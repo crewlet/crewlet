@@ -10,15 +10,15 @@ The agent runtime (`internal/agent`, wired together by `internal/engine`) runs a
 
 Each **agent seat** (`kind: agent`, the default) is one `roles:` entry, and there is no long-lived agent object behind it. The authored `config.Role` becomes an `org.Role` in the epoch's `Organization`, and every turn builds a fresh **runner** for that seat from the epoch it pinned. [Human seats](humans-in-the-org.md) are never run: they exist in the `Organization` and resolve through the party registry (`notify.Registry`).
 
-**Identity is deterministic.** A seat's agent id is `org.DeriveAgentID(company name, handle)`: a UUIDv5 over `"<company name>:<handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The same seat in the same company lands on the same UUID across processes, machines and restarts, which is what lets any node address a seat another node is running. The seat's memory is keyed by that id or by the handle itself: `agent_diary` and `agent_onboarding_markers` rows by the agent id, `episodes` and `synthesized_skills` by the handle, and `counterparty_profiles` by the observing seat's handle. All of it survives engine restarts.
+**Identity is deterministic.** A seat's agent id is `org.DeriveAgentID(company name, handle)`: a UUIDv5 over `"<company name>:<handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The same seat in the same company lands on the same UUID across processes, machines and restarts, which is what lets any node address a seat another node is running. A handle is immutable: a document that changes one removes the seat and creates another ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)). The seat's memory is keyed by that id or by the handle itself: `agent_diary` and `agent_onboarding_markers` rows by the agent id; `episodes`, `synthesized_skills` and their versions, and the conversation ledger by the handle; and `counterparty_profiles` by the observing seat's handle and, where the person observed is a colleague, theirs. All of it survives engine restarts.
 
-> **Rename caveat.** *Both* inputs are part of the derived id: changing
-> a seat's handle **or the company's `name`** creates a new derived
-> id and orphans the prior per-agent rows (diary, onboarding markers,
-> counterparty profiles). The seat keeps working; it has simply lost
-> its memory. A company rename does this to *every* seat at once, so
-> settle `name` and each `handle` before the company runs. (An explicit
-> `handle` on each role pins half of it; nothing pins the company name.)
+> **Company-rename caveat.** The company's `name` is the other input to
+> the id: changing it gives *every* agent seat a new id at once, and
+> what is keyed on the id — each seat's mailbox, its diary, its
+> onboarding markers and the memory changelog that carries its rows
+> between nodes — is left under the old one. The seats keep working;
+> they have simply lost that half of their memory, so settle `name`
+> before the company runs. Nothing pins it.
 
 ```mermaid
 flowchart LR
@@ -63,7 +63,7 @@ Beside the state, the projection holds **the turn the seat is on** and **the las
 - `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched a detached [coding run](code-sandbox.md) and is suspended until the run is collected. The run is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose coding run is lost (`sandbox_run_failed`) has nothing left to resume it, so the loss ends that turn.
 - `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
 
-A third key says whether a person has **paused** the seat: `paused` is `{by, at, reason, stop_running}` — who paused it (the person their token is bound to, or the token itself), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
+A third key says whether a person has **paused** the seat: `paused` is `{by, by_kind, operator_id, at, reason, stop_running}` — who paused it (`by`: the seat of the person who did, or of a token or service account the identity directory binds to one, and otherwise the whole login of the credential bound to no seat; `by_kind` says which, `human` or `operator`, and `operator_id` is the credential they came through, such as `session:<lineage>` or `pat:<id>`, absent when none made it), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
 
 `activity`, `stopped_reason`, `turn`, `last_turn` and `paused` are always present, and each of the last four is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn, or a lifted stop, on the card. After a restart, the turns are seeded from the fleet's turn list: each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
 
@@ -213,7 +213,7 @@ The engine ships these tools (`internal/agent/builtin`, registered in the epoch'
 
 | Tool | Registered when | Purpose |
 |------|-----------------|---------|
-| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; returns the candidate list when more than one seat matches |
+| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; a handle a seat **used to** answer to resolves too, ranked below every live match and above every approximate one; returns the candidate list when more than one seat matches. A seat whose holder the identity directory withholds (suspended, retired or removed) is found by name and handle but shows no accounts, and an id copied from one of them names nobody — see [Humans in the Org Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change) |
 | `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox and answers in its own turn, so the call returns as soon as the question is sent |
 | `use_skill` | a learning store | Load one of the seat's own [synthesized skills](agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | a learning store | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
@@ -261,7 +261,7 @@ Since each agent is a unique individual, there is no load-balancing or role-base
 
 ## Execution Model
 
-Agents are **callback-driven**. When a node acquires a seat it attaches a handler to the seat's durable subscription (`agent-{handle}`) on its inbox topic (`crewlet.agent.{handle}.inbox`), and the queue invokes that handler as messages arrive. There is no per-agent loop to run.
+Agents are **callback-driven**. When a node acquires a seat it attaches a handler to the seat's durable subscription (`agent-{seat-id}`) on its inbox topic (`crewlet.agent.{seat-id}.inbox`), and the queue invokes that handler as messages arrive. There is no per-agent loop to run.
 
 Inbox delivery is **batched per conversation** (see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing)): events that queued up while the agent was busy — or within the configured linger window — are drained together and partitioned by partition key, so ten comments on one Jira issue or Slack thread reach the handler as ONE batch and trigger ONE digest turn instead of ten. Every partition — one event or several — reaches the same dispatcher and runs one [Turn Engine](turn-engine.md) turn; what differs is only the ask it is handed. A single-event partition is handed its own event, and a multi-event one is merged into a single coalesced notification first, so the third-party app's scaffolding renders once and the seat is told to treat the thread as one piece of work.
 
@@ -307,7 +307,7 @@ stateDiagram-v2
     Runs --> Parked: a round is refused, nothing written outside yet
     Runs --> Recorded: a round is refused after an outside write
     Parked --> Asked: the window turns over
-    Parked --> Asked: an apply changes the ceilings or the clock
+    Parked --> Asked: a published company changes the ceilings or the clock
 ```
 
 - **Asked.** The node reads the seat's counters and the company's, in the
@@ -332,10 +332,11 @@ stateDiagram-v2
   stamped it. A window a coding run or a background pass filled used to park
   every delivery its seat was sent while reading as one that had refused
   nothing.
-- **Released.** At the reset, or at once when an apply changes the ceilings of
-  either scope or the company's clock (which moves every window's end), the hold
+- **Released.** At the reset, or at once when a published company changes the
+  ceilings of either scope or the company's clock (which moves every window's
+  end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
-  delivered again in order and asked again. A revision that lowers a ceiling
+  delivered again in order and asked again. A change that lowers a ceiling
   parks it again at the cost of one delivery.
 - **Refused mid-flight.** A window that had room when the delivery was claimed
   can run out during the turn. That turn stops with `budget_exhausted` and makes
@@ -378,6 +379,14 @@ on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round.
 
+**Who may pause a seat** is the seat's holder — the person the identity
+directory binds to it — whoever leads it, or an administrator (`admin`);
+resuming it is the same, and neither is ever a seat's to do. No app is asked:
+a lead who uses neither app still runs their team. Everybody signed in holds a
+credential, so "any operator" would let every reader of the board stop any
+seat in the company. A refusal names the permission that would have admitted
+the caller. See [the authority table](identity-and-access.md#the-fifteen-rules).
+
 ```mermaid
 stateDiagram-v2
     [*] --> Taking: seat not paused
@@ -389,12 +398,15 @@ stateDiagram-v2
 ```
 
 - **The pause is one record for the whole company.** It lives in the
-  coordination store (`seat_pause`), with no age: it ends when somebody
-  resumes the seat, or when the seat leaves the company (the apply that removes
-  a seat clears its pause, so a seat added later under the same handle is not
-  born paused). It is written by compare-and-set, so two people pausing one seat
-  at once make one change: the second is told it was already paused. The writer
-  whose change won publishes `seat_paused` or `seat_resumed`.
+  coordination store (`seat_pause`), keyed by the seat's **id**, as its
+  mailbox is. It has no age: it ends when somebody resumes
+  the seat, or when the seat leaves the company — the apply that
+  removes a seat clears its pause. It is written by
+  compare-and-set, so two people pausing one seat at once make one change: the
+  second is told it was already paused. The writer whose change won publishes
+  `seat_paused` or `seat_resumed`, naming the person as every write does
+  (`paused_by`, `paused_by_kind`) and the credential they came through
+  (`operator_id`).
 - **Every node carries it out from its own copy.** Each node watches the
   records and, the moment a pause lands, takes a pause hold (`seat_paused`) on
   the seat's inbox; the resume lifts it and the mail that waited is delivered.
@@ -428,7 +440,10 @@ stateDiagram-v2
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
 reads at its next round boundary and keeps to for the rest of the turn — from
-the live view, or from their own assistant with `steer_turn`. The note travels
+the live view, or from their own assistant with `steer_turn`. It is the
+seat's holder's, its lead's or an administrator's to send, as a pause
+is — decided on the turn's seat, which only the node running the turn can
+name, so the note asks that node first. The note travels
 on an ephemeral scatter to every node; the node running the turn is the one
 that answers, and the turn's own record says what became of it
 (`agent_turn_steered`: `delivered` at the round that read it, or `expired` when
@@ -452,8 +467,8 @@ flowchart TD
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
-    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
-    S9["9. Reap shared MCP servers; last auxiliary-spend flush;<br/>custody flush; close stream + store"]
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · credential cooldown"] --> S9
+    S9["9. Reap shared MCP servers; custody flush (node without data);<br/>close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
@@ -478,7 +493,13 @@ flowchart TD
    publishing, and "wait until nothing is running" never comes true.
 5. **Wait for in-flight handlers**, indefinitely: running turns finish their
    rounds until the count hits 0, with `drain_in_progress` logging the
-   in-flight count every 10 s. A turn parked on a
+   in-flight count every 10 s. The one stop that does not wait is a node that
+   [stopped itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)
+   because its own connection to the stream was closed for good: every
+   delivery is acknowledged over that connection, so nothing a running turn
+   concludes can be, and a peer runs each of them again. That drain ends this
+   step at once, cancels the running turns rather than finishing them twice,
+   and logs `drain_cut` (see *Watching the drain* below). A turn parked on a
    [detached coding run](code-sandbox.md) is not one of them. It suspended
    when the run detached and its trigger is already recorded as worked, which
    is exactly why coding work is detached: a drain that waited for a real
@@ -497,32 +518,47 @@ flowchart TD
    closed (`api_stopped`).
 8. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
    a running box being reaped while turns are still finishing), then the
-   notification transports, the maintenance duties, the integration reconcile
-   loop, memory sync, the learning passes, the cron scheduler and the
-   credential cooldown refresh.
-9. **Close the backends**: the shared MCP servers are reaped; the
-   auxiliary-spend ledger publishes its last records — what the seats'
-   auxiliary model spent since its last 15-second flush — on a budget of five
-   seconds, once every producer of them has stopped and before a node without
-   `data` flushes its [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
-   batches, which carry those records too; then the custody flush, and the
-   stream connection and the store file are closed (`engine_stopped`).
+   notification transports, the maintenance duties and the embedding duty.
+   The memory fill stops beside them — it only embeds, and spends nothing a
+   usage day counts, but it reads the store step 9 closes, and the vectors it
+   fills ride the memory sync, which stops after it. Then everything that
+   writes a row this node's usage day counts: the learning passes and the cron
+   scheduler; the auxiliary-spend
+   ledger's last records — what the seats' auxiliary model spent since its last
+   15-second flush — published on a budget of five seconds once every producer
+   of them has stopped, and before a node without `data` flushes its
+   [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+   batches in step 9, which carry those records too; and, on a data node, the
+   custody keeper, which leaves its group — it stops taking batches, gives one
+   in hand up to a second to settle, and detaches, so a batch it did not take
+   goes to the data nodes still in the group. Then the
+   [usage publisher](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day),
+   which publishes what today and yesterday gained since its last 15-second
+   tick on a budget of five seconds, the state log's own resolve budget — after
+   every writer above, so a node stopped this way and never started again
+   still leaves that day whole, and before the trim and the logs it publishes
+   into. Then the integration reconcile loop, memory sync and the credential
+   cooldown refresh.
+9. **Close the backends**: the shared MCP servers are reaped; a node without
+   `data` flushes its custody batches; and the stream connection and the store
+   file are closed (`engine_stopped`).
 
 **The stop's coordination shares one allowance.** Every lease the stop gives back — the presence and seat leases of steps 2 and 6, and in step 8 its fleet duties and the integration lease a reconcile pass still in flight gives back as its loop is stopped — draws on ONE allowance of one heartbeat interval: the lease TTL over three, 15 s at the shipped 45 s. A third of it, 5 s there, is reserved for withdrawing the node's admission to a [ceiling change](../guides/retention.md#changing-a-logs-ceiling) in step 8, and no step before it can spend that share: every lease falls back to lapsing on its TTL, but an admission has no TTL, so one that is not withdrawn stays until the node restarts under the same id or an operator excludes it (`admission_not_withdrawn` says which). The leases' two thirds are charged only while one of their round trips is in flight, so the wait of step 5 spends none of it, and seats released together are charged once for the time they overlap. On a healthy fleet each step takes milliseconds and the allowance never binds. On a member that has lost its coordination store — every step failing, each lease falling back to lapsing on its TTL — the stop's give-back costs that one allowance in total, after which every remaining step fails at once with its own `…_unavailable` / `…_not_released` warning. The integration lease is charged only from step 8, where its loop is stopped and the stop waits for the pass in flight — from that moment on, a give-back that began before it included. The loop runs through the drain, so a pass that ends on its own while step 5 waits is an ordinary pass, and its give-back ends on its own client's request timeout rather than spending what the seats are owed when the wait is over. Each step used to wait out a bound of its own, so a member whose coordination store had gone spent the sum of them on deadlines that could not succeed; one that has lost that store alone now stops in about one allowance, 15 s at the shipped TTL.
 
-**The stop's events are not on the allowance.** The `org_stopped` announcement of step 1 and each seat's last `agent_terminated` in step 6 travel on the event stream rather than through the coordination store, and the two are separately replicated streams, so one can lose its quorum alone. Each event is therefore bounded on its own, by the five seconds the stream's client gives a request with no deadline (past it, `lifecycle_event_not_published` or `seat_lifecycle_not_published`, and a live screen ages the seat out), and published beside the give-backs rather than in front of them: the announcement while the drain runs, each seat's event while that seat is torn down — and finished before its lease is given back, so a peer that takes the seat over announces it only after this node has let it go. A stream that will not acknowledge costs the stop those bounds where nothing else is running, and never the time the leases and the admission are owed. The auxiliary-spend and custody flushes of step 9 are not on the allowance either: they carry records rather than give a lease back, and what they cannot publish is lost rather than lapsed, so each keeps the budget of its own named there.
+**The stop's events are not on the allowance.** The `org_stopped` announcement of step 1 and each seat's last `agent_terminated` in step 6 travel on the event stream rather than through the coordination store, and the two are separately replicated streams, so one can lose its quorum alone. Each event is therefore bounded on its own, by the five seconds the stream's client gives a request with no deadline (past it, `lifecycle_event_not_published` or `seat_lifecycle_not_published`, and a live screen ages the seat out), and published beside the give-backs rather than in front of them: the announcement while the drain runs, each seat's event while that seat is torn down — and finished before its lease is given back, so a peer that takes the seat over announces it only after this node has let it go. A stream that will not acknowledge costs the stop those bounds where nothing else is running, and never the time the leases and the admission are owed. The auxiliary-spend flush and the usage publisher's last flush in step 8 and the custody flush of step 9 are not on the allowance either: they carry records rather than give a lease back, and what they cannot publish is lost rather than lapsed, so each keeps the budget of its own named there — and so does the custody keeper's second for a batch in hand, which orders a settle before the usage flush rather than giving anything back.
 
-**A member that has lost both stores stops in about 25 s.** A lone member of an embedded fleet whose peers have gone loses the event stream and the coordination buckets together, so it spends the whole allowance and, wherever nothing overlaps them, every one of those bounds besides: the leases' share of the allowance (10 s at the shipped TTL, spent by the presence give-back while the announcement waits out its own five seconds inside it), each seat's last event beside its last memory publish (5 s), the admission's share (5 s) and the auxiliary-spend flush (5 s). That is about 25 s at the shipped TTL, as such a stop was measured before the allowance existed, and it fits Kubernetes' 30 s default grace by five seconds rather than by the fifteen a member that lost only its coordination store has to spare.
+**A member that has lost both stores can take about 46 s after the drain.** A lone member of an embedded fleet whose peers have gone loses the event stream and the coordination buckets together, so it spends the whole allowance and, wherever nothing overlaps them, every one of those bounds besides: the leases' share of the allowance (10 s at the shipped TTL — spent by the presence give-back in step 2 when the stores were already gone, or by the seats' give-backs in step 6, each after its 5 s last event, when they went during the drain), each seat's last event beside its last memory publish (5 s), the auxiliary-spend flush (5 s), the usage publisher's last flush when its day moved since its last tick (5 s) and the admission's share (5 s) — and up to one second more on a data node whose custody keeper had a batch in hand. Those are the stop's own steps, about 30 s at the shipped TTL — about 25 s, as such a stop was measured before the allowance existed, plus the usage flush. Step 7 adds the listeners: five seconds of grace for each (the public one first when `api.public` is set, then `api.port`), which an open [sandbox bridge](code-sandbox.md) session spends whole, and five more shared by the live projection and the sign-in surface's background writes. So what follows step 5 can take about 46 s — 15 for the seats' last events and give-backs, 15 for the listeners, 16 for the auxiliary-spend, keeper, usage and admission bounds — or about 36 s when the stores were gone before the stop began; a node without `data`, which runs no keeper and no usage publisher but flushes its custody batches in step 9 on a ten-second budget of their own, about 50 s. That is more than Kubernetes' 30 s default grace on its own. And it all comes AFTER step 5, whose wait for the turns still running has no bound of the engine's own, so a grace sized to the longest turn alone still kills such a member before its store closes: give every pod a `terminationGracePeriodSeconds` of at least its longest turn plus 60 s, plus any `preStop` sleep the pod has, since Kubernetes counts the hook inside the grace (see [Probes](../guides/deployment.md#probes)) — and a deployment whose turns finish in seconds the same 60 s.
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
-**No engine-level timeout on the drain.** Step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
+**No engine-level timeout on the drain.** On a signal, step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
 
-- **Interactive:** a second Ctrl+C tells us you're done waiting.
-- **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL.
-- **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback.
+- **Interactive:** a second Ctrl+C tells us you're done waiting — the first, on a drain the node started itself.
+- **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL. The default is never enough: set it to your longest turn plus 60 s, plus any `preStop` sleep.
+- **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback. The default covers turns up to 30 s; raise it to your longest turn plus 60 s once turns run longer.
+- **Docker / Compose:** `docker stop -t`, `docker run --stop-timeout`, or Compose's `stop_grace_period` (default 10 s) — same SIGKILL fallback, and too short for any turn: set it to your longest turn plus 60 s.
 
-Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes).
+Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to at least your longest turn plus 60 s (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes): the drain needs the longest turn, and what follows it needs up to about 50 s on a node that has lost both its stores (see "A member that has lost both stores" above, and [Probes](../guides/deployment.md#probes)).
 
 **Force stop (second signal).** The first signal *hands the signals back to
 the operating system* the moment it arrives, so a second SIGINT or SIGTERM
@@ -536,7 +572,12 @@ first Ctrl+C during that recovery waits for it to finish (the log says
 makes those unbounded waits safe to offer. Without it the engine would still
 be the installed handler, every further press would be swallowed, and an
 operator watching a drain or a slow boot from the terminal they started it in
-would have no way to abort it short of SIGKILL from somewhere else.
+would have no way to abort it short of SIGKILL from somewhere else. A node
+that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)
+(`engine_fatal`) has had no first signal, so it hands the signals back as its
+drain starts, and the FIRST SIGINT or SIGTERM during that drain is the one
+that exits at once; its `engine_draining` hint says so, naming `an interrupt`
+rather than `a second interrupt`.
 
 A turn killed that way leaves its trigger **unacknowledged** rather than
 NAK'd, because nothing gets to run. The broker redelivers it once its ack
@@ -549,7 +590,7 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it.
+**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it. A node that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too) because its broker connection is gone takes the same drain with no signal behind it: `engine_fatal` comes first, naming the cause, then the same lines in the same order, and it exits with status 1. One thing differs when the connection it lost is the **queue's own**: no turn still running can be acknowledged over it, so a peer will run each of them again, and the drain does not wait for them — it cancels them and ends at once, logging `drain_cut` with the in-flight count it stopped waiting for before `drain_complete`. When only the coordination store's connection was lost, acknowledgements still land and the drain waits as above.
 
 A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Settings › Nodes** screen stops listing it rather than showing it draining. On a split deployment a `-roles data,ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
 

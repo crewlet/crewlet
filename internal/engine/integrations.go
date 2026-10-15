@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/provision"
 
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -143,13 +143,10 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		// applied revision and an apply can change it.
 		Endpoint: func() string {
 			// EMPTY WHERE THIS NODE CANNOT SAY, which is what the worker
-			// reads a missing endpoint as. A node with no active revision
-			// has no public base to have registered anything against.
-			company := e.Company()
-			if company == nil {
-				return ""
-			}
-			return company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+			// reads a missing endpoint as. The VENDORS' address, never the
+			// one a person reaches: behind a public listener the two are
+			// different sockets ([config.API.WebhookBase]).
+			return e.webhookBase
 		},
 		// AND THE NAME A REGISTRATION IS HELD UNDER, for the one surface
 		// where the address cannot find it again. Read fresh on every
@@ -367,33 +364,14 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 		// exist yet.
 		return nil, integration.ErrNotConfigured
 	}
-	// A SINK IS BEST EFFORT HERE. A node with no keyring cannot seal a
-	// minted credential, but it can still read a surface and report what
-	// it finds, and reporting is most of what this loop is for.
-	//
-	// [provision.ReadOnly] RATHER THAN NIL. This passed nil and called it a
-	// dry run, which no pass implemented: two of them refused a nil sink at
-	// their entry point with ErrNoSink, so every tick reported those
-	// integrations as a FAULT — "the last pass could not read this",
-	// retried for ever — on an ordinary deployment that keeps its ${VAR}s
-	// in the environment and has no secrets.keys at all.
-	sink, err := c.engine.SetupSink(reconcileOperator)
+	// THE SINK THE DASHBOARD'S PASS IS HANDED, so a credential the loop
+	// mints lands where one an operator's pass mints does. Every node
+	// holds the keyring it seals under, so a sink that cannot be built is
+	// an engine wired without its secret store, and that is the pass's
+	// fault to report rather than a posture to read and carry on in.
+	sink, err := c.engine.SetupSink(loopActor())
 	if err != nil {
-		// ONCE PER NODE, NOT ONCE PER SURFACE PER TICK. Whether this node
-		// holds a keyring is a fact about the NODE — identical for all
-		// eight surfaces and unchanged until it restarts — so the loop
-		// said it eight times an interval, for ever, about the
-		// deployment shape the comment above calls the ordinary one. A
-		// warning that repeats on an unchanging normal condition is one
-		// an operator filters, and filtering it is how the real warning
-		// beside it goes unread.
-		c.engine.sinkUnavailable.Do(func() {
-			log.WarnContext(ctx, "integration_sink_unavailable",
-				"error", err, "detail", "no integration pass on this node "+
-					"will mint a credential; every one of them still reads "+
-					"its surface and reports what it finds")
-		})
-		sink = provision.ReadOnly()
+		return nil, err
 	}
 	// NO GUARD IS TAKEN HERE, and that is the fix rather than an omission.
 	//
@@ -417,8 +395,9 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// ctx is already the guard's: bounded by [setup.PassDeadline], strictly
 	// inside the lease the worker is holding.
 	findings, err := c.pass.Run(ctx, setup.PassInput{
-		Sink:        sink,
-		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
+		Sink:           sink,
+		WebhookBase:    c.engine.webhookBase,
+		WebhookBaseKey: c.engine.webhookBaseKey,
 	})
 	if err != nil {
 		return nil, err
@@ -461,6 +440,9 @@ func reported(findings []integration.Finding) map[string]bool {
 	return seen
 }
 
-// reconcileOperator is who the loop's writes are attributed to, so an audit
-// row says a timer did this rather than naming a person who did not.
-const reconcileOperator = "reconcile loop"
+// loopActor is who the loop's writes are attributed to, so an audit row says a
+// timer did this rather than naming a person who did not: the ENGINE's kind,
+// and no credential, because none made the write.
+func loopActor() iam.Actor {
+	return iam.Actor{Name: "reconcile loop", Kind: iam.ActorSystem}
+}

@@ -61,8 +61,7 @@ func newFakeBrokerNode(t *testing.T) *fakeBrokerNode {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 			if refusal, ok := api.RenderBrokerRefusal(n.refuse); ok {
-				w.WriteHeader(refusal.Status)
-				_ = json.NewEncoder(w).Encode(refusal.Body)
+				refusal.Write(w)
 				return
 			}
 			n.removed = append(n.removed, r.URL.Path)

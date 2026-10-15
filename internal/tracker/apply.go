@@ -39,24 +39,56 @@ type Applier struct {
 	// NodeID is this node's own id, which the eviction gate compares a
 	// record's writer against.
 	NodeID string
+
+	// inbox is told, after a committed batch, whose inbox moved on this
+	// node — see inboxmove.go. Nil is legal and means nobody is listening.
+	inbox func([]InboxMovement)
+
+	// inboxed is filled inside Apply and drained by Committed. NOT guarded
+	// by a mutex, and the framework's contract is why: an applier is ONE
+	// writer, and Apply and Committed are called from the same goroutine
+	// with the commit in between.
+	inboxed map[[2]string]inboxNote
 }
 
 // NewApplier builds the applier for one node.
-func NewApplier(nodeID string) *Applier { return &Applier{NodeID: nodeID} }
-
-// Committed is the post-commit half, and it is deliberately empty.
 //
-// EVERY CONSEQUENCE OF A TRACKER RECORD IS A ROW. A wake is derived by the
-// change feed — something that outlives this process — rather than published
-// here as a courtesy, which is the whole reason a wake survives the node that
-// wrote the record dying between the commit and the publish.
-func (a *Applier) Committed(context.Context) {}
+// inbox is called after a COMMITTED batch with every inbox that batch moved.
+// After the commit and never inside the transaction: the store re-runs the
+// body of an attempt that failed transiently, and a movement announced from
+// inside it would announce a notice no row holds.
+func NewApplier(nodeID string, inbox func([]InboxMovement)) *Applier {
+	return &Applier{NodeID: nodeID, inbox: inbox}
+}
+
+// Committed is the post-commit half.
+//
+// EVERY CONSEQUENCE OF A TRACKER RECORD THAT ANOTHER NODE COULD NEED IS A ROW.
+// A wake is derived by the change feed — something that outlives this process
+// — rather than published here as a courtesy, which is the whole reason a wake
+// survives the node that wrote the record dying between the commit and the
+// publish.
+//
+// What happens here is the one consequence no other node needs: telling THIS
+// node's open dashboards whose inbox just moved (inboxmove.go). Every data
+// node applies every record, and only a data node serves dashboards (ingress
+// requires `data`), so each one tells its own — and a node that dies before
+// telling them has no sockets left to tell.
+func (a *Applier) Committed(context.Context) {
+	// RESET BEFORE THE CALL, not after: the listener may take long enough
+	// for the next batch to be waiting behind it, and a set drained
+	// afterwards would be delivered twice or lost.
+	moved := a.drainInbox()
+	if len(moved) > 0 && a.inbox != nil {
+		a.inbox(moved)
+	}
+}
 
 // Gated reports a record that must produce no rows at all.
 //
-// TWO GATES, both READ FROM THIS SAME TRANSACTION, because their answer has
-// to come from the state the record would have applied against rather than
-// from a cache that may be a heartbeat old:
+// TWO GATES, both READ FROM THIS SAME TRANSACTION, because their answer has to
+// come from the state the record would have applied against rather than from a
+// cache that may be a heartbeat old:
 //
 //  1. THE EVICTION GATE. A record written by a node the fleet evicted before
 //     the record's own position is dropped everywhere. It depends on nothing

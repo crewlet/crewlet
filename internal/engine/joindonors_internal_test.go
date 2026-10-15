@@ -47,7 +47,7 @@ func TestAJoinNamesEveryNodeThatCanDonate(t *testing.T) {
 		"a draining node, off its fresh row, with no presence": {
 			ownServing: true,
 			live:       []string{"joiner"},
-			rows:       []coord.NodePositions{holds("draining", PositionHeartbeat)},
+			rows:       []coord.NodePositions{holds("draining", statelog.PositionHeartbeat)},
 			want:       []string{"draining", "joiner"},
 		},
 		"a row naming an artefact by a log's snapshot instant alone": {

@@ -235,9 +235,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["answer_run"],

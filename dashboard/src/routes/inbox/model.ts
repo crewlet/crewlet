@@ -28,7 +28,14 @@
 import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
-import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
+import {
+  ENGINE_SENTENCES,
+  authorOf,
+  nameAuthor,
+  noticeItem,
+  turnItem,
+  type ItemRef,
+} from "~/lib/work.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -171,14 +178,24 @@ export interface Who {
   handle: string | null;
 }
 
-/** The seat behind a handle, named as the chart names it. */
-export function whoOf(index: OrgIndex, handle: string | null | undefined): Who | null {
+/**
+ * The seat behind a handle, named as the chart names it, or, for a name no
+ * seat holds, the name itself: the LOGIN of somebody the identity directory
+ * binds to no seat, which is the name their own changes are recorded under
+ * (`iam.ActorFor`). `kind` is what the record says the author is, for a name
+ * the chart cannot answer for: a login is a person's, never an agent's.
+ */
+export function whoOf(
+  index: OrgIndex,
+  handle: string | null | undefined,
+  kind?: string,
+): Who | null {
   const h = (handle ?? "").trim();
   if (!h) return null;
   const seat = index.byHandle.get(h);
   return {
     name: seat?.name ?? h,
-    kind: seat?.kind ?? "agent",
+    kind: seat?.kind ?? (kind === undefined || kind === "agent" ? "agent" : "human"),
     avatar: seat?.avatar ?? null,
     handle: h,
   };
@@ -187,18 +204,18 @@ export function whoOf(index: OrgIndex, handle: string | null | undefined): Who |
 /**
  * Who a row is about.
  *
- * A NOTICE'S AUTHOR IS THE PERSON, NEVER THE CREDENTIAL: a change a person's
- * token made is authored by the token and carries `actor_seat`, the seat it was
- * bound to. An operator change with no bound seat names nobody (its actor is a
- * token id, which is a secret's name rather than a person's), so it is drawn
- * as "An operator".
+ * A NOTICE'S AUTHOR IS WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the
+ * identity directory binds to a seat writes AS that seat, so their change is
+ * the seat's and draws as them; anybody bound to none writes under their own
+ * login, which is a name rather than a secret and is drawn as one. A change
+ * the engine made itself (`system`) names nobody.
  */
 export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
   switch (row.kind) {
     case "decision":
       switch (row.subject.kind) {
         case "ask":
-          return whoOf(index, row.subject.ask.asked_by_seat || row.subject.ask.asked_by);
+          return whoOf(index, row.subject.ask.asked_by);
         case "run":
           return whoOf(index, row.subject.run.agent_handle);
         case "seat":
@@ -209,21 +226,59 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       return whoOf(index, row.item.who);
     case "notice": {
       const n = row.notice;
-      if (n.actor_seat) return whoOf(index, n.actor_seat);
-      if (n.actor && n.actor_kind !== "operator") return whoOf(index, n.actor);
-      return null;
+      if (n.actor_kind === "system") return null;
+      return whoOf(index, n.actor, n.actor_kind);
     }
   }
   return null;
 }
 
-/** The name a row leads with: its seat's, or what stands in for nobody. */
+/**
+ * The name a row leads with: its seat's, or what stands in for nobody. A row
+ * about no seat is the company's own condition, or a change the engine made
+ * itself.
+ */
 export function rowName(row: InboxRow, who: Who | null): string {
   if (who) return who.name;
-  return row.kind === "condition" ? "The company" : "An operator";
+  return row.kind === "condition" ? "The company" : "The engine";
 }
 
-/** The work item a row is on, by key, or "". */
+/**
+ * The work item a row is on, or null, to ADDRESS it ([itemAddress]): a key
+ * another task claimed first opens that task, so a row about the task that did
+ * not claim it links, threads and replies by its id. The engine says so on
+ * every row that carries a key it may not own (`key_collision`,
+ * `subject_key_collision`); a turn's reference carries no flag, so a native
+ * task a turn was on is addressed by its id ([turnItem]).
+ */
+export function rowItem(row: InboxRow): ItemRef | null {
+  switch (row.kind) {
+    case "decision":
+      switch (row.subject.kind) {
+        case "ask":
+          return row.subject.ask;
+        case "run": {
+          const ref = row.subject.run.work_item;
+          return ref ? turnItem(ref) : null;
+        }
+        case "seat": {
+          const r = row.subject.seat.row;
+          const ref = r.turn?.work_item ?? r.live_call?.work_item;
+          return ref ? turnItem(ref) : null;
+        }
+      }
+      break;
+    case "condition":
+      return null;
+    case "notice": {
+      const item = noticeItem(row.notice);
+      return item.id || item.key ? item : null;
+    }
+  }
+  return null;
+}
+
+/** The work item a row is on, by the key a reader reads, or "". */
 export function rowKey(row: InboxRow): string {
   switch (row.kind) {
     case "decision":
@@ -406,9 +461,9 @@ export function moment(at: string, now: number): string {
  * is zero.
  */
 export function inboxQuiet(input: {
-  /** The Updates answer, or null where there is none (unanswered, or nobody bound). */
+  /** The Updates answer, or null where there is none (unanswered, or nobody signed in). */
   answer: WorkInboxAnswer | null;
-  /** The notices are part of this view: a bound reader. */
+  /** The notices are part of this view: a reader with a record of their own. */
   bound: boolean;
   error: boolean;
   /** Rows drawn in Needs you and Updates. */

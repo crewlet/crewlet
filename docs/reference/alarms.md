@@ -3,34 +3,47 @@
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you three ways, and they are the same table evaluated once,
-every ten seconds on every node: a `crewlet.alarm.active{kind}` gauge your
-collector scrapes, a named `WARN` line when it starts and another when it
-clears, carrying how long it was up, and a count on the node's health envelope
-(`GET /health` and the dashboard's health push carry `alarms: {count, worst}`,
-where `worst` is the alarm that has been firing longest). Nothing has to be
-polled for any of them: alarms are evaluated on the node's own position
-heartbeat, so a condition with a one-minute grace is named within that minute.
+An alarm reaches you three ways, and they are the same table evaluated once: a
+`crewlet.alarm.active{kind}` gauge your collector scrapes, a named `WARN`
+line when it starts and another when it clears, carrying how long it was up,
+and a count on the node's health envelope (`GET /health` and the
+dashboard's health push carry `alarms: {count, worst}`, where `worst`
+is the alarm that has been firing longest). Nothing has to be polled for any
+of them: every node running a state log, which is every data node, evaluates
+the whole table on its own position heartbeat, every 10s, and again the moment
+the measurements it takes every 15m (each log's daily intake, the vector
+coverage, the store's connection-pool waits) land, so an alarm whose
+threshold is 1m is raised within a beat of passing it.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
 
-Each kind is one alarm, however many logs it stands on. A condition that is a
-property of a log (`log_headroom`, `trim_blocked`) names every
-log it holds in its `domains` list, each with its own measurement, so the
-count, the gauge and the log line agree about how many problems there are.
+Each kind is one alarm, however many logs it stands on. These are about a log
+rather than the node:
+
+`log_headroom`, `log_ceiling_short`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`.
+
+Each of those names every log it stands on in its `domains` list, with that
+log's own measurement, and leads with the most pressing log's, so the health
+count and the gauge (one series per kind, reading 1 while any log's stands)
+agree about how many problems there are. Their log lines are written per log:
+each log the alarm comes to stand on writes its own `alarm_raised`, and each
+log it stops standing on its own `alarm_cleared`, carrying the log as
+`domain`, so a second log joining an alarm that is already up, and the first
+one leaving it, are each said.
 
 | Alarm | What it means | What to do |
 |---|---|---|
 | `apply_lag` | This node is more than a minute behind the log. Being behind does not take its copy out of service; a position that stops moving does. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that is behind keeps the seats it holds and claims no new ones. Only if its position stops moving for the stall grace, or it holds a record it cannot decode past the deferral grace, is its copy wrong rather than behind: it then stops serving its copy of the estate, and its seats stay and read the estate from the other data nodes until the copy recovers. |
 | `read_refusals` | Reads are being refused for something other than ordinary lag, and have been for longer than a heartbeat. | Read the refusal code in the logs. Anything other than `behind` or `too_stale` is a fault rather than a wait. |
 | `barrier_slow` | The read barrier (the append every linearizable read waits on) is spending a quarter of the whole read budget. | The barrier is an append and a wait: check the broker's own latency and this node's apply drain before looking anywhere else. |
-| `log_headroom` | A log is within a tenth of the byte ceiling its ordinary writes are held to. One alarm names every such log, leading with the one with the least room. A full log refuses writes rather than dropping records; on the tracker and pages logs an eviction still lands in the gate reserve above that ceiling. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, or find out why the trim is not advancing (`crewlet retention status` names the term holding it). A full log refuses writes; it does not drop records. On a log that claims identity the top of the ceiling is kept for gate records, so if the term is a node that is gone, `crewlet retention evict` still lands and unpins the trim. |
-| `backup_age` | No verified backup has been recorded, or the newest is older than the policy asks for. The trim does not advance either way, and the alarm names every log whose trim the backup term is holding, so those logs raise no `trim_blocked` of their own. | Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it. The trim does not advance past a backup older than the policy, and does not advance at all until there is one. |
-| `trim_blocked` | A log's trim has a term it cannot satisfy, so the log is growing toward its ceiling. One alarm names every held log and the term holding each, leading with the one held longest. A log the backup term holds while `backup_age` fires is named there instead. | The term holding each log names what to fix, and `crewlet retention status` prints it with its detail. Until it is fixed the log grows toward its ceiling. |
-| `deferred_old` | This node has been holding records it cannot apply for longer than the deferral grace. It no longer serves its copy of the estate; its seats read the estate from the other data nodes. | This node is running a build that cannot decode records its peers are writing. Upgrade it; it has already stopped serving its copy of the estate, and its seats read the estate from the other data nodes. |
-| `floor_unknown` | The trim floor has been unreadable for four heartbeats, so every read on this node refuses. | Coordination cannot be reached from this node. Every read is refused until it can be. |
+| `log_headroom` | A log is within a tenth of the byte ceiling its ordinary writes are held to. One alarm names every such log, leading with the one with the least room. A full log refuses writes rather than dropping records; on every log that claims identity (the tracker's, the knowledge base's and the identity estate's) an eviction still lands in the gate reserve above that ceiling. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, or find out why the trim is not advancing (`crewlet retention status` names the term holding it). A full log refuses writes; it does not drop records. On a log that claims identity the top of the ceiling is kept for gate records, so if the term is a node that is gone, `crewlet retention evict` still lands and unpins the trim. |
+| `log_ceiling_short` | At the rate this log took in over the last day, its byte ceiling holds less than the `min_age` window the trim keeps, so it will fill and refuse writes with every trim term satisfied. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, to at least the window's worth at this rate, or shorten `stream.tracker_retention.min_age` if the deployment does not need that window. Unblocking the trim cannot help: it never removes a record younger than min_age. |
+| `backup_age` | No verified backup has been recorded, or the newest is older than the policy asks for. The trim does not advance either way, and the alarm names every log whose trim the backup term is holding past its replay window, so those logs raise no `trim_blocked` of their own. | Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it. The trim does not advance past a backup older than the policy, and does not advance at all until there is one. |
+| `trim_blocked` | A log's trim has been blocked for longer than its `min_age` replay window plus one trim tick, and the log is keeping records older than that window, so it is holding what a working trim would have removed and growing toward its ceiling. One alarm names every such log and the term holding each, leading with the one held longest; a log the backup term holds while `backup_age` fires is named there instead. A young fleet blocked on its first backup or snapshot donors does not raise it: nothing in its log is past the window yet. | The term holding each log names what to fix, and `crewlet retention status` prints it with what it has and what it wants. Until it is fixed the log grows toward its ceiling by a day of records every day. |
+| `deferred_old` | This node has been holding a record it cannot apply on a log for longer than the thirty-minute deferral grace. One alarm names every log that is, leading with the one held longest. Where a log judges this node's copy of the estate (the tracker's and the knowledge base's do), the node no longer serves its copy, and its seats read the estate from the other data nodes. | This node is running a build that cannot decode records its peers are writing. Upgrade it. Where the record's log judges this node's copy of the estate (the detail says), the node has already stopped serving its copy, and its seats read the estate from the other data nodes. |
+| `floor_unknown` | This node has been unable to read a log's trim floor for four heartbeats, so every read of that log here refuses. One alarm names every such log, which is every log at once when coordination is what cannot be reached. | Read the cause. An unreachable coordination store clears when coordination does, and every log on this node says so at once; a floor published at a later generation than this node's means that log was re-anchored and this node was not (see re-anchoring in docs/guides/retention.md). Every read of the log on this node is refused until its floor can be read. |
 | `prefetch_slow` | Turn-start context assembly is over its budget. Every turn on this node pays it before its first token. | Every turn on this node pays this before its first token. Check the store's own latency and the knowledge backend's. |
 | `search_slow` | Interactive search is over its target. The corpus has outgrown what one node's share of it can scan in the budget. | The corpus has outgrown what one node's share can scan in the budget. Adding a node divides the buckets again, with no configuration and no rebuild. See docs/guides/search.md. |
 | `search_degraded` | Searches are being answered without their semantic half: the embeddings provider or the vector domain is failing. | The embeddings provider or the vector domain is failing. Search still answers; it answers less well, and silently. |
@@ -51,7 +64,7 @@ An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
 decides something: the grace that takes a copy out of service, the grace
 that stops a node serving a copy it cannot decode, the budget a caller was
-promised.
+promised, the replay window a log's ceiling was sized to hold.
 
 A seat whose token window is spent is NOT an alarm, because nothing is wrong
 with the node: the ceiling is doing what it was set to do. Its mail is parked

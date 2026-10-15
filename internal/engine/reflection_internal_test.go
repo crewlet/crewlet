@@ -7,11 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // reflectProbe is a reflection worker that records the turns it ran on.
@@ -56,20 +60,28 @@ func holderOn(t *testing.T, q *memory.Queue) (*Engine, *reflectProbe) {
 	return e, probe
 }
 
+// reflectSeat is the one seat these cases hold, by the id every one of its
+// mailboxes is named after: the agent id derived from its handle (ADR-0013).
+var reflectSeat = func() placement.Seat {
+	id, _ := org.DeriveAgentID("Acme", "swe")
+	return placement.Seat{ID: id, Handle: "swe"}
+}()
+
 func reflectTelemetry(runID string) turnTelemetry {
-	return turnTelemetry{handle: "swe", role: "Engineer", runID: runID, agentID: "agent-swe"}
+	return turnTelemetry{handle: "swe", role: "Engineer", runID: runID,
+		agentID: reflectSeat.ID.String()}
 }
 
 func reflectedTurn(runID string) types.TurnCompleted {
 	return types.TurnCompleted{
-		Agent: "agent-swe", AgentHandle: "swe", RoleName: "Engineer", TurnID: runID,
+		Agent: reflectSeat.ID.String(), AgentHandle: "swe", RoleName: "Engineer", TurnID: runID,
 		ToolSequence: []string{"search"}, ReviewOutcome: "done", Outcome: "delivered",
 	}
 }
 
-func attached(q *memory.Queue, handle string) bool {
+func attached(q *memory.Queue, seat uuid.UUID) bool {
 	return slices.Contains(q.Attachments(),
-		[2]string{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)})
+		[2]string{topics.AgentReflect(seat), topics.AgentReflectGroup(seat)})
 }
 
 // A SEAT'S REFLECTION RUNS ON THE NODE THAT HOLDS IT, and on whichever node holds
@@ -91,10 +103,10 @@ func TestASeatsReflectionRunsWhereTheSeatIsHeld(t *testing.T) {
 	holder, probe := holderOn(t, q)
 
 	// THROUGH THE SEAT'S OWN HOOKS: acquisition attaches, release lets go.
-	if err := holder.prepareSeat(ctx, "swe", 1, "node-a/1"); err != nil {
+	if err := holder.prepareSeat(ctx, reflectSeat, 1, "node-a/1"); err != nil {
 		t.Fatalf("prepare the seat: %v", err)
 	}
-	if !attached(q, "swe") {
+	if !attached(q, reflectSeat.ID) {
 		t.Fatal("the holder did not attach the seat's reflection subject")
 	}
 	holder.publishReflectionDue(ctx, reflectedTurn("run-1"), reflectTelemetry("run-1"))
@@ -110,8 +122,8 @@ func TestASeatsReflectionRunsWhereTheSeatIsHeld(t *testing.T) {
 	}
 
 	// RELEASED, the seat's wakes wait for whoever holds it next.
-	holder.releaseSeat(ctx, "swe")
-	if attached(q, "swe") {
+	holder.releaseSeat(ctx, reflectSeat)
+	if attached(q, reflectSeat.ID) {
 		t.Fatal("a released seat's reflection subject is still attached here")
 	}
 	holder.publishReflectionDue(ctx, reflectedTurn("run-2"), reflectTelemetry("run-2"))
@@ -125,7 +137,7 @@ func TestASeatsReflectionRunsWhereTheSeatIsHeld(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = peer.Stop(context.Background()) })
 	next, nextProbe := holderOn(t, peer)
-	if err := next.prepareSeat(ctx, "swe", 2, "node-b/1"); err != nil {
+	if err := next.prepareSeat(ctx, reflectSeat, 2, "node-b/1"); err != nil {
 		t.Fatalf("prepare the seat on the next holder: %v", err)
 	}
 	deadline := time.Now().Add(5 * time.Second)

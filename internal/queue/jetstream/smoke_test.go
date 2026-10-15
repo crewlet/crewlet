@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // probe is a minimal registered payload so the smoke tests exercise the real
@@ -68,7 +67,7 @@ func TestMailIsRetainedWithNothingAttached(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("alice"), topics.AgentInboxGroup("alice")
+	topic, group := seatInbox("alice"), seatGroup("alice")
 
 	created, err := q.EnsureSubscription(ctx, topic, group)
 	if err != nil {
@@ -126,7 +125,7 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")
+	topic, group := seatInbox("ghost"), seatGroup("ghost")
 
 	if err := q.Publish(ctx, topic, ev(1)); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -171,7 +170,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("bob"), topics.AgentInboxGroup("bob")
+	topic, group := seatInbox("bob"), seatGroup("bob")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
@@ -236,7 +235,7 @@ func TestBatchCoalescesByConversation(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("carol"), topics.AgentInboxGroup("carol")
+	topic, group := seatInbox("carol"), seatGroup("carol")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
@@ -399,7 +398,7 @@ func TestAnUnreadableTLSPathIsNamedBeforeDialling(t *testing.T) {
 			// A URL nothing listens on: the point is that the TLS
 			// material is refused BEFORE anything is dialled, so the
 			// error must not be a connection failure.
-			_, err := Dial(Config{URL: "nats://127.0.0.1:1", TLS: tc.tls})
+			_, err := dial(Config{URL: "nats://127.0.0.1:1", TLS: tc.tls}, watched{})
 			if err == nil {
 				t.Fatal("an unreadable TLS path dialled anyway")
 			}
@@ -521,7 +520,7 @@ func TestTheLingerWindowDoesNotSlideWithArrivals(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("dora"), topics.AgentInboxGroup("dora")
+	topic, group := seatInbox("dora"), seatGroup("dora")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}

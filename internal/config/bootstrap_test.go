@@ -100,14 +100,20 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"token with no id", "api:\n  auth:\n    tokens:\n      - id: \"\"\n        token: abc\n", "api.auth.tokens[0].id", ErrMissing},
 		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
 		{"duplicate token id", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: founder, token: b}\n", "api.auth.tokens[1].id", ErrConflict},
-		// A TOKEN ID IS LOWERCASE, because `contact.crewlet_operator_id`
-		// binds it by its lowercased value while every write made under it
-		// is recorded exactly. `Founder` beside `founder` was two
-		// credentials one seat's binding admitted as the same person, and
-		// `Founder` alone was bound for writes while its own rows never
-		// matched the person's reads.
-		{"mixed-case token id", "api:\n  auth:\n    tokens:\n      - {id: Founder, token: a}\n", "api.auth.tokens[0].id", ErrShape},
-		{"token ids that differ only in case", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: FOUNDER, token: b}\n", "api.auth.tokens[1].id", ErrShape},
+
+		// A TOKEN IS A MACHINE, AND ITS LOGIN `token:<id>` IS HELD TO THE
+		// MACHINE GRAMMAR. Each of these composed an author name outside
+		// every grammar the three namespaces are kept apart by, and a login
+		// no directory row can hold — so the token could never be bound to
+		// a seat, and nothing said so until somebody tried.
+		{"token id with a capital", "api:\n  auth:\n    tokens:\n      - {id: Founder, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		{"token id with an underscore", "api:\n  auth:\n    tokens:\n      - {id: ci_bot, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		{"token id with a dot", "api:\n  auth:\n    tokens:\n      - {id: ci.bot, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		{"token id with an empty segment", "api:\n  auth:\n    tokens:\n      - {id: \"ci:\", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		// AND TO ITS LENGTH: fifty-nine characters is a `token:<id>` of
+		// sixty-five, one past the bound every login is held to.
+		{"token id whose login is past the bound", "api:\n  auth:\n    tokens:\n      - {id: " +
+			strings.Repeat("a", 59) + ", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
 
 		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
 		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
@@ -130,8 +136,7 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		// entry no id can ever equal locks the managing system out rather
 		// than restricting anybody else.
 		{"empty company writer", "api:\n  auth:\n    company_writers: ['']\n", "api.auth.company_writers[0]", ErrMissing},
-		{"mixed-case company writer", "api:\n  auth:\n    company_writers: [Operator]\n", "api.auth.company_writers[0]", ErrShape},
-		{"reserved company writer", "api:\n  auth:\n    company_writers: [anonymous]\n", "api.auth.company_writers[0]", ErrConflict},
+		{"mixed-case company writer", "api:\n  auth:\n    company_writers: [Operator]\n", "api.auth.company_writers[0]", ErrUnknownValue},
 		{"company writer listed twice", "api:\n  auth:\n    company_writers: [operator, operator]\n", "api.auth.company_writers[1]", ErrConflict},
 
 		{"active key names nothing", "secrets:\n  active_key_id: nope\n  keys:\n    - {id: k1, material: bWF0}\n", "secrets.active_key_id", ErrUnknownValue},
@@ -327,7 +332,7 @@ func TestAPeerListCountsOnlyTheOtherMembers(t *testing.T) {
 			"    port: 6222\n    host: 0.0.0.0\n" +
 			"    peers: [nats://0.0.0.0:6222, nats://node-b.internal:6222]\n",
 	} {
-		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+		if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Errorf("%q should load:\n%v", doc, err)
 		}
 	}
@@ -379,7 +384,7 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 		// server held them and died with it.
 		"stream:\n  type: nats\n  url: nats://localhost:4222\n  replicas: 3\ncoordination:\n  type: embedded-kv\n",
 	} {
-		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+		if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Fatalf("%q should load:\n%v", doc, err)
 		}
 	}
@@ -456,7 +461,7 @@ func TestIncarnationIsUniquePerCall(t *testing.T) {
 // deployment. Reading it as "no roles" would be a node that does nothing.
 func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap(nil, EnvOnly())
+	cfg, err := ParseRunnableBootstrap(nil, EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +498,7 @@ func TestEveryBadNodeLabelKeyIsReportedInOneStableOrder(t *testing.T) {
 	// Repeated because map order is random per iteration: an unsorted walk
 	// matches the sorted one by chance on some runs, never on twenty.
 	for range 20 {
-		_, err := ParseBootstrap([]byte(doc.String()), EnvOnly())
+		_, err := ParseRunnableBootstrap([]byte(doc.String()), EnvOnly())
 		var got []string
 		for _, p := range Problems(err) {
 			got = append(got, p.Path)
@@ -506,7 +511,7 @@ func TestEveryBadNodeLabelKeyIsReportedInOneStableOrder(t *testing.T) {
 
 func TestNodeProfileCarriesRolesAndLabels(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap([]byte("node:\n  roles: [seats]\n  labels:\n    zone: eu\n"+
+	cfg, err := ParseRunnableBootstrap([]byte("node:\n  roles: [seats]\n  labels:\n    zone: eu\n"+
 		"store:\n  path: /tmp/n.db\n  scratch: true\n"+
 		"stream:\n  leaf:\n    urls: [nats-leaf://data-a.internal:7422]\n"+
 		"coordination:\n  type: embedded-kv\n"), EnvOnly())
@@ -576,7 +581,8 @@ func TestAZeroDurationAccessorStaysZero(t *testing.T) {
 // so nothing downstream reads an empty one at all.
 func TestAnEmptyTypeIsTheDefaultOne(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap([]byte("stream:\n  type: \"\"\ncoordination:\n  type: \"\"\n"), NewResolver(MapSource{}))
+	cfg, err := ParseRunnableBootstrap([]byte("stream:\n  type: \"\"\n  store_dir: "+TestStoreDir+
+		"\ncoordination:\n  type: \"\"\n"), NewResolver(MapSource{}))
 	if err != nil {
 		t.Fatalf("a single node with empty types was refused: %v", err)
 	}
@@ -584,7 +590,8 @@ func TestAnEmptyTypeIsTheDefaultOne(t *testing.T) {
 		t.Fatalf("types = (%q, %q), want (%q, %q)", cfg.Stream.Type, cfg.Coordination.Type,
 			StreamEmbedded, CoordinationLocal)
 	}
-	cfg, err = ParseBootstrap([]byte("stream:\n  type: \"${STREAM_TYPE}\"\n"), NewResolver(MapSource{"STREAM_TYPE": ""}))
+	cfg, err = ParseRunnableBootstrap([]byte("stream:\n  type: \"${STREAM_TYPE}\"\n  store_dir: "+TestStoreDir+"\n"),
+		NewResolver(MapSource{"STREAM_TYPE": ""}))
 	if err != nil || cfg.Stream.Type != StreamEmbedded {
 		t.Fatalf("a stream type from an empty variable = (%v, %v), want the embedded default", cfg, err)
 	}

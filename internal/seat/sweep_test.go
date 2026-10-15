@@ -146,7 +146,7 @@ func TestAnUnserviceableNodeGivesBackEverySeat(t *testing.T) {
 	fit := true
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo", "eng"), Hooks: hooks,
-		Serviceable: func() (bool, string) {
+		Serviceable: func(context.Context) (bool, string) {
 			if fit {
 				return true, ""
 			}
@@ -199,7 +199,7 @@ func TestAPanickingServiceabilityGateKeepsTheSeats(t *testing.T) {
 	hooks := &hookLog{}
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"), Hooks: hooks,
-		Serviceable: func() (bool, string) { panic("status source is down") },
+		Serviceable: func(context.Context) (bool, string) { panic("status source is down") },
 	})
 	h.renewNodePresence(f.ctx)
 	h.Sweep(f.ctx)
@@ -253,12 +253,16 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	group := func(handles ...string) []placement.Group {
 		return []placement.Group{{Handles: handles, Nodes: 1, Share: len(handles)}}
 	}
+	// The company's seats by handle, as a sweep hands the claim path: a
+	// group names its seats by handle, and the hint is on the lease, which
+	// is named by the seat's id.
+	byHandle := seatIndex([]string{"ceo", "eng"})
 	order := func(groups []placement.Group) []candidate {
 		room := make([]int, len(groups))
 		for i, g := range groups {
 			room[i] = g.Share
 		}
-		return h.claimOrder(f.ctx, groups, room)
+		return h.claimOrder(f.ctx, byHandle, groups, room)
 	}
 
 	// Two candidates: an ordering exists, so the hints are worth reading.
@@ -279,7 +283,7 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	// Two seats, but one in a group with no room left: one candidate, and
 	// still one ordering.
 	full := append(group("ceo"), group("eng")...)
-	if got := h.claimOrder(f.ctx, full, []int{1, 0}); len(got) != 1 || got[0].handle != "ceo" {
+	if got := h.claimOrder(f.ctx, byHandle, full, []int{1, 0}); len(got) != 1 || got[0].seat.Handle != "ceo" {
 		t.Fatalf("claimOrder with one group full = %v, want only ceo", got)
 	}
 	// Two candidates in two groups of one: the groups' order is the plan's,

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 )
 
@@ -188,17 +189,14 @@ func TestAnUnreadableLedgerAnswersThisNodeAndSaysSo(t *testing.T) {
 	}
 }
 
-// OPERATOR-ONLY, and unregistered with nothing to read from.
-func TestTheCredentialPoolIsOperatorOnly(t *testing.T) {
+// ADMIN'S — which variable holds each model's keys and which of them a vendor
+// is refusing is what the company document's reader is trusted with — and
+// unregistered with nothing to read from.
+func TestTheCredentialPoolIsAdmins(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, poolSources(fleetLedger()))
-	if !r.RequiresOperator("credential_pool") {
-		t.Fatal("credential_pool is served to any caller")
-	}
-	if _, err := r.Answer(t.Context(), "credential_pool", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("anonymous credential_pool answered %v, want an authorization refusal", err)
-	}
+	requiresExactly(t, r, "credential_pool", iam.GrantAdmin)
 	bare := queries.NewRegistry()
 	queries.Register(bare, queries.Sources{})
 	if slices.Contains(bare.Names(), "credential_pool") {
@@ -212,7 +210,7 @@ func TestTheModelsScreenReadsWhatTheCredentialPoolSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, poolSources(fleetLedger()))
-	raw, err := r.Answer(t.Context(), "credential_pool", nil, "founder")
+	raw, err := r.Answer(everyGrant(t), "credential_pool", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 	gates := tracker.NewGates(r.db.Reader())
 	reason, gated, err := gates.GatedAt(t.Context(),
 		statelog.Subject{Kind: "task", ID: "t-1"}, "node-a", "op-purge",
-		purged.Position)
+		purged.Position, nil)
 	if err != nil {
 		t.Fatalf("GatedAt: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 	for _, opID := range []string{"op-comment", "op-purge-again"} {
 		reason, gated, err := gates.GatedAt(t.Context(),
 			statelog.Subject{Kind: "task", ID: "t-1"}, "node-a", opID,
-			purged.Position)
+			purged.Position, nil)
 		if err != nil {
 			t.Fatalf("GatedAt %s: %v", opID, err)
 		}
@@ -110,7 +110,7 @@ func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 			return err
 		}},
 		{"a restore", func() error {
-			_, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-1", "ENG", nil)
+			_, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-1", "ENG", false, nil)
 			return err
 		}},
 		{"a move to another project", func() error {
@@ -129,11 +129,6 @@ func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 			_, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 				Task: "t-1", Project: "ENG", WaitingOnAdd: []string{"t-2"},
 			}, nil)
-			return err
-		}},
-		{"a promotion out of it", func() error {
-			_, err := r.writer.PromoteItem(t.Context(), "op-promote", "t-1", "item-1",
-				newTask("t-3"), nil)
 			return err
 		}},
 	} {
@@ -279,13 +274,15 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	// stopped applier never reaches.
 	onLog := func(node string, want bool) {
 		t.Helper()
-		evicted, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, tracker.Domain{}.Stream(), r.log, node)
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{},
+			tracker.Domain{}.Stream(), statelog.StandingOf(r.log, r.verifier), node)
 		if err != nil || !found || evicted != want {
 			t.Fatalf("%s's standing read off the log = evicted %v, found %v (%v), "+
 				"want evicted %v", node, evicted, found, err, want)
 		}
 	}
-	if _, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, tracker.Domain{}.Stream(), r.log, "node-b"); err != nil || found {
+	if _, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{},
+		tracker.Domain{}.Stream(), statelog.StandingOf(r.log, r.verifier), "node-b"); err != nil || found {
 		t.Fatalf("a node never gated has a standing on the log: found %v, %v", found, err)
 	}
 

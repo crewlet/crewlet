@@ -39,11 +39,15 @@ type WorkSearcher interface {
 // shape rather than a copy this package would have to keep matching, and the
 // shape is built where every node — not only one serving this API — can build
 // it.
+//
+// HANDED A [memread.Seat] WHOLE — its agent id and its handle — resolved by
+// this package from the org its answer is made of, so the node that answers
+// never resolves a handle against an org the asker's may differ from.
 type SeatMemory interface {
-	Memory(ctx context.Context, handle string, limit int) (memread.Memory, error)
-	Episode(ctx context.Context, handle, id string) (memread.EpisodeDetail, error)
-	Threads(ctx context.Context, handle, conversation string, limit int) (memread.Threads, error)
-	Overview(ctx context.Context, handles []string) (memread.Overview, error)
+	Memory(ctx context.Context, seat memread.Seat, limit int) (memread.Memory, error)
+	Episode(ctx context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error)
+	Threads(ctx context.Context, seat memread.Seat, conversation string, limit int) (memread.Threads, error)
+	Overview(ctx context.Context, seats []memread.Seat) (memread.Overview, error)
 }
 
 // DefaultSearchLimit is what a caller that names none gets.
@@ -124,11 +128,14 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 // answer to know what to ask for. The page is [memread.ThreadPage]'s, and the
 // listing carries the seat's whole count beside it.
 func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	// A SEAT'S TRAIL, and so its lead's or an admin's whoever's seat it is
+	// — see [Sources.trailSeat]. An absent handle is still the caller's own
+	// seat.
+	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
-	return s.Memory.Threads(ctx, handle, strings.TrimSpace(p.String("conversation")),
+	return s.Memory.Threads(ctx, seat, strings.TrimSpace(p.String("conversation")),
 		p.Int("limit", 0))
 }
 
@@ -162,7 +169,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +188,7 @@ func (s Sources) inboxRetention() time.Duration {
 	if s.Company == nil {
 		return 0
 	}
-	company := s.Company()
+	company, _ := s.Company()
 	if company == nil {
 		return 0
 	}

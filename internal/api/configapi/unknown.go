@@ -46,7 +46,7 @@ func carryUnknown(stored, written []byte) ([]byte, error) {
 //
 // THE STORED DOCUMENT, not this build's struct encoded again: the rest of the
 // company may carry fields this build cannot represent, and a write about one
-// seat must not remove them.
+// entity must not remove them.
 //
 // A CREATED entity has no element to replace, so it is PLACED where the
 // collection's create put it in the struct — an MCP server at the end of its
@@ -91,8 +91,7 @@ func spliceStored(stored []byte, access entityAccess, id string, entity any, cre
 		return nil, fmt.Errorf("configapi: encode the config: %w", err)
 	}
 	// The element replaced is matched to its stored self like every other
-	// member: a seat by its handle, a unit by its name, a server by its name
-	// in its list, a provider by its key.
+	// member: a server by its name in its list, a provider by its key.
 	return carryUnknown(stored, final)
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // --- the tri-state ---------------------------------------------------------
@@ -205,9 +206,9 @@ func TestProvableFollowsTheLeaseRatherThanTurnAdmission(t *testing.T) {
 	var h *Host
 	h = f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"), TTL: 30 * time.Second, HeartbeatInterval: 5 * time.Second,
-		Hooks: HookFuncs{Acquire: func(_ context.Context, handle string, _ coord.Lease) error {
-			whileEstablishing = h.Provable(handle)
-			_, admittedWhileEstablishing = h.MayStart(handle)
+		Hooks: HookFuncs{Acquire: func(_ context.Context, seat placement.Seat, _ coord.Lease) error {
+			whileEstablishing = h.Provable(seat.Handle)
+			_, admittedWhileEstablishing = h.MayStart(seat.Handle)
 			return nil
 		}},
 	})
@@ -413,7 +414,7 @@ func TestAnAdmissionHookFailureDoesNotAbortTheHeartbeat(t *testing.T) {
 	faulty := coordtest.NewFaulty(f.store)
 	h := f.newHost("node-a", Config{
 		Backend: faulty, Seats: seatsNamed("ceo", "eng"),
-		Hooks: HookFuncs{Admission: func(context.Context, string, bool) error {
+		Hooks: HookFuncs{Admission: func(context.Context, placement.Seat, bool) error {
 			panic("the broker will not answer")
 		}},
 	})

@@ -89,16 +89,23 @@ type Company struct {
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
 
-	// ActivatedAt is when the fleet activated this configuration — the
-	// activation pointer's own instant, or the active revision's
-	// `activated_at` a boot reads — stamped when the epoch is installed.
+	// ActivatedAt is the instant the revision this epoch was applied from
+	// was activated — the activation pointer's own ([coord.Activation.At]),
+	// or a boot's reading of the active revision's `activated_at` — in UTC,
+	// stamped ONCE, as the company is built ([stampActivation]).
 	//
-	// ZERO FOR A CONFIGURATION NO ACTIVATION HAS NAMED: a Tier B file a
-	// node booted with, before its reconciler has published it. Everything
-	// that must agree across nodes about WHEN a configuration took effect
-	// reads this rather than a clock, and a zero instant is a
-	// configuration none of them may apply — the chart is not written from
-	// it.
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET: a Tier B file a node
+	// booted with, which its reconciler publishes and applies with the
+	// pointer's instant before a seat is claimed. A zero instant is a
+	// configuration nothing derived from it may be written from.
+	//
+	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
+	// ([configplane.ActivationStamp]) — the tracker's chart-owned project
+	// fields and the knowledge containers — so that an older configuration
+	// applied late on another node cannot walk a newer one back. Never the
+	// applying node's own clock: every node applies one activation
+	// separately, at its reconcile tick and again at every boot. See
+	// [Engine.applyChart].
 	ActivatedAt time.Time
 }
 
@@ -192,7 +199,16 @@ func (c *Company) Seats() []placement.Seat {
 		// yields no handle ("the name yields no handle, so set one
 		// explicitly"), and NewCompany validates. Probed, not assumed —
 		// "!!!", "---" and "日本" are all refused at parse.
-		out = append(out, placement.Seat{Handle: role.Handle(), Placement: role.Placement})
+		//
+		// THE ID IS CARRIED WITH THE SEAT, because every durable name the
+		// host and the mailbox sweep build is made from it and neither can
+		// resolve one on the paths where the company view is gone. A seat
+		// with no derivable id is still listed: the host refuses to claim
+		// it, loudly, where dropping it here would make it vanish from the
+		// placement arithmetic with nothing to say so.
+		id, _ := c.Org.AgentIDFor(role)
+		out = append(out, placement.Seat{
+			ID: id, Handle: role.Handle(), Placement: role.Placement})
 	}
 	// Sorted, because this feeds the placement math and the sweep compares
 	// its own answer across ticks. An org walk's order is stable today but
@@ -249,7 +265,11 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 	te := c.Config.TurnEngine
 	del := te.Delegation
 	return runner.New(runner.Config{
-		Seat:     prompts.Seat{Org: c.Org, Role: role, Env: c.contacts},
+		// THE TURN'S OWN READING of who may be reached, so the roster its
+		// prompt renders leaves out exactly the people its tools do — and
+		// the chain the roster's ${VAR} contact ids resolve through.
+		Seat: prompts.Seat{Org: c.Org, Role: role, Env: c.contacts,
+			Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
 		Models:   c.Models,
 		Caps: runner.Caps{

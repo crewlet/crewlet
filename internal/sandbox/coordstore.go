@@ -73,12 +73,16 @@ func (s *CoordStore) clock() time.Time {
 
 // casRetries bounds one read-decide-write.
 //
-// Sixteen, matching the coordination store's own loops. Contention here is a
-// seat's own turns plus a recovering peer — two or three writers at the very
-// worst — so exhausting this many rounds is a store that is not settling
-// rather than a queue of legitimate writers, and it is reported as an error
-// instead of as a lost race: a caller told "somebody else got there" stops,
-// while a caller told "no answer" retries.
+// A COUNT, unlike the time the fleet store retries its own lost races for
+// (internal/coord/kv's race.go), and for the reason that file gives its own
+// counted loops: what a write here races ends the race of itself. The time
+// bound exists for records whose writers nothing limits — the token counter, a
+// credential's cooldown — while a run's record is written only by its seat's
+// own turns and a peer recovering it, two or three writers at the very worst.
+// Sixteen is that several times over, so exhausting it is a store that is not
+// settling rather than a queue of legitimate writers, and it is reported as an
+// error instead of as a lost race: a caller told "somebody else got there"
+// stops, while a caller told "no answer" retries.
 const casRetries = 16
 
 // BeginLaunch opens a launch on this turn's row. See the contract on
@@ -107,10 +111,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
-	// And the job's own record starts here, keyed on that name: the
-	// instant the launch exists is the instant its phase began, and a
-	// previous job's record — its start, its iteration, whether its phase
-	// was published — is not this one's. Only the model is the caller's.
+	// And the job's own record starts here: the instant the launch exists
+	// is the instant its phase began, and a previous job's record — its
+	// start, its iteration, whether its phase was published — is not this
+	// one's. Only the model is the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model}
 	raw, err := encodeRun(run)
 	if err != nil {
@@ -803,6 +807,21 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
 	return s.list(ctx, func(r PendingRun) bool {
 		return r.AgentHandle == handle && slices.Contains(Active, r.Status)
+	})
+}
+
+// ListActiveForSeatID returns one seat's unfinished runs by the seat's id: the
+// read a mailbox retirement makes. See the contract on [PendingStore].
+//
+// Through [seatOf], the parse a run's control and inbox subjects are built
+// with, so the runs a retirement ends are exactly the runs whose completion and
+// answer travel on the subscriptions it is about to delete.
+func (s *CoordStore) ListActiveForSeatID(ctx context.Context, seat uuid.UUID) ([]PendingRun, error) {
+	if seat == uuid.Nil {
+		return nil, errors.New("sandbox: a seat's runs are listed by its id, and none was given")
+	}
+	return s.list(ctx, func(r PendingRun) bool {
+		return seatOf(r.AgentID) == seat && slices.Contains(Active, r.Status)
 	})
 }
 

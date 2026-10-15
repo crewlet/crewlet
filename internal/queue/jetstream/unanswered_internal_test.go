@@ -12,7 +12,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // stallingJS answers EVERY existence probe with the error a broker that never
@@ -130,8 +129,8 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 			q.timing = timing
 			ctx := t.Context()
 
-			topic := topics.AgentInbox("unanswered-" + sanitizeName(unanswered.Error()))
-			group := topics.AgentInboxGroup("unanswered-" + sanitizeName(unanswered.Error()))
+			topic := seatInbox("unanswered-" + sanitizeName(unanswered.Error()))
+			group := seatGroup("unanswered-" + sanitizeName(unanswered.Error()))
 
 			// BOTH PROBES AT ONCE, because a subscribe reaches
 			// both: EnsureSubscription looks the consumer up and
@@ -188,7 +187,7 @@ func TestAnAnsweredFailureStillFailsTheProbe(t *testing.T) {
 	refused := errors.New("nats: authorization violation")
 	q.js = &stallingJS{JetStream: q.js, silent: true, err: refused}
 
-	topic, group := topics.AgentInbox("refused"), topics.AgentInboxGroup("refused")
+	topic, group := seatInbox("refused"), seatGroup("refused")
 	if _, err := q.EnsureSubscription(ctx, topic, group); !errors.Is(err, refused) {
 		t.Fatalf("EnsureSubscription returned %v, want the broker's own refusal "+
 			"wrapped: only silence falls through to the create", err)
@@ -281,8 +280,8 @@ func TestEveryLookupIsAskedAtTheReadTerm(t *testing.T) {
 	if err := q.ensureStream(ctx, spec); err != nil {
 		t.Fatalf("ensure stream: %v", err)
 	}
-	topic := topics.AgentInbox("lookup-term")
-	group := topics.AgentInboxGroup("lookup-term")
+	topic := seatInbox("lookup-term")
+	group := seatGroup("lookup-term")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("ensure subscription: %v", err)
 	}

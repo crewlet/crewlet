@@ -49,14 +49,16 @@ logging:
 stream:
   type: embedded          # a JetStream server inside this process: no
                           #   listener, no port, no service to operate
-  store_dir: "./acme-data/stream"   # leave empty and the stream is
-                          #   in-memory, and nothing published survives a
-                          #   restart. This company is on the engine's own
-                          #   tracker and knowledge base — the defaults — so
-                          #   every item and every page lives there too, and
-                          #   the engine REFUSES to boot on an in-memory
-                          #   stream rather than lose them at the first
-                          #   restart. Name a directory
+  store_dir: "./acme-data/stream"   # REQUIRED. Leave it empty and the
+                          #   stream is in-memory, so nothing published
+                          #   survives a restart — including the people
+                          #   who sign in, whom every node keeps on a
+                          #   state log whatever backends the company
+                          #   names, and its items and pages, which are on
+                          #   the engine's own tracker and knowledge base
+                          #   here. The engine
+                          #   REFUSES to boot without one rather than lose
+                          #   them at the first restart
 
 store:
   path: "./acme-data/acme.db"   # this node's own database, owned
@@ -80,13 +82,41 @@ api:
                     # is worth the privileged bind only once an external
                     # service registers a webhook URL against this engine —
                     # see guides/deployment.md.)
+  external_url: "http://localhost:8000"
+                    # REQUIRED once a port is set. Where a BROWSER reaches
+                    # this deployment, which is not what the two lines above
+                    # bind: its scheme decides the session cookie's flags and
+                    # its host is the origin every write is checked against.
+                    # Behind a proxy, the public address.
   auth:
-    # Needed for WRITES and for /config. Reads — the dashboard, /events,
-    # /agents — serve without one by default; add
-    # `allow_anonymous_read: false` here to guard those too.
-    tokens:
+    totp: optional  # people sign in with a login and a password; unset, a
+                    #   second factor (an authenticator app) is REQUIRED too.
+                    #   `optional` is fine here because the browser reaches
+                    #   this on loopback; leave the line out anywhere else.
+                    #   Nobody holds a password yet: the token below invites
+                    #   the first person onto their seat (step 4).
+    admin: serve    # whether THIS node grants admin to those who hold it:
+                    #   `serve`, or `refuse` to clamp admin away here and keep
+                    #   every app. Required once a port is set.
+    tokens:         # at least one is REQUIRED once a port is set: every route
+                    #   needs a credential, and this is also what puts the
+                    #   first person on their seat on a fresh deployment.
       - id: founder
-        token: "${CREWLET_API_TOKEN_FOUNDER}"
+        token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
+        grants: [admin]   # what this credential may do — required and
+                          #   non-empty: admin, tracker, knowledge. Admin
+                          #   runs the company and includes every app.
+
+secrets:                  # REQUIRED. Every record on every state log — the
+                          #   tracker's, the knowledge base's — is signed
+                          #   under this keyring, because the broker has no
+                          #   auth of its own and a record is whatever the
+                          #   next node applies. `crewlet secrets keygen`
+                          #   mints one and prints the export line
+  active_key_id: "2026-01"
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 ## 2. Write the Tier B company (`company.yaml`)
@@ -119,21 +149,27 @@ roles:
   # You, in the chart. A `kind: human` seat is addressable but never
   # spawned (no runtime, no inbox, no LLM) — it gives escalation a person
   # to stop at, and lets agents recognise your activity on the surfaces
-  # you connect later. Needs at least one `contact` identity; scope
+  # you connect later. It is also the seat you join on in step 4: every
+  # person holds a human seat, so a company with none admits nobody.
+  # `contact` is optional — without one you are reached through the
+  # dashboard only, and agents cannot @-mention you on chat; scope
   # `manages` to the top seat so you aren't copied on everything.
   - name: Your Name
+    handle: founder             # see the note under this block — set these now
     kind: human
-    manages: [CEO]
+    manages: [ceo]              # BY HANDLE. A `manages:` entry names a seat by
+                                # its handle and a unit by its key — never by a
+                                # display name, which is prose you will edit
     contact:
       # One identity per surface you connect. Swap this for
       # `slack_user_id` (a `U…` member ID) if Slack is your chat.
       mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}"   # your chat username
 
   - name: CEO
-    handle: ceo                 # see the note under this block — set these now
+    handle: ceo
     goal: "Set product vision, prioritize initiatives, and make final calls"
     backstory: "Experienced founder who balances speed with quality"
-    manages: [CTO, PM]
+    manages: [cto, pm]
     # A zero-integration way to see your first agent turn: a scheduled task.
     # Delete this once you have real integrations delivering work.
     schedules:
@@ -144,8 +180,12 @@ roles:
 # Flexible org structure — use any nesting depth and unit types.
 units:
   - name: Product Management
+    id: pm-team                 # the unit's KEY: what a `manages:` entry and a
+                                # root seat's `unit:` resolve. The name above is
+                                # display. Leave it out and one is minted from
+                                # the name at import (`product-management` here)
     type: team
-    lead: PM
+    lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
     # A unit's identity on the tracker and the knowledge base. Both default
     # to the engine's own backends, so these two keys are all it takes to
@@ -160,11 +200,12 @@ units:
         handle: pm
         goal: "Turn business goals into clear specs and prioritized backlogs"
         backstory: "Data-driven product manager who writes crisp requirements"
-        manages: [Engineer]
+        manages: [eng]
 
   - name: Core Engineering
+    id: eng-team
     type: team
-    lead: CTO
+    lead: cto
     purpose: "Build and ship the product"
     project: ENG
     space: ENG
@@ -176,7 +217,7 @@ units:
         handle: cto
         goal: "Set technical direction, make architecture decisions, unblock engineers"
         backstory: "Senior architect with deep distributed systems experience"
-        manages: [Engineer]
+        manages: [eng]
 
       - name: Engineer
         handle: eng
@@ -184,12 +225,22 @@ units:
         backstory: "Full-stack engineer who writes clean, tested code"
 ```
 
-> **Set `handle` now, and keep it.** An agent's durable id is a UUIDv5
-> over `"<company name>:<handle>"` (`org.DeriveAgentID`), so changing a
-> handle, *or the company `name`*, mints a new id and orphans that seat's
-> diary, onboarding markers, and counterparty profiles. It keeps working, but it
-> has lost its memory. Leaving `handle` unset auto-derives it from the
-> role name, which ties the id to a label you may well rename later. See
+> **Set `handle` now, and keep it.** The handle is the seat's identity twice
+> over: an agent's durable id is a UUIDv5 over `"<company name>:<handle>"`
+> (`org.DeriveAgentID`), and it is also what every `lead:` and `manages:` in
+> the chart above resolves. So changing a handle, *or the company `name`*,
+> mints a new id and orphans that seat's diary, onboarding markers and
+> counterparty profiles. It keeps working, but it has lost its memory.
+> A seat that leaves `handle` unset gets one derived from its `name`, and
+> every write stores it — so an edit of the *stored* company (the org
+> builder, `PATCH /config`, the per-entity routes) keeps it when a name is
+> corrected. A *file* does not: every import of one (`crewlet config import`,
+> `crewlet run -import-company`) mints a missing handle afresh from the name
+> the file holds, so correcting a name in a file
+> that leaves the handle out replaces the seat. Declare `handle` on every
+> seat, and `id` on every unit, in any file you keep. With its handle
+> declared, a seat's `name` is display and referenced by nothing, so renaming
+> one is free. See
 > [Agent Runtime](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ### LLM options
@@ -278,10 +329,12 @@ token_budget:          # org-wide, every seat together
 
 units:
   - name: Core
+    id: core
     type: team
-    lead: CTO
+    lead: cto
     roles:
       - name: CTO
+        handle: cto
         token_budget: {day: 100000}     # this seat alone, on top of the org's
       - name: Engineer
         token_budget: {week: 250000}
@@ -299,20 +352,22 @@ the window turns over — or at once, if you raise the ceiling.
 Usage is **durable** — it lives in the fleet's
 [coordination store](../concepts/coordination.md), so it survives restarts and
 is one number for the whole company however many nodes run it. Read it
-against a running node, and raise a ceiling to make room before a window
-turns over:
+against a running node:
 
 ```bash
-crewlet budgets show     # usage per scope, read from the running node
+crewlet budgets show     # every scope's day, week and month, spent and capped
 ```
 
-(Usage used to reset on every engine start, which made a cap advisory in
-exactly the situation that motivates one — an agent burning budget in a
-crash loop.)
+There is no reset: a window's allowance comes back when it turns over, and
+room before then is made by raising its ceiling through `/config` — a seat's
+with `PUT /config/roles/{handle}` (see
+[Budgets and spend](../guides/budgets-and-spend.md#budget-windows)).
 
 ## 3. Run it
 
 ```bash
+crewlet secrets keygen -key-id 2026-01   # prints the export line below
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."          # embeddings
@@ -372,15 +427,116 @@ terminal. Piping instead? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`),
 because a plain `tee` dies on the first Ctrl+C and the drain's log has nowhere
 to go.
 
-## 4. Watch the first turn
+## 4. Sign in, and invite yourself
 
-Open the dashboard at <http://localhost:8000/>. It lands on **Home**, which is
-what a person opening this wants first: how the company is (who is working,
-what waits on you, the work in progress and finished, the tokens spent), the
-decisions only you can make — answered right there, an option of an agent's
-question is a button — who is working now, and what the company has done. With
-no company activity yet each card says so, and a condition the engine itself
-raised takes over the sentence under the greeting.
+Open the dashboard at <http://localhost:8000/>. **Opening it means signing
+in**: every route needs a credential, reads included, so the first thing it
+shows is its sign-in screen. People sign in with a login and a password, and
+nobody has one yet — nobody has joined — so the screen says so and opens its
+**API token** form (on a deployment somebody has joined, it is behind **Use an
+API token instead**). Paste `$CREWLET_API_TOKEN_FOUNDER`: it is
+exchanged for a one-hour session, and the browser keeps the session's cookie
+and never the token, which is sent once, in a header, and held nowhere
+afterwards.
+
+**Invite yourself onto your seat.** Every person holds exactly one human seat
+for as long as they exist, so you join the company on the one `company.yaml`
+declares for you — the human seat with the handle `founder`. Open **Agents ›
+Org chart**: your seat's card (under the name you gave it) reads **Vacant**,
+because nobody holds it yet. Click the card to open the seat beside the
+chart: its foot offers **Invite** and **Create person** (the same two are on
+the card itself, as icons that appear when you point at it or in its menu
+from the keyboard, and on the seat's page). Press **Invite** — the dialog is
+for that seat and offers no other — and fill in
+
+- **your email address** — what the invitation is held against;
+- **your access** — tick **Admin**, which ticks and locks both apps (Tracker
+  and Knowledge) beside it. The founder token holds `admin`, and nobody can
+  confer a permission they do not hold. Keep Admin, or nobody after you can be
+  invited or created except with the token again.
+
+The link it shows is the credential and is shown **once** — copy it now. The
+engine sends no mail; for anybody else you invite, getting it to them is
+yours. Until the link is redeemed, the open invitation holds the seat: the
+card reads **Invited ·** your address, and nobody else can be put on it.
+
+(**Create person** is the other way onto a vacant seat:
+it creates the person active at once and shows a one-time **password link**
+that sets their first password. For yourself the invitation is the shorter
+road, since redeeming it signs you in.)
+
+**Open the link** (this browser is fine). It is the dashboard's invitation
+screen: it names who the invitation is for and the seat it binds — and who
+sent it when a person did; this one was issued under the founder token, a
+machine nobody holding the link would recognise, so it names no sender — and
+asks for a login — it proposes one from your address, dotted like
+`jane.doe`, how you sign in beside your address — your name, and a
+password of at least twelve characters (`api.auth.min_password_length` raises
+that). Redeeming it puts you on the `founder` seat and signs you in: from your
+first sign-in you act as that seat. The secret after the `.` never leaves the
+page in a URL: the link carries it in the fragment, which no browser sends to a
+server, and the screen sends it in a header and a body instead.
+
+This walkthrough's `crewlet.yaml` says `totp: optional`, so a password alone
+signs you in here. **Leave that line out on a deployment reached off
+loopback** — unset, a second factor is required, and the session a redemption
+or a password sign-in opens for somebody holding none may only enrol one: the
+dashboard shows a QR code to scan with an authenticator app on your phone
+(with the key to type, and the `otpauth://` link for an app on the same
+device, beside it), takes the first code the app shows, and shows the
+**recovery codes once**. See [A required second factor
+is enrolled before anything
+else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
+
+From now on the sign-in screen takes your login or address and your password.
+**Your name at the sidebar's foot opens your own Account** — your password,
+two-step verification (an authenticator app, which you can set up there even
+where it is optional) and recovery codes, where you are signed in and your
+personal access tokens; Settings lists it too, under **You**. The menu beside
+your name holds the same link and signing out, here or everywhere at once. A gesture that changes who may do what, or how somebody
+proves who they are, asks you to confirm your password first, in one dialog,
+and then carries on. The founder token stays: it is what a pipeline uses, and
+the way back in when nobody who can sign in is available — a machine
+credential, not how people should be signing in. Everybody after you arrives
+the same way, on a seat of their own: add a human seat for them (**Agents ›
+Edit org › Add human seat**), and once it is saved an administrator invites
+them onto it, or creates them on it, from its card in the org chart — with
+both apps ticked by default and Admin not. A person handed no permission at all
+still sees the company's overview: the org chart, what the agents are doing,
+spend and schedules — just not its tracker or its knowledge base.
+
+**From a shell instead**, `crewlet iam invite` issues the same invitation
+through the running node, authenticating with `CREWLET_API_TOKEN` like every
+command that talks to one, and prints its link once. `-seat` is required —
+every invitation names the seat its redemption binds — and `crewlet iam seats
+-unheld` lists the human seats nothing holds yet:
+
+```bash
+export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+crewlet iam invite you@example.com -seat founder -grants admin
+```
+
+`-grants admin` stores `admin` and both apps beside it; `-grants` takes
+`admin`, `tracker`, `knowledge` or `none`, and left out on an invitation it
+sends every app and not admin.
+
+```
+invitation 0192f4c8-…
+http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
+
+expires 2026-06-21 12:00
+This link is shown once and cannot be read back: what the estate keeps is a hash of the secret after the id. Send it to them yourself — this engine never sends mail.
+```
+
+## 5. Watch the first turn
+
+It lands on **Home**, which is what a person opening this wants first: how the
+company is (who is working, what waits on you, the work in progress and
+finished, the tokens spent), the decisions only you can make — answered right
+there, an option of an agent's question is a button — who is working now, and
+what the company has done. With no company activity yet each card says so, and
+a condition the engine itself raised takes over the sentence under the
+greeting.
 
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
@@ -414,39 +570,35 @@ hundredth — and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
-**Bind your token to your seat** and the personal screens become yours: give a
-human seat `contact.crewlet_operator_id` matching one of your
-`api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
-person. My work is one tab per claim on somebody's attention — what they hold,
-the order somebody put it in, the questions waiting on them and the ones they
-are waiting on — with every count on the strip, and a band above it naming
-whose day is on screen. The **Queue** is the work list narrowed to that
-person: the same Filter, Display and scope controls, opening grouped by when
-each task is due; read in priority order, its rows are reordered by dragging
-them. A question put to them is answered on its row in **Asked of me**. Until
-then the dashboard says so rather than guessing: an unbound token is an
-ordinary state, not a fault.
+**My work** and the **Inbox** answer for you — the person bound to the founder
+seat — and every rule that asks "do you lead this" is asked about your seat. My work is one tab per claim
+on somebody's attention — what they hold, the order somebody put it in, the
+questions waiting on them and the ones they are waiting on — with every count
+on the strip, and a band above it naming whose day is on screen. The **Queue**
+is the work list narrowed to that person: the same Filter, Display and scope
+controls, opening grouped by when each task is due; read in priority order, its
+rows are reordered by dragging them. A question put to them is answered on its
+row in **Asked of me**. Signed in with the API token instead, the dashboard says
+so rather than guessing — a token bound to no seat is an ordinary state, not a
+fault, and its day is the one kept under its own login. See [Humans in the Org
+Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
 `>` to actions — or paste an event, trace or turn id out of a log to open it.
-Type a question of three words or more and pause, and a bound token gets a
-short answer written from your company's own pages and tasks, with its sources
-and the tokens it spent, charged to the company's budget. From the same box you
+Type a question of three words or more and pause, and a caller bound to a
+seat — a signed-in person, who always holds one, or a directory-bound token —
+gets a short answer written from your company's own pages and tasks, with its
+sources and the tokens it spent, charged to the company's budget. It runs on
+the auxiliary model of the seat you act as, so a token bound to no seat is
+told so instead. From the same box you
 can assign the task you found to an agent, ask an agent about what you typed
-(the answer lands in your Inbox) or file it as a task — each made as you, filed
-in the project on screen or your team's, and where neither says, in the project
-you pick from the list it offers; on a token that is not bound to a person each
-row says why it cannot act instead.
-
-Once bound, **what you file through your own assistant counts as yours** on
-both screens. The record still names the token — a write through
-`/operator/mcp` is attributed to the credential, with author kind `operator`,
-because a tracker whose author field is chosen by the writer is not an audit
-trail — and the personal reads match your seat handle *or* that token id, so
-the item you reported and the one a colleague assigned you land on the same
-day. An operator reading somebody else's screen gets *their* two names from
-the chart, never the token in your hand.
+(the answer lands in your Inbox) or file it as a task — each made as you, under
+your seat when you are signed in as yourself and under the token's own login
+when you are signed in with one that no seat binds,
+filed in the project on screen or your team's, and where neither says, in the
+project you pick from the list it offers; an action the authority table would
+refuse you says why on its row instead.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:
@@ -465,52 +617,84 @@ client at `/operator/mcp` with your API token:
 
 It gets the same tracker and knowledge-base tools a seat holds — eighteen over
 the tracker and five over the pages — and eleven more that no seat is given:
-the saved views, the catalogue write, a person's own queue and inbox, the
-trash, and the board drag. Its writes are attributed to the token's own name rather than to a
-seat — so an audit can tell your edit from an agent's. See
+the saved views, the catalogue write, a person's own queue, inbox and pins, the
+trash, and the board drag. Each is decided by the same authority table a seat's
+calls are, and knowledge search sits beside them, with the gestures a person
+makes about the company rather than its work — pausing and resuming a seat,
+steering a running turn, answering a coding run's question. On the
+deployment's token its writes carry the token's own login, `token:founder`,
+with author kind `operator` — never an agent's — so an audit can tell them from
+an agent's. The token cannot write as your seat: a seat is held by one row of
+the identity directory, and yours is you. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
+
+Once you sign in as a person, give the assistant **your own** token rather than
+the deployment's. It acts as you — your seat, your permissions, its writes carrying
+your seat's handle with author kind `human` — and every write it
+makes also records `pat:<its id>`, so what the assistant did stays tellable
+from what you did. Nobody else can mint it, an administrator included; you mint
+it yourself, and the command signs in as you for that one request:
+
+```bash
+crewlet iam token -login jane.doe -label "my assistant"   # asks for your password
+```
+
+See [machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts).
 
 The same picture is available over the API:
 
 ```bash
-curl -s http://localhost:8000/agents | python3 -m json.tool
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
+  http://localhost:8000/agents | python3 -m json.tool
 curl -s http://localhost:8000/health
 ```
 
-No token on those: reads serve without one by default, which is why the
-dashboard opened without asking you for anything. That also means anyone who can
-reach port 8000 can read the LLM transcripts on `/events` — fine on a laptop,
-a decision to make deliberately anywhere else. Set
-`api.auth.allow_anonymous_read: false` to guard reads, at which point every call
-above needs `-H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER"` and the
-dashboard prompts for the token on first load. See
-[Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
+**Every route needs that credential, reads included** — `/health` and `/ready`
+are probes and are the exception, which is why the second call carries nothing.
+That is also why the dashboard opened on its sign-in screen. Reads used
+to serve without one, which meant anyone who could reach port 8000 could read
+the LLM transcripts on `/events`; see
+[Configuration § Auth](../concepts/configuration.md#auth) for what replaced
+that posture and why it could not simply be defaulted the other way.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting.
-The first revision brings up everything the company needs, the engine's own
-tracker and knowledge base included, with their projects and spaces, and the
+An unconfigured node is not an idle one: its identity estate runs from boot,
+so you can sign in on it with the founder token before any company exists. You
+cannot invite yourself yet — there is no seat to put you on, so an invitation
+there answers `409 no_active_revision` — and the company comes first: import
+or create it with your human seat in it, then invite yourself onto that seat
+as above. The work tracker's and the knowledge base's routes
+answer `503 no_active_revision` until the first revision arrives. That
+revision brings up everything the company needs, the engine's own tracker and
+knowledge base included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
-`providers.sandbox`:
+`providers.sandbox` — under the same API, with nothing restarted:
 
 ```bash
-curl -X PUT http://localhost:8000/config \
-  -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
-  -H "Content-Type: application/yaml" \
-  -H "X-Summary: initial bootstrap" \
-  --data-binary @company.yaml
+export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+crewlet config import company.yaml
 ```
 
+The engine holds its store, so the command goes through the node's API: a
+`PUT /config` of the whole file, which stores it as the company's first
+revision and activates it fleet-wide — exactly what a script driving the API
+directly sends ([Configure via the API](../guides/configure-via-api.md)).
+
 Or create the company from the dashboard: open **Agents** and its **Edit
-org** button (`#/agents/edit`). With no configuration active it opens
-on a form that starts the company from a template, has the engine check it,
-and creates it with `PUT /config`. The builder reads and writes `/config`, so
-it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
-dashboard adds no model provider — Settings › Models & keys edits one the
-configuration already declares — so one step stays outside it. Until it is
-done the company runs and no agent seat takes a turn; whatever is sent to a
-seat waits on its inbox. Add `providers.llm` afterwards with
-`crewlet config import` or `PATCH /config`, as the builder's next steps show
+org** button (`#/agents/edit`). With no configuration active it opens on a
+form that starts the company from a template, has the engine check it, and
+creates it with `PUT /config`. Keep its **Add a seat for yourself** ticked:
+that seat is the one you then invite yourself onto, from the org chart, as
+step 4 describes. The builder reads and writes the company
+document, so it needs a session holding `admin`: the one you signed in with
+using `$CREWLET_API_TOKEN_FOUNDER` carries it, and a person you invite needs
+it ticked to build the company — or to lead a unit, whose own team they may
+edit without it. The dashboard adds no model provider — Settings › Models &
+keys edits one the configuration already declares — so one step stays outside
+it. Until it is done the company runs and no agent seat takes a turn; whatever
+is sent to a seat waits on its inbox. Add `providers.llm` afterwards with a
+`PATCH /config` merge patch, as the builder's next steps show
 ([The Org Builder](../guides/org-builder.md#creating-the-company)), and the
 work that waited runs.
 
@@ -599,7 +783,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 
 ```bash
 crewlet validate                       # check both tiers in CI
-crewlet config import company.yaml     # write a new active revision
+crewlet config import company.yaml     # store and activate the company
 crewlet run                            # start the node
 ```
 
@@ -644,15 +828,20 @@ each), then wire them in:
   [GitHub](../integrations/github.md) — and enable the
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
   merge requests
+- Bring your team in: add a human seat for each person who is to sign in
+  (**Agents › Edit org › Add human seat**), then invite them onto it or create
+  them on it from its card in **Agents › Org chart** — every person holds a
+  seat of their own. See [Putting a person in the
+  seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,
   `gitlab_username`, …) so escalations land in your DMs and agents recognise
   your activity
-- Encrypt your config at rest — add a Tier A keyring (`crewlet secrets keygen`)
-  and run `crewlet config seal` so the **entire** company config is stored
-  encrypted in the DB as one opaque blob. See
-  [Configuration § Secrets](../concepts/configuration.md#secrets)
+- Your config is already encrypted at rest — the keyring every node holds seals
+  the **entire** company document into the DB as one opaque blob on every
+  write, and that seal is also what lets a peer trust a revision it fetches.
+  See [Configuration § Secrets](../concepts/configuration.md#secrets)
 - Stop exporting a variable per credential — with that keyring in place,
   `crewlet secrets set LLM_API_KEY` puts the value in the encrypted
   [secret store](../concepts/secret-store.md), which the engine consults ahead

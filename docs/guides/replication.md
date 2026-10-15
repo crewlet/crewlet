@@ -1,10 +1,11 @@
 # Replication
 
-Crewlet's own tracker and knowledge base are **replicated state machines**
-(the embeddings and each node's usage history ride the same framework as
-[compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day)). One
-ordered stream per domain is the write-ahead log; every node applies it into
-its own SQL database; the checkpoint commits in the same transaction as the
+Crewlet's own tracker, knowledge base and identity directory are
+**replicated state machines** — five domains on one framework, the embeddings
+and each node's usage history riding it as
+[compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day).
+One ordered stream per domain is the write-ahead log; every data node applies it
+into its own SQL database; the checkpoint commits in the same transaction as the
 rows it covers. That last clause is the whole design: a node's position and its
 rows can never disagree, because they are written together or not at all.
 
@@ -50,6 +51,58 @@ different with each.
 - **`unknown`** — nothing can be established about the record. It may be on the
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
+  It is also what a write answers when the broker **says** the record may yet
+  land: on a clustered stream, a second append under an operation id whose
+  first record is proposed and not yet applied (`duplicate message id is in
+  process`), or a leader whose store closed under a record raft had already
+  committed (`store is closed`). Neither is a refusal — the record usually
+  applies a moment later — so the retry under the same id is answered by the
+  broker's duplicate acknowledgement once it lands.
+
+**A clustered leader has a third answer to a conditional append that is not a
+refusal either:** `wrong last sequence` with no sequence in it, which means
+another write to the same subject is still in flight at the leader — often
+this node's own previous write, already acknowledged, whose bookkeeping the
+leader clears only after the acknowledgement has gone out. It compared nothing
+and stored nothing of the append, so the append is simply asked again — a
+millisecond later, doubling to 64 ms, within the append's own deadline — until
+the leader answers with something it decided: the record lands, or `wrong last
+sequence: N` says who wrote first. Read as that second answer, it sent a write
+whose expectation was perfectly current round the lost-race path, re-decided
+against the same anchor and refused again, until the round budget reported a
+conflict nobody was causing. One still in flight at the append's deadline is
+treated as an append nobody answered: the log is asked whether this
+operation's record is on it, and finding none, the write decides again. The
+coordination store's compare-and-sets take the same rule — see
+[Coordination § A compare-and-set waits for the leader to
+decide](../concepts/coordination.md#a-compare-and-set-waits-for-the-leader-to-decide).
+
+### Two pendings, and only one says something about the node
+
+There are two ways to get `pending`, and they carry opposite information about
+this node:
+
+- **It waited and the record did not arrive.** This node is behind. It is the
+  common one, and it is what the rest of this section is about.
+- **Nothing waited.** A caller asked for the answer the broker's acknowledgement
+  already establishes, because it has no use for the row.
+
+The answer says which: a `pending` that waited reports `waited: true`. Reported
+as one they would be indistinguishable, and a deliberate skip would read to an
+operator as a node falling behind under load — a health signal they would go
+and act on.
+
+**Exactly one write in this engine takes the second path**: a sign-in's session
+record. The cookie minted from it carries the record's own position, every node
+that serves the API — a data node — validates a bearer against its own applier, and a node below that position
+serves reads on the signature and the epoch alone — so the row this node would
+be waiting for is a row nothing in the answer reads. What the wait costs there
+is a quarter to half a second of parked browser fetch against a 50 ms credential
+verify, on the one request a person judges the whole product by.
+
+Nothing else may take it. A directory write answers `200` only once this node's
+rows carry it, because the caller's next read goes to this node and would not
+see what it just wrote.
 
 A lost acknowledgement is resolved from the log before it is ever called
 `unknown`: the write reads the newest record on its subject, and a record that
@@ -86,8 +139,12 @@ a call that brings it back is that operation again
 ([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant))
 — and only that one: the id names the call's tool and a digest of its
 arguments, and brought back with any other it is refused before anything is
-written, rather than half-answered from the first call.
-The purge and node-gate routes take theirs as `?op_id=`. A caller that sends
+written, rather than half-answered from the first call. The dashboard's
+[act route](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
+and the `/work` and `/pages` routes take the key in an `Idempotency-Key` header
+instead — the act route refuses a write without one — and answer the `op_id`
+they wrote under. The purge and node-gate routes take theirs as `?op_id=`. A
+caller that sends
 neither starts a new operation, which finishes nothing: a create repeated that
 way files a second item. A create whose item landed and whose dependencies did
 not says so — the item is named, and its dependencies are finished on it with
@@ -95,7 +152,7 @@ not says so — the item is named, and its dependencies are finished on it with
 
 ### What a retry is judged by: the instant its operation was minted
 
-Every node keeps an **operation ledger** — which operations its own applier
+Every data node keeps an **operation ledger** — which operations its own applier
 has applied, and where — and it is the ledger, not the broker, that makes a
 retry safe. The broker also collapses a repeated operation id, but only inside
 its two-minute duplicate window, and a turn re-run after a crash or a caller
@@ -172,6 +229,17 @@ that only runs on a schedule carrying an operation id across a long weekend; a
 write that is retried later than that is told `unknown`, and the operation's
 own record, if it landed, is on the log. The watermark travels with the ledger,
 so a node that adopts inherits its donor's.
+
+One ledger forgets one kind of operation sooner. The identity estate keeps a
+**session's** operations for an hour rather than the month — a sign-in is
+answered inside its own request and never asked again, a sign-out decides
+again rather than retrying, and those rows are the busiest thing the domain
+writes — and that sweep records a watermark for the
+session kind alone, beside the ledger's own. What a retry is weighed against is
+the later of the two for its own kind: a session operation minted more than an
+hour ago is answered `unknown`, while every other identity operation — an
+invitation's redemption, a create retried under its key, a token's mint — is
+still vouched for over the whole thirty days.
 
 What decides it is the instant the operation was **minted**, and that instant
 travels inside the operation id itself: every id the engine mints is a
@@ -327,6 +395,35 @@ That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
 [Retention](retention.md).
 
+## Adopting a peer's copy
+
+A node below the floor has nothing left to replay and no amount of waiting
+produces it. What it does instead is ask the fleet for a **snapshot** — one
+member's replicated database file — and install it wholesale before anything
+reads from it. That happens at boot, and again without one: a node that falls
+below the floor while running pauses its appliers, joins the same way, and
+starts them again over the installed file. The transfer is verified against a
+checksum and against the positions the file itself keeps, because a checkpoint
+commits in the same transaction as the rows and a manifest claiming a position
+the file does not hold is describing a different artefact.
+
+Every data node runs every state-log domain whatever its other roles, so a
+donor's artefact covers everything the recipient applies and is installed
+whole:
+
+```mermaid
+flowchart TB
+    F["<b>Fetch</b><br/>beside the live file, so the install is a rename"]
+    V["<b>Verify</b><br/>checksum · the positions the file keeps ·<br/>the donor's own scrub claim"]
+    I["<b>Install</b><br/>both databases closed, then one rename"]
+    F --> V --> I
+```
+
+An artefact that names **no** position for a domain the recipient runs — a
+donor on an older build, mid-upgrade — is refused outright, from the
+manifest, before anything is transferred; see
+[Running a fleet](fleet.md#who-can-donate-to-whom).
+
 ## A node resumes from its rows, never from its reader
 
 Each node reads each log through a durable consumer of its own on the broker,
@@ -384,7 +481,7 @@ longer waits on records its old reader already acknowledged.
 
 ## Replication lag is two positions
 
-Not one number. Every node publishes both:
+Not one number. Every data node publishes both:
 
 - **`seq`** — the record it has *consumed*: its checkpoint, the contiguous
   prefix it has moved over.
@@ -447,7 +544,7 @@ fleet-wide without tripping any alarm:
 
 - an unrelated single-object write's five-second wait expires and returns
   **`pending`** with its position and its lag — correct, and designed for;
-- a barriered read answers `behind` with a computed `retry_after_seconds` of
+- a barriered read answers `behind` with a computed `retry_after` of
   about 16.
 
 Both are the system working. `crewlet retention status` publishes the longest
@@ -465,14 +562,28 @@ writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
-knob. With three domains applying and a bulk update in flight (the usage
-domain's transactions are a node-day's handful of rows, and weigh nothing
-here outside a replay), the default
-five seconds is close to the three transactions a fourth writer can
-legitimately wait behind — so that log line on a node doing bulk work is the
-signal to raise it rather than a fault. Raise the knob before you widen
-anything else: a longer per-waiter bound lets one stuck holder block the line
-for longer, and this way the line still drains in order.
+knob. A writer that still has not reached the front after a second wait gives
+up with the store's busy mark, and a tool or a person's surface answers that
+`unavailable` with a `Retry-After`, never as a fault: the writers ahead of it
+commit, and the same write made again lands.
+
+**The default does not scale with the number of domains, on purpose.** Five
+seconds is half the dashboard's 10 s query timeout, and that is the whole
+derivation: a busy wait *longer* than the timeout above it turns lock
+contention into a request that fails with nothing to show. What a waiter can
+legitimately queue behind, on the other hand, is roughly one bounded
+transaction per other applier on the node — about two seconds each — so with
+every state-log domain applying and a bulk update in flight, the legitimate
+wait is already past five seconds and grows with each domain the engine gains.
+(The usage domain's transactions are a node-day's handful of rows, and weigh
+nothing here outside a replay.)
+
+That is why `store_tx_retry` on a node doing bulk work is a **signal to raise
+the knob, not a fault**: the writer rejoins the line and the work lands, one
+round later. Raise it toward — never past — the query timeout above it, and
+raise it before you widen anything else: a longer per-waiter bound lets one
+stuck holder block the line for longer, and this way the line still drains in
+order.
 
 **No apply transaction is ever aborted by a commit elsewhere in the database,
 and none is ever re-run because of one.** Every write transaction takes the
@@ -487,8 +598,22 @@ else.
 
 A record at a version this build cannot decode is retained, and everything
 whose scope meets it is retained too. That is bounded rather than open-ended:
-the **deferral grace** is 30 minutes, past which the alarm fires and names the
-position and the scope.
+the **deferral grace** is 30 minutes, past which `deferred_old` fires — naming
+the log, the position of the oldest record held and the record version it was
+written at against the one this build reads. Where the node's copy is judged
+by that log (the tracker's and the knowledge base's are; the identity
+estate's, the vectors' and the usage log's are not) the node takes its copy
+out of service at the same moment — its seats stay, and read the estate from
+the other data nodes — because both are measured from one instant — the
+position heartbeat's first sighting of the record — and the alarm says which of
+the two it is. It
+is **one alarm** however many logs hold such a record, and it lists each of
+them in its `domains` with that log's own detail, so an upgrade that moved two
+logs' record versions names both, each saying what its own grace did: a detail
+naming only the node's oldest record would have said the identity estate's took
+nothing out of service while the tracker's had. Its log lines are written per
+log, so the second log's record passing the grace, and the first log's clearing
+while the second's stands, are each said.
 
 So a rolling upgrade should finish inside that window. An upgrade that stalls
 half-done leaves the old nodes holding records they cannot apply and refusing
@@ -499,7 +624,14 @@ covers every page in that space, a page purge covers the whole space it
 re-files the page's children in, and a task purge covers every task it
 rewrites — its dependents, the blockers it waits on, the tasks related to it
 or referencing it, and its subtree — each by name, or by its project once
-there are too many to name.
+there are too many to name. It covers every **key** the task held, current
+and former, too, because the purge hands each one on to another task holding
+it, and which task that is depends on the order the key's claims were
+applied in. So every record that can change who holds a key names that key:
+a task's create, a move that re-keys it, and its purge. A node holding back a
+newer peer's create of a task under a key therefore holds back a later create
+of the same key and the purge of its claimant with it, and hands the key to
+the same task as every other node.
 
 **A record is written at the lowest version that can apply it whole**, never at
 the newest the build knows, so what an older node holds back is exactly the
@@ -531,25 +663,44 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-Today no record in any domain carries a field past the base format, so every
-record is written at version 1; the first field a later build adds raises
-exactly the records that carry it.
+**Every strict domain states that as a table**, and the table is the rule
+rather than a description of it. Each field a record has gained since the base
+format is one row of the domain's `RecordFields`: the version it arrived at,
+the operation it rides (or every one) and its path from the record's root. A
+writer stamps the highest version among the rows its record carries — present
+with any value but null — and a build reads exactly up to its table's highest
+row, so it can never accept a version no field introduced and then drop the
+field it was minted for. A version, once a build has read it, means one thing
+for ever: a version whose field is gone is **retired** and stays empty rather
+than being given to the next field. The conformance suite every domain passes
+holds each table to the records its encoder actually writes.
+
+Every domain's table is **empty today**: version 1 is everything this build
+writes, so every record is stamped 1. The first release that adds a field to a
+record gives it version 2, and from then on an older node holds back exactly
+the records carrying it — except a gate record, which an older node stops on
+rather than retains, so a row that adds a field to one is marked as a gate's
+and its writer waits for the fleet's census of the versions its nodes read
+before publishing it.
 
 ### Values the engine computes are recomputed once
 
-Some columns are not copied out of any record but computed from the history a
+Some columns are not copied out of any record but computed from the rows a
 node already holds: in the tracker, how often a task was reopened (`reopens`),
 how much of a project's open work has been started (`task_counts.active`), the
 hand-off count on each history row, and when a task last changed
-(`updated_at`). The apply maintains each one as it goes. When the rules that
+(`updated_at`); in the identity estate, the seat an invitation holds
+(`iam_invites.seat_id`, read out of the invitation's own document so a seat
+hold is one indexed lookup). The apply maintains each one as it goes. When the rules that
 compute them differ from the ones a node's rows were derived under — a build
 that adds such a column or changes how one is computed, a node that just
 adopted a snapshot from a peer on a different build, or a checkpoint a reanchor
 created — the node's next boot recomputes them from the rows it holds, in the
 same transaction that records which rules the rows now follow, before it
-applies anything new. It happens once per change, on every node; the
+applies anything new. It happens once per change, on every data node; the
 `statelog_rederived` log line names the domain, the rule versions it moved
-between and how many rows it wrote.
+between and how many rows it wrote. Both domains are at rule set 1, the one
+this build applies as it goes.
 
 ## Two compacted domains: the embeddings and each node's day
 
@@ -562,24 +713,95 @@ hold identical rows.
 | Domain | Stream | One subject per | Written by | Kept for |
 |---|---|---|---|---|
 | **vectors** | `CREWLET_TRACKER_VECTORS` | embedded source | the fleet's one embedding duty | 90 days per message; the rows until the source is forgotten |
-| **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat or schedule) | **every node, for its own days only** | 181 days |
+| **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat, schedule or person) | **every data node, for its own days only** | 181 days |
 
 **`usage` is what makes history fleet-wide.** Each node derives its own day —
 the spend by phase, worker, model and provider slot, the turns that ended and
 how (failed, reviewed, first pass, sent back, a duration histogram), the pages
 its seats read, the schedules it fired — from its own event log, every 15
 seconds while the day moves, and publishes each object's whole cumulative value.
-Every node applies every node's days, so any node answers for the fleet and a
-node that leaves takes nothing with it: its days stay in every peer's rows, and
-a node that joins later replays them from the stream. Because the node is part
+A node without `data` keeps no event log of its own: what its seats did is
+handed to the data node that keeps its events, and is counted in that node's
+day. Every data node applies every node's days, so any data node answers for
+the fleet and a node that leaves takes nothing with it: its days stay in every
+peer's rows, and a node that joins later replays them from the stream. Because the node is part
 of the subject, no two nodes ever write one object and nothing is arbitrated;
 an apply replaces the object's rows.
 
 A day is cut on the company's clock (`timezone`). A node re-derives today and
 yesterday on every tick, so the turn that ended a second before midnight
-reaches the fleet, and on every start, so a day a node was down across still
-arrives. History older than 181 days leaves in the same transaction that
-applies the day that makes it old, on every node alike — there is no sweep.
+reaches the fleet. What it has not yet published whole — the day before the
+newest it fingerprinted, or an older day a tick could not settle — it keeps as
+a watermark in its own store (`usage_watermark`), and every start re-derives
+each day from that one. So the tail of the day a node stopped in, written
+after its last tick, reaches the fleet when it comes back, if that day began
+less than the event log's 30-day read floor before the node derives it again (a
+day that began more than 30 days back keeps the value it was last published
+at, even when the node was down for less than 30 days); a day more than 7 days back — the
+dispatch ledger's retention — is derived without its schedules, which the
+ledger may already have swept. An orderly stop also flushes today and
+yesterday once more on its way out, after every writer of a usage row on the
+node has stopped, so a node stopped in an orderly way and never started again
+leaves its last day whole. A node that crashes and never comes back loses up to
+one 15-second tick of it.
+
+A node's day counts the rows it **keeps**. A [custody](deployment.md#custody-the-rows-of-a-node-without-data)
+batch a data node has written but not yet settled may be another data node's
+to keep, so no day counts it until it settles — counted on both, every reader
+summing the fleet would bill a stateless node's spend twice. Every count of a
+day is read off rows inside it — a turn's reviews, send-backs and duration off
+the one record that ends the turn, which states the whole turn however its
+other records were spread over the data nodes (a turn whose end states no
+tally — one a build before that record ended, or one resumed from a park such a
+build made — is read off its records, as that build read it) — so once a batch
+settles as kept its rows count on the days they fall on and on no other, which
+can be days back after a long partition. The settle records the oldest of them
+(the node's own `usage_rederive` rows) and the next tick derives every day from
+it again. Never a day older than the event log's 30-day read floor: its rows
+may already be swept, and a short derivation would replace the whole day on
+every node with less, so such a day keeps the value it was last published at
+and the node logs `usage_rederive_past_floor` once.
+
+A day derived again is cut on the instants it was first cut on (the node's
+`usage_day_windows`), so moving the company's `timezone` never moves rows
+between days already published: the day the clock moves on is longer or
+shorter by the move instead. For the hours between the old clock's midnight
+and the new one's, a node's usage day label is not the company's local date.
+Moved west, those hours belong to the first day cut on the new clock, which
+starts where the old clock's last day ended, so the label runs one ahead. A
+move of more than a day makes it two ahead for its first hours, and makes that
+first day more than two days long. Moved east, those hours stay on the old
+clock's last day, so the label runs one behind. A move of more than a day
+leaves the date in between with no instants at all: the node publishes no
+record for it, and the label runs two behind until the old clock's day ends. A
+chart that buckets by label shows the node's spend for those hours on the
+neighbouring date.
+
+And no day — today and yesterday included — is ever published **below** what
+the fleet already holds of it. Inside the read floor a day only grows, so a
+derivation that comes out smaller in any figure — fewer turns, failed turns,
+reviews, send-backs or long turns, fewer tokens, calls, page reads or fires —
+means the node's own event log lost rows that record counted: a store
+[restored](backup.md) beside a usage log copied later, one started empty, or a
+turn whose end states no tally and whose earliest records the event log's sweep
+removed (a parked turn's records reach back to wherever it started). So what a
+node publishes is its derivation **joined** with the fleet's record: every
+figure at the larger of the two. On an ordinary day that is the derivation
+itself; after a loss the figures the fleet held more of stay at the fleet's
+while every other keeps moving, and the node logs `usage_rederive_short` once.
+A seat's handle and role are the derivation's wherever it states them and the
+fleet's where it does not, so a seat since removed from the org chart keeps
+its name in the history even where this node's rows of the day — spend alone,
+which carries no handle — name nobody. A handle never changes, so the fleet's
+is never another seat's, and a label carried this way is not a short
+derivation.
+A join cannot recover what was lost: a figure the fleet held more of counts the
+node's new rows only once its own count passes the fleet's. The node derives no
+day at all until its usage applier has replayed the log to its end, so the
+rows it joins with are the fleet's and not a restore's.
+
+History older than 181 days leaves in the same transaction that applies the
+day that makes it old, on every data node alike — there is no sweep.
 The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md).
 
 ## The six capacity ceilings
@@ -591,35 +813,48 @@ The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020
    measured once. **Divide it when more than one engine shares a filesystem**:
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
-   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` and
-   `stream.usage_log_max_bytes`, sized
-   together as [below](#how-the-byte-ceilings-are-sized). A full log
-   **refuses** appends rather than shedding old records; see
-   [Retention](retention.md). On the tracker and pages logs ordinary writes
-   are refused a sixteenth short of it, the rest being
+   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+   `stream.iam_log_max_bytes` and `stream.usage_log_max_bytes`, sized together
+   as [below](#how-the-byte-ceilings-are-sized). The last two are **not
+   derived from the disk** — the identity estate grows with sign-ins and the
+   usage log with the node-days it holds, and a volume has an opinion about
+   neither — so each takes a flat default and its own floor. A full log **refuses** appends rather than shedding old records; see
+   [Retention](retention.md). On every log that claims identity — the
+   tracker's, the knowledge base's and the identity estate's — ordinary writes are refused short of it, the top being
    [kept for gate records](retention.md#the-gate-reserve) so that an eviction
    can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
    what bounds how long a node may be away.
-4. **The store's own size** — every node is a full replica, so the corpus is
-   held N times.
+4. **The store's own size** — every data node is a full replica, so the corpus
+   is held once per data node.
 5. **Applier occupancy** — the 16 seconds above.
 6. **The snapshot repository** — one artefact per node, sized in
-   [Retention](retention.md).
+   [Retention](retention.md). An artefact's manifest names a position per
+   domain, and a joiner refuses one that names no position for a domain **it
+   runs**, because a checkpoint for a domain the file has no rows for is worse
+   than no artefact at all. That is why adding a domain is a coordinated
+   upgrade — see [Running a fleet](fleet.md#draining-and-rolling-upgrades),
+   and [above](#adopting-a-peers-copy) for what happens in the other
+   direction.
 
 ### How the byte ceilings are sized
 
 A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
-stream whose ceiling it could not honour. So the four logs compete for one
-number, and a node sizes them together, once, when it creates their streams:
+stream whose ceiling it could not honour. So the state logs compete for one
+number, and a node sizes them together, once, when it creates their streams —
+**all five** this build registers (the tracker's, the vectors', the knowledge
+base's, the identity estate's and the usage log). Every data node
+runs every one whatever its other roles, and a stream keeps whatever ceiling the
+node that created it gave it, so whichever node creates them first sets the
+ceilings the fleet keeps:
 
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, or it cannot be read, the share is half of the stream volume's free space instead, and nothing is added to it: a reservation never spends free space, so that figure already contains what the logs hold. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling — the one you set, or the one it derived — because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; and the usage log for a fixed 1 GiB — a count of node-days, which more disk does not grow. |
-| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling — the one you set, or the one it derived — because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in — the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. |
+| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
@@ -679,13 +914,24 @@ the state logs that already exist keep the ceilings they were created with,
 and no Tier A setting changes them: …
 ```
 
+The sentence about the Tier A field says which of three things the ceiling
+was: **set** (`… sets the ceiling`, with what would have fitted), **derived**
+from the volume and scaled, as above, or the log's own **fixed default** —
+the identity log's and the usage log's, which do not follow the volume at all.
+
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 5⅓ GiB free there, three quarters
-of which is the four 1 GiB floors), which the broker measures again when the
-node next starts. Or, when the refused log's ceiling is
-above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
-so when that applies.
+on that volume (a first boot needs at least 6 GiB free there, three
+quarters of which — 4.5 GiB — is what the five logs reserve at their smallest:
+the three 1 GiB scaling floors, the usage log's 1 GiB default and the identity
+log's 512 MiB), which the broker measures again when
+the node next starts. Or, when the refused log's ceiling is above the smallest
+value its own field accepts, set that field to a smaller ceiling — the refusal
+offers it only then, and names that floor: 1 GiB for the tracker's, the
+vectors' and the knowledge base's fields, 64 MiB for
+`stream.iam_log_max_bytes` and `stream.usage_log_max_bytes`. So a refused
+identity log at its 512 MiB default, or a refused usage log at its 1 GiB, is
+offered a smaller one.
 
 A log that already exists cannot be shrunk to make room from here. Its ceiling
 changes only through `crewlet retention set-capacity`, which runs on a node

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -33,11 +36,16 @@ import (
 //
 // Nobody's seat runs this and no turn exists: a person typed a question into
 // the dashboard and is waiting for a paragraph. So it is an OPERATOR tool, and
-// one only a token bound to a person may call — the act transport admits
-// nobody else, and this tool refuses an unbound credential on the MCP
-// transport too, because the spend is attributed to somebody and "a CI token"
-// is not somebody. A seat is never given it: a seat has `search_knowledge` and
-// its own model, and an answer written by a second model into its context
+// one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer]
+// admits whoever uses either app and is human-only; this tool refuses the
+// rest): it runs on the
+// auxiliary model of the seat the identity directory binds them to — the
+// human seat every person holds (ADR-0032). A principal no seat binds — a
+// pipeline's token or a service account, never a person (ADR-0032) — has no
+// seat whose model to run on, and is refused
+// rather than answered on the company's default model, because "a CI token"
+// is not somebody the spend can be attributed to. A seat is never given it: a seat has `search_knowledge`
+// and its own model, and an answer written by a second model into its context
 // would be one it could not check.
 //
 // # Why it is a write
@@ -72,12 +80,28 @@ import (
 //
 // A question asked again — by the same person pressing Enter twice, or by a
 // colleague on the same node — gets the same answer while nothing it could
-// have been written from has changed. The key is the normalised question and
-// the CORPUS POSITION: where this node's pages, tracker and vector logs have
-// been applied through. A cache hit spends nothing and says `cached: true`. A
-// company whose knowledge base is not native has no position to key on — an
-// external wiki can change under the answer without this node hearing — so
-// its answers are never cached.
+// have been written from has changed. The cache is the NODE's
+// ([AnswerDeps.Cache]), handed in rather than built with the catalogue: a
+// surface builds its catalogue per request, and a cache built with it would
+// hold one request's answers. The key is the normalised question, the APPS
+// the asker uses and the CORPUS POSITION: where this node's pages, tracker and
+// vector logs have been applied through. A cache hit spends nothing and says
+// `cached: true`. A company whose knowledge base is not native has no position
+// to key on — an external wiki can change under the answer without this node
+// hearing — so its answers are never cached.
+//
+// # Each corpus only for an asker who uses its app
+//
+// The pages are the knowledge base's and the work items the tracker's, and an
+// answer QUOTES them: an answer written from a work item, read by somebody
+// kept off the tracker, is the work item read. So the pages are searched only
+// for an asker holding the knowledge base and the items only for one holding
+// the tracker ([authz.Shows], the one per-app filter every cross-app answer
+// goes through), and the table refuses an asker holding neither before
+// anything is searched ([authz.ClassAnyApp]). The apps are in the cache key for
+// the same reason: two askers who may read different corpora asked different
+// questions, however alike they typed them, and one's answer handed to the
+// other would carry what the second may not read.
 
 // AnswerKnowledgeTool is the tool's wire name.
 const AnswerKnowledgeTool = "answer_knowledge"
@@ -214,9 +238,15 @@ type AnswerDeps struct {
 	// nothing.
 	Corpus func() (string, bool)
 
-	// Actor is who is asking, off the caller's own credential. Nil omits
-	// the tool.
+	// Actor is who is asking, off the caller's own credential
+	// ([PrincipalActor]): a person bound to a seat is named by that seat,
+	// kind human, which is the one asker this tool answers. Nil omits the
+	// tool.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
+
+	// Cache is this node's answers, kept across every catalogue the
+	// surface builds — see [NewAnswerCache]. Nil caches nothing.
+	Cache *AnswerCache
 
 	// Rewrites is the cache a source condensed for a question is kept in,
 	// so the same question at the same corpus pays for each rewrite once.
@@ -266,7 +296,6 @@ type answerKnowledge struct {
 	pages  PageReader
 	tasks  TaskReader
 	deps   AnswerDeps
-	cache  *answerCache
 }
 
 var _ tools.SeatCallable = (*answerKnowledge)(nil)
@@ -277,8 +306,8 @@ func (t *answerKnowledge) Description() string {
 	return "Answer a question from what the company has written down: its " +
 		"knowledge-base pages and its work items. Returns a short Markdown " +
 		"answer that cites its sources, the sources themselves, and the " +
-		"tokens it spent — charged to the company's budget. Only a token " +
-		"bound to a person may ask. The same question asked again while " +
+		"tokens it spent — charged to the company's budget. Only a person " +
+		"bound to a seat may ask. The same question asked again while " +
 		"nothing it was written from has changed is answered from a cache " +
 		"and spends nothing."
 }
@@ -310,11 +339,13 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+
 			" answers the person whose credential calls it, and this call carries none."), nil
 	}
-	// A PERSON, and nobody else. See the file head.
-	if strings.TrimSpace(actor.Seat) == "" {
-		return refused(tools.RefusalForbidden, fmt.Sprintf("%s spends the company's "+
-			"tokens on a person's behalf, and the token %q is bound to no seat. Bind it "+
-			"with contact.crewlet_operator_id on the person's seat.",
+	// A PERSON BOUND TO A SEAT, and nobody else: [iam.ActorFor] names
+	// exactly that asker kind human, by the seat. See the file head.
+	if actor.Kind != tracker.AuthorHuman || strings.TrimSpace(actor.Handle) == "" {
+		return refused(tools.RefusalForbidden, fmt.Sprintf("%s runs on the auxiliary "+
+			"model of the seat its asker is bound to, and %q is bound to no seat, so "+
+			"there is no model to answer on and nobody the spend is charged for. A "+
+			"person bound to a seat in the identity directory may ask.",
 			AnswerKnowledgeTool, actor.Handle)), nil
 	}
 	question := strings.TrimSpace(argString(args, "q"))
@@ -338,19 +369,31 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalUnavailable,
 			"No organization is loaded, so there is no knowledge to answer from."), nil
 	}
-	role := company.SeatByHandle(actor.Seat)
+	role := company.SeatByHandle(actor.Handle)
 	if role == nil {
-		// The token names a seat the chart no longer has: a config apply
+		// The binding names a seat the company no longer has: an apply
 		// removed it between the binding and this call.
-		return refused(tools.RefusalForbidden, fmt.Sprintf("The seat %q this token "+
-			"is bound to is not in the company chart.", actor.Seat)), nil
+		return refused(tools.RefusalForbidden, fmt.Sprintf("The seat %q you are "+
+			"bound to is not in the company chart.", actor.Handle)), nil
 	}
 
-	key, cacheable := t.cacheKey(question)
+	// WHAT THIS ASKER MAY BE ANSWERED FROM, decided once and used for the
+	// search and the cache alike — see the file head.
+	principal, _ := iam.From(ctx)
+	reach := answerReachOf(principal)
+	if !reach.pages && !reach.tasks {
+		// THE TABLE REFUSES THIS before the tool runs; refused here too,
+		// because an answer from nothing would be one written from what
+		// the model already believes rather than from the company.
+		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+" answers from the "+
+			"knowledge base and the tracker, and your access includes neither. An "+
+			"admin can give it to you."), nil
+	}
+	key, cacheable := t.cacheKey(question, reach)
 	if cacheable {
-		if hit, ok := t.cache.get(key); ok {
+		if hit, ok := t.deps.Cache.get(key); ok {
 			hit.Cached, hit.Tokens = true, AnswerTokens{}
-			log.InfoContext(ctx, "knowledge_answered", "seat", actor.Seat,
+			log.InfoContext(ctx, "knowledge_answered", "seat", actor.Handle,
 				"cached", true, "sources", len(hit.Sources))
 			return jsonResult(hit)
 		}
@@ -361,7 +404,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// through.
 	refusal, refusing, err := t.deps.Budget.Refusing(ctx)
 	if err != nil {
-		log.WarnContext(ctx, "knowledge_answer_budget_unreadable", "seat", actor.Seat,
+		log.WarnContext(ctx, "knowledge_answer_budget_unreadable", "seat", actor.Handle,
 			"error", err.Error())
 		return refused(tools.RefusalUnavailable, "The company's token counter could not "+
 			"be read, so no answer was written and nothing was spent. Try again shortly."), nil
@@ -370,7 +413,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalBudgetExhausted, budgetSentence(refusal)), nil
 	}
 
-	sources, excerpts, searched := t.retrieve(ctx, question, company, role)
+	sources, excerpts, searched := t.retrieve(ctx, question, company, role, reach)
 	if !searched {
 		return refused(tools.RefusalUnavailable, "The company's knowledge could not be "+
 			"searched just now, so this says nothing about whether it is written down. "+
@@ -384,7 +427,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Sources:  []AnswerSource{},
 		}
 		if cacheable {
-			t.cache.put(key, answer)
+			t.deps.Cache.put(key, answer)
 		}
 		return jsonResult(answer)
 	}
@@ -415,7 +458,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if err != nil {
 			reason = err.Error()
 		}
-		log.WarnContext(ctx, "knowledge_answer_failed", "seat", actor.Seat,
+		log.WarnContext(ctx, "knowledge_answer_failed", "seat", actor.Handle,
 			"model", member.Key, "error", reason)
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("The model could not "+
 			"answer (%s). Try again shortly.", reason)), nil
@@ -424,7 +467,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if text == "" {
 		// The cap spent reasoning, usually. Reported with both numbers,
 		// because the fix is a bigger cap and nothing else says so.
-		log.WarnContext(ctx, "knowledge_answer_empty", "seat", actor.Seat,
+		log.WarnContext(ctx, "knowledge_answer_empty", "seat", actor.Handle,
 			"model", completion.Model, "output_tokens", completion.OutputTokens,
 			"max_tokens", AnswerMaxTokens)
 		return refused(tools.RefusalUnavailable, "The model wrote no answer. Try again, "+
@@ -437,25 +480,52 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Model:    completion.Model,
 	}
 	if cacheable {
-		t.cache.put(key, answer)
+		t.deps.Cache.put(key, answer)
 	}
-	log.InfoContext(ctx, "knowledge_answered", "seat", actor.Seat, "cached", false,
+	log.InfoContext(ctx, "knowledge_answered", "seat", actor.Handle, "cached", false,
 		"model", answer.Model, "input_tokens", answer.Tokens.Input,
 		"output_tokens", answer.Tokens.Output, "sources", len(sources))
 	return jsonResult(answer)
 }
 
-// cacheKey is the question's cache key at this node's corpus position, and
-// false where the corpus cannot say where it is.
-func (t *answerKnowledge) cacheKey(question string) (string, bool) {
-	if t.cache == nil || t.deps.Corpus == nil {
+// answerReach is which of the two corpora one asker may be answered from.
+type answerReach struct{ pages, tasks bool }
+
+// answerReachOf is what p may be answered from, through [authz.Shows] — the one
+// per-app filter every cross-app answer asks.
+func answerReachOf(p iam.Principal) answerReach {
+	return answerReach{
+		pages: authz.Shows(p, authz.KindPage),
+		tasks: authz.Shows(p, authz.KindTask),
+	}
+}
+
+// key is the reach as the cache key spells it: the apps it reads from, in a
+// fixed order, so two askers who may read the same corpora share answers and
+// two who may not never do.
+func (r answerReach) key() string {
+	var apps []string
+	if r.tasks {
+		apps = append(apps, string(iam.GrantTracker))
+	}
+	if r.pages {
+		apps = append(apps, string(iam.GrantKnowledge))
+	}
+	slices.Sort(apps)
+	return strings.Join(apps, ",")
+}
+
+// cacheKey is the question's cache key for one asker's reach at this node's
+// corpus position, and false where the corpus cannot say where it is.
+func (t *answerKnowledge) cacheKey(question string, reach answerReach) (string, bool) {
+	if t.deps.Cache == nil || t.deps.Corpus == nil {
 		return "", false
 	}
 	position, ok := t.deps.Corpus()
 	if !ok || position == "" {
 		return "", false
 	}
-	return NormalizeQuestion(question) + "\x00" + position, true
+	return NormalizeQuestion(question) + "\x00" + reach.key() + "\x00" + position, true
 }
 
 // NormalizeQuestion is the form two questions that are one question share:
@@ -465,19 +535,23 @@ func NormalizeQuestion(q string) string {
 	return strings.Join(strings.Fields(strings.ToLower(q)), " ")
 }
 
-// retrieve runs both searches and reads each hit's text. searched is false
-// when NEITHER corpus could be searched — which is not "nothing matched".
+// retrieve runs the searches the asker's reach allows and reads each hit's
+// text. searched is false when no corpus that was asked could be searched —
+// which is not "nothing matched" — and a corpus the asker may not read is
+// never asked, so it is neither a source nor a reason the search failed.
 func (t *answerKnowledge) retrieve(ctx context.Context, question string,
-	company *org.Organization, asker *org.Role) ([]AnswerSource, []prompts.KnowledgeSource, bool) {
+	company *org.Organization, asker *org.Role,
+	reach answerReach) ([]AnswerSource, []prompts.KnowledgeSource, bool) {
 
 	sources := []AnswerSource{}
 	var excerpts []prompts.KnowledgeSource
 	searched := false
 
 	// THE COMPANY'S OWN ACCOUNT: a nil seat, which is how the operator
-	// surface's search_knowledge reads — the person holds the company's
-	// credential, and the search is not narrowed to their seat's scope.
-	if t.search.CanSearch(nil, company) {
+	// surface's search_knowledge reads — an asker who uses the knowledge
+	// base reads the whole of it, and the search is not narrowed to their
+	// seat's scope.
+	if reach.pages && t.search.CanSearch(nil, company) {
 		result := t.search.Search(ctx, knowledge.Query{
 			Text: question, Org: company, Limit: AnswerPageSources,
 			Mode: knowledge.ModeHybrid,
@@ -503,7 +577,7 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 		}
 	}
 
-	if t.items != nil {
+	if reach.tasks && t.items != nil {
 		answer, err := t.items.Search(ctx, tracker.SearchQuery{
 			Text: question, Limit: AnswerTaskSources, Mode: knowledge.ModeHybrid,
 		})
@@ -644,8 +718,11 @@ func budgetSentence(r BudgetRefusal) string {
 		r.Period, r.Window, r.Used, r.Limit, when)
 }
 
-// answerCache is one node's answers, least recently used out first.
-type answerCache struct {
+// AnswerCache is one node's answers, least recently used out first.
+//
+// BUILT ONCE PER NODE and handed to every catalogue the operator surface
+// builds ([AnswerDeps.Cache]), safe for concurrent use.
+type AnswerCache struct {
 	mu      sync.Mutex
 	limit   int
 	order   *list.List
@@ -657,13 +734,18 @@ type cachedAnswer struct {
 	answer KnowledgeAnswer
 }
 
-func newAnswerCache(limit int) *answerCache {
-	return &answerCache{limit: limit, order: list.New(), entries: map[string]*list.Element{}}
+// NewAnswerCache is a cache holding at most limit answers; a limit below one
+// holds [AnswerCacheEntries].
+func NewAnswerCache(limit int) *AnswerCache {
+	if limit < 1 {
+		limit = AnswerCacheEntries
+	}
+	return &AnswerCache{limit: limit, order: list.New(), entries: map[string]*list.Element{}}
 }
 
 // get is a copy of the entry, so a caller stamping `cached` on it changes
 // nothing stored.
-func (c *answerCache) get(key string) (KnowledgeAnswer, bool) {
+func (c *AnswerCache) get(key string) (KnowledgeAnswer, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	el, ok := c.entries[key]
@@ -676,7 +758,7 @@ func (c *answerCache) get(key string) (KnowledgeAnswer, bool) {
 	return answer, true
 }
 
-func (c *answerCache) put(key string, answer KnowledgeAnswer) {
+func (c *AnswerCache) put(key string, answer KnowledgeAnswer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	answer.Sources = append([]AnswerSource{}, answer.Sources...)
@@ -694,7 +776,7 @@ func (c *answerCache) put(key string, answer KnowledgeAnswer) {
 }
 
 // len is how many answers the cache holds.
-func (c *answerCache) len() int {
+func (c *AnswerCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()

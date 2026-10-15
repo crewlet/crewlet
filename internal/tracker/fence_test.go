@@ -144,7 +144,7 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 				}
 				return wired(db, floor, ends(40, 100))
 			},
-			want: statelog.ReasonEvicted, cause: store.ErrNoEstate,
+			want: statelog.ReasonEvictionUnknown, cause: store.ErrNoEstate,
 		},
 		"a floor that cannot be read": {
 			build: func(t *testing.T) *tracker.Fence {

@@ -117,11 +117,15 @@ func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 		t.Fatalf("the page writes reached the knowledge base with %d keys, want 5",
 			len(kb.keys))
 	}
+	// EACH KEY IS AN ID THE ENGINE'S GRAMMAR MINTED, at the instant the
+	// work began — the store derives every write's id from it and the
+	// instant rides along.
 	for i, key := range kb.keys {
-		if key.String() != turn.WorkKey || !key.Since.Equal(began) {
-			t.Errorf("page write %d carries key %+v, want the turn's work key %q "+
-				"at %s when the work began — a write re-made after an adoption "+
-				"is otherwise decided twice", i, key, turn.WorkKey, began)
+		at, ok := statelog.OpMintedAt(key)
+		if !ok || !at.Equal(began) || statelog.CheckCallerOpID(key) != nil {
+			t.Errorf("page write %d carries key %q minted at %v (%v), want an "+
+				"op id carrying %s when the work began — a write re-made after "+
+				"an adoption is otherwise decided twice", i, key, at, ok, began)
 		}
 	}
 }
@@ -171,17 +175,22 @@ func TestARebasedTurnMintsEveryWriteAtItsRebase(t *testing.T) {
 			kb := newFakeKB()
 			call(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}), rebased(),
 				builtin.CommentOnPageTool, map[string]any{"page": "p1", "body": "noted"})
-			if len(kb.comments) != 1 {
-				t.Fatalf("the comment reached the knowledge base %d time(s)", len(kb.comments))
+			if len(kb.comments) != 1 || len(kb.keys) != 1 {
+				t.Fatalf("the comment reached the knowledge base %d time(s) under %v",
+					len(kb.comments), kb.keys)
 			}
-			if got := kb.comments[0].CallKey.Since; !got.Equal(rebasedTo) {
-				t.Fatalf("the rebased comment carries %s, want the rebase's %s", got, rebasedTo)
+			if minted, _ := statelog.OpMintedAt(kb.keys[0]); !minted.Equal(rebasedTo) {
+				t.Fatalf("the rebased comment was minted at %s, want the rebase's %s",
+					minted, rebasedTo)
 			}
 		})
 	}
 }
 
-// call drives a seat-callable tool under the given turn.
+// call drives a seat-callable tool under the given turn, as a caller holding
+// every grant: these cases are about the operation a write carries, and a
+// rename asked of a container this fixture holds no chart for is otherwise
+// undecidable rather than refused or allowed.
 func call(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
 	args map[string]any) tools.Result {
 
@@ -194,7 +203,7 @@ func call(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
 	if !ok {
 		t.Fatalf("%s is not seat-callable", name)
 	}
-	got, err := callable.CallForTurn(t.Context(), turn, args)
+	got, err := callable.CallForTurn(everyGrant(), turn, args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}

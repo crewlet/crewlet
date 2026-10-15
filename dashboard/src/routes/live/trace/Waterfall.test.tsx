@@ -346,7 +346,8 @@ describe("a person's note", () => {
         iteration: 1,
         round: 3,
         note: "use staging",
-        steered_by_seat: "jane",
+        steered_by: "jane",
+        steered_by_kind: "human",
       }),
       event("agent_turn_steered", 3_000, { note_id: "n2", outcome: "expired", note: "too late" }),
     ];

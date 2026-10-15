@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/search"
@@ -36,13 +37,15 @@ import (
 func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 
 	declared := map[string][3]string{
 		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
 		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
+		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
+			topics.IamLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

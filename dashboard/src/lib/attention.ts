@@ -18,7 +18,7 @@
  * seat is stopped, no run is parked on a question, and no budget is refusing",
  * which is three of the twelve conditions below written as a closed sentence,
  * so an engine with no active company configuration, a node shedding its
- * seats, a draining node, a refused token and a round stalled for eleven
+ * seats, a draining node, nobody signed in and a round stalled for eleven
  * minutes were all inside a silence that claimed to have measured them.
  */
 
@@ -27,6 +27,7 @@ import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
+import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -63,7 +64,7 @@ export const SUBJECTS: Record<Subject, string> = {
  *  - `seat`: the Inbox's "Needs you" group and Home's count of
  *    conditions that need a look. A person decides these — raise a ceiling,
  *    resume a paused seat, look at one that failed.
- *  - `engine`: the sidebar's health card and Home's status sentence, which
+ *  - `engine`: the sidebar's engine row and Home's status sentence, which
  *    are what a reader sees on every screen; an engine condition is a fact
  *    about the product they are looking at, not an item in anybody's queue.
  *  - `live`: Live › Now running, BESIDE the rounds and runs it is about — a
@@ -189,8 +190,12 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       severity: "critical",
       subject: "engine",
       icon: "key",
-      title: "The engine refused this browser's token",
-      detail: "Set a valid token to read or change anything.",
+      // THE SESSION IS THE BROWSER'S ONE CREDENTIAL. The refusal is of the
+      // cookie this browser holds, or of none, so the repair is signing in,
+      // an API token included: the sign-in screen exchanges one for a session
+      // rather than keeping it anywhere.
+      title: "Nobody is signed in on this browser",
+      detail: "Sign in to read or change anything, as a person or with an API token.",
     });
   } else if (!connected) {
     out.push({
@@ -314,7 +319,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     const state = activityOf(agent);
     if (agent.last_error) {
       out.push({
-        id: `error-${agent.role}`,
+        id: `error-${agent.agent_id}`,
         severity: "critical",
         subject: "seat",
         icon: "triangle-alert",
@@ -331,7 +336,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // it resets, so it is not said twice.
     if (state === "stopped" && agent.stopped_reason !== "budget") {
       out.push({
-        id: `stopped-${agent.role}`,
+        id: `stopped-${agent.agent_id}`,
         severity: "caution",
         subject: "seat",
         icon: "pause",
@@ -352,7 +357,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       const how = staleness(call.updated_at, now, agent.turn?.stage);
       if (how) {
         out.push({
-          id: `stale-${agent.role}-${call.turn_id}`,
+          id: `stale-${agent.agent_id}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
           subject: "round",
           icon: "clock",
@@ -381,7 +386,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     const refusing = waitedOn(agent.budget?.windows, "refusing");
     if (refusing) {
       out.push({
-        id: `seat-budget-${agent.role}`,
+        id: `seat-budget-${agent.agent_id}`,
         severity: "caution",
         subject: "budget",
         icon: "coins",
@@ -422,7 +427,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  * sentence simply ends.
  */
 function waitingDetail(run: SandboxRun, now: number): string {
-  const asked = run.question || "A coding run needs your answer to continue.";
+  const asked =
+    run.question ||
+    (questionWithheld(run)
+      ? `${QUESTION_WITHHELD}.`
+      : "A coding run needs your answer to continue.");
   if (run.status === "reseed") return `${asked} Answering restarts the work.`;
   const ttl = run.pause_ttl_seconds;
   const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;

@@ -129,7 +129,7 @@ func (w *Episodist) Skip(t Turn) string {
 		// a turn in which the seat did nothing.
 		return "no_engagement"
 	}
-	if t.Event.AgentHandle == "" {
+	if t.Seat() == "" {
 		// Episodes are keyed on the seat. An unkeyed row is one no
 		// recall can ever find, so it is not worth writing.
 		return "no_handle"
@@ -180,7 +180,7 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 	}
 	return Episode{
 		ID:     w.newID(),
-		Handle: t.Event.AgentHandle,
+		Handle: t.Seat(),
 		Role:   t.Event.RoleName,
 		// THE ITEM THE TURN WAS CHARGED TO, as its backend-qualified
 		// ref, and empty for a turn on nothing — see [Episode.WorkItem].

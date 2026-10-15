@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -447,6 +448,14 @@ type LocalOptions struct {
 
 	// RunArgs are extra arguments spliced into the container run.
 	RunArgs []string
+
+	// RuntimeEnv is what the operator DECLARED for the container runtime's
+	// own CLI, its references already resolved — laid over the fixed rule
+	// every runtime call carries ([hostbox.ContainerRuntime]), for what that
+	// rule cannot know a runtime's helpers read: the cloud role, profile or
+	// key file a registry credential helper pulls the image with.
+	// It never reaches a box: that is `role.sandbox.env`.
+	RuntimeEnv map[string]string
 }
 
 // Local mints sandboxes on the engine host, directly or in a container.
@@ -456,9 +465,9 @@ type LocalOptions struct {
 // token minting. The run reads the same credential directory `crewlet llm
 // login` wrote.
 type Local struct {
-	opts    LocalOptions
-	root    string
-	runtime string // resolved container binary; "" in direct mode
+	opts LocalOptions
+	root string
+	cli  containerCLI // the resolved runtime; its path is "" in direct mode
 }
 
 var _ Provider = (*Local)(nil)
@@ -495,9 +504,13 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 				"that has the coding-agent CLI installed — there is no sensible default, and a "+
 				"box without the CLI fails only once an agent tries to use it", Container)
 		}
-		if local.runtime, err = ResolveContainerRuntime(opts.Runtime); err != nil {
+		var path string
+		if path, err = ResolveContainerRuntime(opts.Runtime); err != nil {
 			return nil, err
 		}
+		// CLONED, so the options map a caller built — and may reuse for the
+		// next apply — is never the one every runtime call reads.
+		local.cli = containerCLI{path: path, declared: maps.Clone(opts.RuntimeEnv)}
 	}
 	return local, nil
 }
@@ -574,9 +587,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	name := l.containerName(id)
-	argv := l.runArgv(ctx, layout, name)
-
-	result, err := runHost(ctx, hostCommand{argv: argv})
+	result, err := runHost(ctx, l.cli.command(0, l.runArgv(ctx, layout, name)...))
 	if err != nil || result.ExitCode != 0 {
 		_ = os.RemoveAll(layout.root)
 		detail := strings.TrimSpace(result.Stderr)
@@ -595,16 +606,14 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 			l.opts.Image, detail)
 	}
 	box := &containerBox{
-		layout: layout, runtime: l.runtime, container: name,
+		layout: layout, cli: l.cli, container: name,
 		env: spec.Env, credentials: spec.CredentialFiles,
 	}
 	// PROVEN BEFORE THE BOX IS HANDED OUT. Both properties this mode rests
 	// on fail silently and only much later — see verifyMount — so the box is
 	// torn down here rather than returned to do half its job.
 	if err := verifyMount(ctx, box, layout); err != nil {
-		_, _ = runHost(context.WithoutCancel(ctx), hostCommand{
-			argv: []string{l.runtime, "rm", "-f", name},
-		})
+		_, _ = runHost(context.WithoutCancel(ctx), l.cli.command(0, "rm", "-f", name))
 		_ = os.RemoveAll(layout.root)
 		return nil, err
 	}
@@ -613,14 +622,14 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	return box, nil
 }
 
-// runArgv is the container-run command line for one box.
+// runArgv is the container-run command line for one box, after the binary.
 //
 // Separated from Create so the argument order is assertable without a running
 // daemon: what an operator's own run_args may override is a function of where
 // they are spliced, and nothing else says it.
 func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []string {
 	argv := []string{
-		l.runtime, "run", "-d",
+		"run", "-d",
 		"--name", name,
 		"-v", layout.home() + ":" + DefaultHome,
 		"-w", DefaultHome + "/" + WorkspaceSubdir,
@@ -631,7 +640,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 		// completion check on a job that already died.
 		"--init",
 	}
-	argv = append(argv, containerUserArgs(ctx, l.runtime)...)
+	argv = append(argv, containerUserArgs(ctx, l.cli)...)
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)
 	}
@@ -715,7 +724,7 @@ func (l *Local) reattach(sandboxID string) (Sandbox, error) {
 		return &directBox{layout: layout, credentials: credentials}, nil
 	}
 	return &containerBox{
-		layout: layout, runtime: l.runtime,
+		layout: layout, cli: l.cli,
 		container: l.containerName(sandboxID), credentials: credentials,
 	}, nil
 }
@@ -734,7 +743,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		return nil
 	}
 	if l.opts.Placement == Container {
-		_, _ = runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
+		_, _ = runHost(ctx, l.cli.command(0, "rm", "-f", l.containerName(sandboxID)))
 	} else if signalJob(layout, "kill", procgroup.Kill) {
 		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
 		// by SIGKILL directly — the signal cannot be caught, blocked or
@@ -911,9 +920,8 @@ func (l *Local) boxIsAlive(layout boxLayout, live map[string]bool) bool {
 // One listing per reap, rather than an inspect per box: the reap runs on the
 // Create path, which an agent is waiting on.
 func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
-	result, err := runHost(ctx, hostCommand{argv: []string{
-		l.runtime, "ps", "-a", "--filter", "name=" + ContainerPrefix, "--format", "{{.Names}}",
-	}})
+	result, err := runHost(ctx, l.cli.command(0,
+		"ps", "-a", "--filter", "name="+ContainerPrefix, "--format", "{{.Names}}"))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {

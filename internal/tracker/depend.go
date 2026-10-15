@@ -463,10 +463,13 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			adding := slices.Contains(required, id)
 			switch {
 			case !held && adding:
-				return invalid("there is no task %s, so the "+
-					"dependency naming it cannot be written — an edge to a "+
-					"task that does not exist resolves to nothing on every "+
-					"node, for ever", id)
+				// NO EDGE TO A TASK THIS NODE DOES NOT HOLD, and the
+				// refusal is [missingTask]'s two answers rather than
+				// one: a purged task is gone for good, and a task with
+				// no row and no marker may be a create this node has
+				// not applied — which "there is no task" told the
+				// caller never to retry.
+				return missingTask(ctx, tx, id, "no dependency can be drawn to it")
 			case !held:
 				// A REMOVE OF AN EDGE TO A VANISHED TASK IS THE
 				// CORRECTION SOMEBODY IS MAKING, so it is skipped

@@ -301,6 +301,7 @@ func TestACellThisGroupingPlacesNowhereStillCounts(t *testing.T) {
 
 func TestAUnitBandCountsItsSeatsAndARootSeatHasItsOwn(t *testing.T) {
 	t.Parallel()
+	engineering := tokens.Seat{UnitKey: "engineering", UnitName: "Engineering"}
 	got := tokens.BucketDaily([]tokens.Cell{
 		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
 		cell("2026-06-14", "dev", "execute", "sonnet", 20),
@@ -308,17 +309,17 @@ func TestAUnitBandCountsItsSeatsAndARootSeatHasItsOwn(t *testing.T) {
 		cell("2026-06-15", "ops", "execute", "sonnet", 1),
 	}, tokens.SeriesOptions{
 		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
-		Units: map[string]string{"dev": "Engineering", "ops": "Engineering"},
+		Seats: tokens.Seats{"id-ceo": {Handle: "ceo"}, "id-dev": engineering, "id-ops": engineering},
 	})
 	rows := map[string]tokens.GroupRow{}
 	for _, row := range got.ByGroup {
 		rows[row.Group] = row
 	}
-	if eng := rows["Engineering"]; eng.TotalTokens != 26 || eng.Seats != 2 {
-		t.Errorf("Engineering = %+v, want 26 tokens over two seats", eng)
+	if eng := rows["engineering"]; eng.TotalTokens != 26 || eng.Seats != 2 || eng.Label != "Engineering" {
+		t.Errorf("engineering = %+v, want 26 tokens over two seats, keyed on the unit and named by it", eng)
 	}
-	if root := rows["no unit"]; root.TotalTokens != 10 || root.Seats != 1 {
-		t.Errorf("the root seat's band = %+v, want its own", root)
+	if root := rows["no unit"]; root.TotalTokens != 10 || root.Seats != 1 || root.Label != "" {
+		t.Errorf("the root seat's band = %+v, want its own, printed by its key", root)
 	}
 }
 
@@ -326,7 +327,8 @@ func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
 	t.Parallel()
 	// A team's bar is drawn in its seats' shares, so the parts come from the
 	// cells that made the band: biggest first, keyed as the seat grouping
-	// keys a band, and summing to the band exactly.
+	// keys a band — the agent id — named and linked as the chart names the
+	// seat now, and summing to the band exactly.
 	cells := []tokens.Cell{
 		cell("2026-06-14", "dev", "execute", "sonnet", 20),
 		cell("2026-06-14", "ops", "execute", "sonnet", 4),
@@ -334,33 +336,40 @@ func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
 		cell("2026-06-15", "ops", "execute", "haiku", 26),
 		cell("2026-06-15", "ceo", "execute", "sonnet", 10),
 	}
+	engineering := func(handle, name string) tokens.Seat {
+		return tokens.Seat{Handle: handle, Name: name, UnitKey: "engineering", UnitName: "Engineering"}
+	}
 	got := tokens.BucketDaily(cells, tokens.SeriesOptions{
 		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
-		Units: map[string]string{"dev": "Engineering", "ops": "Engineering"},
+		Seats: tokens.Seats{
+			"id-dev": engineering("dev", "Developer"),
+			"id-ops": engineering("ops", "Operator"),
+			"id-ceo": {Handle: "ceo", Name: "Chief"},
+		},
 	})
 	rows := map[string]tokens.GroupRow{}
 	for _, row := range got.ByGroup {
 		rows[row.Group] = row
 	}
-	eng := rows["Engineering"]
+	eng := rows["engineering"]
 	type part struct {
-		group, handle string
-		total         int
+		group, label, handle string
+		total                int
 	}
 	var parts []part
 	sum := 0
 	for _, p := range eng.Parts {
-		parts = append(parts, part{p.Group, p.Handle, p.TotalTokens})
+		parts = append(parts, part{p.Group, p.Label, p.Handle, p.TotalTokens})
 		sum += p.TotalTokens
 	}
-	want := []part{{"ops", "ops", 30}, {"dev", "dev", 25}}
+	want := []part{{"id-ops", "Operator", "ops", 30}, {"id-dev", "Developer", "dev", 25}}
 	if !slices.Equal(parts, want) {
 		t.Errorf("Engineering's parts = %+v, want %+v", parts, want)
 	}
 	if sum != eng.TotalTokens {
 		t.Errorf("the parts sum to %d, and the band is %d", sum, eng.TotalTokens)
 	}
-	if root := rows["no unit"]; len(root.Parts) != 1 || root.Parts[0].Group != "ceo" {
+	if root := rows["no unit"]; len(root.Parts) != 1 || root.Parts[0].Group != "id-ceo" {
 		t.Errorf("the root seats' band = %+v, want the one seat that spent in it", root.Parts)
 	}
 
@@ -376,7 +385,10 @@ func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
 	}
 	folded := tokens.BucketDaily(cells, tokens.SeriesOptions{
 		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
-		Units:  map[string]string{"dev": "Engineering", "ops": "Operations"},
+		Seats: tokens.Seats{
+			"id-dev": engineering("dev", "Developer"),
+			"id-ops": {Handle: "ops", UnitKey: "operations", UnitName: "Operations"},
+		},
 		Groups: 1,
 	})
 	last := folded.ByGroup[len(folded.ByGroup)-1]
@@ -384,13 +396,13 @@ func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
 		t.Errorf("residual = %+v, want an other with no parts", last)
 	}
 
-	// ON THE WIRE a part is the seat's key, its handle and its bucket, and a
-	// band without parts says nothing about them.
+	// ON THE WIRE a part is the seat's key, its name, its handle and its
+	// bucket, and a band without parts says nothing about them.
 	wire, err := json.Marshal(eng.Parts[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(wire), `"group":"ops","handle":"ops"`) ||
+	if !strings.Contains(string(wire), `"group":"id-ops","label":"Operator","handle":"ops"`) ||
 		!strings.Contains(string(wire), `"total_tokens":30`) {
 		t.Errorf("a part marshals as %s", wire)
 	}
@@ -400,6 +412,65 @@ func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
 	}
 	if strings.Contains(string(unsplit), `"parts"`) {
 		t.Errorf("a band with no parts marshals them anyway: %s", unsplit)
+	}
+}
+
+// A PERSON'S SPEND IS BANDED AS THEIR HUMAN SEAT'S: under the unit the chart
+// files that seat in, as a part of that unit's bar, and as a seat band of their
+// own — keyed on [tokens.PersonKey] and linked by their handle. A person is no
+// agent seat and has no agent id, so keyed as a seat is every person fell into
+// one band under an empty id; and a person whose seat the chart no longer holds
+// keeps their band and their handle, the only identity it has, in the
+// unattached unit.
+//
+// Mutation: band a unit by the cell's agent id rather than its spender key, and
+// Maya's spend lands in "no unit".
+func TestAPersonsSpendIsBandedAsTheirHumanSeats(t *testing.T) {
+	t.Parallel()
+	person := func(handle string, total int) tokens.Cell {
+		return tokens.Cell{Day: "2026-06-14", Handle: handle, Role: "Founder", Person: true,
+			Phase: tokens.PhaseAuxiliary, Worker: "answer_knowledge", Model: "haiku",
+			Bucket: tokens.Bucket{TotalTokens: total, Calls: 1}}
+	}
+	cells := []tokens.Cell{
+		cell("2026-06-14", "dev", "execute", "sonnet", 20),
+		person("maya", 7),
+		person("ana", 3),
+	}
+	seats := tokens.Seats{
+		"id-dev":                 {Handle: "dev", Name: "Developer", UnitKey: "leadership", UnitName: "Leadership"},
+		tokens.PersonKey("maya"): {Handle: "maya", Name: "Chair", UnitKey: "leadership", UnitName: "Leadership"},
+	}
+	r := days(t, "2026-06-14", "2026-06-14", time.UTC)
+
+	byUnit := tokens.BucketDaily(cells, tokens.SeriesOptions{Group: tokens.GroupUnit, Range: r, Seats: seats})
+	units := map[string]tokens.GroupRow{}
+	for _, row := range byUnit.ByGroup {
+		units[row.Group] = row
+	}
+	lead := units["leadership"]
+	if lead.TotalTokens != 27 || lead.Seats != 2 || len(lead.Parts) != 2 {
+		t.Fatalf("leadership = %+v, want the seat's 20 and Maya's 7 over two spenders", lead)
+	}
+	if p := lead.Parts[1]; p.Group != tokens.PersonKey("maya") || p.Handle != "maya" || p.Label != "Chair" {
+		t.Errorf("Maya's part = %+v, want her key, her handle and her seat's name now", p)
+	}
+	if loose := units["no unit"]; loose.TotalTokens != 3 || len(loose.Parts) != 1 ||
+		loose.Parts[0].Handle != "ana" {
+		t.Errorf("no unit = %+v, want Ana, whose seat the chart no longer holds, by her handle", loose)
+	}
+
+	bySeat := tokens.BucketDaily(cells, tokens.SeriesOptions{Group: tokens.GroupSeat, Range: r, Seats: seats})
+	bands := map[string]tokens.GroupRow{}
+	for _, row := range bySeat.ByGroup {
+		bands[row.Group] = row
+	}
+	if maya := bands[tokens.PersonKey("maya")]; maya.TotalTokens != 7 || maya.Handle != "maya" ||
+		maya.Label != "Chair" {
+		t.Errorf("Maya's band = %+v, want her own, named as the chart names her seat", maya)
+	}
+	if ana := bands[tokens.PersonKey("ana")]; ana.TotalTokens != 3 || ana.Handle != "ana" {
+		t.Errorf("Ana's band = %+v, want her own, linked by her handle", ana)
 	}
 }
 
@@ -416,9 +487,105 @@ func TestProviderAndSeatAreBandsOfTheirOwn(t *testing.T) {
 		t.Errorf("by provider = %+v, want one entry serving both models", byProvider.ByGroup)
 	}
 	opts.Group = tokens.GroupSeat
+	opts.Seats = tokens.Seats{"id-dev": {Handle: "dev", Name: "Developer"}}
 	bySeat := tokens.BucketDaily([]tokens.Cell{a, b}, opts)
-	if bySeat.ByGroup[0].Group != "dev" || bySeat.ByGroup[0].Handle != "dev" {
-		t.Errorf("by seat = %+v, want the handle as the band and its link", bySeat.ByGroup[0])
+	if top := bySeat.ByGroup[0]; top.Group != "id-dev" || top.Handle != "dev" || top.Label != "Developer" {
+		t.Errorf("by seat = %+v, want the seat's id as the band, its handle as the link "+
+			"and its name now as the words", top)
+	}
+}
+
+// TWO SEATS THAT SHARE A NAME ARE TWO BANDS, and two units that share a name
+// are two bands: the band is the identity and the label is only the words. A
+// band keyed on the name was both of them, under whichever handle came last.
+func TestSeatsAndUnitsSharingANameAreSeparateBands(t *testing.T) {
+	t.Parallel()
+	ada := cell("2026-06-14", "ada", "execute", "sonnet", 10)
+	bob := cell("2026-06-14", "bob", "execute", "sonnet", 30)
+	ada.Role, bob.Role = "Engineer", "Engineer"
+	seats := tokens.Seats{
+		"id-ada": {Handle: "ada", Name: "Engineer", UnitKey: "platform", UnitName: "Core"},
+		"id-bob": {Handle: "bob", Name: "Engineer", UnitKey: "product", UnitName: "Core"},
+	}
+	for _, group := range []tokens.Group{tokens.GroupSeat, tokens.GroupUnit} {
+		got := tokens.BucketDaily([]tokens.Cell{ada, bob}, tokens.SeriesOptions{
+			Group: group, Seats: seats, Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
+		})
+		if len(got.ByGroup) != 2 {
+			t.Fatalf("by %s: bands = %+v, want two", group, got.ByGroup)
+		}
+		if got.ByGroup[0].TotalTokens != 30 || got.ByGroup[1].TotalTokens != 10 {
+			t.Errorf("by %s: bands = %+v, want each identity's own spend", group, got.ByGroup)
+		}
+		if got.ByGroup[0].Label == "" || got.ByGroup[0].Label != got.ByGroup[1].Label {
+			t.Errorf("by %s: labels = %q / %q, want the shared name on both",
+				group, got.ByGroup[0].Label, got.ByGroup[1].Label)
+		}
+	}
+}
+
+// A SEAT RENAMED INSIDE THE WINDOW IS ONE BAND, named as the chart names it now
+// — and one the chart no longer holds keeps the NEWEST name its days carried
+// and no handle at all, because the handle a removed seat freed may already be
+// a stranger's. Keyed on the handle, the renamed seat was two bands splitting
+// its spend, and the removed one linked to whoever took its old address.
+func TestARenamedSeatIsOneBandAndARemovedOneLinksNowhere(t *testing.T) {
+	t.Parallel()
+	before := cell("2026-06-14", "sam", "execute", "sonnet", 10)
+	after := cell("2026-06-15", "samantha", "execute", "sonnet", 20)
+	after.AgentID = before.AgentID
+	gone := cell("2026-06-14", "lee", "execute", "sonnet", 3)
+	renamed := cell("2026-06-15", "lee-two", "execute", "sonnet", 4)
+	renamed.AgentID, renamed.Role = gone.AgentID, "Lee (contract)"
+	r := days(t, "2026-06-14", "2026-06-15", time.UTC)
+	seats := tokens.Seats{before.AgentID: {Handle: "samantha", Name: "Samantha"}}
+
+	for _, order := range [][]tokens.Cell{
+		{before, after, gone, renamed},
+		{renamed, gone, after, before},
+	} {
+		got := tokens.BucketDaily(order, tokens.SeriesOptions{Group: tokens.GroupSeat, Range: r, Seats: seats})
+		if len(got.ByGroup) != 2 {
+			t.Fatalf("bands = %+v, want one per seat", got.ByGroup)
+		}
+		if sam := got.ByGroup[0]; sam.Group != before.AgentID || sam.TotalTokens != 30 ||
+			sam.Label != "Samantha" || sam.Handle != "samantha" {
+			t.Errorf("the renamed seat = %+v, want one band of 30 named and linked as the chart has it", sam)
+		}
+		if lee := got.ByGroup[1]; lee.Label != "Lee (contract)" || lee.Handle != "" {
+			t.Errorf("the removed seat = %+v, want its newest name and no link", lee)
+		}
+
+		rollup := tokens.FoldDaily(order, nil, tokens.DailyOptions{Range: r, Seats: seats})
+		if len(rollup.ByAgent) != 2 || rollup.ByAgent[0].Role != "Samantha" ||
+			rollup.ByAgent[0].Handle != "samantha" || rollup.ByAgent[1].Handle != "" {
+			t.Errorf("by_agent = %+v, want the same two seats the series has", rollup.ByAgent)
+		}
+	}
+}
+
+// THE NARROWED SEAT IS ECHOED BY ITS ID, with the handle the chart gives it
+// NOW: the handle a request typed may be renamed by the time the answer is
+// drawn, and a link built from it would go to whoever holds it next.
+func TestANarrowedAnswerNamesItsSeatByIDAndItsHandleNow(t *testing.T) {
+	t.Parallel()
+	r := days(t, "2026-06-14", "2026-06-14", time.UTC)
+	seats := tokens.Seats{"id-sam": {Handle: "samantha", Name: "Samantha"}}
+	series := tokens.BucketDaily(nil, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Range: r, AgentID: "id-sam", Seats: seats,
+	})
+	rollup := tokens.FoldDaily(nil, nil, tokens.DailyOptions{Range: r, AgentID: "id-sam", Seats: seats})
+	for name, got := range map[string][2]string{
+		"series": {series.AgentID, series.Seat},
+		"rollup": {rollup.AgentID, rollup.Seat},
+	} {
+		if got != [2]string{"id-sam", "samantha"} {
+			t.Errorf("%s narrowed to %v, want the id and the handle the chart gives it", name, got)
+		}
+	}
+	whole := tokens.BucketDaily(nil, tokens.SeriesOptions{Group: tokens.GroupPhase, Range: r, Seats: seats})
+	if whole.AgentID != "" || whole.Seat != "" {
+		t.Errorf("the whole company's series names a seat: %q %q", whole.AgentID, whole.Seat)
 	}
 }
 

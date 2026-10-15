@@ -16,12 +16,13 @@ import (
 // The pointer publishes an instant later than the activation it replaces
 // (coord.ActivationAt), so a write made on a node whose clock runs behind the
 // node that activated last is published later than this node's clock says.
-// The local copy's `activated_at` is what this node boots its chart with next
-// time; left at the instant it asked for, a restart would stamp the chart with
-// one older than the fleet's and walk nothing forward.
+// The local copy's `activated_at` is what this node's config history shows and
+// what its reconciler holds the pointer against: left at the instant it asked
+// for, the reconciler reads the fleet's own activation as one this node has
+// not applied, and the history names an instant the fleet never ran.
 func TestAWriteKeepsThePointersInstant(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	if res := s.do(t, http.MethodPut, "/config", companyJSONDoc,
 		map[string]string{"X-Summary": "create"}); res.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", res.Code, res.Body)
@@ -60,7 +61,7 @@ func TestAWriteKeepsThePointersInstant(t *testing.T) {
 	if active.ID != target.RevisionID ||
 		store.EncodeTime(active.ActivatedAt) != store.EncodeTime(target.At) {
 		t.Fatalf("this node holds %s activated at %s, and the pointer names %s at "+
-			"%s — a restart would stamp the chart with an instant the fleet never "+
-			"applied", active.ID, active.ActivatedAt, target.RevisionID, target.At)
+			"%s — its history names an instant the fleet never ran",
+			active.ID, active.ActivatedAt, target.RevisionID, target.At)
 	}
 }

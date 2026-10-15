@@ -30,7 +30,8 @@ const read = (over: Partial<Parameters<typeof engineReading>[0]> = {}) =>
 
 /** One reading of every state the row can say. */
 const EVERY: Record<EngineState, EngineReading> = {
-  token: read({ authRejected: true }),
+  "signed-out": read({ authRejected: true }),
+  refused: read({ accessRefused: "seat_unavailable" }),
   unreachable: read({ connected: false, lostAt: 1, health: null }),
   connecting: read({ connected: false, lostAt: null, everConnected: false, health: null }),
   draining: read({ health: { ...healthy, shutting_down: true } }),
@@ -49,14 +50,23 @@ describe("which state the row says", () => {
 
   // THE ORDER IS PRECEDENCE: each state below is true AT THE SAME TIME as
   // every state after it, and the row says the one a reader acts on.
-  test("a refused token outranks everything, and is the one state a press can fix", () => {
+  test("nobody signed in outranks everything, and is the one state a press can fix", () => {
     const r = read({
       authRejected: true,
+      accessRefused: "seat_unavailable",
       connected: false,
       lostAt: 1,
       health: { ...healthy, shutting_down: true },
     });
-    expect(r).toMatchObject({ state: "token", tone: "danger", title: "Token refused" });
+    expect(r).toMatchObject({ state: "signed-out", tone: "danger", title: "Not signed in" });
+  });
+
+  // A PERSON THE ENGINE KNOWS AND REFUSES is not asked to sign in again:
+  // signing in reaches the same person with the same access.
+  test("a refusal of somebody the engine knows names its reason, over a lost engine", () => {
+    const r = read({ accessRefused: "seat_unavailable", connected: false, lostAt: 1 });
+    expect(r).toMatchObject({ state: "refused", tone: "danger", title: "Access refused" });
+    expect(r.lead).toContain("seat_unavailable");
   });
 
   test("a lost engine outranks what the last push claimed", () => {
@@ -178,24 +188,24 @@ function client(answers: Record<string, unknown> = {}) {
 function panel(
   reading: EngineReading,
   {
-    operator = false,
+    readsReport = false,
     answers = {},
-    onSetToken = () => {},
-  }: { operator?: boolean; answers?: Record<string, unknown>; onSetToken?: () => void } = {},
+    onSignIn = () => {},
+  }: { readsReport?: boolean; answers?: Record<string, unknown>; onSignIn?: () => void } = {},
 ) {
   const c = client(answers);
   const view = render(
     <ClientContext.Provider value={{ store: c.store, socket: c.socket }}>
-      <EnginePanel reading={reading} operator={operator} onSetToken={onSetToken} />
+      <EnginePanel reading={reading} readsReport={readsReport} onSignIn={onSignIn} />
     </ClientContext.Provider>,
   );
   const rerender = (next: EngineReading) =>
     view.rerender(
       <ClientContext.Provider value={{ store: c.store, socket: c.socket }}>
-        <EnginePanel reading={next} operator={operator} onSetToken={onSetToken} />
+        <EnginePanel reading={next} readsReport={readsReport} onSignIn={onSignIn} />
       </ClientContext.Provider>,
     );
-  return { ...c, rerender };
+  return { ...c, view, rerender };
 }
 
 /** Let the queries a render made answer, and the renders they cause land. */
@@ -290,7 +300,7 @@ describe("the row", () => {
 
   test("lists the alarms by name, longest-standing first, and goes to where the console lists them", async () => {
     const { asked } = panel(read({ health: twoAlarms }), {
-      operator: true,
+      readsReport: true,
       answers: { retention: report },
     });
     fireEvent.click(screen.getByRole("button", { name: "Engine serving, 2 alarms" }));
@@ -308,10 +318,11 @@ describe("the row", () => {
     );
   });
 
-  // THE NAMES ARE THE OPERATOR'S. The push is public and names only the one
-  // that has stood longest, so a reader who may not ask the report is told
-  // that one and how many more, and the report is not asked to refuse them.
-  test("a reader without an operator credential is told the longest-standing alarm and how many more", async () => {
+  // THE NAMES ARE THE REPORT'S, which takes Admin. The push is
+  // public and names only the one that has stood longest, so a reader who may
+  // not ask the report is told that one and how many more, and the report is
+  // not asked to refuse them.
+  test("a reader without the report's grant is told the longest-standing alarm and how many more", async () => {
     const { asked } = panel(read({ health: fiveAlarms }), { answers: { retention: report } });
     fireEvent.click(screen.getByRole("button", { name: "Engine serving, 5 alarms" }));
     await settle();
@@ -326,7 +337,7 @@ describe("the row", () => {
 
   test("asks for the names again when the count beside them moves", async () => {
     const { asked, rerender } = panel(read({ health: fiveAlarms }), {
-      operator: true,
+      readsReport: true,
       answers: { retention: report },
     });
     fireEvent.click(screen.getByRole("button", { name: "Engine serving, 5 alarms" }));
@@ -388,13 +399,38 @@ describe("the row", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  test("a refused token is the button that asks for another, and opens no panel", () => {
-    const onSetToken = vi.fn();
-    panel(EVERY.token, { onSetToken });
-    const row = screen.getByRole("button", { name: "Token refused. Set another token" });
+  test("nobody signed in is the button that goes to the sign-in, and opens no panel", () => {
+    const onSignIn = vi.fn();
+    panel(EVERY["signed-out"], { onSignIn });
+    const row = screen.getByRole("button", { name: "Not signed in. Sign in" });
     expect(row.hasAttribute("aria-haspopup")).toBe(false);
     fireEvent.click(row);
-    expect(onSetToken).toHaveBeenCalledOnce();
+    expect(onSignIn).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // A STATEMENT WEARS NOTHING A CONTROL WEARS. A refusal drew a chevron, a
+  // pointer and a hover border on a card that did nothing and could not be
+  // focused. It is repaired by an admin, so the row says it and is no
+  // control: no button, no chevron, no place in the tab order, and nothing a
+  // press opens. Mutation: give it the panel's trigger, or the sign-in's
+  // button, and a line here goes red.
+  test("a refusal is a statement, with nothing to press", () => {
+    for (const statement of [EVERY.refused]) {
+      const { view } = panel(statement);
+      const row = view.container.querySelector(".crewlet-app-shell__rail-row")!;
+      expect(row.tagName, statement.state).toBe("DIV");
+      expect(row.textContent).toBe(statement.title);
+      expect(screen.queryByRole("button")).toBeNull();
+      expect(view.container.querySelector("a, button, [tabindex]")).toBeNull();
+      expect(view.container.querySelector(".crewlet-app-shell__rail-row-opens")).toBeNull();
+      fireEvent.click(row);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      cleanup();
+    }
+    // THE CONTROLS KEEP THEIR MARKS: the row that opens the panel ends in
+    // its chevron.
+    const { view } = panel(read());
+    expect(view.container.querySelector(".crewlet-app-shell__rail-row-opens")).not.toBeNull();
   });
 });

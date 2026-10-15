@@ -43,7 +43,7 @@ func TestTheOverviewCountsEverySeatAtItsHolder(t *testing.T) {
 	asks := &counting{Asker: read.Queue}
 	read.Queue = asks
 
-	got, err := read.Overview(t.Context(), []string{"ops", "pm", "swe"})
+	got, err := read.Overview(t.Context(), seatsOf("ops", "pm", "swe"))
 	if err != nil {
 		t.Fatalf("Overview: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestTheOverviewNamesAHolderThatDidNotAnswer(t *testing.T) {
 	f.hold(t, "pm", b.owner)
 	read := f.reader(t, b, "pm")
 
-	got, err := read.Overview(t.Context(), []string{"pm", "swe"})
+	got, err := read.Overview(t.Context(), seatsOf("pm", "swe"))
 	if err != nil {
 		t.Fatalf("Overview: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestTheOverviewDoesNotCountASeatStillArriving(t *testing.T) {
 	f.reader(t, a)
 	read := f.reader(t, b)
 
-	got, err := read.Overview(t.Context(), []string{"pm", "swe"})
+	got, err := read.Overview(t.Context(), seatsOf("pm", "swe"))
 	if err != nil {
 		t.Fatalf("Overview: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestTheOverviewOfANodeWithNoBrokerIsItsOwn(t *testing.T) {
 	b.remember(t, "swe", "only", 3)
 	read := &memread.Reader{Owner: b.owner, Local: b.stores}
 
-	got, err := read.Overview(t.Context(), []string{"swe"})
+	got, err := read.Overview(t.Context(), seatsOf("swe"))
 	if err != nil {
 		t.Fatalf("Overview: %v", err)
 	}

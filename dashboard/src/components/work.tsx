@@ -38,6 +38,7 @@ import {
   relTime,
 } from "~/lib/format.ts";
 import { shortAge } from "~/lib/seats.ts";
+import { GENERATION_STRIDE } from "~/contract/positions.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -51,6 +52,8 @@ import {
   STATUS_TONE,
   typeIcon,
   typeName,
+  itemAddress,
+  checklistTask,
 } from "~/lib/work.ts";
 import type {
   WorkChecklistRow,
@@ -872,7 +875,7 @@ export function RowList({
           now={now}
           chrome={chrome}
           href={hrefOf(row)}
-          selected={selected === row.key}
+          selected={selected === itemAddress(row)}
           onOpen={onOpen ? () => onOpen(row) : undefined}
           keyOf={(id) => keys.get(id)}
           ordinal={ordinals ? at + 1 : undefined}
@@ -970,13 +973,10 @@ export function oddLevel(level: string | undefined): boolean {
  */
 export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   if (!answer) return null;
-  const behind =
-    answer.applied_through !== undefined &&
-    answer.log_seq !== undefined &&
-    answer.applied_through < answer.log_seq;
+  const behind = appliedThrough(answer);
   const level = answer.read_level ?? "";
   const odd = oddLevel(level);
-  if (!odd && !behind) return null;
+  if (!odd && behind === null) return null;
   return (
     <span className="work-coverage">
       {odd && (
@@ -993,13 +993,40 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
           apply is visible as its own state rather than as lag. NEUTRAL: a
           read level and an apply position are facts about the answer, not
           states of it, and lag alone is never an alarm. */}
-      {behind && (
+      {behind !== null && (
         <Tag appearance="outline" size="xs" title="This node holds records it has not applied yet">
-          applied through {answer.applied_through} of {answer.log_seq}
+          {behind}
         </Tag>
       )}
     </span>
   );
+}
+
+/**
+ * A packed log position as a person reads it: the sequence alone in the first
+ * generation, where every log starts and almost all stay, and `generation:seq`
+ * past it, so a re-anchored log says which generation it is in.
+ *
+ * `applied_through` and `log_seq` are packed — (generation × 2^40) + seq, by
+ * the engine's own stride ([GENERATION_STRIDE]) — so they ORDER correctly with
+ * a plain `<` across a re-anchor, and that comparison stays on the packed
+ * values. What a person reads is not packed: printed raw, every position after
+ * a log's first re-anchor was a thirteen-digit number ("applied through
+ * 1099511627817 of 1099511627832") that names neither the generation nor how
+ * far behind the node is.
+ */
+export function positionWords(packed: number): string {
+  const generation = Math.floor(packed / GENERATION_STRIDE);
+  const seq = packed - generation * GENERATION_STRIDE;
+  return generation === 0 ? `${seq}` : `${generation}:${seq}`;
+}
+
+/** "applied through 41 of 88" for an answer whose node is behind its log, or null. */
+export function appliedThrough(facts: CoverageFacts | null | undefined): string | null {
+  if (facts?.applied_through === undefined || facts.log_seq === undefined) return null;
+  return facts.applied_through < facts.log_seq
+    ? `applied through ${positionWords(facts.applied_through)} of ${positionWords(facts.log_seq)}`
+    : null;
 }
 
 /**
@@ -1072,15 +1099,18 @@ export function ChecklistClaims({
   hrefOf,
 }: {
   rows: readonly WorkChecklistRow[];
-  /** Where a task key goes. The screen owns the address. */
-  hrefOf: (key: string) => string;
+  /**
+   * Where a task goes, by its ADDRESS (`itemAddress`) — the key, unless
+   * another task claimed that key first. The screen owns the route.
+   */
+  hrefOf: (address: string) => string;
 }) {
   if (rows.length === 0) return null;
   return (
     <div className="col">
       {rows.map((item) => (
         <div key={`${item.task}:${item.item}`} className={cx("work-check", item.done && "done")}>
-          <a className="mono t-link" href={hrefOf(item.task_key)}>
+          <a className="mono t-link" href={hrefOf(itemAddress(checklistTask(item)))}>
             {item.task_key}
           </a>
           <span className="work-check-name">{item.name}</span>

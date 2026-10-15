@@ -33,7 +33,7 @@ import { Router } from "~/app/router.tsx";
 import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName, WorkSummary } from "~/protocol/index.ts";
+import { Store, type QueryName, type WorkSummary } from "~/protocol/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -110,8 +110,8 @@ function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = fla
     const answer = answers[what as QueryName];
     return typeof answer === "function" ? answer(params ?? {}) : (answer ?? {});
   });
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(org as never);
   return query;
 }
@@ -193,12 +193,26 @@ const emptyDay = {
 const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
 const ada = {
-  operator_id: "ops-1",
-  operator: true,
+  login: "ops-1",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "ada",
+  owner: "ada",
   name: "Ada Okonkwo",
   kind: "human",
 };
+
+/** A principal the directory binds to no seat: their record is their login. */
+const unbound = {
+  login: "token:ops-7",
+  grants: ["tracker", "knowledge", "admin"],
+  handle: "",
+  owner: "token:ops-7",
+  name: "",
+  kind: "",
+};
+
+/** Nobody signed in. */
+const anonymous = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 /** One task with the fields a row and a band are decided from. */
 function task(over: Partial<WorkSummary> = {}): WorkSummary {
@@ -276,24 +290,89 @@ test("an explicit handle names whose day it is, in the third person", async () =
   expect(screen.queryByText("yours")).toBeNull();
 });
 
-// AND THE THREE VIEWER STATES TAKE THREE SENTENCES. Only one of them is
-// anybody's fault, and the other two have different remedies: a credential,
-// and a line of company configuration.
-test("an unbound token says what to bind, not that something is broken", async () => {
-  serving({
-    viewer: { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
+// AN UNBOUND READER HAS A DAY OF THEIR OWN, kept under their login — the name
+// their assistant writes their priorities and marks under. Asked for by the
+// SEAT, an unbound reader was shown nothing but a sentence about binding while
+// the record sat under a name the screen never asked for. It shows the day
+// now, and says what binding would add above it.
+test("an unbound reader's own day is the one kept under their login", async () => {
+  const query = serving({
+    viewer: unbound,
+    work_my_work: { ...emptyDay, handle: "token:ops-7" },
+    work_items: noWork,
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/not bound to a person/)).toBeTruthy());
-  // And it says where the binding is made.
-  expect(screen.getByText("Bind it to a seat in Edit org, or pick someone above.")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
+  expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
+  // AND WHAT BINDING WOULD ADD, naming the login in the command that binds a
+  // token no row holds yet — rather than reporting a fault, which is a
+  // person's (`Inbox.test.tsx`).
+  expect(screen.getByText(/binds/)).toBeTruthy();
+  expect(
+    // The whole command, `-grants` included: the CLI refuses a service
+    // account's create that names none, so a command without it fails as
+    // pasted.
+    screen.getByText("crewlet iam create -kind machine -login token:ops-7 -seat SEAT -grants none"),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
+  expect(screen.getAllByText(/token:ops-7/).length).toBeGreaterThan(0);
+  // A LOGIN IS NOT A SEAT, so the banner names it without a chip linking to a
+  // seat page that would answer "no such seat".
+  expect(screen.queryByRole("link", { name: /token:ops-7/ })).toBeNull();
 });
 
-test("no credential at all is a different sentence from an unbound one", async () => {
-  serving({ viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } });
+// AND THE THREE VIEWER STATES TAKE THREE SENTENCES: nobody signed in is not an
+// unbound reader, whose day is theirs, and neither is a reader who has not
+// chosen somebody.
+test("nobody signed in is a different sentence from an unbound reader", async () => {
+  serving({ viewer: anonymous });
   mount();
-  await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
-  expect(screen.queryByText(/not bound to a person/)).toBeNull();
+  await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
+  expect(screen.queryByText(/not bound to a seat/)).toBeNull();
+});
+
+// THE DAY MOVES WITH THE READER'S INBOX. The record that hands somebody work,
+// asks them something or reorders their queue is the record that writes them a
+// notice, so the frame that moves their inbox is what asks the day again —
+// every read the strip and the banner are drawn from, not only one of them,
+// since a tab count that moved while the banner did not is two answers about
+// one change.
+test("the reader's own day is asked again when their inbox moves", async () => {
+  const store = new Store();
+  const answers: Partial<Record<QueryName, unknown>> = {
+    viewer: ada,
+    work_my_work: emptyDay,
+    work_items: noWork,
+    work_person: { handle: "ada", version: 1, held: true, complete: true },
+  };
+  const query = vi.fn(
+    async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
+  );
+  vi.mocked(useClient).mockReturnValue({ store, socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+  vi.mocked(useOrg).mockReturnValue(flatOrg as never);
+  mount();
+  await counts();
+  // THE SECTION COUNTS, not the list under them: the list carries an
+  // arrangement, and it is the list's own question rather than the day's.
+  const asked = (what: string) =>
+    query.mock.calls.filter(
+      (c) => c[0] === what && (c[1] as Record<string, unknown> | undefined)?.group_by === undefined,
+    ).length;
+  await waitFor(() => expect(asked("work_person")).toBeGreaterThan(0));
+  const before = {
+    day: asked("work_my_work"),
+    person: asked("work_person"),
+    count: asked("work_items"),
+  };
+
+  act(() => {
+    store.applyInboxChanged({ handle: "ada", unread_delta: 1, subject: "t-1", reason: "assignee" });
+  });
+  await waitFor(() => expect(asked("work_my_work")).toBeGreaterThan(before.day));
+  await waitFor(() => expect(asked("work_person")).toBeGreaterThan(before.person));
+  await waitFor(() => expect(asked("work_items")).toBeGreaterThan(before.count));
 });
 
 /** The banner's whose-day pill, as it is drawn for one reader. */
@@ -510,8 +589,8 @@ test("the queue claims no count until the tracker answers", async () => {
           ? emptyDay
           : {},
   );
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -666,8 +745,9 @@ function askRow(over: Record<string, unknown> = {}) {
   return {
     ...task({ key: "ENG-9", title: "Which reader?" }),
     comment: "c1",
-    asked_by: "ops-rui",
-    asked_by_seat: "rui",
+    // THE ASKER'S RECORD NAME (`iam.ActorFor`): a person the directory binds
+    // to a seat asks AS that seat, so the row names the person by it.
+    asked_by: "rui",
     asked_at: "2031-04-16T09:00:00Z",
     body: "parent or replies?",
     open: true,
@@ -733,7 +813,7 @@ test("an ask on somebody else's day is written about them and cannot be answered
     work_my_work: {
       ...emptyDay,
       handle: "rui",
-      asked_of_me: [askRow({ asked_by: "bo", asked_by_seat: undefined })],
+      asked_of_me: [askRow({ asked_by: "bo" })],
     },
   });
   mount("asked-of-me");
@@ -773,29 +853,26 @@ test("a page of asks under a larger total says which ones it holds", async () =>
 // Asked by me
 // ---------------------------------------------------------------------------
 
-// WHAT THIS PERSON IS WAITING ON is the work list held to the ASKER — and held
-// to the person rather than one of their names: a question put through their
-// own credential is authored by the TOKEN, and the engine counts it as theirs
-// only for the viewer it knows both names of. So the section and its count ask
-// with the person as the viewer, on anybody's day.
-test("asked by me asks for the person's questions under both of their names", async () => {
+// WHAT THIS PERSON IS WAITING ON is the work list held to the ASKER, by the
+// one name the engine records them under (`iam.ActorFor`): a person bound to a
+// seat asks AS the seat whichever credential they asked through, so there is
+// no second name to ask under and no `viewer` to send beside it.
+test("asked by me asks for the person's questions by the one name they are recorded under", async () => {
   location.hash = "#/me/asked-by-me?handle=rui";
-  // THE ENGINE ANSWERS A TASK ONLY THE TOKEN ASKED ON — the Party expansion
-  // is the engine's, so here it answers exactly what it would.
   const query = serving({
     viewer: ada,
     work_my_work: { ...emptyDay, handle: "rui" },
     work_items: (p: Record<string, unknown>) =>
-      p.asked_by === "rui" && p.viewer === "rui"
+      p.asked_by === "rui" && !("viewer" in p)
         ? {
             ...noWork,
-            items: [task({ key: "ENG-77", title: "Asked through the token" })],
+            items: [task({ key: "ENG-77", title: "Asked through their assistant" })],
             total_hint: 1,
           }
         : noWork,
   });
   mount("asked-by-me");
-  await waitFor(() => expect(screen.getByText("Asked through the token")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Asked through their assistant")).toBeTruthy());
   const asked = query.mock.calls
     .filter((c) => c[0] === "work_items" && (c[1] as Record<string, unknown>).asked_by)
     .map((c) => c[1] as Record<string, unknown>);
@@ -804,7 +881,7 @@ test("asked by me asks for the person's questions under both of their names", as
   expect(asked.some((p) => p.limit !== 1)).toBe(true);
   for (const params of asked) {
     expect(params.asked_by).toBe("rui");
-    expect(params.viewer).toBe("rui");
+    expect(params).not.toHaveProperty("viewer");
   }
   expect((await counts())["asked-by-me"]).toBe("1");
   // NOT A CHIP AND NOT A KEY: the asker is what the section IS.
@@ -1110,10 +1187,10 @@ test("a bound reader is offered no row that returns them where they are", async 
 // a refusal — and the screen's own sentence named that pick as the remedy.
 test("an anonymous reader gets the credential sentence, not a menu of refusals", async () => {
   const query = serving({
-    viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+    viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
   expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
   expect(screen.queryByText(/pick someone above/)).toBeNull();
   // AND THE LOAD STOPS BEING ASKED FOR. It is the picker's own question, and
@@ -1411,13 +1488,8 @@ describe("somebody else's day", () => {
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+    { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
     WRITE_REASONS.anonymous,
-  ],
-  [
-    "an unbound token",
-    { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
-    WRITE_REASONS.unbound,
   ],
   ["a person the engine does not reorder for", { ...ada, acts: [] }, WRITE_REASONS.not_served],
 ])("%s sees the rows and the reason they do not move", async (_who, viewer, reason) => {

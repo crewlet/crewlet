@@ -43,6 +43,7 @@ import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
@@ -53,6 +54,8 @@ import type {
   SandboxRun,
   WorkAskRow,
 } from "~/protocol/index.ts";
+import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
+import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 
 /** A seat the engine stopped for a spent token budget, as a decision. */
 export interface SeatCondition {
@@ -101,11 +104,14 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * when they can take one of them:
  *
  *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes from an operator's token and, where another system manages the
- *    document (ADR-0030), only from one of its writers: `mayChangeConfig`
- *    (`lib/useWriteAccess.ts`), the same answer the raise control is
- *    disabled by, so a seat is never counted as a decision whose control
- *    then refuses the reader;
+ *    takes from an admin, and a SEAT's ceiling also from whoever leads it
+ *    (`lib/leadScope.ts`) — so the reader's access or the units they lead
+ *    decide it, never a binding of their own. The company's ceiling, which
+ *    stops a seat whose own window has room, is Admin's alone. Where another system manages the document (ADR-0030),
+ *    only its writers raise anything: `configWrite` is `mayChangeConfig`
+ *    (`lib/useWriteAccess.ts`), the same answer the raise control is disabled
+ *    by, and the caller passes no leads — so a seat is never counted as a
+ *    decision whose control then refuses the reader;
  *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
  *    engine to serve that write for them (`viewer.acts`) AND an item the seat
  *    was on: a seat stopped between turns has nothing to hand on.
@@ -115,20 +121,26 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * sentence telling a person a decision waits that they cannot make is the one
  * thing this screen must not say.
  */
-export function seatDecisionsFor<T extends { row: AgentRow }>(
+export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindow }>(
   conditions: readonly T[],
   reader: {
     /** Whether the reader may change the company's configuration: `mayChangeConfig`. */
     configWrite: boolean;
     acts: readonly string[];
   },
+  /**
+   * The handles of the seats the reader leads ([LeadScope.seats]) — EMPTY
+   * on a managed document, where a lead's raise is refused like anybody's.
+   */
+  leads: { has(handle: string): boolean } = new Set(),
 ): { mine: T[]; others: T[] } {
   const mine: T[] = [];
   const others: T[] = [];
   for (const c of conditions) {
+    const raises = reader.configWrite || (c.window !== undefined && leads.has(c.row.handle ?? ""));
     const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
     const reassign = item !== null && reader.acts.includes("update_work_item");
-    (reader.configWrite || reassign ? mine : others).push(c);
+    (raises || reassign ? mine : others).push(c);
   }
   return { mine, others };
 }
@@ -234,7 +246,10 @@ export function blocksOf(subjects: readonly DecisionSubject[]): Block[] {
       blocks.push({ kind: "row", key: subjectKey(subject), subject });
       continue;
     }
-    const asker = subject.ask.asked_by_seat || subject.ask.asked_by;
+    // THE AUTHOR IS THE SEAT: a person the identity directory binds to a seat
+    // writes AS it, so the asker is that seat, and a principal bound to none
+    // draws as its own login.
+    const asker = subject.ask.asked_by;
     const group = byAsker.get(asker);
     if (group) {
       group.asks.push(subject.ask);
@@ -367,11 +382,14 @@ function seatOf(
   return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent", avatar: seat?.avatar ?? null };
 }
 
-/** A key, in the mono face every key is drawn in, linking to its item. */
-function Key({ value }: { value: string }) {
+/**
+ * A key, in the mono face every key is drawn in, linking to its item by its
+ * ADDRESS (`itemAddress`): a key another task claimed first opens that task.
+ */
+function Key({ item }: { item: ItemRef }) {
   return (
-    <a className="decision-key mono" href={href(["work", value])}>
-      {value}
+    <a className="decision-key mono" href={href(itemPath(item))}>
+      {item.key || item.id}
     </a>
   );
 }
@@ -411,8 +429,6 @@ function AskGroup({
   answeredOf: (ask: WorkAskRow) => AskAnswer | undefined;
   onAnswered: (ask: WorkAskRow, answer: AskAnswer) => void;
 }) {
-  // THE PERSON, NEVER THE TOKEN: an ask a person's credential wrote is
-  // authored by the token and drawn as the seat it is bound to.
   const asker = seatOf(index, askerHandle);
   // WHO THE LINES ARE ABOUT: "you" on the reader's own decisions, the
   // decider's name on anybody else's — see [Decider].
@@ -422,16 +438,18 @@ function AskGroup({
       ? `${them ? `${them} is` : "you are"} the ${ask.decision.role}`
       : `asked ${them ?? "you"}`;
   // WHAT EVERY ASK SHARES IS SAID ONCE, on the head; what differs, on the ask.
-  const sharedKey = asks.every((a) => a.key === asks[0]!.key) ? asks[0]!.key : "";
+  // ONE ITEM IS ONE ID: two tasks may show one key (`itemAddress`), and asks
+  // on both are two items, not one.
+  const sharedItem = asks.every((a) => a.id === asks[0]!.id) ? asks[0]! : null;
   const sharedRole = asks.every((a) => roleOf(a) === roleOf(asks[0]!)) ? roleOf(asks[0]!) : "";
   const newest = asks.reduce(
     (at, a) => (Date.parse(a.asked_at) > Date.parse(at) ? a.asked_at : at),
     asks[0]!.asked_at,
   );
   const head = joined([
-    sharedKey ? (
+    sharedItem ? (
       <span key="k">
-        on <Key value={sharedKey} />
+        on <Key item={sharedItem} />
       </span>
     ) : (
       ""
@@ -458,7 +476,7 @@ function AskGroup({
           const question = decision?.question || firstLine(ask.body) || ask.title;
           const given = answeredOf(ask);
           const own = joined([
-            sharedKey ? "" : <Key key="k" value={ask.key} />,
+            sharedItem ? "" : <Key key="k" item={ask} />,
             sharedRole ? "" : roleOf(ask),
             decision?.inform ? `answer posted to #${decision.inform.channel}` : "",
           ]);
@@ -470,7 +488,8 @@ function AskGroup({
                 <AnsweredLine answer={given} />
               ) : (
                 <AnswerAsk
-                  item={ask.key}
+                  item={itemAddress(ask)}
+                  label={ask.key}
                   comment={ask.comment}
                   asker={asker.name}
                   options={decision?.options ?? []}
@@ -510,11 +529,11 @@ function AnsweredLine({ answer }: { answer: AskAnswer }) {
 
 function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: number }) {
   const who = seatOf(index, run.agent_handle);
-  const key = run.work_item?.key ?? "";
+  const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
   const sub = joined([
-    key ? <Key key="k" value={key} /> : "",
-    run.question ? `“${run.question}”` : "",
+    item ? <Key key="k" item={item} /> : "",
+    run.question ? `“${run.question}”` : questionWithheld(run) ? QUESTION_WITHHELD : "",
     audienceOf(run, index),
     relTime(since, now),
   ]);
@@ -525,7 +544,9 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
       title={`${who.name}’s coding run is parked on a question`}
       sub={sub}
       line={holdLine(run, now)}
-      actions={<AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question} />}
+      actions={
+        <AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question ?? ""} />
+      }
     />
   );
 }
@@ -569,7 +590,7 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const period = seat.window ? PERIOD_ADJECTIVE[seat.window.period] : "";
   const sub = joined([
-    item ? <Key key="k" value={item.key} /> : "",
+    item ? <Key key="k" item={item} /> : "",
     item ? "stopped mid-turn" : "",
     seat.at ? relTime(seat.at, now) : "",
   ]);
@@ -584,7 +605,7 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
               that is refusing this seat, the stopped window focused. */}
           <RaiseBudgetButton handle={handle} name={who.name} window={seat.window} />
-          {item && <ReassignItem item={item.key} />}
+          {item && <ReassignItem item={itemAddress(item)} />}
         </>
       }
     />
@@ -596,8 +617,18 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
  * version this reader saw, like every assignment (`AssignButton`).
  */
 export function ReassignItem({ item }: { item: string }) {
-  const read = useQuery("work_item", { id: item });
+  // A HAND-OFF IS A TRACKER WRITE, so the version it is conditional on is
+  // read only for a reader holding Tracker; without it there is no button.
+  const { tracker } = useViewer();
+  const read = useQuery("work_item", { id: item }, { enabled: tracker });
   const task = read.data?.task;
   if (!task) return null;
-  return <AssignButton item={item} version={task.version} assignee={task.assignee ?? ""} />;
+  return (
+    <AssignButton
+      item={item}
+      label={task.key}
+      version={task.version}
+      assignee={task.assignee ?? ""}
+    />
+  );
 }

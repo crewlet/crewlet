@@ -197,7 +197,11 @@ func TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode the purge: %v", err)
 	}
-	before, after := applyPurgeThroughARunner(t, r, purgeAt, body)
+	// SEALED AS THE WRITER SEALS IT: the node's loop verifies every frame
+	// before the domain decodes a byte, so a replacement handed it bare
+	// would be a record this fleet never signed.
+	before, after := applyPurgeThroughARunner(t, r, purgeAt,
+		testSigner(t, tracker.Domain{}).Seal(body))
 	if _, held := after["tracker_tasks"]; !held {
 		t.Fatal("the dump read no task table")
 	}
@@ -229,14 +233,14 @@ func assertTheTasksRecordsAreGone(t *testing.T, after map[string][]string, secre
 		// of a row may: the comment's row goes whole, and a kept row
 		// holds no title, no excerpt and no document.
 		if strings.HasPrefix(row, `["op-comment",`) || strings.Contains(row, `title`) {
-			t.Errorf("a rewrite-version purge left content in a history row about "+
+			t.Errorf("a purge left content in a history row about "+
 				"the task: %s", row)
 		}
 	}
 	for table, rows := range after {
 		for _, row := range rows {
 			if strings.Contains(row, secret) {
-				t.Errorf("the purged comment survives a rewrite-version purge in %s: %s",
+				t.Errorf("the purged comment survives a purge in %s: %s",
 					table, row)
 			}
 		}
@@ -244,13 +248,13 @@ func assertTheTasksRecordsAreGone(t *testing.T, after map[string][]string, secre
 	for _, table := range []string{"tracker_turns", "tracker_task_dependents"} {
 		for _, row := range after[table] {
 			if strings.Contains(row, `"t-1"`) {
-				t.Errorf("a rewrite-version purge left a %s row naming the task: %s", table, row)
+				t.Errorf("a purge left a %s row naming the task: %s", table, row)
 			}
 		}
 	}
 	for _, row := range after["tracker_notifications"] {
 		if strings.Contains(row, `"t-1"`) && !strings.Contains(row, `"op-purge"`) {
-			t.Errorf("a rewrite-version purge left an inbox notice about the task: %s", row)
+			t.Errorf("a purge left an inbox notice about the task: %s", row)
 		}
 	}
 }
@@ -267,13 +271,14 @@ func applyPurgeThroughARunner(t *testing.T, r *roundTrip, purgeAt uint64,
 	fetch := &heldLogFetch{log: r.log, next: 1, hold: purgeAt,
 		replace: map[uint64][]byte{purgeAt: purge}}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:  tracker.Domain{},
-		Spec:    tracker.Domain{}.Stream(),
-		Applier: tracker.NewApplier("node-b"),
-		Fetch:   fetch,
-		Log:     r.log,
-		Node:    node,
-		DB:      estate,
+		Domain:   tracker.Domain{},
+		Spec:     tracker.Domain{}.Stream(),
+		Applier:  tracker.NewApplier("node-b", nil),
+		Fetch:    fetch,
+		Log:      r.log,
+		Node:     node,
+		DB:       estate,
+		Verifier: r.verifier,
 	})
 	if err != nil {
 		t.Fatalf("build the node's applier: %v", err)

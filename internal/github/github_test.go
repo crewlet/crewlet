@@ -448,7 +448,7 @@ func TestOnlyRoutableLoginsProduceNotifications(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "eng"}},
 	}
-	reg := notify.NewRegistry(organization)
+	reg := notify.NewRegistry(organization, nil)
 	if err := reg.Register(github.Backend, "eng-bot", "eng"); err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestAnAgentsOwnAppIsRoutableUnderBothItsNames(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
 	}
-	reg := notify.NewRegistry(organization)
+	reg := notify.NewRegistry(organization, nil)
 	// The two registrations the engine makes for one app.
 	if err := reg.Register(github.Backend, "acme-sre-lead", "sre-lead"); err != nil {
 		t.Fatal(err)
@@ -1869,9 +1869,35 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 	}
 	// NAMING THE FIELD, because that is the whole of what an operator does
 	// about it.
-	if findings[0].Subject != "integrations.public_base_url" {
+	if findings[0].Subject != "api.external_url" {
 		t.Errorf("the finding's subject is %q, which is not the field to set",
 			findings[0].Subject)
+	}
+}
+
+// BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY.
+//
+// A deployment that sets `api.public` reads every webhook address from
+// `api.public.external_url`, and its `api.external_url` is the person's
+// address, set and answering 404 for every webhook route. A finding naming
+// that key sent an operator to change a setting that was already set and that
+// nothing building a GitHub hook reads. Both arms are held: the one with no
+// credential, and the one that reached GitHub.
+func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
+	t.Parallel()
+	const key = "api.public.external_url"
+	res, err := github.Reconcile(t.Context(), github.Options{
+		Config: &config.GitHub{Enabled: true}, WebhookBaseKey: key,
+	})
+	if err != nil {
+		t.Fatalf("a pass with no credential failed: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Subject != key {
+		t.Fatalf("findings = %+v, want one naming %s", findings, key)
+	}
+	if !strings.HasPrefix(findings[0].Detail, key+" is unset") {
+		t.Errorf("the sentence names another setting: %q", findings[0].Detail)
 	}
 }
 
@@ -1922,11 +1948,11 @@ func TestARefusedWebhookIsStillAFinding(t *testing.T) {
 // the pass registers no hooks at all — which was silence, so Classify saw no
 // findings and reported the integration Ready. The comment justifying that
 // silence said the URL "is not on the integrations block today"; it is
-// integrations.public_base_url, and the reconcile loop feeds it into every
+// api.external_url, and the reconcile loop feeds it into every
 // pass.
 func TestARunWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
 	t.Parallel()
-	res := &github.Result{NoIngress: "integrations.public_base_url is unset"}
+	res := &github.Result{NoIngress: "api.external_url is unset"}
 	got := res.Findings()
 	if len(got) != 1 {
 		t.Fatalf("got %d finding(s), want exactly one: %+v", len(got), got)
@@ -1934,7 +1960,7 @@ func TestARunWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
 	if got[0].Kind != integration.FindingIngressBlocked {
 		t.Errorf("kind = %q, want %q", got[0].Kind, integration.FindingIngressBlocked)
 	}
-	if got[0].Subject != "integrations.public_base_url" {
+	if got[0].Subject != "api.external_url" {
 		t.Errorf("subject = %q; the finding must name the field to set", got[0].Subject)
 	}
 	if integration.Classify(got).Phase == integration.PhaseReady {

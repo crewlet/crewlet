@@ -19,7 +19,7 @@ import (
 // operator asked it to: a directory tree of markdown, one space per
 // directory, plus the tool skills the files themselves declare.
 
-func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
+func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 	directory, args := splitSubject(args)
 
@@ -68,7 +68,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 // SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
 // at query time and never loaded into a registry, so for them there is
 // nothing to resync.
-func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
+func runConfluenceResync(_ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence resync", flag.ContinueOnError)
@@ -183,7 +183,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 // it registers one signed hook; on Cloud one token-bearing hook per event,
 // because Cloud signs nothing and names no event in what it delivers.
 
-func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
+func runConfluenceProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence provision", flag.ContinueOnError)
@@ -245,7 +245,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the hooks; "+
-			"defaults to integrations.public_base_url")
+			"defaults to "+publicURLDefault)
 	recreate := fs.Bool("recreate-webhooks", false,
 		"delete and remake every hook to mint a fresh token or secret; this "+
 			"invalidates the value every other deployment of this company holds")
@@ -275,7 +275,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -310,8 +310,9 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no hook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBaseKey = webhookBaseKey(boot)
+		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
 		if openErr != nil {
 			return openErr
 		}

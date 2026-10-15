@@ -12,40 +12,44 @@ import (
 // ONE SEAT-STATE VOCABULARY. Every case here reads the state off the overlay the
 // engine serves, which is the only place a reader may take it from.
 
-func stateOf(t *testing.T, s *livestate.LiveState, role string) (livestate.Activity, livestate.StoppedReason) {
+// stateOf reads the state of the seat with this agent id off the roster row
+// the projection merges onto — the row a client is handed.
+func stateOf(t *testing.T, s *livestate.LiveState, seat string) (livestate.Activity, livestate.StoppedReason) {
 	t.Helper()
-	rows := s.MergeAgents([]map[string]any{{"role": role}})
+	rows := s.MergeAgents([]map[string]any{{"agent_id": seat}})
 	activity, _ := rows[0]["activity"].(livestate.Activity)
 	if !activity.Valid() {
-		t.Fatalf("seat %q carries activity %#v, which is not a word of the vocabulary", role, rows[0]["activity"])
+		t.Fatalf("seat %q carries activity %#v, which is not a word of the vocabulary", seat, rows[0]["activity"])
 	}
 	reason, _ := rows[0]["stopped_reason"].(*livestate.StoppedReason)
 	switch {
 	case activity == livestate.ActivityStopped && reason == nil:
-		t.Fatalf("seat %q is stopped with no reason", role)
+		t.Fatalf("seat %q is stopped with no reason", seat)
 	case activity != livestate.ActivityStopped && reason != nil:
-		t.Fatalf("seat %q is %s and still carries stopped reason %q", role, activity, *reason)
+		t.Fatalf("seat %q is %s and still carries stopped reason %q", seat, activity, *reason)
 	case reason != nil:
 		return activity, *reason
 	}
 	return activity, ""
 }
 
-func wantState(t *testing.T, s *livestate.LiveState, role string, activity livestate.Activity,
+func wantState(t *testing.T, s *livestate.LiveState, seat string, activity livestate.Activity,
 	reason livestate.StoppedReason,
 ) {
 	t.Helper()
-	gotActivity, gotReason := stateOf(t, s, role)
+	gotActivity, gotReason := stateOf(t, s, seat)
 	if gotActivity != activity || gotReason != reason {
-		t.Errorf("%s: activity %q (%q), want %q (%q)", role, gotActivity, gotReason, activity, reason)
+		t.Errorf("%s: activity %q (%q), want %q (%q)", seat, gotActivity, gotReason, activity, reason)
 	}
 }
 
-// codingRun is one run as the durable record states it.
-func codingRun(turnID, role string, status livestate.SandboxStatus, started time.Time) livestate.SandboxRecord {
+// codingRun is one run as the durable record states it, launched by the seat
+// with this agent id. Every run carries the SAME role name, which is what a
+// record looks like for a company whose seats share one.
+func codingRun(turnID, seat string, status livestate.SandboxStatus, started time.Time) livestate.SandboxRecord {
 	return livestate.SandboxRecord{
 		Entry: livestate.SandboxEntry{
-			TurnID: turnID, Role: role, AgentHandle: "coder", Status: status,
+			TurnID: turnID, AgentID: seat, Role: "Engineer", AgentHandle: "coder", Status: status,
 			StartedAt: started.Format(time.RFC3339Nano),
 		},
 		LaunchID:  "l-" + turnID,
@@ -80,7 +84,7 @@ func TestNeedsIsReadFromTheRunRecordNotTheParkedTurn(t *testing.T) {
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"Coder": true})
 	s.Apply(env("agent_turn_completed", map[string]any{
-		"role": "Coder", "turn_id": "tn-1", "suspended": true,
+		"agent_id": "Coder", "turn_id": "tn-1", "suspended": true,
 	}))
 	s.ReconcileSandboxes([]livestate.SandboxRecord{
 		codingRun("tn-1", "Coder", livestate.SandboxRunning, fixtureNow.Add(-time.Minute)),
@@ -143,7 +147,7 @@ func TestARefusingBudgetWindowStopsTheSeat(t *testing.T) {
 	s.SetPlacement(map[string]bool{"Lead": true, "Coder": true})
 
 	own := meterReport("m-1", 1, map[string]any{
-		"role": "Lead", "agent_id": "a-1", "handle": "lead",
+		"agent_id": "Lead", "role": "Engineer", "handle": "lead",
 		"windows": []any{dayWindow(400, 400, "2026-06-14T12:00:00Z")},
 	})
 	s.Apply(env("budget_meters", own, streamOnly))
@@ -171,10 +175,10 @@ func TestAPausedSeatIsStoppedOnceItsTurnEnds(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CTO", "turn_id": "tn-1", "phase": "execute",
+		"agent_id": "CTO", "turn_id": "tn-1", "phase": "execute",
 	}, at("2026-06-14T11:58:00Z"), id("ph")))
 	change := s.Apply(env("seat_paused", map[string]any{
-		"role": "CTO", "paused_by": "jane-token", "paused_at": "2026-06-14T11:59:00Z",
+		"agent_id": "CTO", "paused_by": "jane-token", "paused_at": "2026-06-14T11:59:00Z",
 	}, at("2026-06-14T11:59:00Z"), id("p1")))
 	wantState(t, s, "CTO", livestate.ActivityWorking, "")
 	if o := overlayOf(t, s, "CTO"); o.Paused == nil {
@@ -184,11 +188,11 @@ func TestAPausedSeatIsStoppedOnceItsTurnEnds(t *testing.T) {
 		t.Error("the pause did not push the seat")
 	}
 
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "CTO", "turn_id": "tn-1"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "CTO", "turn_id": "tn-1"},
 		at("2026-06-14T12:00:00Z"), id("tc")))
 	wantState(t, s, "CTO", livestate.ActivityStopped, livestate.StoppedPaused)
 
-	s.Apply(env("seat_resumed", map[string]any{"role": "CTO"}, at("2026-06-14T12:05:00Z"), id("r1")))
+	s.Apply(env("seat_resumed", map[string]any{"agent_id": "CTO"}, at("2026-06-14T12:05:00Z"), id("r1")))
 	wantState(t, s, "CTO", livestate.ActivityIdle, "")
 }
 
@@ -197,11 +201,11 @@ func TestAPausedSeatIsStoppedOnceItsTurnEnds(t *testing.T) {
 func TestAFailedLastTurnLeavesTheSeatIdle(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
+	base := map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
 	s.Apply(env("agent_phase_started", base))
 	s.Apply(env("agent_phase_completed", with(base, map[string]any{"failed": true, "error": "boom"}),
 		at("2026-06-14T12:00:05Z"), id("pc")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "tn-1"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead", "turn_id": "tn-1"},
 		at("2026-06-14T12:00:06Z"), id("tc")))
 
 	wantState(t, s, "Lead", livestate.ActivityIdle, "")
@@ -219,11 +223,11 @@ func TestAFailedLastTurnLeavesTheSeatIdle(t *testing.T) {
 func TestTheStoppedReasonsTakeTheirPrecedence(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead"}, id("u")))
+	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead"}, id("u")))
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedProvider)
 
 	own := meterReport("m-1", 1, map[string]any{
-		"role": "Lead", "agent_id": "a-1", "handle": "lead",
+		"agent_id": "Lead", "role": "Engineer", "handle": "lead",
 		"windows": []any{dayWindow(400, 400, "2026-06-14T12:00:00Z")},
 	})
 	s.Apply(env("budget_meters", own, streamOnly, at("2026-06-14T12:00:00Z")))
@@ -232,11 +236,11 @@ func TestTheStoppedReasonsTakeTheirPrecedence(t *testing.T) {
 	s.SetPlacement(map[string]bool{"Lead": false})
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedUnplaced)
 
-	s.Apply(env("seat_paused", map[string]any{"role": "Lead", "paused_by": "jane"}, id("p")))
+	s.Apply(env("seat_paused", map[string]any{"agent_id": "Lead", "paused_by": "jane"}, id("p")))
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedPaused)
 
 	// And work outranks every stop.
-	s.Apply(env("agent_turn_started", map[string]any{"role": "Lead", "turn_id": "tn-9"},
+	s.Apply(env("agent_turn_started", map[string]any{"agent_id": "Lead", "turn_id": "tn-9"},
 		at("2026-06-14T12:10:00Z"), id("ts")))
 	wantState(t, s, "Lead", livestate.ActivityWorking, "")
 }
@@ -269,7 +273,7 @@ func TestAReconcileThatMovesARunPushesItsSeat(t *testing.T) {
 func TestTheStoppedReasonIsAlwaysOnTheRow(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1"}))
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "turn_id": "tn-1"}))
 	rows := s.OverlayRows([]string{"Lead"})
 	reason, present := rows[0]["stopped_reason"]
 	if !present {
@@ -322,4 +326,23 @@ func keys(m map[string]struct{}) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// TWO SEATS THAT SHARE A NAME HAVE TWO STATES. Every input a seat's state is
+// computed over — its placement, its runs, its meter — is keyed by the seat's
+// agent id, so a run one Engineer launched does not make the other one need
+// somebody, and the lease one holds does not place the other.
+//
+// Mutation: match a run to its seat by `role` in runsOf, and the unplaced
+// namesake reads as needing somebody.
+func TestTwoSeatsSharingANameHaveTwoStates(t *testing.T) {
+	t.Parallel()
+	s := sandboxState(t)
+	s.SetPlacement(map[string]bool{"id-ada": true, "id-bob": false})
+	s.ReconcileSandboxes([]livestate.SandboxRecord{
+		codingRun("tn-ada", "id-ada", livestate.SandboxAwaiting, fixtureNow.Add(-time.Minute)),
+	}, fixtureNow)
+
+	wantState(t, s, "id-ada", livestate.ActivityNeeds, "")
+	wantState(t, s, "id-bob", livestate.ActivityStopped, livestate.StoppedUnplaced)
 }

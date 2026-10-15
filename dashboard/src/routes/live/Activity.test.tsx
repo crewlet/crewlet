@@ -277,7 +277,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
       ],
     }),
   );
-  store.applyAgents([
+  store.applySeats([
     { role: "SWE", handle: "swe", agent_id: "a-swe" },
     { role: "CTO", handle: "cto", agent_id: "a-cto" },
   ]);

@@ -36,9 +36,12 @@ import (
 type CreatePayload struct {
 	V int `json:"v"`
 
-	// PageID is the uuid the applier files the head under. MINTED BY THE
-	// WRITER and carried, never derived: a create that lost its race must
-	// not have written a page under an id the winner also chose.
+	// PageID is the uuid the applier files the head under. CHOSEN BY THE
+	// WRITER and carried, never derived by an applier, and a function of
+	// the create's own operation id ([pageIDOf]): two creates racing for one
+	// address are two operations and so two ids, so the one that lost never
+	// names a page under the winner's — while a retry of one create names
+	// the page its first attempt made.
 	PageID string `json:"page_id"`
 
 	// Container and Title are the address. Title is the DISPLAYED form,
@@ -175,8 +178,8 @@ type ContainerPayload struct {
 
 	// ChartEpoch is the configuration activation these settings were
 	// derived from ([configplane.ActivationStamp]), which the next
-	// EnsureContainer compares against so an older configuration applied
-	// late cannot walk a newer one back.
+	// EnsureContainer compares against so a node applying an older
+	// configuration late cannot walk a newer one back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
@@ -193,7 +196,10 @@ type StatusPayload struct {
 
 // Eviction is a node's eviction from this log, or its readmission.
 //
-// PINNED AT [GateRecordVersion] FOR EVER. See the constant.
+// PINNED AT [GateRecordVersion] FOR EVER — see the constant — and A GATE, so
+// its record stays at the base version for every build there will ever be
+// ([RecordEnvelope.readByEveryBuild]): its shape may only ever grow by
+// addition.
 type Eviction struct {
 	V      int    `json:"v"`
 	NodeID string `json:"node_id"`
@@ -313,10 +319,9 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			// PINNED, never [RecordVersion] and never left to the
-			// table: see [baseRecordVersion]. The encoder refuses a
-			// barrier carrying a versioned field.
-			V:       baseRecordVersion,
+			// NO VERSION: the encoder stamps the base one, and refuses
+			// a barrier carrying a versioned field
+			// ([RecordEnvelope.readByEveryBuild]).
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},

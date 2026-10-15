@@ -152,6 +152,58 @@ func TestADeferralTakesACopyOutOfServiceOnlyPastTheGrace(t *testing.T) {
 	}
 }
 
+// TAKING A COPY OUT OF SERVICE AND THE ALARM READ ONE AGE, and it can reach
+// the grace.
+//
+// `deferred_old` fires once a deferral is older than [statelog.DeferralGrace]
+// and tells the operator the node stops serving its copy of the estate then;
+// [statelog.Health.Healthy] going false is what takes it out of service. Both
+// take the age from [statelog.DeferredSince.Age], so the instant the alarm
+// names is the instant the copy stops serving. The alarm's own copy used to
+// stand the grace in for the age, which a rule firing "past the grace" can
+// never reach — so this case holds the arithmetic to the table's own rule,
+// past the grace and at it.
+func TestTakingACopyOutOfServiceAndTheAlarmReadOneDeferralAge(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		since statelog.DeferredSince
+		want  time.Duration
+	}{
+		"nothing held":             {statelog.DeferredSince{}, 0},
+		"held and never dated":     {statelog.DeferredSince{Held: true}, 0},
+		"dated and no longer held": {statelog.DeferredSince{Since: now.Add(-time.Hour)}, 0},
+		"held for exactly the grace": {statelog.DeferredSince{
+			Since: now.Add(-statelog.DeferralGrace), Held: true}, statelog.DeferralGrace},
+		"held since a minute past the grace": {statelog.DeferredSince{
+			Since: now.Add(-statelog.DeferralGrace - time.Minute), Held: true},
+			statelog.DeferralGrace + time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.since.Age(now); got != tc.want {
+				t.Fatalf("age = %s, want %s", got, tc.want)
+			}
+			_, fired := find(statelog.Evaluate(statelog.Reading{
+				DeferredAge: tc.since.Age(now), DeferredJudgesCopy: true}),
+				statelog.KindDeferredOld)
+			held := statelog.Health{
+				Position: statelog.Position{Stream: "S", Generation: 1, Seq: 10},
+				Drained:  true, Deferred: 1,
+				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+			}
+			if out := !held.Healthy(now, tc.since); out != fired {
+				t.Errorf("the copy's health says out of service = %v and the "+
+					"alarm says %v about one deferral — the alarm tells an "+
+					"operator when the copy stops serving, so the two must "+
+					"agree", out, fired)
+			}
+			if fired != (tc.want > statelog.DeferralGrace) {
+				t.Errorf("deferred_old fired = %v for an age of %s", fired, tc.want)
+			}
+		})
+	}
+}
+
 // A SERVING COPY HOLDS A WHOLE STATE AND IS CLOSE TO THE LOG, WHATEVER THE
 // INSTANT SAYS: an established copy that has drained serves at a lag of one —
 // the record in flight a busy log has on most heartbeats — and at the snapshot

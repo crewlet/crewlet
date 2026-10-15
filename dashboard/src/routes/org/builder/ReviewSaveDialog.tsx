@@ -7,8 +7,8 @@
  * accounts behind. `model/changes.ts` derives all of it from the base and the
  * draft as the engine derived them, and this dialog states each one in a
  * sentence. The consequences that cannot be taken back (a company rename, a
- * handle change, a change of tool credentials, removing most
- * of the company) each need an acknowledgement before Save enables.
+ * change of tool credentials, removing most of the company) each need an
+ * acknowledgement before Save enables.
  *
  * THE WARNINGS ARE THE ENGINE'S, for exactly the body the save will send: the
  * check of the current draft is a dry run of that same request.
@@ -20,6 +20,7 @@
 
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
@@ -65,9 +66,6 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       `Renames the company from ${changes.companyRename.before} to ${changes.companyRename.after}.`,
     );
   }
-  for (const h of changes.handleChanges) {
-    follow.push(`${h.ref.name} changes handle from @${h.before} to @${h.after}.`);
-  }
   for (const group of changes.onboarding) {
     const one = group.seats.length === 1;
     follow.push(
@@ -75,11 +73,7 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     );
   }
   for (const u of changes.unitRenames) {
-    const schedules =
-      u.schedules.length > 0 ? ` A schedule due now may run twice: ${u.schedules.join(", ")}.` : "";
-    follow.push(
-      `Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.${schedules}`,
-    );
+    follow.push(`Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.`);
   }
   for (const r of changes.reportsTo) {
     follow.push(
@@ -113,6 +107,11 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       follow.push(`${s.ref.name} no longer receives tool credentials for ${s.lost.join(", ")}.`);
     }
   }
+  for (const u of changes.uncarriedCredentials) {
+    follow.push(
+      `${u.ref.name} starts without ${handleLabel(u.from)}'s credentials ${u.fields.join(", ")}: the dashboard never holds their values, so they do not carry over.`,
+    );
+  }
   for (const c of changes.clearedReferences) {
     const what =
       c.kind === "gitlab_access_level"
@@ -133,11 +132,6 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       `The GitLab access level for @${g.handle} changes from ${g.before ?? "none"} to ${g.after ?? "none"}.`,
     );
   }
-  for (const m of changes.memoryReuse) {
-    follow.push(
-      `${m.ref.name} takes the handle @${m.handle} of the removed seat ${m.previous}, and its memory reattaches.`,
-    );
-  }
   if (changes.massRemoval) {
     follow.push(
       `Removes ${changes.massRemoval.removed} of the company's ${changes.massRemoval.total} seats.`,
@@ -154,7 +148,7 @@ export function ReviewSaveDialog({
   warnings,
   problemCount,
   documentProblems,
-  needsContact,
+  withoutContact,
   writeId,
   phase,
   onSave,
@@ -169,8 +163,8 @@ export function ReviewSaveDialog({
   warnings: readonly ConfigWarning[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
-  /** Human seats holding no contact identity, by name. */
-  needsContact: readonly string[];
+  /** Human seats holding no contact identity, by name: a notice, never a block. */
+  withoutContact: readonly string[];
   writeId: string;
   phase: SavePhase;
   onSave: (summary: string) => void;
@@ -274,12 +268,16 @@ export function ReviewSaveDialog({
         </Callout>
       )}
 
-      {needsContact.length > 0 && (
-        <section className="col gap-1" aria-label="Seats that need a contact identity">
-          <strong>These human seats need a contact identity</strong>
+      {withoutContact.length > 0 && (
+        <section className="col gap-1" aria-label="Seats with no contact identity">
+          <strong>These human seats have no contact identity</strong>
+          <span className="t-caption">
+            No agent can mention them, and the person is reached through the dashboard only, until
+            one is added in the seat's editor.
+          </span>
           <ul className="org-builder-list">
-            {needsContact.map((name) => (
-              <li key={name}>{name}</li>
+            {withoutContact.map((name, i) => (
+              <li key={i}>{name}</li>
             ))}
           </ul>
         </section>

@@ -58,6 +58,22 @@ import (
 // The clustered case shared the solo 30 seconds and flaked under the full
 // race suite with several clusters forming at once — which is a smaller
 // version of exactly the production case it has to survive.
+//
+// # And the handshake of every connection after it
+//
+// The same budget bounds the CLIENT HANDSHAKE a connection to this server
+// makes ([embeddedServer.connect]) — INFO, CONNECT, PING, PONG with a broker
+// in this very process, or on its loopback. That used nats's own default,
+// two seconds, which is a figure for dialling a REMOTE server whose silence
+// means it is not there. This one has already answered ReadyForConnections,
+// so the only thing a slow handshake here measures is the same scheduler
+// and disk contention the accept budget exists to ride out: a loaded host
+// failed a boot with `connect nats: read pipe: i/o timeout` against a
+// server that was up. The asymmetry above holds unchanged — a handshake cut
+// short fails the queue, the coordination store or a donor's connection,
+// while a long one only reports a wedged broker later — so it is the same
+// number rather than a third one to keep in step: 2 s became 30 s solo and
+// two minutes clustered.
 const (
 	// acceptTimeout bounds a solo server: its own file store, and nothing
 	// else.
@@ -195,17 +211,24 @@ func (s *Server) Client(ctx context.Context, opts ...queue.Option) (*Queue, erro
 	return newQueueOn(ctx, s.cfg, s.embedded, false, queue.Resolve(opts...))
 }
 
-// Conn returns a NATS connection to this server, for subsystems that ride
-// the same broker without going through the queue contract — the KV
-// coordination backend is the one that matters, and sharing the broker is
-// what makes the single-binary topology one service rather than two.
+// Conn returns a NATS connection to this server, held to the transport's
+// contract like every connection this package opens, for a caller that rides
+// the broker without a queue client of its own: a test standing members up to
+// exercise the coordination store, an object store or the broker's log bridge
+// directly.
+//
+// UNWATCHED: NATS closing it for good is the caller's to notice, and no queue
+// reports it as a lost node — see [watched]. That is why a node's own
+// coordination store does not take its connection from here: on an embedded
+// broker it rides [Queue.DialWatched], whose close for good stops the node
+// rather than leaving it renewing nothing while it consumes work (ADR-0001).
 //
 // The caller owns the connection and must close it.
 func (s *Server) Conn() (*nats.Conn, error) {
 	if s.embedded == nil {
 		return nil, errors.New("jetstream: server is shut down")
 	}
-	return s.embedded.connect()
+	return s.embedded.connect(watched{})
 }
 
 // AwaitClusterReady waits until this member can serve a stream of replicas
@@ -225,7 +248,7 @@ func (s *Server) AwaitClusterReady(ctx context.Context, replicas int) error {
 	if s.embedded == nil {
 		return errors.New("jetstream: server is shut down")
 	}
-	nc, err := s.embedded.connect()
+	nc, err := s.embedded.connect(watched{})
 	if err != nil {
 		return fmt.Errorf("jetstream: connect to wait for the cluster: %w", err)
 	}
@@ -256,6 +279,27 @@ func (s *Server) RoutePeers() []string {
 		return nil
 	}
 	return s.embedded.routePeers()
+}
+
+// LeadsStream reports whether this member believes, right now, that it leads
+// stream — the very predicate the server asks before it answers a request only
+// a stream's leader may answer, `$JS.API.STREAM.MSG.GET` among them
+// (server/jetstream_api.go, jsMsgGetRequest).
+//
+// Test-facing, for the case in jetstreamtest that holds a coordination read to
+// never being answered by a member that is behind. That case has to know, of a
+// member cut off from its cluster, whether it still believes it leads — a cut
+// leader goes on answering until it notices it lost its quorum, and is waited
+// out — and asked over the network the question has no "no": a member that
+// does not lead a stream answers a request about it with silence, so "no" was
+// a timeout, and a leader slow to answer on a loaded machine read as one that
+// did not lead and failed the case over a read it was entitled to answer.
+// Asked here, in process, it is the server's own answer and nothing else.
+func (s *Server) LeadsStream(stream string) bool {
+	if s.embedded == nil {
+		return false
+	}
+	return s.embedded.ns.GlobalAccount().JetStreamIsStreamLeader(stream)
 }
 
 // routePeers is the derivation itself, shared with [embeddedServer.awaitClusterReady]
@@ -356,9 +400,11 @@ func (s *Server) Shutdown() {
 //
 // SEPARATED FROM THE START for the same reason dialOptions is, and it earns it
 // twice over here: two of these options have no observable effect until the
-// day they matter. A wrong MaxPayload surfaces as one oversized publish
-// failing in production, and a wrong SyncAlways surfaces only as acked data
-// missing after a host loses power — which no test can stage.
+// day they matter. A wrong MaxPayload surfaced as one oversized publish
+// failing in production — every connection is now held to the contract when
+// it is opened ([carriesTheContract]), so it fails the boot instead, and only
+// through that check — and a wrong SyncAlways surfaces only as acked data
+// missing after a host loses power, which no test can stage.
 //
 // system is the identity a CLUSTERED member declares its system account with
 // (see membership.go), minted by the caller because the key that signs for it
@@ -433,7 +479,10 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 		// one, deliberately: the client reads it off the server's INFO and
 		// refuses an oversized publish locally, which is what turns "this
 		// delivery is too big" into an error the publisher can report
-		// instead of a connection the broker closes underneath it.
+		// instead of a connection the broker closes underneath it. And
+		// every connection is held to it when it is opened
+		// (carriesTheContract), so an edit that dropped this line fails
+		// every boot, blaming the build, rather than the first large write.
 		MaxPayload: queue.MaxPayloadBytes,
 
 		// WHAT "PERSISTED" MEANS, and the one place it is decided.
@@ -949,11 +998,99 @@ func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStr
 		"answer within %s: %w", e.ns.Name(), r.timeout, last)
 }
 
-func (e *embeddedServer) connect() (*nats.Conn, error) {
-	if e.inProcess {
-		return nats.Connect("", nats.InProcessServer(e.ns))
+// embeddedReconnectWait is how long a connection to this process's own broker
+// waits between two reconnect attempts: the second the external dial waits,
+// since nothing about the wait itself differs by where the server runs.
+const embeddedReconnectWait = time.Second
+
+// embeddedReconnects is how many failed attempts in a row a connection to this
+// process's own broker makes before the client closes it for good — which the
+// node then stops for ([connectionLoss]).
+//
+// # Only a stopped broker runs them out
+//
+// The server is in this process, so a connection to it drops for one of two
+// reasons. Either the server pushed the client off — a slow consumer, a stale
+// connection — which the first attempt undoes, the count starting again from
+// zero on every success; or the server has stopped, which no attempt undoes,
+// because nothing starts an in-process server again but the process. So the
+// budget is how long a node whose own broker has stopped stays up, dark, before
+// it exits for its supervisor to restart the two together.
+//
+// Only because every attempt is at THIS member: a cluster member's peers are
+// in its INFO, and a pool that took them would land the reconnect on one of
+// them and never run out at all — which is why [embeddedServer.connect]
+// ignores what a member discovers.
+//
+// # The accept budget, spent one wait at a time
+//
+// It is the decision [acceptBudget] already made about this server — how long
+// it gets to take a connection, thirty seconds solo and two minutes on a
+// cluster member — because a reconnect asks the same server the same question
+// a boot does. It was nats.go's own default, sixty attempts two seconds apart,
+// which was nobody's decision: two minutes dark on a solo node whose broker a
+// boot would have given thirty seconds, and the one number on the path to a
+// node stopping itself that nothing here stated.
+func embeddedReconnects(clustered bool) int {
+	return int(acceptBudget(clustered) / embeddedReconnectWait)
+}
+
+// connect opens a client connection to this server: through an in-memory
+// pipe when it listens on no socket, over its loopback client port when it
+// does.
+//
+// BOTH DIALS TAKE THE ACCEPT BUDGET as their handshake timeout, not nats's
+// two-second default — see the budgets' doc for why a handshake with a server
+// already accepting shares it — and as the span of their reconnects
+// ([embeddedReconnects]). One option list for the two branches, so the
+// loopback dial a clustered member takes cannot lose a budget the in-process
+// one keeps.
+//
+// AND EVERY CONNECTION IS HELD TO THE CONTRACT ([carriesTheContract]), with
+// the reconnect watch installed beside it — this and [dial] are the only two
+// places this package opens one, so the queue's own, the coordination
+// store's and a donor's second connection cannot differ about it.
+//
+// at says where a close NATS makes for good is recorded, and is the zero value
+// for a connection whose owner is the one to notice — see [watched].
+func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
+	opts := []nats.Option{
+		nats.Timeout(acceptBudget(e.clustered)),
+		nats.MaxReconnects(embeddedReconnects(e.clustered)),
+		nats.ReconnectWait(embeddedReconnectWait),
+		// THIS MEMBER AND NO OTHER. A clustered member advertises every
+		// peer's client URL in the INFO it sends, and the client adds each
+		// to its reconnect pool unless told not to: a connection that
+		// dropped — a slow consumer is enough — reconnected to a random
+		// member and carried this node's traffic to a peer for the rest of
+		// its life, and one whose own member had STOPPED was carried on a
+		// peer's broker instead of running its reconnects out, so the node
+		// ran on with its member dead, the cluster a replica short, and
+		// nothing saying so. The member is in this process; a connection to
+		// any other is not what this dial is for.
+		nats.IgnoreDiscoveredServers(),
+		nats.ReconnectHandler(reconnectWatch{
+			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
+		// And the client's asynchronous errors through the engine's own
+		// logger rather than its default's raw stderr: see [clientErrors].
+		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
-	return nats.Connect(e.ns.ClientURL())
+	opts = append(opts, watchClose(at, true, "")...)
+	var nc *nats.Conn
+	var err error
+	if e.inProcess {
+		nc, err = nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
+	} else {
+		nc, err = nats.Connect(e.ns.ClientURL(), opts...)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if nc, err = heldToTheContract(nc, true); err != nil {
+		return nil, err
+	}
+	at.track(nc)
+	return nc, nil
 }
 
 func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.started, e.scratch) }
@@ -1063,72 +1200,60 @@ func joinURLs(urls []string) string {
 	return out
 }
 
-// Dial opens a NATS connection to an external server with this package's own
-// reconnect policy.
+// dial opens a NATS connection to an external server with this package's own
+// reconnect policy, held to the transport's contract. The caller owns the
+// connection and must close it; at says where a close NATS makes for good is
+// recorded, and is the zero value where the caller is the one to notice — see
+// [watched].
 //
-// Exported so a caller outside this package that needs a plain connection to
-// the same estate gets the same reconnect-forever behaviour. Reimplementing
-// the option list there would give two places to disagree about how long a
-// node survives a broker blip — and the whole point of that policy is that it
-// keeps its seats through one.
-//
-// The caller owns the connection and must close it.
-func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }
-
-func dial(cfg Config) (*nats.Conn, error) {
+// UNEXPORTED, because a caller outside this package reaches it through a
+// queue: [Queue.DialOwned] is how a subsystem gets a second connection with
+// the same reconnect-forever policy, and it dials the estate the queue
+// already proved. An exported Dial beside it was kept for a caller that would
+// otherwise reimplement the option list, and none ever existed — it was code
+// with no caller, indistinguishable from code whose caller nobody had found.
+func dial(cfg Config, at watched) (*nats.Conn, error) {
 	opts, err := dialOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, watchClose(at, false, cfg.URL)...)
 	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", cfg.URL, err)
+		// NAMED BY HOST AND PORT, never by cfg.URL itself: stream.url may
+		// carry a password or a token as its userinfo, and this sentence
+		// is a boot's stderr. See [serverAddresses].
+		return nil, fmt.Errorf("dial %s: %w", serverAddresses(cfg.URL), unquoted(err))
 	}
-	if err := carriesTheContract(cfg.URL, nc.MaxPayload()); err != nil {
-		nc.Close()
+	// The other place a connection is opened, and held to the same
+	// contract — see [embeddedServer.connect].
+	if nc, err = heldToTheContract(nc, false); err != nil {
 		return nil, err
 	}
+	at.track(nc)
 	return nc, nil
 }
 
-// ErrPayloadCeiling is an external server that accepts smaller messages than
-// this engine sends.
-var ErrPayloadCeiling = errors.New("jetstream: the broker's max_payload is " +
-	"below what this engine sends")
-
-// carriesTheContract refuses a server whose max_payload is below
-// [queue.MaxPayloadBytes].
+// externalHandshake bounds each attempt to reach an EXTERNAL server: the dial,
+// the TLS handshake and INFO, CONNECT, PING, PONG.
 //
-// THE EMBEDDED BROKER IS CONFIGURED TO THE CONTRACT NUMBER and an external one
-// is somebody else's, at nats-server's own 1 MiB default unless they changed
-// it. Below the contract nothing fails at connect: every event over the
-// server's ceiling is refused at its publish, on a node that started cleanly
-// and reports nothing wrong with its broker. So it is refused here, where the
-// one setting that fixes it can be named.
+// # Two seconds, and why the embedded member's budget does not transfer
 //
-// WHAT REACHES THE NUMBER is an event (a state-log record among them) and the
-// answers nodes give each other on the ephemeral verbs: the estate router's
-// gather batches (internal/estate), the fleet turn-detail scatter
-// (internal/eventfan) and the memory read (internal/learning/memread) each
-// fill an answer up to [queue.MaxPayloadBytes]. Below the contract those
-// answers fail too, so lowering it is never a matter of events alone. A
-// company's files cross the same broker, but in messages of 128 KiB
-// (internal/objstore/natsobj), which any server's default carries, so they
-// ask nothing of the ceiling.
-//
-// THE SERVER THIS CONNECTION REACHED, since a client learns the ceiling from
-// that server's INFO alone: a cluster configured unevenly passes here on one
-// member and fails on the next, which is why the remedy says every server.
-func carriesTheContract(url string, ceiling int64) error {
-	if ceiling >= int64(queue.MaxPayloadBytes) {
-		return nil
-	}
-	return fmt.Errorf("%w: the NATS server at %s accepts messages of at most %d "+
-		"bytes, and this engine sends messages of up to %d (an event, or a "+
-		"node's answer to another). Set max_payload: "+
-		"8MB in the configuration of every server in that cluster",
-		ErrPayloadCeiling, url, ceiling, queue.MaxPayloadBytes)
-}
+// A connection to this process's own member takes the ACCEPT budget
+// ([acceptBudget]), because that server has already answered
+// ReadyForConnections and a slow handshake there measures only the host's
+// contention. Nothing has answered for a remote one, and here the figure is
+// also how long the reconnect loop waits on each member of the pool: it tries
+// them in turn, and a member that silently drops packets — a partition, a host
+// that went away without closing anything — holds every attempt at it for
+// exactly this long before the next member is asked. The coordination store
+// rides this connection, and an outage past the lease TTL (45 s by default)
+// hands this node's seats to a peer, so each second here is a second a node
+// with a healthy member in its pool spends not renewing them. Two seconds is
+// NATS's own figure for a remote server, and far above the handshake of a
+// reachable one; stated rather than inherited, so it is a decision a change
+// to either side has to read.
+const externalHandshake = 2 * time.Second
 
 // dialOptions is the option list, separated from the dial so a test can
 // assert what a config produces without a broker to connect to.
@@ -1147,6 +1272,15 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 		// distinction.
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
+		nats.Timeout(externalHandshake),
+		// And say so when a reconnect lands on a member that holds this
+		// connection to less than the contract — the half of the dial's
+		// own check a boot cannot reach. See [reconnectWatch].
+		nats.ReconnectHandler(reconnectWatch{
+			log: logging.Get("queue.jetstream")}.reconnected),
+		// And the client's asynchronous errors through the engine's own
+		// logger rather than its default's raw stderr: see [clientErrors].
+		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
 	if cfg.Credentials != "" {
 		opts = append(opts, nats.UserCredentials(cfg.Credentials))
@@ -1197,12 +1331,19 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 		return nil, err
 	}
 	if err = q.ensureStream(ctx, spec); err != nil {
-		return nil, err
+		return nil, q.brokerFailed(ctx, err)
 	}
 	stream := spec.name
 	consCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
-	cons, err := q.js.CreateOrUpdateConsumer(consCtx, stream, jetstream.ConsumerConfig{
+	q.noteConsumerProposal()
+	// THE CALLER'S CONTEXT BOUNDS THE CREATE, and consCtx only the
+	// subscription's life. The create ran on consCtx, which is detached
+	// from ctx precisely so the feed outlives the call that opened it — so
+	// a caller's deadline and cancellation bounded nothing here, and a
+	// SubscribeStream against a broker that was not answering waited out
+	// the client's own default however little time it had been given.
+	cons, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		FilterSubject: pattern,
 		// From here on, not from the beginning: a live feed that
 		// replayed a month of history on every browser refresh would be
@@ -1217,7 +1358,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	})
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("create stream consumer on %s: %w", pattern, err)
+		return nil, fmt.Errorf("create stream consumer on %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
 
 	// stopped gates dispatch rather than relying on the consume context
@@ -1238,7 +1379,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	})
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("consume stream %s: %w", pattern, err)
+		return nil, fmt.Errorf("consume stream %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
 
 	var once sync.Once

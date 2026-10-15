@@ -676,7 +676,7 @@ func TestAnAppliersFirstDrainWakesTheSnapshotLoop(t *testing.T) {
 	t.Parallel()
 	s, q, appendTo := aProvisionedTrackerLog(t)
 	s.snapshotNudge = make(chan struct{}, 1)
-	running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo, nil)
+	running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -733,21 +733,21 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		{"a reanchor", func(t *testing.T) (*Engine, func()) {
 			e, js := aRunningNode(t)
 			return e, func() {
-				running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+				running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 				spec := running.spec
 				if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 					res.Outcome != statelog.OutcomeApplied {
 					t.Fatalf("a write before the rebuild: %+v, %v", res, err)
 				}
 				rebuildLog(t, js, spec)
-				e.native.Load().log.publishPositions(t.Context())
+				e.core.Load().log.publishPositions(t.Context())
 				view, err := e.ReanchorStatus(t.Context(), spec.Name)
 				if err != nil {
 					t.Fatalf("ReanchorStatus: %v", err)
 				}
 				if _, err := e.Reanchor(t.Context(), ReanchorRequest{
 					Stream: spec.Name, Confirm: statelog.ConfirmationOf(view.CreatedAt),
-					By: "ops-1",
+					By: reanchorOperator,
 				}); err != nil {
 					t.Fatalf("Reanchor: %v", err)
 				}
@@ -756,7 +756,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		{"an adoption", func(t *testing.T) (*Engine, func()) {
 			e, back, q := bootRejoinNode(t)
 			waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-			quietHeartbeat(e.native.Load().log)
+			quietHeartbeat(e.core.Load().log)
 			return e, func() {
 				running, at, last := pushBelowTheFloor(t, e, q)
 				rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
@@ -764,7 +764,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 				standUpDonor(t, e, q, rows, statelog.Position{
 					Stream: at.Stream, Generation: at.Generation, Seq: last,
 				}, running.runner.KeyedTo())
-				if err := e.rejoin(e.native.Load().log.run, e.native.Load().log); err != nil {
+				if err := e.rejoin(e.core.Load().log.run, e.core.Load().log); err != nil {
 					t.Fatalf("rejoin: %v", err)
 				}
 			}
@@ -772,9 +772,9 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		{"the restore of an estate a failed adoption left closed", func(t *testing.T) (*Engine, func()) {
 			e, back, _ := bootRejoinNode(t)
 			waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-			quietHeartbeat(e.native.Load().log)
+			quietHeartbeat(e.core.Load().log)
 			return e, func() {
-				s := e.native.Load().log
+				s := e.core.Load().log
 				s.haltAppliers()
 				if err := back.Store.CloseReplicated(); err != nil {
 					t.Fatalf("close the replicated estate: %v", err)
@@ -791,7 +791,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 			parked := parkSnapshotLoop(t, e)
 			event()
 			waitUntil(t, 10*time.Second, "the snapshot loop to wake", func() bool {
-				return e.native.Load().log.snapshot.Load() != parked
+				return e.core.Load().log.snapshot.Load() != parked
 			})
 		})
 	}
@@ -817,7 +817,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 // behind: it waits for the nudge to have been taken and the value to hold.
 func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	t.Helper()
-	s := e.native.Load().log
+	s := e.core.Load().log
 	waitUntil(t, 20*time.Second, "the boot's snapshot tick", func() bool {
 		return s.snapshot.Load() != nil
 	})
@@ -854,6 +854,84 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 		return true
 	})
 	return parked
+}
+
+// TestANodeHoldingAShortArtefactIsADonorForNothing.
+//
+// [statelog.Offer.Usable] refuses an artefact that names no position for a
+// domain the RECIPIENT registers, and it refuses it WHOLESALE — there is no
+// partial adoption. So a node whose newest artefact predates a domain can
+// donate it to nobody, for any domain, and stamping the domains it does cover
+// would have the trim count this node as holding a snapshot it can never hand
+// over. That is the arithmetic that lets a log trim past records no joiner
+// could then replay.
+func TestANodeHoldingAShortArtefactIsADonorForNothing(t *testing.T) {
+	t.Parallel()
+	row := coord.NodePositions{
+		NodeID: "node-a",
+		Domains: map[string]coord.DomainPosition{
+			"tracker": {Seq: 900, Generation: 2, AppliedThrough: 900},
+			"pages":   {Seq: 40, Generation: 2, AppliedThrough: 40},
+			"chart":   {Seq: 7, Generation: 2, AppliedThrough: 7},
+		},
+	}
+	stampSnapshot(&row, &snapshotHeld{
+		Have: true,
+		Manifest: statelog.Manifest{
+			TakenAt: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC),
+			Bytes:   4 << 20,
+			// Taken by the build before `chart` was registered.
+			Domains: map[string]statelog.DomainPosition{
+				"tracker": {Seq: 850, Generation: 2},
+				"pages":   {Seq: 33, Generation: 2},
+			},
+		},
+	})
+
+	for name := range row.Domains {
+		if got := row.Domains[name]; !got.SnapshotAt.IsZero() || got.SnapshotSeq != 0 {
+			t.Errorf("%s was stamped seq %d at %s from an artefact no joiner can "+
+				"adopt — the trim would then count this node as holding a snapshot "+
+				"it can never hand over", name, got.SnapshotSeq, got.SnapshotAt)
+		}
+	}
+	if row.SnapshotBytes != 0 {
+		t.Errorf("snapshot_bytes = %d, want 0: the fleet screen would otherwise "+
+			"offer a transfer that cannot happen", row.SnapshotBytes)
+	}
+}
+
+// TestAnArtefactNamingADomainThisNodeDroppedStillStamps is the other side of
+// the same rule, and the reason it is a subset test rather than an equality
+// one: an artefact from an OLDER build names domains this one no longer
+// registers, and that is not a reason to refuse it. What matters is that it
+// covers everything this node runs.
+func TestAnArtefactNamingADomainThisNodeDroppedStillStamps(t *testing.T) {
+	t.Parallel()
+	taken := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	row := coord.NodePositions{
+		NodeID:  "node-a",
+		Domains: map[string]coord.DomainPosition{"tracker": {Seq: 900, Generation: 2}},
+	}
+	stampSnapshot(&row, &snapshotHeld{
+		Have: true,
+		Manifest: statelog.Manifest{
+			TakenAt: taken,
+			Bytes:   1 << 20,
+			Domains: map[string]statelog.DomainPosition{
+				"tracker": {Seq: 850, Generation: 2},
+				"retired": {Seq: 12, Generation: 1},
+			},
+		},
+	})
+	if got := row.Domains["tracker"]; got.SnapshotSeq != 850 || !got.SnapshotAt.Equal(taken) {
+		t.Errorf("tracker snapshot = seq %d at %s, want 850 at %s", got.SnapshotSeq,
+			got.SnapshotAt, taken)
+	}
+	if _, stamped := row.Domains["retired"]; stamped {
+		t.Error("a domain this node does not run was stamped onto the row, which the " +
+			"trim reads as a node holding that log back at zero")
+	}
 }
 
 // THE DONOR OFFERS THE NEWEST ARTEFACT IN THE SNAPSHOT ROOT, BY THE NAME ITS

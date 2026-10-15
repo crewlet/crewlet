@@ -87,20 +87,15 @@ type ViewQuery struct {
 	Container Container
 
 	// Viewer is whose pins order the saved half, and whose personal views
-	// join it. An UNNAMED party asks for the shared strip: no pins, and no
-	// personal views but the shared ones.
-	//
-	// A [Party] RATHER THAN A HANDLE for the reason [MyWorkQuery.Who] is
-	// one — a saved view and a pin are both written by the person's own
-	// credential through the operator tool server, so they are OWNED by
-	// the token's name while the strip is asked for under the seat's.
-	Viewer Party
+	// join it. Empty asks for the shared strip: no pins, and no personal
+	// views but the shared ones.
+	Viewer string
 
-	// Units resolves a UNIT container's two spellings, so a strip asked
-	// for by a team's id carries the views saved against its name and the
-	// other way round — see [Units] and [CanonicalContainer]. Nil matches
-	// the container as asked, which is the honest answer for a surface
-	// holding no chart.
+	// Units resolves a UNIT container to its team's KEY, which is what a
+	// save stores ([CanonicalContainer]), so a strip asked for by the
+	// team's name or its key finds the same views — see [Units]. Nil
+	// matches the container as asked, which is the honest answer for a
+	// surface holding no chart.
 	//
 	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
 	// cannot decode back. A surface that sends this across a wire has the
@@ -193,7 +188,7 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 
 	if q.Counts {
 		switch {
-		case len(q.Viewer.Handles()) == 0:
+		case q.Viewer == "":
 			return ViewListing{}, fmt.Errorf("tracker: a view read asks for " +
 				"its pinned views' counts and names no viewer — pins are a " +
 				"person's, so a strip nobody is looking at has none to count")
@@ -273,7 +268,7 @@ func stripScope(q ViewQuery) statelog.ScopeSet {
 		return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
 	}
 	scope := viewScope(q.Container)
-	if len(q.Viewer.Handles()) > 0 {
+	if q.Viewer != "" {
 		scope.Paths = append(scope.Paths, personScope().Paths...)
 	}
 	return scope.Normalised()
@@ -289,7 +284,9 @@ func stripScope(q ViewQuery) statelog.ScopeSet {
 // statement that answers that read's `total_hint`. It is not a second
 // definition of what a view selects, and a sidebar number that disagreed with
 // the list it opens would be exactly that.
-func countPinned(ctx context.Context, tx *sql.Tx, q ViewQuery, rows []ViewRow) error {
+func countPinned(ctx context.Context, tx *sql.Tx,
+	q ViewQuery, rows []ViewRow) error {
+
 	for i := range rows {
 		if !rows[i].Pinned {
 			continue
@@ -319,8 +316,8 @@ var errUncountable = errors.New("this view cannot be counted")
 // nothing else in the answer could be trusted either. The first is wrapped in
 // [errUncountable] and the second is not, which is the whole of how
 // [countPinned] tells them apart.
-func countView(ctx context.Context, tx *sql.Tx, q ViewQuery, view ViewRow) (
-	int, bool, error) {
+func countView(ctx context.Context, tx *sql.Tx,
+	q ViewQuery, view ViewRow) (int, bool, error) {
 
 	// THE CONTAINER THE VIEW WAS SAVED IN, as the caller's key, which is
 	// how a board runs it: `work_items{view, container}`. A unit's or a
@@ -335,7 +332,7 @@ func countView(ctx context.Context, tx *sql.Tx, q ViewQuery, view ViewRow) (
 	}
 	// THE BOARD'S OWN MERGE, `me` included — see [mergeExpansion].
 	resolved, err := mergeExpansion(caller, nil, savedDefaults(view.Params),
-		q.Viewer.Handle)
+		q.Viewer)
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
@@ -343,7 +340,6 @@ func countView(ctx context.Context, tx *sql.Tx, q ViewQuery, view ViewRow) (
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
-	parsed = parsed.forViewer(q.Viewer)
 	parsed.Units = q.Units
 	// FLAT, as every surface that RUNS a view runs it. The dashboard's
 	// shapes send `subtasks=separate` over whatever a view carries (none of
@@ -362,7 +358,7 @@ func countView(ctx context.Context, tx *sql.Tx, q ViewQuery, view ViewRow) (
 	case err != nil:
 		return 0, false, err
 	}
-	if parsed.PriorityListOf.Named() {
+	if parsed.PriorityListOf != "" {
 		if parsed.PriorityList, err = readPriorityList(ctx, tx,
 			parsed.PriorityListOf); err != nil {
 			return 0, false, err
@@ -438,30 +434,26 @@ func implicitViews(container Container) []ViewRow {
 // answer at all. Filtering in SQL rather than after the fact is what stops a
 // personal view riding a page boundary into somebody else's strip.
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
-	units Units, viewer Party, pinned map[string]bool) ([]ViewRow, error) {
+	units Units, viewer string, pinned map[string]bool) ([]ViewRow, error) {
 
-	// A UNIT CONTAINER MATCHES BOTH OF ITS TEAM'S SPELLINGS, which is the
-	// same rule a `unit=` filter follows and for the same reason: a strip
-	// saved before the team had an id is addressed by its name, and one
-	// saved after it by the id. Every other kind addresses itself one way
-	// and [unitSpellings] hands that one back.
+	// A UNIT CONTAINER IS READ UNDER ITS TEAM'S KEY, which is what a save
+	// stores ([CanonicalContainer]) — so a strip asked for by the team's
+	// name finds the views saved under its id.
 	ids := []string{container.ID}
 	if container.Kind == ContainerUnit {
-		if spellings := unitSpellings(units, ids); len(spellings) > 0 {
-			ids = spellings
+		if keys := unitKeys(units, ids); len(keys) > 0 {
+			ids = keys
 		}
 	}
-	// THE SHARED HALF IS `owner = ''`, and it answers for a party that
-	// names nobody — which is what an anonymous strip is. The personal
-	// half matches EVERY name this person saves under, because a view
-	// saved through their own credential is owned by the token's id while
-	// the strip is asked for under their seat's.
+	// THE SHARED HALF IS `owner = ''`, and it is all an anonymous strip
+	// gets. The personal half is the viewer's own name — the one a person
+	// saves under, since bound to a seat they write AS it (iam.ActorFor).
 	own := ""
 	args := []any{container.Kind}
 	args = append(args, anyOf(ids)...)
-	if owners := viewer.args(); len(owners) > 0 {
-		own = " OR owner IN (" + placeholders(len(owners)) + ")"
-		args = append(args, owners...)
+	if viewer != "" {
+		own = " OR owner = ?"
+		args = append(args, viewer)
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
@@ -513,15 +505,11 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 }
 
 // pinnedViews is the viewer's own pins, and empty for an anonymous read.
-//
-// GATED ON THE IDENTITY LIST, which is what [savedViews] matches on: the two
-// halves of one strip must agree about whether there is a viewer at all, or a
-// party naming only a credential would have its views and not its pins.
-func pinnedViews(ctx context.Context, tx *sql.Tx, viewer Party) (map[string]bool, error) {
-	if len(viewer.Handles()) == 0 {
+func pinnedViews(ctx context.Context, tx *sql.Tx, viewer string) (map[string]bool, error) {
+	if viewer == "" {
 		return nil, nil
 	}
-	person, held, err := readPartyRecord(ctx, tx, viewer)
+	person, held, err := readPerson(ctx, tx, viewer)
 	if err != nil || !held {
 		return nil, err
 	}

@@ -87,7 +87,7 @@ import { EditModelDialog } from "./EditModelDialog.tsx";
 export const MODELS_POLL_MS = 15_000;
 
 export function Models({ id }: { id?: string }) {
-  const { data, loading, error, refetch } = useQuery("credential_pool", undefined, {
+  const { data, loading, error, refusal, refetch } = useQuery("credential_pool", undefined, {
     pollMs: MODELS_POLL_MS,
   });
   const org = useOrg();
@@ -99,7 +99,7 @@ export function Models({ id }: { id?: string }) {
 
   return (
     <>
-      {error && !data && <QueryState error={error} loading={false} />}
+      {error && !data && <QueryState error={error} refusal={refusal} loading={false} />}
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
 
       {data && !id && <ModelList answer={data} seats={seats} onEdit={setEditing} />}
@@ -255,7 +255,7 @@ function ModelList({
               {
                 key: "act",
                 header: "",
-                label: "Actions",
+                action: true,
                 shrink: true,
                 cell: (p) => <EditButton id={p.key} onEdit={onEdit} icon />,
               },

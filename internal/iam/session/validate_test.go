@@ -1,0 +1,776 @@
+package session_test
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE FULL SESSION TABLE, EVERY ROW REACHED BY A REAL BEARER.
+//
+// Not the map read back — that asserts nothing — but every state of the world
+// driven through [Signer.Validate], each landing on the row the design names,
+// with the cell each row permits for each of the three kinds of request.
+//
+// THE CONTROL IS THE TWO ABSENT-ROW ARMS. `gone` and `behind` are the same
+// observation — no row — separated only by whether this node's applied
+// position covers the bearer's start position. Collapse them and one of the
+// two verdicts is wrong every time: answering 401 signs out every person whose
+// request reached a node a second behind, and serving honours a session that
+// ended. TestCollapsingTheAbsentRowArmsIsAStampede is that mutation, written
+// out rather than described.
+func TestTheFullSessionTable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		world  func(*signedIn)
+		row    session.Row
+		reads  session.Answer
+		writes session.Answer
+		stepUp session.Answer
+	}{{
+		name:  "everything checks out",
+		world: func(*signedIn) {},
+		row:   session.RowValid,
+		reads: session.AnswerServe, writes: session.AnswerServe,
+		stepUp: session.AnswerStepUp,
+	}, {
+		name: "the session row says it ended",
+		world: func(s *signedIn) {
+			s.dir.identity.Session.Ended = true
+		},
+		row:   session.RowEnded,
+		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
+		stepUp: session.AnswerRefuse,
+	}, {
+		name: "the person's revocation epoch has moved",
+		world: func(s *signedIn) {
+			s.dir.identity.Person.Epoch = 4
+		},
+		row:   session.RowEnded,
+		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
+		stepUp: session.AnswerRefuse,
+	}, {
+		name: "the fleet-wide generation has moved",
+		world: func(s *signedIn) {
+			s.dir.identity.Generation = 2
+		},
+		row:   session.RowEnded,
+		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
+		stepUp: session.AnswerRefuse,
+	}, {
+		name: "no row, and this node covers the start position",
+		world: func(s *signedIn) {
+			s.dir.identity.Session.Found = false
+			s.dir.identity.Applied = startPos + 1
+		},
+		row:   session.RowGone,
+		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
+		stepUp: session.AnswerRefuse,
+	}, {
+		name: "no row, and this node is below the start position",
+		world: func(s *signedIn) {
+			s.dir.identity.Session.Found = false
+			s.dir.identity.Applied = startPos - 1
+			s.dir.identity.Lag = 10 * time.Second
+		},
+		row:   session.RowBehind,
+		reads: session.AnswerServe, writes: session.AnswerUnavailable,
+		stepUp: session.AnswerUnavailable,
+	}, {
+		name: "the applier has stalled past the grace",
+		world: func(s *signedIn) {
+			s.dir.identity.Lag = statelog.StallGrace + time.Second
+		},
+		row:   session.RowStalled,
+		reads: session.AnswerUnavailable, writes: session.AnswerUnavailable,
+		stepUp: session.AnswerUnavailable,
+	}, {
+		name: "the person's bucket is deferred",
+		world: func(s *signedIn) {
+			s.dir.identity.Deferred = true
+		},
+		row:   session.RowStalled,
+		reads: session.AnswerUnavailable, writes: session.AnswerUnavailable,
+		stepUp: session.AnswerUnavailable,
+	}, {
+		name: "the replicated estate cannot be read",
+		world: func(s *signedIn) {
+			s.dir.err = errors.New("the replicated estate is not open")
+		},
+		row:   session.RowStalled,
+		reads: session.AnswerUnavailable, writes: session.AnswerUnavailable,
+		stepUp: session.AnswerUnavailable,
+	}, {
+		name: "the cookie is not a bearer at all",
+		world: func(s *signedIn) {
+			s.cookie = "v2.nonsense"
+		},
+		row:   session.RowMalformed,
+		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
+		stepUp: session.AnswerRefuse,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			tc.world(rig)
+			got := rig.validate()
+			if got.Row != tc.row {
+				t.Fatalf("landed on %q, want %q (%s)", got.Row, tc.row, got.Detail)
+			}
+			for need, want := range map[session.Need]session.Answer{
+				session.NeedRead:   tc.reads,
+				session.NeedWrite:  tc.writes,
+				session.NeedStepUp: tc.stepUp,
+			} {
+				if answer := got.Answer(need); answer != want {
+					t.Errorf("%s of a %q session answers %q, want %q",
+						need, got.Row, answer, want)
+				}
+			}
+		})
+	}
+}
+
+// EVERY ROW IS COVERED AND EVERY ROW HAS A POLICY.
+//
+// Two-sided, because each omission is silent in its own way: a row with no
+// entry in the table defaults to refusing, which is safe and invisible until
+// somebody's session is refused for no reason; and a row the case above never
+// reaches is one whose cells nothing checks.
+func TestEveryRowHasAPolicyAndTheSuiteReachesThemAll(t *testing.T) {
+	t.Parallel()
+	reached := map[session.Row]bool{}
+	for _, world := range worlds() {
+		rig := newSignedIn(t)
+		world(rig)
+		reached[rig.validate().Row] = true
+	}
+	for _, row := range session.Rows {
+		if !reached[row] {
+			t.Errorf("no case in this suite lands on %q, so its cells are a "+
+				"claim rather than coverage", row)
+		}
+		for _, need := range session.Needs {
+			v := session.Validation{Row: row}
+			if v.Answer(need) == "" {
+				t.Errorf("%q has no answer for %s", row, need)
+			}
+		}
+	}
+	// AND A ROW THIS BUILD CANNOT NAME REFUSES. Serving by default is how
+	// a new arm ships ungated and ships looking correct.
+	unknown := session.Validation{Row: session.Row("somethingnewer")}
+	for _, need := range session.Needs {
+		if got := unknown.Answer(need); got != session.AnswerRefuse {
+			t.Errorf("an unnamed row answers %s with %q, want %q", need, got,
+				session.AnswerRefuse)
+		}
+	}
+}
+
+// worlds is every state the table case drives, so the coverage check above and
+// the table itself cannot drift apart.
+func worlds() []func(*signedIn) {
+	return []func(*signedIn){
+		func(*signedIn) {},
+		func(s *signedIn) { s.dir.identity.Session.Ended = true },
+		func(s *signedIn) {
+			s.dir.identity.Session.Found = false
+			s.dir.identity.Applied = startPos + 1
+		},
+		func(s *signedIn) {
+			s.dir.identity.Session.Found = false
+			s.dir.identity.Applied = startPos - 1
+		},
+		func(s *signedIn) {
+			s.dir.identity.Lag = statelog.StallGrace + time.Second
+		},
+		func(s *signedIn) { s.dir.identity.Deferred = true },
+		func(s *signedIn) { s.cookie = "v2.nonsense" },
+	}
+}
+
+// A NODE THAT IS MERELY BEHIND ANSWERS 503 AND NEVER 401, ON EVERY ARM THAT
+// CANNOT SERVE.
+//
+// THE CASE THE WHOLE TABLE IS SHAPED BY. A browser reads 401 as "sign in
+// again" and discards the cookie, so one stalled applier answering 401 signs
+// out every person whose request reached that node and stampedes the identity
+// provider with the re-authentications — while the node is, by definition,
+// already alarmed and about to catch up.
+func TestANodeThatIsBehindNeverAnswers401(t *testing.T) {
+	t.Parallel()
+	for name, world := range map[string]func(*signedIn){
+		"below the start position": func(s *signedIn) {
+			s.dir.identity.Session.Found = false
+			s.dir.identity.Applied = startPos - 1
+		},
+		"stalled past the grace": func(s *signedIn) {
+			s.dir.identity.Lag = statelog.StallGrace + time.Second
+		},
+		"the estate is not open": func(s *signedIn) {
+			s.dir.err = errors.New("ErrNoEstate")
+		},
+		"the person's bucket is deferred": func(s *signedIn) {
+			s.dir.identity.Deferred = true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			world(rig)
+			got := rig.validate()
+			for _, need := range session.Needs {
+				if answer := got.Answer(need); answer == session.AnswerRefuse {
+					t.Errorf("a node that is behind refuses %s outright, which "+
+						"a browser reads as 'sign in again'", need)
+				}
+				if code := got.Code(need); code == session.CodeRevoked {
+					t.Errorf("%s carries %q from a node that is merely behind",
+						need, code)
+				}
+			}
+		})
+	}
+}
+
+// COLLAPSING THE TWO ABSENT-ROW ARMS IS A STAMPEDE, AND THIS IS THE CONTROL
+// THE DESIGN NAMES.
+//
+// It asserts the two arms are DIFFERENT from one observation — no row — which
+// is the whole content of carrying the start position in the bearer. An
+// implementation that dropped the position comparison lands both on one row,
+// and whichever row that is, is wrong half the time.
+func TestCollapsingTheAbsentRowArmsIsAStampede(t *testing.T) {
+	t.Parallel()
+	covered, behind := newSignedIn(t), newSignedIn(t)
+	for _, rig := range []*signedIn{covered, behind} {
+		rig.dir.identity.Session.Found = false
+	}
+	covered.dir.identity.Applied = startPos + 1
+	behind.dir.identity.Applied = startPos - 1
+
+	a, b := covered.validate(), behind.validate()
+	if a.Row == b.Row {
+		t.Fatalf("both absent-row arms landed on %q — one observation, two "+
+			"opposite answers, and no way left to tell them apart", a.Row)
+	}
+	if a.Answer(session.NeedRead) != session.AnswerRefuse {
+		t.Error("a node that has seen the session's own start record and has " +
+			"no row for it served the request, which honours a session that " +
+			"ended")
+	}
+	if b.Answer(session.NeedRead) != session.AnswerServe {
+		t.Error("a node below the session's start position refused a read, " +
+			"which signs out every person whose request reached a node that " +
+			"is a second behind")
+	}
+	if b.Answer(session.NeedWrite) != session.AnswerUnavailable {
+		t.Error("a node below the session's start position accepted a write, " +
+			"and there is no grace for one: the row it would be checked " +
+			"against has not arrived")
+	}
+}
+
+// THE ABSOLUTE DEADLINE BEATS A RENEWED IDLE CLOCK.
+//
+// Every request moves the idle deadline out, and nothing moves the absolute
+// one — so a session somebody uses continuously still ends on time. The
+// opposite reading, a deadline any activity extends, is a sign-in that lasts
+// for ever as long as a tab is open.
+func TestTheAbsoluteDeadlineBeatsARenewedIdleClock(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+
+	// Used every half hour, right up to the absolute deadline.
+	for elapsed := time.Duration(0); elapsed < absolute; elapsed += 30 * time.Minute {
+		got := rig.validate()
+		if got.Row != session.RowValid {
+			t.Fatalf("at %s the session landed on %q: %s", elapsed, got.Row,
+				got.Detail)
+		}
+		if got.Reissue != "" {
+			rig.cookie = got.Reissue
+		}
+		rig.clock.advance(30 * time.Minute)
+	}
+	got := rig.validate()
+	if got.Row != session.RowEnded {
+		t.Fatalf("past the absolute deadline the session landed on %q: %s",
+			got.Row, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "absolute") {
+		t.Errorf("it ended for the reason %q, want the absolute deadline",
+			got.Detail)
+	}
+}
+
+// AN IDLE SESSION IS SERVED AND RE-ISSUED.
+//
+// A person who stopped at noon and came back at two holds a cookie issued two
+// hours ago, and that is all it is: a captured copy of it would be the same
+// bytes, so nothing about the cookie can call it theft. What bounds it is the
+// twelve-hour idle deadline, which a rule that refused it after an hour would
+// have made unreachable.
+func TestALongIdleSessionIsServedAndReissued(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	// Six hours away, well inside both the idle deadline and the absolute
+	// one.
+	rig.clock.advance(6 * time.Hour)
+
+	got := rig.validate()
+	if got.Row != session.RowValid {
+		t.Fatalf("a session idle for six hours landed on %q: %s", got.Row,
+			got.Detail)
+	}
+	if got.Reissue == "" {
+		t.Fatal("no re-issue, so the idle deadline stays where the last use " +
+			"six hours ago put it")
+	}
+	// And the re-issued cookie is current: the next request does not
+	// re-issue again inside the throttle.
+	rig.cookie = got.Reissue
+	if next := rig.validate(); next.Reissue != "" {
+		t.Error("a cookie issued a moment ago was re-issued again, so every " +
+			"response carries a Set-Cookie header")
+	}
+}
+
+// TWO NODES WHOSE CLOCKS DISAGREE NEVER END A SESSION BETWEEN THEM.
+//
+// The rotation index this format used to carry had one arm that acted: a
+// bearer whose index was ahead of the validating node's clock by more than a
+// two-minute overlap bumped the person's revocation epoch, ending every
+// session and every machine token they held. The index was inside the signed
+// payload, so only a node holding the keyring wrote it, from its own clock —
+// the arm fired on an NTP fault and on nothing else. So a cookie minted and
+// re-issued by a node three hours fast, and one by a node three hours slow,
+// are both served by a node on time, re-issued, and ask nobody to revoke
+// anything.
+//
+// THE CONTROL is the previous format: the same fast node's cookie landed on
+// the reuse row there, refused, with the revocation asked for.
+func TestClockSkewBetweenNodesNeverEndsASession(t *testing.T) {
+	t.Parallel()
+	for name, skew := range map[string]time.Duration{
+		"minted by a node three hours fast": 3 * time.Hour,
+		"minted by a node three hours slow": -3 * time.Hour,
+		"minted by a node a minute fast":    time.Minute,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			// The other node: the same keyring, its own clock.
+			elsewhere := &clock{at: rig.clock.now().Add(skew)}
+			other, err := session.New(session.Options{
+				Material: keyring(), Now: elsewhere.now,
+			})
+			if err != nil {
+				t.Fatalf("build the other node's signer: %v", err)
+			}
+			// ITS LINEAGE IS ITS OWN, a uuid7 minted on its own clock,
+			// which is the instant the old index was read out of.
+			cookie, err := other.Mint(session.Mint{
+				Lineage: lineageAt(t, elsewhere.now()), Person: personID, Epoch: 3,
+				Generation: 1, StartPosition: startPos,
+				AbsoluteExpiresAt: elsewhere.now().Add(absolute),
+			})
+			if err != nil {
+				t.Fatalf("mint on the other node: %v", err)
+			}
+			// An hour of use on the other node, re-issued there.
+			elsewhere.advance(time.Hour)
+			rig.clock.advance(time.Hour)
+			reissued := other.Validate(t.Context(), rig.dir, cookie)
+			if reissued.Reissue == "" {
+				t.Fatalf("the other node did not re-issue: %s", reissued.Detail)
+			}
+
+			got := rig.signer.Validate(t.Context(), rig.dir, reissued.Reissue)
+			if got.Row != session.RowValid {
+				t.Fatalf("a node on time landed a cookie from a node %s off on "+
+					"%q: %s — a clock fault on one host signs a person out "+
+					"everywhere", skew, got.Row, got.Detail)
+			}
+			if got.Answer(session.NeedWrite) != session.AnswerServe {
+				t.Errorf("a write answers %q", got.Answer(session.NeedWrite))
+			}
+		})
+	}
+}
+
+// A PRE-LOGIN COOKIE IS NEVER HONOURED.
+//
+// A browser holds values for this host before anybody has authenticated —
+// whatever else a deployment serves from the same host sets its own. None of
+// them is a session, and every one of them arrives in the same cookie jar. What makes them safe is not where they are
+// stored but that a bearer is only honoured when it PARSES as one and verifies
+// under a key this node holds.
+func TestAPreLoginCookieIsNeverHonoured(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	live := rig.validate()
+	if live.Row != session.RowValid {
+		t.Fatalf("the rig's own session is not valid: %s", live.Detail)
+	}
+	for name, value := range map[string]string{
+		"an empty value":       "",
+		"another app's cookie": "sessionid=abc123",
+		"a bearer with no mac": strings.Join(strings.Split(rig.cookie, ".")[:8], "."),
+		"a bearer with a forged mac": strings.Join(
+			append(strings.Split(rig.cookie, ".")[:8], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), "."),
+		"a bearer at another version": "v1" +
+			strings.TrimPrefix(rig.cookie, session.Version),
+		"a bearer whose person was swapped": swapPerson(t, rig.cookie),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := rig.signer.Validate(t.Context(), rig.dir, value)
+			if got.Row != session.RowMalformed {
+				t.Errorf("%q landed on %q, want %q", value, got.Row,
+					session.RowMalformed)
+			}
+			if got.Answer(session.NeedRead) != session.AnswerRefuse {
+				t.Errorf("%q was served", value)
+			}
+		})
+	}
+}
+
+// swapPerson rewrites the person inside a bearer's triple without re-signing,
+// which is the edit an attacker holding somebody else's cookie would make.
+func swapPerson(t *testing.T, cookie string) string {
+	t.Helper()
+	parts := strings.Split(cookie, ".")
+	pair := strings.Split(parts[3], "~")
+	pair[1] = "018f3a9c-0000-7000-8000-0000000000bb"
+	parts[3] = strings.Join(pair, "~")
+	return strings.Join(parts, ".")
+}
+
+// lineageAt is a uuid7 whose embedded instant is at, which is what a node
+// whose clock reads at mints: the library reads the real clock, and a case
+// about two clocks has to name both.
+func lineageAt(t *testing.T, at time.Time) uuid.UUID {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("mint a lineage: %v", err)
+	}
+	millis := at.UnixMilli()
+	for i := range 6 {
+		id[i] = byte(millis >> (8 * (5 - i)))
+	}
+	return id
+}
+
+// --- the seat table ---------------------------------------------------------- //
+
+// THE FULL SEAT TABLE, EVERY ROW, AND THE 403 NAMES THE SEAT.
+//
+// A seat is a seat of the company this node runs, so a missing one is GONE —
+// unless this node cannot say, which is 503. The arm that must never exist is a
+// silent fall-through to an empty handle — that principal writes audit rows
+// under nobody's name and reads every person-scoped query as empty.
+func TestTheFullSeatTable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		world  func(*signedIn)
+		row    session.SeatRow
+		answer session.Answer
+		handle string
+	}{{
+		name:   "the person holds no seat",
+		world:  func(s *signedIn) { s.dir.identity.Person.Seat = "" },
+		row:    session.SeatRowSeatless,
+		answer: session.AnswerServe,
+	}, {
+		name:   "the running organisation holds it as a human seat",
+		world:  func(*signedIn) {},
+		row:    session.SeatRowHeld,
+		answer: session.AnswerServe,
+		handle: "platform-lead",
+	}, {
+		name:   "the running organisation does not hold the seat",
+		world:  func(s *signedIn) { delete(s.chart.seats, "platform-lead") },
+		row:    session.SeatRowGone,
+		answer: session.AnswerRefuse,
+	}, {
+		name: "the seat is an agent seat",
+		world: func(s *signedIn) {
+			s.chart.seats["platform-lead"] = session.Seat{
+				Handle: "platform-lead", Kind: "agent",
+			}
+		},
+		row:    session.SeatRowGone,
+		answer: session.AnswerRefuse,
+	}, {
+		name:   "the organisation cannot be read",
+		world:  func(s *signedIn) { s.chart.err = errors.New("no view") },
+		row:    session.SeatRowStalled,
+		answer: session.AnswerUnavailable,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			tc.world(rig)
+			got := session.ResolveSeat(t.Context(), rig.chart,
+				rig.dir.identity.Person)
+			if got.Row != tc.row {
+				t.Fatalf("landed on %q, want %q (%s)", got.Row, tc.row, got.Detail)
+			}
+			if answer := got.Answer(); answer != tc.answer {
+				t.Errorf("%q answers %q, want %q", got.Row, answer, tc.answer)
+			}
+			if got.Handle() != tc.handle {
+				t.Errorf("the handle is %q, want %q", got.Handle(), tc.handle)
+			}
+			// A REFUSAL NAMES THE SEAT. A person locked out because
+			// somebody removed a seat needs to know which one, and so
+			// does whoever removed it.
+			if tc.answer == session.AnswerRefuse &&
+				!strings.Contains(got.Detail, "platform-lead") {
+				t.Errorf("the refusal %q does not name the seat", got.Detail)
+			}
+		})
+	}
+}
+
+// A SEAT THAT COULD NOT BE RESOLVED NEVER FALLS THROUGH TO AN EMPTY HANDLE.
+//
+// The one arm that is allowed to answer with no handle is the seatless one.
+// Everything else either resolves the seat or refuses — because a principal
+// carrying an empty handle is one whose every write lands under nobody's name
+// and whose every person-scoped read comes back empty, which reads exactly
+// like a person with nothing assigned to them.
+func TestOnlyTheSeatlessArmEverAnswersWithNoHandle(t *testing.T) {
+	t.Parallel()
+	for _, row := range session.SeatRows {
+		if row == session.SeatRowSeatless || row == session.SeatRowHeld {
+			continue
+		}
+		b := session.Binding{Row: row}
+		if b.Answer() == session.AnswerServe {
+			t.Errorf("%q serves with the handle %q", row, b.Handle())
+		}
+	}
+	// And a node with no org seam at all is the unknown arm rather than
+	// the seatless one.
+	got := session.ResolveSeat(t.Context(), nil, session.PersonRow{
+		Found: true, Seat: "platform-lead",
+	})
+	if got.Row != session.SeatRowStalled {
+		t.Errorf("a node with no org seam landed on %q, want %q", got.Row,
+			session.SeatRowStalled)
+	}
+}
+
+// EVERY SEAT ROW HAS A POLICY, AND AN UNNAMED ONE REFUSES.
+func TestEverySeatRowHasAPolicy(t *testing.T) {
+	t.Parallel()
+	for _, row := range session.SeatRows {
+		if (session.Binding{Row: row}).Answer() == "" {
+			t.Errorf("%q has no answer", row)
+		}
+	}
+	if got := (session.Binding{Row: session.SeatRow("newer")}).Answer(); got !=
+		session.AnswerRefuse {
+		t.Errorf("an unnamed seat row answers %q, want %q", got,
+			session.AnswerRefuse)
+	}
+	if !slices.Contains(session.SeatRows, session.SeatRowHeld) {
+		t.Error("the row list does not carry the row that serves")
+	}
+}
+
+// A SUSPENDED PERSON IS REFUSED BY THE SESSION TABLE, NOT LEFT TO A GRANT
+// CHECK.
+//
+// A grant answers what somebody may DO; this answers whether they are somebody
+// at all. The stage allowlist is one value wide, so a stage a newer peer wrote
+// that this build cannot name refuses — a denylist would have admitted it.
+func TestASuspendedOrUnknownStageIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, stage := range []iam.Stage{
+		iam.StageInvited, iam.StageEnrolling, iam.StageSuspended,
+		iam.StageRetired, iam.Stage("somethingnewer"),
+	} {
+		t.Run(fmt.Sprint(stage), func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			rig.dir.identity.Person.Stage = stage
+			got := rig.validate()
+			if got.Row != session.RowEnded {
+				t.Errorf("a %q person landed on %q: %s", stage, got.Row,
+					got.Detail)
+			}
+		})
+	}
+}
+
+// BOTH BEHIND ARMS MOVE THE IDLE DEADLINE, BECAUSE BOTH SERVE.
+//
+// A node can hold the session's row without the person's, or the person's
+// without the session's — they are records on different subjects. Whichever
+// half is missing, the request is served on the bearer's own proof, so
+// whichever half is missing the deadline has to move: an arm that served
+// without re-issuing would let a session in continuous use on a lagging node
+// expire on the deadline it was minted with.
+func TestBothBehindArmsReissueTheCookie(t *testing.T) {
+	t.Parallel()
+	for name, world := range map[string]func(*signedIn){
+		"the session's row has not arrived": func(s *signedIn) {
+			s.dir.identity.Session.Found = false
+		},
+		"the person's row has not arrived": func(s *signedIn) {
+			s.dir.identity.Person.Found = false
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			world(rig)
+			rig.dir.identity.Applied = startPos - 1
+			// Past the re-issue throttle, so a served arm must hand
+			// one back.
+			rig.clock.advance(session.ReissueAfter + time.Minute)
+
+			got := rig.validate()
+			if got.Row != session.RowBehind {
+				t.Fatalf("landed on %q: %s", got.Row, got.Detail)
+			}
+			if got.Answer(session.NeedRead) != session.AnswerServe {
+				t.Fatal("the read was not served")
+			}
+			if got.Reissue == "" {
+				t.Error("served without a re-issue, so a session in " +
+					"continuous use on a lagging node expires on the deadline " +
+					"it was minted with")
+			}
+		})
+	}
+}
+
+// A DEADLINE ENDS A SESSION BEFORE ANY ROW IS READ.
+//
+// Both deadlines live in the bearer, so a cookie past either is over whatever
+// this node's rows say — and deciding it needs nothing, which is why it is
+// decided first: a node that cannot read its identity estate still refuses an
+// expired cookie rather than answering 503 and keeping it in the browser.
+//
+// Mutation: read the rows before the deadlines and both cases land on
+// `stalled`; drop either deadline and its case is served.
+func TestADeadlineEndsASessionBeforeAnyRowIsRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		world func(*signedIn)
+		want  string
+	}{
+		{"idle past the idle window", func(s *signedIn) {
+			// A LIFETIME LONGER THAN THE IDLE WINDOW, which the rig's own
+			// is not: this is the session a person leaves open overnight.
+			cookie, err := s.signer.Mint(session.Mint{
+				Lineage: s.lineage, Person: personID, Epoch: 3, Generation: 1,
+				StartPosition:     startPos,
+				AbsoluteExpiresAt: s.clock.at.Add(30 * 24 * time.Hour),
+			})
+			if err != nil {
+				s.t.Fatalf("mint: %v", err)
+			}
+			s.cookie = cookie
+			s.clock.advance(session.Idle + time.Minute)
+		}, "idle"},
+		{"past the absolute lifetime", func(s *signedIn) {
+			s.clock.advance(absolute + time.Minute)
+		}, "absolute"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			tc.world(rig)
+			rig.dir.err = errors.New("the replicated estate is not open")
+			got := rig.validate()
+			if got.Row != session.RowEnded {
+				t.Fatalf("landed on %q, want ended: %s", got.Row, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tc.want) {
+				t.Errorf("it ended for the reason %q, want the %s deadline",
+					got.Detail, tc.want)
+			}
+		})
+	}
+}
+
+// AN OPEN CONNECTION'S BEARER OUTLIVES ITS IDLE DEADLINE, AND NOTHING ELSE.
+//
+// A socket holds the bearer its handshake presented and can never be handed a
+// re-issue, so its idle deadline is the handshake's plus [session.Idle] however
+// busy the tab has been since. [session.Signer.ValidateOpen] sets that one
+// deadline aside. The control is the same bearer through Validate, which the
+// idle deadline ends; a record ending the session and the absolute deadline
+// still end it; and nothing is re-issued, since there is no response to carry
+// one.
+//
+// Mutation: keep the idle deadline on the open arm and the first case is
+// ended; finish the open arm through the re-issue and it carries a cookie.
+func TestAnOpenConnectionsBearerOutlivesOnlyItsIdleDeadline(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	lifetime := session.Idle + 12*time.Hour
+	cookie, err := rig.signer.Mint(session.Mint{
+		Lineage: rig.lineage, Person: personID, Epoch: 3, Generation: 1,
+		StartPosition: startPos, AbsoluteExpiresAt: rig.clock.at.Add(lifetime),
+	})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	rig.cookie = cookie
+	rig.clock.advance(session.Idle + time.Hour)
+	open := func() session.Validation {
+		return rig.signer.ValidateOpen(t.Context(), rig.dir, rig.cookie)
+	}
+
+	if got := rig.validate(); got.Row != session.RowEnded {
+		t.Fatalf("the control: a request past the idle deadline landed on %q, "+
+			"so the case below proves nothing", got.Row)
+	}
+	got := open()
+	if got.Row != session.RowValid {
+		t.Fatalf("an open connection past its idle deadline landed on %q: %s",
+			got.Row, got.Detail)
+	}
+	if got.Reissue != "" {
+		t.Error("an open connection was re-issued a cookie it has no " +
+			"response to carry")
+	}
+	if !got.Person.Found || got.Person.Login != "sarah.chen" {
+		t.Errorf("it carried the person row %+v, want this node's", got.Person)
+	}
+
+	rig.dir.identity.Session.Ended = true
+	if got := open(); got.Row != session.RowEnded {
+		t.Errorf("a session a record ended landed on %q for its open "+
+			"connection, want ended: the rows still decide", got.Row)
+	}
+	rig.dir.identity.Session.Ended = false
+
+	rig.clock.advance(lifetime)
+	if got := open(); got.Row != session.RowEnded ||
+		!strings.Contains(got.Detail, "absolute") {
+		t.Errorf("past its absolute deadline an open connection landed on %q "+
+			"(%s), want ended by that deadline", got.Row, got.Detail)
+	}
+}

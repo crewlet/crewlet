@@ -19,9 +19,10 @@ import (
 // next version above [pages.RecordVersion] and adds its own line.
 func TestAClosedPagesRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
-	closed := map[int][]string{
-		2: {"MutationRecord.ActorSeat"},
-	}
+	// EMPTY, because every field the knowledge base writes is in the base
+	// format: the first field to join the table takes version 2 and closes
+	// it here, so the field after it cannot join a version a build reads.
+	closed := map[int][]string{}
 	got := map[int][]string{}
 	for _, field := range pages.VersionedFields() {
 		got[field.Since] = append(got[field.Since], field.Name)

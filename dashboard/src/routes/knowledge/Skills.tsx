@@ -13,7 +13,9 @@
  *
  * `kind=learned` is what one seat DREW from its own repeated work, answered by
  * the node holding that seat (`agent_memory`), with "n of total" — the page is
- * cut at the answer's limit and the total is the seat's own.
+ * cut at the answer's limit and the total is the seat's own. A seat's memory
+ * is its TRAIL, which the engine answers to an admin and to whoever leads the
+ * seat (`mayReadTrail`); for anybody else it is drawn locked and never asked.
  *
  * # Counts are totals
  *
@@ -31,6 +33,10 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { ADMIN } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
+import { TRAIL_WORDS, mayReadTrail } from "~/routes/agents/seat/profile.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -83,6 +89,7 @@ function ToolSkills() {
   return (
     <QueryState
       error={listing.error}
+      refusal={listing.refusal}
       loading={listing.loading}
       empty={
         rows.length
@@ -201,7 +208,10 @@ function LearnedSkills() {
   );
   const [picked, setPicked] = useParam("seat", "");
   const seat = picked || agents[0]?.handle || "";
-  const memory = useQuery("agent_memory", { id: seat }, { enabled: seat !== "", pollMs: 60_000 });
+  const viewer = useViewer();
+  const trail = seat !== "" && mayReadTrail(viewer, index, seat);
+  const locked = seat !== "" && !viewer.loading && !trail;
+  const memory = useQuery("agent_memory", { id: seat }, { enabled: trail, pollMs: 60_000 });
   const skills = memory.data?.skills ?? [];
   const total = memory.data?.skills_total ?? 0;
   const who = index.byHandle.get(seat);
@@ -227,76 +237,87 @@ function LearnedSkills() {
           options={agents.map((a) => ({ value: a.handle, label: a.name }))}
         />
       </Card.Header>
-      <QueryState
-        error={memory.error}
-        loading={memory.loading}
-        empty={
-          skills.length
-            ? undefined
-            : {
-                title: `${who?.name ?? seat} has learned no skills yet`,
-                hint: "Skills come from repeated work.",
-              }
-        }
-      >
-        <DataGrid
-          rows={skills}
-          rowKey={(r) => r.id}
-          defaultSort="-uses"
-          columns={[
-            {
-              key: "title",
-              header: "Skill",
-              sortValue: (r) => r.title,
-              cell: (r) => (
-                <span className="col">
-                  <span>{r.title || r.key}</span>
-                  {r.summary && <span className="t-caption truncate">{r.summary}</span>}
-                </span>
-              ),
-            },
-            {
-              key: "uses",
-              header: "Uses",
-              shrink: true,
-              align: "right",
-              sortValue: (r) => r.uses,
-              cell: (r) => <NumberCell value={r.uses} />,
-            },
-            {
-              key: "version",
-              header: "Version",
-              shrink: true,
-              align: "right",
-              sortValue: (r) => r.version,
-              cell: (r) => <NumberCell value={r.version} />,
-            },
-            {
-              key: "updated",
-              header: "Updated",
-              shrink: true,
-              align: "right",
-              sortValue: (r) => tsKey(r.updated_at),
-              cell: (r) => <DateCell at={r.updated_at} now={now} />,
-            },
-          ]}
+      {locked ? (
+        <GrantRequired
+          what={`What ${who?.name ?? seat} learned`}
+          grants={[ADMIN]}
+          reader={viewer.login}
+          size="compact"
+          also={TRAIL_WORDS}
         />
-        <Card.Footer variant="meta">
-          <span className="row wrap gap-2">
-            <span>
-              {skills.length < total
-                ? `${skills.length} of ${plural(total, "learned skill")}.`
-                : plural(total, "learned skill")}
+      ) : (
+        <QueryState
+          error={memory.error}
+          refusal={memory.refusal}
+          loading={memory.loading}
+          empty={
+            skills.length
+              ? undefined
+              : {
+                  title: `${who?.name ?? seat} has learned no skills yet`,
+                  hint: "Skills come from repeated work.",
+                }
+          }
+        >
+          <DataGrid
+            rows={skills}
+            rowKey={(r) => r.id}
+            defaultSort="-uses"
+            columns={[
+              {
+                key: "title",
+                header: "Skill",
+                sortValue: (r) => r.title,
+                cell: (r) => (
+                  <span className="col">
+                    <span>{r.title || r.key}</span>
+                    {r.summary && <span className="t-caption truncate">{r.summary}</span>}
+                  </span>
+                ),
+              },
+              {
+                key: "uses",
+                header: "Uses",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => r.uses,
+                cell: (r) => <NumberCell value={r.uses} />,
+              },
+              {
+                key: "version",
+                header: "Version",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => r.version,
+                cell: (r) => <NumberCell value={r.version} />,
+              },
+              {
+                key: "updated",
+                header: "Updated",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => tsKey(r.updated_at),
+                cell: (r) => <DateCell at={r.updated_at} now={now} />,
+              },
+            ]}
+          />
+          <Card.Footer variant="meta">
+            <span className="row wrap gap-2">
+              <span>
+                {skills.length < total
+                  ? `${skills.length} of ${plural(total, "learned skill")}.`
+                  : plural(total, "learned skill")}
+              </span>
+              {memory.data?.held_by && memory.data.held_by !== "none" && (
+                <span>Answered by {memory.data.held_by}, the node holding the seat.</span>
+              )}
+              <a className="t-link" href={href(["agents", "seats", seat], { tab: "memory" })}>
+                {who?.name ?? seat}&rsquo;s memory →
+              </a>
             </span>
-            {memory.data?.held_by && memory.data.held_by !== "none" && (
-              <span>Answered by {memory.data.held_by}, the node holding the seat.</span>
-            )}
-            <a className="t-link" href={href(["agents", "seats", seat], { tab: "memory" })}>
-              {who?.name ?? seat}&rsquo;s memory →
-            </a>
-          </span>
-        </Card.Footer>
-      </QueryState>
+          </Card.Footer>
+        </QueryState>
+      )}
     </Card>
   );
 }

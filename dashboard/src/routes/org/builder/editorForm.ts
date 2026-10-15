@@ -59,16 +59,18 @@ export interface CompanyForm {
 
 export interface UnitForm {
   readonly name: string;
+  /** The unit's key: editable only on a unit this draft created. */
+  readonly id: string;
   readonly type: string;
   readonly purpose: string;
-  /** A seat name; "" for none. */
+  /** A seat's handle; "" for none. */
   readonly lead: string;
   readonly goals: readonly string[];
   readonly channel: string;
   readonly knowledge: readonly string[];
-  /** The tracker project the unit owns: a vendor-neutral key, on the unit. */
+  /** The tracker project the unit owns (`project`): a vendor-neutral key, on the unit. */
   readonly project: string;
-  /** The knowledge container the unit writes in, on the unit. */
+  /** The knowledge container the unit owns (`space`), on the unit. */
   readonly space: string;
   /** Schedule name to whether it runs. */
   readonly schedules: Readonly<Record<string, boolean>>;
@@ -83,7 +85,7 @@ export interface SeatForm {
   readonly backstory: string;
   readonly responsibilities: readonly string[];
   readonly guidelines: readonly string[];
-  /** The explicit `manages` list: seat and unit names. */
+  /** The explicit `manages` list: seat handles and unit keys. */
   readonly manages: readonly string[];
   readonly contact: Readonly<Record<HumanContactKey, string>>;
   readonly availability: string;
@@ -106,9 +108,12 @@ export interface SeatForm {
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
   readonly accessLevel: string;
-  /** The tracker project the seat owns: a vendor-neutral key, on the seat. */
+  /**
+   * The tracker project the seat writes in (`project`): a vendor-neutral key,
+   * on the seat — and the one it owns when the seat sits at the root.
+   */
   readonly project: string;
-  /** The knowledge container the seat writes in, on the seat. */
+  /** The knowledge container the seat writes in (`space`), owned likewise. */
   readonly space: string;
 }
 
@@ -151,6 +156,7 @@ export function companyForm(company: CompanyDocument): CompanyForm {
 export function unitForm(data: ConfigUnit): UnitForm {
   return {
     name: text(data.name),
+    id: text(data.id),
     type: text(data.type),
     purpose: text(data.purpose),
     lead: text(data.lead),
@@ -286,8 +292,8 @@ export function editIntent(target: NodeKey, parts: readonly EditPartIntent[]): I
  * model would write (the trimmed value) differs from the name the document
  * has.
  *
- * BOTH HALVES. A rename is not an ordinary field: it re-keys a unit's
- * schedules and onboarding pages and makes every agent under it onboard
+ * BOTH HALVES. A rename is not an ordinary field: it moves the onboarding
+ * pages a unit's members are found by and makes every agent under it onboard
  * again, so it may only ever come from somebody typing in the box. A stored
  * name that carries surrounding spaces differs from its own trimmed form, so
  * asking the trimmed question alone renamed such a node the moment anything
@@ -309,12 +315,18 @@ export function companyParts(initial: CompanyForm, form: CompanyForm): EditPartI
   return set.length > 0 ? [{ type: "updateCompany", set }] : [];
 }
 
-export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): EditPartIntent[] {
+export function unitParts(
+  key: NodeKey,
+  initial: UnitForm,
+  form: UnitForm,
+  { editableKey }: { editableKey: boolean },
+): EditPartIntent[] {
   const parts: EditPartIntent[] = [];
   if (renames(initial.name, form.name)) {
     parts.push({ type: "renameUnit", target: key, name: form.name });
   }
   const set = [
+    ...(editableKey ? textPart(["id"], initial.id, form.id, line) : []),
     ...textPart(["type"], initial.type, form.type, line),
     ...textPart(["purpose"], initial.purpose, form.purpose, prose),
     ...changed(["goals"], listValue(initial.goals), listValue(form.goals)),

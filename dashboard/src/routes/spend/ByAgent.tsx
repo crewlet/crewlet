@@ -77,7 +77,9 @@ export function ByAgent({
   const agents = useAgents();
   const { open } = usePeekControls();
   const rows = useMemo(() => [...lines], [lines]);
-  const byHandle = useMemo(() => new Map(agents.map((a) => [a.handle ?? "", a])), [agents]);
+  // EACH SEAT'S LIVE ROW BY ITS AGENT ID, the key the spend row carries too
+  // (`agentLines`).
+  const byAgent = useMemo(() => new Map(agents.map((a) => [a.agent_id, a])), [agents]);
   const top = Math.max(0, ...lines.map((l) => l.share));
   const turns = turnsLink(range);
   // WHETHER ANY SEAT'S DAY IS CAPPED — the column exists only if so.
@@ -135,7 +137,7 @@ export function ByAgent({
             sortValue: (l) => badgeOf(l.row.handle || l.row.role).name,
             cell: (l) => {
               const badge = badgeOf(l.row.handle || l.row.role);
-              const status = statusOf(activityOf(byHandle.get(l.row.handle)));
+              const status = statusOf(activityOf(byAgent.get(l.row.agent_id)));
               return (
                 <span className="cell-seat" title={badge.name}>
                   <SeatAvatar

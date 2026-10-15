@@ -25,9 +25,13 @@ vi.mock("~/lib/store-hooks.ts", () => ({
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  login: "founder",
+  grants: ["admin", "tracker", "knowledge"],
+  admin: true,
+  tracker: true,
+  knowledge: true,
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["steer_turn"],
@@ -41,7 +45,7 @@ const JANE: ViewerState = {
 };
 
 beforeEach(() => {
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(null as never);
   vi.mocked(useViewer).mockReturnValue(JANE);
 });

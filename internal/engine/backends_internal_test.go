@@ -1,12 +1,15 @@
 package engine
 
 import (
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // ttlBackend is a coord.Backend that reports a lease TTL, which is the shape
@@ -31,7 +34,7 @@ func (b ttlBackend) TTL() time.Duration { return b.ttl }
 // node would renew on a cadence the bucket outlives.
 func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Coordination.LeaseTTLSeconds = 90
 	configured := 90 * time.Second
 
@@ -60,5 +63,74 @@ func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	// TTL, which is a lease that has already lapsed.
 	if got := effectiveLeaseTTL(&b, ttlBackend{ttl: 0}); got != configured {
 		t.Errorf("a backend reporting no TTL resolved to %v, want %v", got, configured)
+	}
+}
+
+// A DATA NODE HOLDS THE REPLICATED ESTATE SIZED FOR THE WHOLE REGISTER, AND A
+// NODE WITHOUT `data` HOLDS NONE.
+//
+// Every domain's apply loop pins one connection of the replicated pool for its
+// life, and the pool is sized for exactly the logs it was opened for: a pin
+// short and the applier that finds none refuses at its first round, so its
+// domain's rows never move. Every DATA node runs every domain, so [holdEstate]
+// opens the estate for the whole register — and the store refuses opening it
+// again for any other count, so opening it for the register's count after
+// [holdEstate] is the check. Its own file pins nothing, since no apply loop
+// writes it ([storeOptions]).
+//
+// A node without data holds no estate at all: a scratch store, discarded at
+// every boot, that answers [store.ErrNoEstate] to every reach for one rather
+// than an empty database that reads as a company with nothing in it.
+//
+// Mutation: size holdEstate's open from anything but the register and the
+// second open refuses; drop its role check and the stateless node holds one.
+func TestADataNodeHoldsTheEstateForTheWholeRegister(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		roles []string
+		holds bool
+	}{
+		{"every role", nil, true},
+		{"data alone", []string{string(placement.RoleData)}, true},
+		{"seats without data", []string{string(placement.RoleSeats)}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			b := testBootstrap(t)
+			b.Node.Roles = c.roles
+			b.Store.Path = filepath.Join(t.TempDir(), "node.db")
+			b.Store.Scratch = !c.holds
+			opts := storeOptions(&b, nil)
+			if opts.Scratch == c.holds {
+				t.Errorf("roles %v open the node's own file with scratch=%v, want %v: "+
+					"only a node that holds no data may discard its store at boot",
+					c.roles, opts.Scratch, !c.holds)
+			}
+			db, err := store.OpenNode(t.Context(), b.Store.Path, opts)
+			if err != nil {
+				t.Fatalf("open the node's store: %v", err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if err := holdEstate(t.Context(), db, &b); err != nil {
+				t.Fatalf("hold the estate: %v", err)
+			}
+			if !c.holds {
+				if _, err := db.ReplicatedDB(); !errors.Is(err, store.ErrNoEstate) {
+					t.Errorf("roles %v hold a replicated estate (%v), want none: a "+
+						"node without data asks a data node for everything", c.roles, err)
+				}
+				return
+			}
+			if _, err := db.ReplicatedDB(); err != nil {
+				t.Fatalf("roles %v hold no replicated estate after holdEstate: %v",
+					c.roles, err)
+			}
+			if _, err := db.OpenReplicated(t.Context(), len(register())); err != nil {
+				t.Errorf("roles %v opened the estate for some count other than the "+
+					"register's %d, so an apply loop comes up short of a pin: %v",
+					c.roles, len(register()), err)
+			}
+		})
 	}
 }

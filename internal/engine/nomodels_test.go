@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // noModelsDoc is an org chart written before its credentials exist: valid,
@@ -75,8 +74,15 @@ func TestACompanyWithNoModelsIsApplied(t *testing.T) {
 	if p.engine.Company().Models != nil {
 		t.Error("the applied epoch carries a model registry for a company with none")
 	}
-	if got := p.seats(t); !slices.Equal(got, []string{"ceo"}) {
-		t.Errorf("seats = %v, want the company's one agent seat", got)
+	// THE SEATS ARE THE CHART'S and the apply does not touch them, so what
+	// this checks is that the company still HAS them: an apply that
+	// published an epoch composed with no view would leave a node serving a
+	// company of nobody, which is the failure a model-less revision is
+	// most likely to be mistaken for.
+	if got := p.seats(t); len(got) == 0 {
+		t.Error("the applied epoch carries no seats at all — a company with " +
+			"no models still has its chart, and a node serving nobody looks " +
+			"exactly like this case's own subject")
 	}
 }
 
@@ -126,11 +132,11 @@ func TestACompanyWithNoModelsHoldsItsWorkUntilAProviderArrives(t *testing.T) {
 	}
 	paused := func() bool {
 		return slices.Contains(holds.PauseHolds(
-			topics.AgentInbox("ceo"), topics.AgentInboxGroup("ceo")), "no_turn_engine")
+			seatInbox(e, "ceo"), seatInboxGroup(e, "ceo")), "no_turn_engine")
 	}
 
 	held := ev("external_notification")
-	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"), held); err != nil {
+	if err := e.Backends().Queue.Publish(t.Context(), seatInbox(e, "ceo"), held); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	waitFor(t, "the seat's inbox to be paused", paused)

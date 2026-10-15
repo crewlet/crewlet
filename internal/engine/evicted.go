@@ -134,8 +134,16 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				return nil, fmt.Errorf("engine: %s's log is not open, so whether the "+
 					"nodes ahead of this one on it are evicted cannot be read", name)
 			}
+			// THROUGH THE DOMAIN'S VERIFIER, since the standing is decoded
+			// from a record's body — and derived here from the keyring
+			// rather than from a running log, because the join asks this
+			// before any log has started.
+			verifier, verr := s.verifierFor(domain)
+			if verr != nil {
+				return nil, verr
+			}
 			if evicted, err = s.evictedOn(ctx, domain, domain.Stream(),
-				log, candidates); err != nil {
+				statelog.StandingOf(log, verifier), candidates); err != nil {
 				return nil, err
 			}
 		}

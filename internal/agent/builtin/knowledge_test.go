@@ -58,7 +58,7 @@ func TestSearchKnowledgeRendersPointersNotPages(t *testing.T) {
 		{Title: "Untitled page"},
 	}}
 	tool := &searchKnowledge{search: backend}
-	res, err := tool.CallForTurn(context.Background(), searchTurn(),
+	res, err := tool.CallForTurn(everyGrant(), searchTurn(),
 		map[string]any{"query": "staging redirect proxy"})
 	if err != nil {
 		t.Fatalf("CallForTurn: %v", err)
@@ -83,7 +83,7 @@ func TestSearchKnowledgeExcludesAutoDrafts(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}
 	tool := &searchKnowledge{search: backend}
-	if _, err := tool.CallForTurn(context.Background(), searchTurn(),
+	if _, err := tool.CallForTurn(everyGrant(), searchTurn(),
 		map[string]any{"query": "anything"}); err != nil {
 		t.Fatalf("CallForTurn: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestAnUnsearchableSeatIsToldSoWithoutASearch(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: false}
 	tool := &searchKnowledge{search: backend}
-	res, err := tool.CallForTurn(context.Background(), searchTurn(),
+	res, err := tool.CallForTurn(everyGrant(), searchTurn(),
 		map[string]any{"query": "anything"})
 	if err != nil {
 		t.Fatalf("CallForTurn: %v", err)
@@ -127,7 +127,7 @@ func TestAnUnsearchableSeatIsToldSoWithoutASearch(t *testing.T) {
 func TestNoMatchesIsAnOrdinaryAnswer(t *testing.T) {
 	t.Parallel()
 	tool := &searchKnowledge{search: &stubSearcher{can: true}}
-	res, _ := tool.CallForTurn(context.Background(), searchTurn(),
+	res, _ := tool.CallForTurn(everyGrant(), searchTurn(),
 		map[string]any{"query": "nothing here"})
 	if res.Failed {
 		t.Errorf("an empty search failed the call: %s", res.Output)
@@ -141,7 +141,7 @@ func TestSearchKnowledgeRefusesAnEmptyQuery(t *testing.T) {
 	t.Parallel()
 	tool := &searchKnowledge{search: &stubSearcher{can: true}}
 	for _, args := range []map[string]any{{}, {"query": "   "}} {
-		res, _ := tool.CallForTurn(context.Background(), searchTurn(), args)
+		res, _ := tool.CallForTurn(everyGrant(), searchTurn(), args)
 		if !res.Failed {
 			t.Errorf("%v was accepted", args)
 		}
@@ -154,7 +154,7 @@ func TestSearchKnowledgeRefusesAnEmptyQuery(t *testing.T) {
 func TestSearchKnowledgeWithNoTurnRefusesRatherThanPanicking(t *testing.T) {
 	t.Parallel()
 	tool := &searchKnowledge{search: &stubSearcher{can: true}}
-	res, err := tool.Call(context.Background(), map[string]any{"query": "x"})
+	res, err := tool.Call(everyGrant(), map[string]any{"query": "x"})
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestALongQueryIsRefusedNotCut(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}
 	tool := &searchKnowledge{search: backend}
-	res, err := tool.CallForTurn(context.Background(), searchTurn(),
+	res, err := tool.CallForTurn(everyGrant(), searchTurn(),
 		map[string]any{"query": strings.Repeat("z", 5000)})
 	if err != nil {
 		t.Fatalf("CallForTurn: %v", err)

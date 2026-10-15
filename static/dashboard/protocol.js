@@ -46,6 +46,12 @@ var NOTHING_HELD = {
 	rounds: null
 };
 /**
+* The one heavy field that is STATUS — each round's timing and tokens — which
+* a call whose body is withheld from this reader still carries and versions.
+* Every other detail is the seat's BODY (`LiveCall.body_withheld`).
+*/
+var STATUS_DETAIL = /* @__PURE__ */ new Set(["rounds"]);
+/**
 * One seat's live call as a push states it, merged onto the copy a tab holds —
 * and whether the push says the tab missed a change it no longer carries.
 *
@@ -58,6 +64,12 @@ var NOTHING_HELD = {
 * yet. A push naming a version newer than the one held, without the field, is
 * a tab that missed the push which carried it: `stale`, and the field stays
 * what is held until the call is fetched whole.
+*
+* A CALL WHOSE BODY IS WITHHELD (`body_withheld`) names every body version
+* zero and carries no body field, so it is never `stale` for one — a status
+* reader is never sent a body, and asking for the call whole would only fetch
+* the same status again — and no body the tab held is kept: a reader who could
+* read this seat's trail a moment ago and cannot now is shown none of it.
 */
 function mergeLiveCall(held, next) {
 	if (!next) return {
@@ -65,10 +77,16 @@ function mergeLiveCall(held, next) {
 		stale: false
 	};
 	const same = !!held && sameCall(held, next);
+	const withheld = next.body_withheld === true;
 	const merged = { ...next };
 	const versions = {};
 	let stale = false;
 	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		if (withheld && !STATUS_DETAIL.has(detail)) {
+			for (const f of fields) delete merged[f];
+			versions[detail] = 0;
+			continue;
+		}
 		const pushed = next.versions[detail];
 		const have = same ? held.versions[detail] : 0;
 		const carried = fields.every((f) => f in next);
@@ -106,6 +124,7 @@ function newerDetail(held, older) {
 	let merged = null;
 	const versions = { ...held.versions };
 	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		if (held.body_withheld === true && !STATUS_DETAIL.has(detail)) continue;
 		const version = older.versions[detail];
 		if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
 		merged ??= { ...held };
@@ -142,7 +161,9 @@ function emptyState() {
 		connected: false,
 		lostAt: null,
 		everConnected: false,
-		authRejected: false
+		authRejected: false,
+		accessRefused: null,
+		inboxMoves: {}
 	};
 }
 var Store = class {
@@ -212,44 +233,53 @@ var Store = class {
 		this.emit(...ALL_DATA_SLICES);
 	}
 	/**
-	* Changed seat overlays, keyed by role — and the roles whose live call this
-	* tab now holds behind what the push describes, which the socket fetches
-	* whole (`mergeLiveCall`).
+	* Changed seat overlays, merged onto the roster rows by AGENT ID — and the
+	* agent ids whose live call this tab now holds behind what the push
+	* describes, which the socket fetches whole (`mergeLiveCall`).
+	*
+	* By the id and nothing else. They were merged by ROLE NAME, which is prose:
+	* two seats sharing a name both took every overlay either of them moved, so
+	* each card rendered whatever the other was last doing. The id is what the
+	* engine sends on an overlay, and it names exactly one seat.
+	*
+	* An overlay for a seat the roster does not carry is DROPPED rather than
+	* appended as a row of its own. A seat reaches this list through the roster
+	* (the snapshot, or a `seats` push after every published company), and the
+	* server merges its live overlay into that roster row before sending it —
+	* so nothing dropped here is lost, while an appended row would be a card
+	* with no name, no handle and no page, for a seat the server may already
+	* have removed.
 	*/
 	applyAgents(rows) {
 		if (!Array.isArray(rows) || rows.length === 0) return [];
+		const byID = /* @__PURE__ */ new Map();
+		for (const row of rows) if (row && typeof row.agent_id === "string" && row.agent_id !== "") byID.set(row.agent_id, row);
+		if (byID.size === 0) return [];
 		const stale = [];
 		const merge = (held, patch) => {
 			if (!("live_call" in patch)) return patch;
-			const heldSeq = held?.live_call_seq ?? 0;
+			const heldSeq = held.live_call_seq ?? 0;
 			const patchSeq = patch.live_call_seq;
 			if (patchSeq !== void 0 && patchSeq < heldSeq) return {
 				...patch,
-				live_call: held?.live_call ?? null,
+				live_call: held.live_call ?? null,
 				live_call_seq: heldSeq
 			};
-			const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
-			if (behind) stale.push(patch.role);
+			const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+			if (behind) stale.push(patch.agent_id);
 			return {
 				...patch,
 				live_call: call,
 				live_call_seq: patchSeq ?? heldSeq
 			};
 		};
-		const byRole = new Map(rows.map((r) => [r.role, r]));
 		this.state.agents = this.state.agents.map((a) => {
-			const patch = byRole.get(a.role);
-			if (!patch) return a;
-			byRole.delete(a.role);
-			return {
+			const patch = byID.get(a.agent_id);
+			return patch ? {
 				...a,
 				...merge(a, patch)
-			};
+			} : a;
 		});
-		for (const row of byRole.values()) this.state.agents = [...this.state.agents, {
-			id: row.role,
-			...merge(void 0, row)
-		}];
 		this.emit("agents");
 		return stale;
 	}
@@ -279,11 +309,11 @@ var Store = class {
 	* was behind while this answer was out (`LiveSocket.fetchCalls`).
 	*/
 	applyLiveCall(answer) {
-		if (!answer || typeof answer.role !== "string") return true;
+		if (!answer || typeof answer.agent_id !== "string" || answer.agent_id === "") return true;
 		let moved = false;
 		let current = true;
 		this.state.agents = this.state.agents.map((a) => {
-			if (a.role !== answer.role) return a;
+			if (a.agent_id !== answer.agent_id) return a;
 			const heldSeq = a.live_call_seq ?? 0;
 			const seq = answer.live_call_seq;
 			if (seq >= heldSeq) {
@@ -309,15 +339,15 @@ var Store = class {
 	/**
 	* The complete seat list, replacing what is on screen.
 	*
-	* Distinct from `applyAgents`, which merges changed overlays by role: a merge
-	* cannot express a deletion, so a revision that removes a role would leave
-	* its card rendered until the next reload.
+	* Distinct from `applyAgents`, which merges changed overlays: a merge cannot
+	* express a deletion, so a revision that removes a seat would leave its card
+	* rendered until the next reload.
 	*/
 	applySeats(rows) {
 		if (!Array.isArray(rows)) return;
-		const live = new Map(this.state.agents.map((a) => [a.role, a]));
+		const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
 		this.state.agents = rows.map((row) => {
-			const current = live.get(row.role);
+			const current = live.get(row.agent_id);
 			return current ? {
 				...current,
 				...row
@@ -373,6 +403,50 @@ var Store = class {
 			this.state.lostAt = null;
 		} else if (this.state.lostAt === null) this.state.lostAt = Date.now();
 	}
+	/**
+	* One seat's inbox moved. The SEAT is read off the payload's own `handle`
+	* rather than trusted from anywhere else, and a frame without one moves
+	* nothing — a counter under "" would be a seat no screen asks about.
+	*/
+	applyInboxChanged(change) {
+		const handle = change?.handle;
+		if (typeof handle !== "string" || handle === "") return;
+		this.state.inboxMoves = {
+			...this.state.inboxMoves,
+			[handle]: (this.state.inboxMoves[handle] ?? 0) + 1
+		};
+		this.emit("inboxMoves");
+	}
+	/**
+	* The engine knows this browser and will not serve it the company, or null.
+	*
+	* A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
+	* read the company, so what an earlier socket sent stops being shown the
+	* moment it lands: a tab whose seat was taken out of the chart went on
+	* naming the company, listing its agents and tools in the palette, from the
+	* snapshot it held — while a session refused at its first handshake, sent
+	* nothing, named and listed none of it. An outage keeps the last state on purpose ("showing the
+	* last state received"); a refusal is not an outage. `health` stays: it is
+	* the unguarded `/health`, not the company.
+	*/
+	setAccessRefused(reason) {
+		const next = reason === null ? null : reason || "refused";
+		if (this.state.accessRefused === next) return;
+		this.state.accessRefused = next;
+		if (next !== null) {
+			const { health, connected, lostAt, everConnected, authRejected } = this.state;
+			Object.assign(this.state, emptyState(), {
+				health,
+				connected,
+				lostAt,
+				everConnected,
+				authRejected,
+				accessRefused: next
+			});
+			this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves");
+		}
+		this.emit("health");
+	}
 	setAuthRejected(value) {
 		const next = !!value;
 		if (this.state.authRejected === next) return;
@@ -397,123 +471,746 @@ var Store = class {
 		const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
 		this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
 	}
-	agentById(id) {
-		return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
-	}
-	/**
-	* Resolve a seat by whatever the URL carried.
-	*
-	* Seats are addressed by HANDLE — the canonical identity everywhere else in
-	* the system, and the one an operator can read off a chat mention. Runtime
-	* ids and role names still resolve, because links minted before the move
-	* used them and they are in people's history.
-	*/
-	agentByKey(key) {
-		if (!key) return null;
-		const wanted = String(key);
-		const lower = wanted.toLowerCase();
-		return this.state.agents.find((a) => a.handle === wanted || a.id === wanted || a.role === wanted || String(a.handle ?? "").toLowerCase() === lower || String(a.role ?? "").toLowerCase() === lower) ?? null;
-	}
 };
 //#endregion
-//#region src/protocol/authToken.ts
+//#region src/contract/retry.ts
 /**
-* The API bearer token the auth-gated screens share.
+* The two waits the dashboard's retries are bounded by that the ENGINE owns:
+* what it says when it has nothing better, and the longest hint it fixes.
 *
-* Configuration and Secrets sit behind the auth middleware, and the socket
-* carries the same credential on its handshake and on every query frame. One
-* token between them, so setting it anywhere unlocks everything.
-*
-* Asking for it is the shell's job, over a real dialog. This module only knows
-* how to read and write it: the prompting used to live here as a
-* `window.prompt`, which meant a request for a credential arrived in a
-* chrome-drawn box that could not say who was asking or why.
+* Each is a COPY of an engine value, held to it by `internal/api`'s
+* `TestTheDashboardRetriesOnTheEnginesOwnHints`. What is done with them — the
+* arithmetic over a hint — is behaviour, and lives in `protocol/retry.ts`.
 */
-var TOKEN_KEY = {
-	/** The API token this browser presents (`protocol/authToken.ts`). */
-	apiToken: "crewlet_api_token",
-	/** The mode: light, dark or the system's (`lib/prefs.ts`). */
-	theme: "crewlet_theme",
-	/**
-	* The theme, one of `themeRegistry`'s ids (`lib/prefs.ts`); anything else
-	* reads as no choice, which is the default theme.
-	*/
-	palette: "crewlet_palette",
-	/** Compact, normal or comfortable (`lib/prefs.ts`). */
-	density: "crewlet_density",
-	/** Objects this reader opened, for the palette (`lib/recents.ts`). */
-	recents: "crewlet_recents",
-	/** Pages this reader starred, for the sidebar (`lib/starred.ts`). */
-	starred: "crewlet_starred",
-	/** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
-	peekWidth: "crewlet.peek.width",
-	/** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
-	orgDraft: "crewlet_org_draft"
-}.apiToken;
-/** The stored token, or "". Never throws. */
-function apiToken() {
-	try {
-		return localStorage.getItem(TOKEN_KEY) ?? "";
-	} catch {
-		return "";
-	}
-}
 /**
-* Persist a token. Returns false if the browser refused the write.
+* How soon an `unavailable` answer that carries NO hint is asked again, in
+* milliseconds.
 *
-* The caller has to know: a silently-unsaved token works until the next reload
-* and is then unauthenticated again, with nothing on screen to explain why.
+* ONLY THE FALLBACK. Every `unavailable` frame the engine sends carries
+* `retry_after`, so an answer without one is one nobody decided a hint for.
+* FIVE SECONDS because that is what the engine itself says when it has nothing
+* better: its shared health tick (`stream.HealthInterval`), the soonest a
+* node's posture can change and the hint every `unavailable` it cannot say
+* more about carries. Waiting it out is asking as the engine would have asked;
+* sooner asks before anything could have changed, and later leaves a recovered
+* node looking broken.
 */
-function storeToken(token) {
-	try {
-		localStorage.setItem(TOKEN_KEY, String(token ?? "").trim());
-	} catch {
-		return false;
-	}
-	announce();
-	return true;
-}
+var UNAVAILABLE_RETRY_MS = 5e3;
+/**
+* The longest a hint is waited out before asking again anyway, in
+* milliseconds.
+*
+* A BOUND ON THE ONE HINT THAT HAS NONE. Every hint the engine fixes — the
+* health tick (5 s), a quorum election (4 s), the identity estate's and an
+* undecidable authority's two seconds, a surface another writer holds (3 s),
+* the reconcile poll that brings a company and the floor's heartbeat (15 s), a
+* drain (30 s) — is at or under thirty seconds and is waited out exactly. The
+* one this cuts is DERIVED: a node's backlog divided by the rate it has been
+* draining at, which is minutes on a node that has just joined or restarted
+* behind a busy log, and an estimate made from a rate that only rises as the
+* node warms up. Past thirty seconds a screen waiting on it says "this fills
+* in on its own" for longer than a person believes it, and the cost of asking
+* sooner is one read the node refuses again. THIRTY because it is already this
+* dashboard's ceiling on waiting for an engine to come back — the socket's
+* reconnect backoff and the builder's check backoff stop there for the same
+* reason — and the gate fails the day a hint the engine fixes grows past it.
+*/
+var RETRY_AFTER_MAX_MS = 3e4;
+//#endregion
+//#region src/protocol/signin.ts
+var need = null;
 var listeners = /* @__PURE__ */ new Set();
-/** Ask for the token dialog. A no-op when no shell is mounted. */
-function requestToken() {
+function announce() {
 	for (const listener of listeners) listener();
 }
-/** Subscribe the shell. Returns the unsubscribe. */
-function onTokenRequested(listener) {
-	listeners.add(listener);
-	return () => listeners.delete(listener);
+/** The session's outstanding need, or null for one that needs nothing. */
+function currentSessionNeed() {
+	return need;
 }
 /**
-* The symmetric signal: the token CHANGED.
-*
-* The socket learns through `setToken` + `reconnect`, which the shell calls
-* from the dialog. Every REST-backed surface learned nothing at all: it had
-* fetched once on mount, so setting a token left `/setup` and `/secrets`
-* still showing the refusal that prompted the reader to set one. The screen
-* said "needs an operator token", the reader supplied it, and nothing moved.
-*
-* Fired from `storeToken` and `clearToken` themselves rather than from the
-* dialog, so a future writer cannot forget to announce it.
+* Record what the session lacks. Called by the transports, never by a screen:
+* a screen that wants a person to sign in navigates there itself.
 */
-var changed = /* @__PURE__ */ new Set();
-/** Subscribe to token changes. Returns the unsubscribe. */
-function onTokenChanged(listener) {
-	changed.add(listener);
-	return () => changed.delete(listener);
-}
-function announce() {
-	for (const listener of changed) listener();
-}
-/** Forget the stored token. Returns false if the browser refused the write. */
-function clearToken() {
-	try {
-		localStorage.removeItem(TOKEN_KEY);
-	} catch {
-		return false;
-	}
+function needSession(what) {
+	if (need === what) return;
+	need = what;
 	announce();
-	return true;
 }
+/**
+* The browser holds a whole session again — a sign-in, a redemption or an
+* enrolment finished — so whatever a transport recorded before it no longer
+* describes this browser.
+*/
+function sessionRestored() {
+	if (need === null) return;
+	need = null;
+	announce();
+}
+/**
+* The browser holds a session that may only enrol a second factor — a
+* sign-in or a redemption answered `second_factor_enrolment_required`.
+*
+* THE SIGN-IN'S OWN ANSWER REPLACES WHATEVER A TRANSPORT RECORDED BEFORE IT,
+* because it is the newest fact about this browser's session. The sign-in
+* screen's own `GET /auth/session` and the socket's refusal probe both record
+* `sign_in` for a browser holding nothing, which is the state every sign-in
+* starts from; left in place, it routed the enrolment straight back to the
+* sign-in form the moment the enrolment screen mounted.
+*/
+function sessionNeedsEnrolment() {
+	needSession("second_factor");
+}
+/**
+* Subscribe to a change of need. Returns the unsubscribe. The shape
+* `useSyncExternalStore` takes, which is what reads it.
+*/
+function onSessionNeed(listener) {
+	listeners.add(listener);
+	return () => {
+		listeners.delete(listener);
+	};
+}
+var confirmer = null;
+var confirming = null;
+var asking = /* @__PURE__ */ new Set();
+/**
+* Whether a step-up is being asked of the person right now — what a dialog
+* whose write is held behind it says it is waiting for: the person, not the
+* engine.
+*/
+function stepUpAsked() {
+	return confirming !== null;
+}
+/** Subscribe to a step-up starting or ending. Returns the unsubscribe. */
+function onStepUpAsked(listener) {
+	asking.add(listener);
+	return () => {
+		asking.delete(listener);
+	};
+}
+function toldAsking() {
+	for (const listener of asking) listener();
+}
+/**
+* Install what confirms a step-up. Returns the uninstall, which leaves a
+* later installation in place.
+*
+* ONE AT A TIME, because there is one person at the keyboard: a second
+* installation replaces the first rather than queueing behind it.
+*/
+function setStepUpConfirmer(fn) {
+	confirmer = fn;
+	return () => {
+		if (confirmer === fn) confirmer = null;
+	};
+}
+/**
+* Ask for a step-up, or join the one already being asked.
+*
+* FALSE WITH NOBODY TO ASK, so a refused request is reported as the refusal it
+* was rather than waiting for a dialog that will never open; and false for a
+* confirmer that failed, which is not a proof.
+*/
+function confirmStepUp() {
+	if (!confirmer) return Promise.resolve(false);
+	if (!confirming) {
+		confirming = confirmer().catch(() => false).finally(() => {
+			confirming = null;
+			toldAsking();
+		});
+		toldAsking();
+	}
+	return confirming;
+}
+//#endregion
+//#region src/protocol/rest.ts
+/**
+* The dashboard's one REST transport: every write, and the guarded reads the
+* socket has no question for.
+*
+* The socket remains the data channel for the projection and for every
+* question in the query registry. This is not a second one: it carries the
+* requests that are not questions about state at all, and the reads that no
+* query answers. A screen does not call it for a read directly — it reads
+* through `lib/useRest.ts`, the one loader, so that a superseded answer, an
+* unmounted screen and a server's `Retry-After` are each handled once. Writes
+* never go over the socket, deliberately: a write is judged on its `Origin` by
+* the engine's cross-site check before its handler runs, answers the three
+* write outcomes as statuses with an op id to retry by, and may be refused for
+* a step-up this module confirms and replays — none of which a frame on an
+* open socket carries. And a handful of reads exist only as REST,
+* `GET /secrets` above all, because no query in the registry answers them.
+*
+* ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
+* for its own transport takes its client from somewhere, and the somewhere the
+* Fleet screen chose was a context field the shell never populated, so it
+* shipped dead. Everything here is a plain function over `fetch` against
+* `location.origin`, which is where the dashboard is served from and the only
+* origin the engine answers on (it writes no CORS header at all).
+*
+* THE CREDENTIAL IS THE SESSION COOKIE, which the browser attaches to every
+* same-origin request and this module never sees: it is `HttpOnly`, so no
+* script on the page can read it, and there is no token in storage for one to
+* take instead. A call that must present something else — the API token
+* exchange at `POST /auth/token` — sets its own `Authorization` header for
+* that one request, and nothing keeps it.
+*/
+/**
+* What the engine said when it refused.
+*
+* `status` alone is not enough to act on: the setup surface distinguishes a
+* revision that moved under the caller from a config slot holding a literal
+* from a company with no active revision, and all three are a 409. The engine
+* answers those with a `code`, and the screen branches on it.
+*/
+var RestError = class extends Error {
+	status;
+	code;
+	detail;
+	hint;
+	/**
+	* The engine's own sentence for the code — the envelope's `message`, which
+	* every refusal it writes carries — or "" for an answer the engine did not
+	* write. What a person is shown when a screen has nothing more specific to
+	* say: the sign-in surface's one uniform refusal is exactly this sentence,
+	* and a screen that wrote its own would be a second copy of the engine's
+	* wording, the one that goes stale.
+	*/
+	sentence;
+	/** Everything else the body carried, for a caller that needs a field. */
+	body;
+	/**
+	* The `Retry-After` the answer carried, in whole seconds — either form the
+	* RFC allows ([retryAfterSeconds]) — or null where it named no wait.
+	*
+	* A `429` always carries one and says how long the sign-in curve makes the
+	* next attempt wait. A `503` the engine wrote carries one where waiting can
+	* clear the cause and NONE where it cannot (a node with no keyring, a full
+	* log), which is the difference a loader retries on — see [retryHint],
+	* which also refuses to read a proxy's header as the engine's.
+	*/
+	retryAfterSeconds;
+	constructor(status, body, retryAfter = null) {
+		const code = typeof body.error === "string" ? body.error : "";
+		const detail = typeof body.detail === "string" ? body.detail : "";
+		super(detail || code || `HTTP ${status}`);
+		this.name = "RestError";
+		this.status = status;
+		this.code = code;
+		this.detail = detail;
+		this.hint = typeof body.hint === "string" ? body.hint : "";
+		this.sentence = typeof body.message === "string" ? body.message : "";
+		this.body = body;
+		this.retryAfterSeconds = retryAfter;
+	}
+	/**
+	* Whether the engine refused on AUTHORITY rather than on the request.
+	*
+	* Both statuses, because a screen locks the same way for either: 401 is
+	* "nobody is signed in" and 403 is "the credential you presented does not
+	* carry this". Only a 401 sends the reader to sign in (see [noteSession]): a
+	* person holding a perfectly good session meets 403 the moment they open a
+	* screen outside their grants, which is the ordinary case.
+	*/
+	get unauthorized() {
+		return this.status === 401 || this.status === 403;
+	}
+	/** The grants a refusal on authority named — see [refusedGrants]. */
+	get grants() {
+		return refusedGrants(this.body);
+	}
+	/**
+	* This refusal in the shape `QueryState` renders from — the one the
+	* socket's error frame carries, under the same keys and on the same terms:
+	* a `403 unauthorized`'s rule and the grants that would have admitted the
+	* caller, and a 503's state-log code, its own words and whether waiting
+	* changes it (no `Retry-After` is the engine saying it will not). Null for
+	* anything else, a 401 included: nobody being signed in is not a rule's
+	* refusal, and there are no grants to name to nobody.
+	*
+	* ONLY `unauthorized` IS A RULE'S REFUSAL. Every 403 used to be read as one,
+	* with its code standing in for the rule, so a read refused
+	* `seat_unavailable` or `csrf_origin` reached the banner as a refusal naming
+	* no grant — which says "no grant would change that: the rule asks a
+	* relation the org chart does not hold", a claim about neither.
+	*/
+	get refusal() {
+		if (this.status === 403 && this.code === "unauthorized" && typeof this.body.reason === "string") return {
+			reason: this.body.reason,
+			grants: this.grants
+		};
+		const hint = this.retryHint;
+		if (hint === null) return null;
+		return {
+			code: typeof this.body.refusal === "string" ? this.body.refusal : null,
+			detail: this.detail || null,
+			retryAfter: hint
+		};
+	}
+	/**
+	* When the ENGINE said to ask again, in whole seconds, or null where it said
+	* nothing: a `503` it wrote says its `Retry-After`, and ZERO where it sent
+	* none — its statement that waiting will not change the answer. Every other
+	* answer, a `503` something in front of the engine wrote included, carries
+	* no hint, because nobody at the engine decided one.
+	*/
+	get retryHint() {
+		return this.status === 503 && !this.unanswered ? this.retryAfterSeconds ?? 0 : null;
+	}
+	/**
+	* Whether this is NOT the engine's own answer: nothing came back (status
+	* 0), a body that could not be read (`unreadable_body` — a gateway's HTML
+	* page, a 200 cut off part way through), or a status with no engine error
+	* code in it. Every refusal the engine writes is JSON with an `error` code,
+	* its auth guard's included and its router's own `no_route` and
+	* `method_not_allowed` for a route or method it does not serve, so an answer
+	* without one was written by something in front of it.
+	*
+	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
+	* the engine wrote means nothing was done; this means nobody here knows. A
+	* reverse proxy whose read timeout is shorter than the fifty seconds the
+	* engine takes to answer a node gate (`engine.GateAnswerBudget`) hands a slow
+	* eviction to the browser as a 504 — and read as a refusal, its operation id
+	* was dropped with it.
+	*/
+	get unanswered() {
+		return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+	}
+};
+/**
+* The grants a refusal on AUTHORITY named: any ONE of which would have
+* admitted the caller. Empty when the answer named none — a 401 (nobody was
+* recognised), or a rule that asks a relation no grant replaces.
+*
+* READ FROM THE ANSWER, because the engine's envelope carries them under
+* `grants` precisely so no screen has to name a grant itself: a sentence
+* typed into a screen is a second statement of the rule, and the one that
+* goes stale the day the rule's grant moves.
+*/
+function refusedGrants(body) {
+	if (typeof body !== "object" || body === null) return [];
+	const grants = body.grants;
+	return Array.isArray(grants) ? grants.filter((g) => typeof g === "string") : [];
+}
+/**
+* The codes a `401` carries when it is an answer about WHAT WAS TYPED rather
+* than about the browser's credential: a sign-in whose details were not
+* accepted, and one whose password proved itself and now wants the second
+* factor. Every other `401` means this browser holds nothing the engine
+* accepts, and the session needs a sign-in.
+*/
+var TYPED_REFUSALS = /* @__PURE__ */ new Set(["sign_in_refused", "second_factor_required"]);
+/**
+* What a refusal says about the browser's SESSION, noted where every screen's
+* request passes — so no screen has to recognise a lost session itself, and
+* none can forget to.
+*
+* A `401` that is not an answer about typed details is a browser signed in as
+* nobody the engine accepts: never signed in, its session ended, expired or
+* revoked. A `403 second_factor_enrolment_required` is a session that may do
+* nothing but enrol the second factor the deployment requires. Every other
+* refusal is about the REQUEST, and the session is fine.
+*/
+function noteSession(refusal) {
+	if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
+	if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") needSession("second_factor");
+}
+/**
+* A `Retry-After` header value as whole seconds from `now`, or null for a
+* header that is absent or says nothing usable.
+*
+* BOTH FORMS RFC 9110 ALLOWS. The engine writes delay-seconds, but a proxy in
+* front of it may answer for it with an HTTP-date, and reading that as "no
+* hint" would drop the one instruction the refusal carried. A date already
+* past is a wait of zero, never a negative one.
+*/
+function retryAfterSeconds(header, now) {
+	const value = header?.trim() ?? "";
+	if (value === "") return null;
+	if (/^\d+$/.test(value)) return Number(value);
+	if (!/[A-Za-z]/.test(value)) return null;
+	const at = Date.parse(value);
+	if (Number.isNaN(at)) return null;
+	return Math.max(0, Math.ceil((at - now) / 1e3));
+}
+/** The seconds a response's `Retry-After` names, or null for none. */
+function retryAfterOf(response) {
+	return retryAfterSeconds(response.headers.get("Retry-After"), Date.now());
+}
+/**
+* [RestError.retryHint] for a refused response that did not come through
+* [request] — the degraded-mode snapshot (`api.ts`) and the socket's
+* plain-HTTP re-ask of a refused handshake (`socket.ts`), each of which reads
+* the response itself. Consumes the body.
+*/
+async function retryHintOf(response) {
+	const body = await response.json().catch(() => null);
+	const envelope = body !== null && typeof body === "object" ? body : {};
+	return new RestError(response.status, envelope, retryAfterOf(response)).retryHint;
+}
+/**
+* A refusal that never reached the engine: DNS, a dropped connection, a proxy
+* answering HTML. Status 0, so a caller testing `status === 409` cannot
+* mistake it for an answer.
+*/
+function offline(err) {
+	return new RestError(0, {
+		error: "unreachable",
+		detail: err instanceof Error ? err.message : "the engine could not be reached"
+	});
+}
+/**
+* How long a request may take before it is abandoned.
+*
+* A REQUEST THAT NEVER SETTLES NEVER SETTLES, and that is not a slow spinner
+* here: every write in this UI runs behind a `busy` flag whose only reset is
+* the `finally` of its own await, and every dialog disables its own exits
+* while busy — Escape, the veil click and the Cancel button. An unresolved
+* fetch was a modal with every way out switched off and a reload as the only
+* escape.
+*
+* ANCHORED TO THE LONGEST ORDINARY PATH THIS API HAS: a setup submission
+* seals a credential in the fleet's store, patches the company document,
+* validates it whole and advances the epoch, each a round trip of its own.
+* Thirty seconds is comfortably above that and comfortably below the point at
+* which a person concludes the page is broken.
+*
+* It is the DEFAULT, not the only deadline: a call whose path is genuinely
+* longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
+* Two do. A backup copies the whole store before it answers. And the node
+* gate answers a gesture within `engine.GateAnswerBudget`, and a client waits
+* the longer `GATE_REQUEST_TIMEOUT_MS` for it (`contract/gate.ts`), so thirty
+* seconds gave up on a gesture the node went on to finish, holding nothing to
+* finish it with.
+*/
+var REQUEST_TIMEOUT_MS = 3e4;
+/** A deadline as a person would say it: seconds under two minutes, else
+*  minutes. */
+function waitWords(ms) {
+	const seconds = Math.round(ms / 1e3);
+	return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+}
+/** Whether a rejection is the caller's own abort rather than a failure. */
+function isAbort(err) {
+	return typeof err === "object" && err !== null && err.name === "AbortError";
+}
+/** JSON is `application/json` and every `+json` type, merge patch included. */
+function isJson(contentType) {
+	const essence = contentType.split(";")[0].trim().toLowerCase();
+	return essence === "application/json" || essence.endsWith("+json");
+}
+/** The path with the caller's query parameters merged into its own. */
+function withQuery(path, query) {
+	if (!query) return path;
+	const at = path.indexOf("?");
+	const params = new URLSearchParams(at < 0 ? "" : path.slice(at + 1));
+	for (const [key, value] of Object.entries(query)) if (value !== void 0) params.set(key, String(value));
+	const qs = params.toString();
+	return (at < 0 ? path : path.slice(0, at)) + (qs ? `?${qs}` : "");
+}
+/**
+* The route a step-up is given at. Asking to confirm the confirmation would
+* be a dialog that reopens for ever, so a refusal there is the refusal.
+*/
+var STEP_UP_PATH = "/auth/step-up";
+/**
+* `waiting`, or the caller's own abort if that comes first. A person can sit
+* at the confirmation for as long as they like, and a screen that gave up on
+* its request meanwhile must not be held to an answer it no longer wants.
+*/
+function unlessAborted(waiting, signal) {
+	if (!signal) return waiting;
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const abort = () => reject(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
+		waiting.then((value) => {
+			signal.removeEventListener("abort", abort);
+			resolve(value);
+		}, (err) => {
+			signal.removeEventListener("abort", abort);
+			reject(err);
+		});
+	});
+}
+/** How many requests are out right now, and who is waiting for none to be. */
+var inFlight = 0;
+var settled = [];
+/**
+* Resolves once no request this module sent is still out — at once when none
+* is.
+*
+* WHAT A SOCKET CLOSED 4401 WAITS FOR before it dials again. A step-up
+* REPLACES the session it was made from, so the engine ends the old one and
+* closes every socket it opened; the answer that sets the new cookie may
+* still be on its way, and a dial before it lands carries the cookie the
+* engine just ended and is refused — which would send a person who had just
+* proved who they are to the sign-in form.
+*/
+function whenRequestsSettle() {
+	if (inFlight === 0) return Promise.resolve();
+	return new Promise((resolve) => settled.push(resolve));
+}
+/** The wall-clock instant, in ms, the engine last answered a request here. */
+var answeredAt = 0;
+/**
+* When the engine last answered any request this module sent, in ms since
+* the epoch, or 0 for never. Any answer to a request carrying the session
+* cookie re-issues it once it is five minutes old, so a tab that has heard
+* from the engine this recently needs no keepalive (`keepalive.ts`).
+*/
+function lastAnsweredAt() {
+	return answeredAt;
+}
+/**
+* The one request path, answering the status and entity-tag as well as the
+* body.
+*
+* NOT CACHED, EVER. Every answer here is either a write or a guarded read of
+* something that changes under the reader (a configuration revision, the
+* sealed store's names, an integration's requirements), and a heuristic cache
+* hit on one of those is a screen showing the company as it was. A 304 still
+* reaches the caller, when the caller sent the precondition that asks for it.
+*
+* # A step-up is confirmed HERE, and the refused request sent again
+*
+* A gesture refused `403 step_up_required` is asked of the person once —
+* through whatever confirms a step-up (`signin.ts`), however many requests
+* were refused together — and then REPLAYED: the same method, path, body and
+* headers, so a form that was being saved is saved, rather than lost to a
+* refusal its screen could only report. Once: a replay refused again is the
+* refusal. Every screen gets this by sending its writes through here, and no
+* screen implements it.
+*
+* The deadline is each ATTEMPT's, not the gesture's: the time a person spends
+* typing their password is not the engine taking too long.
+*/
+async function request(method, path, options = {}) {
+	try {
+		return await counted(method, path, options);
+	} catch (err) {
+		if (!(err instanceof RestError && err.status === 403 && err.code === "step_up_required") || path.split("?")[0] === STEP_UP_PATH) throw err;
+		if (!await unlessAborted(confirmStepUp(), options.signal)) throw err;
+		return counted(method, path, options);
+	}
+}
+/** One attempt, counted in flight for [whenRequestsSettle]. */
+async function counted(method, path, options) {
+	inFlight++;
+	try {
+		return await attempt(method, path, options);
+	} finally {
+		inFlight--;
+		if (inFlight === 0) {
+			const waiting = settled;
+			settled = [];
+			for (const resolve of waiting) resolve();
+		}
+	}
+}
+/** One round trip — see [request] for what surrounds it. */
+async function attempt(method, path, options) {
+	const { body, headers = {}, query, signal, read = "json", timeoutMs = REQUEST_TIMEOUT_MS } = options;
+	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
+	let encoded;
+	if (body !== void 0) {
+		if (contentType && !isJson(contentType)) {
+			if (typeof body !== "string") throw new TypeError(`rest.request: a ${contentType} body must be a string`);
+			encoded = body;
+		} else encoded = JSON.stringify(body);
+	}
+	if (signal?.aborted) throw signal.reason;
+	const init = {
+		method,
+		cache: "no-store",
+		credentials: "same-origin",
+		headers: {
+			...contentType ? { "Content-Type": contentType } : {},
+			...headers
+		},
+		...encoded === void 0 ? {} : { body: encoded }
+	};
+	const controller = new AbortController();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, timeoutMs);
+	const forward = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", forward, { once: true });
+	const unanswered = (err) => {
+		if (signal?.aborted) return signal.reason;
+		return timedOut ? new RestError(0, {
+			error: "unreachable",
+			detail: `the engine did not answer within ${waitWords(timeoutMs)}`
+		}) : offline(err);
+	};
+	let response;
+	let text;
+	try {
+		try {
+			response = await fetch(location.origin + withQuery(path, query), {
+				...init,
+				signal: controller.signal
+			});
+		} catch (err) {
+			throw unanswered(err);
+		}
+		try {
+			text = await response.text();
+		} catch (err) {
+			throw unanswered(err);
+		}
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", forward);
+	}
+	answeredAt = Date.now();
+	if (read === "text" && response.ok) return {
+		status: response.status,
+		body: text,
+		etag: response.headers.get("ETag")
+	};
+	let parsed = null;
+	if (text !== "") try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new RestError(response.ok ? 502 : response.status, {
+			error: "unreadable_body",
+			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back without the engine's JSON, so something in front of it answered`
+		}, response.ok ? null : retryAfterOf(response));
+	}
+	if (!response.ok && response.status !== 304) {
+		const body = parsed && typeof parsed === "object" ? parsed : {};
+		const refusal = new RestError(response.status, body, retryAfterOf(response));
+		noteSession(refusal);
+		throw refusal;
+	}
+	return {
+		status: response.status,
+		body: parsed,
+		etag: response.headers.get("ETag")
+	};
+}
+/** The body alone, for the callers that need nothing else. */
+async function bodyOf(method, path, options) {
+	return (await request(method, path, options)).body;
+}
+/**
+* How long a download may take, from its request to its last byte.
+*
+* FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
+* gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
+* sized for a JSON answer would abandon every large download part way.
+*/
+var DOWNLOAD_TIMEOUT_MS = 9e5;
+/**
+* A file's bytes, fetched as a blob over the session cookie.
+*
+* NOT A LINK. A plain `<a href>` would carry the cookie too, but its answer is
+* the browser's to handle: a refusal would be saved to disk as the file — the
+* engine's JSON envelope under the file's own name — and a lost session would
+* download a 401 rather than sending the reader to sign in. Fetched here, a
+* refusal is the engine's JSON read like every other ([RestError], with its
+* `Retry-After`), and a `401` reaches [noteSession] exactly as a request's
+* does.
+*
+* NOT COUNTED IN FLIGHT ([whenRequestsSettle]): a download may run for
+* [DOWNLOAD_TIMEOUT_MS], and a socket closed 4401 waits for the requests that
+* could be carrying a new cookie — a GET of a file sets none.
+*/
+async function blob(path, signal) {
+	if (signal?.aborted) throw signal.reason;
+	const controller = new AbortController();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, DOWNLOAD_TIMEOUT_MS);
+	const forward = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", forward, { once: true });
+	const unanswered = (err) => {
+		if (signal?.aborted) return signal.reason;
+		return timedOut ? new RestError(0, {
+			error: "unreachable",
+			detail: `the download did not finish within ${waitWords(DOWNLOAD_TIMEOUT_MS)}`
+		}) : offline(err);
+	};
+	try {
+		let response;
+		try {
+			response = await fetch(location.origin + path, {
+				method: "GET",
+				cache: "no-store",
+				credentials: "same-origin",
+				signal: controller.signal
+			});
+		} catch (err) {
+			throw unanswered(err);
+		}
+		answeredAt = Date.now();
+		if (!response.ok) {
+			let body;
+			try {
+				body = await response.json();
+			} catch {
+				body = { error: "unreadable_body" };
+			}
+			const refusal = new RestError(response.status, body, retryAfterOf(response));
+			noteSession(refusal);
+			throw refusal;
+		}
+		try {
+			return await response.blob();
+		} catch (err) {
+			throw unanswered(err);
+		}
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", forward);
+	}
+}
+var rest = {
+	/**
+	* The whole answer: status, entity-tag and body. For a caller that sends a
+	* precondition, reads a tag, cancels, or branches on a success status.
+	*/
+	request,
+	/** A read's body. `signal` is the loader's: `lib/useRest.ts` aborts a read
+	*  it superseded, and a screen reads through that rather than calling this. */
+	get: (path, signal) => bodyOf("GET", path, { signal }),
+	post: (path, body, headers) => bodyOf("POST", path, {
+		body: body ?? {},
+		headers
+	}),
+	put: (path, body, headers) => bodyOf("PUT", path, {
+		body: body ?? {},
+		headers
+	}),
+	patch: (path, body, headers) => bodyOf("PATCH", path, {
+		body: body ?? {},
+		headers
+	}),
+	/**
+	* THE BODY IS THE VALUE, not a document carrying one.
+	*
+	* `PUT /secrets/{name}` takes the credential as raw bytes, deliberately: a
+	* credential is arbitrary text — a PEM key has newlines, a token can hold
+	* anything — and an encoding step between the operator and the byte
+	* sequence the vendor compares is a 401 nobody can explain. Sending it
+	* through `put` would seal the JSON quotes into the credential.
+	*/
+	putText: (path, value) => bodyOf("PUT", path, {
+		body: value,
+		contentType: "text/plain; charset=utf-8"
+	}),
+	del: (path, body, headers) => bodyOf("DELETE", path, {
+		body,
+		headers
+	}),
+	/** A file's bytes — see [blob]. */
+	blob
+};
 //#endregion
 //#region src/protocol/api.ts
 /**
@@ -534,26 +1231,175 @@ function clearToken() {
 * the shell never populated. Only `socket.ts` imports this file.
 */
 var api = { 
-/**
-* The degraded-mode snapshot, or `null` if it could not be read.
-*
-* `null` and not an `{_error}` object. That shape was tried: the caller
-* guarded with `!snap._error`, which is TRUE for zero, so the one case this
-* whole fallback exists for — the network completely gone — applied the
-* error object as if it were a snapshot and replaced agents, events,
-* sandboxes, org and tools with empties. The page went blank at the exact
-* moment the last state it received was the only thing it had.
-*/
+/** The degraded-mode snapshot, or why not and when to ask again. */
 async snapshot() {
 	try {
-		const stored = apiToken();
-		const response = await fetch(location.origin + "/stream/snapshot", stored ? { headers: { Authorization: "Bearer " + stored } } : void 0);
-		if (!response.ok) return null;
-		return await response.json();
+		const response = await fetch(location.origin + "/stream/snapshot", {
+			credentials: "same-origin",
+			cache: "no-store"
+		});
+		if (!response.ok) {
+			if (response.status === 401) {
+				needSession("sign_in");
+				return { state: "nobody" };
+			}
+			return {
+				state: "unread",
+				retryAfter: await retryHintOf(response)
+			};
+		}
+		return {
+			state: "read",
+			snapshot: await response.json()
+		};
 	} catch {
-		return null;
+		return {
+			state: "unread",
+			retryAfter: null
+		};
 	}
 } };
+//#endregion
+//#region src/protocol/auth.ts
+/**
+* The header an invitation's secret travels in to the view.
+*
+* A HEADER, because the view is a GET and a GET has no body — and never the
+* query string, which every access log between the browser and the engine
+* records. The link carries the secret in its FRAGMENT precisely so that no
+* server sees it on the way to this page.
+*/
+var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+/** The header a password reset link's secret travels in to its view, for
+*  [INVITE_SECRET_HEADER]'s reason. */
+var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
+var auth = {
+	/**
+	* Whether the company has its first person — `/health`'s `identity`:
+	* `ready`, `unclaimed`, `unknown`, or absent. `/health` is unguarded and is
+	* the one answer an install with nobody in it can reach, which is why the
+	* sign-in page asks it rather than `/iam`.
+	*/
+	firstPerson: async () => (await rest.get("/health"))?.identity,
+	/** The password floor and the second-factor posture — unguarded, like `/health`. */
+	config: async (signal) => await rest.get("/auth/config", signal),
+	/**
+	* Sign in with a login or an address and a password — and, once the engine
+	* has answered `second_factor_required`, the code.
+	*/
+	login: async (body) => await rest.post("/auth/login", body),
+	/**
+	* Exchange a Tier A token for a one-hour session.
+	*
+	* THE TOKEN IS THE BEARER OF THIS ONE REQUEST and nothing else: it goes in
+	* the `Authorization` header, which is how the engine takes it, and the
+	* session that comes back is a cookie. Nothing here holds it afterwards.
+	*/
+	exchangeToken: async (token) => await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` }),
+	/** Render an invitation without spending it. */
+	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
+	/** Redeem an invitation, which creates the person and signs them in. */
+	redeemInvite: async (id, body) => await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body),
+	/** Say whose password a reset link sets, without spending it. */
+	viewReset: async (id, secret) => (await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, { headers: { [RESET_SECRET_HEADER]: secret } })).body,
+	/**
+	* Set a new password from a reset link, once. It ends every session the
+	* person held and signs nobody in: the person signs in next.
+	*/
+	spendReset: async (id, body) => await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body),
+	/**
+	* Enrolment's first leg: a seed, and nothing stored. A person who never
+	* completes the second leg has enrolled nothing.
+	*/
+	secondFactorSeed: async () => await rest.post("/auth/totp", {}),
+	/**
+	* Enrolment's second leg: the seed back, with a code derived from it — the
+	* only evidence the authenticator on the other side works.
+	*/
+	enrolSecondFactor: async (secret, code) => await rest.post("/auth/totp", {
+		secret,
+		code
+	}),
+	/** Ten fresh single-use codes, retiring the old set, shown this once. */
+	recoveryCodes: async () => await rest.post("/auth/totp/recovery", {}),
+	/**
+	* Confirm who you are on a session that is already valid: the password,
+	* and the code where a second factor is held. The engine answers a fresh
+	* session cookie and ends the one it replaces.
+	*/
+	stepUp: async (body) => await rest.post("/auth/step-up", body),
+	/**
+	* Change your own password. The current one — and, from somebody who holds
+	* a second factor, a code, exactly as a step-up asks it — is the proof, so
+	* no step-up is asked first; the change ends every other session and
+	* personal token you hold, and answers a fresh session for this browser.
+	*/
+	changePassword: async (body) => await rest.post("/auth/password", body),
+	/**
+	* Who this browser is signed in as — ended by `signal` where the caller
+	* passes one, for a read a newer one has superseded.
+	*/
+	session: async (signal) => await rest.get("/auth/session", signal),
+	/**
+	* End this browser's session. The engine clears the cookie whatever its
+	* own write did, so an answer at all means this browser holds no session.
+	*/
+	logout: async () => {
+		await rest.post("/auth/logout", {});
+	},
+	/**
+	* End ONE named session of yours — a laptop left signed in somewhere —
+	* without ending this browser's.
+	*/
+	logoutOne: async (lineage) => {
+		await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
+	},
+	/**
+	* End every session the caller holds, on every device, by moving their
+	* revocation epoch — this browser's included.
+	*/
+	logoutEverywhere: async () => {
+		await rest.post("/auth/logout/all", {});
+	}
+};
+//#endregion
+//#region src/protocol/retry.ts
+/**
+* When to ask the engine again after it said it cannot answer yet.
+*
+* THE ENGINE SAYS WHEN, and every retry path in this dashboard reads that one
+* way, here. A socket query's or a watch's `unavailable` frame carries
+* `retry_after`, and a REST `503` the engine wrote carries a `Retry-After`
+* header; both are whole seconds decided by the engine — the refusal's derived
+* hint where it has one, the node's health tick where it has none — and ZERO
+* where waiting will not change the answer: a log at its byte ceiling, a
+* record this node cannot decode, a barrier its broker refused.
+*
+* PURE ARITHMETIC OVER A NUMBER, bounded by the engine's own ceiling
+* {@link RETRY_AFTER_MAX_MS}, declared in `contract/retry.ts` beside the
+* fallback a caller waits when an answer carried no hint at all.
+*/
+/**
+* The wait a hint of `seconds` asks for, in milliseconds, or `null` for "do not
+* ask again on a timer".
+*
+* ZERO IS THE ANSWER, never an omission: the engine is saying waiting will not
+* change it, so nothing re-asks — the screen shows the refusal and what it
+* names, and it is asked again only when something a person does could have
+* changed it (a reconnect, a write, a reload). A caller whose answer carried no
+* hint at all does not come here: what an absent hint means is the caller's.
+*
+* BOUNDED, because the one hint the engine does not fix — a backlog divided by
+* a drain rate — runs to minutes on a node that has just joined, and a screen
+* that says "this fills in on its own" for that long is not believed.
+*
+* The hint is whole seconds and never negative — both parsers that read one
+* admit nothing else — so anything at or under zero is the zero.
+*/
+function retryAfterMs(seconds) {
+	if (!(seconds > 0)) return null;
+	return Math.min(seconds * 1e3, RETRY_AFTER_MAX_MS);
+}
 //#endregion
 //#region src/protocol/socket.ts
 /**
@@ -565,6 +1411,10 @@ async snapshot() {
 * payload, a trace, a different spend window, the configuration document — is
 * asked for over the same socket and answered on it.
 *
+* One push is addressed to a SEAT rather than to every tab: `inbox_changed`,
+* sent only to a socket that asked to `watch` that seat and was allowed to. It
+* is how a person learns they have work without waiting for a poll.
+*
 * The socket is the channel for the projection and for every question the
 * query registry answers — not for everything. Writes and the guarded reads no
 * query answers (`/secrets`, `/setup`, `/config`) go over REST through
@@ -572,17 +1422,30 @@ async snapshot() {
 * snapshot, which keeps the page honest while the socket is down (a proxy that
 * refuses to upgrade, a restarting engine) and stops the moment the socket is
 * back, and the refusal probe after a handshake that never opened.
+*
+* # What a close means
+*
+* The handshake carries the session cookie and nothing else, and the engine
+* decides it once. After that it CLOSES the socket when the identity estate
+* moves under it — and the code says what the tab should do:
+*
+*  - 4401 (`CLOSE_UNAUTHENTICATED`): the session the socket was opened with
+*    ended — a sign-out here or everywhere, a suspension, a removal, a
+*    revocation, a fleet-wide invalidation, or a STEP-UP, which replaces the
+*    session it was made from. Not a refusal on its own: the browser may hold
+*    a newer cookie, and after a step-up it does, once the answer that set it
+*    has landed. So the tab waits for its own requests to settle and asks
+*    `GET /auth/session` once: a `401` is nobody and sends the reader to sign
+*    in with nothing dialled, a session somebody else's sign-in left in the
+*    browser hands the tab to them (`LiveSocketOptions.takeSession`), and any
+*    other answer dials again.
+*  - 4403 (`CLOSE_FORBIDDEN`): the engine knows who this is and will not serve
+*    them this surface. Reconnecting reaches the same person with the same
+*    access, so the socket STOPS and the page says why.
+*  - anything else, the standard's 1013 "try again later" included: an
+*    ordinary reconnect on the backoff.
 */
 var PATH = "/ws/stream";
-/**
-* `policy violation` — a refusal delivered as a close FRAME, which is only
-* reachable once a connection has opened. The engine does not currently refuse
-* anyone that late (it answers 401 to the handshake instead, see
-* `probeRefusal`), so nothing here fires today; it is honoured because a close
-* code meaning "your credential stopped being good" is the one a long-lived
-* socket would use.
-*/
-var CLOSE_UNAUTHORIZED = 1008;
 /**
 * Reconnect backoff ceiling. Long enough that a dashboard left open against a
 * stopped engine is not hammering it, short enough that bringing the engine
@@ -591,8 +1454,18 @@ var CLOSE_UNAUTHORIZED = 1008;
 var MAX_BACKOFF_MS = 3e4;
 /** Application-level keepalive, comfortably inside the 60 s idle timeout most reverse proxies apply. */
 var PING_MS = 25e3;
-/** Degraded-mode poll — only ever runs while the socket is down. */
+/**
+* Degraded-mode poll — only ever runs while the socket is down. A `503` the
+* engine wrote replaces its next tick with the answer's own `Retry-After`
+* (see `fallbackFetch`).
+*/
 var FALLBACK_MS = 5e3;
+/**
+* What a watch refusal's error frame names in `what` — the engine's
+* `watchWhat`. A watch carries no query id, so this is how an error frame about
+* one is told from a query's.
+*/
+var WATCH_WHAT = "watch";
 /**
 * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
 * against.
@@ -626,66 +1499,162 @@ function queryErrorCode(value) {
 	return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? value : null;
 }
 /**
-* A query the engine refused, with the wait it asked for.
+* A query the engine refused, with what its error frame said beyond the code.
 *
 * AN ERROR WHOSE MESSAGE IS THE CODE, so every caller that reads a refusal by
-* [queryErrorCode] of its message keeps working, and a TYPE beside it because
-* the wait is a number and the text of an error is no place to carry one: the
-* `unavailable` frame carries `retry_after_seconds`, computed by the same
-* engine helper as the REST 503's `Retry-After`, and a transport that dropped
-* it left each screen to guess a wait of its own.
+* [queryErrorCode] of its message keeps working, and a TYPE beside it for what
+* the text of an error is no place to carry: the refusal — on AUTHORITY, the
+* rule and the grants that would have admitted the reader; on `unavailable`,
+* the state log's refusal and whether, and when, asking again can change it.
 */
 var QueryError = class extends Error {
 	/**
-	* The engine's wait in seconds, on an `unavailable` refusal that named one,
-	* and null everywhere else — the socket's own `timeout` and `closed`
-	* included, which no engine said anything about.
+	* The refusal behind the code, or null — for a frame that is neither a
+	* refusal on authority nor an `unavailable` answer, and for the socket's own
+	* `timeout` and `closed`, which no engine said anything about.
 	*/
-	retryAfterSeconds;
+	refusal;
 	/**
 	* The refusal's own sentence on a `bad_params` refusal — the parameter to
 	* change and what it accepts — and null everywhere else. The engine writes
 	* that one refusal FOR the caller and keeps every other failure's text in
-	* its log, so this is never a path or a driver's message.
+	* its log, so this is never a path or a driver's message. An `unavailable`
+	* answer's words are its {@link LogRefusal}'s.
 	*/
 	detail;
-	constructor(code, retryAfterSeconds = null, detail = null) {
+	constructor(code, refusal = null, detail = null) {
 		super(code);
 		this.name = "QueryError";
-		this.retryAfterSeconds = retryAfterSeconds;
+		this.refusal = refusal;
 		this.detail = detail;
 	}
 };
-/** The engine's wait on a refusal, or null where it named none. */
-function retryHint(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+/**
+* Whether a refusal is the state log's, carried by an `unavailable` answer,
+* rather than one on authority. The two ride the same field of an answer
+* because a screen hands both to `QueryState` the same way.
+*/
+function isLogRefusal(refusal) {
+	return "retryAfter" in refusal;
+}
+/**
+* How soon something the engine answered `unavailable` is asked again — a
+* query (see `useQuery`) or a watch — in milliseconds, or `null` for "not on a
+* timer".
+*
+* `unavailable` is the engine saying it cannot answer HERE, and its frame says
+* when that may change: `retry_after`, read through {@link retryAfterMs} —
+* waited out, bounded, and ZERO meaning waiting will not change it, so nothing
+* re-asks. An answer carrying no hint waits {@link UNAVAILABLE_RETRY_MS}, what
+* the engine says when it has nothing better.
+*/
+function unavailableRetryMs(refusal) {
+	if (refusal === null || !isLogRefusal(refusal)) return UNAVAILABLE_RETRY_MS;
+	return retryAfterMs(refusal.retryAfter);
+}
+/**
+* A `bad_params` frame's sentence, or null for any other frame. The engine
+* writes that one refusal for the caller; an `unavailable` frame's words are
+* its refusal's ({@link refusalOf}), and every other frame carries none.
+*/
+function badParamsDetail(msg) {
+	return msg.error === "bad_params" && typeof msg.detail === "string" && msg.detail !== "" ? msg.detail : null;
+}
+/**
+* The refusal an error frame carries, or null — for a frame that is neither a
+* refusal on authority nor an `unavailable` answer.
+*/
+function refusalOf$1(msg) {
+	if (msg.error === "unavailable") {
+		if (typeof msg.retry_after !== "number" || !(msg.retry_after >= 0)) return null;
+		return {
+			code: typeof msg.refusal === "string" ? msg.refusal : null,
+			detail: typeof msg.detail === "string" ? msg.detail : null,
+			retryAfter: msg.retry_after
+		};
+	}
+	if (msg.error !== "unauthorized" || typeof msg.reason !== "string") return null;
+	return {
+		reason: msg.reason,
+		grants: Array.isArray(msg.grants) ? msg.grants.filter((g) => typeof g === "string") : []
+	};
 }
 var LiveSocket = class {
 	store;
+	takeSession;
 	sock = null;
 	attempt = 0;
 	reconnectTimer = 0;
 	pingTimer = 0;
 	fallbackTimer = 0;
+	/**
+	* The degraded-mode poll now running, or 0 for none. A NUMBER PER RUN rather
+	* than a flag, because a read can be in flight when its run is stopped, and
+	* one that landed after a new run began would schedule a second chain of
+	* reads beside the new one's.
+	*/
+	fallbackRun = 0;
+	fallbackRuns = 0;
 	isClosed = false;
+	/**
+	* Whether the engine refused this browser the surface (see `accessRefused`).
+	* A latch rather than a cancelled timer, because the refusal can arrive from
+	* an async probe while a reconnect is already in flight, whose own close
+	* would otherwise schedule the next one.
+	*/
+	refused = false;
+	/**
+	* Whether the latch above is set because NOBODY IS SIGNED IN (see
+	* `authRejected`) — the one refusal the tab coming back may lift, since a
+	* sign-in in another tab gives this one the cookie too.
+	*/
+	signedOut = false;
+	/**
+	* Whether a sign-out holds the socket (see `hold`). Not `refused`, because
+	* a sign-out that fails gives the socket back as it found it — still
+	* refused, if it was.
+	*/
+	held = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
-	/** Seats whose live call is being fetched whole, each with whether a push
-	*  found the call behind again while the fetch was out — see `fetchCalls`. */
+	/**
+	* The seat this tab watches for `inbox_changed` frames, or "". Held HERE
+	* rather than only sent, because a watch lives in the engine's routing index
+	* for ONE socket: every new socket starts watching nothing, so the tab has to
+	* say it again on every open.
+	*/
+	watched = "";
+	watchRetry = 0;
+	/** Seats, by AGENT ID, whose live call is being fetched whole, each with
+	*  whether a push found the call behind again while the fetch was out — see
+	*  `fetchCalls`. */
 	fetchingCalls = /* @__PURE__ */ new Map();
-	token = "";
-	/** Whether the shell has already been asked to collect a token. */
-	askedForToken = false;
-	authRejectedHandler = null;
-	constructor(store) {
+	constructor(store, options = {}) {
 		this.store = store;
+		this.takeSession = options.takeSession ?? (() => true);
 	}
-	/** Operator bearer token, sent on the handshake and with every query frame. */
-	setToken(token) {
-		this.token = token || "";
-		if (this.token) this.askedForToken = false;
-	}
+	/**
+	* The tab came back to a socket stopped because nobody was signed in: dial
+	* ONCE, which is what notices a sign-in made in another tab. A dial that
+	* finds nobody still stops again.
+	*/
+	onVisible = () => {
+		if (!this.signedOut || this.isClosed || document.visibilityState !== "visible") return;
+		this.signedOut = false;
+		this.refused = false;
+		this.connect();
+	};
+	/**
+	* Dial for the session the frame has just read (`app/Shell.tsx`), unless a
+	* dial is already open or under way.
+	*
+	* IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for every
+	* session it reads — after a sign-in, or once an admin has put a refusal
+	* right — and a refusal or a sign-out recorded under the last one no longer
+	* describes the browser.
+	*/
 	start() {
+		this.lift();
 		this.connect();
 	}
 	/**
@@ -693,15 +1662,50 @@ var LiveSocket = class {
 	*
 	* A dropped envelope is gone: the server's per-client queue discards the
 	* OLDEST frame under backpressure, so a lost `agents` overlay is never
-	* re-sent and the only true repair is a fresh handshake snapshot.
+	* re-sent and the only true repair is a fresh handshake snapshot. It is
+	* also how a restored access is tried: a re-dial is a new attempt, so the
+	* last refusal no longer describes it.
 	*/
 	reconnect() {
+		this.lift();
 		if (this.sock) this.sock.close();
 		else this.connect();
 	}
+	/** Forget what the last refusal or sign-out latched. */
+	lift() {
+		this.refused = false;
+		this.signedOut = false;
+		this.store.setAuthRejected(false);
+		this.store.setAccessRefused(null);
+	}
+	/**
+	* Dial nothing while this tab signs out, until `release()`.
+	*
+	* The engine ends this session's socket (4401) as it applies the sign-out,
+	* and that close re-dialled once this tab's own requests had settled — which
+	* is before the sign-out's reload — so every sign-out made one more
+	* handshake the engine refused.
+	*/
+	hold() {
+		this.held = true;
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = 0;
+		this.stopFallback();
+	}
+	/**
+	* Give back what `hold` took: a sign-out nothing answered stays on the page,
+	* and the socket dials again — unless a refusal had already stopped it,
+	* which the sign-out did not change.
+	*/
+	release() {
+		this.held = false;
+		this.connect();
+	}
 	stop() {
 		this.isClosed = true;
+		document.removeEventListener("visibilitychange", this.onVisible);
 		clearTimeout(this.reconnectTimer);
+		clearTimeout(this.watchRetry);
 		this.stopPing();
 		this.stopFallback();
 		this.failInflight("closed");
@@ -720,7 +1724,7 @@ var LiveSocket = class {
 	* "could not load" and stayed there. Queries are pure reads, so one that was
 	* in flight when the socket dropped is simply re-sent on reconnect.
 	*
-	* Rejects with an Error carrying the server's machine-readable code
+	* Rejects with a [QueryError] carrying the server's machine-readable code
 	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
 	* query goes unanswered, or `closed` if the client shuts down.
 	*/
@@ -747,7 +1751,6 @@ var LiveSocket = class {
 			what: entry.what,
 			params: entry.params
 		};
-		if (this.token) frame.token = this.token;
 		try {
 			this.sock.send(JSON.stringify(frame));
 		} catch {
@@ -762,14 +1765,62 @@ var LiveSocket = class {
 	flushQueries() {
 		for (const entry of this.inflight.values()) this.sendQuery(entry);
 	}
+	/**
+	* Ask for one seat's `inbox_changed` frames on this socket and every socket
+	* after it, or stop with "".
+	*
+	* ONE SEAT, because the engine keeps one per socket: a watch is a screen
+	* saying where it now is, so a second call replaces the first rather than
+	* adding to it. The engine decides a watch the way it decides the inbox
+	* question about the same seat — its holder, whoever leads it, or the admin
+	* grant — and answers a refusal on the socket rather than closing it; see
+	* `watchAnswered`.
+	*/
+	watch(seat) {
+		const next = seat.trim();
+		clearTimeout(this.watchRetry);
+		this.watchRetry = 0;
+		const clearing = next === "" && this.watched !== "";
+		this.watched = next;
+		if (next !== "" || clearing) this.sendWatch();
+	}
+	sendWatch() {
+		if (!this.connected || !this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "watch",
+				seat: this.watched
+			}));
+		} catch {}
+	}
+	/**
+	* The engine refused a watch.
+	*
+	* `unavailable` means this node could not read the chart that decides it,
+	* or the directory a login resolves through, so it is asked again when the
+	* frame's `retry_after` says that may have changed ({@link
+	* unavailableRetryMs}). A ZERO is a read no wait clears, and ANY OTHER CODE
+	* IS A DECISION; either way asking again on a timer would only be answered
+	* the same: the screens' polls carry on as they did before there was a push
+	* at all, and the next socket asks once more in case the answer moved.
+	*/
+	watchAnswered(msg) {
+		clearTimeout(this.watchRetry);
+		this.watchRetry = 0;
+		if (msg.error !== "unavailable" || this.watched === "") return;
+		const wait = unavailableRetryMs(refusalOf$1(msg));
+		if (wait === null) return;
+		this.watchRetry = setTimeout(() => {
+			this.watchRetry = 0;
+			this.sendWatch();
+		}, wait);
+	}
 	connect() {
-		if (this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
+		if (this.isClosed || this.refused || this.held || this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
 		const proto = location.protocol === "https:" ? "wss" : "ws";
-		const token = this.token || apiToken();
-		const qs = token ? `?token=${encodeURIComponent(token)}` : "";
 		let sock;
 		try {
-			sock = new WebSocket(`${proto}://${location.host}${PATH}${qs}`);
+			sock = new WebSocket(`${proto}://${location.host}${PATH}`);
 		} catch {
 			this.scheduleReconnect();
 			return;
@@ -780,90 +1831,179 @@ var LiveSocket = class {
 			handshakeCompleted = true;
 			this.attempt = 0;
 			this.store.setAuthRejected(false);
+			this.store.setAccessRefused(null);
 			this.store.setConnected(true);
 			clearTimeout(this.reconnectTimer);
 			this.stopFallback();
 			this.startPing();
 			this.flushQueries();
+			if (this.watched !== "") this.sendWatch();
 		};
 		sock.onmessage = (e) => this.onMessage(String(e.data));
 		sock.onclose = (e) => {
 			this.stopPing();
 			this.sock = null;
+			clearTimeout(this.watchRetry);
+			this.watchRetry = 0;
 			for (const entry of this.inflight.values()) {
 				clearTimeout(entry.timer);
 				entry.timer = 0;
 			}
 			this.store.setConnected(false);
+			if (this.held) return;
+			const code = e ? e.code : 0;
+			if (code === 4403) {
+				this.accessRefused(e.reason);
+				return;
+			}
+			if (code === 4401) {
+				whenRequestsSettle().then(() => this.redialIfSignedIn());
+				return;
+			}
 			this.scheduleReconnect();
 			this.startFallback();
-			if (e && e.code === CLOSE_UNAUTHORIZED) this.authRejected();
-			else if (!handshakeCompleted) this.probeRefusal();
+			if (!handshakeCompleted) this.probeRefusal();
 		};
 		sock.onerror = () => {
 			this.store.setConnected(false);
 		};
 	}
 	/**
+	* After a `4401`: dial again only if the browser still holds a session.
+	*
+	* `GET /auth/session` FIRST, rather than a dial whose handshake decides:
+	* a session that ended elsewhere — a password change, a sign-out
+	* everywhere, an administrator — was a refused handshake, its refusal
+	* probe and a refused degraded-mode snapshot before the sign-in, three
+	* `401`s where one says it. A `401` here is that one (`rest.ts` raises the
+	* sign-in need); any other failure says nothing about the session, and
+	* the dial's own handshake decides.
+	*
+	* AND ONLY FOR THE PERSON THIS TAB WAS READ BY (`takeSession`): a sign-in
+	* as somebody else in another tab ends this tab's session and moves the
+	* cookie, and a re-dial on any answer reached the company as them in a tab
+	* still holding the last reader's.
+	*/
+	async redialIfSignedIn() {
+		try {
+			const session = await auth.session();
+			if (!this.takeSession(session.person)) return;
+		} catch (err) {
+			if (err instanceof RestError && err.status === 401) {
+				this.authRejected();
+				return;
+			}
+		}
+		this.connect();
+	}
+	/**
 	* Ask, over plain HTTP, whether that dial was refused or merely failed.
 	*
-	* A handshake the engine answers 401 NEVER reaches this page as close(1008).
-	* A close code travels in a close frame, and a connection that never opened
+	* A handshake the engine refuses NEVER reaches this page as a close code. A
+	* close code travels in a close frame, and a connection that never opened
 	* has no frames — so the browser reports 1006, the same code it gives for an
 	* engine that is simply down, and withholds the status deliberately (a page
 	* that could read it could use a socket to scan ports it cannot otherwise
 	* reach).
 	*
-	* This client believed otherwise once, and the whole repair path — the
-	* banner, the dialog, "forget this token" — hung off a code that never
-	* arrived. A wrong token in `localStorage` therefore produced a dashboard
-	* that reconnected for ever, said "retrying", and offered no way to correct
-	* the one thing that was wrong.
-	*
 	* So the status is fetched where a browser will hand it over. A plain GET of
-	* the same path runs the same guard and stops one line short of the upgrade:
-	* 401 is a refused credential, 426 (Upgrade Required) means it was accepted
-	* and only the missing header stopped it. A throw is the network, which is
-	* not an auth problem and must not raise a dialog.
-	*
-	* The credential goes in the HEADER here, not the query string the handshake
-	* is forced to use: a fetch can set one, and a token in a URL is a token in
-	* every proxy's access log.
+	* the same path runs the same guard, with the same cookie, and stops one line
+	* short of the upgrade: 401 is nobody signed in, 426 (Upgrade Required)
+	* means the session was accepted and only the missing header stopped it, a
+	* 403 is somebody refused this surface, and a `503` the engine wrote is a
+	* node that could not decide the handshake yet, which says in its
+	* `Retry-After` when to dial again (see `redialWhenSaid`). A throw is the
+	* network, which is not an auth problem and must not send anybody to sign
+	* in.
 	*/
 	async probeRefusal() {
 		if (this.isClosed) return;
-		const token = this.token || apiToken();
 		try {
-			if ((await fetch(PATH, {
-				headers: token ? { Authorization: "Bearer " + token } : {},
+			const res = await fetch(PATH, {
+				credentials: "same-origin",
 				cache: "no-store"
-			})).status === 401) this.authRejected();
+			});
+			if (res.status === 401) this.authRejected();
+			else if (res.status === 503) await this.redialWhenSaid(res);
+			else if (res.status === 403) {
+				const body = await res.json().catch(() => null);
+				if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
+				else this.accessRefused(body?.detail ?? body?.error ?? "");
+			}
 		} catch {}
 	}
 	/**
-	* The engine refused this browser's credential.
+	* A refused handshake's `503`: dial again when the engine said, in place of
+	* the backoff — exactly, and bounded at `RETRY_AFTER_MAX_MS`.
 	*
-	* Two things happen, and both are needed. Asking for a token is the repair —
-	* the dashboard is served unauthenticated by design (the page that asks for a
-	* token cannot itself require one), so the browser has no other moment to
-	* learn it needs one. The store flag is what happens when the reader
-	* dismisses that request: the ask fires once and only once, deliberately, so
-	* a 30-second reconnect backoff does not reopen a dialog forever — which
-	* leaves the page looking like an outage unless the chrome can say otherwise.
+	* ONLY THE ENGINE'S `503` (`retryHintOf`): a proxy in front of a node that
+	* is down writes one too, and that is the backoff's case. A ZERO keeps the
+	* backoff rather than stopping the loop, because a dial is not a re-ask of
+	* this one node — behind a balancer the next one may reach another — and
+	* the loop is this tab's only way back to any engine.
+	*/
+	async redialWhenSaid(res) {
+		const hint = await retryHintOf(res);
+		const wait = hint === null ? null : retryAfterMs(hint);
+		if (wait !== null) this.scheduleReconnect(wait);
+	}
+	/**
+	* The engine knows who this browser is and will not serve it this surface.
 	*
-	* The socket does not own the asking. It cannot: the dialog belongs to the
-	* shell, and a transport that reaches into the DOM to draw one is a transport
-	* that cannot be tested without a browser.
+	* The reconnect loop and the REST fallback both STOP: each would be refused
+	* by the same decision every thirty seconds for as long as the tab stayed
+	* open, and a page that says "reconnecting" to somebody whose access was
+	* withdrawn is telling them to wait for something that will not happen.
+	* `reconnect()` is the way back, once an admin has put it right — or
+	* `start()`, which the frame calls once it reads the session again.
+	*/
+	accessRefused(reason) {
+		this.stopDialling();
+		this.store.setAccessRefused(reason);
+	}
+	/**
+	* The engine accepts this browser's session for nothing but enrolling the
+	* second factor the deployment requires. Every dial would be refused the
+	* same way until it has, so the loop stops; the enrolment ends in the
+	* frame, which dials again (`start()`) for the whole session it opened.
+	*/
+	enrolmentRequired() {
+		this.stopDialling();
+		needSession("second_factor");
+	}
+	/** Stops the reconnect loop and the REST fallback, until `start()` or `reconnect()`. */
+	stopDialling() {
+		this.refused = true;
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = 0;
+		this.stopFallback();
+	}
+	/**
+	* The engine resolved nobody from this browser's cookie.
+	*
+	* Asking for a sign-in is the repair — the dashboard is served
+	* unauthenticated by design (the page that signs a person in cannot itself
+	* require them to be), so the browser has no other moment to learn it needs
+	* one — and the store flag is what the chrome reads meanwhile.
+	*
+	* AND THE LOOP STOPS, as it does for a refusal: every dial until somebody
+	* signs in is the same 401, and a signed-out tab — the sign-in page, an
+	* invitation's or a reset link's — dialled one on its backoff for as long
+	* as it stayed open, each a failed handshake and a 401 in the console. What
+	* ends it is a sign-in: in this tab, which lands in the frame and dials
+	* (`start()`); or in another, which gives this one the cookie too and is
+	* noticed by ONE dial when the tab comes back (`onVisible`).
+	*
+	* The socket does not own the screen: the sign-in is a route, and a
+	* transport that reaches into the router is a transport that cannot be
+	* tested without one — so it raises the session need the app follows.
 	*/
 	authRejected() {
 		this.store.setAuthRejected(true);
-		if (this.askedForToken || !this.authRejectedHandler) return;
-		this.askedForToken = true;
-		this.authRejectedHandler();
-	}
-	/** Register what to do the first time the engine refuses a credential. */
-	onAuthRejected(fn) {
-		this.authRejectedHandler = fn;
+		needSession("sign_in");
+		this.stopDialling();
+		this.signedOut = true;
+		document.addEventListener("visibilitychange", this.onVisible);
 	}
 	/**
 	* The dispatch table.
@@ -916,11 +2056,18 @@ var LiveSocket = class {
 			case "health":
 				this.store.applyHealth(msg.data);
 				break;
+			case "inbox_changed":
+				this.store.applyInboxChanged(msg.data);
+				break;
 			case "result":
 				this.settle(msg.id, null, msg.data);
 				break;
 			case "error":
-				this.settle(msg.id, msg.error || "query_failed", null, retryHint(msg.retry_after_seconds), typeof msg.detail === "string" && msg.detail ? msg.detail : null);
+				if (msg.what === WATCH_WHAT && msg.id === void 0) {
+					this.watchAnswered(msg);
+					break;
+				}
+				this.settle(msg.id, msg.error || "query_failed", null, refusalOf$1(msg), badParamsDetail(msg));
 				break;
 			case "pong": break;
 			default: this.store.noteUnknownPush(msg.kind);
@@ -928,7 +2075,7 @@ var LiveSocket = class {
 	}
 	/**
 	* Fetch, whole, each seat's live call this tab holds behind what a push
-	* described — the push that moved one of its heavy fields was dropped by the
+	* described — asked by the seat's AGENT ID, the key the push named it by — the push that moved one of its heavy fields was dropped by the
 	* server's queue (`mergeLiveCall`).
 	*
 	* ONE ASK PER SEAT IN FLIGHT, but a push that finds the call behind while it
@@ -940,27 +2087,27 @@ var LiveSocket = class {
 	* the seat's next push, which a frozen failed call or a long round never
 	* sends. An answer at or past them holds everything they named, and ends it.
 	*/
-	fetchCalls(roles) {
-		for (const role of roles) {
-			if (this.fetchingCalls.has(role)) {
-				this.fetchingCalls.set(role, true);
+	fetchCalls(ids) {
+		for (const id of ids) {
+			if (this.fetchingCalls.has(id)) {
+				this.fetchingCalls.set(id, true);
 				continue;
 			}
-			this.fetchingCalls.set(role, false);
-			this.query("live_call", { role }).then((answer) => this.store.applyLiveCall(answer), () => false).then((current) => {
-				const again = this.fetchingCalls.get(role) ?? false;
-				this.fetchingCalls.delete(role);
-				if (again && !current) this.fetchCalls([role]);
+			this.fetchingCalls.set(id, false);
+			this.query("live_call", { agent_id: id }).then((answer) => this.store.applyLiveCall(answer), () => false).then((current) => {
+				const again = this.fetchingCalls.get(id) ?? false;
+				this.fetchingCalls.delete(id);
+				if (again && !current) this.fetchCalls([id]);
 			});
 		}
 	}
-	settle(id, error, data, retryAfterSeconds = null, detail = null) {
+	settle(id, error, data, refusal = null, detail = null) {
 		if (id === void 0) return;
 		const entry = this.inflight.get(id);
 		if (!entry) return;
 		this.inflight.delete(id);
 		clearTimeout(entry.timer);
-		if (error) entry.reject(new QueryError(error, retryAfterSeconds, detail));
+		if (error) entry.reject(new QueryError(error, refusal, detail));
 		else entry.resolve(data);
 	}
 	failInflight(reason) {
@@ -970,11 +2117,24 @@ var LiveSocket = class {
 		}
 		this.inflight.clear();
 	}
-	scheduleReconnect() {
-		if (this.isClosed) return;
+	/**
+	* Dial again after the backoff — or after `after` ms, where the engine said
+	* when (`redialWhenSaid`), which replaces the dial already scheduled and
+	* leaves the backoff's count where it was.
+	*
+	* FULL JITTER: the wait is drawn uniformly between zero and the backoff's
+	* ceiling for this attempt. A node that closes every socket at once — a
+	* 1013 to everybody on a restart — would otherwise bring every tab back in
+	* lockstep, one wave per doubling, each wave as large as the first.
+	*/
+	scheduleReconnect(after) {
+		if (this.isClosed || this.refused) return;
 		clearTimeout(this.reconnectTimer);
-		const delay = Math.min(1e3 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
-		this.attempt++;
+		let delay = after;
+		if (delay === void 0) {
+			delay = Math.random() * Math.min(1e3 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
+			this.attempt++;
+		}
 		this.reconnectTimer = setTimeout(() => this.connect(), delay);
 	}
 	startPing() {
@@ -990,379 +2150,25 @@ var LiveSocket = class {
 		this.pingTimer = 0;
 	}
 	startFallback() {
-		if (this.isClosed || this.fallbackTimer) return;
-		this.fallbackFetch();
-		this.fallbackTimer = setInterval(() => void this.fallbackFetch(), FALLBACK_MS);
+		if (this.isClosed || this.refused || this.fallbackRun !== 0) return;
+		this.fallbackRun = ++this.fallbackRuns;
+		this.fallbackFetch(this.fallbackRun);
 	}
 	stopFallback() {
-		clearInterval(this.fallbackTimer);
+		clearTimeout(this.fallbackTimer);
 		this.fallbackTimer = 0;
+		this.fallbackRun = 0;
 	}
-	async fallbackFetch() {
-		const snap = await api.snapshot();
-		if (this.connected) return;
-		if (snap) this.store.applySnapshot(snap);
+	async fallbackFetch(run) {
+		this.fallbackTimer = 0;
+		const read = await api.snapshot();
+		if (this.fallbackRun !== run || this.connected) return;
+		if (read.state === "nobody") return;
+		if (read.state === "read") this.store.applySnapshot(read.snapshot);
+		const next = read.state === "unread" && read.retryAfter !== null ? retryAfterMs(read.retryAfter) : FALLBACK_MS;
+		if (next === null) return;
+		this.fallbackTimer = setTimeout(() => void this.fallbackFetch(run), next);
 	}
-};
-//#endregion
-//#region src/protocol/rest.ts
-/**
-* The dashboard's one REST transport: every write, and the guarded reads the
-* socket has no question for.
-*
-* The socket remains the data channel for the projection and for every
-* question in the query registry. This is not a second one: it carries the
-* requests that are not questions about state at all, and the reads that no
-* query answers. A screen does not call it for a read directly — it reads
-* through `lib/useRest.ts`, the one loader, so that a superseded answer, an
-* unmounted screen, a changed token and a server's `Retry-After` are each
-* handled once. Writes never
-* go over the socket, deliberately — its token rides the query string on the
-* handshake, and a channel whose credential appears in a proxy log is not
-* where a credential-bearing write belongs (see internal/api/auth's own note
-* on that). And a handful of reads exist only as REST, `GET /secrets` above
-* all, because no query in the registry answers them.
-*
-* ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
-* for its own transport takes its client from somewhere, and the somewhere the
-* Fleet screen chose was a context field the shell never populated, so it
-* shipped dead. Everything here is a plain function over `fetch` against
-* `location.origin`, which is where the dashboard is served from and the only
-* origin the engine answers on (it writes no CORS header at all).
-*
-* Every call carries the operator bearer token. The engine guards `/config`,
-* `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
-* posture is, so a call with no token is refused rather than silently served.
-*/
-/**
-* What the engine said when it refused.
-*
-* `status` alone is not enough to act on: the setup surface distinguishes a
-* revision that moved under the caller from a config slot holding a literal
-* from a fleet with no keyring, and all three are a 409 or a 503. The engine
-* answers those with a `code`, and the screen branches on it.
-*/
-var RestError = class extends Error {
-	status;
-	code;
-	detail;
-	hint;
-	/** Everything else the body carried, for a caller that needs a field. */
-	body;
-	/**
-	* How long the engine asked the caller to wait before asking again, in
-	* seconds, from the refusal's `Retry-After` header — or null where it named
-	* no wait.
-	*
-	* THE ONLY RETRY SIGNAL A REST READ HAS. A 503 is not one on its own: the
-	* engine answers 503 both for a node draining or catching up, which a wait
-	* clears and which carries the header, and for a node with no keyring,
-	* which no wait clears and which does not. The header is the engine saying
-	* which, so a loader retries exactly when it is present.
-	*/
-	retryAfterSeconds;
-	constructor(status, body, retryAfter = null) {
-		const code = typeof body.error === "string" ? body.error : "";
-		const detail = typeof body.detail === "string" ? body.detail : "";
-		super(detail || code || `HTTP ${status}`);
-		this.name = "RestError";
-		this.status = status;
-		this.code = code;
-		this.detail = detail;
-		this.hint = typeof body.hint === "string" ? body.hint : "";
-		this.body = body;
-		this.retryAfterSeconds = retryAfterSeconds(retryAfter, Date.now());
-	}
-	/** Whether the engine refused the credential rather than the request. */
-	get unauthorized() {
-		return this.status === 401 || this.status === 403;
-	}
-	/**
-	* Whether this is NOT the engine's own answer: nothing came back (status
-	* 0), a body that could not be read (`unreadable_body` — a gateway's HTML
-	* page, a 200 cut off part way through), or a status with no engine error
-	* code in it. Every refusal the engine writes is JSON with an `error` code,
-	* its auth guard's included and its router's own `no_route` and
-	* `method_not_allowed` for a route or method it does not serve, so an answer
-	* without one was written by something in front of it.
-	*
-	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
-	* the engine wrote means nothing was done; this means nobody here knows. A
-	* reverse proxy whose read timeout is shorter than the fifty seconds the
-	* engine takes to answer a node gate (`engine.GateAnswerBudget`) hands a slow
-	* eviction to the browser as a 504 — and read as a refusal, its operation id
-	* was dropped with it.
-	*/
-	get unanswered() {
-		return this.status === 0 || this.code === "" || this.code === "unreadable_body";
-	}
-};
-/**
-* A `Retry-After` header value as whole seconds from `now`, or null for a
-* header that is absent or says nothing usable.
-*
-* BOTH FORMS RFC 9110 ALLOWS. The engine writes delay-seconds, but a proxy in
-* front of it may answer for it with an HTTP-date, and reading that as "no
-* hint" would drop the one instruction the refusal carried. A date already
-* past is a wait of zero, never a negative one.
-*/
-function retryAfterSeconds(header, now) {
-	const value = header?.trim() ?? "";
-	if (value === "") return null;
-	if (/^\d+$/.test(value)) return Number(value);
-	if (!/[A-Za-z]/.test(value)) return null;
-	const at = Date.parse(value);
-	if (Number.isNaN(at)) return null;
-	return Math.max(0, Math.ceil((at - now) / 1e3));
-}
-/**
-* A refusal that never reached the engine: DNS, a dropped connection, a proxy
-* answering HTML. Status 0, so a caller testing `status === 409` cannot
-* mistake it for an answer.
-*/
-function offline(err) {
-	return new RestError(0, {
-		error: "unreachable",
-		detail: err instanceof Error ? err.message : "the engine could not be reached"
-	});
-}
-/**
-* How long a request may take before it is abandoned.
-*
-* A REQUEST THAT NEVER SETTLES NEVER SETTLES, and that is not a slow spinner
-* here: every write in this UI runs behind a `busy` flag whose only reset is
-* the `finally` of its own await, and every dialog disables its own exits
-* while busy — Escape, the veil click and the Cancel button. An unresolved
-* fetch was a modal with every way out switched off and a reload as the only
-* escape.
-*
-* ANCHORED TO THE LONGEST ORDINARY PATH THIS API HAS: a setup submission
-* seals a credential in the fleet's store, patches the company document,
-* validates it whole and advances the epoch, each a round trip of its own.
-* Thirty seconds is comfortably above that and comfortably below the point at
-* which a person concludes the page is broken.
-*
-* It is the DEFAULT, not the only deadline: a call whose path is genuinely
-* longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
-* Two do. A backup copies the whole store before it answers. And the node
-* gate takes up to fifty seconds to answer a gesture (twenty to judge it,
-* thirty to write every log), so thirty seconds gave up on a gesture the node
-* went on to finish, holding nothing to finish it with.
-*/
-var REQUEST_TIMEOUT_MS = 3e4;
-/** A deadline as a person would say it: seconds under two minutes, else
-*  minutes. */
-function waitWords(ms) {
-	const seconds = Math.round(ms / 1e3);
-	return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
-}
-/** Whether a rejection is the caller's own abort rather than a failure. */
-function isAbort(err) {
-	return typeof err === "object" && err !== null && err.name === "AbortError";
-}
-/** JSON is `application/json` and every `+json` type, merge patch included. */
-function isJson(contentType) {
-	const essence = contentType.split(";")[0].trim().toLowerCase();
-	return essence === "application/json" || essence.endsWith("+json");
-}
-/** The path with the caller's query parameters merged into its own. */
-function withQuery(path, query) {
-	if (!query) return path;
-	const at = path.indexOf("?");
-	const params = new URLSearchParams(at < 0 ? "" : path.slice(at + 1));
-	for (const [key, value] of Object.entries(query)) if (value !== void 0) params.set(key, String(value));
-	const qs = params.toString();
-	return (at < 0 ? path : path.slice(0, at)) + (qs ? `?${qs}` : "");
-}
-/**
-* The one request path, answering the status and entity-tag as well as the
-* body.
-*
-* NOT CACHED, EVER. Every answer here is either a write or a guarded read of
-* something that changes under the reader (a configuration revision, the
-* sealed store's names, an integration's requirements), and a heuristic cache
-* hit on one of those is a screen showing the company as it was. A 304 still
-* reaches the caller, when the caller sent the precondition that asks for it.
-*/
-async function request(method, path, options = {}) {
-	const { body, headers = {}, query, signal, read = "json", timeoutMs = REQUEST_TIMEOUT_MS } = options;
-	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
-	let encoded;
-	if (body !== void 0) {
-		if (contentType && !isJson(contentType)) {
-			if (typeof body !== "string") throw new TypeError(`rest.request: a ${contentType} body must be a string`);
-			encoded = body;
-		} else encoded = JSON.stringify(body);
-	}
-	if (signal?.aborted) throw signal.reason;
-	const token = apiToken();
-	const init = {
-		method,
-		cache: "no-store",
-		headers: {
-			...token ? { Authorization: "Bearer " + token } : {},
-			...contentType ? { "Content-Type": contentType } : {},
-			...headers
-		},
-		...encoded === void 0 ? {} : { body: encoded }
-	};
-	const controller = new AbortController();
-	let timedOut = false;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		controller.abort();
-	}, timeoutMs);
-	const forward = () => controller.abort(signal?.reason);
-	signal?.addEventListener("abort", forward, { once: true });
-	const unanswered = (err) => {
-		if (signal?.aborted) return signal.reason;
-		return timedOut ? new RestError(0, {
-			error: "unreachable",
-			detail: `the engine did not answer within ${waitWords(timeoutMs)}`
-		}) : offline(err);
-	};
-	let response;
-	let text;
-	try {
-		try {
-			response = await fetch(location.origin + withQuery(path, query), {
-				...init,
-				signal: controller.signal
-			});
-		} catch (err) {
-			throw unanswered(err);
-		}
-		try {
-			text = await response.text();
-		} catch (err) {
-			throw unanswered(err);
-		}
-	} finally {
-		clearTimeout(timer);
-		signal?.removeEventListener("abort", forward);
-	}
-	if (read === "text" && response.ok) return {
-		status: response.status,
-		body: text,
-		etag: response.headers.get("ETag")
-	};
-	let parsed = null;
-	if (text !== "") try {
-		parsed = JSON.parse(text);
-	} catch {
-		throw new RestError(response.ok ? 502 : response.status, {
-			error: "unreadable_body",
-			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back without the engine's JSON, so something in front of it answered`
-		}, response.ok ? null : response.headers.get("Retry-After"));
-	}
-	if (!response.ok && response.status !== 304) {
-		const refusal = parsed && typeof parsed === "object" ? parsed : {};
-		throw new RestError(response.status, refusal, response.headers.get("Retry-After"));
-	}
-	return {
-		status: response.status,
-		body: parsed,
-		etag: response.headers.get("ETag")
-	};
-}
-/** The body alone, for the callers that need nothing else. */
-async function bodyOf(method, path, options) {
-	return (await request(method, path, options)).body;
-}
-/**
-* How long a download may take, from its request to its last byte.
-*
-* FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
-* gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
-* sized for a JSON answer would abandon every large download part way.
-*/
-var DOWNLOAD_TIMEOUT_MS = 9e5;
-/**
-* A file's bytes, fetched with the operator's token.
-*
-* NOT A LINK. A plain `<a href>` carries no bearer token, so on an engine that
-* guards its reads it would download the refusal instead of the file — the
-* bytes are fetched here, where the token is, and handed to the caller as a
-* blob. A refusal is read as the engine's JSON, like every other.
-*/
-async function blob(path, signal) {
-	const token = apiToken();
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
-	const forward = () => controller.abort(signal?.reason);
-	signal?.addEventListener("abort", forward, { once: true });
-	try {
-		let response;
-		try {
-			response = await fetch(location.origin + path, {
-				method: "GET",
-				cache: "no-store",
-				headers: token ? { Authorization: "Bearer " + token } : {},
-				signal: controller.signal
-			});
-		} catch (err) {
-			if (signal?.aborted) throw signal.reason;
-			throw offline(err);
-		}
-		if (!response.ok) {
-			let body = {};
-			try {
-				body = await response.json();
-			} catch {
-				body = { error: "unreadable_body" };
-			}
-			throw new RestError(response.status, body);
-		}
-		try {
-			return await response.blob();
-		} catch (err) {
-			throw offline(err);
-		}
-	} finally {
-		clearTimeout(timer);
-		signal?.removeEventListener("abort", forward);
-	}
-}
-var rest = {
-	/**
-	* The whole answer: status, entity-tag and body. For a caller that sends a
-	* precondition, reads a tag, cancels, or branches on a success status.
-	*/
-	request,
-	/** A read's body. `signal` is the loader's: `lib/useRest.ts` aborts a read
-	*  it superseded, and a screen reads through that rather than calling this. */
-	get: (path, signal) => bodyOf("GET", path, { signal }),
-	post: (path, body, headers) => bodyOf("POST", path, {
-		body: body ?? {},
-		headers
-	}),
-	put: (path, body, headers) => bodyOf("PUT", path, {
-		body: body ?? {},
-		headers
-	}),
-	patch: (path, body, headers) => bodyOf("PATCH", path, {
-		body: body ?? {},
-		headers
-	}),
-	/**
-	* THE BODY IS THE VALUE, not a document carrying one.
-	*
-	* `PUT /secrets/{name}` takes the credential as raw bytes, deliberately: a
-	* credential is arbitrary text — a PEM key has newlines, a token can hold
-	* anything — and an encoding step between the operator and the byte
-	* sequence the vendor compares is a 401 nobody can explain. Sending it
-	* through `put` would seal the JSON quotes into the credential.
-	*/
-	putText: (path, value) => bodyOf("PUT", path, {
-		body: value,
-		contentType: "text/plain; charset=utf-8"
-	}),
-	del: (path, body, headers) => bodyOf("DELETE", path, {
-		body,
-		headers
-	}),
-	/** A file's bytes — see [blob]. */
-	blob
 };
 //#endregion
 //#region src/contract/gate.ts
@@ -1512,16 +2318,71 @@ var BROKER_FINDING_KINDS = [
 */
 var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 //#endregion
+//#region src/protocol/keepalive.ts
+/**
+* Keeping a tab's session alive while it only listens.
+*
+* A session ends after twelve hours with nothing happening on it
+* (`session.Idle`), and what counts as something happening is a REQUEST: the
+* engine re-issues the cookie with a fresh idle deadline on any answer to a
+* request carrying one that is five minutes old (`session.ReissueAfter`). The
+* live socket neither enforces nor extends that deadline — it is authenticated
+* once, at its handshake — so a tab somebody leaves open on a dashboard that
+* only reads the socket would idle out with the person looking at it, and the
+* next reconnect would land them on the sign-in form.
+*
+* So while the socket is open, a REST read is made at least once per
+* re-issue interval — `GET /auth/session`, the cheapest guarded read there is —
+* unless some other request already heard from the engine since the last
+* tick, which re-issued the cookie just as well. Hidden or not: an open live
+* view is somebody using the dashboard, and the session's absolute deadline
+* still bounds how long that can last. A 401 is read where every other is
+* (`rest.ts`): a session that ended needs a sign-in.
+*/
+/**
+* How often an open tab makes sure the engine has heard from it, in ms:
+* the engine's own re-issue interval (`session.ReissueAfter`, five minutes).
+* Any sooner re-issues nothing — a cookie younger than that is not
+* re-issued — and any later lets a whole interval go unrenewed.
+*/
+var SESSION_KEEPALIVE_MS = 3e5;
+var SessionKeepAlive = class {
+	socket;
+	timer = 0;
+	constructor(socket) {
+		this.socket = socket;
+	}
+	start() {
+		if (this.timer) return;
+		this.timer = setInterval(() => this.tick(), SESSION_KEEPALIVE_MS);
+	}
+	stop() {
+		clearInterval(this.timer);
+		this.timer = 0;
+	}
+	/** One interval: a read, unless the socket is down or a request already answered. */
+	tick(now = Date.now()) {
+		if (!this.socket.connected) return;
+		if (now - lastAnsweredAt() < 3e5) return;
+		auth.session().catch(() => void 0);
+	}
+};
+//#endregion
 //#region src/contract/actions.ts
 /**
 * Every change the dashboard makes, as the tool the engine runs for it.
 *
 * The dashboard writes through ONE route — `POST /operator/act/{tool}`, as the
-* person the presented token is bound to (ADR-0024) — and the tools behind it
-* are the operator catalogue's, the same implementations a person's own
+* principal the request resolves to (ADR-0024): a person the identity
+* directory binds to a seat writes as that seat, a credential nobody is bound
+* through under its own login, and nobody is refused for being unbound — what
+* each may do is the authority table's, as on every surface. The tools behind
+* it are the operator catalogue's, the same implementations a person's own
 * assistant calls. This table is what the dashboard is allowed to send there:
 * `protocol/act.ts` takes only a key of it, and only the arguments its row
-* names.
+* names, as the body's `args`; the operation is the request's
+* `Idempotency-Key`, minted once per gesture and sent again on its retry,
+* never an `op_id` argument, which the route refuses.
 *
 * ONE ROW PER TOOL A CONTROL PRESSES, and no other: `app/source.test.ts` holds
 * the keys to the `useAct("…")` literals outside the suites, both ways, so a
@@ -1537,17 +2398,19 @@ var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 *  - `refreshes` — questions OUTSIDE that domain's session set
 *    (`contract/domains.ts`) that the write also moves, asked again without a
 *    floor because they cannot take one;
-*  - `scope` — `person` for a change any bound person makes to the company's
-*    work in their own name, `company` for one that rewrites what every seat's
-*    tracker means (a project's settings, the catalogue), which a screen
-*    offers only where it says so.
+*  - `scope` — `person` for a change somebody makes to the company's work in
+*    their own name, `company` for one that rewrites what every seat's tracker
+*    means (a project's settings, the catalogue), which a screen offers only
+*    where it says so. It is the authority table's: a write decided by a
+*    container's lead or by admin is `company`.
 *
 * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
 * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
 * served by the act transport and is not a read, every argument is one its
-* schema takes, every required one is present, and every scope is the
-* engine's. A renamed argument in Go is a red build here rather than a button
-* that is refused `invalid` the first time somebody presses it.
+* schema takes, every required one is present, and every scope is the one its
+* authority class gives it. A renamed argument in Go is a red build here
+* rather than a button the tools' own gate refuses `invalid_body` — an
+* argument the tool does not declare — the first time somebody presses it.
 */
 var ACTIONS = {
 	create_work_item: {
@@ -1722,7 +2585,7 @@ var ACTIONS = {
 			"name",
 			"type",
 			"params",
-			"owner"
+			"personal"
 		],
 		domain: "tracker",
 		refreshes: [],
@@ -1749,12 +2612,17 @@ var ACTIONS = {
 *
 * EXACTLY THE ENGINE'S TWO SETS, held both ways by `internal/api/operator`'s
 * `TestTheDashboardKnowsExactlyTheActRefusals`: the transport's own codes
-* (`operator.ActTransportCodes` — a token, a body, a drain) and the tool
-* refusal classes (`mcp.Refusals` — what the tool itself refused). One union
-* because a caller branching on `error` must never need to know which half a
-* code came from, and the engine keeps them disjoint for that reason. A code
-* missing here is a refusal rendered as "something went wrong"; one listed
-* that nothing sends is a sentence nobody will ever read.
+* (`operator.ActTransportCodes` — the request guard's, the authority table's,
+* the operation key's, a body, a drain) and the tool refusal classes
+* (`mcp.Refusals` — what the tool itself refused, or a fault of the node it
+* met). One union because a caller branching on `error` must never need to
+* know which half a code came from, and the engine keeps them disjoint for
+* that reason. A code missing here is a refusal rendered as "something went
+* wrong"; one listed that nothing sends is a sentence nobody will ever read.
+*
+* NO SENTENCE MENTIONS A TOKEN. The dashboard holds no credential a script can
+* read — the browser's session cookie is the whole of it — so a person is
+* told to sign in again, never to set anything.
 *
 * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
 * which means "show the tool's own `detail`". Those are the two classes whose
@@ -1764,17 +2632,23 @@ var ACTIONS = {
 * `if_match` and record ids.
 */
 var ACT_ERRORS = {
-	invalid_token: "The engine refused your API token. Set it again to make changes.",
-	unbound: "This token is not bound to a person, so there is nobody to record the change under.",
+	invalid_token: "Your sign-in has ended. Sign in again, then make the change.",
+	identity_unavailable: "This node cannot confirm who you are just now. Try again in a moment; your sign-in is fine.",
+	seat_unavailable: "The seat you act as is no longer in the org chart, so nothing can be made in its name.",
+	second_factor_enrolment_required: "This deployment requires a second factor. Enrol one before you make changes.",
+	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
+	unauthorized: "You do not hold what this change needs.",
+	step_up_required: "This change needs you to confirm who you are first.",
 	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
 	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
 	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
-	invalid_request_id: "The dashboard sent the change without a usable request id.",
+	op_id_invalid: "The dashboard sent the change without a usable operation key. Reload; if it persists, it is a bug.",
+	invalid_input: "What this change was about moved since you opened it. Look again, then make the change.",
 	invalid_body: "The dashboard sent a change the engine could not read.",
 	body_too_large: "The change is larger than the engine accepts in one request.",
 	unreadable_body: "The change could not be read in full by the engine.",
+	no_active_revision: "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
 	draining: "This node is shutting down and takes no changes now. Try again in a moment.",
-	internal_error: "The change failed inside the engine. Its log has the reason; nothing was refused on purpose.",
 	invalid: null,
 	not_found: "It is not there any more. Somebody may have removed or moved it.",
 	forbidden: null,
@@ -1787,7 +2661,8 @@ var ACT_ERRORS = {
 	not_running: "It is not running any more.",
 	steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
 	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
-	unavailable: "This node could not make the change just now. Try again in a moment."
+	unavailable: "This node could not make the change just now. Try again in a moment.",
+	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."
 };
 //#endregion
 //#region src/contract/domains.ts
@@ -1974,17 +2849,25 @@ var session = new SessionFloors();
 //#endregion
 //#region src/protocol/act.ts
 /**
-* The dashboard's one write: a change, made as the person the token is bound
-* to (ADR-0024).
+* The dashboard's one write: a change, made as the principal this browser's
+* session resolves to (ADR-0024).
 *
 * EVERY BUTTON THAT CHANGES THE COMPANY COMES THROUGH HERE, and here goes to
 * exactly one route — `POST /operator/act/{tool}` — where the engine runs the
-* same operator tool a person's own assistant would, attributed to the token
-* as author and to the seat it is bound to as the person. There is no second
-* write path to keep in step with it: `app/source.test.ts` holds every `act(`
-* to a literal tool, `protocol/transport.test.ts` holds every network read to
-* `src/protocol/`, and `contract/actions.ts` is the whole vocabulary, held
-* against the engine's catalogue by a Go gate.
+* same operator tool a person's own assistant would, decided by the one
+* authority table and attributed the way every surface attributes a write: a
+* person the identity directory binds to a seat writes as that seat, and a
+* credential nobody is bound through writes under its own login. There is no
+* second write path to keep in step with it: `app/source.test.ts` holds every
+* `act(` to a literal tool, `protocol/transport.test.ts` holds every network
+* read to `src/protocol/`, and `contract/actions.ts` is the whole vocabulary,
+* held against the engine's catalogue by a Go gate.
+*
+* THE CREDENTIAL IS THE SESSION COOKIE, as for every request `rest.ts` makes:
+* this module holds nothing a script could read. A `401` is noted there as a
+* session that needs a sign-in, and a `403 step_up_required` is confirmed and
+* the SAME request replayed there — so a press refused for a stale proof is
+* made once the person has confirmed who they are, under the same operation.
 *
 * # What an answer can be, and what each tells a person
 *
@@ -1996,7 +2879,7 @@ var session = new SessionFloors();
 *  - `unknown` — nobody can say whether it landed: the connection dropped
 *    after the request left, a gateway gave up, or the engine itself said so.
 *    NEVER RETRIED HERE. A retry is the person's decision, and when they make
-*    it the same `requestId` goes again, which the engine derives the same
+*    it the same `opId` goes again, which the engine derives the same
 *    operations from — so a retry is the first attempt's write rather than a
 *    second one;
 *  - `refused` — the engine said no, with a code from `contract/errors.ts`
@@ -2007,70 +2890,59 @@ var session = new SessionFloors();
 * abort, which is not an answer at all.
 */
 var ROWS = ACTIONS;
-/**
-* The codes the act transport itself answers with a 5xx, each of which says
-* nothing was written: the drain gate refused before the handler ran, a tool
-* refused before it appended (an interrupted call says `outcome: unknown`
-* beside its class, and is read before this), or a tool failed without a
-* class. Any other 5xx is somebody else's.
-*/
-var ENGINE_5XX = /* @__PURE__ */ new Set([
-	"draining",
-	"unavailable",
-	"internal_error"
-]);
-/** The refusal classes a later attempt may clear: the node, not the request. */
-var RETRYABLE = /* @__PURE__ */ new Set(["draining", "unavailable"]);
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code) {
 	return Object.hasOwn(ACT_ERRORS, code);
 }
 /**
-* A fresh request id: a UUIDv7, stamped with the instant the gesture began.
+* A fresh operation key: a UUIDv7, stamped with the instant the gesture began.
 *
-* VERSION 7 BECAUSE THE ENGINE READS THE INSTANT. The act transport derives
-* the call's operation from this id, and the operation's mint instant is the
-* id's own — the instant the engine uses to decide whether its operation
-* ledger can still vouch for a retry. An id carrying no instant is refused
-* `invalid_request_id`. The layout is the engine's operation-id grammar with
-* no name ([layoutOpID]), so there is one encoder rather than two.
+* VERSION 7 BECAUSE THE ENGINE READS THE INSTANT. The key travels in the
+* `Idempotency-Key` header, which the act route REQUIRES and holds to the
+* engine's operation-id grammar (`statelog.CheckCallerOpID`); the operation's
+* mint instant is the key's own, and it is what the engine uses to decide
+* whether its operation ledger can still vouch for a retry. A key carrying no
+* instant is refused `op_id_invalid`. The layout is the engine's operation-id
+* grammar with no name ([layoutOpID]), so there is one encoder rather than
+* two. The engine then scopes the key by the principal that sent it, so a key
+* somebody copied names an operation of theirs, never this person's.
 *
 * `crypto.getRandomValues`, never `crypto.randomUUID`: the second exists only
 * in a secure context, and a node's dashboard reached at
 * `http://10.0.0.4:8000` is not one — every write there would throw.
 */
-function newRequestId(now = Date.now()) {
+function newActOpID(now = Date.now()) {
 	return layoutOpID(now, crypto.getRandomValues(/* @__PURE__ */ new Uint8Array(10)), "");
 }
 /**
-* Make one change, as the signed-in person.
+* Make one change, as the signed-in principal.
 *
-* The body is `{request_id, args}` as JSON — the engine refuses any other
-* content type, which is what keeps a cross-site form from reaching a write.
+* The body is `{args}` as JSON — the engine refuses any other content type,
+* which is what keeps a cross-site form from reaching a write — and the
+* operation rides the `Idempotency-Key` header, where every surface that
+* takes one reads it.
 */
 async function act(tool, args, options = {}) {
-	const requestId = options.requestId ?? newRequestId();
+	const opId = options.opId ?? newActOpID();
 	const floors = options.floors ?? session;
 	const unknown = (reason) => ({
 		kind: "unknown",
 		tool,
-		requestId,
+		opId,
 		reason
 	});
 	let body;
 	try {
 		({body} = await rest.request("POST", `/operator/act/${encodeURIComponent(tool)}`, {
-			body: {
-				request_id: requestId,
-				args
-			},
+			body: { args },
 			contentType: "application/json",
+			headers: { "Idempotency-Key": opId },
 			signal: options.signal
 		}));
 	} catch (err) {
 		if (isAbort(err)) throw err;
 		if (!(err instanceof RestError)) return unknown(String(err));
-		return refusalOf(tool, requestId, err, floors);
+		return refusalOf(tool, opId, err, floors);
 	}
 	const answer = body ?? {};
 	const outcome = answer.outcome;
@@ -2081,7 +2953,7 @@ async function act(tool, args, options = {}) {
 	return {
 		kind: outcome,
 		tool,
-		requestId,
+		opId,
 		position,
 		domain,
 		receipt: answer.receipt
@@ -2090,36 +2962,38 @@ async function act(tool, args, options = {}) {
 /**
 * The refusals that say the screen the press was made from is OUT OF DATE:
 * somebody else changed the object since it was drawn (`stale_version`,
-* `conflict`), removed it (`not_found`), made it already (`exists`) or answered
-* it (`already_answered`). Each asks again every question the write would have
-* moved — without raising a floor, since nothing of this tab's landed — so the
-* page redraws what IS there and the next press is made against it. Without
-* that a task page kept sending the version it was drawn at and was refused
-* `stale_version` on every press until its own poll happened to come round.
+* `conflict`), removed it (`not_found`), made it already (`exists`), answered
+* it (`already_answered`), or moved what the request named so its operation
+* already landed on something else (`invalid_input`). Each asks again every
+* question the write would have moved — without raising a floor, since
+* nothing of this tab's landed — so the page redraws what IS there and the
+* next press is made against it. Without that a task page kept sending the
+* version it was drawn at and was refused `stale_version` on every press
+* until its own poll happened to come round.
 */
 var LOOK_AGAIN = /* @__PURE__ */ new Set([
 	"stale_version",
 	"conflict",
 	"not_found",
 	"exists",
-	"already_answered"
+	"already_answered",
+	"invalid_input"
 ]);
 /** What a refusal, or a request that never got an answer, came to. */
-function refusalOf(tool, requestId, err, floors) {
+function refusalOf(tool, opId, err, floors) {
 	if (err.body.outcome === "unknown") return {
 		kind: "unknown",
 		tool,
-		requestId,
+		opId,
 		reason: err.detail || err.code
 	};
 	const code = isActErrorCode(err.code) ? err.code : "";
-	if (err.status === 0 || err.status >= 500 && !ENGINE_5XX.has(code)) return {
+	if (err.unanswered || err.status >= 500 && code === "") return {
 		kind: "unknown",
 		tool,
-		requestId,
+		opId,
 		reason: err.detail || `The answer was lost (status ${err.status}).`
 	};
-	if (err.status === 401) requestToken();
 	if (LOOK_AGAIN.has(code)) {
 		const { domain, refreshes } = ROWS[tool];
 		floors.written(domain, null, refreshes);
@@ -2127,12 +3001,13 @@ function refusalOf(tool, requestId, err, floors) {
 	return {
 		kind: "refused",
 		tool,
-		requestId,
+		opId,
 		code,
-		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || `The engine refused the change (status ${err.status}).`),
+		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
 		hint: err.hint,
-		retryable: RETRYABLE.has(code)
+		grants: err.grants,
+		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SessionFloors, Store, act, api, apiToken, clearToken, domainOf, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

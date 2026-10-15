@@ -26,7 +26,7 @@ import { GROUPS } from "~/contract/spend.ts";
 import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
+
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";
 // OURS, AND DELIBERATELY: the kit's `SegmentedControl` commits the option the
@@ -60,8 +60,10 @@ export function PhaseChart({
   // split is in flight the old answer is still on screen, and its legend must
   // name its own bands.
   const drawn = data?.group ?? group;
-  const badgeOf = useSeatBadgeOf();
-  const bands = bandsOf(data, drawn, (handle) => badgeOf(handle).name);
+  // THE ENGINE'S LABEL FOR EVERY BAND (`bandsOf`): a seat band is keyed by
+  // its agent id and labelled by the engine with its current name, so there
+  // is no chart lookup to make here.
+  const bands = bandsOf(data, drawn);
   const today = dayLabelIn(Date.now(), zone);
   const labels = new Map(
     (data?.series ?? []).map((p) => [
@@ -83,6 +85,7 @@ export function PhaseChart({
     <Card className="spend-card spend-chart">
       <QueryState
         error={series.error}
+        refusal={series.refusal}
         detail={series.detail}
         loading={series.loading && !data}
         empty={

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // LETTING AN ANSWER GO IS EXACTLY ONCE, ACROSS A CRASH AT EACH STEP.
@@ -47,7 +46,7 @@ func (r *coordRig) handedBack() []string {
 	defer r.queue.mu.Unlock()
 	var out []string
 	for _, p := range r.queue.published {
-		if p.topic == topics.AgentInbox("swe") {
+		if p.topic == sweInbox() {
 			out = append(out, p.event.ID.String())
 		}
 	}

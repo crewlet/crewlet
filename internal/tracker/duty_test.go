@@ -416,53 +416,6 @@ func TestTheDutyLeavesAMergeWhoseWalkHoldsItsClaim(t *testing.T) {
 	}
 }
 
-// A REMOVED TASK MID-MERGE WAITS FOR ITS RESTORE, and costs no tick until then.
-//
-// A tombstoned task is frozen, so the close is refused like every other write
-// to it: a gate that counted it ran the job against it on every tick, failing
-// on it each time — and, because the job stopped at its first failure, every
-// merge after it in id order was never finished at all.
-func TestARemovedTaskMidMergeWaitsForItsRestore(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	filedTask(t, r, "keep")
-	filedTask(t, r, "dup")
-	markMerge(t, r, "dup", "keep")
-	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "dup", "ENG",
-		false, nil); err != nil {
-		t.Fatalf("RemoveTask: %v", err)
-	}
-	r.drain()
-
-	// THE GATE ITSELF, because a job that runs and finds nothing reports
-	// exactly what a job that never ran does: the cost is the selection
-	// the gate exists to skip.
-	if pending := trackerGate(t, r, "tracker_abandoned_merges"); pending {
-		t.Fatal("the gate reports a merge to finish when the only one is a " +
-			"removed task nothing can write to — the job runs on every tick " +
-			"until somebody restores it")
-	}
-
-	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "dup", "ENG",
-		nil); err != nil {
-		t.Fatalf("RestoreTask: %v", err)
-	}
-	r.drain()
-	swept, err := trackerWorker(t, r).Tick(t.Context())
-	if err != nil {
-		t.Fatalf("Tick: %v", err)
-	}
-	if got := swept["tracker_abandoned_merges"]; got != 1 {
-		t.Fatalf("the duty finished %d merge(s) after the restore, want 1", got)
-	}
-	r.drain()
-	if dup := r.task(t, "dup"); dup.Task.Merging ||
-		dup.Task.Status != tracker.StatusCancelled {
-		t.Errorf("the restored merge is %q, merging %v", dup.Task.Status,
-			dup.Task.Merging)
-	}
-}
-
 // ONE MERGE THE DUTY CANNOT FINISH DOES NOT HOLD UP THE REST.
 //
 // The merges are independent — different tasks, different subjects — and the

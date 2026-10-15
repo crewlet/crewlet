@@ -14,6 +14,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -48,31 +50,31 @@ import (
 //     asking the thing under test to test itself.
 
 // runRetention dispatches the group.
-func runRetention(args []string, stdout, stderr io.Writer) error {
+func runRetention(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "status":
-		return retentionStatus(rest, stdout, stderr)
+		return retentionStatus(environ, rest, stdout, stderr)
 	case "snapshots":
-		return retentionSnapshots(rest, stdout, stderr)
+		return retentionSnapshots(environ, rest, stdout, stderr)
 	case "ack":
-		return retentionAck(rest, stdout, stderr)
+		return retentionAck(environ, rest, stdout, stderr)
 	case "evict":
-		return retentionGate(rest, stdout, stderr, true)
+		return retentionGate(environ, rest, stdout, stderr, true)
 	case "readmit":
-		return retentionGate(rest, stdout, stderr, false)
+		return retentionGate(environ, rest, stdout, stderr, false)
 	case "reanchor":
-		return retentionReanchor(rest, stdout, stderr)
+		return retentionReanchor(environ, rest, stdout, stderr)
 	case "verify":
 		return retentionVerify(rest, stdout, stderr)
 	case "set-capacity":
-		return retentionSetCapacity(rest, stdout, stderr)
+		return retentionSetCapacity(environ, rest, stdout, stderr)
 	case "maintenance":
-		return retentionMaintenance(rest, stdout, stderr)
+		return retentionMaintenance(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention "+
 			"status|snapshots|ack|evict|readmit|reanchor|verify|"+
-			"set-capacity|maintenance [<config.yaml>] [-url] [-token]")
+			"set-capacity|maintenance [<config.yaml>] [-url]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown retention command %q", sub)
@@ -136,8 +138,12 @@ type maintenanceRow struct {
 	OriginalMaxBytes    uint64    `json:"original_max_bytes"`
 	Since               time.Time `json:"since"`
 	By                  string    `json:"by"`
+	OperatorID          string    `json:"operator_id"`
 	ParticipantsMissing []string  `json:"participants_missing"`
 	Blocked             string    `json:"blocked"`
+
+	// AbandonedBy is who abandoned it, once somebody has.
+	AbandonedBy capacityParty `json:"abandoned_by"`
 }
 
 // retentionDomain is one registered domain's row.
@@ -152,6 +158,7 @@ type retentionDomain struct {
 	MaxBytes          uint64          `json:"max_bytes"`
 	ReserveBytes      uint64          `json:"reserve_bytes"`
 	HeadroomFraction  *float64        `json:"headroom_fraction"`
+	BytesPerDay       *uint64         `json:"bytes_per_day"`
 	TrimFloor         uint64          `json:"trim_floor"`
 	TrimTo            uint64          `json:"trim_to"`
 	BlockedBy         string          `json:"blocked_by"`
@@ -306,9 +313,9 @@ type retentionAlarmDomain struct {
 // own — see [statelog.Report.ExitNonZero]. A second rule here would be a
 // second definition of "is something wrong", and the cron watching this exit
 // code would be watching the one nobody maintained.
-func retentionStatus(args []string, stdout, stderr io.Writer) error {
+func retentionStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var domain *string
-	client, err := nodeClientFor(args, "retention status", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "retention status", stderr, func(fs *flag.FlagSet) {
 		domain = fs.String("domain", "",
 			"limit the log and watermark blocks to one domain; empty prints every one")
 	})
@@ -330,12 +337,15 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "  phase %s, attempt %d, open since %s",
 			m.Phase, m.Attempt, m.Since.UTC().Format(time.RFC3339))
 		if m.By != "" {
-			fmt.Fprintf(stdout, ", run by %s", m.By)
+			fmt.Fprintf(stdout, ", run by %s", describeAuthor(m.By, m.OperatorID))
 		}
 		fmt.Fprintln(stdout, ".")
 		if m.Blocked != "" {
 			fmt.Fprintf(stdout, "  BLOCKED: %s. This needs a person, not time.\n",
 				m.Blocked)
+		}
+		if m.AbandonedBy.By != "" {
+			fmt.Fprintf(stdout, "  abandoned by %s.\n", m.AbandonedBy.describe())
 		}
 		if len(m.ParticipantsMissing) > 0 {
 			fmt.Fprintf(stdout, "  waiting on %s.\n",
@@ -433,20 +443,25 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 // apply to a domain prints `n/a` rather than `0`, because an absent term and a
 // term that permits nothing are different facts.
 //
+// PER DAY is the log's intake over the trailing day, measured out of its own
+// records, and `-` where nobody measured it — a compacted log, one younger
+// than a day, a node that has not ticked — which is not a log that took in
+// nothing.
+//
 // RESERVE is the top of CEILING kept for gate records on a log that claims
 // identity, and HEADROOM is what is left of the rest — the ceiling ordinary
 // writes are refused `log_full` at — so a log at 0% still takes an eviction.
 func retentionDomains(w io.Writer, report retentionReport, only string) {
-	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tCEILING\tRESERVE\tHEADROOM\tTRIM FLOOR")
+	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tPER DAY\tCEILING\tRESERVE\tHEADROOM\tTRIM FLOOR")
 	for _, d := range report.Domains {
 		if only != "" && d.Domain != only {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			d.Domain, d.Stream, d.Generation, d.Replay, d.FirstSeq, d.LastSeq,
-			humanBytes(int64(d.Bytes)), ceilingOrDash(d.MaxBytes),
-			reserveOrDash(d.ReserveBytes), headroomOrDash(d.HeadroomFraction),
-			d.floorOrDash())
+			humanBytes(int64(d.Bytes)), perDayOrDash(d.BytesPerDay),
+			ceilingOrDash(d.MaxBytes), reserveOrDash(d.ReserveBytes),
+			headroomOrDash(d.HeadroomFraction), d.floorOrDash())
 	}
 }
 
@@ -607,8 +622,8 @@ func alarmLog(d retentionAlarmDomain) string {
 // what they hold" is a disk question, and it is the one an operator asks when a
 // join has failed. Folding it into `status` would put it behind the trim's own
 // story, which is a different failure with a different remedy.
-func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
-	client, err := nodeClientFor(args, "retention snapshots", stderr, nil)
+func retentionSnapshots(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	client, err := nodeClientFor(environ, args, "retention snapshots", stderr, nil)
 	if err != nil {
 		return err
 	}
@@ -651,10 +666,10 @@ func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
 //
 // It exists because the engine cannot see a copy that has left the host, and
 // `backup_floor: operator` is the policy that says only such a copy counts.
-func retentionAck(args []string, stdout, stderr io.Writer) error {
+func retentionAck(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream *string
 	var position *uint64
-	client, err := nodeClientFor(args, "retention ack", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "retention ack", stderr, func(fs *flag.FlagSet) {
 		stream = fs.String("stream", "",
 			"the log this acknowledgement is about; required")
 		position = fs.Uint64("position", 0,
@@ -698,7 +713,7 @@ func retentionAck(args []string, stdout, stderr io.Writer) error {
 // did not reach every log exits non-zero and says how to finish it — the same
 // command with the operation id it answered with, which every log that already
 // holds the record answers from its own ledger rather than writing twice.
-func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
+func retentionGate(environ config.Source, args []string, stdout, stderr io.Writer, evict bool) error {
 	verb := "readmit"
 	if evict {
 		verb = "evict"
@@ -706,7 +721,7 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	node, rest := splitSubject(args)
 	var confirm, opID *string
 	var force *bool
-	client, err := nodeClientFor(rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id, because this changes whether that machine's records apply")
 		opID = fs.String("op-id", "",
@@ -742,9 +757,16 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// the route itself mints with, so the id carries its instant — the node
 	// refuses one that does not, since no ledger could vouch for it — and
 	// reads in the ledger exactly as a node-minted one would.
+	//
+	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
+	// IT TO ([statelog.CheckCallerOpID]) before anything is asked: the node
+	// refuses it `400 op_id_invalid` anyway, and refused here the error
+	// names the flag rather than a query parameter this command composed.
 	gesture := *opID
 	if gesture == "" {
 		gesture = statelog.NewOpID(time.Now(), verb+"-"+node)
+	} else if err := statelog.CheckCallerOpID(gesture); err != nil {
+		return fmt.Errorf("-op-id: %w", err)
 	}
 	forced := force != nil && *force
 	// THE COMMAND THAT FINISHES THIS GESTURE, with the flags that decide it:
@@ -770,7 +792,13 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// PATIENTLY, for the reason [nodeClient.patiently] names: how long a
 	// gesture takes is a property of what it waits on — a write per log,
 	// each resolved against this node's applier — and not of the network.
-	if err := client.patiently(gateRequestTimeout).post(context.Background(), path,
+	// And for as long as [engine.GateClientWait] says: past the node's own
+	// bound on the gesture, so its answer — every log's outcome and what to
+	// do about the ones it could not finish — reaches the operator rather
+	// than a client timeout that knows none of it. The ten seconds every
+	// other verb waits was two of the five-second resolutions a gesture
+	// legitimately makes, back to back.
+	if err := client.patiently(engine.GateClientWait()).post(context.Background(), path,
 		&answer); err != nil {
 		var lost noAnswer
 		if errors.As(err, &lost) {
@@ -1044,19 +1072,6 @@ func waitAdvice(refusal string) string {
 	return ""
 }
 
-// gateRequestTimeout is how long `retention evict` and `readmit` wait for the
-// node's answer.
-//
-// ONE MINUTE: the node answers one gesture within engine.GateAnswerBudget —
-// fifty seconds: twenty to judge it and thirty to write every log — and the
-// ten beyond it are the request's round trip. Waiting past the node's own
-// bound is what makes its answer — every log's outcome and what to do about
-// the ones it could not finish — reach the operator rather than a client
-// timeout that knows none of it. The ten seconds every other verb waits was
-// two of the five-second resolutions a gesture legitimately makes, back to
-// back.
-const gateRequestTimeout = time.Minute
-
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.
 //
@@ -1121,6 +1136,17 @@ func headroomOrDash(fraction *float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.0f%%", *fraction*100)
+}
+
+func perDayOrDash(perDay *uint64) string {
+	if perDay == nil {
+		// NOT ZERO. A log nobody has measured — compacted, younger
+		// than a day, or on a node that has not ticked — is not a log
+		// that took in nothing, and `0 B` is the value that says it
+		// did.
+		return "-"
+	}
+	return humanBytes(int64(*perDay))
 }
 
 func yesNo(v bool) string {

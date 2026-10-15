@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -59,6 +61,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"OnlyALaunchingRunCanSuspend", testOnlyALaunchingRunCanSuspend},
 		{"AttachingABoxClearsTheSnapshotStamp", testAttachingABoxClearsTheSnapshotStamp},
 		{"ALaunchingRunIsActive", testALaunchingRunIsActive},
+		{"ASeatsRunsAreFoundByItsID", testASeatsRunsAreFoundByItsID},
 		{"TheTailIsClaimedExactlyOnce", testTheTailIsClaimedExactlyOnce},
 		{"AClaimIsExclusiveUnderContention", testAClaimIsExclusiveUnderContention},
 		{"AClaimReportsWhereItCameFrom", testAClaimReportsWhereItCameFrom},
@@ -1627,6 +1630,63 @@ func testALaunchingRunIsActive(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
+// A SEAT'S RUNS ARE FOUND BY ITS ID, and by the id alone. The reader that asks
+// this way — a mailbox retirement, about to delete the subscriptions every one
+// of these runs is reached on — may hold no handle at all, and a store that
+// matched on the handle beside the id handed it nothing for such a seat, while
+// one that matched on the handle instead handed it a namesake's runs: the same
+// handle under a renamed organisation is another seat. Every unfinished status
+// is listed, a launching run included, a finished run is gone from this
+// listing like every other, and no seat at all is refused rather than answered
+// with every row that names none.
+func testASeatsRunsAreFoundByItsID(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	seat, namesake := uuid.New(), uuid.New()
+	named := func(turnID string, id string) sandbox.PendingRun {
+		r := run(turnID)
+		r.AgentID = id
+		return r
+	}
+	mustLaunched(t, s, named("running", seat.String()))
+	mustLaunched(t, s, named("parked", seat.String()))
+	park(t, s, "parked")
+	mustBeginLaunch(t, s, named("launching", seat.String()))
+	// The same handle on both of these, "swe", as on every run above.
+	mustLaunched(t, s, named("namesake", namesake.String()))
+	mustLaunched(t, s, named("unnamed", ""))
+
+	turns := func(id uuid.UUID) []string {
+		t.Helper()
+		got, err := s.ListActiveForSeatID(ctx, id)
+		if err != nil {
+			t.Fatalf("ListActiveForSeatID(%s): %v", id, err)
+		}
+		var ids []string
+		for _, r := range got {
+			ids = append(ids, r.TurnID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	if got, want := turns(seat), []string{"launching", "parked", "running"}; !slices.Equal(got, want) {
+		t.Fatalf("the seat's runs by id = %v, want %v and not its namesake's", got, want)
+	}
+	if got := turns(namesake); !slices.Equal(got, []string{"namesake"}) {
+		t.Fatalf("the namesake's runs by id = %v, want only its own", got)
+	}
+	if _, err := s.ListActiveForSeatID(ctx, uuid.Nil); err == nil {
+		t.Fatal("a listing for no seat was answered; it would hand a retirement every run " +
+			"whose row names no seat")
+	}
+
+	if _, finished, err := end(ctx, s, "running", everyJob(sandbox.Fence{}, sandbox.Active)); err != nil || !finished {
+		t.Fatalf("end = %v, %v", finished, err)
+	}
+	if got, want := turns(seat), []string{"launching", "parked"}; !slices.Equal(got, want) {
+		t.Fatalf("after one run finished the seat's runs by id = %v, want %v", got, want)
+	}
+}
+
 func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	// THE SUSPENDED CONVERSATION. Everything the tool loop needs to re-enter
 	// where it stopped; a lossy round trip here resumes into a conversation
@@ -2643,13 +2703,16 @@ func testAnAnswerIsRecordedWithItsRoute(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("an answer naming no route = %v, %v, want refused", ok, err)
 	}
 	byTurn := answerOf("r1", "use main")
-	byTurn.Via, byTurn.By, byTurn.BySeat = types.AnswerViaOperator, "founder-token", "founder"
+	byTurn.Via = types.AnswerViaOperator
+	byTurn.By, byTurn.ByKind, byTurn.OperatorID = "founder", "human", "pat:founder-token"
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, byTurn, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("an answer by turn = %v, %v", ok, err)
 	}
 	got := mustGet(t, s, "t1").Answer
-	if got == nil || got.Via != types.AnswerViaOperator || got.By != "founder-token" || got.BySeat != "founder" {
-		t.Fatalf("recorded %+v, want the answer by turn with the credential and the person it names", got)
+	if got == nil || got.Via != types.AnswerViaOperator || got.By != "founder" ||
+		got.ByKind != "human" || got.OperatorID != "pat:founder-token" {
+		t.Fatalf("recorded %+v, want the answer by turn with its author, their kind and the "+
+			"credential it came through", got)
 	}
 }
 

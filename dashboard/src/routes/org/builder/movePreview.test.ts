@@ -40,7 +40,7 @@ function state() {
 
 describe("a seat", () => {
   test("names who it reports to before the move, the destination's lead, its onboarding and the credentials it loses", () => {
-    expect(movePreview(state(), "seat:dev", "unit:Sales")).toEqual({
+    expect(movePreview(state(), "seat:dev", "unit:sales")).toEqual({
       known: true,
       reportsTo: "VP Engineering",
       endsAsLeadOf: null,
@@ -53,12 +53,12 @@ describe("a seat", () => {
   });
 
   test("moving into a unit with a lead names that lead; moving within the same chain onboards nobody", () => {
-    const preview = movePreview(state(), "seat:sre", "unit:Engineering");
+    const preview = movePreview(state(), "seat:sre", "unit:engineering");
     expect(preview.destinationLead).toBe("VP Engineering");
     expect(preview.onboarding).toEqual(["SRE"]);
     expect(preview.credentials).toEqual({ gained: ["tracker"], lost: [] });
 
-    const stay = movePreview(state(), "seat:vp-engineering", "unit:Engineering");
+    const stay = movePreview(state(), "seat:vp-engineering", "unit:engineering");
     expect(stay.onboarding).toEqual([]);
     expect(stay.destinationLead).toBeNull();
   });
@@ -73,10 +73,10 @@ describe("a seat", () => {
         "units[0].roles[1]": { manager: "vp-engineering" },
       },
     });
-    expect(movePreview(managed, "seat:dev", "unit:Sales").endsAsLeadOf).toBe("Engineering");
+    expect(movePreview(managed, "seat:dev", "unit:sales").endsAsLeadOf).toBe("Engineering");
     expect(movePreview(managed, "seat:dev", COMPANY_KEY).endsAsLeadOf).toBe("Engineering");
     // An explicit manager, the fixture's default, is not the move's to end.
-    expect(movePreview(state(), "seat:dev", "unit:Sales").endsAsLeadOf).toBeNull();
+    expect(movePreview(state(), "seat:dev", "unit:sales").endsAsLeadOf).toBeNull();
     // A root seat placed in Platform by its unit reference and written into
     // Platform stays a direct member there.
     const placed = keyedState(fixtureCompany(), {
@@ -85,8 +85,8 @@ describe("a seat", () => {
         "units[0].children[0].roles[0]": { auto_reports: ["designer"] },
       },
     });
-    expect(movePreview(placed, "seat:designer", "unit:Platform").endsAsLeadOf).toBeNull();
-    expect(movePreview(placed, "seat:designer", "unit:Sales").endsAsLeadOf).toBe("Platform");
+    expect(movePreview(placed, "seat:designer", "unit:platform").endsAsLeadOf).toBeNull();
+    expect(movePreview(placed, "seat:designer", "unit:sales").endsAsLeadOf).toBe("Platform");
   });
 
   test("a human seat gains and loses no tool credentials", () => {
@@ -100,7 +100,7 @@ describe("a seat", () => {
 
 describe("a unit", () => {
   test("names the leads and channels its subtree inherits, and every agent seat that onboards again", () => {
-    expect(movePreview(state(), "unit:Platform", COMPANY_KEY)).toEqual({
+    expect(movePreview(state(), "unit:platform", COMPANY_KEY)).toEqual({
       known: true,
       reportsTo: null,
       endsAsLeadOf: null,
@@ -113,7 +113,7 @@ describe("a unit", () => {
   });
 
   test("a unit that declares its own lead and channel keeps them", () => {
-    expect(movePreview(state(), "unit:Engineering", "unit:Sales")).toMatchObject({
+    expect(movePreview(state(), "unit:engineering", "unit:sales")).toMatchObject({
       leads: [],
       channels: [],
       onboarding: ["VP Engineering", "Dev", "SRE"],
@@ -130,12 +130,12 @@ test("a destination the current check has not described previews nothing, not a 
     intent: {
       type: "addUnit",
       key: "new:ops",
-      placement: { parent: COMPANY_KEY, after: "unit:Sales" },
-      data: { name: "Ops", lead: "SRE", channel: "ops" },
+      placement: { parent: COMPANY_KEY, after: "unit:sales" },
+      data: { name: "Ops", id: "ops", lead: "sre", channel: "ops" },
     },
   });
-  expect(movePreview(added, "unit:Platform", "new:ops").known).toBe(false);
-  expect(movePreview(added, "seat:dev", "unit:Sales").known).toBe(false);
+  expect(movePreview(added, "unit:platform", "new:ops").known).toBe(false);
+  expect(movePreview(added, "seat:dev", "unit:sales").known).toBe(false);
 
   const checked = recheck(added, {
     units: {
@@ -148,7 +148,7 @@ test("a destination the current check has not described previews nothing, not a 
       "units[2]": { lead: "sre", channel: "ops" },
     },
   });
-  expect(movePreview(checked, "unit:Platform", "new:ops")).toMatchObject({
+  expect(movePreview(checked, "unit:platform", "new:ops")).toMatchObject({
     known: true,
     leads: [{ unit: "Platform", before: "VP Engineering", after: "SRE" }],
     channels: [{ unit: "Platform", before: "eng", after: "ops" }],
@@ -171,8 +171,8 @@ test("a destination the current check has not described previews nothing, not a 
       },
     },
   });
-  expect(movePreview(partial, "unit:Platform", "new:ops").known).toBe(false);
-  expect(movePreview(partial, "unit:Platform", COMPANY_KEY).known).toBe(true);
+  expect(movePreview(partial, "unit:platform", "new:ops").known).toBe(false);
+  expect(movePreview(partial, "unit:platform", COMPANY_KEY).known).toBe(true);
 });
 
 test("a draft no check has described previews nothing", () => {
@@ -182,5 +182,5 @@ test("a draft no check has described previews nothing", () => {
     document: fixtureCompany(),
     revision: "rev-1",
   });
-  expect(movePreview(loaded, "unit:Platform", COMPANY_KEY).known).toBe(false);
+  expect(movePreview(loaded, "unit:platform", COMPANY_KEY).known).toBe(false);
 });

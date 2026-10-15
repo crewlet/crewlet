@@ -180,7 +180,11 @@ export function useLiveTail(
     let live = true;
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
     const run = async (): Promise<void> => {
-      let retryMs = 0;
+      // The engine's own wait for a refusal it named one for (`retryDelayMs`),
+      // or null. A tail polls whatever the answer, so a refusal waiting cannot
+      // clear (0) or one that named no wait (null) keeps the ordinary poll,
+      // and only a named wait shorter than it brings the next ask forward.
+      let retryMs: number | null = null;
       try {
         const answer = await socket.query("sandbox_tail", {
           turn_id: turnId,

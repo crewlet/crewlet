@@ -7,23 +7,25 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- seat pauses -------------------------------------------------------- //
 
-// SeatPause reads one seat's pause.
-func (f *Fleet) SeatPause(_ context.Context, handle string) (coord.SeatPause, bool, error) {
-	if handle == "" {
-		return coord.SeatPause{}, false, errors.New("coord/memory: a seat pause needs a handle")
+// SeatPause reads one seat's pause, by the seat's id.
+func (f *Fleet) SeatPause(_ context.Context, seat uuid.UUID) (coord.SeatPause, bool, error) {
+	if seat == uuid.Nil {
+		return coord.SeatPause{}, false, errors.New("coord/memory: a seat pause needs a seat id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p, ok := f.pauses[handle]
+	p, ok := f.pauses[seat]
 	return p, ok, nil
 }
 
-// ListSeatPauses returns every pause, ordered by handle.
+// ListSeatPauses returns every pause, ordered by seat id.
 func (f *Fleet) ListSeatPauses(context.Context) ([]coord.SeatPause, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -37,7 +39,7 @@ func (f *Fleet) CreateSeatPause(_ context.Context, p coord.SeatPause) (coord.Sea
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, exists := f.pauses[p.Handle]; exists {
+	if _, exists := f.pauses[p.Seat]; exists {
 		return coord.SeatPause{}, false, nil
 	}
 	return f.storePauseLocked(p), true, nil
@@ -50,7 +52,7 @@ func (f *Fleet) UpdateSeatPause(_ context.Context, p coord.SeatPause) (coord.Sea
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	current, ok := f.pauses[p.Handle]
+	current, ok := f.pauses[p.Seat]
 	if !ok || p.Version == 0 || current.Version != p.Version {
 		return coord.SeatPause{}, false, nil
 	}
@@ -58,18 +60,18 @@ func (f *Fleet) UpdateSeatPause(_ context.Context, p coord.SeatPause) (coord.Sea
 }
 
 // DeleteSeatPause lifts a pause at a version.
-func (f *Fleet) DeleteSeatPause(_ context.Context, handle string, version uint64) (bool, error) {
-	if handle == "" {
-		return false, errors.New("coord/memory: a seat pause needs a handle")
+func (f *Fleet) DeleteSeatPause(_ context.Context, seat uuid.UUID, version uint64) (bool, error) {
+	if seat == uuid.Nil {
+		return false, errors.New("coord/memory: a seat pause needs a seat id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	current, ok := f.pauses[handle]
+	current, ok := f.pauses[seat]
 	if !ok || version == 0 || current.Version != version {
 		return false, nil
 	}
-	delete(f.pauses, handle)
-	f.notifyPauseLocked(coord.SeatPauseUpdate{Handle: handle})
+	delete(f.pauses, seat)
+	f.notifyPauseLocked(coord.SeatPauseUpdate{Seat: seat})
 	return true, nil
 }
 
@@ -77,13 +79,15 @@ func (f *Fleet) DeleteSeatPause(_ context.Context, handle string, version uint64
 //
 // The snapshot and the registration happen under ONE lock, which is the whole
 // ordering guarantee: a write lands either before the snapshot (and is in it)
-// or after the registration (and is delivered as a change). The KV watcher
-// gives the same guarantee by being one ordered consumer over the bucket.
+// or after the registration (and is delivered as a change). The KV backend
+// gives the same guarantee by starting its change hint before it lists, and
+// confirming every hint on the leader — see its WatchSeatPauses. This twin has
+// one copy, so every update it delivers is already the current state.
 func (f *Fleet) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
 	w := &pauseWatcher{wake: make(chan struct{}, 1)}
 	f.mu.Lock()
 	for _, p := range f.sortedPausesLocked() {
-		w.pending = append(w.pending, coord.SeatPauseUpdate{Handle: p.Handle, Pause: &p})
+		w.pending = append(w.pending, coord.SeatPauseUpdate{Seat: p.Seat, Pause: &p})
 	}
 	w.pending = append(w.pending, coord.SeatPauseUpdate{Current: true})
 	if f.pauseWatchers == nil {
@@ -160,11 +164,11 @@ func (f *Fleet) storePauseLocked(p coord.SeatPause) coord.SeatPause {
 	p.Version = f.version
 	p.At = p.At.UTC()
 	if f.pauses == nil {
-		f.pauses = map[string]coord.SeatPause{}
+		f.pauses = map[uuid.UUID]coord.SeatPause{}
 	}
-	f.pauses[p.Handle] = p
+	f.pauses[p.Seat] = p
 	stored := p
-	f.notifyPauseLocked(coord.SeatPauseUpdate{Handle: p.Handle, Pause: &stored})
+	f.notifyPauseLocked(coord.SeatPauseUpdate{Seat: p.Seat, Pause: &stored})
 	return p
 }
 
@@ -185,6 +189,6 @@ func (f *Fleet) sortedPausesLocked() []coord.SeatPause {
 	for _, p := range f.pauses {
 		out = append(out, p)
 	}
-	slices.SortFunc(out, func(a, b coord.SeatPause) int { return cmp.Compare(a.Handle, b.Handle) })
+	slices.SortFunc(out, func(a, b coord.SeatPause) int { return cmp.Compare(a.Seat.String(), b.Seat.String()) })
 	return out
 }

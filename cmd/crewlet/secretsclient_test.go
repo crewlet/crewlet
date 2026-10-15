@@ -39,7 +39,7 @@ func bootWithAPI(t *testing.T, host string, port int, token string) *config.Boot
 func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 	t.Parallel()
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
-		client, err := newSecretsClient(bootWithAPI(t, host, 9090, "t"), "")
+		client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, host, 9090, "t"), "")
 		if err != nil {
 			t.Fatalf("host %q: %v", host, err)
 		}
@@ -54,7 +54,7 @@ func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 // neither.
 func TestAnIPv6HostIsBracketed(t *testing.T) {
 	t.Parallel()
-	client, err := newSecretsClient(bootWithAPI(t, "fd00::1", 9090, "t"), "")
+	client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "fd00::1", 9090, "t"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestAnIPv6HostIsBracketed(t *testing.T) {
 // for a network fault.
 func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	_, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 0, "t"), "")
+	_, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 0, "t"), "")
 	if err == nil {
 		t.Fatal("a node with api.port 0 was accepted as a write target")
 	}
@@ -80,50 +80,18 @@ func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO TOKENS IS REFUSED BEFORE THE REQUEST, not after a 401.
-//
-// The guard would answer 401 either way; saying it here names the two ways
-// out — add a token to Tier A, or export one — which a bare 401 cannot.
-func TestANodeWithNoTokensSaysHowToAuthenticate(t *testing.T) {
-	t.Parallel()
-	_, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, ""), "")
-	if err == nil {
-		t.Fatal("a node with no api.auth.tokens was accepted")
-	}
-	for _, want := range []string{"api.auth.tokens", apiTokenEnv} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal omits %q: %v", want, err)
-		}
-	}
-}
-
 // THE ENVIRONMENT WINS OVER TIER A, because the token decides ATTRIBUTION.
 // Every entry in the list authenticates, but the id is stamped as the author
 // of the write, so an operator who wants their own name on a rotation has to
 // be able to supply their own credential.
 func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
-	t.Setenv(apiTokenEnv, "mine")
-	client, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "shared"), "")
+	t.Parallel()
+	client, err := newSecretsClient(tokenEnviron("mine"), bootWithAPI(t, "127.0.0.1", 8080, "shared"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if client.token != "mine" {
 		t.Errorf("token = %q, want the one from the environment", client.token)
-	}
-}
-
-// AUTH DISABLED NEEDS NO TOKEN. Refusing here would make the local-dev escape
-// hatch the one posture this command cannot talk to.
-func TestADisabledGuardNeedsNoToken(t *testing.T) {
-	t.Parallel()
-	boot := bootWithAPI(t, "127.0.0.1", 8080, "")
-	boot.API.Auth.Disabled = true
-	client, err := newSecretsClient(boot, "")
-	if err != nil {
-		t.Fatalf("a node with auth disabled was refused: %v", err)
-	}
-	if client.token != "" {
-		t.Errorf("token = %q, want none", client.token)
 	}
 }
 
@@ -171,7 +139,8 @@ func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 
 func (n *fakeSecretsNode) client(t *testing.T) *secretsClient {
 	t.Helper()
-	c, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 1, "ops-token"), n.server.URL)
+	c, err := newSecretsClient(tokenEnviron("ops-token"),
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), n.server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +158,8 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	value := "-----BEGIN KEY-----\nline two\n\ttabbed \n"
 
-	if err := node.client(t).Set(t.Context(), "GL_TOKEN", value, "ignored", "cli", time.Now()); err != nil {
+	if _, err := node.client(t).Set(t.Context(), "GL_TOKEN", value,
+		secrets.Author{Name: "ignored"}, "cli", time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if node.last.body != value {
@@ -206,6 +176,73 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	}
 }
 
+// THE AUTHOR PRINTED IS THE ONE THE NODE RECORDED, and the one this command
+// offers never travels.
+//
+// The node stamps the party its guard authenticated, so the shell's user is
+// not who a fleet row names — and the command used to print it anyway, telling
+// an operator writing through a Tier A token that the row carried their name.
+func TestASecretWriteReportsTheAuthorTheNodeRecorded(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"name":"GL_TOKEN","bytes":5,"key_id":"k1",` +
+		`"updated_by":"jane.doe","updated_by_kind":"operator",` +
+		`"operator_id":"pat:0192f00d-0000-7000-8000-00000000000a"}`
+
+	recorded, err := node.client(t).Set(t.Context(), "GL_TOKEN", "value",
+		secrets.Author{Name: "shell-user", Kind: "operator"}, "cli", time.Now())
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	want := secrets.Author{Name: "jane.doe", Kind: "operator",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+	if recorded != want {
+		t.Errorf("recorded = %+v, want the node's own answer %+v", recorded, want)
+	}
+	if strings.Contains(node.last.path+node.last.query+node.last.body, "shell-user") {
+		t.Errorf("the offered author travelled (%s?%s), so a client could "+
+			"choose who a fleet row names", node.last.path, node.last.query)
+	}
+	if got := describeAuthor(recorded.Name, recorded.OperatorID); got !=
+		"jane.doe (through pat:0192f00d-0000-7000-8000-00000000000a)" {
+		t.Errorf("printed author = %q, want the name and the credential beside it", got)
+	}
+}
+
+// AUTHENTICATION IS THE ENVIRONMENT'S, AND A MISSING ONE IS REFUSED HERE.
+//
+// The guard would answer 401 either way; saying it before the request names
+// the way out, which a bare 401 from the far end cannot.
+//
+// THE CONFIG'S OWN TOKENS ARE NOT A FALLBACK, which this asserts in both
+// directions. `api.auth.tokens` is what a node ACCEPTS, and a command that
+// helped itself to the first entry authored an operator's write under a name
+// they had not chosen — and read a resolved ${VAR} out of a file in the clear
+// to do it.
+func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
+	t.Parallel()
+	// A node listing a perfectly good token is STILL refused, because the
+	// command has none of its own.
+	if _, err := newSecretsClient(noEnviron, bootWithAPI(t, "127.0.0.1", 8080, "ops-token"),
+		""); err == nil {
+
+		t.Fatal("a command with no credential was accepted, so it will send " +
+			"nothing and read a 401 from the far end")
+	} else if !strings.Contains(err.Error(), apiTokenEnv) {
+		t.Errorf("the refusal does not name %s: %v", apiTokenEnv, err)
+	}
+	// AND THE ENVIRONMENT IS ENOUGH ON ITS OWN, which is the control: a
+	// node whose Tier A lists nothing is still reachable by somebody
+	// holding a machine token.
+	client, err := newSecretsClient(tokenEnviron("a-minted-token"), bootWithAPI(t, "127.0.0.1", 8080, ""), "")
+	if err != nil {
+		t.Fatalf("an exported credential was refused: %v", err)
+	}
+	if client.token != "a-minted-token" {
+		t.Errorf("the client carries %q", client.token)
+	}
+}
+
 // A NAME WITH A SLASH IN IT STILL ADDRESSES ONE ROW.
 //
 // ${VAR} names are conventionally uppercase words, but nothing refuses an odd
@@ -214,7 +251,7 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 func TestAnAwkwardNameIsEscapedIntoThePath(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
-	if err := node.client(t).Set(t.Context(), "a/b c", "v", "", "", time.Now()); err != nil {
+	if _, err := node.client(t).Set(t.Context(), "a/b c", "v", secrets.Author{}, "", time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if node.last.path != "/secrets/a/b c" {
@@ -270,7 +307,7 @@ func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
 	t.Cleanup(server.Close)
-	c, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL)
+	c, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,25 +332,26 @@ func TestARejectedTokenSaysWhatToSet(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	node.status = http.StatusUnauthorized
 
-	err := node.client(t).Set(t.Context(), "T", "v", "", "", time.Now())
+	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
 	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {
 		t.Fatalf("err = %v, want it to name %s", err, apiTokenEnv)
 	}
 }
 
 // THE NODE'S HINT REACHES THE OPERATOR. A refusal this client swallowed would
-// leave a 503 with no reason anywhere the person running the command can see.
+// leave a failure with no reason anywhere the person running the command can
+// see.
 func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
-	node.status = http.StatusServiceUnavailable
-	node.body = `{"error":"no_keyring","hint":"run crewlet secrets keygen"}`
+	node.status = http.StatusBadRequest
+	node.body = `{"error":"invalid_name","hint":"a name is what a ${VAR} can hold"}`
 
-	err := node.client(t).Set(t.Context(), "T", "v", "", "", time.Now())
+	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
 	if err == nil {
-		t.Fatal("a 503 was accepted as success")
+		t.Fatal("a 400 was accepted as success")
 	}
-	for _, want := range []string{"no_keyring", "crewlet secrets keygen"} {
+	for _, want := range []string{"invalid_name", "a name is what a ${VAR} can hold"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error omits %q: %v", want, err)
 		}
@@ -327,17 +365,84 @@ func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
-	node.body = `{"moved":["A","B"]}`
+	node.body = `{"moved":["A","B"],"engine_keys_moved":3,` +
+		`"identity":{"people":2,"values":5}}`
 
-	moved, err := node.client(t).Rekey(t.Context(), "key-2", "op", time.Now())
+	moved, err := node.client(t).Rekey(t.Context(), "key-2")
 	if err != nil {
 		t.Fatalf("rekey: %v", err)
 	}
 	if node.last.query != "key_id=key-2" {
 		t.Errorf("query = %q, want the expected key to travel", node.last.query)
 	}
-	if strings.Join(moved, ",") != "A,B" {
-		t.Errorf("moved = %v, want what the node reported", moved)
+	if strings.Join(moved.Moved, ",") != "A,B" || moved.EngineKeys != 3 ||
+		moved.Identity == nil || moved.Identity.People != 2 || moved.Identity.Values != 5 {
+		t.Errorf("moved = %+v, want what the node reported, the identity "+
+			"estate's half included", moved)
+	}
+}
+
+// THE ENGINE'S OWN KEYS ARE REFUSED BY NAME, on both sides of the wire.
+//
+// The command refuses a reserved name before it opens any store — a stopped
+// node's own table never holds one, and a running node refuses it too — and
+// a node that answers `reserved_name` comes back as the same sentinel rather
+// than as a missing grant, which would send an operator off to ask for one.
+func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
+	for _, name := range []string{key, "iam/blind-index-key"} {
+		for _, args := range [][]string{
+			{"get", name, "-reveal"},
+			{"set", name, "-value", "stolen"},
+			{"unset", name},
+		} {
+			_, _, err := secretsCmd(t, cfg, args...)
+			if !errors.Is(err, secrets.ErrReservedName) {
+				t.Errorf("secrets %s %s answered %v, want ErrReservedName",
+					args[0], name, err)
+			}
+		}
+	}
+
+	node := newFakeSecretsNode(t)
+	node.status = http.StatusForbidden
+	node.body = `{"error":"reserved_name","hint":"the address index's key belongs to the identity estate"}`
+	if _, err := node.client(t).Get(t.Context(), key); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("the node's reserved_name answered %v, want ErrReservedName", err)
+	}
+}
+
+// A LISTING SAYS HOW MUCH A ROTATION HAS TO MOVE THAT NO COMMAND NAMES, from
+// the counts the node carries beside the names — the engine's keys and the
+// identity estate's values — and names none of it. A node that runs no
+// identity estate says so with a null, which reads back as nil rather than as
+// an estate with nothing in it.
+func TestAListingCountsWhatNoCommandNames(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"secrets":[],"engine_keys":{"total":4,"by_key":{"k1":3,"k2":1}},` +
+		`"identity_values":{"people":{"k1":5,"k2":2},"invitations":{"k1":1}}}`
+	held, err := node.client(t).EngineKeys(t.Context())
+	if err != nil {
+		t.Fatalf("EngineKeys: %v", err)
+	}
+	if held.Keys.Total != 4 || held.Keys.StaleUnder("k2") != 3 {
+		t.Errorf("the count reads %+v, want 4 with 3 under a key other than k2",
+			held.Keys)
+	}
+	if held.Identity == nil || held.Identity.Outside("k2") != 5 ||
+		held.Identity.InvitationsOutside("k2") != 1 {
+		t.Errorf("the identity estate reads %+v, want 5 values and 1 invitation "+
+			"under a key other than k2", held.Identity)
+	}
+
+	node.body = `{"secrets":[],"engine_keys":{"total":0},"identity_values":null}`
+	if held, err = node.client(t).EngineKeys(t.Context()); err != nil ||
+		held.Identity != nil {
+		t.Errorf("a node with no identity estate read back as %+v (%v)", held, err)
 	}
 }
 
@@ -388,12 +493,12 @@ func TestUnsetReportsWhetherARowWent(t *testing.T) {
 // store to "check" first would create an empty database beside the Tier A
 // file that nothing ever reads, on a machine that runs no engine.
 func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
+	t.Parallel()
 	node := newFakeSecretsNode(t)
 	cfg := bootstrapWithKeyring(t, "k1")
-	t.Setenv(apiTokenEnv, "ops-token")
 
 	var out, errs bytes.Buffer
-	err := run([]string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
+	err := runIn(tokenEnviron("ops-token"), []string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
 		"-config", cfg, "-api", node.server.URL}, &out, &errs)
 	if err != nil {
 		t.Fatalf("set: %v\n%s", err, errs.String())
@@ -409,6 +514,12 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "next start") {
 		t.Errorf("a fleet write was reported as a node-local one: %q", out.String())
+	}
+	// AND WHEN THE RUNNING FLEET READS IT: at its next apply, which a reload
+	// brings forward. Said by nothing, a rotated key the engine went on
+	// using read as a write that failed.
+	if !strings.Contains(out.String(), "POST /config/reload") {
+		t.Errorf("a fleet write does not say when the running fleet reads it: %q", out.String())
 	}
 	// The local database beside the Tier A file must not have been created.
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(cfg), "index.db")); statErr == nil {
@@ -452,7 +563,7 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 // See internal/httpx's package doc.
 func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 	t.Parallel()
-	sc, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "")
+	sc, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "")
 	if err != nil {
 		t.Fatalf("newSecretsClient: %v", err)
 	}

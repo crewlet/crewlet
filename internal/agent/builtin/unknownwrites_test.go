@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -62,14 +63,18 @@ func (u *unknownWriter) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) RestoreTask(_ context.Context, opID, _, _ string,
+func (u *unknownWriter) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) WriteView(_ context.Context, opID string,
-	_ tracker.View) (tracker.WriteResult, error) {
+	_ tracker.View, _ tracker.ViewPrior) (tracker.WriteResult, error) {
 	return u.answer(opID)
+}
+
+func (u *unknownWriter) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
+	return tracker.ViewPrior{}, nil
 }
 
 func (u *unknownWriter) WriteTypes(_ context.Context, opID string,
@@ -88,12 +93,12 @@ func (u *unknownWriter) WritePriorities(_ context.Context, opID, _ string, _ []s
 }
 
 func (u *unknownWriter) WritePins(_ context.Context, opID, _ string,
-	_ tracker.PinGesture) (tracker.WriteResult, error) {
+	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
-	_ tracker.InboxGesture) (tracker.WriteResult, error) {
+	_ tracker.InboxGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }
 
@@ -138,7 +143,9 @@ func (u *unknownWriter) operatorSurface(t *testing.T) *tools.Registry {
 	deps := u.deps()
 	deps.Actor = operatorActor
 	reg := tools.NewRegistry()
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Work: deps}) {
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: deps, Authorize: builtin.Decide(chartLeads),
+	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
 		}
@@ -246,9 +253,9 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 			u := &unknownWriter{fakeTracker: newFakeTracker(), unvouched: unvouched}
 			deps := u.deps()
 			reg := tools.NewRegistry()
-			if _, err := builtin.Register(reg, builtin.Deps{
-				Work: deps, LeadsProject: leadAlways,
-			}); err != nil {
+			if _, err := builtin.Register(reg, gated(builtin.Deps{
+				Work: deps,
+			})); err != nil {
 				t.Fatalf("register: %v", err)
 			}
 			got := callWork(t, reg, name, args)
@@ -361,6 +368,17 @@ func unknownAnswerProblems(got tools.Result, unvouched bool, ops []string) []str
 	}
 	said := withoutOperations(got.Output, ops)
 	var problems []string
+	// AND THE CAUSE SAYS SO, because a surface answering in status codes
+	// reads that rather than the sentence: without it the HTTP write surface
+	// rendered an unknown as a refusal, telling a client its change was NOT
+	// made when it may well have been.
+	var outcome *builtin.UnknownOutcome
+	if !errors.As(got.Cause, &outcome) || !errors.Is(got.Cause, builtin.ErrOutcomeUnknown) {
+		problems = append(problems, fmt.Sprintf("carries cause %v, want an UnknownOutcome",
+			got.Cause))
+	} else if outcome.Unvouched != unvouched || outcome.OpID == "" {
+		problems = append(problems, fmt.Sprintf("names %+v as its unknown outcome", outcome))
+	}
 	for _, leak := range receipt {
 		if strings.Contains(said, leak) {
 			problems = append(problems, "carries "+leak+" beside an unknown outcome")
@@ -555,5 +573,73 @@ func TestAnUpdateThatAlsoChangesDependenciesReportsTheItemsNewestVersion(t *test
 					"its own call's last write", answer["outcome"], answer["position"])
 			}
 		})
+	}
+}
+
+// A GESTURE THAT STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN IS AN UNKNOWN TO A
+// CALLER ANSWERING IN STATUS CODES, and never a refusal.
+//
+// Its sentence already said so to a model; its CAUSE was the writer's error
+// alone, which the HTTP write surface has no status for but its default — a
+// refusal telling a client that nothing had been written, about a gesture
+// whose earlier steps had landed and whose stopped step may have. The error
+// stays reachable inside the cause, so whether this node can vouch for the
+// step is still a question [errors.Is] answers.
+func TestAStoppedGestureCarriesAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	for _, unvouched := range []bool{false, true} {
+		sentinel := tracker.ErrStepUnresolved
+		if unvouched {
+			sentinel = tracker.ErrStepUnvouched
+		}
+		for name, run := range map[string]func(*testing.T) tools.Result{
+			// A WALKING WRITE, stopped inside the tracker's own sequence.
+			"a stopped update": func(t *testing.T) tools.Result {
+				trk := newFakeTracker()
+				trk.writeErr = fmt.Errorf("stopped: %w", sentinel)
+				return callNoTurn(t, retrySurface(t, trk, nil),
+					builtin.UpdateWorkItemTool,
+					map[string]any{"item": "ENG-1", "priority": "urgent"})
+			},
+			// AND ONE STOPPED AT ITS OWN LABEL DECLARATION, before its
+			// write — the same unknown, met one step earlier.
+			"a stopped label declaration": func(t *testing.T) tools.Result {
+				trk := newFakeTracker()
+				trk.ensureErr = declarationStopped(unvouched)
+				return callNoTurn(t, labelSurface(t, trk, true),
+					builtin.CreateWorkItemTool, map[string]any{
+						"title": "the regression", "project": "ENG",
+						"labels": []any{"regression"}, "labels_create_missing": true,
+					})
+			},
+		} {
+			t.Run(fmt.Sprintf("%s/unvouched=%v", name, unvouched), func(t *testing.T) {
+				t.Parallel()
+				got := run(t)
+				var outcome *builtin.UnknownOutcome
+				switch {
+				case !got.Failed:
+					t.Fatalf("the stopped gesture answered as a receipt: %s", got.Output)
+				case !errors.As(got.Cause, &outcome):
+					t.Fatalf("the stopped gesture's cause is %v, want an "+
+						"UnknownOutcome", got.Cause)
+				case outcome.Unvouched != unvouched:
+					t.Errorf("the cause says unvouched %v, want %v", outcome.Unvouched,
+						unvouched)
+				case outcome.OpID == "":
+					t.Errorf("the cause names no operation: %+v", outcome)
+				// THE SAME OPERATION IS OFFERED BACK where it finishes the
+				// gesture here; unvouched, it stops at the same step on
+				// this node, so the answer sends the caller elsewhere and
+				// only the cause still names what it was.
+				case !unvouched && !strings.Contains(got.Output, outcome.OpID):
+					t.Errorf("the cause names operation %q, which the answer does "+
+						"not offer back: %s", outcome.OpID, got.Output)
+				case !errors.Is(got.Cause, sentinel):
+					t.Errorf("the writer's own error is not reachable in the cause %v",
+						got.Cause)
+				}
+			})
+		}
 	}
 }

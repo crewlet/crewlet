@@ -59,6 +59,13 @@ export function namedAlarms(
   return [...named.filter((a) => a.key === worst), ...named.filter((a) => a.key !== worst)];
 }
 
+/** One log a trim term holds, and what the engine measured on it. */
+export interface AlarmLogMeasure {
+  domain: string;
+  /** The log's own sentence: what it keeps past its replay window. */
+  detail: string;
+}
+
 /**
  * One line of the logs an alarm stands on: the logs one trim term is holding,
  * or one log and its own measurement.
@@ -72,6 +79,11 @@ export interface AlarmLogLine {
   since?: string;
   /** The log's own measurement, on a line that is one log's. */
   detail?: string;
+  /**
+   * Every log the term holds with its own measurement, in the report's
+   * order, on a line one term holds.
+   */
+  logs?: AlarmLogMeasure[];
 }
 
 /**
@@ -79,9 +91,13 @@ export interface AlarmLogLine {
  *
  * LOGS ONE TERM HOLDS ARE ONE LINE. Four logs waiting on one backup are one
  * fact with four names in it, and a line each would say it four times; logs
- * held by different terms are different facts and keep a line each. A log
- * with a measurement of its own and no term (a log nearing its ceiling) is a
- * line of its own, carrying that measurement.
+ * held by different terms are different facts and keep a line each. What the
+ * grouping must not lose is each held log's OWN measurement: a log is listed
+ * under a held trim only once it keeps records past its replay window, and how
+ * many is a fact about that log that the earliest `since` cannot carry, so
+ * every log rides on the line in `logs` with its own sentence. A log with a
+ * measurement of its own and no term (a log nearing its ceiling) is a line of
+ * its own, carrying that measurement.
  */
 export function alarmLogLines(alarm: Pick<RetentionAlarm, "domains">): AlarmLogLine[] {
   const lines: AlarmLogLine[] = [];
@@ -92,10 +108,16 @@ export function alarmLogLines(alarm: Pick<RetentionAlarm, "domains">): AlarmLogL
     }
     const line = lines.find((l) => l.term === d.term);
     if (!line) {
-      lines.push({ term: d.term, domains: [d.domain], since: d.since });
+      lines.push({
+        term: d.term,
+        domains: [d.domain],
+        since: d.since,
+        logs: [{ domain: d.domain, detail: d.detail }],
+      });
       continue;
     }
     line.domains.push(d.domain);
+    (line.logs ??= []).push({ domain: d.domain, detail: d.detail });
     if (d.since && (!line.since || Date.parse(d.since) < Date.parse(line.since))) {
       line.since = d.since;
     }

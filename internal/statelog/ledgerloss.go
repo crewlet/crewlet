@@ -13,9 +13,15 @@ package statelog
 //
 // THE SWEEP deletes rows applied more than [OpsRetention] ago and records its
 // cutoff in the transaction that deletes them ([tables.purgeOps], through
-// [tables.markLost]), and it is the watermark's only writer.
+// [tables.markLost]). A domain that declares a SHORTER horizon for one subject
+// KIND ([OpsHorizon.Kinds]) has that kind swept on its own, and that sweep
+// records ITS cutoff the same way, as the kind's own watermark in
+// `statelog_ops_lost_kind` ([tables.purgeOpsOfKind], through
+// [tables.markLostKind]); [Rows.LostBefore] answers the later of the table's
+// and the kind's. The sweeps — the table's and each kind's — are the
+// watermarks' only writers, each in the transaction that loses the rows.
 //
 // AN ADOPTION LOSES NOTHING. The ledger TRAVELS inside a snapshot
-// ([Domain.OpsTable]) and so does the watermark, so the adopter holds the
-// donor's rows and inherits how far back the donor's own sweep had lost any —
-// the file and the watermark that describes it are installed by one rename.
+// ([Domain.OpsTable]) and so do both watermarks, so the adopter holds the
+// donor's rows and inherits how far back the donor's own sweeps had lost any —
+// the file and the watermarks that describe it are installed by one rename.

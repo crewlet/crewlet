@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // DefaultRevisionPage is how many revisions a listing returns when the caller
@@ -19,80 +21,41 @@ const DefaultRevisionPage = 50
 // ErrNoRevision reports a revision id that does not exist.
 var ErrNoRevision = errors.New("store: no such config revision")
 
-// AuthorKind is WHAT wrote a revision: a person through a credential, or the
-// engine itself.
-//
-// # Why a kind and not just a name
-//
-// `created_by` is a LABEL — a token's name, a login, a node id, "reconcile
-// loop" — and the two name spaces overlap: nothing stops an operator token
-// being called `node`. A reader that inferred the writer from the label was
-// guessing, and the audit screen stopped guessing by assuming instead: it drew
-// every revision as an operator's, including the ones a node seeded from its
-// file and the reloads the reconcile loop makes after sealing a credential.
-// So the writer states its kind at the write, where it is a fact, beside the
-// label it chose.
-//
-// There is no `seat` kind. No seat writes configuration in this build — the
-// agent tools reach the tracker and the knowledge base, never /config — and a
-// constant with no producer would be a value every reader had to handle and no
-// test could reach. A newer build that adds one needs no change here to be
-// READ: [Configs.Adopt] keeps whatever kind the fleet's pointer carries.
-type AuthorKind string
-
-// The two writers of a revision in this build.
-const (
-	// AuthorOperator is a person, through the credential that
-	// authenticated them: an API token on /config or /setup, or the login
-	// running `crewlet config import` and `crewlet config rekey`.
-	AuthorOperator AuthorKind = "operator"
-	// AuthorNode is the engine acting on its own: a node seeding the store
-	// from its -company file at boot, and the reconcile loop's own writes
-	// (removing a disconnected integration's block, recording a site it
-	// discovered, reloading after it sealed a credential).
-	AuthorNode AuthorKind = "node"
-)
-
-// Valid reports a kind this build writes.
-//
-// Only a WRITE is held to it. A revision adopted from the fleet carries the
-// kind its origin recorded, which may be one a newer build added — an unknown
-// kind off the wire is a value, and refusing it would stop this node recording
-// a revision it is running. An EMPTY kind is no kind at all, and [Configs.Adopt]
-// refuses it.
-func (k AuthorKind) Valid() bool {
-	switch k {
-	case AuthorOperator, AuthorNode:
-		return true
-	}
-	return false
-}
-
-// Author is who wrote a revision: the label they are recorded under and
-// their [AuthorKind]. One value, so a writer cannot pass a name and forget
-// what it names.
-type Author struct {
-	Name string
-	Kind AuthorKind
-}
-
 // Revision is one immutable snapshot of the whole Tier B document.
 type Revision struct {
 	ID       string
 	ParentID string
 
 	CreatedAt time.Time
-	CreatedBy string
-	// CreatedByKind is what CreatedBy names: never empty, and one of this
-	// build's kinds on every revision it writes — an adopted one may name a
-	// kind a newer build added, which arrives as itself.
-	CreatedByKind AuthorKind
-	Source        string
-	Summary       string
 
-	// Payload is the document as stored. When a keyring is configured this
-	// is the sealed envelope rather than the plaintext structure — opaque
-	// to SQL either way, which is why it is one column and not a schema.
+	// CreatedBy is the revision's AUTHOR, CreatedByKind what sort of
+	// author, and OperatorID the credential it was written through — empty
+	// for a write no credential made. Three rather than the one this used
+	// to be, which held the credential and so named, for a revision written
+	// through a person's machine token, a token whose row the identity
+	// sweep collects a week after it lapses. See
+	// node migration `0047_identity_and_access.sql`.
+	//
+	// THE KIND IS [iam.ActorKind], the vocabulary every other trail in the
+	// engine records an author in, rather than a second one of this
+	// table's: a label alone cannot say whether a person or the engine
+	// wrote the revision — the name spaces overlap, and nothing stops a
+	// token being called after a node — so the writer states it at the
+	// write, where it is a fact. NEVER EMPTY: one of this build's kinds on
+	// every revision it writes, and on an adopted one whatever kind the
+	// fleet's pointer carries — which may be one a newer build added, and
+	// arrives as itself ([Configs.Adopt]).
+	CreatedBy     string
+	CreatedByKind iam.ActorKind
+	OperatorID    string
+
+	Source  string
+	Summary string
+
+	// Payload is the document as stored: the sealed envelope, under the
+	// keyring every node holds, rather than the plaintext structure. Opaque
+	// to SQL, which is why it is one column and not a schema — and to this
+	// package, which stores what it is handed and never opens it.
 	Payload json.RawMessage
 
 	Active      bool
@@ -110,7 +73,8 @@ type Configs struct{ db *DB }
 func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
-	created_by_kind, source, summary, payload, is_active, activated_at`
+	created_by_kind, operator_id, source, summary, payload, is_active,
+	activated_at`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -162,13 +126,17 @@ func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 // insert is the one INSERT both writes share, so a revision stored active and
 // one stored inactive cannot differ in anything but the flag.
 //
-// THE KIND IS REQUIRED. Every writer on this node knows whether it is a person
-// or the engine, and a revision stored without saying is exactly the row the
-// audit screen used to fill in with a guess.
+// THE KIND IS REQUIRED, and held to [iam.ActorKind.Valid]. Every writer on
+// this node knows whether it is a person, a credential or the engine, and a
+// revision stored without saying is exactly the row the audit screen used to
+// fill in with a guess. Only a WRITE is held to it: [Configs.Adopt] stores the
+// kind the fleet's pointer carries, which may be one a newer build added — an
+// unknown kind off the wire is a value, and refusing it would stop this node
+// recording a revision it is running.
 func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, error) {
 	if !r.CreatedByKind.Valid() {
 		return "", fmt.Errorf("store: a config revision needs its author's kind "+
-			"(%q or %q), got %q", AuthorOperator, AuthorNode, r.CreatedByKind)
+			"(one of %q), got %q", iam.ActorKinds, r.CreatedByKind)
 	}
 	id := r.ID
 	if id == "" {
@@ -198,11 +166,12 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
-			      created_by_kind, source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			      created_by_kind, operator_id, source, summary, payload,
+			      is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			string(r.CreatedByKind), r.Source, r.Summary, string(payload),
-			isActive, activatedAt)
+			string(r.CreatedByKind), r.OperatorID, r.Source, r.Summary,
+			string(payload), isActive, activatedAt)
 		return err
 	})
 	if err != nil {
@@ -210,7 +179,8 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 	}
 	log.InfoContext(ctx, "config_revision_stored",
 		"revision", id, "source", r.Source, "by", r.CreatedBy,
-		"by_kind", string(r.CreatedByKind), "active", active)
+		"by_kind", string(r.CreatedByKind), "operator", r.OperatorID,
+		"active", active)
 	return id, nil
 }
 
@@ -288,12 +258,15 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 //
 // # The author is the ORIGIN's, never this node's
 //
-// The caller passes the author, kind, source and creation instant the fleet's
-// pointer carries, so a revision reads the same on every node rather than
-// "peer" everywhere but the one it was written on. The kind is NOT held to
-// [AuthorKind.Valid] here, for the reason that method gives — but it must be
-// SOME kind, as must the source and both instants: the pointer always carries
-// them, and a row missing one is a guess on the audit screen.
+// The caller passes the author, kind, credential, source and creation instant
+// the fleet's pointer carries, so a revision reads the same on every node
+// rather than "peer" everywhere but the one it was written on. The kind is NOT
+// held to [iam.ActorKind.Valid] here, as a local write's is: an unknown kind
+// off the wire is a value, and refusing it would stop this node recording a
+// revision it is running. But it must be SOME kind, as must the source and both
+// instants: the pointer always carries them, and a row missing one is a guess
+// on the audit screen. The credential alone may be empty — a revision no
+// credential wrote, the engine's own, names none.
 //
 // A row that is already here keeps its body and its author: the row this node
 // wrote, or adopted first, is the authority on that write. Only its active
@@ -325,12 +298,13 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
-			      created_by_kind, source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			      created_by_kind, operator_id, source, summary, payload,
+			      is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
 			 ON CONFLICT (revision_id) DO NOTHING`,
 			r.ID, NullText(r.ParentID), EncodeTime(r.CreatedAt), r.CreatedBy,
-			string(r.CreatedByKind), r.Source, r.Summary, string(payload),
-			EncodeTime(r.ActivatedAt)); err != nil {
+			string(r.CreatedByKind), r.OperatorID, r.Source, r.Summary,
+			string(payload), EncodeTime(r.ActivatedAt)); err != nil {
 			return err
 		}
 		// The row may already have been here — the conflict above did
@@ -345,7 +319,7 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 		return fmt.Errorf("store: adopt config revision %s: %w", r.ID, err)
 	}
 	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source,
-		"by", r.CreatedBy, "by_kind", string(r.CreatedByKind))
+		"by", r.CreatedBy, "by_kind", string(r.CreatedByKind), "operator", r.OperatorID)
 	return nil
 }
 
@@ -425,15 +399,137 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var activatedAt sql.NullInt64
 	var active int64
 	var kind string
-	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy, &kind, &r.Source,
-		&r.Summary, &payload, &active, &activatedAt); err != nil {
+	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy,
+		&kind, &r.OperatorID, &r.Source, &r.Summary, &payload,
+		&active, &activatedAt); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
 	}
 	r.ParentID = Text(parent)
-	r.CreatedByKind = AuthorKind(kind)
+	r.CreatedByKind = iam.ActorKind(kind)
 	r.CreatedAt = DecodeTime(createdAt)
 	r.Payload = json.RawMessage(payload)
 	r.Active = active != 0
 	r.ActivatedAt = TimeAt(activatedAt)
 	return r, nil
+}
+
+// Chain is the active revision and every ancestor it reaches through
+// parent_revision_id, newest first.
+//
+// WHAT THE RETENTION SWEEP MAY NOT DELETE, whatever its horizon. A revert
+// re-activates an older revision by id, and `crewlet config diff` walks the
+// chain — so a deleted ancestor turns both into an error naming a row that
+// used to exist. The chain is normally short: it is one revision per config
+// write, not per node and not per apply.
+//
+// STOPS AT THE FIRST BREAK rather than reporting one. A chain can already be
+// broken by a revision this node never adopted — a node joins a running fleet
+// and fetches the active revision alone — and that is an ordinary state
+// rather than damage, so the sweep protects what it can reach and lets the
+// horizon cover the rest.
+//
+// A VISITED SET, because a cycle in parent pointers would otherwise be an
+// infinite loop inside a maintenance tick. Nothing writes one, which is
+// exactly why nothing would notice it.
+func (c *Configs) Chain(ctx context.Context) ([]Revision, error) {
+	active, found, err := c.Active(ctx)
+	if err != nil || !found {
+		return nil, err
+	}
+	out := []Revision{active}
+	seen := map[string]bool{active.ID: true}
+	for at := active; at.ParentID != ""; {
+		if seen[at.ParentID] {
+			return out, nil
+		}
+		parent, found, err := c.Get(ctx, at.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return out, nil
+		}
+		seen[parent.ID] = true
+		out = append(out, parent)
+		at = parent
+	}
+	return out, nil
+}
+
+// Purge deletes revisions older than cutoff, keeping the active one and its
+// unbroken parent chain, and reports how many went.
+//
+// # Why this table needs a sweep at all
+//
+// Every node keeps its OWN copy of every revision it ever met, in an
+// append-only table, and nothing deleted from it — so a company that edits
+// its configuration daily accumulates a row per edit per node for the life of
+// the deployment, and each row is a copy of the whole document — every seat's
+// address among it, which this is what eventually removes.
+//
+// # The chain is kept whatever its age
+//
+// Deleting an ancestor of the active revision breaks a revert and a diff, and
+// a company that has not changed its configuration for a year has an active
+// revision OLDER than any horizon worth setting. So the chain is excluded by
+// id rather than by date.
+func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
+	chain, err := c.Chain(ctx)
+	if err != nil {
+		return 0, err
+	}
+	// BOUND PARAMETERS, one per kept revision, rather than an interpolated
+	// list: the chain is short and the ids are uuids this process wrote,
+	// but a query built by concatenation is a query somebody later feeds
+	// something else.
+	keep := make([]any, 0, len(chain))
+	placeholders := make([]byte, 0, 2*len(chain))
+	for i, rev := range chain {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		keep = append(keep, rev.ID)
+	}
+	doomed := `created_at < ? AND is_active = 0`
+	if len(chain) > 0 {
+		doomed += ` AND revision_id NOT IN (` + string(placeholders) + `)`
+	}
+	args := append([]any{EncodeTime(cutoff)}, keep...)
+
+	var n int64
+	err = c.db.Tx(ctx, func(tx *sql.Tx) (err error) {
+		// THE SURVIVORS' PARENT POINTERS FIRST, and this is not tidiness:
+		// parent_revision_id is a real foreign key and this database runs
+		// with `PRAGMA foreign_keys = ON`, so deleting a row something
+		// still points at FAILS. Off-chain revisions point at each other
+		// — a reverted branch is exactly that shape — so a bare delete
+		// aborts the whole tick on the first row whose child has not gone
+		// yet, and the table never shrinks while the log says the sweep
+		// ran.
+		//
+		// NULLING IT IS THE TRUTHFUL REPAIR rather than a way round the
+		// constraint: the ancestor is gone, so a pointer at it is a lie,
+		// and the column is already nullable because the first revision
+		// ever written has no parent. [Configs.Chain] stops at a break for
+		// this reason among others.
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE company_config SET parent_revision_id = NULL
+			 WHERE parent_revision_id IN (
+			     SELECT revision_id FROM company_config WHERE `+doomed+`)`,
+			args...); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx,
+			`DELETE FROM company_config WHERE `+doomed, args...)
+		if err != nil {
+			return err
+		}
+		n, err = result.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: purge config revisions: %w", err)
+	}
+	return n, nil
 }

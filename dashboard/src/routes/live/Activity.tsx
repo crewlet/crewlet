@@ -383,6 +383,7 @@ export function Activity() {
         </Card.Header>
         <QueryState
           error={series.error}
+          refusal={series.refusal}
           loading={series.loading}
           empty={
             series.data && series.data.total === 0
@@ -571,7 +572,7 @@ export function Activity() {
         )}
         <footer className="panel-foot">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : exhausted ? (
             // THE END OF WHAT WAS ASKED, NOT OF THE STORE. Pages are bounded
             // by the window and narrowed by the filters, so "exhausted" means

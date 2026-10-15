@@ -123,8 +123,9 @@ describe("the status sentence", () => {
   });
 
   test("an engine condition takes the sentence over", () => {
-    expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toMatch(
-      /refused this browser’s token/,
+    // NOBODY SIGNED IN, never a token to set: the browser holds no token.
+    expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toBe(
+      "Nobody is signed in on this browser. Sign in to read the company.",
     );
     expect(sentenceText(statusSentence({ ...base, connected: false }))).toMatch(/^Not connected/);
     expect(sentenceText(statusSentence({ ...base, configured: false }))).toMatch(
@@ -185,6 +186,7 @@ describe("the figures", () => {
   test("a sub-line names only the parts with somebody in them", () => {
     const row = (activity: AgentRow["activity"]): AgentRow => ({
       id: activity ?? "",
+      agent_id: activity ?? "",
       role: "r",
       activity,
     });
@@ -220,9 +222,10 @@ describe("the figures", () => {
   });
 
   // A STOPPED SEAT WAITS ON A READER ONLY WHERE THEY CAN TAKE A WAY OUT:
-  // raise the ceiling (a `/config` write — `mayChangeConfig`, an operator and,
-  // on a managed document, one of its writers) or hand the item on
-  // (`update_work_item`, and only with an item to hand).
+  // raise the ceiling (a `/config` write — `mayChangeConfig`: Admin
+  // and, on a managed document, one of its writers — or a seat's own window
+  // its lead may raise) or hand the item on (`update_work_item`, and only with
+  // an item to hand).
   test("a stopped seat is the reader's decision only where they can act on it", () => {
     const onItem = {
       row: { role: "SWE", turn: { work_item: { id: "t-1", key: "ENG-1" } } } as never,
@@ -242,6 +245,19 @@ describe("the figures", () => {
     expect(seatDecisionsFor([onItem, between], neither)).toEqual({
       mine: [],
       others: [onItem, between],
+    });
+    // A LEAD RAISES THEIR OWN SEAT'S CEILING, and not the company's: a seat
+    // stopped by its own window is the lead's decision, one stopped by the
+    // company's is not.
+    const own = {
+      row: { role: "SWE", handle: "swe" } as never,
+      window: { period: "day", state: "refusing" } as never,
+    };
+    const company = { row: { role: "SWE", handle: "swe" } as never, window: undefined };
+    const elsewhere = { ...own, row: { role: "PM", handle: "pm" } as never };
+    expect(seatDecisionsFor([own, company, elsewhere], neither, new Set(["swe"]))).toEqual({
+      mine: [own],
+      others: [company, elsewhere],
     });
   });
 

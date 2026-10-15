@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -43,8 +45,13 @@ type CapacityRequest struct {
 	Stream         string
 	TargetMaxBytes uint64
 
-	// By names the operator, for the record.
-	By string
+	// By names the operator, for the record — the AUTHOR, internal/iam's
+	// ActorFor name — and OperatorID the credential they acted through,
+	// kept apart for the reason every other trail keeps them apart: a
+	// person's machine token is swept a week after it lapses, and an
+	// operation that named only `pat:<id>` would name nobody by then.
+	By         string
+	OperatorID string
 
 	// Assert is the operator's explicit statement that they have excluded
 	// every publisher, required only on a broker the engine does not run.
@@ -73,12 +80,14 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 				"quantity nothing can move, and what retires a request the " +
 				"broker already queued is the broker process restarting")
 	}
-	n := e.native.Load()
-	if e.backends == nil || e.backends.Fleet == nil || n == nil || n.log == nil {
+	s, err := e.stateLogOf()
+	if e.backends == nil || e.backends.Fleet == nil || err != nil {
 		return coord.MaintenanceOperation{}, errors.New(
-			"engine: this node runs no state log, so it has no stream to resize")
+			"engine: this node runs no state log, so it has no stream to resize: " +
+				"only a node with the `data` role holds the logs a capacity " +
+				"change applies to")
 	}
-	running := n.log.logOf(req.Stream)
+	running := s.logOf(req.Stream)
 	if running == nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
@@ -137,8 +146,8 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 // far as this node can read it, and unstated where it cannot.
 //
 // ASKED OF THIS NODE'S OWN BROKER, which is the one holding the stream being
-// resized — see [Engine.capacityHost]. A node with no state log has no such
-// stream either, so the two absences are the same one.
+// resized — see [Engine.capacityHost]. An engine with no core runtime has no
+// such stream either, so the two absences are the same one.
 //
 // UNREAD IS UNSTATED, and the window still opens. The check this feeds only
 // spares an operator the restarts of learning a refusal late; the broker is the
@@ -161,39 +170,62 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 	return room
 }
 
-// streamKeepsGateReserve reports whether the domain log named stream keeps a
-// gate reserve under its ceiling ([statelog.KeepsGateReserve]) — a property of
-// the domain, so read from the register rather than from a running log.
-func streamKeepsGateReserve(stream string) bool {
+// capacityBounds is what a capacity target on the domain log named stream is
+// held to: how its ceiling divides between ordinary writes and the gate
+// reserve ([statelog.ReservationOf]), and the floor Tier A holds its ceiling
+// field to, with the field's name — both properties of the DOMAIN, so read
+// from the register rather than from a running log.
+//
+// THE FLOOR IS THE FIELD'S, read off the register entry that declares the
+// field ([domainCeiling.Floor]), and never one number for every log: the
+// verb refused every target under a gibibyte on every log, calling it the
+// floor Tier A enforces, while Tier A takes the identity estate's and the
+// usage log's down to 64 MiB ([config.IamLogMaxBytesFloor],
+// [config.UsageLogMaxBytesFloor]) — so the one way to give either log back a
+// reservation was refused, with a reason that was not true of it.
+func capacityBounds(stream string) (statelog.Reservation, domainCeiling, bool) {
 	for _, domain := range registeredDomains() {
-		if domain.Stream().Name == stream {
-			return statelog.KeepsGateReserve(domain)
+		if domain.Stream().Name != stream {
+			continue
 		}
+		entry, found := registrationFor(domain.Name())
+		if !found || entry.Ceiling == nil {
+			return statelog.Reservation{}, domainCeiling{}, false
+		}
+		// THE FIELD'S DECLARATION, which does not depend on what the
+		// field is set to or on the volume: an unset stream and no free
+		// bytes name the field and its floor as well as any.
+		return statelog.ReservationOf(domain), entry.Ceiling(config.Stream{}, 0), true
 	}
-	return false
+	return statelog.Reservation{}, domainCeiling{}, false
 }
 
 // smallestTargetAbove is the smallest ceiling a log holding bytes can be given
 // whose ordinary writes are not refused the moment it applies, and never below
-// [MinDomainCeiling].
+// floor.
 //
-// SEARCHED rather than solved, because [statelog.OrdinaryCeiling] rounds the
-// reserve down: the closed form is right to within a byte either way, and a
-// number an operator is told to type has to be the exact one. The ordinary
-// ceiling grows by one or by nothing per byte of target, so both walks are a
-// step or two.
-func smallestTargetAbove(bytes uint64, reserved bool) uint64 {
-	target := bytes + 1
-	if reserved {
-		target += target / (statelog.GateReserveDivisor - 1)
+// SEARCHED rather than solved, because the reserve is the larger of two terms
+// and each rounds ([statelog.Reservation.Bytes]): a closed form is right to
+// within a byte either way, and a number an operator is told to type has to be
+// the exact one. The ordinary ceiling never falls as the target grows, so the
+// least target above bytes is found by bisection — between bytes, whose
+// ordinary ceiling is at most bytes, and bytes plus its own reserve, which is
+// above it — in sixty-odd steps at any size.
+func smallestTargetAbove(bytes uint64, reservation statelog.Reservation, floor uint64) uint64 {
+	low := bytes
+	high := bytes + 1 + reservation.Bytes(2*(bytes+1)) + statelog.GateRoom
+	for reservation.Ordinary(high) <= bytes {
+		high += high - bytes
 	}
-	for statelog.OrdinaryCeiling(target, reserved) <= bytes {
-		target++
+	for high-low > 1 {
+		mid := low + (high-low)/2
+		if reservation.Ordinary(mid) > bytes {
+			high = mid
+		} else {
+			low = mid
+		}
 	}
-	for target > 0 && statelog.OrdinaryCeiling(target-1, reserved) > bytes {
-		target--
-	}
-	return max(target, uint64(MinDomainCeiling))
+	return max(high, floor)
 }
 
 // openCapacity takes the exclusion, or resumes the operation already holding
@@ -225,28 +257,30 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		return held, nil
 	}
 
-	// A TARGET BELOW THE FLOOR EVERY STATE LOG IS HELD TO is refused as
-	// Tier A refuses one on an explicit value and as [divide] never scales
-	// below: under a gibibyte a log is a window that refuses appends within
-	// a week of a company starting work. And on a log that keeps a gate
-	// reserve the floor is also what the reserve is sized against
-	// ([statelog.GateReserveDivisor]), so a smaller ceiling keeps a reserve
-	// too small for the appends it has to absorb. A resume is not asked,
-	// for the reason the usage below is not.
-	if req.TargetMaxBytes < uint64(MinDomainCeiling) {
+	// A TARGET BELOW THE LOG'S OWN FLOOR is refused as Tier A refuses one
+	// on an explicit value of that log's field: below it the log is a
+	// window that refuses appends before anybody could act, and the floor
+	// is the field's, so it differs by log. A resume is not asked, for the
+	// reason the usage below is not.
+	reservation, field, known := capacityBounds(req.Stream)
+	if !known {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: a %d-byte ceiling is below the %d bytes every state log's "+
-				"ceiling is floored at — the floor Tier A enforces on an explicit "+
-				"value, and the one a log's gate reserve is sized against. Choose "+
+			"engine: %q is not a domain log this build registers — the streams a "+
+				"capacity change applies to are %v", req.Stream, maintenanceStreams())
+	}
+	if req.TargetMaxBytes < uint64(field.Floor) {
+		return coord.MaintenanceOperation{}, fmt.Errorf(
+			"engine: a %d-byte ceiling is below the %d bytes %s's ceiling is "+
+				"floored at — the floor Tier A enforces on an explicit %s. Choose "+
 				"a target of at least %d bytes",
-			req.TargetMaxBytes, MinDomainCeiling, MinDomainCeiling)
+			req.TargetMaxBytes, field.Floor, req.Stream, field.Field, field.Floor)
 	}
 
 	// A TARGET WHOSE ORDINARY CEILING IS AT OR BELOW WHAT THE LOG HOLDS IS A
 	// FULL LOG the moment it applies: every ordinary append and every
 	// linearizable read refused, fleet-wide, after three restarts spent
 	// reaching it. On a log that keeps a gate reserve that ceiling is the
-	// target less the reserve ([statelog.OrdinaryCeiling]), since that is
+	// target less the reserve ([statelog.Reservation.Ordinary]), since that is
 	// where ordinary writes are refused; a target that only the reserve is
 	// above leaves a log an eviction can reach and nothing else can. The
 	// usage is what a resize is decided against, and in this mode nothing
@@ -254,20 +288,19 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	// A resume is not asked again: its target was accepted when the window
 	// opened, and refusing it now would strand a window whose request may
 	// already be in flight.
-	reserved := streamKeepsGateReserve(req.Stream)
-	if ordinary := statelog.OrdinaryCeiling(req.TargetMaxBytes, reserved); ordinary <= current.Bytes {
+	if ordinary := reservation.Ordinary(req.TargetMaxBytes); ordinary <= current.Bytes {
 		held := ""
-		if reserved {
+		if reservation.Kept {
 			held = fmt.Sprintf(" (ordinary writes are held to %d of it; the top "+
 				"%d is kept for the records that install or lift a gate)",
-				ordinary, statelog.GateReserve(req.TargetMaxBytes))
+				ordinary, reservation.Bytes(req.TargetMaxBytes))
 		}
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %s holds %d bytes, so a %d-byte ceiling%s would refuse every "+
 				"ordinary append the moment it applied. Choose a target of at "+
 				"least %d bytes, or let the trim release some of the log first",
 			req.Stream, current.Bytes, req.TargetMaxBytes, held,
-			smallestTargetAbove(current.Bytes, reserved))
+			smallestTargetAbove(current.Bytes, reservation, uint64(field.Floor)))
 	}
 
 	// AND A RAISE THE BROKER CANNOT RESERVE, for the same reason at the other
@@ -321,6 +354,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		Participants:     participants,
 		EnteredAt:        time.Now().UTC(),
 		By:               req.By,
+		OperatorID:       req.OperatorID,
 	}
 	// RETRIED WITH THE SAME ID, bounded, because an absent read after an
 	// unknown create establishes nothing at all.
@@ -337,7 +371,8 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 			log.InfoContext(ctx, "capacity_operation_opened",
 				"stream", op.Stream, "operation", op.OperationID,
 				"target", op.TargetMaxBytes, "was", op.OriginalMaxBytes,
-				"participants", op.Participants, "by", op.By)
+				"participants", op.Participants, "by", op.By,
+				"operator", op.OperatorID)
 			return held, nil
 		case held.OperationID == op.OperationID:
 			// AN EARLIER ATTEMPT OF MINE WON and its answer was lost.
@@ -512,17 +547,18 @@ func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation
 
 // streamVolume is the directory the state logs' ceilings were derived from,
 // which [limitSource] names where that volume is what bounds the broker. Empty
-// on a node with no state log, where no such limit can be the answer either.
+// on an engine with no core runtime, where no such limit can be the answer
+// either.
 func (e *Engine) streamVolume() string {
-	n := e.native.Load()
-	if n == nil || n.log == nil {
+	s, err := e.stateLogOf()
+	if err != nil {
 		return ""
 	}
-	return n.log.volume
+	return s.volume
 }
 
-// capacityHost is the broker a capacity question is put to, or nil on a node
-// that runs no state log.
+// capacityHost is the broker a capacity question is put to, or nil on an
+// engine that runs no core runtime.
 //
 // ASSERTED OFF THE ENGINE'S OWN QUEUE rather than read from a copy the state
 // log keeps. It was that copy, and the copy had ONE writer — a field in one
@@ -536,7 +572,7 @@ func (e *Engine) streamVolume() string {
 // stream to resize, and the assertion cannot fail behind that guard, since
 // startStateLog refuses to build one on a broker that does not satisfy this.
 func (e *Engine) capacityHost() domainHost {
-	if n := e.native.Load(); n == nil || n.log == nil || e.backends == nil {
+	if _, err := e.stateLogOf(); err != nil || e.backends == nil {
 		return nil
 	}
 	host, _ := e.backends.Queue.(domainHost)
@@ -704,7 +740,11 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 // changes what the operation is trying to reach, never the barrier it must
 // cross, and a paused coordinator's request is outstanding whether or not a
 // person has read a status page.
-func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
+//
+// BY IS WHO ABANDONED IT, recorded on the operation while it lives
+// ([coord.MaintenanceOperation.AbandonedBy]) and on the log line when it does
+// not.
+func (e *Engine) AbandonCapacity(ctx context.Context, stream string, by iam.Actor) (
 	coord.MaintenanceOperation, error) {
 
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
@@ -726,6 +766,7 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
 		}
 		log.InfoContext(ctx, "capacity_operation_abandoned", "stream", stream,
 			"operation", op.OperationID, "phase", op.Phase,
+			"by", by.Name, "operator", by.OperatorID,
 			"detail", "no configuration request had been issued, so the "+
 				"exclusion is released outright")
 		out := op
@@ -735,11 +776,13 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
 	out := op
 	out.Phase = phase
 	out.Blocked = "abandoned_by_operator"
+	out.AbandonedBy = partyOf(by)
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
 	}
 	log.WarnContext(ctx, "capacity_operation_abandoning", "stream", stream,
 		"operation", op.OperationID, "was", op.Phase,
+		"by", by.Name, "operator", by.OperatorID,
 		"detail", "a request may be outstanding, so the fleet still has to "+
 			"restart with `-mode seal`: the observed ceiling is then recorded "+
 			"as the outcome whatever it is")
@@ -751,8 +794,11 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
 //
 // THE ONLY THING THAT WAIVES AN ACKNOWLEDGEMENT. An eviction does not: that is
 // about whose records apply, and this is about whose process is running.
-func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string) (
-	coord.MaintenanceOperation, error) {
+//
+// BY IS WHO ASSERTED IT, recorded against the node it names
+// ([coord.MaintenanceOperation.ExcludedBy]).
+func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
@@ -766,6 +812,14 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string) (
 	if !contains(op.Excluded, node) {
 		out.Excluded = append(cloneStrings(op.Excluded), node)
 	}
+	// THE LATEST ASSERTION'S AUTHOR, because repeating one is making it
+	// again: whoever last said the process is stopped is who the seal is
+	// taking it from.
+	out.ExcludedBy = maps.Clone(op.ExcludedBy)
+	if out.ExcludedBy == nil {
+		out.ExcludedBy = map[string]coord.MaintenanceParty{}
+	}
+	out.ExcludedBy[node] = partyOf(by)
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
 	}
@@ -776,6 +830,7 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string) (
 	}
 	log.WarnContext(ctx, "capacity_participant_excluded", "stream", stream,
 		"operation", op.OperationID, "node", node,
+		"by", by.Name, "operator", by.OperatorID,
 		"detail", "an operator asserted this node's process is stopped and "+
 			"holds no outstanding request; it no longer has to acknowledge")
 	return e.reread(ctx, stream)
@@ -907,9 +962,12 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 // node is counted: a publisher that went uncounted is the one thing this set
 // exists to prevent.
 //
-// A DATA NODE RUNNING NO ESTATE is counted all the same — a company on vendor
-// backends for both its tracker and its knowledge base runs no state log — and
-// costs only an acknowledgement an operator can exclude.
+// A DATA NODE IS A PUBLISHER WHATEVER ITS COMPANY KEEPS: the core runs every
+// registered log on every node holding the estate from boot — with no company,
+// in a maintenance mode, on a vendor's tracker and wiki ([Engine.startCore]) —
+// so a presence that holds data is exactly a node that publishes records, and
+// [placement.NodeProfile.HoldsData] is the whole test. A node without `data`
+// runs no log and is found only as a broker member ([capacityMembers]).
 func capacityHolders(held []coord.Lease) []string {
 	out := make([]string, 0, len(held))
 	for _, lease := range held {
@@ -1074,4 +1132,9 @@ func sleep(ctx context.Context, d time.Duration) {
 func (e *Engine) dialsExternalBroker() bool {
 	return e.backends != nil && e.backends.Queue != nil &&
 		e.backends.Queue.Backend() != "jetstream-embedded"
+}
+
+// partyOf is a party as a capacity window records one.
+func partyOf(by iam.Actor) coord.MaintenanceParty {
+	return coord.MaintenanceParty{By: by.Name, OperatorID: by.OperatorID}
 }

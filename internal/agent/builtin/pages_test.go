@@ -27,13 +27,18 @@ type fakeKB struct {
 	edits    []commentEdit
 	actors   []pages.Actor
 
-	// keys is the call key every write arrived with, in order, so a tool
-	// that derived its operation from something other than the caller's
-	// own key — or forgot to pass one — is visible.
-	keys []pages.CallKey
+	// keys is the operation key every write's actor arrived with
+	// ([pages.Actor.OpKey]), in order, so a tool that derived its operation
+	// from something other than the caller's own key — or forgot to pass
+	// one — is visible.
+	keys []string
 
 	readErr  error
 	writeErr error
+
+	// renameErr fails a rename alone, so a save that also renames lands its
+	// edit and meets this on the half that follows.
+	renameErr error
 
 	// awaited is every position [builtin.PageDeps.Await] was handed, in
 	// order, so a tool that waited for the wrong write — or waited before
@@ -105,7 +110,7 @@ func (f *fakeKB) Create(_ context.Context, actor pages.Actor, in pages.NewPage) 
 	}
 	f.created = append(f.created, in)
 	f.actors = append(f.actors, actor)
-	f.keys = append(f.keys, in.CallKey)
+	f.keys = append(f.keys, actor.OpKey)
 	return f.written(pages.Written{Page: pages.Page{ID: "new", Container: in.Container,
 		Title: in.Title, Version: 1}, Revision: 10}), nil
 }
@@ -116,7 +121,7 @@ func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save p
 	}
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
-	f.keys = append(f.keys, save.CallKey)
+	f.keys = append(f.keys, actor.OpKey)
 	return f.written(pages.Written{
 		Page: pages.Page{ID: "p1", Version: 5}, Revision: 11,
 		Outcome: landedAt(11),
@@ -132,17 +137,20 @@ type renamed struct {
 }
 
 func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
-	_ bool, key pages.CallKey) (pages.Written, error) {
+	_ bool) (pages.Written, error) {
 
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
+	}
+	if f.renameErr != nil {
+		return pages.Written{}, f.renameErr
 	}
 	f.renames = append(f.renames, renamed{
 		pageID: pageID, title: title,
 		awaitedBefore: slices.Clone(f.awaited),
 	})
 	f.actors = append(f.actors, actor)
-	f.keys = append(f.keys, key)
+	f.keys = append(f.keys, actor.OpKey)
 	return f.renameResult(pageID, title), nil
 }
 
@@ -152,7 +160,7 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 	}
 	f.comments = append(f.comments, in)
 	f.actors = append(f.actors, actor)
-	f.keys = append(f.keys, in.CallKey)
+	f.keys = append(f.keys, actor.OpKey)
 	return pages.Comment{ID: "m1", Mentions: in.Mentions},
 		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}), nil
 }
@@ -160,14 +168,14 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 // commentEdit is one EditComment call the fake took.
 type commentEdit struct{ commentID, body string }
 
-func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
+func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID,
+	body string) (pages.Comment, pages.Written, error) {
 	if f.writeErr != nil {
 		return pages.Comment{}, pages.Written{}, f.writeErr
 	}
 	f.edits = append(f.edits, commentEdit{commentID: commentID, body: body})
 	f.actors = append(f.actors, actor)
-	f.keys = append(f.keys, key)
+	f.keys = append(f.keys, actor.OpKey)
 	return pages.Comment{ID: commentID, Body: body},
 		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}), nil
 }
@@ -200,7 +208,7 @@ func (f *fakeKB) await(_ context.Context, at statelog.Position) error {
 func kbRegistry(t *testing.T, deps builtin.PageDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Pages: deps}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Pages: deps})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -259,32 +267,6 @@ func TestASaveNeedsTheVersionItRead(t *testing.T) {
 	}
 	if len(kb.saved) != 1 || kb.saved[0].BaseVersion != 4 {
 		t.Errorf("the base version did not reach the store: %+v", kb.saved)
-	}
-}
-
-// A RESERVED CONTAINER IS REFUSED NAMING IT. A page written there is excluded
-// from every search, so it would land somewhere no reader ever finds — and
-// the seat would report the work as done.
-func TestWritingToAReservedContainerIsRefused(t *testing.T) {
-	t.Parallel()
-	kb := newFakeKB()
-	reg := kbRegistry(t, builtin.PageDeps{
-		Reader: kb, Writer: kb, Reserved: []string{"TS", "HOME"},
-	})
-	for _, container := range []string{"TS", "ts", "HOME"} {
-		got := callWork(t, reg, builtin.WritePageTool, map[string]any{
-			"title": "somewhere hidden", "body": "x", "container": container,
-		})
-		if !got.Failed {
-			t.Errorf("a page was written into the reserved container %q", container)
-			continue
-		}
-		if !strings.Contains(got.Output, "excluded from every search") {
-			t.Errorf("the refusal does not say why: %s", got.Output)
-		}
-	}
-	if len(kb.created) != 0 {
-		t.Errorf("a reserved write reached the store: %+v", kb.created)
 	}
 }
 
@@ -381,9 +363,20 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	if len(kb.actors) == 0 || kb.actors[0].Handle != "eng" || kb.actors[0].Kind != pages.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", kb.actors)
 	}
-	if kb.comments[0].CallKey.String() != "turn-1" {
-		t.Errorf("the comment carries turn key %q — a re-run turn would post twice",
-			kb.comments[0].CallKey.String())
+	// AND ITS OPERATION KEY IS THE TURN'S: an id the engine's grammar
+	// minted, and the same one when the turn is re-run — so a re-run posts
+	// once rather than twice.
+	if len(kb.keys) == 0 || statelog.CheckCallerOpID(kb.keys[0]) != nil {
+		t.Fatalf("the comment carries operation key %q, which is no id this "+
+			"engine minted", kb.keys)
+	}
+	rerun := newFakeKB()
+	if got := callWork(t, kbRegistry(t, builtin.PageDeps{Reader: rerun, Writer: rerun,
+		Mentions: fakeMentions{"pm"}}), builtin.CommentOnPageTool, map[string]any{
+		"page": "p1", "body": "@pm is this still right?",
+	}); got.Failed || len(rerun.keys) != 1 || rerun.keys[0] != kb.keys[0] {
+		t.Errorf("a re-run of the same turn's comment carried key %v, want %q — "+
+			"a re-run turn would post twice", rerun.keys, kb.keys[0])
 	}
 	if !slices.Equal(kb.comments[0].Mentions, []string{"pm"}) {
 		t.Errorf("mentions = %v", kb.comments[0].Mentions)
@@ -391,7 +384,12 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 
 	kb.readErr = errors.New("the projection is not hydrated yet")
 	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {
-		got := callWork(t, reg, name, map[string]any{"page": "p1"})
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		got := callWork(t, reg, name, declaredOf(entry.Tool,
+			map[string]any{"page": "p1"}))
 		if !got.Failed || !strings.Contains(got.Output, "NOT an empty result") {
 			t.Errorf("%s on a failed read gave %q", name, got.Output)
 		}
@@ -640,6 +638,46 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 	}
 }
 
+// A RENAME THROUGH save_page IS STILL A RENAME, and it is the container
+// lead's.
+//
+// The tool's own gate decides the SAVE, which any colleague may make; the
+// address change a `title` asks for is [authz.ActionPageRename], decided on
+// the stored page's container. Without the ask a colleague renamed any page
+// by editing it, which the rename verb itself would have refused them.
+//
+// And the refusal lands NOTHING: the body half of the same call is not saved
+// either, because a caller who may not do what they asked should not find a
+// different half of it done. The control is the same edit without a title.
+func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{
+		Pages:     builtin.PageDeps{Reader: kb, Writer: kb},
+		Authorize: builtin.Decide(chartRefuses),
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	renaming := callWorkAs(colleagueCaller(), t, reg, builtin.SavePageTool,
+		map[string]any{"page": "p1", "base_version": 4, "body": "new",
+			"title": "Deploy Runbook v2"})
+	if !renaming.Failed || !errors.Is(renaming.Cause, builtin.ErrRefused) {
+		t.Fatalf("a colleague who leads nothing renamed a page: %s",
+			renaming.Output)
+	}
+	if len(kb.saved)+len(kb.renames) != 0 {
+		t.Errorf("a refused rename still saved %d and renamed %d",
+			len(kb.saved), len(kb.renames))
+	}
+	// THE CONTROL: the same colleague, the same edit, no title.
+	if plain := callWorkAs(colleagueCaller(), t, reg, builtin.SavePageTool,
+		map[string]any{"page": "p1", "base_version": 4, "body": "new"}); plain.Failed {
+		t.Fatalf("the control was refused too, so the case asserts nothing: %s",
+			plain.Output)
+	}
+}
+
 // A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, as every work write does:
 // they are what a caller outside a turn — a person's assistant, the dashboard —
 // hands back as `min_position` so the read after its write includes it. And a
@@ -757,9 +795,10 @@ func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 	}
 }
 
-// A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
-// the store derives a second comment rather than the first one's retry; a
-// remark repeated with nothing between carries the same count and stays one.
+// A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT in
+// its operation key, so the store derives a second comment rather than the
+// first one's retry; a remark repeated with nothing between carries the same
+// key and stays one.
 func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -776,21 +815,18 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 			t.Fatalf("comment %q = (%+v, %v)", body, res, err)
 		}
 	}
-	var repeats []int
-	for _, c := range kb.comments {
-		repeats = append(repeats, c.CallKey.Repeat)
+	keys := kb.keys
+	if len(keys) != 4 {
+		t.Fatalf("four remarks reached the store as %d", len(keys))
 	}
-	if len(repeats) != 4 {
-		t.Fatalf("four remarks reached the store as %d", len(repeats))
+	if keys[1] != keys[0] {
+		t.Errorf("a remark repeated with nothing between carried key %q after %q — "+
+			"a retry would post it twice", keys[1], keys[0])
 	}
-	if repeats[1] != repeats[0] {
-		t.Errorf("a remark repeated with nothing between carried %d after %d — "+
-			"a retry would post it twice", repeats[1], repeats[0])
-	}
-	if repeats[3] == repeats[0] {
+	if keys[3] == keys[0] {
 		t.Errorf("the remark made again after \"unblocked\" carried the first "+
-			"one's count %d, so its id is the first one's and it is that one's "+
-			"retry (counts %v)", repeats[0], repeats)
+			"one's key %q, so its id is the first one's and it is that one's "+
+			"retry (keys %v)", keys[0], keys)
 	}
 }
 

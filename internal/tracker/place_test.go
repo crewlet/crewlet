@@ -1,6 +1,8 @@
 package tracker_test
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -435,6 +437,66 @@ func TestADropThatNamesNoGapIsRefused(t *testing.T) {
 		Task: "t-1", Project: "OPS", Before: "t-2",
 	}, nil); err == nil {
 		t.Error("a drop of a card into a board it is not on was placed")
+	}
+}
+
+// AN EDIT AFTER A DRAG LEAVES THE CARD WHERE IT WAS DRAGGED.
+//
+// A drag writes the dragged key to the task's ROW and to its DOCUMENT, and a
+// later edit merges into the document and upserts the row from it — so a drag
+// that left either copy at the key the task was filed at would have the next
+// edit put the card back there, the next time anybody touched it. The edit
+// leaves both the column and the document at the dragged key.
+func TestAnEditAfterADragLeavesTheCardWhereItWasDragged(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	if _, err := h.apply(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil), at); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	dragged, err := tracker.MoveKeys(tracker.RankOrigin, "", 1)
+	if err != nil {
+		t.Fatalf("MoveKeys: %v", err)
+	}
+	body, _ := json.Marshal(tracker.RankOrder{
+		V: tracker.DocumentVersion, Project: "ENG",
+		Placements: []tracker.Placement{{Task: "t-1", Rank: dragged[0]}},
+	})
+	if _, err := h.apply(tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: 1, OpID: "drag-1", Subject: tracker.RankOrderSubject("ENG"),
+			Op: tracker.OpPatch, CreatedAt: at, Writer: "node-a",
+			Scope: tracker.ScopeSet{Terms: []tracker.ScopeTerm{{
+				Kind: tracker.TermContainer, ID: "ENG"}}},
+		},
+		Mutation: body, Actor: "ana", ActorKind: tracker.AuthorHuman,
+	}, at); err != nil {
+		t.Fatalf("drag: %v", err)
+	}
+	high := tracker.PriorityHigh
+	edit := taskRecord("t-1", tracker.OpPatch, tracker.TaskPatch{Priority: &high}, nil)
+	edit.OpID, edit.Kind = "edit-1", tracker.ChangeFields
+	if _, err := h.apply(edit, at); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	var column string
+	var document []byte
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT rank, document FROM tracker_tasks WHERE id = 't-1'`).
+			Scan(&column, &document)
+	}); err != nil {
+		t.Fatalf("read t-1: %v", err)
+	}
+	var task tracker.Task
+	if err := json.Unmarshal(document, &task); err != nil {
+		t.Fatalf("decode t-1: %v", err)
+	}
+	if tracker.Rank(column) != dragged[0] || task.Rank != dragged[0] {
+		t.Fatalf("an edit after a drag left the row at %q and the document at "+
+			"%q, want the dragged key %q on both — the edit put the card back "+
+			"where it was filed", column, task.Rank, dragged[0])
 	}
 }
 

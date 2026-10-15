@@ -106,9 +106,12 @@ export interface SteerMark {
   noteId: string;
   outcome: "delivered" | "expired";
   note: string;
-  /** Who sent it: a seat's HANDLE where the sender is bound to one, which a
-   *  reader sees as the seat's name, else the credential's own name. */
+  /** Who sent it, as the record names its author (`steered_by`, from
+   *  `iam.ActorFor`): a seat's HANDLE where the sender is bound to one — which
+   *  a reader sees as the seat's name — else the credential's own login. */
   by: string;
+  /** Whether `by` is a seat's handle: the author kind the engine recorded
+   *  beside it (`steered_by_kind`) is `human` or `agent`, never `operator`. */
   bySeat: boolean;
   /** The span that read it — a round's model call — or "" for an expired one. */
   spanId: string;
@@ -128,13 +131,17 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
       const phase = typeof p.phase === "string" ? p.phase : "";
       const iteration = typeof p.iteration === "number" ? p.iteration : 0;
       const round = typeof p.round === "number" ? p.round : 0;
-      const seat = typeof p.steered_by_seat === "string" ? p.steered_by_seat : "";
+      // THE AUTHOR AND ITS KIND, the two halves `iam.ActorFor` records: a bound
+      // person's note is written AS THEIR SEAT (kind `human`), so its author is
+      // a handle to name; an unbound credential's is its own login.
+      const by = typeof p.steered_by === "string" ? p.steered_by : "";
+      const kind = typeof p.steered_by_kind === "string" ? p.steered_by_kind : "";
       return {
         noteId: String(p.note_id ?? e.id),
         outcome,
         note: String(p.note ?? ""),
-        by: seat || String(p.steered_by ?? ""),
-        bySeat: seat !== "",
+        by,
+        bySeat: by !== "" && (kind === "human" || kind === "agent"),
         spanId:
           outcome === "delivered" && phase && round
             ? `${turnId}|${phase}|${iteration}.r${round}`

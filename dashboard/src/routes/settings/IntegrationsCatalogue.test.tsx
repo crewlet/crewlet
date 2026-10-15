@@ -6,7 +6,7 @@
  * two meet on screen the way they are meant to: every tile carries exactly
  * ONE control, Manage and Learn more are real links, Rotate token opens the
  * settings form saying why, the filter narrows what is shown, and a reader
- * with no operator token sees every form action disabled with its reason
+ * the engine refuses `/setup` sees every form action disabled with its reason
  * rather than removed.
  */
 
@@ -107,7 +107,7 @@ const listing: SetupListing = {
     tool("datadog", { configured: true, enabled: true, satisfied: true, form_complete: true }),
     ...["slack", "mattermost", "atlassian", "jira", "confluence", "github"].map((k) => tool(k)),
   ],
-  public_base_url: { present: true, resolved: true, value: "https://engine.example.com" },
+  external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
 } as unknown as SetupListing;
 
 function stubFetch(setup: { status: number; body: unknown }) {
@@ -125,16 +125,21 @@ function stubFetch(setup: { status: number; body: unknown }) {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  localStorage.setItem("crewlet_api_token", "t");
 });
+
+/** Somebody who may read and connect an integration. */
+const OPERATOR = {
+  login: "ops",
+  owner: "ops",
+  grants: ["admin"],
+};
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
-function mount(viewer: unknown = []) {
+function mount(viewer: unknown = OPERATOR) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
@@ -224,16 +229,21 @@ test("the filter shows what the company has, or what it could have", async () =>
 });
 
 // A WRITE CONTROL IS NEVER HIDDEN. `/setup` is guarded in full, so a reader
-// with no operator token has no form to open — and every form action says so
-// on the control itself, while Manage (which writes nothing) still works.
-test("without an operator token every form action is disabled with its reason", async () => {
-  stubFetch({ status: 401, body: { error: "unauthorized" } });
-  mount();
+// the engine refuses has no form to open — and every form action says which
+// grants it takes on the control itself, while Manage (which writes nothing)
+// still works.
+test("a reader refused /setup sees every form action disabled with the grants it takes", async () => {
+  stubFetch({
+    status: 403,
+    body: { error: "unauthorized", reason: "config", grants: ["admin"] },
+  });
+  mount({ login: "dee", owner: "dee", grants: [] });
   const connect = await screen.findByRole("button", { name: "Connect Slack" });
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
-  expect(document.body.textContent).toContain("Setting up integrations needs an operator token.");
-  expect(document.body.textContent).toContain("Setting up integrations needs an operator token.");
+  expect(document.body.textContent).toContain(
+    "Setting up integrations needs Admin access. An admin can give it to you.",
+  );
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
@@ -247,12 +257,7 @@ test("without an operator token every form action is disabled with its reason", 
 // keeps when a key leaks.
 test("a managed document holds Connect and keeps Rotate token", async () => {
   stubFetch({ status: 200, body: listing });
-  mount({
-    operator_id: "jane",
-    operator: true,
-    config_writer: false,
-    config_managed_by: ["gitops"],
-  });
+  mount({ ...OPERATOR, config_writer: false, config_managed_by: ["gitops"] });
   // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
   expect(
     (await screen.findAllByText(/Managed by gitops\. Change it there\./)).some(

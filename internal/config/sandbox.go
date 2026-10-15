@@ -1,8 +1,13 @@
 package config
 
 import (
+	"maps"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Placement is WHERE a seat's code work runs.
@@ -504,6 +509,25 @@ type LocalSandbox struct {
 	// --memory, extra mounts, --user). This is where a container box is
 	// SIZED, mirroring how a remote box is sized by its template.
 	RunArgs []string `yaml:"run_args,omitempty" json:"run_args,omitempty" desc:"Extra container run arguments. This is where a local box is sized."`
+
+	// RuntimeEnv is the environment DECLARED for the container runtime's
+	// own CLI — every `docker`/`podman` call the backend makes — over the
+	// fixed rule it always gets (hostbox.ContainerRuntime: the host
+	// allowlist, the engine user's locations and the runtime's own
+	// DOCKER_/CONTAINER_/CONTAINERS_/PODMAN_ settings).
+	//
+	// The channel the fixed rule cannot be: what a runtime's HELPERS read
+	// is open-ended — the cloud role, profile or key file a registry
+	// credential helper pulls a private image with — and with no
+	// way to add a name, a runtime that needed one simply stopped working
+	// when the engine stopped handing the CLI its whole environment. It is
+	// the MCP server's `env:` for the runtime, resolved the same way at the
+	// edge, and it never reaches a box: what a box needs is
+	// `role.sandbox.env`.
+	//
+	// A credential field, for the reason an MCP server's `env:` is one: a
+	// helper's cloud credentials are exactly what gets declared here.
+	RuntimeEnv map[string]string `secret:"true" yaml:"runtime_env,omitempty" json:"runtime_env,omitempty" desc:"Environment for the container runtime's own CLI (not the box); ${VAR} supported."`
 }
 
 // containerOnly are the fields no direct box reads, named as an operator
@@ -511,22 +535,83 @@ type LocalSandbox struct {
 // this package spends most of its rules on, and the check that reports it
 // needs the SEATS — see (*Company).validateSandboxPlacement.
 func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
-	args := ""
-	if len(l.RunArgs) > 0 {
-		args = "set"
+	set := func(n int) string {
+		if n > 0 {
+			return "set"
+		}
+		return ""
 	}
 	return []struct{ field, value string }{
 		{"image", l.Image},
 		{"runtime", string(l.Runtime)},
 		{"network", l.Network},
-		{"run_args", args},
+		{"run_args", set(len(l.RunArgs))},
+		{"runtime_env", set(len(l.RuntimeEnv))},
 	}
+}
+
+// unsuppliedEnvArgs is every bare `-e NAME` in run_args — the index it was
+// written at and the name — that the runtime's CLI has nothing for.
+//
+// A bare `-e NAME` (`--env NAME`, `--env=NAME`, `-eNAME`) COPIES NAME FROM
+// THE RUNTIME CLI'S OWN ENVIRONMENT, and that environment is the fixed rule
+// plus runtime_env — never the engine's. So a name neither carries arrives in
+// the box as nothing at all, silently: the container starts, and whatever
+// read the variable finds it unset. `-e NAME=value` names its own value and
+// is not this question.
+func (l *LocalSandbox) unsuppliedEnvArgs() []struct {
+	at   int
+	name string
+} {
+	var out []struct {
+		at   int
+		name string
+	}
+	for i := 0; i < len(l.RunArgs); i++ {
+		arg, at := l.RunArgs[i], i
+		var value string
+		switch {
+		case arg == "-e" || arg == "--env":
+			if i+1 >= len(l.RunArgs) {
+				continue
+			}
+			i++
+			value, at = l.RunArgs[i], i
+		case strings.HasPrefix(arg, "--env="):
+			value = strings.TrimPrefix(arg, "--env=")
+		case strings.HasPrefix(arg, "-e") && !strings.HasPrefix(arg, "--"):
+			value = strings.TrimPrefix(strings.TrimPrefix(arg, "-e"), "=")
+		default:
+			continue
+		}
+		if value == "" || strings.Contains(value, "=") {
+			continue
+		}
+		if _, declared := l.RuntimeEnv[value]; declared || hostbox.ContainerRuntimeCarries(value) {
+			continue
+		}
+		out = append(out, struct {
+			at   int
+			name string
+		}{at, value})
+	}
+	return out
 }
 
 func (l *LocalSandbox) validate(path Path) error {
 	var p problems
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
+	}
+	// A NAME OUTSIDE THE ENVIRONMENT'S OWN GRAMMAR is refused rather than
+	// handed on: `A=B` as a key would set a variable called A to `B=…`, and
+	// a name with a space in it is one no process can read back.
+	for _, name := range slices.Sorted(maps.Keys(l.RuntimeEnv)) {
+		if !envref.ValidName(name) {
+			p.add(entry(at(path, "runtime_env"), name), ErrShape,
+				"%q is not an environment variable name (letters, digits and "+
+					"underscores, not starting with a digit)", name)
+		}
 	}
 	return p.err()
 }
@@ -542,13 +627,20 @@ type SandboxSetupStep struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Short identifier used in logs and failure messages."`
 
 	// Files are written into the box (path -> content) before Commands
-	// run. ${VAR} references here are resolved when the step is loaded.
+	// run.
 	//
 	// A CREDENTIAL FIELD, because provisioning is what these files are for:
 	// a registry's auth file, a git credential store, a cloud CLI's config.
 	// A file's content is shown on a config read only when it is exactly one
 	// ${VAR} reference, and masked otherwise.
-	Files map[string]string `secret:"true" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run."`
+	//
+	// AND CONTENT RATHER THAN A SETTING (`secret:"content"`, see
+	// internal/secrets): a body that is exactly one ${VAR} is read at launch
+	// as the value that variable holds, byte for byte, and any other body is
+	// written as it is — a `${HOME}` in a script or a `${NPM_TOKEN}` in an
+	// .npmrc is the box's own syntax, expanded there from the run
+	// environment and never from the engine host's.
+	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value."`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this
@@ -582,11 +674,6 @@ type SandboxSetupStep struct {
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Per-command wall-clock cap for this step."`
 }
 
-// defaultSetupTimeoutSeconds gives a provisioning command room for a
-// dependency install or a cold image pull, which is what these steps
-// actually do.
-const defaultSetupTimeoutSeconds = 300.0
-
 // IdentityKey is the step's name: the handle a failure message and a log line
 // already use for it, and now what its masked credentials are restored by.
 //
@@ -599,12 +686,7 @@ const defaultSetupTimeoutSeconds = 300.0
 func (s SandboxSetupStep) IdentityKey() string { return s.Name }
 
 // Timeout is the per-command cap, applying the default.
-func (s *SandboxSetupStep) Timeout() float64 {
-	if s.TimeoutSeconds <= 0 {
-		return defaultSetupTimeoutSeconds
-	}
-	return s.TimeoutSeconds
-}
+func (s *SandboxSetupStep) Timeout() float64 { return org.SetupTimeout(s.TimeoutSeconds) }
 
 func (s *SandboxSetupStep) validate(path Path) error {
 	var p problems
@@ -622,7 +704,7 @@ func (s *SandboxSetupStep) validate(path Path) error {
 	if s.TimeoutSeconds < 0 {
 		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the %v s default) or positive, got %v",
-			defaultSetupTimeoutSeconds, s.TimeoutSeconds)
+			org.DefaultSetupTimeoutSeconds, s.TimeoutSeconds)
 	}
 	for file := range s.Files {
 		if strings.TrimSpace(file) == "" {
@@ -630,35 +712,4 @@ func (s *SandboxSetupStep) validate(path Path) error {
 		}
 	}
 	return p.err()
-}
-
-// Resolve returns a copy of the step with ${VAR} substituted in its FILES
-// and COMMANDS only, reporting what went unresolved.
-//
-// Env is deliberately left verbatim: it is resolved exactly once, together
-// with the rest of the sandbox env at launch, and resolving it here too
-// would double-resolve a secret whose real value contains a literal
-// ${...}. Brief and Name are never resolved — agent-facing text and an
-// identifier.
-//
-// path is rendered, like [Resolver.Map]'s: it only ever names a log line.
-func (s *SandboxSetupStep) Resolve(path string, r *Resolver) (SandboxSetupStep, []Unresolved) {
-	out := *s
-	var missing []Unresolved
-	if len(s.Files) > 0 {
-		files, m := r.Map(at(Path{path}, "files").String(), s.Files)
-		out.Files = files
-		missing = append(missing, m...)
-	}
-	if len(s.Commands) > 0 {
-		out.Commands = make([]string, len(s.Commands))
-		for i, cmd := range s.Commands {
-			expanded, names := r.Expand(cmd)
-			out.Commands[i] = expanded
-			if len(names) > 0 {
-				missing = append(missing, Unresolved{Path: idx(at(Path{path}, "commands"), i).String(), Names: names})
-			}
-		}
-	}
-	return out, missing
 }

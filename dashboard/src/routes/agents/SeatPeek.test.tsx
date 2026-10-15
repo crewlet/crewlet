@@ -1,17 +1,18 @@
 /**
  * The seat peek: what it reads, what it withholds, and what it lets a reader
- * do — without a refused request and within three reads.
+ * do — without a refused request and within three questions, plus one read of
+ * the identity directory for a human seat and a reader it answers.
  */
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol/index.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
@@ -36,7 +37,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   location.hash = "";
+  vi.unstubAllGlobals();
 });
+
+/**
+ * The identity directory answering `GET /iam/seats` with jane's seat as each
+ * case wants it — held, invited or vacant — and every request recorded.
+ */
+function directory(jane: Record<string, unknown>) {
+  const paths: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      paths.push(path);
+      return new Response(
+        JSON.stringify(
+          path === "/iam/seats"
+            ? { seats: [{ handle: "jane", name: "Jane Founder", ...jane }] }
+            : { error: "no_route" },
+        ),
+        {
+          status: path === "/iam/seats" ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }),
+  );
+  return paths;
+}
+
+const HELD = {
+  holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "suspended" },
+};
+const INVITED = {
+  invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" },
+};
+const VACANT = {};
 
 const window_ = (period: BudgetWindow["period"], used: number, limit: number): BudgetWindow => ({
   period,
@@ -62,7 +99,8 @@ function org(): OrgProjection {
 }
 
 const SWE: AgentRow = {
-  id: "SWE",
+  agent_id: "a-swe",
+  id: "swe",
   role: "SWE",
   handle: "swe",
   activity: "working",
@@ -70,7 +108,7 @@ const SWE: AgentRow = {
     turn_id: "turn-2",
     started_at: "2031-05-01T08:00:00Z",
     stage: "running",
-    work_item: { key: "ENG-412" },
+    work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
   },
   live_call: {
     versions: ZERO_VERSIONS,
@@ -82,7 +120,7 @@ const SWE: AgentRow = {
     round_num: 6,
     rounds_used: 6,
     max_rounds: 25,
-    work_item: { key: "ENG-412" },
+    work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
     in_progress: true,
     updated_at: "2031-05-01T08:06:00Z",
   },
@@ -106,13 +144,16 @@ async function mount(
   const store = new Store();
   store.applyHealth(health);
   store.applyOrg(projection);
-  store.applyAgents(agents);
+  store.applySeats(agents);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
+  const params: Record<string, unknown[]> = {};
   (socket as unknown as { query: (what: string, p?: unknown) => Promise<unknown> }).query = (
     what,
+    p,
   ) => {
     asked.push(what);
+    (params[what] ??= []).push(p);
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "fleet") {
       return Promise.resolve({
@@ -125,7 +166,11 @@ async function mount(
       return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
     }
     if (what === "work_item_turns") {
-      return Promise.resolve({ key: "ENG-412", turns: [{ turn_id: "turn-1", ordinal: 1 }] });
+      return Promise.resolve({
+        item: "t-412",
+        key: "ENG-412",
+        turns: [{ turn_id: "turn-1", ordinal: 1 }],
+      });
     }
     return Promise.reject(new Error(`the peek asked for ${what}`));
   };
@@ -141,14 +186,15 @@ async function mount(
   await act(async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
   });
-  return { asked: asked.filter((w) => w !== "viewer") };
+  return { asked: asked.filter((w) => w !== "viewer"), params };
 }
 
-const ANONYMOUS = { operator_id: "", acts: [] };
+const ANONYMOUS = { login: "", owner: "", acts: [] };
 const OPERATOR = {
-  operator_id: "ops",
-  operator: true,
+  login: "ops",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   acts: ["create_work_item"],
 };
@@ -192,12 +238,102 @@ test("the peek asks at most three questions", async () => {
   expect(asked).not.toContain("config");
 });
 
+// A HUMAN SEAT SAYS WHAT HOLDS IT, for every signed-in reader, and is asked
+// ONE more read — the directory, which the engine masks per reader — never for
+// an agent's seat, whose holder is the engine. The CONTROLS: the operator's
+// agent-seat peek above asks no directory at all, and a browser nobody signed
+// in on is asked nothing and shown no fact. Mutation: read the directory for
+// every seat, or for an anonymous reader, and a count here goes red.
+//
+// THE VALUE DOES NOT REPEAT ITS TERM: the card's line begins "Held by", and
+// drawn under the term it read "Held by / Held by jane.doe (suspended)".
+test.each([
+  ["held", HELD, "jane.doe (suspended)"],
+  [
+    "service account's",
+    { holder: { person: "m-ci", kind: "machine", login: "ci:release", stage: "active" } },
+    "The service account ci:release",
+  ],
+  ["invited", INVITED, "An open invitation · jane@example.com"],
+  ["vacant", VACANT, "Nobody — the seat is vacant"],
+])("a %s human seat's peek says what holds it, in one directory read", async (_, jane, line) => {
+  const paths = directory(jane);
+  const { asked } = await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(line);
+  expect(paths.filter((p) => p === "/iam/seats")).toHaveLength(1);
+  expect(new Set(asked).size).toBeLessThanOrEqual(3);
+});
+
+test("an agent's seat and an anonymous reader ask it nothing, and every signed-in reader asks once", async () => {
+  const paths = directory(VACANT);
+  await mount(OPERATOR);
+  expect(paths).toEqual([]);
+  expect(screen.queryByText("Held by")).toBeNull();
+  cleanup();
+  const anonymous = directory(VACANT);
+  await mount(ANONYMOUS, { handle: "jane" });
+  expect(anonymous).toEqual([]);
+  expect(screen.queryByText("Held by")).toBeNull();
+  cleanup();
+  const tracker = directory(VACANT);
+  await mount({ ...OPERATOR, grants: ["tracker"] }, { handle: "jane" });
+  await act(async () => {});
+  expect(tracker.filter((p) => p === "/iam/seats")).toHaveLength(1);
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
+    "Nobody — the seat is vacant",
+  );
+});
+
+// THE PEEK FILLS A SEAT TOO — on a phone it is where those gestures are —
+// for Admin alone: a reader without it reads the fact with no control. A
+// vacant seat offers Invite and Create, an invited one its cancellation, a
+// held one nothing. Mutation: drop the grant check and that reader is
+// offered both.
+test("a vacant human seat's peek offers Invite and Create to an administrator alone", async () => {
+  directory(VACANT);
+  await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  const foot = screen.getByRole("button", { name: "Invite" }).closest("footer") as HTMLElement;
+  expect(within(foot).getByRole("button", { name: "Create person" })).toBeTruthy();
+  fireEvent.click(within(foot).getByRole("button", { name: "Create person" }));
+  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  cleanup();
+
+  directory(VACANT);
+  await mount({ ...OPERATOR, grants: ["tracker", "knowledge"] }, { handle: "jane" });
+  await act(async () => {});
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
+    "Nobody — the seat is vacant",
+  );
+  expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Create person" })).toBeNull();
+  cleanup();
+
+  directory(INVITED);
+  await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  expect(screen.getByRole("button", { name: "Cancel invitation" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+  cleanup();
+
+  directory(HELD);
+  await mount(OPERATOR, { handle: "jane" });
+  await act(async () => {});
+  for (const name of ["Invite", "Create person", "Cancel invitation"]) {
+    expect(screen.queryByRole("button", { name })).toBeNull();
+  }
+});
+
 // THE STATE CARD: the engine's line, and which turn on the task and which
 // round of how many.
 test("the state card names the turn on the task and the round", async () => {
-  await mount(OPERATOR);
+  const { params } = await mount(OPERATOR);
   expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
   expect(screen.getByText("Turn 2 · round 7 of 25")).toBeTruthy();
+  // ASKED FOR BY THE TASK'S ID, shown by its key: a key another task claimed
+  // first would number this turn on the claimant's list.
+  expect(params["work_item_turns"]).toEqual([{ id: "t-412", limit: 1 }]);
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
 });
 
@@ -252,7 +388,6 @@ test("a seat with no budget of its own under a capped company names the company'
 // cannot act, and pressable for one who can.
 test.each([
   ["anonymous", ANONYMOUS, WRITE_REASONS.anonymous],
-  ["unbound", { operator_id: "ci", acts: [] }, WRITE_REASONS.unbound],
   ["not served", { ...OPERATOR, acts: [] }, WRITE_REASONS.not_served],
 ])("Message is held with the reason for a reader who is %s", async (_, viewer, reason) => {
   await mount(viewer);
@@ -265,6 +400,42 @@ test("Message is pressable for a reader who can file", async () => {
   await mount(OPERATOR);
   const message = screen.getByRole("button", { name: /Message/ });
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
+});
+
+// YOUR OWN SEAT, PEEKED FROM THE CHART, IS THE PAGE'S OWN SEAT: Message held —
+// an ask of it is a question only you could answer — and the way to your
+// Account, which the page carried and the peek did not, so a person who found
+// themselves on the chart offered to message themselves and found no way to
+// their own security. The CONTROL is a colleague's seat by the same reader:
+// Message free and no Account. Mutation: drop the button's own-seat rule and
+// the first half goes red; draw the card on every seat and the second does.
+test("your own seat's peek holds Message and points to your Account, and a colleague's does not", async () => {
+  const jane = {
+    login: "jane.doe",
+    grants: ["tracker"],
+    handle: "jane",
+    owner: "jane",
+    acts: ["create_work_item"],
+  };
+  await mount(jane, { handle: "jane" });
+  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer")!;
+  const message = within(foot as HTMLElement).getByRole("button", { name: "Message" });
+  expect(message.getAttribute("aria-disabled")).toBe("true");
+  expect(message.getAttribute("title")).toBe(OWN_SEAT_MESSAGE);
+  const card = screen.getByRole("heading", { name: "Your account" }).closest(".prof-card")!;
+  expect(
+    within(card as HTMLElement)
+      .getByRole("link", { name: "Account" })
+      .getAttribute("href"),
+  ).toBe("#/account");
+  cleanup();
+
+  await mount(jane, { handle: "swe" });
+  expect(screen.getByRole("button", { name: "Message" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
+  expect(screen.queryByRole("heading", { name: "Your account" })).toBeNull();
+  expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
 // A SEAT THE ENGINE GAVE NO MANAGER is the top of the chart, and says so

@@ -70,7 +70,7 @@ func TestARelatedAgentsFeedOnlyPageLeavesOutItsTracesAccounting(t *testing.T) {
 	base := time.Now().UTC().Add(-time.Hour)
 	for i, rec := range []store.EventRecord{
 		{ID: "work", Type: "agent_phase_completed", Category: "task",
-			Tags: map[string]string{"agent_role": "Lead"}},
+			Tags: map[string]string{"agent_id": "a-lead", "agent_role": "Lead"}},
 		{ID: "cause", Type: "webhook_received", Category: "webhook"},
 		{ID: "spend", Type: unfed[0], Category: "system"},
 	} {
@@ -94,11 +94,11 @@ func TestARelatedAgentsFeedOnlyPageLeavesOutItsTracesAccounting(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if got := ids(store.ListQuery{Limit: 10, RelatedAgent: "Lead"}); !slices.Equal(got, []string{"cause", "spend", "work"}) {
+	if got := ids(store.ListQuery{Limit: 10, RelatedAgent: "a-lead"}); !slices.Equal(got, []string{"cause", "spend", "work"}) {
 		t.Fatalf("related listing = %v, want the agent's row and its trace's — the case "+
 			"exercises nothing otherwise", got)
 	}
-	if got := ids(store.ListQuery{Limit: 10, RelatedAgent: "Lead", FeedOnly: true}); !slices.Equal(got, []string{"cause", "work"}) {
+	if got := ids(store.ListQuery{Limit: 10, RelatedAgent: "a-lead", FeedOnly: true}); !slices.Equal(got, []string{"cause", "work"}) {
 		t.Errorf("feed-only related listing = %v, want the agent's row and its cause, "+
 			"without the trace's accounting", got)
 	}

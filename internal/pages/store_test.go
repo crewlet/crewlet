@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -106,7 +107,7 @@ func TestARenameMovesTheAddressAndFreesTheOldOne(t *testing.T) {
 	page := r.write(author("jane"), pages.NewPage{Title: "Old Name", Body: "prose"})
 
 	if _, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"New Name", false, pages.CallKey{}); err != nil {
+		"New Name", false); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	r.drain()
@@ -148,7 +149,7 @@ func TestARenameOntoATakenAddressIsRefused(t *testing.T) {
 	page := r.write(author("jane"), pages.NewPage{Title: "One", Body: "a"})
 	r.write(author("jane"), pages.NewPage{Title: "Two", Body: "b"})
 
-	_, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID, "Two", false, pages.CallKey{})
+	_, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID, "Two", false)
 	if !errors.Is(err, pages.ErrTitleTaken) {
 		t.Fatalf("a rename took an address another page holds: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestATurnsCommentOnAPageIsPostedOnce(t *testing.T) {
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 
-	in := pages.NewComment{Body: "the agent's note", CallKey: pages.CallKey{Seed: "turn-7"}}
+	in := pages.NewComment{Body: "the agent's note", TurnKey: "turn-7"}
 	for range 3 {
 		if _, _, err := r.store.Comment(t.Context(), agent("eng"), page.Page.ID,
 			in); err != nil {
@@ -258,11 +259,11 @@ func TestARemarkMadeAgainAfterAnotherIsASecondComment(t *testing.T) {
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 	for _, in := range []pages.NewComment{
-		{Body: "blocked", CallKey: pages.CallKey{Seed: "turn-7"}},
-		{Body: "unblocked", CallKey: pages.CallKey{Seed: "turn-7", Repeat: 1}},
-		{Body: "blocked", CallKey: pages.CallKey{Seed: "turn-7", Repeat: 1}},
+		{Body: "blocked", TurnKey: "turn-7"},
+		{Body: "unblocked", TurnKey: "turn-7", Repeat: 1},
+		{Body: "blocked", TurnKey: "turn-7", Repeat: 1},
 		// ITS RETRY, which a re-run makes under the same count.
-		{Body: "blocked", CallKey: pages.CallKey{Seed: "turn-7", Repeat: 1}},
+		{Body: "blocked", TurnKey: "turn-7", Repeat: 1},
 	} {
 		if _, _, err := r.store.Comment(t.Context(), agent("eng"), page.Page.ID,
 			in); err != nil {
@@ -297,7 +298,7 @@ func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	r.drain()
 
 	_, _, err = r.store.EditComment(t.Context(), author("bob"), page.Page.ID,
-		comment.ID, "bob's words in jane's mouth", pages.CallKey{})
+		comment.ID, "bob's words in jane's mouth")
 	if !errors.Is(err, pages.ErrInvalid) {
 		t.Fatalf("a second person edited somebody else's comment: %v", err)
 	}
@@ -308,6 +309,81 @@ func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	}
 	if len(thread) != 1 || thread[0].Body != "jane's remark" {
 		t.Errorf("the comment was changed anyway: %+v", thread)
+	}
+}
+
+// AND ONLY THE AUTHOR OR A MODERATOR REMOVES ONE.
+//
+// This verb had NO CHECK AT ALL: any caller that could reach it could take
+// down any remark on any page, while [pages.Store.EditComment] three functions
+// up refused exactly that. The asymmetry was invisible because nothing called
+// it yet — the pages routes are its first caller.
+func TestANonAuthorCannotRemoveAComment(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := r.store.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "jane's remark"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.store.RemoveComment(t.Context(), author("bob"),
+		page.Page.ID, comment.ID, pages.CommentAuthority{}); !errors.Is(
+		err, pages.ErrInvalid) {
+
+		t.Fatalf("a second person removed somebody else's comment: %v", err)
+	}
+	r.drain()
+	if thread, err := r.store.Thread(t.Context(), page.Page.ID); err != nil {
+		t.Fatalf("thread: %v", err)
+	} else if len(thread) != 1 {
+		t.Fatalf("the comment came down anyway: %+v", thread)
+	}
+
+	// AND A MODERATOR DOES, which is the arm admin opens:
+	// somebody has to be able to take down what nobody else can.
+	if _, err := r.store.RemoveComment(t.Context(), author("bob"),
+		page.Page.ID, comment.ID,
+		pages.CommentAuthority{Moderate: true}); err != nil {
+
+		t.Fatalf("a moderator could not remove a comment: %v", err)
+	}
+	r.drain()
+	if thread, err := r.store.Thread(t.Context(), page.Page.ID); err != nil {
+		t.Fatalf("thread: %v", err)
+	} else if len(thread) != 0 {
+		t.Fatalf("the moderator's removal did not land: %+v", thread)
+	}
+
+	// A REMARK THAT IS GONE IS NOT FOUND, for a moderator too, and nothing
+	// is published: there is no author left to ask the check about and
+	// nothing for a record to take down.
+	end := r.logEnd()
+	if _, err := r.store.RemoveComment(t.Context(), author("bob"),
+		page.Page.ID, comment.ID,
+		pages.CommentAuthority{Moderate: true}); !errors.Is(err, pages.ErrNotFound) {
+
+		t.Fatalf("removing a remark already gone = %v, want ErrNotFound", err)
+	}
+	if got := r.logEnd(); got != end {
+		t.Fatalf("removing a remark already gone put %d record(s) on the log",
+			got-end)
+	}
+
+	// AND THE AUTHOR NEEDS NO ANSWER AT ALL, which is what keeps the
+	// ordinary case reachable on a node that can decide nothing.
+	second, _, err := r.store.Comment(t.Context(), author("jane"),
+		page.Page.ID, pages.NewComment{Body: "another"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.RemoveComment(t.Context(), author("jane"),
+		page.Page.ID, second.ID, pages.CommentAuthority{}); err != nil {
+
+		t.Fatalf("jane could not remove her own remark: %v", err)
 	}
 }
 
@@ -362,37 +438,48 @@ func TestOversizedContentIsRefusedNamingTheField(t *testing.T) {
 	}
 }
 
-// A WRITE NAMES ITS AUTHOR, and an OPERATOR names it differently.
+// A WRITE NAMES ITS AUTHOR — every kind, an operator included — and names it
+// BARE.
 //
 // A seat or an agent must state the handle it acts as: an audit trail whose
 // author is empty is a list of changes nobody made. An operator has no seat —
 // the operator surface deliberately gives a caller no way to name one — so it
-// is identified by the token it presented instead.
+// is named by the credential's own login, exactly as the tracker names it.
+//
+// It used to be named `"operator:" + OperatorID` when it stated no handle,
+// which was a second spelling of one party: the audit feed reads this history
+// beside the tracker's, where the same operator is the bare login, and showed
+// one person as two. So there is no fallback name, and a write with no handle
+// is refused whatever its kind.
 func TestAWriteNamesItsAuthor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if _, err := r.store.Create(t.Context(), pages.Actor{}, pages.NewPage{
-		Container: "ENG", Title: "Runbook", Body: "x",
-	}); !errors.Is(err, pages.ErrInvalid) {
-		t.Fatalf("a write with no author kind landed: %v", err)
-	}
-	if _, err := r.store.Create(t.Context(),
-		pages.Actor{Kind: pages.AuthorAgent}, pages.NewPage{
+	for name, actor := range map[string]pages.Actor{
+		"no author kind":               {},
+		"an agent with no seat handle": {Kind: pages.AuthorAgent},
+		"an operator named only by its credential": {
+			Kind: pages.AuthorOperator, OperatorID: "pat:0b8f6b44",
+		},
+	} {
+		if _, err := r.store.Create(t.Context(), actor, pages.NewPage{
 			Container: "ENG", Title: "Runbook", Body: "x",
 		}); !errors.Is(err, pages.ErrInvalid) {
-		t.Fatalf("an agent write with no seat handle landed: %v", err)
+			t.Errorf("a write by %s landed: %v", name, err)
+		}
 	}
-	written, err := r.store.Create(t.Context(),
-		pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops-3"},
-		pages.NewPage{Container: "ENG", Title: "Runbook", Body: "x"})
+	if got := r.logEnd(); got != 0 {
+		t.Fatalf("refused writes put %d record(s) on the log", got)
+	}
+	written, err := r.store.Create(t.Context(), pages.Actor{
+		Handle: "token:ops-3", Kind: pages.AuthorOperator, OperatorID: "token:ops-3",
+	}, pages.NewPage{Container: "ENG", Title: "Runbook", Body: "x"})
 	if err != nil {
 		t.Fatalf("an operator write was refused: %v", err)
 	}
 	r.drain()
-	if got := r.get(written.Page.ID).Page.Author; got != "operator:ops-3" {
-		t.Errorf("the operator's write is attributed to %q — it carries the "+
-			"TOKEN's own name, because there is deliberately no way for that "+
-			"surface to name a seat to act as", got)
+	if got := r.get(written.Page.ID).Page.Author; got != "token:ops-3" {
+		t.Errorf("the operator's write is attributed to %q, want the "+
+			"credential's own login, bare — the name every other row calls it", got)
 	}
 }
 
@@ -643,7 +730,7 @@ func TestAnUnchangedCommentEditStillAnswersWithARevision(t *testing.T) {
 	before := r.consumed
 
 	_, got, err := r.store.EditComment(t.Context(), author("jane"), page.Page.ID,
-		comment.ID, "is this still right?", pages.CallKey{})
+		comment.ID, "is this still right?")
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -684,7 +771,7 @@ func TestARenameToTheTitleItAlreadyDisplaysAnswersApplied(t *testing.T) {
 	before := r.consumed
 
 	got, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"  Runbook ", false, pages.CallKey{})
+		"  Runbook ", false)
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -743,7 +830,7 @@ func TestACapitalisationChangeIsARenameAndLands(t *testing.T) {
 	before := r.consumed
 
 	got, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"RUNBOOK", false, pages.CallKey{})
+		"RUNBOOK", false)
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -791,13 +878,20 @@ func TestACapitalisationChangeIsARenameAndLands(t *testing.T) {
 // covered by a clause that is false by construction once the mutator has run,
 // and true only for the empty handle, so the one caller it fired for was the
 // one caller with nothing to change.
+//
+// AND THE OPERATOR IS BUILT AS EVERY SURFACE BUILDS ONE, with the credential's
+// own login as its handle. The rule was keyed on the handle being empty, which
+// this case satisfied and no surface did, so in production an operator's
+// unwatch muted its login and published a record, and an operator's create
+// subscribed a login no wake can reach.
 func TestAnOperatorsWatchToggleChangesNothing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 	before := r.consumed
 
-	operator := pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ci"}
+	operator := pages.Actor{Handle: "token:ci", Kind: pages.AuthorOperator,
+		OperatorID: "token:ci"}
 	if _, err := r.store.SavePage(t.Context(), operator, page.Page.ID,
 		pages.Save{BaseVersion: 1, Watch: ptr(false)}); err != nil {
 		t.Fatalf("save: %v", err)
@@ -811,6 +905,13 @@ func TestAnOperatorsWatchToggleChangesNothing(t *testing.T) {
 	if got := r.get(page.Page.ID); len(got.Page.Muted) != 0 {
 		t.Errorf("muted = %v after an operator unwatch — a token has no seat "+
 			"to mute", got.Page.Muted)
+	}
+
+	created := r.write(operator, pages.NewPage{Title: "Release notes", Body: "x",
+		Watchers: []string{"jane"}})
+	if got := r.get(created.Page.ID).Page.Watchers; !slices.Equal(got, []string{"jane"}) {
+		t.Errorf("an operator's create is watched by %v, want only the seat it "+
+			"named — a credential's login is no seat for a wake to reach", got)
 	}
 }
 
@@ -903,7 +1004,7 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 		t.Errorf("the head reads at %d and the reader answers %d", revision, got)
 	}
 	if _, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"New Name", false, pages.CallKey{}); err != nil {
+		"New Name", false); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	r.drain()
@@ -916,4 +1017,401 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 			"stamps `scoped_through` and never `version`, so a revision taken "+
 			"from the version alone never moves for one", moved, revision)
 	}
+}
+
+// THE SKILLS CONTAINER REFUSES AN AGENT EVERY WRITE, not only a create.
+//
+// It used to be one check inside `write_page`, so a seat that could not create
+// a page in the tool-skills container could still SAVE over one, RENAME one
+// and COMMENT on one — and every surface added later inherited the hole
+// silently, because nothing in the domain said the rule existed. The store is
+// the one place every write goes through, which is why it is here and why
+// [pages.ErrReserved] finally has a producer.
+//
+// A PERSON IS NOT REFUSED here. Whether a person may write a tool skill is a
+// capability, and internal/authz decides it; what the store holds is that a
+// page in the skills container is machinery injected into every seat's turn
+// and excluded from search and routing, which an AGENT cannot tell from
+// anything it holds.
+func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
+	r := newRoundTrip(t)
+
+	// THE PAGE IS PUT THERE BY A PERSON, which is both the setup and the
+	// first half of the rule: the same call an agent is refused.
+	page := r.write(author("ana"), pages.NewPage{
+		Container: "TS", Title: "Chat conventions", Body: "thread your reply",
+	}).Page
+	remark, _, err := r.store.Comment(t.Context(), author("ana"), page.ID,
+		pages.NewComment{Body: "see also the handbook"})
+	if err != nil {
+		t.Fatalf("a person could not comment on a skill page: %v", err)
+	}
+	r.drain()
+
+	for name, write := range map[string]func(pages.Actor) error{
+		"create": func(a pages.Actor) error {
+			_, err := r.store.Create(t.Context(), a, pages.NewPage{
+				Container: "ts", Title: "another", Body: "x",
+			})
+			return err
+		},
+		"save": func(a pages.Actor) error {
+			_, err := r.store.SavePage(t.Context(), a, page.ID,
+				pages.Save{BaseVersion: 1, Body: ptr("rewritten")})
+			return err
+		},
+		"rename": func(a pages.Actor) error {
+			_, err := r.store.Rename(t.Context(), a, page.ID,
+				"Chat rules", false)
+			return err
+		},
+		"comment": func(a pages.Actor) error {
+			_, _, err := r.store.Comment(t.Context(), a, page.ID,
+				pages.NewComment{Body: "why?"})
+			return err
+		},
+		"comment edit": func(a pages.Actor) error {
+			_, _, err := r.store.EditComment(t.Context(), a, page.ID,
+				remark.ID, "rewritten")
+			return err
+		},
+		"comment removal": func(a pages.Actor) error {
+			_, err := r.store.RemoveComment(t.Context(), a, page.ID,
+				remark.ID, pages.CommentAuthority{Moderate: true})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := write(agent("pm"))
+			if !errors.Is(err, pages.ErrReserved) {
+				t.Fatalf("an agent's %s into the skills container gave %v, "+
+					"want ErrReserved", name, err)
+			}
+			if !strings.Contains(err.Error(), "TS") ||
+				!strings.Contains(err.Error(), "tool skills") {
+				t.Errorf("the refusal does not name the container and why: %v", err)
+			}
+		})
+	}
+
+	// AND AN ORDINARY CONTAINER IS UNTOUCHED, or the rule would be a ban
+	// on agents writing anything.
+	if _, err := r.store.Create(t.Context(), agent("pm"), pages.NewPage{
+		Container: "ENG", Title: "Deploy notes", Body: "x",
+	}); err != nil {
+		t.Fatalf("an agent could not write an ordinary container: %v", err)
+	}
+}
+
+// THE ORG ROOT REFUSES AN AGENT A NEW PAGE, AND NOTHING ELSE.
+//
+// The root holds what is true of the whole company, starting with the
+// Onboarding page every seat reads first, and a new page at the top of the
+// company is a person's decision — which is all `write_page` ever refused
+// there. When the rule moved into the store it was folded into the skills
+// container's, so an agent could no longer keep a root page current, rename
+// it or remark on it, and the refusal told it the page was "excluded from
+// knowledge search and from routing" — true of the skills container and false
+// of this one, which is searched and routed like any other.
+//
+// Both halves, and the message: a create is refused naming the root's own
+// reason, and every gesture on a page already there lands.
+func TestTheOrgRootRefusesAnAgentOnlyANewPage(t *testing.T) {
+	r := newRoundTrip(t)
+
+	// THE ONBOARDING PAGE IS A PERSON'S, as the convention has it.
+	page := r.write(author("ana"), pages.NewPage{
+		Container: "HOME", Title: "Onboarding", Body: "who is here",
+	}).Page
+
+	_, err := r.store.Create(t.Context(), agent("pm"), pages.NewPage{
+		Container: "home", Title: "Team rituals", Body: "x",
+	})
+	if !errors.Is(err, pages.ErrReserved) {
+		t.Fatalf("an agent's new page in the org root gave %v, want ErrReserved", err)
+	}
+	if !strings.Contains(err.Error(), "HOME") ||
+		!strings.Contains(err.Error(), "organisation's own container") {
+		t.Errorf("the refusal does not name the root and why: %v", err)
+	}
+	if strings.Contains(err.Error(), "excluded from") {
+		t.Errorf("the refusal says the root is excluded from search or routing, "+
+			"which is the skills container's reason and false of this one: %v", err)
+	}
+
+	saved, err := r.store.SavePage(t.Context(), agent("pm"), page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("who is here, and who joined")})
+	if err != nil {
+		t.Fatalf("an agent could not keep a root page current: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.Rename(t.Context(), agent("pm"), page.ID,
+		"Onboarding for everyone", false); err != nil {
+		t.Fatalf("an agent could not rename a root page: %v", err)
+	}
+	r.drain()
+	remark, _, err := r.store.Comment(t.Context(), agent("pm"), page.ID,
+		pages.NewComment{Body: "the second section is stale"})
+	if err != nil {
+		t.Fatalf("an agent could not remark on a root page: %v", err)
+	}
+	r.drain()
+	if _, _, err := r.store.EditComment(t.Context(), agent("pm"), page.ID,
+		remark.ID, "the third section is stale"); err != nil {
+		t.Fatalf("an agent could not correct its own remark on a root page: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.RemoveComment(t.Context(), agent("pm"), page.ID,
+		remark.ID, pages.CommentAuthority{}); err != nil {
+		t.Fatalf("an agent could not take down its own remark on a root page: %v", err)
+	}
+	if saved.Page.Version != 2 {
+		t.Errorf("the save landed at version %d, want 2", saved.Page.Version)
+	}
+
+	// AND A PERSON ADDS A PAGE THERE, which is what the container is for.
+	if _, err := r.store.Create(t.Context(), author("ana"), pages.NewPage{
+		Container: "HOME", Title: "Company values", Body: "x",
+	}); err != nil {
+		t.Fatalf("a person could not publish into the org root: %v", err)
+	}
+}
+
+// A GESTURE RETRIED UNDER THE CALLER'S OWN KEY IS ONE OPERATION.
+//
+// An HTTP write whose answer was `unknown` can only be retried safely under
+// the SAME operation id, because the ledger is what recognises a second
+// arrival. Every write here minted a fresh id per call, so a retried comment
+// posted twice — and there was no way for a caller with no turn to say "this
+// is the same gesture". [pages.Actor.OpKey] is that way.
+//
+// The control is the same retry with no key, which is two operations: the
+// comment posted twice is exactly what the key exists to prevent.
+//
+// AND THE RETRY IS ANSWERED WITH WHAT THE FIRST ONE WROTE. It is answered from
+// the ledger rather than decided, so a remark or a page computed by this call
+// would describe a decision nothing published — the comment's author and
+// instant are the earlier copy's, and the page it trashed is trashed.
+func TestAGestureRetriedUnderOneKeyIsOneOperation(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	keyed := author("ana")
+	keyed.OpKey = statelog.NewOpID(time.Now(), "")
+	var changes []string
+	var remarks []pages.Comment
+	var trashes []pages.Written
+	for range 2 {
+		remark, written, err := r.store.Comment(t.Context(), keyed, page.Page.ID,
+			pages.NewComment{Body: "step 3 is stale"})
+		if err != nil {
+			t.Fatalf("comment: %v", err)
+		}
+		changes = append(changes, written.ChangeID)
+		remarks = append(remarks, remark)
+		r.drain()
+		trashed, err := r.store.Trash(t.Context(), keyed, page.Page.ID)
+		if err != nil {
+			t.Fatalf("trash: %v", err)
+		}
+		changes = append(changes, trashed.ChangeID)
+		trashes = append(trashes, trashed)
+		r.drain()
+	}
+	if changes[0] != changes[2] || changes[1] != changes[3] {
+		t.Errorf("a retry under one key was a new operation: %v", changes)
+	}
+	thread, err := r.store.Thread(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if len(thread) != 1 {
+		t.Fatalf("a retried comment posted %d times", len(thread))
+	}
+	if !trashes[1].Outcome.Collapsed {
+		t.Fatalf("the premise: the retried trash was answered from the ledger, "+
+			"got %+v", trashes[1].Outcome)
+	}
+	held := thread[0]
+	if got := remarks[1]; got.ID != held.ID || got.Author != held.Author ||
+		!got.CreatedAt.Equal(held.CreatedAt) || got.Body != held.Body {
+		t.Errorf("the retried comment answered %+v, want the remark the first "+
+			"run posted %+v", got, held)
+	}
+	for i, trashed := range trashes {
+		if trashed.Page.ID != page.Page.ID || trashed.Page.Title != "Runbook" ||
+			trashed.Page.Status != pages.StatusTrashed {
+			t.Errorf("trash %d answered the page (%q, %q, %s), want %s, "+
+				"Runbook, trashed", i+1, trashed.Page.ID, trashed.Page.Title,
+				trashed.Page.Status, page.Page.ID)
+		}
+	}
+
+	// THE CONTROL: no key, and the retry is a second comment.
+	unkeyed := author("bo")
+	for range 2 {
+		if _, _, err := r.store.Comment(t.Context(), unkeyed, page.Page.ID,
+			pages.NewComment{Body: "and step 4"}); err != nil {
+			t.Fatalf("comment: %v", err)
+		}
+		r.drain()
+	}
+	if thread, _ = r.store.Thread(t.Context(), page.Page.ID); len(thread) != 3 {
+		t.Fatalf("the control holds %d comments, want 3 — so this test cannot "+
+			"tell a keyed retry from an unkeyed one", len(thread))
+	}
+}
+
+// A KEYED RETRY OF A WRITE THAT LANDED IS ANSWERED WITH WHAT THE OPERATION
+// WROTE, never with what this call would have decided.
+//
+// The retry an `unknown` asks for is answered from the ledger before any
+// decision runs ([statelog.Result.Collapsed]), so a write that reported what
+// its decision read reported nothing on exactly that call: a retried save came
+// back as a success carrying a page with no id, no title and version zero, and
+// a retried create as a page id it had just minted — one no row held — while
+// the page the operation did create went unreported.
+func TestAKeyedRetryIsAnsweredWithWhatTheOperationWrote(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	create := pages.NewPage{Container: "ENG", Title: "Runbook", Body: "prose"}
+	creator := keyedAuthor("ana")
+	first, err := r.store.Create(t.Context(), creator, create)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	again, err := r.store.Create(t.Context(), creator, create)
+	switch {
+	case err != nil:
+		t.Fatalf("the retried create: %v", err)
+	case !again.Outcome.Collapsed:
+		t.Fatalf("the premise: the retried create was answered from the "+
+			"ledger, got %+v", again.Outcome)
+	case again.Page.ID != first.Page.ID || again.ChangeID != first.ChangeID:
+		t.Fatalf("the retried create answered page %s under %s, want the "+
+			"first attempt's %s under %s", again.Page.ID, again.ChangeID,
+			first.Page.ID, first.ChangeID)
+	case again.Page.Version != 1 || again.Page.Body != "prose" ||
+		again.Revision != first.Revision:
+		t.Errorf("the retried create answered %+v at revision %d, want the "+
+			"page the first attempt created at %d", again.Page, again.Revision,
+			first.Revision)
+	}
+	if got := r.get(first.Page.ID); got.Page.Title != "Runbook" {
+		t.Errorf("the page the create answered with reads %q", got.Page.Title)
+	}
+
+	editor := keyedAuthor("ana")
+	save := pages.Save{BaseVersion: 1, Body: ptr("revised")}
+	saved, err := r.store.SavePage(t.Context(), editor, first.Page.ID, save)
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	resaved, err := r.store.SavePage(t.Context(), editor, first.Page.ID, save)
+	switch {
+	case err != nil:
+		t.Fatalf("the retried save — refused on a version its own first "+
+			"copy moved: %v", err)
+	case !resaved.Outcome.Collapsed:
+		t.Fatalf("the premise: the retried save was answered from the ledger, "+
+			"got %+v", resaved.Outcome)
+	case resaved.Page.ID != first.Page.ID || resaved.Page.Title != "Runbook" ||
+		resaved.Page.Version != 2 || resaved.Page.Body != "revised":
+		t.Errorf("the retried save answered (%q, %q, v%d, %q), want the page "+
+			"its first copy saved", resaved.Page.ID, resaved.Page.Title,
+			resaved.Page.Version, resaved.Page.Body)
+	case resaved.Revision != saved.Revision:
+		t.Errorf("the retried save answered revision %d, want its first "+
+			"copy's %d", resaved.Revision, saved.Revision)
+	}
+}
+
+// A RENAME RETRIED AFTER ITS MOVE LANDED IS ANSWERED, NOT REFUSED.
+//
+// Which shape a rename is — a move to another address, or a retitle of the one
+// it holds — is decided from the row before anything is published, and the
+// retry of a move that landed finds the page already at its new address. Both
+// shapes derived one id from the key, so the retry went to the page's subject
+// under an id the ledger holds on the title's, and was refused as an operation
+// reused: the caller that asked for the rename was told it had failed.
+func TestARenameRetriedAfterItsMoveLandedIsAnswered(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	mover := keyedAuthor("jane")
+	moved, err := r.store.Rename(t.Context(), mover, page.Page.ID, "Deploy runbook", false)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	again, err := r.store.Rename(t.Context(), mover, page.Page.ID, "Deploy runbook", false)
+	if err != nil {
+		t.Fatalf("the retried rename was refused: %v", err)
+	}
+	if again.Page.ID != page.Page.ID || again.Page.Title != "Deploy runbook" {
+		t.Errorf("the retried rename answered (%q, %q), want the page at its "+
+			"new address", again.Page.ID, again.Page.Title)
+	}
+	if again.Revision < moved.Revision {
+		t.Errorf("the retried rename answered revision %d, below its first "+
+			"copy's %d", again.Revision, moved.Revision)
+	}
+	if got := r.logEnd(); got != moved.Outcome.Position.Seq {
+		t.Errorf("the retried rename put %d record(s) on the log",
+			got-moved.Outcome.Position.Seq)
+	}
+
+	// AND A RETITLE RETRIED IS THE SAME OPERATION: collapsed, and answered
+	// with the title it set.
+	retitler := keyedAuthor("jane")
+	if _, err := r.store.Rename(t.Context(), retitler, page.Page.ID,
+		"DEPLOY RUNBOOK", false); err != nil {
+		t.Fatalf("retitle: %v", err)
+	}
+	retitled, err := r.store.Rename(t.Context(), retitler, page.Page.ID,
+		"DEPLOY RUNBOOK", false)
+	switch {
+	case err != nil:
+		t.Fatalf("the retried retitle: %v", err)
+	case !retitled.Outcome.Collapsed:
+		t.Fatalf("the premise: the retried retitle was answered from the "+
+			"ledger, got %+v", retitled.Outcome)
+	case retitled.Page.Title != "DEPLOY RUNBOOK":
+		t.Errorf("the retried retitle answered the title %q", retitled.Page.Title)
+	}
+}
+
+// A KEY THAT IS NOT AN OPERATION ID THE ENGINE MINTED IS REFUSED, before
+// anything is published.
+//
+// Every id a write derives from the key carries the key's own instant, and one
+// outside the grammar carries none: read as minted at the epoch, every write
+// under it would be answered `unknown` without being published, on every
+// attempt, from the first time the ledger swept a row.
+func TestAKeyOutsideTheOperationGrammarIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	actor := author("ana")
+	for _, key := range []string{"request-7", "0b8f6b44-5c0e-4a8e-9d3b-2f1c6a7e9d10"} {
+		actor.OpKey = key
+		_, err := r.store.Create(t.Context(), actor, pages.NewPage{
+			Container: "ENG", Title: "Runbook", Body: "prose",
+		})
+		if !errors.Is(err, pages.ErrInvalid) {
+			t.Errorf("a create under the key %q = %v, want ErrInvalid", key, err)
+		}
+	}
+	if got := r.logEnd(); got != 0 {
+		t.Errorf("refused writes put %d record(s) on the log", got)
+	}
+}
+
+// keyedAuthor is a person acting under an operation key of their own — one
+// request's, which is what a retry of that request brings back.
+func keyedAuthor(handle string) pages.Actor {
+	actor := author(handle)
+	actor.OpKey = statelog.NewOpID(time.Now(), "")
+	return actor
 }

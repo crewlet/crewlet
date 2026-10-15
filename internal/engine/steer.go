@@ -2,15 +2,17 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A person's note to a running turn, carried out on the node running it.
@@ -33,6 +35,17 @@ import (
 // [steerClosedMemory] turns this node ran, and a note for one is answered
 // `closed`. Past that the node forgets it, and the asker says `unknown`, which
 // is honest about what nobody could confirm.
+//
+// # Only a note the fleet signed is offered
+//
+// The note is offered to the turn as the person it names, on the asking
+// node's decision that they may steer it — so the desk takes only what the
+// fleet signed, bound to an id it has not taken and a deadline still ahead
+// (internal/signedask, the [steer.Channel] wire). Anything else is answered by
+// nobody, which the asker hears as it hears a node the turn is not on — except
+// a request signed under a key this node does not hold for a turn it runs,
+// which is answered [steer.Reply.Unverified], so the person is told the fleet's
+// keyring disagrees rather than that nobody knows.
 //
 // # What becomes of a note is on the turn's record
 //
@@ -62,26 +75,62 @@ var errNotThisNode = errors.New("engine: that turn is not running on this node")
 type steerDesk struct {
 	mu     sync.Mutex
 	open   map[string]steerTurn
-	closed map[string]string
+	closed map[string]steerSeat
 	order  []string
+
+	// wire signs and verifies the steer channel, both halves — this node's
+	// operator surface asks with it ([Engine.SteerWire]) and the desk
+	// answers with it — and taken is the ids the desk has taken.
+	wire  *steerWire
+	taken *signedask.Guard
+	now   func() time.Time
 }
 
-type steerTurn struct {
-	box    *steer.Box
+// steerWire is the steer channel's envelopes ([steer.Channel]).
+type steerWire = signedask.Channel[steer.Request, steer.Reply]
+
+// steerSeat is the seat a turn runs on: its derived agent id, which is what a
+// person's authority to steer the turn is decided on, and its handle when the
+// turn was opened, for the person reading the answer.
+type steerSeat struct {
+	agent  string
 	handle string
 }
 
-func newSteerDesk() *steerDesk {
-	return &steerDesk{open: map[string]steerTurn{}, closed: map[string]string{}}
+type steerTurn struct {
+	box *steer.Box
+	steerSeat
+}
+
+// newSteerDesk builds this node's desk over the fleet keyring every state-log
+// record is signed under. The keyring is required on every node, so this fails
+// only on a bootstrap [config.Bootstrap.Validate] would already have refused.
+func newSteerDesk(ring statelog.Keyring) (*steerDesk, error) {
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel, ring)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the steer channel's envelopes: %w", err)
+	}
+	return &steerDesk{open: map[string]steerTurn{}, closed: map[string]steerSeat{},
+		wire: wire, taken: signedask.NewGuard(), now: time.Now}, nil
+}
+
+// SteerWire is this node's steer channel, for the operator surface that asks
+// on it ([builtin.SteerDeps.Wire]) — the same envelopes this node's desk
+// answers with, built once. Nil on an engine assembled without a desk.
+func (e *Engine) SteerWire() *signedask.Channel[steer.Request, steer.Reply] {
+	if e.steers == nil {
+		return nil
+	}
+	return e.steers.wire
 }
 
 // open files a turn's box under its run id. A box whose runtime cannot read a
 // note is filed too, so a note for it is answered `unsupported` rather than
 // not at all.
-func (d *steerDesk) register(runID, handle string, box *steer.Box) {
+func (d *steerDesk) register(runID string, seat steerSeat, box *steer.Box) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.open[runID] = steerTurn{box: box, handle: handle}
+	d.open[runID] = steerTurn{box: box, steerSeat: seat}
 	// A resumed segment reuses its run id: it is running again, not ended.
 	delete(d.closed, runID)
 }
@@ -99,7 +148,7 @@ func (d *steerDesk) close(runID string) []steer.Note {
 	if _, seen := d.closed[runID]; !seen {
 		d.order = append(d.order, runID)
 	}
-	d.closed[runID] = t.handle
+	d.closed[runID] = t.steerSeat
 	for len(d.order) > steerClosedMemory {
 		delete(d.closed, d.order[0])
 		d.order = d.order[1:]
@@ -111,45 +160,108 @@ func (d *steerDesk) close(runID string) []steer.Note {
 }
 
 // offer hands a note to the turn it names, if this node runs or remembers it.
-func (d *steerDesk) offer(turnID string, n steer.Note) (steer.Status, string, error) {
+func (d *steerDesk) offer(turnID string, n steer.Note) (steer.Status, steerSeat, error) {
+	return d.lookup(turnID, func(box *steer.Box) steer.Status { return box.Offer(n) })
+}
+
+// probe answers what an offer to the turn would be answered, and whose turn it
+// is, taking nothing — see [steer.Request.Probe].
+func (d *steerDesk) probe(turnID string) (steer.Status, steerSeat, error) {
+	return d.lookup(turnID, (*steer.Box).Status)
+}
+
+// lookup is the routing both an offer and a probe take: a running turn's box
+// is asked, an ended turn this node remembers is closed, and any other is not
+// this node's to answer.
+func (d *steerDesk) lookup(turnID string, ask func(*steer.Box) steer.Status) (steer.Status, steerSeat, error) {
 	d.mu.Lock()
 	t, running := d.open[turnID]
-	handle, ended := d.closed[turnID]
+	seat, ended := d.closed[turnID]
 	d.mu.Unlock()
 	switch {
 	case running:
-		return t.box.Offer(n), t.handle, nil
+		return ask(t.box), t.steerSeat, nil
 	case ended:
-		return steer.StatusClosed, handle, nil
+		return steer.StatusClosed, seat, nil
 	}
-	return "", "", errNotThisNode
+	return "", steerSeat{}, errNotThisNode
 }
 
 // answer is the serve handler: one scattered note, answered only by the node
-// that runs or remembers its turn.
-func (d *steerDesk) answer(_ context.Context, raw []byte) ([]byte, error) {
-	var req steer.Request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, fmt.Errorf("engine: a steer request this build cannot read: %w", err)
+// that runs or remembers its turn — and only where the fleet signed it.
+func (d *steerDesk) answer(ctx context.Context, raw []byte) ([]byte, error) {
+	admitted := d.wire.Admit(raw, d.taken, d.now())
+	switch admitted.Disposition {
+	case signedask.Tampered:
+		// NOT THE FLEET'S: answered by nobody, and at ERROR — no node will
+		// ever take it, so whoever sent it reached the broker and is not
+		// the fleet.
+		log.ErrorContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
+			"detail", admitted.Why+"; nothing was offered")
+		return nil, errors.New("engine: a steer request the fleet did not sign")
+	case signedask.KeyUnknown:
+		return d.unverified(ctx, admitted)
+	case signedask.Undecodable:
+		return nil, fmt.Errorf("engine: a steer request this build cannot read: %s", admitted.Why)
+	case signedask.Stale:
+		log.WarnContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
+			"turn_id", admitted.Request.TurnID, "detail", admitted.Why)
+		return nil, fmt.Errorf("engine: a steer request not to be taken now: %s", admitted.Why)
 	}
+	req := admitted.Request
 	turnID := strings.TrimSpace(req.TurnID)
 	if turnID == "" {
 		return nil, errors.New("engine: a steer request names no turn")
 	}
-	// THE SAME RULE THE TOOL ENFORCED, held again where the note lands: a
-	// peer on another build may bound a note differently, and the turn is
-	// what the bound protects.
-	if err := steer.Validate(req.Note); err != nil {
-		return nil, fmt.Errorf("engine: a steer request for %s: %w", turnID, err)
+	var (
+		status steer.Status
+		seat   steerSeat
+		err    error
+	)
+	if req.Probe {
+		// A PROBE OFFERS NOTHING, so there is no note to bound.
+		status, seat, err = d.probe(turnID)
+	} else {
+		// THE SAME RULE THE TOOL ENFORCED, held again where the note
+		// lands: a peer on another build may bound a note differently,
+		// and the turn is what the bound protects.
+		if err = steer.Validate(req.Note); err != nil {
+			return nil, fmt.Errorf("engine: a steer request for %s: %w", turnID, err)
+		}
+		status, seat, err = d.offer(turnID, steer.Note{
+			ID: req.NoteID, Text: strings.TrimSpace(req.Note),
+			By: req.By, ByKind: req.ByKind, OperatorID: req.OperatorID,
+		})
 	}
-	status, handle, err := d.offer(turnID, steer.Note{
-		ID: req.NoteID, Text: strings.TrimSpace(req.Note), By: req.By, BySeat: req.BySeat,
-	})
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(steer.Reply{
-		Version: steer.WireVersion, TurnID: turnID, AgentHandle: handle, Status: status,
+	return d.wire.SealReply(steer.Reply{
+		Version: steer.WireVersion, Request: req.ID, TurnID: turnID,
+		Agent: seat.agent, AgentHandle: seat.handle, Status: status,
+	})
+}
+
+// unverified answers a request signed under a key this node does not hold —
+// but only for a turn this node runs or remembers, read off the UNTRUSTED body
+// for that alone: every other node stays silent, as it does for any note not
+// its own, and the one the turn is on says why it took nothing, bound to the
+// id the asker sent, rather than leave the person reading `unknown`.
+func (d *steerDesk) unverified(ctx context.Context, admitted signedask.Admission[steer.Request]) ([]byte, error) {
+	turnID := strings.TrimSpace(admitted.Request.TurnID)
+	if turnID == "" || admitted.ID == "" {
+		return nil, errors.New("engine: a steer request under an unheld key that names nothing")
+	}
+	if _, _, err := d.lookup(turnID, (*steer.Box).Status); err != nil {
+		return nil, err
+	}
+	log.WarnContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
+		"turn_id", turnID, "detail", admitted.Why+"; nothing was offered")
+	return d.wire.SealReply(steer.Reply{
+		Version: steer.WireVersion, Request: admitted.ID, TurnID: turnID,
+		Unverified: fmt.Sprintf("the node running turn %s does not hold the key the "+
+			"note is signed under (it holds %v) — add the key to its secrets.keys",
+			turnID, d.wire.HeldKeys()),
 	})
 }
 
@@ -208,7 +320,15 @@ func (e *Engine) openSteer(runID, handle string, box *steer.Box,
 			}
 		}
 	}
-	e.steers.register(runID, handle, box)
+	// THE SEAT BY ITS ID beside its handle: who may steer the turn is
+	// decided on the seat. A handle the running company resolves to no
+	// agent seat files an empty id, which a decision reads as a seat it
+	// cannot name.
+	seat := steerSeat{handle: handle}
+	if id, err := e.seatID(handle); err == nil {
+		seat.agent = id.String()
+	}
+	e.steers.register(runID, seat, box)
 	return func(ctx context.Context) {
 		if expired := e.steers.close(runID); len(expired) > 0 {
 			r.SteerExpired(context.WithoutCancel(ctx), expired)

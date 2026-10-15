@@ -1,0 +1,449 @@
+package iam
+
+import (
+	"math/rand/v2"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+// TestTheZeroValueOfEveryNamedTypeIsInvalid protects the property the whole
+// package rests on: a gate somebody forgot to fill in holds a zero value, and
+// a zero that validated would ship that gate as "granted".
+//
+// Both directions, because a Valid that answered false to everything would
+// pass the first half and protect nothing.
+func TestTheZeroValueOfEveryNamedTypeIsInvalid(t *testing.T) {
+	cases := []struct {
+		name  string
+		zero  func() bool // Valid() on the type's zero value
+		known func() bool // Valid() on a value this build declares
+	}{
+		{"Kind", func() bool { return Kind("").Valid() }, func() bool { return KindSeat.Valid() }},
+		{"Grant", func() bool { return Grant("").Valid() }, func() bool { return GrantAdmin.Valid() }},
+		{"AdminPosture", func() bool { return AdminPosture("").Valid() }, func() bool { return AdminRefuse.Valid() }},
+		{"Stage", func() bool { return Stage("").Valid() }, func() bool { return StageActive.Valid() }},
+		{"ActorKind", func() bool { return ActorKind("").Valid() }, func() bool { return ActorOperator.Valid() }},
+		{"Resolution", func() bool { return Resolution("").Valid() }, func() bool { return Unknown.Valid() }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.zero() {
+				t.Errorf("the zero %s validates — a gate nobody filled in would ship as granted", tc.name)
+			}
+			if !tc.known() {
+				t.Errorf("a declared %s does NOT validate, so the check above proves nothing", tc.name)
+			}
+		})
+	}
+
+	// The two closed sets that also carry a behavioural predicate: a zero
+	// must not be able to act, and must not classify as anything.
+	if Stage("").MayAct() {
+		t.Error("the zero Stage may act")
+	}
+	if !StageActive.MayAct() {
+		t.Error("StageActive may NOT act, so the check above proves nothing")
+	}
+	if Grant("").IsApp() || (Principal{Grants: []Grant{""}}).Can("") {
+		t.Error("the zero Grant reads as an app or is carried as a permission")
+	}
+}
+
+// TestEveryDeclaredSetIsTheSizeItClaims pins the counts the package doc and
+// the constants' own comments state, so a member added or removed without a
+// reader is caught rather than quietly changing what "the three" means.
+func TestEveryDeclaredSetIsTheSizeItClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"AllGrants", len(AllGrants), 3},
+		{"Apps", len(Apps), 2},
+		{"AdminPostures", len(AdminPostures), 2},
+		{"Kinds", len(Kinds), 4},
+		{"ActorKinds", len(ActorKinds), 4},
+		{"Stages", len(Stages), 5},
+		{"Resolutions", len(Resolutions), 3},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s has %d members, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+	// A duplicate would make a set look the right size while covering one
+	// value twice and another not at all.
+	seen := map[Grant]bool{}
+	for _, g := range AllGrants {
+		if seen[g] {
+			t.Errorf("AllGrants lists %q twice", g)
+		}
+		seen[g] = true
+	}
+}
+
+// TestTheLoginAndHandleRegexesAreDisjoint is the guard behind the package
+// doc's claim that three name spaces can never collide.
+//
+// Over a GENERATED corpus rather than a handful of literals: a handful is a
+// handful of cases somebody already thought of, and the property being
+// protected is universal — no string at all may match both, and neither
+// grammar may mint a name a seat handle could also be.
+func TestTheLoginAndHandleRegexesAreDisjoint(t *testing.T) {
+	corpus := nameCorpus()
+
+	logins, handles := 0, 0
+	for _, s := range corpus {
+		isLogin, isHandle := ValidLogin(s), ValidMachineHandle(s)
+		if isLogin && isHandle {
+			t.Fatalf("%q is BOTH a person login and a machine handle — "+
+				"one audit row, two actors, no way to tell which", s)
+		}
+		if isLogin {
+			logins++
+		}
+		if isHandle {
+			handles++
+		}
+		// The second half of the claim: a seat handle's grammar
+		// ([a-z0-9][a-z0-9-]*, internal/org/role.go) carries neither
+		// '.' nor ':', so every name either grammar admits must carry
+		// one of them or it could be a seat's.
+		if (isLogin || isHandle) && !strings.ContainsAny(s, ".:") {
+			t.Fatalf("%q is admitted as a principal name and carries no '.' or ':' — "+
+				"nothing stops it colliding with a seat handle", s)
+		}
+	}
+
+	// THE CONTROL. A corpus that exercised neither grammar would pass
+	// every assertion above while proving nothing at all.
+	const floor = 50
+	if logins < floor || handles < floor {
+		t.Fatalf("corpus of %d strings produced %d logins and %d handles; "+
+			"want at least %d of each or the disjointness above is vacuous",
+			len(corpus), logins, handles, floor)
+	}
+}
+
+// NO SEAT HANDLE IS EVER A LOGIN, and no login is ever a seat handle.
+//
+// This is the third namespace against the other two, which the case above
+// reaches only through a claim about separators: here the seat grammar is
+// asked directly, over the same generated corpus plus handles GENERATED FROM
+// the seat grammar itself — every one-to-four symbol string over its alphabet,
+// and each at the width bound — because the property is universal. A name
+// [NamesLogin] admits is sent to the identity directory by [OwnerOf] and never
+// to the chart, so one that was also a valid seat handle would be a seat no
+// name could ever reach. Mutation: let the seat pattern admit '.' and `jane.doe`
+// is both.
+func TestNoSeatHandleIsALogin(t *testing.T) {
+	t.Parallel()
+	corpus := nameCorpus()
+	level := []string{""}
+	for range 4 {
+		var next []string
+		for _, prefix := range level {
+			for _, r := range "a9-" {
+				next = append(next, prefix+string(r))
+			}
+		}
+		corpus = append(corpus, next...)
+		level = next
+	}
+	corpus = append(corpus, strings.Repeat("a", MaxLogin),
+		strings.Repeat("a", MaxLogin+1), "jane.doe", "ci:release", "token:ops")
+
+	seats := 0
+	for _, s := range corpus {
+		seat := ValidSeatHandle(s)
+		if seat && NamesLogin(s) {
+			t.Fatalf("%q is a valid seat handle AND has a login's shape — "+
+				"OwnerOf would send it to the directory, and the seat named "+
+				"by it could never be reached by name", s)
+		}
+		if seat && strings.ContainsAny(s, ".:") {
+			t.Fatalf("%q is a valid seat handle and carries a login separator", s)
+		}
+		if seat {
+			seats++
+		}
+	}
+	for _, login := range []string{"jane.doe", "ci:release", "token:ops"} {
+		if ValidSeatHandle(login) {
+			t.Errorf("%q is admitted as a seat handle — the chart would hold "+
+				"a seat every name resolution sends to the identity directory",
+				login)
+		}
+	}
+	// THE BOUND, at and one past it.
+	if !ValidSeatHandle(strings.Repeat("a", MaxLogin)) {
+		t.Errorf("a seat handle of %d bytes, the bound, is refused", MaxLogin)
+	}
+	if ValidSeatHandle(strings.Repeat("a", MaxLogin+1)) {
+		t.Errorf("a seat handle of %d bytes, past the bound, is admitted", MaxLogin+1)
+	}
+	// THE CONTROL: a corpus that admitted no seat handle would pass the
+	// disjointness above while proving nothing.
+	if seats < 50 {
+		t.Fatalf("the corpus admitted %d seat handles; the assertions above "+
+			"are vacuous", seats)
+	}
+}
+
+// A LOGIN'S GRAMMAR BELONGS TO ITS KIND, and to no other.
+//
+// Disjointness alone is not enough, which is what this adds to the case above:
+// two disjoint grammars that EITHER kind may use still let a person choose a
+// machine's name. `token:<id>` is the name a Tier A token acts under, and the
+// directory row holding it is what binds that token to a seat — so a person
+// who could enrol as `token:ops` would make the deployment's `ops` credential
+// act as their seat. Over the same generated corpus, because the property is
+// universal: no string is a valid login for two kinds, and a seat or the engine
+// holds none at all.
+func TestALoginsGrammarBelongsToItsKind(t *testing.T) {
+	people, machines := 0, 0
+	for _, s := range nameCorpus() {
+		person, machine := ValidLoginFor(KindPerson, s), ValidLoginFor(KindMachine, s)
+		if person && machine {
+			t.Fatalf("%q is a login for a person AND a machine", s)
+		}
+		if person != ValidLogin(s) {
+			t.Fatalf("%q: a person's login grammar answered %v and the dotted "+
+				"grammar %v — a person may hold exactly the dotted names", s,
+				person, ValidLogin(s))
+		}
+		if machine != ValidMachineHandle(s) {
+			t.Fatalf("%q: a machine's login grammar answered %v and the coloned "+
+				"grammar %v — a machine may hold exactly the coloned names", s,
+				machine, ValidMachineHandle(s))
+		}
+		for _, k := range []Kind{KindSeat, KindEngine, Kind(""), Kind("delegate")} {
+			if ValidLoginFor(k, s) {
+				t.Fatalf("%q is admitted as a %q login; only a person and a "+
+					"machine hold one", s, k)
+			}
+		}
+		if person {
+			people++
+		}
+		if machine {
+			machines++
+		}
+	}
+	// THE NAMED CASE, stated rather than left to the corpus: the Tier A
+	// token namespace is a machine's and never a person's.
+	if ValidLoginFor(KindPerson, "token:ops") {
+		t.Error("a person may choose `token:ops`, so they can make the " +
+			"deployment's ops credential act as their seat")
+	}
+	if !ValidLoginFor(KindMachine, "token:ops") {
+		t.Error("a machine may not hold `token:ops`, so no Tier A token can " +
+			"ever be bound to a seat")
+	}
+	// THE CONTROL: a corpus that admitted nothing would pass every
+	// assertion above.
+	if people < 50 || machines < 50 {
+		t.Fatalf("the corpus admitted %d person and %d machine logins; the "+
+			"assertions above are vacuous", people, machines)
+	}
+}
+
+// A LOGIN IS BOUNDED AT [MaxLogin], in both grammars and so for every kind.
+//
+// It is a subject token the broker indexes for the life of the deployment and
+// the name in an author column beside a seat handle, so it is held to the
+// handle's width — enforced IN the grammar, which is what every surface that
+// enrols, renames or composes one asks. At the bound and one past it, for a
+// dotted login, a coloned handle and a Tier A token id, whose login carries
+// six bytes of class. Mutation: drop the length from either grammar and the
+// case past the bound is admitted.
+func TestALoginIsBoundedInItsGrammar(t *testing.T) {
+	t.Parallel()
+	// seg builds a name of exactly n bytes out of segments joined by sep.
+	seg := func(n int, sep string) string {
+		return strings.Repeat("a", n-1-len(sep)) + sep + "b"
+	}
+	for _, tc := range []struct {
+		name string
+		ok   func(string) bool
+		sep  string
+	}{
+		{"a person's login", func(s string) bool { return ValidLoginFor(KindPerson, s) }, "."},
+		{"a machine's handle", func(s string) bool { return ValidLoginFor(KindMachine, s) }, ":"},
+	} {
+		if at := seg(MaxLogin, tc.sep); !tc.ok(at) {
+			t.Errorf("%s of %d bytes, the bound, is refused: %q", tc.name,
+				len(at), at)
+		}
+		if past := seg(MaxLogin+1, tc.sep); tc.ok(past) {
+			t.Errorf("%s of %d bytes, past the bound, is admitted", tc.name,
+				len(past))
+		}
+	}
+	idAt := strings.Repeat("a", MaxLogin-len(TokenLoginPrefix))
+	if !ValidTokenID(idAt) {
+		t.Errorf("a Tier A token id whose login is %d bytes is refused",
+			len(TokenLogin(idAt)))
+	}
+	if ValidTokenID(idAt + "a") {
+		t.Errorf("a Tier A token id whose login is %d bytes is admitted",
+			len(TokenLogin(idAt+"a")))
+	}
+}
+
+// A MACHINE TOKEN'S NAME IS NOBODY'S LOGIN.
+//
+// `pat:<credential id>` is what the operator column records when a machine
+// token acts as its owner — so a service account enrolled under the same class
+// would be a principal whose name reads as a credential nobody minted.
+// Mutation: drop the class from the machine grammar's refusal and `pat:…`
+// enrols.
+func TestAMachineTokensNameIsNobodysLogin(t *testing.T) {
+	t.Parallel()
+	const id = "0192f00d-0000-7000-8000-00000000000a"
+	name := MachineTokenName(id)
+	if !ValidMachineTokenName(name) {
+		t.Fatalf("%q does not name the machine token it was built from", name)
+	}
+	for _, s := range []string{name, "pat:ci", "pat:" + strings.ToUpper(id)} {
+		if ValidLoginFor(KindMachine, s) || ValidLoginFor(KindPerson, s) {
+			t.Errorf("%q may be enrolled as somebody's login", s)
+		}
+	}
+	for _, s := range []string{"pat:", "pat:ci", "token:" + id, id,
+		"pat:" + strings.ToUpper(id)} {
+		if ValidMachineTokenName(s) {
+			t.Errorf("%q is taken for a machine token's name", s)
+		}
+	}
+	// THE CONTROL: the same shape under another class is an ordinary
+	// machine handle, so the refusal above is the class and not the shape.
+	if !ValidLoginFor(KindMachine, "svc:"+id) {
+		t.Fatalf("svc:%s is refused, so the case cannot tell the class "+
+			"from the shape", id)
+	}
+	// AND A PRINCIPAL CARRYING ONE VALIDATES, while one carrying anything
+	// else in that field does not.
+	p := Principal{ID: uuid.New(), Kind: KindPerson, Login: "jane.doe",
+		Stage: StageActive, Via: name}
+	if err := p.Validate(); err != nil {
+		t.Errorf("a person acting through their token: %v", err)
+	}
+	p.Via = "token:ops"
+	if err := p.Validate(); err == nil {
+		t.Error("a principal acting through a credential no machine token " +
+			"names validated")
+	}
+}
+
+// A BROWSER SESSION'S NAME IS NOBODY'S LOGIN EITHER, and a principal acting
+// through one validates.
+//
+// `session:<lineage>` is what the operator column records for a write made
+// through a signed-in browser — the design's own name for it, beside the
+// person as the author — so a service account enrolled under the class would
+// read as somebody's sign-in in every trail that records one. Mutation: drop
+// the class from the machine grammar's refusal and `session:…` enrols; drop it
+// from the credential names and a person's own session fails to validate.
+func TestASessionsNameIsNobodysLogin(t *testing.T) {
+	t.Parallel()
+	const lineage = "0192f00d-0000-7000-8000-00000000000b"
+	name := SessionName(lineage)
+	if !ValidSessionName(name) || !ValidCredentialName(name) {
+		t.Fatalf("%q does not name the session it was built from", name)
+	}
+	for _, s := range []string{name, "session:ci", "session:" + strings.ToUpper(lineage)} {
+		if ValidLoginFor(KindMachine, s) || ValidLoginFor(KindPerson, s) {
+			t.Errorf("%q may be enrolled as somebody's login", s)
+		}
+	}
+	for _, s := range []string{"session:", "session:ci", "token:" + lineage,
+		lineage, MachineTokenName(lineage), "session:" + strings.ToUpper(lineage)} {
+		if ValidSessionName(s) {
+			t.Errorf("%q is taken for a session's name", s)
+		}
+	}
+	// THE TWO CLASSES DO NOT NAME EACH OTHER: a credential is one or the
+	// other, and a reader resolving the name looks in one place.
+	if ValidMachineTokenName(name) {
+		t.Errorf("%q reads as a machine token", name)
+	}
+	p := Principal{ID: uuid.New(), Kind: KindPerson, Login: "jane.doe",
+		Seat: "founder", Stage: StageActive, Via: name}
+	if err := p.Validate(); err != nil {
+		t.Errorf("a person acting through their browser session: %v", err)
+	}
+	if got := ActorFor(p); got.Name != "founder" || got.Kind != ActorHuman ||
+		got.OperatorID != name {
+		t.Errorf("a person signed in through a browser is recorded as %+v, "+
+			"want the seat as the author and the session as the operator", got)
+	}
+}
+
+// A TIER A TOKEN'S ID COMPOSES A MACHINE LOGIN, and only one that does is an
+// id — the rule internal/config refuses a token by.
+func TestATierATokenIDComposesAMachineLogin(t *testing.T) {
+	for id, want := range map[string]bool{
+		"founder": true, "ci-pipeline": true, "ci:release": true, "ops2": true,
+		"Founder": false, "ci_bot": false, "ci.bot": false, "ci:": false,
+		"": false, "-ops": false, "ops-": false, "a b": false,
+	} {
+		if got := ValidTokenID(id); got != want {
+			t.Errorf("ValidTokenID(%q) = %v, want %v", id, got, want)
+		}
+		if want && !ValidLoginFor(KindMachine, TokenLogin(id)) {
+			t.Errorf("%q is a valid id whose login %q no machine may hold", id,
+				TokenLogin(id))
+		}
+	}
+}
+
+// nameCorpus is every string of length 1..4 over the characters that decide a
+// name's shape, plus deterministic longer ones over a wider alphabet so the
+// rejection paths are exercised too.
+func nameCorpus() []string {
+	shape := []rune{'a', '9', '-', '.', ':', '_'}
+	corpus := []string{""}
+	level := []string{""}
+	for range 4 {
+		next := make([]string, 0, len(level)*len(shape))
+		for _, prefix := range level {
+			for _, r := range shape {
+				next = append(next, prefix+string(r))
+			}
+		}
+		corpus = append(corpus, next...)
+		level = next
+	}
+
+	// Names BUILT the way a person or a provisioner would build them:
+	// plausible segments joined by every separator worth trying, so both
+	// grammars and their near-misses are exercised rather than waited for.
+	segments := []string{"a", "9", "b9", "x-y", "-a", "a-", "x--y", "", "A", "x_y"}
+	joins := []string{".", ":", "-", "_", "", "..", "::", ".:"}
+	for _, join := range joins {
+		for _, first := range segments {
+			for _, second := range segments {
+				corpus = append(corpus, first+join+second)
+				for _, third := range segments {
+					corpus = append(corpus, first+join+second+join+third)
+				}
+			}
+		}
+	}
+
+	// A fixed seed: a corpus that differs between runs turns a real
+	// counter-example into a flake nobody can reproduce.
+	rng := rand.New(rand.NewPCG(0x1A, 0x105E))
+	wide := []rune("aq9-.:_ZA/ @")
+	for range 4000 {
+		n := 5 + rng.IntN(10)
+		var b strings.Builder
+		for range n {
+			b.WriteRune(wide[rng.IntN(len(wide))])
+		}
+		corpus = append(corpus, b.String())
+	}
+	return corpus
+}

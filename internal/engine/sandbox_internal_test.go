@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -40,12 +42,12 @@ func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 
 	cases := []struct {
 		name string
-		gate config.RoleSandbox
+		gate org.RoleSandbox
 		want *time.Duration
 	}{
-		{"unset inherits", config.RoleSandbox{}, nil},
-		{"an explicit zero never pauses", config.RoleSandbox{PauseTTLSeconds: &never}, dur(0)},
-		{"a set value is used", config.RoleSandbox{PauseTTLSeconds: &held}, dur(600 * time.Second)},
+		{"unset inherits", org.RoleSandbox{}, nil},
+		{"an explicit zero never pauses", org.RoleSandbox{PauseTTLSeconds: &never}, dur(0)},
+		{"a set value is used", org.RoleSandbox{PauseTTLSeconds: &held}, dur(600 * time.Second)},
 	}
 	for _, c := range cases {
 		got := pauseTTL(&c.gate)
@@ -241,7 +243,7 @@ roles:
 		{"CLAUDE_CODE_USE_BEDROCK": "1"},
 	} {
 		run := runOn(t, c, seat, codingagent.ClaudeCodeName,
-			e.sandboxEnv(seat, &config.RoleSandbox{Env: own}, nil))
+			e.sandboxEnv(seat, &org.RoleSandbox{Env: own}, nil))
 		for name, value := range own {
 			if run.env[name] != value {
 				t.Errorf("%v: %s = %q, want the seat's own", own, name, run.env[name])
@@ -258,7 +260,7 @@ roles:
 	// A seat that brings no sign-in still gets the entry's, or this would
 	// just be an entry whose key never travels.
 	run := runOn(t, c, seat, codingagent.ClaudeCodeName,
-		e.sandboxEnv(seat, &config.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}, nil))
+		e.sandboxEnv(seat, &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}, nil))
 	if run.env["ANTHROPIC_API_KEY"] != "sk-ant-company" || run.env["GITHUB_TOKEN"] != "ghp_x" {
 		t.Errorf("a seat with no sign-in of its own: run environment %v", run.env)
 	}
@@ -624,6 +626,33 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 			t.Errorf("run_in %q built no provider and no error, so a "+
 				"sandbox-enabled seat plans around a box it never gets", placement)
 		}
+	}
+}
+
+// THE RUNTIME'S DECLARED ENVIRONMENT REACHES IT RESOLVED. Tier B stores a
+// `${VAR}` verbatim, so a runtime_env passed through as written would put the
+// literal "${REGISTRY_ROLE}" into every docker call's environment: a credential
+// helper assuming a role called "${…}" and an agent socket at that path. It
+// resolves the way an MCP server's `env:` does — the store first, the
+// process environment behind it — and a literal stays a literal.
+func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
+	env := config.WithStore(config.MapSource{"REGISTRY_ROLE": "arn:aws:iam::123456789012:role/pull"})
+	got := localOptions(&config.LocalSandbox{
+		Image: "example.invalid/box:1",
+		RuntimeEnv: map[string]string{
+			"SSH_AUTH_SOCK": "${SSH_AUTH_SOCK}",
+			"AWS_ROLE_ARN":  "${REGISTRY_ROLE}",
+			"AWS_PROFILE":   "registry-pull",
+		},
+	}, env, config.PlacementContainer).RuntimeEnv
+	want := map[string]string{
+		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
+		"AWS_ROLE_ARN":  "arn:aws:iam::123456789012:role/pull",
+		"AWS_PROFILE":   "registry-pull",
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("RuntimeEnv = %v, want %v", got, want)
 	}
 }
 
@@ -1042,21 +1071,30 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 // has none, the retirement is refused while the fleet still records a run for
 // the seat, because a node that cannot reach a box must not delete the
 // subscriptions that run's completion and answer travel on.
+//
+// BY THE SEAT'S ID, on both paths: the retirement of a mailbox the broker's
+// listing alone found holds no handle, and selected by the empty one it held
+// it matched no run, refused nothing and ended nothing.
 func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	t.Parallel()
+	swe, pm := uuid.New(), uuid.New()
 	fleet := memory.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
 	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+		TurnID: "t1", AgentHandle: "swe", AgentID: swe.String(), Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 
 	bare := &Engine{backends: &Backends{Fleet: fleet}}
-	if err := bare.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err == nil {
+	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil {
 		t.Fatal("a node with no coordinator let the retirement proceed over a recorded run")
 	}
-	if err := bare.retireSeatRuns(t.Context(), "pm", "retirement:1", 3); err != nil {
+	if err := bare.retireSeatRuns(t.Context(), swe, "", "retirement:1", 3); err == nil {
+		t.Fatal("a node with no coordinator let the retirement of a mailbox with no handle " +
+			"proceed over its seat's recorded run")
+	}
+	if err := bare.retireSeatRuns(t.Context(), pm, "pm", "retirement:1", 3); err != nil {
 		t.Fatalf("a seat with no runs was refused: %v", err)
 	}
 
@@ -1078,7 +1116,7 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	equipped.useSandbox(store, coordinator)
-	if err := equipped.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err != nil {
+	if err := equipped.retireSeatRuns(t.Context(), swe, "", "retirement:1", 3); err != nil {
 		t.Fatalf("retireSeatRuns: %v", err)
 	}
 	if _, found, err := store.Get(t.Context(), "t1"); err != nil || found {

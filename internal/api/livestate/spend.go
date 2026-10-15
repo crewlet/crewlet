@@ -69,10 +69,17 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		s.spendIDs[env.ID] = struct{}{}
 	}
 	rec := tokens.Record{
-		EventID:      env.ID,
-		Timestamp:    env.Timestamp,
+		EventID:   env.ID,
+		Timestamp: env.Timestamp,
+		// THE SEAT IS ITS AGENT ID, and that is the only key the rollup
+		// files a record under (tokens.Aggregate). The role rides along
+		// as the name the seat had when the phase ran — a LABEL the
+		// rollup prints for a seat the chart no longer holds, never a
+		// key — read off the payload's `role`, the field the store's
+		// `agent_role` column is filled from, so a record from the live
+		// window and the same record from the store print one name.
 		AgentID:      str(payload, "agent_id"),
-		AgentRole:    str(payload, "role", "agent_role"),
+		AgentRole:    str(payload, "role"),
 		Phase:        str(payload, "phase"),
 		HostPhase:    str(payload, "host_phase"),
 		Worker:       str(payload, "worker"),

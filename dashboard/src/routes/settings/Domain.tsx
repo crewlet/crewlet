@@ -68,7 +68,7 @@ interface Position {
 }
 
 export function DomainScreen({ name }: { name: string }) {
-  const { data, loading, error } = useRetentionReport(name !== "");
+  const { data, loading, error, refusal } = useRetentionReport(name !== "");
 
   const domain = data?.domains?.find((d) => d.domain === name);
 
@@ -154,7 +154,7 @@ export function DomainScreen({ name }: { name: string }) {
       </PageActions>
 
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the domain" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (domain ? (
             <>

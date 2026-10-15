@@ -22,6 +22,7 @@ import { Budgets } from "./Budgets.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
@@ -92,13 +93,14 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
 }
 
 const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane",
   kind: "human",
 };
-const READER = { operator_id: "", operator: false, handle: "", name: "", kind: "" };
+const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 let budgetAsks = 0;
 
@@ -365,15 +367,21 @@ test("a ceiling of 0 is refused before anything is sent", async () => {
   expect(calls).toHaveLength(0);
 });
 
-// NEVER HIDDEN: a reader without an operator credential sees every ceiling
-// and every pencil, disabled with the reason, and the reason once above.
+// NEVER HIDDEN: a reader who may not write the configuration sees every
+// ceiling and every pencil, disabled with the reason, and the reason once
+// above — the grant a ceiling is written under, for a signed-in reader
+// without it, and signing in for nobody at all.
 test("a reader who cannot change the configuration sees why, on every ceiling", async () => {
-  mount(answer(), READER);
+  mount(answer(), { login: "dee", owner: "dee", grants: [] });
   await settle();
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
   expect(pencils.length).toBe(6);
   for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
-  expect(screen.getAllByText(/Needs an operator token\./).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(CONFIG_WRITE_REASONS.no_grant).length).toBeGreaterThan(0);
+  cleanup();
+  mount(answer(), READER);
+  await settle();
+  expect(screen.getAllByText(CONFIG_WRITE_REASONS.anonymous).length).toBeGreaterThan(0);
 });
 
 // UNREADABLE IS NOT ZERO.

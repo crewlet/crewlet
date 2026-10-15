@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -66,16 +67,18 @@ func auditLog(t *testing.T) *store.EventLog {
 		node string
 	}{
 		{"b-landed", backupNow.Add(-2 * time.Hour), types.NewBackupRequested(types.BackupRequested{
-			OperatorID: "maya-laptop", ActorSeat: "maya", Dir: "/var/backups/b",
-			Outcome: types.AuditApplied, Streams: 12,
+			ActorName: "maya", ActorKind: "human", OperatorID: "pat:maya-laptop",
+			Dir: "/var/backups/b", Outcome: types.AuditApplied, Streams: 12,
 		}), "node-b"},
 		{"b-failed", backupNow.Add(-time.Hour), types.NewBackupRequested(types.BackupRequested{
-			OperatorID: "ops-cron", Dir: "/full/disk",
+			ActorName: "token:ops-cron", ActorKind: "operator",
+			OperatorID: "token:ops-cron", Dir: "/full/disk",
 			Outcome: types.AuditFailed,
 		}), "node-a"},
 		{"acted", backupNow.Add(-30 * time.Minute), types.NewOperatorActed(types.OperatorActed{
-			OperatorID: "maya-laptop", ActorSeat: "maya", Transport: types.TransportAct,
-			Tool: "update_work_item", Outcome: types.AuditApplied,
+			ActorName: "maya", ActorKind: "human", OperatorID: "pat:maya-laptop",
+			Transport: types.TransportAct, Tool: "update_work_item",
+			Outcome: types.AuditApplied,
 		}), "node-b"},
 	}
 	for _, row := range rows {
@@ -182,8 +185,9 @@ func TestEachPointCarriesWhatItsTakerAnnounced(t *testing.T) {
 
 // THE HISTORY IS EVERY BACKUP A PERSON ASKED FOR, failures included — which
 // the register, holding one point per owner, cannot say — and nothing else the
-// runtime audit holds. Each row names the node whose disk holds the copy, the
-// person the credential is bound to and the directory, off the listing alone.
+// runtime audit holds. Each row names the node whose disk holds the copy, who
+// asked — the author, what sort of actor that is and the credential they asked
+// through — and the directory, off the listing alone.
 func TestTheHistoryIsEveryRequestedBackupWithItsHost(t *testing.T) {
 	t.Parallel()
 	got := askBackups(t, backupSources(t, fourOwners(), config.BackupFloorEngine))
@@ -193,11 +197,13 @@ func TestTheHistoryIsEveryRequestedBackupWithItsHost(t *testing.T) {
 	}
 	failed, landed := got.History[0], got.History[1]
 	if failed.ID != "b-failed" || failed.Outcome != types.AuditFailed ||
-		failed.Node != "node-a" || failed.Dir != "/full/disk" || failed.Operator != "ops-cron" {
+		failed.Node != "node-a" || failed.Dir != "/full/disk" ||
+		failed.Actor != "token:ops-cron" || failed.ActorKind != "operator" {
 		t.Errorf("the newest row is %+v, want the failed backup on node-a", failed)
 	}
 	if landed.ID != "b-landed" || landed.Outcome != types.AuditApplied ||
-		landed.Node != "node-b" || landed.ActorSeat != "maya" || landed.Dir != "/var/backups/b" {
+		landed.Node != "node-b" || landed.Actor != "maya" || landed.ActorKind != "human" ||
+		landed.OperatorID != "pat:maya-laptop" || landed.Dir != "/var/backups/b" {
 		t.Errorf("the older row is %+v, want maya's backup on node-b", landed)
 	}
 	if !got.Coverage.Complete || got.More {
@@ -212,22 +218,19 @@ func TestAnUnreadableRegisterIsNotANeverBackedUpFleet(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, register{err: errors.New("broker down")}, ""))
-	if _, err := r.Answer(t.Context(), "backups", nil, "founder"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "backups", nil); err == nil {
 		t.Fatal("an unreadable register answered")
 	}
 }
 
-// OPERATOR-ONLY, and unregistered without both halves.
-func TestTheBackupsAnswerIsOperatorOnly(t *testing.T) {
+// THE DEPLOYMENT'S, and so admin's — every row names a directory on a named
+// host holding the company's sealed credentials — and unregistered without
+// both halves.
+func TestTheBackupsAnswerIsTheDeployments(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, fourOwners(), ""))
-	if !r.RequiresOperator("backups") {
-		t.Fatal("backups is served to any caller")
-	}
-	if _, err := r.Answer(t.Context(), "backups", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("anonymous backups answered %v, want an authorization refusal", err)
-	}
+	requiresExactly(t, r, "backups", iam.GrantAdmin)
 	for name, s := range map[string]queries.Sources{
 		"no register": {Events: fleetOf(auditLog(t))},
 		"no history":  {Backups: fourOwners()},
@@ -246,7 +249,7 @@ func TestTheBackupsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, fourOwners(), ""))
-	raw, err := r.Answer(t.Context(), "backups", nil, "founder")
+	raw, err := r.Answer(everyGrant(t), "backups", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,4 +283,14 @@ func TestTheBackupsScreenReadsWhatTheAnswerSends(t *testing.T) {
 			t.Errorf("owner kind %q is listed and not valid", k)
 		}
 	}
+}
+
+// stringsOf renders a named-string enum's values for a comparison against the
+// dashboard's own copy.
+func stringsOf[S ~string](values []S) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, string(v))
+	}
+	return out
 }

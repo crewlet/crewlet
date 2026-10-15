@@ -1,12 +1,12 @@
 # A lead and a channel cascade to child units that set none, to any depth.
 # A child that declares its own keeps it, and a lead reaches the members of
-# every descendant that inherits it. A declared lead naming no seat leaves
-# its unit with no lead rather than falling back to the parent's.
+# every descendant that inherits it. A declared lead that is no seat's handle
+# leaves its unit with no lead rather than falling back to the parent's.
 name: Acme
 units:
   - name: Engineering
     type: division
-    lead: VP Engineering
+    lead: vp-engineering
     channel: "#engineering"
     roles:
       - name: VP Engineering
@@ -20,11 +20,11 @@ units:
               - name: Storage Developer
       - name: Infrastructure
         channel: "#infra"
-        lead: Site Reliability
+        lead: sre
         roles:
           - name: Site Reliability
             handle: sre
       - name: Security
-        lead: Ghost
+        lead: ghost
         roles:
           - name: Security Analyst

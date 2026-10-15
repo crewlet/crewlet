@@ -1,5 +1,5 @@
 // Package usage is what each node's seats, schedules and people did each
-// company day, replicated to every node — the state-log framework's FOURTH
+// company day, replicated to every data node — the state-log framework's FIFTH
 // domain, and its second COMPACTED one.
 //
 // # The question it answers, and who has to agree on it
@@ -12,11 +12,51 @@
 // horizon), and a node that left the fleet took its history with it.
 //
 // Every node has to agree on a node's day, and only its CURRENT value matters —
-// which is ADR-0014's fourth answer, a compacted changelog. Each node derives
-// its own day from its own event log ([store.DB.UsageForDay]), folds it into
-// one record per (node, day, seat), per (node, day, schedule) and per (node,
-// day, person), and publishes the record whole; every node's applier writes it
-// into the replicated estate. ADR-0020 is the decision.
+// which is ADR-0014's fourth answer, a compacted changelog. Each data node
+// derives its own day from its own event log ([store.DB.UsageForDay]), folds it
+// into one record per (node, day, seat), per (node, day, schedule) and per
+// (node, day, person), and publishes the record whole — signed, as every
+// state-log record is (ADR-0031) — and every data node's applier writes it into
+// the replicated estate. ADR-0020 is the decision.
+//
+// A NODE WITHOUT `data` PUBLISHES NOTHING, because it keeps no event log to
+// derive a day from: its events are written by a data node that keeps them in
+// custody (internal/observe, ADR-0025), so its seats' spend is counted in that
+// keeper's day, under the keeper's node id — and in no other data node's, since
+// the custody claim gives each batch exactly one keeper.
+//
+// # A day is the rows a node KEEPS, and every day those change is published
+//
+// The claim decides the keeper only after a batch is written, so until it
+// settles two data nodes can hold one batch's rows. A day therefore counts the
+// rows its node keeps and never a batch in flight ([store.DB.UsageForDay]) —
+// counted on both nodes, every reader summing the fleet would bill the batch
+// twice, and once the losing copy was deleted the double count would stay in
+// the history of any day nobody derived again. Every count of a day is read
+// off rows inside it — a turn's off the one record that ends it, which states
+// the whole turn (internal/events/types' TurnTally), and only a turn whose end
+// states none (ended by a build before the tally, or resumed from such a
+// build's park) is read off its records, which reach back to wherever the turn
+// started — so settled as kept, a batch's rows count on the days they fall on
+// and on no other, which can be days back; the settle marks the oldest in its
+// own transaction and the [Publisher] derives every day from it again, never
+// one older than the event log is read back ([store.EventHistory]), whose rows
+// may already be swept. A day derived again keeps the instants it was first
+// cut on, whatever the company's clock does since, and NO day — today and
+// yesterday included — is ever published below what the fleet already holds
+// of it: what goes out is the derivation joined with the fleet's record, the
+// larger of the two in every figure ([Join]), because inside the read floor a
+// day only grows and a smaller derivation means this node's log lost rows that
+// record counted (a restore, an emptied store, a turn whose earliest records
+// were swept), not that the day shrank. What the publisher
+// still owes on its own account — the day before the newest it fingerprinted,
+// or an older one it could not settle — is a watermark in the node's store,
+// which its next start derives every day from again: the day a node stopped
+// in reaches the fleet when it comes back inside that read floor, a day older
+// than the dispatch ledger's retention without its schedules. And an orderly
+// stop flushes today and yesterday once more, so a node stopped and never
+// started again leaves its last day whole; one that crashed and never returns
+// loses up to a tick of it.
 //
 // # Why the node is part of the identity
 //
@@ -24,6 +64,24 @@
 // subject makes each object single-writer — nothing to arbitrate, no merge at
 // write time — and leaves the merge to the reader, which sums across nodes. A
 // seat that moved at noon is two rows for that day, and both are true.
+//
+// # And what names the seat, the schedule and the person
+//
+// Their IDENTITIES, never their names, because a day is kept for half a year
+// and a name is prose somebody retypes: a seat by its agent id — derived from
+// its handle (ADR-0013) — a schedule by its scope's identity (`scope_type`,
+// `scope_id`) and its name within that scope, the key the dispatch ledger
+// keys a fire on, and a person by the HANDLE of the human seat their spend was
+// charged to — the seat the request's principal holds ([iam.RecordOwner]),
+// immutable like every handle, since a human seat derives no agent id. It is
+// NOT the identity estate's person id: a day records which seat spent, and the
+// person holding that seat is the directory's answer, which moves when
+// somebody is moved to another seat. A principal bound to no seat charges the
+// company's day alone and no person's. A seat's handle rides its record as a
+// LABEL only, for a seat the organisation no longer holds; a reader resolves
+// a seat's id to its handle. A day derived again once the seat has left the
+// chart keeps the handle the fleet's record already states wherever its own
+// rows name nobody ([Join]).
 //
 // # What a record holds
 //
@@ -41,11 +99,11 @@
 //
 // Not turn-level detail. A day's row cannot say which turn spent what, and
 // the questions that need one turn — a trace, a phase, an event — are answered
-// by asking every node's own event log at query time, which is a different
-// mechanism with a different retention.
+// by asking every data node's own event log at query time, which is a
+// different mechanism with a different retention.
 //
 // Not swept. The horizon ([History]) is applied by the applier from the
-// record's own day, so the rows leave on every node in the same transaction
-// that writes the day that makes them old, and nothing but the applier writes
-// the replicated estate.
+// record's own day, so the rows leave on every data node in the same
+// transaction that writes the day that makes them old, and nothing but the
+// applier writes the replicated estate.
 package usage

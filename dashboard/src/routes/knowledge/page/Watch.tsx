@@ -4,7 +4,7 @@
  * # Two controls, because they are two questions
  *
  * The eye answers "am I told when this changes" and changes it in one press
- * (`save_page` with `watch`, as the person the token is bound to). The count
+ * (`save_page` with `watch`, as the person signed in). The count
  * beside it answers "who is told" and opens the list. A hover panel over the
  * eye would carry a list no keyboard, touch or screen reader reaches, which is
  * what `Tooltip` refuses to be; a `Popover` is a list a reader can keep open.
@@ -15,6 +15,15 @@
  * rather than deletes, so a seat that stopped following is not quietly
  * subscribed again by a later mention. The engine's own rule
  * (`internal/pages` `recipientsOf`), read the same way here.
+ *
+ * # Which name is "you"
+ *
+ * A watch is filed under the SEAT the writer acts as (`ViewerState.handle`),
+ * because a wake reaches a seat and nothing else. A credential the directory
+ * binds to no seat subscribes nobody (`internal/pages` `Actor.subscriber`):
+ * its login is no seat a change could be told to, so the eye is drawn
+ * disabled for it with that reason rather than offering a press the engine
+ * would answer by moving nothing.
  */
 
 import { Button, IconButton, Popover, useToast } from "@crewlethq/ui";
@@ -36,8 +45,15 @@ export function WatchControl({ page }: { page: Page }) {
   const toast = useToast();
   const save = useAct("save_page");
   const followers = followersOf(page);
-  const watching = viewer.handle !== "" && followers.includes(viewer.handle);
-  const names = followers.map((h) => (h === viewer.handle ? "you" : who(h).name));
+  const me = viewer.handle;
+  const watching = me !== "" && followers.includes(me);
+  // NO SEAT, NO SUBSCRIPTION: see "Which name is you" above.
+  const held = !save.access.can
+    ? save.access.reason
+    : viewer.unbound
+      ? "A watch is kept under a seat, and this credential is bound to none, so nothing could tell it about a change."
+      : undefined;
+  const names = followers.map((h) => (h === me ? "you" : who(h).name));
   const said = names.length > 0 ? `Watching: ${names.join(", ")}` : "Nobody watches this page";
 
   const press = async () => {
@@ -66,7 +82,7 @@ export function WatchControl({ page }: { page: Page }) {
         label={watching ? "Stop watching this page" : "Watch this page"}
         variant="ghost"
         pressed={watching}
-        disabledReason={save.access.can ? undefined : save.access.reason}
+        disabledReason={held}
         onClick={() => {
           if (!save.busy) void press();
         }}
@@ -97,15 +113,15 @@ export function WatchControl({ page }: { page: Page }) {
                   <Face handle={handle} who={who} />
                   <span>
                     {who(handle).name}
-                    {handle === viewer.handle && <span className="knowledge-note"> (you)</span>}
+                    {handle === me && <span className="knowledge-note"> (you)</span>}
                   </span>
                 </li>
               ))}
             </ul>
           )}
           <p className="knowledge-note">
-            {!save.access.can
-              ? save.access.reason
+            {held !== undefined
+              ? held
               : watching
                 ? "Press the eye to stop watching."
                 : "Press the eye to watch."}

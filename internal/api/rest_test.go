@@ -34,7 +34,7 @@ import (
 func status(t *testing.T, a *api.App, path string) int {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))
 	return rec.Result().StatusCode
 }
 
@@ -46,7 +46,7 @@ func restApp(t *testing.T) *api.App {
 	}
 	return newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Company: func() *config.Company { return c }},
+		Sources: queries.Sources{Company: companySource(t, c)},
 	})
 }
 
@@ -84,7 +84,9 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 // reconnaissance for the write nobody can.
 func TestTheIntegrationsMapIsNotServedAnonymously(t *testing.T) {
 	t.Parallel()
-	if got := status(t, restApp(t), "/integrations"); got != http.StatusUnauthorized {
+	rec := httptest.NewRecorder()
+	restApp(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/integrations", nil))
+	if got := rec.Result().StatusCode; got != http.StatusUnauthorized {
 		t.Errorf("GET /integrations = %d, want 401: it is the same map /setup guards", got)
 	}
 }
@@ -100,7 +102,7 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	// No native knowledge base wired, which is a company on Confluence, so
 	// `pages` is unregistered.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/pages", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/pages", nil)))
 	res := rec.Result()
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET /pages = %d, want the query layer's 404", res.StatusCode)
@@ -134,10 +136,11 @@ func TestAPathValueBecomesTheQuestionsParameter(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("GET /agents/ceo = %d (%v), want the seat", status, body)
 	}
-	// The answer keys on the ROLE the handle resolves to, which is also
-	// what the projection keys its overlays by.
-	if body["role"] != "CEO" {
-		t.Errorf("answered about %v, want the seat the path named", body["role"])
+	// The answer names the seat the handle resolves to — its handle, its
+	// name, and the agent id the projection keys its overlays by.
+	if body["role"] != "CEO" || body["handle"] != "ceo" || body["agent_id"] == "" {
+		t.Errorf("answered about %v / %v / %v, want the seat the path named",
+			body["role"], body["handle"], body["agent_id"])
 	}
 	// And a different path answers about a different seat, so the route is
 	// not returning a constant.
@@ -153,7 +156,7 @@ func TestThePathValueOverridesTheQueryString(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	_, body := get(t, a, "/agents/ceo?id=cto&role=CTO")
+	_, body := get(t, a, "/agents/ceo?id=cto")
 	if body["role"] != "CEO" {
 		t.Errorf("answered about %v; the query string is steering a route "+
 			"addressed by its path", body["role"])
@@ -171,12 +174,13 @@ func TestASeatIsAddressableByTheIdentifierTheClientHolds(t *testing.T) {
 	if code, body := get(t, a, "/query/agent?id=ceo"); code != http.StatusOK || body["role"] != "CEO" {
 		t.Errorf("asking by handle = %d %v, want the seat", code, body)
 	}
-	// The role name still works, for a caller that already had one.
-	if code, body := get(t, a, "/query/agent?role=CEO"); code != http.StatusOK || body["role"] != "CEO" {
-		t.Errorf("asking by role = %d %v, want the seat", code, body)
+	// A ROLE NAME IS NOT AN ADDRESS: two seats may share one, so the answer
+	// it used to give was whichever of them the name happened to reach.
+	if code, body := get(t, a, "/query/agent?role=CEO"); code != http.StatusBadRequest {
+		t.Errorf("asking by role = %d %v, want 400 — `id` is the handle", code, body)
 	}
 	// And the roster hands out exactly that identifier.
-	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
 		if row["id"] != row["handle"] {
 			t.Errorf("roster row %v: id must be the identifier every screen "+
 				"sends back, which is the handle", row)
@@ -197,7 +201,7 @@ func TestTheTraceRouteBeatsTheEventWildcard(t *testing.T) {
 	// would be too. So this pins the shape rather than the status: the
 	// route must exist at all.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/events/trace/t-1", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/events/trace/t-1", nil)))
 	if ct := rec.Result().Header.Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /events/trace/{id} content-type = %q; a bare mux 404 "+
 			"means the pattern never matched", ct)
@@ -250,7 +254,7 @@ func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/views", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/views", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
@@ -279,8 +283,8 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/work/views?container=project:ENG", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet,
+		"/work/views?container=project:ENG", nil)))
 	if got := rec.Result().StatusCode; got != http.StatusOK {
 		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
 	}
@@ -290,9 +294,9 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 // test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
-func (stubWorkReader) Inbox(context.Context, tracker.InboxQuery, time.Time) (
+func (stubWorkReader) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (
 	tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{}, nil
+	return tracker.InboxAnswer{Handle: q.Handle}, nil
 }
 
 func (stubWorkReader) Routing(context.Context, tracker.RoutingQuery, time.Time) (
@@ -392,9 +396,9 @@ func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
 //
 // Same hazard the burndown had, one route later: `/work/{id}` matches the
 // path, so a table entry with no route behind it answers 404 about a task
-// nobody named. The refusal proves the query was reached — `work_inbox`
-// refuses an unresolvable handle with `bad_params`, and the wildcard would
-// answer `not_found`.
+// nobody named. The answer proves the query was reached — `work_inbox` reads
+// the caller's own record, which for the fixture's unbound token is kept under
+// its login, and the wildcard would answer `not_found`.
 func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
@@ -403,20 +407,20 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/inbox", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/inbox", nil)))
 	res := rec.Result()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /work/inbox = %d, want 400: an anonymous caller names "+
-			"no seat and the question refuses, so any other status means "+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /work/inbox = %d, want 200: any other status means "+
 			"/work/{id} answered the path instead", res.StatusCode)
 	}
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["error"] != "bad_params" {
-		t.Errorf("error = %q, want bad_params; `not_found` is the wildcard "+
-			"answering about a task called \"inbox\"", body["error"])
+	if body["handle"] != "token:fixture" {
+		t.Errorf("handle = %v, want the fixture token's own record — a "+
+			"`not_found` is the wildcard answering about a task called "+
+			"\"inbox\"", body["handle"])
 	}
 }

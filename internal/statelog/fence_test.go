@@ -95,7 +95,7 @@ func TestTheZeroFenceNamesEveryRefusal(t *testing.T) {
 		},
 		"an eviction nobody could read": {
 			reads: zeroReads{evictedErr: unreadable, floor: 40, ends: onTheLog},
-			want:  statelog.ReasonEvicted, cause: unreadable,
+			want:  statelog.ReasonEvictionUnknown, cause: unreadable,
 		},
 		"a floor nobody could read": {
 			reads: zeroReads{floorErr: unreadable, ends: onTheLog},

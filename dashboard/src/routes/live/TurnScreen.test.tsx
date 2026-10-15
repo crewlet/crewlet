@@ -887,8 +887,10 @@ test("this turn's reflection sentinel refetches the turn, another turn's does no
 /** Mount over a seat whose live overlay places it on this turn, at `stage`. */
 function onTurn(stage: "phase" | "parked") {
   const store = new Store();
-  store.applyAgents([
+  store.applySeats([
     {
+      id: "ceo",
+      agent_id: "ceo",
       role: "CEO",
       handle: "ceo",
       turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage },
@@ -969,6 +971,30 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
   expect(screen.getByRole("menuitem", { name: /Copy turn as JSON/ })).toBeTruthy();
 });
 
+// A TURN ON THE TASK THAT DID NOT CLAIM ITS KEY opens that task. A turn's work
+// item carries no collision flag, so its key may be one another task claimed
+// first; Open task goes by the native task's id, which opens it whoever holds
+// the key, and never by the key, which opened the claimant.
+test("Open task opens the task the turn is charged to by its id", async () => {
+  mount({
+    events: [
+      event({
+        type: "agent_turn_started",
+        payload: {
+          turn_id: TURN,
+          role: "CEO",
+          agent_handle: "ceo",
+          work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
+          started_at: "2026-09-13T10:00:00Z",
+          resumed: false,
+        },
+      }),
+    ],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Open task" }));
+  expect(location.hash).toBe("#/work/t-dup");
+});
+
 // ---------------------------------------------------------------------------
 // Watching it live
 // ---------------------------------------------------------------------------
@@ -976,6 +1002,8 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
 /** The seat's push while it runs this turn's `phase`, as the projection sends it. */
 function runningSeat(phase: string) {
   return {
+    id: "ceo",
+    agent_id: "ceo",
     role: "CEO",
     handle: "ceo",
     activity: "working",
@@ -1018,7 +1046,7 @@ test("a watch link's tab is one the page has", () => {
 test("a watch link lands on the transcript with the running phase open", async () => {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([runningSeat("review")] as never);
+  store.applySeats([runningSeat("review")] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -1053,7 +1081,9 @@ test("a watch link lands on the transcript with the running phase open", async (
 function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tail?: unknown) {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([seat] as never);
+  // THE ROSTER FIRST, as the engine sends it — its overlay merged in — since
+  // a later push for a seat the roster does not hold is dropped.
+  store.applySeats([seat] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -1155,6 +1185,8 @@ test("a live phase that completes keeps its card, open", async () => {
 /** The seat's push while its turn is parked on a coding run: working, no call. */
 function parkedSeat() {
   return {
+    id: "ceo",
+    agent_id: "ceo",
     role: "CEO",
     handle: "ceo",
     activity: "working",

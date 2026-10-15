@@ -597,7 +597,7 @@ func TestAPeerOnAnotherProtocolIsNamedOnEveryQuestion(t *testing.T) {
 			mineOnly(t, got.Rows)
 			named(t, c)
 		}
-		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
+		got, c, err := fan.SeatPhases(t.Context(), "agent-a", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -865,12 +865,13 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 		Time: horizon.Add(time.Minute), TraceID: "tr-edge"})
 	appendTo(t, b, store.EventRecord{ID: "b-phase", Type: "agent_phase_completed", Category: "task",
 		Time: horizon.Add(2 * time.Minute), TraceID: "tr-edge",
-		Tags:  map[string]string{"turn_id": "t-edge", "agent_role": "Lead"},
+		Tags:  map[string]string{"turn_id": "t-edge", "agent_role": "Lead", "agent_id": "agent-a"},
 		Spend: &store.Spend{Phase: "execute", Model: "m", TurnID: "t-edge", TotalTokens: 30}})
 	completionOn(t, b, "b-done", "t-edge", horizon.Add(3*time.Minute))
 	// The work, naming the seat, on the node that held it.
 	appendTo(t, a, store.EventRecord{ID: "a-work", Type: "a2a_asked", Category: "task",
-		Time: horizon.Add(4 * time.Minute), TraceID: "tr-edge", Actor: "PM"})
+		Time: horizon.Add(4 * time.Minute), TraceID: "tr-edge", Actor: "PM",
+		Tags: map[string]string{"agent_id": "agent-pm"}})
 	fan := fanFrom(a, "node-a", "node-b")
 	fan.Clock = func() time.Time { return at }
 
@@ -891,7 +892,7 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 		}
 	})
 	t.Run("events by related agent", func(t *testing.T) {
-		got, c, err := fan.List(t.Context(), store.ListQuery{RelatedAgent: "PM", Limit: 10})
+		got, c, err := fan.List(t.Context(), store.ListQuery{RelatedAgent: "agent-pm", Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -943,7 +944,7 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 		}
 	})
 	t.Run("seat_phases", func(t *testing.T) {
-		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
+		got, c, err := fan.SeatPhases(t.Context(), "agent-a", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1034,7 +1035,7 @@ func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
-	servesAs(t, broker, "node-other", 4, store.EventRecord{ID: "other", Type: "notification_skipped",
+	servesAs(t, broker, "node-other", eventfan.Protocol-1, store.EventRecord{ID: "other", Type: "notification_skipped",
 		Category: "notification", Time: time.Now().UTC(),
 		Tags: map[string]string{"notification_source": "gitlab"}})
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
@@ -1070,7 +1071,7 @@ func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
 		if !missing(coverage, "node-gone", "budget") {
 			t.Errorf("coverage %+v does not name node-gone for the budget", coverage)
 		}
-		if !missing(coverage, "node-other", "v5") {
+		if !missing(coverage, "node-other", fmt.Sprintf("v%d", eventfan.Protocol)) {
 			t.Errorf("coverage %+v does not name node-other for the version it was asked in", coverage)
 		}
 		if missing(coverage, "node-b", "") {

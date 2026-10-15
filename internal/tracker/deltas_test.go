@@ -417,18 +417,13 @@ func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
 	}
 }
 
-// A CHECKLIST DELTA IS COUNTS PER NAMED LIST, and a promotion is its own
-// number.
+// A CHECKLIST DELTA IS COUNTS PER NAMED LIST.
 //
 // A task carries [MaxChecklists] lists holding [MaxChecklistItemsTotal] items
-// between them, so the items themselves cannot ride a log line. What makes the
-// counts sufficient rather than merely cheap is the promotion column:
-// promoting an item to a subtask is a `checklist` commit that moves neither
-// the done count nor the total, so counts alone would have left the one
-// checklist gesture this build has recording nothing at all.
+// between them, so the items themselves cannot ride a log line — and a count
+// is what a reader of a change wants from a checklist anyway.
 func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 	t.Parallel()
-	subtask := "t-9"
 	before := Task{Checklists: []Checklist{{
 		ID: "c-1", Name: "Setup", Items: []ChecklistItem{
 			{ID: "i-1", Name: "clone"}, {ID: "i-2", Name: "build"},
@@ -463,21 +458,6 @@ func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 		t.Errorf("adding a list recorded %+v", got)
 	}
 
-	// AND A PROMOTION, which moves neither count.
-	promoted := done
-	promoted.Checklists = []Checklist{{
-		ID: "c-1", Name: "Setup", Items: []ChecklistItem{
-			{ID: "i-1", Name: "clone", Done: true},
-			{ID: "i-2", Name: "build", PromotedTo: &subtask},
-			{ID: "i-3", Name: "ship"},
-		},
-	}}
-	if got := TaskDeltas(done, promoted, nil)["checklists"]; !sameDelta(got,
-		Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done (1 promoted)"}) {
-
-		t.Errorf("promoting an item recorded %+v, and the one checklist "+
-			"gesture this build has must not write an empty row", got)
-	}
 	// A list nobody named is still attachable to something.
 	nameless := Task{Checklists: []Checklist{{ID: "c-7"}}}
 	if got := TaskDeltas(Task{}, nameless, nil)["checklists"]; got.To != "c-7: 0 of 0 done" {

@@ -22,19 +22,21 @@
  * THE BLOCK IS THE AUTHORITY, AND IT IS NEVER CHECKED AGAINST ITS TREE. The
  * engine derives both halves from one document in one call
  * (`internal/api/orgprojection.go`), so they pair by construction: every seat
- * the block names is a seat of the tree, by its name, and every handle it
- * mentions is one of its own seats. There is no "hierarchy not reported"
+ * the block names is a seat of the tree, by its handle, every unit by its key,
+ * and every handle it mentions is one of its own seats. There is no "hierarchy not reported"
  * state for a screen to draw, because every projection that carries a seat
  * carries the block. `{}`, the answer of a node running no company, carries
  * neither half and indexes as an empty company, as does an org not read yet.
  *
- * THE GUARDED HALF IS NOT HERE EITHER. `/org` is anonymously readable, so the
- * projection carries a charter, a tree, the budgets as written and each
- * agent seat's RESOLVED model chain and tool sources, and nothing else: a
- * seat's email, authored `llm` fields, contact identities, tool credentials,
- * integrations and schedules are read from the company document through the
- * operator-gated `config` query, which is what [seatSettings] and
- * [unitSettings] below are for.
+ * THE GUARDED HALF IS NOT HERE EITHER. `/org` is the overview's projection,
+ * which every signed-in reader is sent, so it carries a charter, a tree, each
+ * human seat's holder and the budgets as written — and, to an admin, each
+ * agent seat's RESOLVED model chain and tool sources ([resolvedAbsence] says
+ * what their absence means to everybody else). Nothing else: a seat's email,
+ * authored `llm` fields, contact identities, tool credentials, integrations
+ * and schedules are read from the company document through the `config`
+ * query, which takes Admin and is what [seatSettings] and [unitSettings]
+ * below are for.
  *
  * Resolved ONCE, into an index, and screens consume seats. Doing it per screen
  * is how the previous dashboard ended up walking the whole roster once per
@@ -46,9 +48,13 @@ import { useMemo } from "react";
 import type { AvatarStatus } from "@crewlethq/ui";
 import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
+import { useLeadScope } from "./leadScope.ts";
+import { ADMIN, holds, needsWords } from "./access.ts";
 import { useQuery } from "./useQuery.ts";
+import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
-import { apiToken } from "~/protocol/index.ts";
+import { useViewer } from "./viewer.ts";
+import { rest } from "~/protocol/rest.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type {
@@ -58,11 +64,13 @@ import type {
   ConfigUnit,
   Derived,
   LiveCall,
+  LogRefusal,
   OrgProjection,
   OrgSeat,
   OrgUnit,
   PhaseLLM,
   ProviderKeys,
+  QueryRefusal,
   ScheduleSpec,
 } from "~/protocol/index.ts";
 
@@ -71,16 +79,14 @@ export interface Unit {
   /** Stable React key and DOM id suffix: the unit's depth-first position. */
   key: string;
   /**
-   * A unit is ADDRESSED BY NAME, here and in every route.
-   *
-   * `org.Unit.Key` prefers the declared `id:`, and this client cannot: the id
-   * is GUARDED — `internal/api/orgprojection_test.go` classifies it as "a
-   * durable key rather than a name: everything filed against the unit keys on
-   * it and nobody reads it, while the chart draws Name" — so the anonymous
-   * projection carries no id at all, and a link built from one would be a
-   * link built from a value this screen was never given. Read it through
-   * [unitSettings] where a token allows and something actually needs the key.
+   * The unit's KEY — the engine's `Unit.Key`, its declared `id:`, which the
+   * engine mints from the name when a document declares none — and how a
+   * unit is ADDRESSED, here and in every route ([unitRoute]). Every reference
+   * in the document names a unit by it: a `manages:` entry, a seat's `unit:`.
    */
+  id: string;
+  /** What a person reads. Prose, and two units may share one, so nothing
+   *  addresses a unit by it. */
   name: string;
   /** The EFFECTIVE type, after the engine's default. */
   type: string;
@@ -89,9 +95,10 @@ export interface Unit {
   /** Free-text knowledge references. NOT a read scope. */
   knowledge: string[];
   /**
-   * The lead AS THE DOCUMENT WRITES IT: a seat name, "" when the unit
-   * inherits one. Deliberately still a name rather than a resolved seat —
-   * `effectiveLead` is the resolved one, and the two are different facts.
+   * The lead AS THE DOCUMENT WRITES IT: a seat handle, "" when the unit
+   * inherits one. Deliberately still the reference rather than a resolved
+   * seat — `effectiveLead` is the resolved one, and the two are different
+   * facts.
    */
   lead: string;
   /** The effective lead, declared or inherited, resolved to a seat. */
@@ -153,7 +160,7 @@ export interface Seat {
   backstory: string;
   responsibilities: string[];
   guidelines: string[];
-  /** The `manages` entries AS WRITTEN: seat and unit names, unexpanded. */
+  /** The `manages` entries AS WRITTEN: seat handles and unit keys, unexpanded. */
   manages: string[];
   availability: string;
   /** Root → own unit. Empty for a root-level seat. */
@@ -204,6 +211,35 @@ export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
   return ["agents", "seats", seat.handle || seat.name];
 }
 
+/** The route segments that open a unit's page: its KEY, never its name. */
+export function unitRoute(unit: Pick<Unit, "id">): string[] {
+  return ["agents", "teams", unit.id];
+}
+
+/**
+ * The unit a route's segment addresses — the one whose KEY it is — or null.
+ * Never the name: two units may share one, and a lookup by name opened
+ * whichever came first.
+ */
+export function unitByKey(index: Pick<OrgIndex, "units">, key: string): Unit | null {
+  if (!key) return null;
+  return index.units.find((u) => u.id === key) ?? null;
+}
+
+/**
+ * The roster row carrying a seat's live state, matched by the seat's HANDLE —
+ * which is the roster row's `id` — and never by its name: two seats may share
+ * a name, and a ring read off a namesake's row is a state the seat is not in.
+ */
+export function liveRowFor(
+  agents: readonly AgentRow[],
+  seat: Pick<Seat, "handle"> | null | undefined,
+): AgentRow | undefined {
+  const handle = seat?.handle;
+  if (!handle) return undefined;
+  return agents.find((a) => a.id === handle);
+}
+
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
 
 interface Authored {
@@ -229,6 +265,7 @@ function walk(org: OrgProjection | null | undefined): Authored {
 function newUnit(raw: OrgUnit, at: number): Unit {
   return {
     key: `u${at}`,
+    id: raw.id ?? "",
     name: raw.name ?? "",
     type: raw.type ?? "",
     purpose: raw.purpose ?? "",
@@ -288,59 +325,59 @@ function link(authored: Authored): Unit[] {
 /**
  * Lay the engine's derived block over the authored tree.
  *
- * Units pair by POSITION — the block lists them depth first, parents before
- * children, which is the order [walk] visits the tree in — and seats by NAME,
- * never by position: the engine's seat order is not the document's, since a
- * root seat moved into a unit comes after that unit's own seats. Every seat,
- * unit, lead and reporting line in the index is the block's; the tree
+ * Units pair by KEY — the block names each by the key the engine minted into
+ * the document, which is [Unit.id] — and seats by HANDLE, which the engine
+ * mints into every stored seat (ADR-0013). Neither pairs by position or by
+ * name: the engine's seat order is not the document's, since a root seat moved
+ * into a unit comes after that unit's own seats, and a NAME IS PROSE, held by
+ * as many seats and units as a company likes, so a pairing by it hands one
+ * seat its namesake's document. Only an entry that declares no handle — a
+ * fixture, a document nothing has stored — is claimed by its name, the first
+ * unclaimed one, and never an entry declaring another seat's handle. Every
+ * seat, unit, lead and reporting line in the index is the block's; the tree
  * contributes only what the document wrote about each (its goal, its purpose,
  * its knowledge).
- *
- * A NAME CAN BE HELD TWICE. Unique names are an ADMISSION rule, which an apply
- * does not refuse (`org.ErrDuplicateSeatName`), so a revision a newer node
- * activated under rules this build does not share can carry two seats of one
- * name. Each derived seat claims an unclaimed entry of its name — the one
- * declaring its handle where there is one — so both are drawn and neither
- * borrows the other's document.
  *
  * TOTAL rather than validating: both halves come from one document in one
  * call, so there is no mismatch a working engine can send, and a reader that
  * second-guessed the block would need a "the engine did not say" state for
- * every screen to draw. A handle the block mentions that it does not list is
+ * every screen to draw. A unit the block does not name keeps what the
+ * document wrote, and a handle the block mentions that it does not list is
  * skipped rather than thrown on, because this runs in the sidebar, outside
  * every error boundary.
  */
 function overlay(authored: Authored, derived: Derived): OrgIndex {
-  const dUnits = list(derived.units);
   const units = link(authored);
-  units.forEach((unit, i) => {
-    const d = dUnits[i];
-    if (!d) return;
+  const dByKey = new Map(list(derived.units).map((d) => [d.id, d]));
+  const derivedOf = (unit: Unit) => (unit.id ? dByKey.get(unit.id) : undefined);
+  for (const unit of units) {
+    const d = derivedOf(unit);
+    if (!d) continue;
     unit.type = d.type || unit.type;
     unit.channel = d.channel ?? "";
     unit.channelInherited = !!d.channel_inherited;
     unit.leadInherited = !!d.lead_inherited;
-  });
+  }
 
-  const unclaimed = new Map<string, OrgSeat[]>();
+  // The entries that declare a handle, by it, and the ones that declare none,
+  // by name — the only entries a name may claim.
+  const declared = new Map<string, OrgSeat>();
+  const undeclared = new Map<string, OrgSeat[]>();
   for (const { raw } of authored.seats) {
+    if (raw.handle) {
+      if (!declared.has(raw.handle)) declared.set(raw.handle, raw);
+      continue;
+    }
     const name = raw.name ?? "";
-    unclaimed.set(name, [...(unclaimed.get(name) ?? []), raw]);
+    undeclared.set(name, [...(undeclared.get(name) ?? []), raw]);
   }
   const claim = (name: string, handle: string): OrgSeat => {
-    const entries = unclaimed.get(name) ?? [];
-    // The entry declaring this handle, else the first declaring none — an
-    // entry declaring ANOTHER handle belongs to the seat carrying that one,
-    // and is taken only when nothing else of the name is left.
-    const declared = entries.findIndex((raw) => raw.handle === handle);
-    const at =
-      declared >= 0
-        ? declared
-        : Math.max(
-            entries.findIndex((raw) => !raw.handle),
-            0,
-          );
-    return entries.splice(at, 1)[0] ?? { name };
+    const own = declared.get(handle);
+    if (own) {
+      declared.delete(handle);
+      return own;
+    }
+    return undeclared.get(name)?.shift() ?? { name };
   };
   const byHandle = new Map<string, Seat>();
   const seats: Seat[] = [];
@@ -358,16 +395,16 @@ function overlay(authored: Authored, derived: Derived): OrgIndex {
   const resolve = (handles: string[] | null | undefined): Seat[] =>
     list(handles).flatMap((handle) => byHandle.get(handle) ?? []);
 
-  units.forEach((unit, i) => {
-    const d = dUnits[i];
-    if (!d) return;
+  for (const unit of units) {
+    const d = derivedOf(unit);
+    if (!d) continue;
     unit.seats = resolve(d.seats);
     for (const seat of unit.seats) {
       seat.unit = unit;
       seat.unitChain = unit.chain;
     }
     unit.effectiveLead = d.lead ? (byHandle.get(d.lead) ?? null) : null;
-  });
+  }
   for (const seat of seats) seat.unitLead = seat.unit?.effectiveLead?.name ?? "";
 
   dSeats.forEach((d, i) => {
@@ -544,6 +581,22 @@ export function leadsInLine(index: OrgIndex, lead: string, handle: string): bool
 }
 
 /**
+ * Whether the reader is the person this seat is held by — the seat the
+ * identity directory binds them to — and so whether what draws it speaks to
+ * them.
+ *
+ * ONE ANSWER FOR EVERY SURFACE THAT DRAWS A SEAT: the overview said "Your day
+ * … waiting on you" while the callout above it said "Held by jane.doe" and the
+ * work card beside it "Nothing open is assigned to them", because each asked
+ * for itself, or did not ask. Here rather than beside the profile because a
+ * shared control asks it too — Message holds itself on the reader's own seat
+ * (`components/writes.tsx`), and the peek draws that control as the page does.
+ */
+export function isOwnSeat(viewer: { readonly handle: string }, handle: string): boolean {
+  return viewer.handle !== "" && viewer.handle === handle;
+}
+
+/**
  * The round a live call is on, ONE-BASED: `round_num` is the engine's
  * zero-based round and `rounds_used` the same count one-based — the rounds
  * that came back, and the one in flight from the frame the loop publishes as
@@ -612,45 +665,100 @@ export type SeatSettings =
 /**
  * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
  *
- * FOUR OUTCOMES, NOT A NULLABLE ROLE. The company document is behind an
- * operator token, so "this seat is not in the active revision", "you may not
- * read it", "the read has not come back yet" and "here it is" are four
- * different facts — and a `ConfigRole | null` collapses the first three into
- * one. Every screen that did that printed the same sentence for all of them,
- * and the sentence it picked was the reader's: the seat header's MODEL fact
- * read "needs an operator token" on five of eight tabs, because those tabs
- * simply did not ask.
+ * FIVE OUTCOMES, NOT A NULLABLE ROLE. The company document takes Admin, so
+ * "this seat is not in the active revision", "you may not
+ * read it", "nobody asked, because you may not", "the read has not come back
+ * yet" and "here it is" are five different facts — and a `ConfigRole | null`
+ * collapses the first four into one. Every screen that did that printed the
+ * same sentence for all of them, and the sentence it picked was the reader's:
+ * the seat header's MODEL fact read "needs a credential" on five of eight
+ * tabs, because those tabs simply did not ask; and the Settings tab told a
+ * reader nobody had asked for that "No company configuration is active".
  *
  * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
  * keeps its last good answer through a failed ask — which suits a poll and is
- * exactly wrong for a guarded read: once a token is cleared or refused, the
- * document it had been allowed to read is still in hand, so a reading that
- * looked at the answer first would keep printing a revoked reader's model,
- * budget and schedules beside a banner saying the answer needs a token.
+ * exactly wrong for a guarded read: once Admin is withdrawn, the document it
+ * had been allowed to read is still in hand, so a reading that looked at the
+ * answer first would keep printing a revoked reader's model, budget and
+ * schedules beside a banner saying the answer needs Admin.
  */
 export type SeatReading =
   | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
-  /** The revision answered and names no single seat by this name. */
+  /** The revision answered and names no seat by this handle. */
   | { state: "absent" }
-  /** The engine refused the read: this reader is missing a credential. */
+  /** The engine refused the read: this reader does not hold Admin. */
   | { state: "refused" }
-  /** Nothing has been asked, or nothing has come back. Never a claim. */
+  /**
+   * NEVER ASKED, because the answer was known before the question: the viewer
+   * has answered, is no admin and leads no unit over the seat, so the engine
+   * would refuse it ([useSeatSetup]). A claim about the READER — which access
+   * reads the seat's half — and never one about the company.
+   */
+  | { state: "withheld" }
+  /**
+   * Nothing has come back yet — or nothing could be asked yet, because the
+   * viewer has not said who this is. Never a claim.
+   */
   | { state: "unread" };
 
 export function seatReading(
   settings: SeatSettings | null | undefined,
   error?: unknown,
+  withheld = false,
 ): SeatReading {
+  // NOT ASKED HAS NO ANSWER TO WEIGH: a disabled read holds neither a
+  // document nor an error (`useQuery`, `useRest`), so this is decided first.
+  if (withheld) return { state: "withheld" };
   if (error) return { state: "refused" };
   if (!settings) return { state: "unread" };
   if (settings.state === "found") {
     return { state: "read", role: settings.role, unit: settings.unit };
   }
   // `missing` AND `ambiguous` ARE ONE ANSWER HERE. Both mean the revision
-  // holds no single entry this page may attribute to this seat; the seat's own
-  // screen says which ([SeatSettings]), and a panel reading the reading only
-  // needs to know it has nothing to draw.
+  // holds no single entry this page may attribute to this seat. The second is
+  // only reachable from a document holding one handle twice, which the engine
+  // refuses; the seat's own screen says which ([SeatSettings]), and a panel
+  // reading the reading only needs to know it has nothing to draw.
   return { state: "absent" };
+}
+
+/**
+ * The access the company document is read under, and the org projection a
+ * seat's RESOLVED setup under: its model chain and its tool sources are
+ * derived from the document's own half, so they follow its rule.
+ */
+export const RUNTIME_GRANT = ADMIN;
+
+/**
+ * What it means that the org projection carried no model chain (`llm`) or no
+ * tool sources (`tool_sources`) for an agent seat — which depends on WHO is
+ * reading, because the engine strips both for every audience but an admin:
+ *
+ *   - `none` — the reader is an admin, so the engine would have sent the
+ *     value, and its absence is the seat's own: no provider, no tools;
+ *   - `withheld` — the reader does not, so the absence says nothing about the
+ *     seat at all. Read as `none`, every such reader was told "No provider
+ *     configured" and "none granted" about a seat that has both;
+ *   - `unknown` — the viewer has not answered, which claims nothing either way.
+ */
+export type ResolvedAbsence = "none" | "withheld" | "unknown";
+
+/** See [ResolvedAbsence]. */
+export function resolvedAbsence(viewer: {
+  readonly grants: readonly string[];
+  readonly loading: boolean;
+}): ResolvedAbsence {
+  if (holds(viewer.grants, RUNTIME_GRANT)) return "none";
+  return viewer.loading ? "unknown" : "withheld";
+}
+
+/**
+ * The sentence a reader without Admin reads where a resolved value would be —
+ * `what` is the value, "its model chain" — naming the access that would show
+ * it rather than an empty value nobody could tell from a seat that has none.
+ */
+export function resolvedWithheld(what: string): string {
+  return needsWords(`Reading ${what}`, [RUNTIME_GRANT]);
 }
 
 /**
@@ -664,55 +772,110 @@ export interface SeatSetup {
   settings: SeatSettings | null;
   reading: SeatReading;
   /** The raw answer, for a panel that states its own read: the document
-   *  (never beside a refusal), whether it is in flight, and the refusal. */
-  config: { doc: CompanyDocument | null; loading: boolean; error: string | null };
+   *  (never beside a refusal), whether it is in flight — or waiting on the
+   *  viewer before it can be asked — and the refusal. */
+  config: {
+    doc: CompanyDocument | null;
+    loading: boolean;
+    error: string | null;
+    refusal: QueryRefusal | LogRefusal | null;
+  };
 }
 
 /**
  * The guarded half of one seat, for any screen that draws it: the company
- * document's entry for the seat and the four-state reading of it.
+ * document's entry for the seat and the five-state reading of it.
  *
- * ONE READ, ONE ORDER. The document is behind an operator token, and every
- * screen that read it on its own either forgot the refusal-first order
- * [seatReading] exists for — and printed a revoked reader's model beside a
- * banner saying the answer needs a token — or collapsed "absent", "refused"
+ * ONE READ, ONE ORDER. The document takes Admin, and every screen that read
+ * it on its own either forgot the refusal-first order [seatReading] exists
+ * for — and printed a revoked reader's model beside a banner saying the
+ * answer needs Admin — or collapsed "absent", "refused"
  * and "not read yet" into one sentence. The seat is resolved by handle, or by
  * name for a link built from a document entry that declares no handle, which
  * is how [seatPath] addresses one.
  *
- * A reader with no credential is never asked for: see the query below.
+ * A reader without Admin is never asked: see the query below. A LEAD of
+ * the seat's unit is, through the reads the engine admits them instead — the
+ * seat and its unit (`GET /config/roles/{handle}`, `GET /config/units/{key}`,
+ * `lib/leadScope.ts`) — composed into the small document [seatSettings]
+ * reads, so the seat's page shows a lead what the org builder lets them edit.
  */
 export function useSeatSetup(handle: string): SeatSetup {
   const org = useOrg();
+  const viewer = useViewer();
+  const scope = useLeadScope();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
-  // NOT ASKED WITHOUT A CREDENTIAL. The document is guarded, so a browser
-  // presenting no token is refused on every ask — the answer is known before
-  // the question, and asking only puts a refusal on the wire and a
-  // `refused` banner over a page that never had a chance. Such a reader stays
-  // `unread`, which claims nothing; the screen names the credential instead.
-  // Read from the stored token rather than the `viewer` answer, which arrives
-  // a round trip later and would put the one refused request back.
-  const config = useQuery("config", undefined, { enabled: !!seat && apiToken() !== "" });
+  // NOT ASKED WITHOUT ADMIN. The document takes it, so a reader without it is
+  // refused on every ask — the answer is known before the question, and
+  // asking only puts a refusal on the wire and a `refused` banner over a page
+  // that never had a chance. Such a reader is `withheld` once the viewer has
+  // answered — a claim about the reader, which the screen says by naming the
+  // access — and `unread`, claiming nothing, until it has.
+  const granted = holds(viewer.grants, RUNTIME_GRANT);
+  const config = useQuery("config", undefined, { enabled: !!seat && granted });
+  const led = !granted && !!seat?.handle && scope.seats.has(seat.handle) ? seat : null;
+  const asked = !!seat && (granted || led !== null);
+  const withheld = !!seat && !asked && !viewer.loading;
+  const lead = useRest(
+    led ? `/config/roles/${led.handle}+${led.unit?.id ?? ""}` : null,
+    (signal) => (led ? leadDocument(led, signal) : Promise.resolve(null)),
+  );
+  const read = led
+    ? {
+        data: lead.data,
+        loading: lead.loading,
+        error: lead.code,
+        refusal: lead.refusal,
+      }
+    : config;
   // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL: `useQuery` keeps its last good
   // answer through a failed ask, which suits a poll and is wrong for a guarded
   // read.
   const settings = useMemo<SeatSettings | null>(
-    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
-    [seat, config.data, config.error],
+    () => (seat && read.data && !read.error ? seatSettings(read.data, seat) : null),
+    [seat, read.data, read.error],
   );
-  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  const reading = useMemo(
+    () => seatReading(settings, read.error, withheld),
+    [settings, read.error, withheld],
+  );
   return {
     seat,
     settings,
     reading,
     config: {
-      doc: config.error ? null : (config.data ?? null),
-      loading: config.loading,
-      error: config.error,
+      doc: read.error ? null : (read.data ?? null),
+      // WAITING ON THE VIEWER IS WAITING TOO: until it answers nothing can be
+      // asked, and a panel reading "not loading, no document" as an answer
+      // told every reader "No company configuration is active" while it did.
+      loading: read.loading || (!!seat && !asked && !withheld),
+      error: read.error,
+      refusal: read.refusal,
     },
   };
 }
+
+/**
+ * The part of the company document a lead may read about one of their seats,
+ * as a document [seatSettings] reads: the seat, and its home unit's own fields
+ * (whose `mcp_env` the seat inherits) without the unit's members, so the seat
+ * is found once.
+ */
+async function leadDocument(seat: Seat, signal: AbortSignal): Promise<CompanyDocument> {
+  const [role, unit] = await Promise.all([
+    rest.get(`/config/roles/${encodeURIComponent(seat.handle)}`, signal),
+    seat.unit ? rest.get(`/config/units/${encodeURIComponent(seat.unit.id)}`, signal) : null,
+  ]);
+  const own = isRecordValue(unit) ? { ...unit, roles: undefined, children: undefined } : null;
+  return {
+    roles: [role as ConfigRole],
+    ...(own ? { units: [own as ConfigUnit] } : {}),
+  };
+}
+
+const isRecordValue = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Every unit in a company document, depth first, parents before children. */
 export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUnit[] {
@@ -726,48 +889,50 @@ export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUn
 }
 
 /**
- * The document's own entry for a seat, from the operator-gated `config` answer.
+ * The document's own entry for a seat, from the `config` answer.
  *
  * Contact identities, email, the model chain, the token budget, schedules, the
  * seat's integration blocks and its tool credential names are not on the
- * anonymous projection, so every screen that shows one reads it here.
+ * overview's projection, so every screen that shows one reads it here.
  *
- * The seat is found by NAME, which is the identity the document itself
- * addresses a seat by. Unique names are an ADMISSION rule, which an apply does
- * not refuse, so an active revision a newer node activated under rules this
- * build does not share can hold two seats of one name — and attributing
- * either one's settings to the page would be a guess, so that answer is
- * `ambiguous` rather than the first match.
+ * The seat is found by HANDLE, which is the identity the document itself
+ * addresses a seat by: the engine mints one for every seat it stores and
+ * refuses a document holding one twice, so a second match is a document this
+ * engine did not write — and attributing either entry to the page would be a
+ * guess, so that answer is `ambiguous` rather than the first match.
  *
  * `unit` is the document's entry for the seat's home unit, whose `mcp_env` its
- * direct agent members inherit. Null at the root, and null where the unit name
- * repeats, for the same reason.
+ * direct agent members inherit, found by its KEY. Null at the root.
  */
 export function seatSettings(doc: CompanyDocument | null | undefined, seat: Seat): SeatSettings {
   const roles: ConfigRole[] = [...list(doc?.roles)];
   const units = documentUnits(doc);
   for (const unit of units) for (const role of list(unit.roles)) roles.push(role);
 
-  const matches = roles.filter((r) => r.name === seat.name);
+  const matches = seat.handle ? roles.filter((r) => r.handle === seat.handle) : [];
   if (matches.length === 0) return { state: "missing" };
   if (matches.length > 1) return { state: "ambiguous" };
-  const home = seat.unit ? units.filter((u) => u.name === seat.unit?.name) : [];
-  return { state: "found", role: matches[0]!, unit: home.length === 1 ? home[0]! : null };
+  return {
+    state: "found",
+    role: matches[0]!,
+    unit: seat.unit ? unitSettings(doc, seat.unit) : null,
+  };
 }
 
 /**
- * The document's own entry for a unit: its stable id, the tracker project and
- * knowledge container it owns, and the credentials its members inherit.
+ * The document's own entry for a unit, found by its KEY: the tracker project
+ * and knowledge container it owns, and the credentials its members inherit.
  *
  * Guarded for the reasons `internal/api/orgprojection_test.go` records against
- * each field, so it is null without a token — never an empty value, which
- * would read as a unit that owns nothing.
+ * each field, so it is null without Admin — never an empty value,
+ * which would read as a unit that owns nothing.
  */
 export function unitSettings(
   doc: CompanyDocument | null | undefined,
-  unit: Pick<Unit, "name">,
+  unit: Pick<Unit, "id">,
 ): ConfigUnit | null {
-  const matches = documentUnits(doc).filter((u) => u.name === unit.name);
+  if (!unit.id) return null;
+  const matches = documentUnits(doc).filter((u) => u.id === unit.id);
   return matches.length === 1 ? matches[0]! : null;
 }
 
@@ -1088,6 +1253,10 @@ export const RUNNING_ROWS = 4;
  * The key of the work item a seat's turn is CHARGED to — its call's, then its
  * turn's — or "" for a turn on none. The item the engine charges the turn to,
  * never a `work_key` a trigger happened to name (see [stateLine]).
+ *
+ * A LABEL, never a join: two tasks can hold one key (`key_collision`), so
+ * anything that pairs a turn with a task joins on the item's id
+ * ([liveOnItems]) and only draws this.
  */
 export function turnItemKey(row: AgentRow | null | undefined): string {
   return row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
@@ -1188,11 +1357,12 @@ export function stateWord(state: SeatState): string {
 /**
  * Who a seat's pauser is, by the name a reader knows them by.
  *
- * `paused.by` is the person's SEAT HANDLE (the seat their token is bound to)
- * or, for a token nobody bound, the token's own name — an address either
- * way, and "Paused by jane-founder" names an address where a person is meant.
- * A screen passes the chart's lookup; a key the chart does not hold (a token's
- * name, a seat since removed) is drawn as it came.
+ * `paused.by` is the name the engine records every author under
+ * (`iam.ActorFor`): the SEAT HANDLE of a person bound to one, or the whole
+ * login of anybody bound to none — an address either way, and "Paused by
+ * jane-founder" names an address where a person is meant. A screen passes the
+ * chart's lookup; a key the chart does not hold (a login, a seat since
+ * removed) is drawn as it came.
  */
 export type NameOf = (key: string) => string;
 
@@ -1284,7 +1454,9 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
  */
 export function delegatedWorkers(call: LiveCall | null | undefined): number {
   const running = call?.running_call;
-  if (!running || running.name !== DELEGATE_TOOL) return 0;
+  // A WITHHELD BODY carries no arguments, so the workers are not counted
+  // rather than guessed: the call is still `delegate`, and says so.
+  if (!running || running.name !== DELEGATE_TOOL || running.arguments === undefined) return 0;
   try {
     const args: unknown = JSON.parse(running.arguments);
     const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];
@@ -1365,15 +1537,19 @@ export interface CardLive {
   since?: string;
 }
 
-/** Every working seat's turn, keyed on the task key the turn is charged to. */
+/**
+ * Every working seat's turn, keyed on the ID of the task the turn is charged
+ * to — never its key, which two tasks can hold (`key_collision`): keyed on it,
+ * the working seat's strip was drawn on both.
+ */
 export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
   const out = new Map<string, CardLive>();
   for (const row of rows) {
     if (row.activity !== "working") continue;
-    const key = turnItemKey(row);
+    const id = row.live_call?.work_item?.id || row.turn?.work_item?.id || "";
     const handle = row.handle ?? "";
-    if (!key || !handle) continue;
-    out.set(key, {
+    if (!id || !handle) continue;
+    out.set(id, {
       handle,
       doing: doingWords(row),
       since: row.turn?.started_at ?? row.live_call?.started_at,

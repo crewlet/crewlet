@@ -207,7 +207,7 @@ func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 func TitleSubject(container, title string) Subject {
 	return Subject{
 		Kind: KindTitle,
-		ID:   strings.ToUpper(container) + "." + TitleToken(title),
+		ID:   ContainerKey(container) + "." + TitleToken(title),
 	}
 }
 

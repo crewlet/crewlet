@@ -126,7 +126,7 @@ func threadedEngine(t *testing.T, thread []map[string]string) *Engine {
 			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
 		}},
 	})
-	e.notify.registry = notify.NewRegistry(organization)
+	e.notify.registry = notify.NewRegistry(organization, nil)
 	e.notify.slack = transport
 	return e
 }

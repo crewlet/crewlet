@@ -19,6 +19,14 @@ import (
 
 var clock = time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 
+// sam and the nodes are the authors the cases write as: an operator at a
+// shell, and the engine on each of two nodes.
+var (
+	sam   = secrets.Author{Name: "sam", Kind: "operator"}
+	nodeA = secrets.Author{Name: "node-a", Kind: "system"}
+	nodeB = secrets.Author{Name: "node-b", Kind: "system"}
+)
+
 // ring builds a keyring with the named keys, the first active.
 func ring(t *testing.T, ids ...string) secrets.Cipher {
 	t.Helper()
@@ -45,7 +53,7 @@ func fleetStore(t *testing.T, cipher secrets.Cipher) (*fleetsecrets.Store, coord
 
 func mustSet(t *testing.T, s *fleetsecrets.Store, name, value string) {
 	t.Helper()
-	if err := s.Set(t.Context(), name, value, "sam", "cli", clock); err != nil {
+	if err := s.Set(t.Context(), name, value, sam, "cli", clock); err != nil {
 		t.Fatalf("Set(%s): %v", name, err)
 	}
 }
@@ -107,7 +115,7 @@ func TestASnapshotRefusesRatherThanSkippingAnUnopenableRow(t *testing.T) {
 	// A row sealed by a keyring this store does not hold — a key dropped
 	// from the config, which is the only way this happens.
 	stranger := fleetsecrets.New(fleet, ring(t, "k9"))
-	if err := stranger.Set(t.Context(), "FOREIGN", "other", "sam", "cli", clock); err != nil {
+	if err := stranger.Set(t.Context(), "FOREIGN", "other", sam, "cli", clock); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +140,7 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 
 	rows, err := fleetsecrets.New(fleet, nil).List(t.Context())
 	if err != nil {
-		t.Fatalf("a node with no keyring could not list what exists: %v", err)
+		t.Fatalf("a store with no keyring could not list what exists: %v", err)
 	}
 	if len(rows) != 2 || rows[0].Name != "A" || rows[1].Name != "B" {
 		t.Fatalf("rows = %+v, want them name-ordered", rows)
@@ -140,6 +148,105 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 	for _, row := range rows {
 		if row.Value != "" {
 			t.Errorf("%s carried its envelope into a listing", row.Name)
+		}
+	}
+}
+
+// THE OPERATOR'S VIEW DOES NOT REACH THE ENGINE'S KEYS, by any route.
+//
+// The blind-index key used to be an ordinary operator secret: listed,
+// revealable, deletable — so one DELETE orphaned every address in the
+// directory — and decrypted into every node's ${VAR} snapshot on every apply.
+// Each of those routes is closed here, and the one gesture that crosses — a
+// rekey, because the keyring is one keyring — moves it and counts it.
+func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
+	t.Parallel()
+	const key = "iam/blind-index-key"
+	old := ring(t, "k1", "k2")
+	s, fleet := fleetStore(t, old)
+	mustCreate(t, s.Estate(), key, "the-engine-key")
+	mustSet(t, s, "GITLAB_TOKEN", "glpat")
+
+	if _, err := s.Get(t.Context(), key); !errors.Is(err, secrets.ErrReservedName) {
+		t.Errorf("a reveal of an engine key answered %v, want ErrReservedName", err)
+	}
+	if _, _, err := s.Describe(t.Context(), key); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("describing an engine key answered %v, want ErrReservedName", err)
+	}
+	if err := s.Set(t.Context(), key, "overwritten", sam, "cli", clock); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("overwriting an engine key answered %v, want ErrReservedName", err)
+	}
+	if _, err := s.Unset(t.Context(), key); !errors.Is(err, secrets.ErrReservedName) {
+		t.Errorf("deleting an engine key answered %v, want ErrReservedName", err)
+	}
+	if got, err := s.Estate().Get(t.Context(), key); err != nil || got != "the-engine-key" {
+		t.Fatalf("after every refused gesture the key reads %q (%v)", got, err)
+	}
+
+	rows, err := s.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Name != "GITLAB_TOKEN" {
+		t.Errorf("the operator's listing is %+v, want the one operator row", rows)
+	}
+	values, err := s.All(t.Context())
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if _, snapped := values[key]; snapped || len(values) != 1 {
+		t.Errorf("the ${VAR} snapshot holds %d values, the engine key among "+
+			"them: %t", len(values), snapped)
+	}
+	engine, err := s.EngineKeys(t.Context())
+	if err != nil || engine.Total != 1 || engine.ByKey["k1"] != 1 {
+		t.Errorf("the engine keys count %+v (%v), want one under k1", engine, err)
+	}
+
+	// A REKEY MOVES IT, and counts rather than names it.
+	rotated := fleetsecrets.New(fleet, ring(t, "k2", "k1"))
+	rekeyed, err := rotated.Rekey(t.Context(), "k2")
+	if err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	if strings.Join(rekeyed.Moved, ",") != "GITLAB_TOKEN" || rekeyed.EngineKeys != 1 {
+		t.Errorf("the rekey reported %+v, want the operator row named and the "+
+			"engine key counted", rekeyed)
+	}
+	if engine, err := rotated.EngineKeys(t.Context()); err != nil ||
+		engine.StaleUnder("k2") != 0 {
+		t.Errorf("after the rekey %d engine keys are still under a retired key "+
+			"(%v)", engine.StaleUnder("k2"), err)
+	}
+	if got, err := rotated.Estate().Get(t.Context(), key); err != nil ||
+		got != "the-engine-key" {
+		t.Errorf("after the rekey the engine key reads %q (%v)", got, err)
+	}
+}
+
+// mustCreate mints one of the engine's own rows, as the engine does.
+func mustCreate(t *testing.T, estate *fleetsecrets.Estate, name, value string) {
+	t.Helper()
+	if created, err := estate.Create(t.Context(), name, value, nodeA, "iam",
+		clock); err != nil || !created {
+		t.Fatalf("the engine's view could not mint %s: (%v, %v)", name, created, err)
+	}
+}
+
+// THE ENGINE'S VIEW WRITES ONLY ITS OWN GRAMMAR, so no estate caller can reach
+// an operator's credential either — and an id that would leave a segment
+// empty is refused rather than shared.
+func TestTheEnginesViewWritesOnlyItsOwnNames(t *testing.T) {
+	t.Parallel()
+	s, _ := fleetStore(t, ring(t, "k1"))
+	for _, name := range []string{
+		"GITLAB_TOKEN", "iam/nested//key", "iam/Nested/x/key", "iam", "other/x",
+	} {
+		if _, err := s.Estate().Create(t.Context(), name, "v", nodeA, "iam",
+			clock); !errors.Is(err, secrets.ErrInvalidName) {
+			t.Errorf("the engine's view wrote %q (%v)", name, err)
 		}
 	}
 }
@@ -159,7 +266,7 @@ func TestAMissingNameIsDistinctFromAnUnopenableOne(t *testing.T) {
 func TestWithoutAKeyringEveryWriteAndReadIsRefused(t *testing.T) {
 	t.Parallel()
 	s, _ := fleetStore(t, nil)
-	if err := s.Set(t.Context(), "A", "v", "sam", "cli", clock); !errors.Is(err, secrets.ErrNoKeyring) {
+	if err := s.Set(t.Context(), "A", "v", sam, "cli", clock); !errors.Is(err, secrets.ErrNoKeyring) {
 		t.Errorf("Set err = %v, want secrets.ErrNoKeyring", err)
 	}
 	if _, err := s.Get(t.Context(), "A"); !errors.Is(err, secrets.ErrNoKeyring) {
@@ -182,22 +289,131 @@ func TestARekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 
 	// The same key material, with k2 active.
 	rotated := fleetsecrets.New(fleet, ring(t, "k2", "k1"))
-	moved, err := rotated.Rekey(t.Context(), "k2", "sam", clock)
+	moved, err := rotated.Rekey(t.Context(), "k2")
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
-	if strings.Join(moved, ",") != "A,B" {
+	if strings.Join(moved.Moved, ",") != "A,B" || moved.EngineKeys != 0 {
 		t.Fatalf("moved = %v, want both names", moved)
 	}
 	// A SECOND RUN IS A NO-OP, which is what makes this safe in a deploy
 	// script.
-	again, err := rotated.Rekey(t.Context(), "k2", "sam", clock)
-	if err != nil || len(again) != 0 {
+	again, err := rotated.Rekey(t.Context(), "k2")
+	if err != nil || len(again.Moved) != 0 || again.EngineKeys != 0 {
 		t.Fatalf("a second rekey moved %v (err %v), want nothing", again, err)
 	}
 	values, err := rotated.All(t.Context())
 	if err != nil || values["A"] != "one" || values["B"] != "two" {
 		t.Fatalf("after the rekey the values are %v (err %v)", values, err)
+	}
+}
+
+// interleavedFleet runs one gesture between a rekey's read of every row and its
+// first write — the window in which the pass holds values it read and has not
+// yet re-sealed.
+type interleavedFleet struct {
+	coord.Fleet
+	between func()
+}
+
+func (f *interleavedFleet) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
+	rows, err := f.Fleet.SecretValues(ctx)
+	if f.between != nil {
+		between := f.between
+		f.between = nil
+		between()
+	}
+	return rows, err
+}
+
+// A REKEY NEVER UNDOES A WRITE THAT LANDED WHILE IT RAN.
+//
+// It reads every row and re-seals each afterwards. Written back with a plain
+// put, what it READ replaced whatever landed in between, and both of those are
+// irreversible in the wrong direction:
+//
+//   - an operator's rotation was reverted to the credential they had just
+//     replaced — the vendor had already been told to refuse it;
+//   - a credential an operator deleted came back, live, on every node.
+//
+// The control is the row nobody touched, which still moves.
+func TestARekeyNeverUndoesAWriteThatLandedWhileItRan(t *testing.T) {
+	t.Parallel()
+	old := ring(t, "k1", "k2")
+	f := &interleavedFleet{Fleet: coordmem.NewFleet()}
+	s := fleetsecrets.New(f, old)
+	mustSet(t, s, "ROTATED", "the-old-credential")
+	mustSet(t, s, "DELETED", "the-leaked-credential")
+	mustSet(t, s, "UNTOUCHED", "still-here")
+
+	rotated := fleetsecrets.New(f, ring(t, "k2", "k1"))
+	f.between = func() {
+		// UNDER THE OLD KEY, so the pass still judges the row stale when
+		// it reads it again: what the rekey must not do is put back the
+		// value it read before this.
+		if err := s.Set(t.Context(), "ROTATED", "the-new-credential", sam,
+			"cli", clock); err != nil {
+			t.Errorf("rotate mid-pass: %v", err)
+		}
+		if _, err := s.Unset(t.Context(), "DELETED"); err != nil {
+			t.Errorf("delete mid-pass: %v", err)
+		}
+	}
+	moved, err := rotated.Rekey(t.Context(), "k2")
+	if err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	if got, err := rotated.Get(t.Context(), "ROTATED"); err != nil ||
+		got != "the-new-credential" {
+		t.Fatalf("after the rekey the rotated credential reads %q (%v) — the "+
+			"pass put back the value it read before the rotation", got, err)
+	}
+	if _, err := rotated.Get(t.Context(), "DELETED"); !errors.Is(err,
+		secrets.ErrNotFound) {
+		t.Fatalf("after the rekey the deleted credential answers %v — the "+
+			"pass resurrected a credential an operator deleted", err)
+	}
+	if strings.Join(moved.Moved, ",") != "ROTATED,UNTOUCHED" || moved.EngineKeys != 0 {
+		t.Errorf("the rekey reported %+v, want both surviving rows moved (the "+
+			"rotated one judged again on what it holds now) and nothing else", moved)
+	}
+	if row, _, err := f.Secret(t.Context(), "ROTATED"); err != nil || row.KeyID != "k2" {
+		t.Errorf("the rotated row is under %q (%v), want it re-sealed onto k2",
+			row.KeyID, err)
+	}
+}
+
+// A REKEY KEEPS WHO STORED EACH ROW. It re-seals a value it did not choose, and
+// it used to stamp its own caller and `rekey` over every row it moved — so
+// after a rotation every credential in the company read as set by whoever
+// rotated the keyring, and the one record of who set each was gone. Mutation:
+// write the moved row with fresh provenance and every field below fails.
+func TestARekeyKeepsWhoStoredEachRow(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1", "k2"))
+	dana := secrets.Author{Name: "dana", Kind: "operator",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+	if err := s.Set(t.Context(), "GL", "v", dana, "gitlab-provision", clock); err != nil {
+		t.Fatal(err)
+	}
+	rotated := fleetsecrets.New(fleet, ring(t, "k2", "k1"))
+	if moved, err := rotated.Rekey(t.Context(), "k2"); err != nil ||
+		len(moved.Moved) != 1 {
+		t.Fatalf("Rekey moved %+v (%v), want the one row", moved, err)
+	}
+	rows, err := rotated.List(t.Context())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v (err %v)", rows, err)
+	}
+	row := rows[0]
+	if row.KeyID != "k2" {
+		t.Errorf("the row is under %q, want the rekey to have moved it", row.KeyID)
+	}
+	if got := (secrets.Author{Name: row.UpdatedBy, Kind: row.UpdatedByKind,
+		OperatorID: row.OperatorID}); got != dana || row.Source != "gitlab-provision" ||
+		!row.UpdatedAt.Equal(clock) {
+		t.Errorf("after the rekey the row records %+v, %q at %s, want %+v, "+
+			"gitlab-provision at %s", got, row.Source, row.UpdatedAt, dana, clock)
 	}
 }
 
@@ -209,13 +425,38 @@ func TestARekeyRefusesToLeaveARowBehind(t *testing.T) {
 	s, fleet := fleetStore(t, ring(t, "k1"))
 	mustSet(t, s, "MINE", "value")
 	stranger := fleetsecrets.New(fleet, ring(t, "k9"))
-	if err := stranger.Set(t.Context(), "THEIRS", "other", "sam", "cli", clock); err != nil {
+	if err := stranger.Set(t.Context(), "THEIRS", "other", sam, "cli", clock); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := s.Rekey(t.Context(), "k1", "sam", clock); err == nil {
+	if _, err := s.Rekey(t.Context(), "k1"); err == nil {
 		t.Fatal("a rekey reported success while leaving a row under a key " +
 			"this node cannot open")
+	}
+}
+
+// AN ENGINE KEY IS MINTED ONLY WHERE NONE IS STORED.
+//
+// The blind-index key is minted by whichever node first needs it, and a fresh
+// fleet boots every node at once: with a plain put, two minters each derived
+// blinds under the key they wrote and the store kept one of them, so the loser's
+// blinds matched nothing. The second create finds the first's key and leaves
+// it, and says so.
+func TestAnEngineKeyIsMintedOnlyWhereNoneIsStored(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	estate := fleetsecrets.New(coordmem.NewFleet(), ring(t, "k1")).Estate()
+	const name = "iam/blind-index-key"
+	if created, err := estate.Create(ctx, name, "first-key", nodeA, "iam",
+		clock); err != nil || !created {
+		t.Fatalf("the first create = (%v, %v)", created, err)
+	}
+	if created, err := estate.Create(ctx, name, "second-key", nodeB, "iam",
+		clock); err != nil || created {
+		t.Fatalf("the second create = (%v, %v), want it refused", created, err)
+	}
+	if got, _ := estate.Get(ctx, name); got != "first-key" {
+		t.Fatalf("a refused create replaced the key: %q", got)
 	}
 }
 
@@ -237,7 +478,7 @@ func TestMigrationMovesTheRowsAndEmptiesTheLocalTable(t *testing.T) {
 	cipher := ring(t, "k1")
 	local := localStore(t, cipher)
 	fleet, _ := fleetStore(t, cipher)
-	if err := local.Set(t.Context(), "GL", "glpat-x", "sam", "cli", clock); err != nil {
+	if err := local.Set(t.Context(), "GL", "glpat-x", sam, "cli", clock); err != nil {
 		t.Fatal(err)
 	}
 
@@ -273,7 +514,7 @@ func TestMigrationCarriesAnOfflineRotationOntoTheFleet(t *testing.T) {
 	local := localStore(t, cipher)
 	fleet, _ := fleetStore(t, cipher)
 	mustSet(t, fleet, "GL", "the-old-token")
-	if err := local.Set(t.Context(), "GL", "the-rotated-token", "sam", "cli",
+	if err := local.Set(t.Context(), "GL", "the-rotated-token", sam, "cli",
 		clock.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -306,10 +547,10 @@ func TestTwoOfflineWritesKeepTheLaterWhicheverNodeBootsFirst(t *testing.T) {
 	cipher := ring(t, "k1")
 	earlier, later := localStore(t, cipher), localStore(t, cipher)
 	fleet, _ := fleetStore(t, cipher)
-	if err := earlier.Set(t.Context(), "GL", "the-first-token", "sam", "cli", clock); err != nil {
+	if err := earlier.Set(t.Context(), "GL", "the-first-token", sam, "cli", clock); err != nil {
 		t.Fatal(err)
 	}
-	if err := later.Set(t.Context(), "GL", "the-second-token", "dana", "cli",
+	if err := later.Set(t.Context(), "GL", "the-second-token", secrets.Author{Name: "dana", Kind: "operator"}, "cli",
 		clock.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -351,10 +592,10 @@ func TestMigrationKeepsAFleetValueWrittenAfterTheOfflineOne(t *testing.T) {
 	cipher := ring(t, "k1")
 	local := localStore(t, cipher)
 	fleet, _ := fleetStore(t, cipher)
-	if err := local.Set(t.Context(), "GL", "the-old-token", "sam", "cli", clock); err != nil {
+	if err := local.Set(t.Context(), "GL", "the-old-token", sam, "cli", clock); err != nil {
 		t.Fatal(err)
 	}
-	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", "dana", "cli",
+	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", secrets.Author{Name: "dana", Kind: "operator"}, "cli",
 		clock.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +625,7 @@ func TestMigrationKeepsWhatItCouldNotCopy(t *testing.T) {
 	t.Parallel()
 	cipher := ring(t, "k1")
 	local := localStore(t, cipher)
-	if err := local.Set(t.Context(), "GL", "glpat-x", "sam", "cli", clock); err != nil {
+	if err := local.Set(t.Context(), "GL", "glpat-x", sam, "cli", clock); err != nil {
 		t.Fatal(err)
 	}
 	// A fleet store with no keyring refuses every write.
@@ -410,7 +651,9 @@ func TestMigrationPreservesWhoWroteTheRow(t *testing.T) {
 	cipher := ring(t, "k1")
 	local := localStore(t, cipher)
 	fleet, _ := fleetStore(t, cipher)
-	if err := local.Set(t.Context(), "GL", "v", "dana", "gitlab-provision", clock); err != nil {
+	dana := secrets.Author{Name: "dana", Kind: "operator",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+	if err := local.Set(t.Context(), "GL", "v", dana, "gitlab-provision", clock); err != nil {
 		t.Fatal(err)
 	}
 
@@ -421,8 +664,11 @@ func TestMigrationPreservesWhoWroteTheRow(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v (err %v)", rows, err)
 	}
-	if rows[0].UpdatedBy != "dana" {
-		t.Errorf("updated_by = %q, want the original author", rows[0].UpdatedBy)
+	// ALL THREE TRAVEL: the author, their kind and the credential beside
+	// them, which a migration that carried only the name would lose.
+	if got := (secrets.Author{Name: rows[0].UpdatedBy, Kind: rows[0].UpdatedByKind,
+		OperatorID: rows[0].OperatorID}); got != dana {
+		t.Errorf("the migrated row records %+v, want the original %+v", got, dana)
 	}
 	if rows[0].Source != fleetsecrets.MigrateSource {
 		t.Errorf("source = %q, want %q so a reader can tell where the row "+
@@ -442,14 +688,39 @@ func TestMigrationOnAnEmptyTableDoesNothing(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING HAS NOTHING TO MIGRATE and must not fail the boot
-// over it: secrets then come from the environment and the store is not in use.
-func TestMigrationWithoutAKeyringIsASilentNoOp(t *testing.T) {
+// A LOCAL ROW THIS NODE CANNOT OPEN IS KEPT, AND THE MIGRATION SAYS SO.
+//
+// It used to be a silent no-op for a node with no keyring, which kept its
+// secrets in the environment. Every node holds a keyring now; what is left is
+// a row sealed under a key this node's keyring no longer carries — dropped
+// before the migration ran — and skipping it quietly would leave a credential
+// where no peer can see it with nothing said, while removing it would destroy
+// the only copy.
+func TestAMigrationThatCannotOpenALocalRowKeepsItAndSaysSo(t *testing.T) {
 	t.Parallel()
-	fleet, _ := fleetStore(t, ring(t, "k1"))
-	_, err := fleetsecrets.Migrate(context.Background(), localStore(t, nil), fleet)
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.SecretValues(ring(t, "k1")).Set(t.Context(), "GL", "glpat-x", sam,
+		"cli", clock); err != nil {
+		t.Fatal(err)
+	}
+	// THE KEY THAT SEALED IT IS GONE from the ring this node now holds.
+	local := db.SecretValues(ring(t, "k2"))
+	fleet, _ := fleetStore(t, ring(t, "k2"))
+
+	moved, err := fleetsecrets.Migrate(context.Background(), local, fleet)
+	if err == nil {
+		t.Fatalf("a migration that could open nothing reported success, moving %v", moved)
+	}
+	rows, err := local.List(t.Context())
 	if err != nil {
-		t.Fatalf("a node with no keyring failed its migration: %v", err)
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "GL" {
+		t.Fatalf("the local rows are %+v, want the unopened one kept", rows)
+	}
+	if onFleet, err := fleet.List(t.Context()); err != nil || len(onFleet) != 0 {
+		t.Errorf("the fleet holds %+v (err %v), want nothing copied", onFleet, err)
 	}
 }
 
@@ -462,7 +733,7 @@ func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {
 	t.Parallel()
 	s, fleet := fleetStore(t, ring(t, "k1"))
 	for _, name := range []string{"", "gitlab token", "gitlab-token", "9LIVES"} {
-		err := s.Set(t.Context(), name, "value", "sam", "cli", clock)
+		err := s.Set(t.Context(), name, "value", sam, "cli", clock)
 		if !errors.Is(err, secrets.ErrInvalidName) {
 			t.Errorf("Set(%q) = %v, want secrets.ErrInvalidName", name, err)
 		}

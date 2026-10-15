@@ -13,7 +13,21 @@ import (
 // maintained by hand is one that stops matching the table.
 func AlarmReference() string {
 	var b strings.Builder
-	b.WriteString(alarmHeader)
+	// THE CADENCES ARE THE CONSTANTS', spelled as an alarm's own sentence
+	// spells a duration: the page once stated the heartbeat as "ten
+	// seconds" in prose, which a retune of [PositionHeartbeat] would have
+	// left describing a loop that no longer ran at it — with the test that
+	// diffs the page against this function still green, because the page
+	// would be regenerated from the same stale words.
+	fmt.Fprintf(&b, alarmHeader,
+		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
+	if perLog := PerLogKinds(); len(perLog) > 0 {
+		named := make([]string, len(perLog))
+		for i, kind := range perLog {
+			named[i] = "`" + string(kind) + "`"
+		}
+		fmt.Fprintf(&b, perLogNote, sentenceList(named))
+	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
 	for _, rule := range table {
@@ -43,21 +57,33 @@ var alarmMeaning = map[Kind]string{
 	KindLogHeadroom: "A log is within a tenth of the byte ceiling its " +
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
-		"rather than dropping records; on the tracker and pages logs an " +
+		"rather than dropping records; on every log that claims identity (the " +
+		"tracker's, the knowledge base's and the identity estate's) an " +
 		"eviction still lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup has been recorded, or the newest is " +
 		"older than the policy asks for. The trim does not advance either way, " +
-		"and the alarm names every log whose trim the backup term is holding, " +
-		"so those logs raise no `trim_blocked` of their own.",
-	KindTrimBlocked: "A log's trim has a term it cannot satisfy, so the log " +
-		"is growing toward its ceiling. One alarm names every held log and " +
-		"the term holding each, leading with the one held longest. A log the " +
-		"backup term holds while `backup_age` fires is named there instead.",
-	KindDeferredOld: "This node has been holding records it cannot apply for " +
-		"longer than the deferral grace. It no longer serves its copy of the " +
-		"estate; its seats read the estate from the other data nodes.",
-	KindFloorUnknown: "The trim floor has been unreadable for four " +
-		"heartbeats, so every read on this node refuses.",
+		"and the alarm names every log whose trim the backup term is holding " +
+		"past its replay window, so those logs raise no `trim_blocked` of " +
+		"their own.",
+	KindTrimBlocked: "A log's trim has been blocked for longer than its " +
+		"`min_age` replay window plus one trim tick, and the log is keeping " +
+		"records older than that window, so it is holding what a working trim " +
+		"would have removed and growing toward its ceiling. One alarm names " +
+		"every such log and the term holding each, leading with the one held " +
+		"longest; a log the backup term holds while `backup_age` fires is " +
+		"named there instead. A young fleet blocked on its first backup or " +
+		"snapshot donors does not raise it: nothing in its log is past the " +
+		"window yet.",
+	KindDeferredOld: "This node has been holding a record it cannot apply on " +
+		"a log for longer than the thirty-minute deferral grace. One alarm " +
+		"names every log that is, leading with the one held longest. Where a " +
+		"log judges this node's copy of the estate (the tracker's and the " +
+		"knowledge base's do), the node no longer serves its copy, and its " +
+		"seats read the estate from the other data nodes.",
+	KindFloorUnknown: "This node has been unable to read a log's trim floor " +
+		"for four heartbeats, so every read of that log here refuses. One " +
+		"alarm names every such log, which is every log at once when " +
+		"coordination is what cannot be reached.",
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
 		"turn on this node pays it before its first token.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
@@ -93,6 +119,10 @@ var alarmMeaning = map[Kind]string{
 		"its census allows (125 a day per agent seat, at least one seat, " +
 		"plus what the object store's collector reads on its own schedule), " +
 		"so every sizing decision under it is stale.",
+	KindLogCeilingShort: "At the rate this log took in over the last day, " +
+		"its byte ceiling holds less than the `min_age` window the trim " +
+		"keeps, so it will fill and refuse writes with every trim term " +
+		"satisfied.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
 		"and some were not there, or were there at the wrong size or under the " +
@@ -105,23 +135,40 @@ const alarmHeader = `# Alarms
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you three ways, and they are the same table evaluated once,
-every ten seconds on every node: a ` + "`crewlet.alarm.active{kind}`" + ` gauge your
-collector scrapes, a named ` + "`WARN`" + ` line when it starts and another when it
-clears, carrying how long it was up, and a count on the node's health envelope
-(` + "`GET /health`" + ` and the dashboard's health push carry ` + "`alarms: {count, worst}`" + `,
-where ` + "`worst`" + ` is the alarm that has been firing longest). Nothing has to be
-polled for any of them: alarms are evaluated on the node's own position
-heartbeat, so a condition with a one-minute grace is named within that minute.
+An alarm reaches you three ways, and they are the same table evaluated once: a
+` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
+line when it starts and another when it clears, carrying how long it was up,
+and a count on the node's health envelope (` + "`GET /health`" + ` and the
+dashboard's health push carry ` + "`alarms: {count, worst}`" + `, where ` + "`worst`" + `
+is the alarm that has been firing longest). Nothing has to be polled for any
+of them: every node running a state log, which is every data node, evaluates
+the whole table on its own position heartbeat, every %s, and again the moment
+the measurements it takes every %s (each log's daily intake, the vector
+coverage, the store's connection-pool waits) land, so an alarm whose
+threshold is %s is raised within a beat of passing it.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
+`
 
-Each kind is one alarm, however many logs it stands on. A condition that is a
-property of a log (` + "`log_headroom`" + `, ` + "`trim_blocked`" + `) names every
-log it holds in its ` + "`domains`" + ` list, each with its own measurement, so the
-count, the gauge and the log line agree about how many problems there are.
+// perLogNote says which alarms are evaluated once per log, rendered from the
+// table's own flag so the sentence cannot name a different set from the one
+// the report lists logs under and the tracker writes per-log lines for.
+const perLogNote = `
+Each kind is one alarm, however many logs it stands on. These are about a log
+rather than the node:
+
+%s.
+
+Each of those names every log it stands on in its ` + "`domains`" + ` list, with that
+log's own measurement, and leads with the most pressing log's, so the health
+count and the gauge (one series per kind, reading 1 while any log's stands)
+agree about how many problems there are. Their log lines are written per log:
+each log the alarm comes to stand on writes its own ` + "`alarm_raised`" + `, and each
+log it stops standing on its own ` + "`alarm_cleared`" + `, carrying the log as
+` + "`domain`" + `, so a second log joining an alarm that is already up, and the first
+one leaving it, are each said.
 `
 
 const alarmFooter = `
@@ -129,7 +176,7 @@ An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
 decides something: the grace that takes a copy out of service, the grace
 that stops a node serving a copy it cannot decode, the budget a caller was
-promised.
+promised, the replay window a log's ceiling was sized to hold.
 
 A seat whose token window is spent is NOT an alarm, because nothing is wrong
 with the node: the ceiling is doing what it was set to do. Its mail is parked
@@ -138,3 +185,12 @@ The ` + "`seat_budget_parked`" + ` line names the window and when it resets, and
 the budgets surfaces show the refusing window. See the budget park in
 docs/concepts/agent-runtime.md.
 `
+
+// sentenceList joins names the way a sentence does: "a", "a and b", "a, b
+// and c".
+func sentenceList(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}

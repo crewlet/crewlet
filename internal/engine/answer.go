@@ -105,16 +105,20 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT NATIVE: an external wiki
 // changes without this node hearing, so a position that covered only the
 // tracker would keep serving an answer whose pages had moved.
+//
+// THE CORE'S LOGS, which every data node runs whatever its company keeps: the
+// native half holds only the searcher over them. A node without `data` runs
+// no log to read a position off, so it answers false and caches nothing.
 func (e *Engine) KnowledgeCorpus() (string, bool) {
-	n := e.native.Load()
-	if e.NativeSearcher() == nil || n == nil || n.log == nil {
+	c := e.core.Load()
+	if e.NativeSearcher() == nil || c == nil || c.log == nil {
 		return "", false
 	}
 	parts := make([]string, 0, 3)
 	for _, name := range []string{
 		tracker.Domain{}.Name(), pages.Domain{}.Name(), search.Domain{}.Name(),
 	} {
-		running := n.log.Domain(name)
+		running := c.log.Domain(name)
 		if running == nil || running.runner == nil {
 			return "", false
 		}

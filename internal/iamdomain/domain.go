@@ -1,0 +1,340 @@
+package iamdomain
+
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// Domain is the identity estate as the state-log framework sees it.
+//
+// A DECLARATION, not a behaviour: every method answers a question the framework
+// asks before it applies anything, and each one has a failure mode that is
+// silent if the answer is wrong. What tables exist decides what a donated
+// snapshot scrubs and what an identity claim compares; which kinds arbitrate
+// decides where an anchor row is written; whether a record installs a gate
+// decides whether an unknown version stops the applier or is filed for later.
+//
+// THE FRAMEWORK'S FOURTH DOMAIN, and its third strictly-ordered one. What it
+// adds over the three before it is a domain whose UNIQUENESS IS DECIDED ON ONE
+// SUBJECT: there is no unique index anywhere in this estate and there cannot
+// be one, so two people taking one address are kept apart by the directory's
+// one subject — every write that sets an address, a login or a seat decides
+// from the whole directory and contends there — and by nothing else.
+// `subject.go` argues it.
+type Domain struct{}
+
+// Name is the register key, the manifest key and the operator's own column.
+func (Domain) Name() string { return "iam" }
+
+// SessionOpsRetention is how long this node's operation ledger keeps a row for
+// a record on a SESSION subject — a sign-in or a sign-out — where every other
+// subject keeps the framework's month ([statelog.OpsRetention]).
+//
+// AN HOUR: the publisher's own resolve budget ([statelog.DefaultResolveBudget],
+// seconds) plus a margin of every retry a session op id is ever given. The
+// month the framework keeps is sized for a SEAT carrying an op id to its next
+// wake after a weekend, and nothing does that with a session's: a sign-in is
+// answered inside its request and never re-asked; a sign-out and an
+// administrator ending somebody's session re-decide under a fresh operation
+// rather than re-ask. Kept a month, these rows are a row per sign-in for a
+// question nobody asks after an hour, and the busiest thing this domain writes.
+//
+// A SESSION OPERATION RE-ASKED PAST THE HOUR IS NOT DECIDED AGAIN. The sweep
+// that takes these rows records that THIS KIND lost them, apart from the
+// table's month (replicated migration 0041), so the publisher answers an
+// operation minted before that instant whose row is gone `unknown` without
+// publishing it ([statelog.Result.Unvouched]) — never a second start of a
+// session, never a close decided on rows that may already hold the first —
+// while every other kind's retry is still vouched for across the month.
+//
+// SO NO SESSION OPERATION TAKES A DERIVED ID ([statelog.DeriveOpID]): an id
+// derived from a unit of work's start carries that instant for up to
+// [statelog.MintHorizon] — a month short of a day — which is long past this
+// kind's hour, so every retry under it would be answered `unknown` on every
+// node and never published. A sign-in's operation is stepped from the lineage
+// it mints ([statelog.StepOpID]), and a close's minted fresh or stepped from
+// the lineage that replaces it — each at the instant its gesture happens — and
+// re-asked, if at all, inside the publisher's own resolve budget
+// — the rule [statelog.MintHorizon] states for every kind swept sooner than the
+// retention.
+const SessionOpsRetention = time.Hour
+
+// IamLogMaxBytes is the ceiling this domain declares for its log, which is
+// what the framework's own suites provision the stream with.
+//
+// A NODE DOES NOT CREATE THE STREAM AT IT. Every state log's ceiling is a
+// reservation the broker grants in full, so the engine sizes them together
+// from Tier A (`stream.iam_log_max_bytes`) inside what the broker can actually
+// grant.
+//
+// Crossing a ceiling REFUSES an append rather than dropping the oldest record:
+// nothing on this stream is derivable from anything else, so shedding history
+// is data loss with a tidy name — and here the history that would be shed is
+// the authentication trail.
+//
+// # HALF A GIBIBYTE, and why it is not the floor
+//
+// It is sized from THIS domain's corpus, which is dominated by one thing:
+// SESSIONS. People, credentials and invitations are hundreds of records a year
+// at any company that fits on one broker — an org chart's order of magnitude. A
+// session is a record when it opens and a record when it closes, and nothing
+// in between, because a re-issue moves a deadline inside the signed bearer
+// rather than recording one; so the domain's write rate is roughly (people ×
+// sign-ins a day × 2).
+//
+// At the reference company — the one docs/guides/retention.md forecasts, whose
+// 3 000 turns a day and 50 projects put it at a low hundreds of people — a
+// pessimistic three new sessions per person per day is about 220 000 session
+// records a year, and at the ~700 bytes a signed record costs on the wire that
+// is around 285 MB a year with everything else folded in. Half a gibibyte is
+// therefore about eighteen months of a COMPLETELY BLOCKED trim at the
+// pessimistic rate and about five years at a realistic one — and a blocked
+// trim is not a quiet state: the retention screen names it from the first
+// tick, and it raises `trim_blocked` once it has been blocked for longer than
+// `min_age` and a tick while its log keeps records older than `min_age`,
+// months before a log this size could fill.
+//
+// IT IS NOT THE 64 MiB FLOOR, because this log grows every morning. At 64 MiB
+// the pessimistic rate fills it in under three months, which is a window that
+// could refuse an append before anybody got back from leave.
+//
+// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either: the broker
+// grants a stream its whole ceiling when it creates it, so this number is free
+// space a node must have BEFORE IT CAN BOOT AT ALL, and a domain at the
+// framework floor raises that by a gibibyte for a log that will not fill one. Half is the smallest power of two that clears a year at
+// the pessimistic rate with margin.
+//
+// An operator running a ten-person company writes a fiftieth of that and sets
+// the Tier A field down to its 64 MiB floor; one running a thousand people
+// sets it up. That is what the field is for.
+const IamLogMaxBytes = 512 << 20
+
+// IamMaxRecordBytes is the largest record this domain publishes
+// ([statelog.StreamSpec.MaxRecordBytes]), and it is what this log's gate
+// reserve is sized by.
+//
+// A HUNDRED AND TWENTY-EIGHT KIBIBYTES, from the one record here that grows:
+// a person's document, which every credential change and every edit
+// republishes whole — and an enrolment, which carries that document beside the
+// three short values it holds. Everything else — an identity change, a
+// session's opening and closing, an invitation, a sweep, a gate — is a few
+// hundred bytes. The
+// document is bounded by the caps it is held to ([MaxName], [MaxAddress],
+// [MaxHeldCredentials], [MaxTokenLabel]), and at every one of them, with every
+// token carrying every grant and a label JSON escapes six-fold, it is under
+// a hundred kibibytes: a test builds that record the way the writer does and
+// holds it here, so a cap raised without this fails there.
+//
+// WHY NOT THE TRANSPORT'S EIGHT MEBIBYTES, which is what every log was sized
+// by before a log declared its own: the reserve's fleet term is seven peers'
+// largest appends, and at this log's 64 MiB Tier A floor seven of eight
+// mebibytes is most of the log. At a hundred and twenty-eight kibibytes the
+// fleet term is under two mebibytes and a sixteenth of the ceiling is the
+// larger, so the reserve is what it would be anyway and ordinary writes keep
+// fifteen sixteenths.
+const IamMaxRecordBytes = 128 << 10
+
+// IamLogDuplicates is the window the broker collapses a repeated operation id
+// in.
+//
+// AN OPTIMISATION, NEVER A MECHANISM: the operation ledger is what actually
+// makes a retry idempotent, and this only saves the round trip. Two minutes,
+// the same window every other domain uses, because it must outlast a
+// publisher's whole retry budget and no longer — every message in the window
+// costs memory on the server.
+const IamLogDuplicates = 2 * time.Minute
+
+// Stream is the identity estate's log.
+func (Domain) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:           topics.IamLogStream,
+		Subjects:       []string{topics.IamLogWildcard},
+		SubjectPrefix:  topics.IamLogPrefix,
+		MaxBytes:       IamLogMaxBytes,
+		MaxRecordBytes: IamMaxRecordBytes,
+		Duplicates:     IamLogDuplicates,
+		Replay:         statelog.ReplayStrict,
+		// SEVEN OF THE EIGHT KINDS. A barrier shares one subject across the
+		// whole domain, so an expectation there would serialise every
+		// linearizable read behind every other one and write an anchor
+		// row per read into the transaction holding this store's only
+		// writer.
+		ArbitratedKinds: arbitratedKinds(),
+	}
+}
+
+// arbitratedKinds is the nine, derived from the enum rather than typed again —
+// a list written twice is a kind that arbitrates in one place and not the
+// other, which wedges that subject the first time a gate drops a record.
+func arbitratedKinds() []string {
+	out := make([]string, 0, len(ObjectKinds))
+	for _, k := range ObjectKinds {
+		if k.Arbitrated() {
+			out = append(out, string(k))
+		}
+	}
+	return out
+}
+
+// RecordVersion is the record shape this build reads.
+func (Domain) RecordVersion() int { return RecordVersion }
+
+// Envelope decodes the half every build can read.
+func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
+	env, err := DecodeEnvelope(payload)
+	if err != nil {
+		return statelog.Envelope{}, err
+	}
+	return statelog.Envelope{
+		V:       env.V,
+		Kind:    string(env.Subject.Kind),
+		Subject: statelog.Subject{Kind: string(env.Subject.Kind), ID: env.Subject.ID},
+		Op:      string(env.Op),
+		OpID:    env.OpID,
+		Gen:     env.Gen,
+		Scope:   env.Scope.Resolve(env.Subject),
+		Writer:  env.Writer,
+	}, nil
+}
+
+// InstallsGate reports a record whose unknown version must STOP the applier
+// rather than be filed for later.
+//
+// Answered from the envelope alone, because that is all a node has when it
+// cannot decode the payload.
+//
+// ON THE OP AND NOT ON A KIND, and a removal is why. A removal rides the
+// DIRECTORY subject beside every enrolment and identity change, so a reader
+// that keyed on the kind would defer it — and a deferred removal here is not a
+// stale row, it is a person the company
+// off-boarded still signing in on one node, with no later record that ever
+// corrects it because nothing names a removed person again. An eviction does
+// have a kind of its own and is answered through the same op, so the two gates
+// are one question asked once: it is [RecordEnvelope.InstallsGate], read
+// rather than restated.
+func (Domain) InstallsGate(env statelog.Envelope) bool {
+	return RecordEnvelope{Op: OpKind(env.Op)}.InstallsGate()
+}
+
+// Tables is every durable table this domain writes, with its class.
+//
+// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
+// THIS MAP, which is why a table missing from it is three lists that are
+// silently short rather than one error. It is built from the exported
+// inventories rather than typed a third time.
+//
+// ONE DIVERGENT TABLE, and it is the operation ledger. Every other column this
+// domain writes is a function of the record that wrote it, the sealed ones
+// included, because the sealing happens at the WRITER before publication — a
+// per-node re-encryption would have made this domain's rows legitimately
+// different on every node and its identity claim meaningless, which is exactly
+// why it does not happen. The ledger's `applied_at` is the instant THIS node
+// applied an operation, so the ledger TRAVELS inside a snapshot — an adopter
+// that arrived without its donor's rows would decide again an operation the
+// donor had applied, and in this estate that is a second enrolment, a second
+// grant change, a second bump of somebody's epoch — and stays out of the
+// identity claim, which the one per-node column would otherwise trip.
+func (Domain) Tables() map[string]statelog.TableClass {
+	out := make(map[string]statelog.TableClass,
+		len(ReproducibleTables)+len(MachineryTables))
+	for _, table := range ReproducibleTables {
+		out[table] = statelog.Replicated
+	}
+	for _, table := range MachineryTables {
+		out[table] = statelog.Local
+	}
+	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
+	// [MachineryTables].
+	out[Domain{}.OpsTable()] = statelog.Divergent
+	return out
+}
+
+// DeferredTable is where a record this build cannot decode is retained.
+func (Domain) DeferredTable() string { return "iam_log_deferred" }
+
+// ScopeIndex is the deferred record's blast radius, one row per scope term.
+func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
+
+// OpsTable is contract 3's first layer: what this node has already applied.
+//
+// THE FRAMEWORK'S COLUMNS AND NOTHING ELSE — the operation, its subject, where
+// it landed, when this node applied it and the broker's instant for the record
+// that did — and TWO HORIZONS, stated rather than hidden in a column: a session
+// subject's rows go after [SessionOpsRetention] and every other kind's after
+// the framework's month. The sweep of the hour is a range over the stored
+// SUBJECT, which already carries the kind, and it records that kind's loss
+// APART from the table's (replicated migration 0041 ships both), so the
+// publisher holds a session operation to the hour and every other kind to the
+// month. One watermark moved hourly would have answered every identity
+// operation minted more than an hour earlier — a redemption, a create retried
+// under its key — `unknown` without publishing it; an unmarked sweep would have
+// let a session operation whose row the hour took be decided again.
+//
+// The authentication TRAIL has two horizons too, and they are not these: the
+// trail is what a person reads, and the ledger is what a publisher resolves an
+// ambiguous write against. Their retentions answer different questions and are
+// measured against different things — an audit obligation, and the longest a
+// client will retry.
+func (Domain) OpsTable() string { return "iam_ops" }
+
+// ReadinessInput reports that this domain's health does NOT gate seat
+// admission, and never judges this node's copy of the estate — and it is the
+// FIRST strictly-ordered domain to say so, which is why this is the longest
+// answer in the file.
+//
+// The tracker and the knowledge base both say true, and the argument is the
+// same each time: a node behind on them serves a turn from state that
+// is wrong, so a fault there takes this node's copy out of service rather than
+// serve confident wrong output. The vector domain says false because it is
+// COMPACTED and a gap is a coverage number. This one says false for a third
+// reason, and stating it is the point.
+//
+// AN AGENT SEAT NEVER READS THIS DOMAIN. A seat's principal is its own handle,
+// its authority is decided by internal/authz from the ORG CHART, and its work
+// arrives on its mailbox. Nothing in a turn asks who the people are. So a node
+// whose iam applier has stalled runs every seat it holds exactly as correctly
+// as a node whose applier is current — and taking its copy of the work and the
+// pages out of service because a human cannot sign in would stop the company's
+// work for a fault in the wrong subsystem, at the moment an operator most
+// needs the company still working so they can go and fix it.
+//
+// WHAT THE STALL MUST GATE INSTEAD IS THE REQUEST PATH, and it does, one layer
+// up: a node that has not applied a revocation answers a session bearer with
+// 503 — never 401, because a browser reads 401 as "sign in again" and one
+// stalled applier would send everybody back to the sign-in form at once. That
+// refusal is
+// per-request, it is where the staleness actually matters, and it is the one
+// place that can tell "this node is behind" from "this person is not allowed".
+//
+// The pairing the framework asserts is satisfied the other way round: a domain
+// with NO operation ledger may not gate seat admission, and this one keeps a
+// ledger and does not gate it. That is a legal combination and this is the
+// domain that makes it a real one.
+func (Domain) ReadinessInput() bool { return false }
+
+// ClaimsIdentity reports that every node's Replicated tables must be
+// byte-identical.
+//
+// TRUE. N copies of one SQL state, derived from one ordered log by one
+// deterministic applier — and the sealed columns do not weaken it, because a
+// person's name and address are sealed by the WRITER before publication rather
+// than by each node on the way in. Every node writes the same ciphertext.
+//
+// That is a design constraint rather than an observation: per-node encryption
+// would have made a determinism comparison impossible to write, and a domain
+// whose rows legitimately differ everywhere has no way to notice that one
+// node's applier has diverged.
+//
+// ASSERTED AND NOT VERIFIED, like every other domain's — see
+// [internal/tracker.Domain.ClaimsIdentity] for the checksum nobody builds.
+func (Domain) ClaimsIdentity() bool { return true }
+
+// BarrierTables is the empty set, DECLARED.
+//
+// The barrier writes no row on any node, and stating that explicitly is what
+// stops a no-op record slipping through the kind-completeness walk by writing
+// nothing: "this kind wrote nothing" and "nobody classified this kind" are the
+// same observation, and only one of them is correct.
+var BarrierTables = map[string]statelog.TableClass{}

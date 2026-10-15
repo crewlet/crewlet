@@ -24,7 +24,9 @@ func labelSurface(t *testing.T, trk *fakeTracker, operator bool) *tools.Registry
 	}
 	deps.Actor = operatorActor
 	reg := tools.NewRegistry()
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Work: deps}) {
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: deps, Authorize: builtin.Decide(chartLeads),
+	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
 		}

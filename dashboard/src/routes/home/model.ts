@@ -180,8 +180,9 @@ function weekday(at: string, zone: string | undefined): string {
 }
 
 /** What waits on the reader: the engine's count, whether it is a floor, and
- *  when the longest one began. Null while it is not known — anonymous,
- *  unbound, or not answered yet — which is never drawn as zero. */
+ *  when the longest one began. Null while it is not known (nobody signed in,
+ *  or not answered yet), which is never drawn as zero: an unbound reader is
+ *  somebody, asked under their login like anybody. */
 export interface Waiting {
   count: number;
   floor: boolean;
@@ -223,7 +224,7 @@ export interface Segment {
 /**
  * The one sentence under the greeting, as runs of text.
  *
- * THE ORDER IS PRECEDENCE: a refused token and a lost connection are said
+ * THE ORDER IS PRECEDENCE: a refused session and a lost connection are said
  * before anything the last push claimed, because what was pushed may be stale;
  * an engine running no company is said before a fleet size, because a fleet
  * running nothing is not "running"; a node that shed its seats says so rather
@@ -252,7 +253,10 @@ export function statusSentence(input: {
 }): Segment[] {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
-  if (authRejected) return sole("The engine refused this browser’s token. Set another one.");
+  // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
+  // to set, so the repair is the sign-in the frame already offers.
+  if (authRejected)
+    return sole("Nobody is signed in on this browser. Sign in to read the company.");
   if (!connected) return sole("Not connected. Showing the last state received.");
   if (configured === false) return sole("No configuration is active, so no seat is running.");
   if (posture && ["shed", "stuck", "isolated"].includes(posture)) {

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -144,22 +146,45 @@ type TeardownInput struct {
 	// integration whose [Pass.Needs] asks for one. Removing an account
 	// usually needs the same authority creating it did.
 	Operator string
+
+	// By is who asked for the teardown, which a step that writes the
+	// company's own document or store records the write under — Slack's,
+	// which clears each seat's sealed app credentials. A step that only
+	// removes things at the third-party app has nothing here to record.
+	By iam.Actor
 }
 
 // PassInput is what a pass is given.
 type PassInput struct {
 	// Sink records a minted credential.
 	//
-	// NIL IS A DRY RUN, and it is the honest posture for a caller that
-	// could not have recorded what it created: a node with no keyring can
-	// still read a surface and report what it finds, which is most of what
-	// a pass is for.
+	// NIL IS A DRY RUN: a check reads a surface and reports what it
+	// finds, which is most of what a pass is for, and creates nothing it
+	// could not record.
 	Sink provision.TokenSink
 
-	// WebhookBase is the address third-party apps reach this deployment on, and
-	// supplying it IS the permission to register a hook. Empty runs the
-	// pass read-only.
+	// WebhookBase is the address third-party apps reach this deployment on
+	// ([config.API.WebhookBase]): the public listener's
+	// `api.public.external_url` where `api.public` is set, and
+	// `api.external_url` otherwise. Empty is a deployment with no such
+	// address, which a pass REPORTS (`ingress_blocked`) rather than
+	// registering a hook at nothing.
+	//
+	// It is not what makes a pass read-only — a nil Sink is — so a check
+	// is handed it too: without it a pass cannot tell a webhook pointing
+	// elsewhere, or a deployment with no address at all, from a healthy one.
 	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which a pass with no address names as
+	// the setting to fill in. See [BaseKey] for what empty names.
+	//
+	// BESIDE THE ADDRESS AND FROM THE SAME ACCESSOR, never spelled by a
+	// vendor: the key depends on whether a public listener is set, and a
+	// pass naming `api.external_url` on a deployment that reads
+	// `api.public.external_url` sends an operator to change a setting
+	// nothing reads.
+	WebhookBaseKey string
 
 	// There is deliberately no DryRun and no Seats here.
 	//
@@ -185,6 +210,30 @@ type PassInput struct {
 	// Operator is the transient third-party app credential, when the pass needs
 	// one. Never persisted, and never logged.
 	Operator string
+}
+
+// BaseKey is the Tier A key a webhook base was read from, as a pass names it
+// when it had no address to register a delivery path at: key as its caller
+// handed it ([PassInput.WebhookBaseKey], or a vendor's own Options field of the
+// same name), or the key a deployment with NO PUBLIC LISTENER reads when key is
+// empty.
+//
+// EMPTY IS THAT DEPLOYMENT, and not a guess: it is what the zero
+// [config.API] answers, and the only deployment a caller holding no Tier A
+// file can describe — the command line run with no `-config`, and a case
+// building a pass's options by hand. Every caller that holds a Tier A hands
+// the key over from [config.API.WebhookBaseKey], beside the address it read
+// from the same block, so the two cannot name different listeners.
+//
+// ONE FUNCTION rather than each vendor's literal, which is what every vendor
+// had: four findings and a dozen sentences naming `api.external_url` on a
+// deployment whose webhooks are served only on `api.public.external_url`.
+func BaseKey(key string) string {
+	if key != "" {
+		return key
+	}
+	var unset config.API
+	return unset.WebhookBaseKey()
 }
 
 // ErrPassInFlight reports that this third-party app's pass is already
@@ -460,9 +509,9 @@ func (r *Runner) Hold(
 ) (context.Context, func(), bool, error) {
 	if r == nil {
 		// NO RUNNER, SO NO LEASE — and the deadline still applies. What it
-		// bounds here is not a lease but the pass: a node with no keyring
-		// reads and reports, and a read that never returns wedges the loop
-		// just as thoroughly as one that outlived a lease would.
+		// bounds here is not a lease but the pass: an engine built with no
+		// fleet store has no runner, and a read that never returns wedges
+		// the loop just as thoroughly as one that outlived a lease would.
 		bounded, cancel := context.WithTimeout(ctx, PassDeadline)
 		return bounded, cancel, true, nil
 	}

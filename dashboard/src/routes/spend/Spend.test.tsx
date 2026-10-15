@@ -183,7 +183,14 @@ async function settle() {
 
 const params = (what: string) => asks.filter((a) => a.what === what).map((a) => a.params);
 
-const VIEWER = { operator_id: "op-1", operator: true, handle: "jane", name: "Jane", kind: "human" };
+const VIEWER = {
+  login: "op-1",
+  grants: ["admin", "tracker", "knowledge"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane",
+  kind: "human",
+};
 
 // THE CONTROL: a window that answered is what the hero is of, and says so in
 // the ANSWER's words — thirty days, from the answer's own `days`.
@@ -366,7 +373,7 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
     <Spend />,
     {
       tokens: rollup(1),
-      viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
     },
     (store) => store.applyBudget(UNCAPPED),
   );
@@ -462,6 +469,26 @@ test("the median task tile asks the tracker, and is absent on a non-native track
   expect(screen.queryByText("Most expensive tasks")).toBeNull();
 });
 
+// THE OVERVIEW IS EVERYBODY'S AND A TASK IS THE TRACKER'S: a reader without
+// Tracker is asked nothing about tasks, and both task readings say what would
+// open them rather than drawing the engine's refusal — whose callout offered
+// "Sign in" to somebody already signed in. Mutation: enable the card's
+// question on `ready` alone and it is asked, and the lock is never drawn.
+test("a reader without Tracker is asked no task question on the overview", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1),
+    viewer: { ...VIEWER, grants: [] },
+    work_items: new QueryError("unauthorized"),
+  });
+  await settle();
+  expect(params("work_items")).toEqual([]);
+  const card = screen.getByText("Most expensive tasks").closest(".spend-card") as HTMLElement;
+  expect(within(card).getByText("Needs Tracker access")).toBeTruthy();
+  expect(within(card).queryByText("All")).toBeNull();
+  expect(within(card).queryByText(/This answer needs|This needs access/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
+});
+
 // "EXHAUSTED" IS THE ENGINE'S `refusing` FOR THE SEAT'S DAY, and the column is
 // TODAY's whatever the window — never a thirty-day spend over a day's ceiling.
 test("a seat whose day is refusing reads exhausted, and share and per-turn are the window's", async () => {
@@ -486,8 +513,10 @@ test("a seat whose day is refusing reads exhausted, and share and per-turn are t
     <Spend />,
     { tokens: rollup(4_000, { by_agent: [ceo, swe] }), viewer: VIEWER },
     (store) =>
-      store.applyAgents([
+      store.applySeats([
         {
+          id: "swe",
+          agent_id: "a-swe",
           role: "SWE",
           handle: "swe",
           activity: "stopped",
@@ -646,8 +675,9 @@ test("the phase legend is all four bands, a band nothing spent in included", asy
 });
 
 // A SEAT SERIES IS NAMED AS THE TABLE BELOW NAMES IT: the engine keys the band
-// on the handle, and the legend reads the chart's name for it.
-test("splitting by seat labels each band with the seat's name, not its handle", async () => {
+// on the seat's agent id and carries the name it read off the chart as its
+// `label`, so the legend draws the name and never the id.
+test("splitting by seat labels each band with the seat's name, not its key", async () => {
   mount("#/spend?window=30d&group=seat", <Spend />, {
     tokens: rollup(100),
     token_series: (p: Record<string, unknown>) => ({
@@ -659,13 +689,13 @@ test("splitting by seat labels each band with the seat's name, not its handle", 
           at: "2026-09-01T00:00:00Z",
           window: "2026-09-01",
           days: 1,
-          groups: { swe: bucket(100) },
+          groups: { "a-swe": bucket(100) },
           other: bucket(0),
         },
       ],
       by_group:
         p.group === "seat"
-          ? [{ ...bucket(100), group: "swe", handle: "swe", other: false, folded: 0 }]
+          ? [{ ...bucket(100), group: "a-swe", label: "SWE", other: false, folded: 0 }]
           : [],
     }),
     viewer: VIEWER,
@@ -675,7 +705,7 @@ test("splitting by seat labels each band with the seat's name, not its handle", 
     .getByRole("heading", { name: "Daily tokens by agent" })
     .closest(".spend-chart");
   expect(within(chart as HTMLElement).getAllByText("SWE").length).toBeGreaterThan(0);
-  expect(within(chart as HTMLElement).queryByText("swe")).toBeNull();
+  expect(within(chart as HTMLElement).queryByText("a-swe")).toBeNull();
 });
 
 // THE DIMENSIONS ARE THE CONTRACT'S SIX, which the engine gate holds against

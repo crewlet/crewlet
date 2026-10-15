@@ -115,13 +115,17 @@ type BackupRunRow struct {
 	// Node is the node whose disk holds the copy — the envelope's own
 	// origin, absent on a row whose publisher recorded none.
 	Node string `json:"node,omitempty"`
-	// Operator is the credential that asked; ActorSeat the person it is
-	// bound to.
-	Operator  string             `json:"operator"`
-	ActorSeat string             `json:"actor_seat,omitempty"`
-	Dir       string             `json:"dir"`
-	Outcome   types.AuditOutcome `json:"outcome"`
-	Summary   string             `json:"summary"`
+	// Actor is who asked, as [iam.ActorFor] names them — a person bound to
+	// a seat by the seat, anybody else by their login; ActorKind is what
+	// sort of actor that is (`human`, `operator`, …); OperatorID is the
+	// CREDENTIAL they asked through. Three halves of one answer, because
+	// "who" and "with what" are different questions an audit asks apart.
+	Actor      string             `json:"actor"`
+	ActorKind  string             `json:"actor_kind,omitempty"`
+	OperatorID string             `json:"operator_id,omitempty"`
+	Dir        string             `json:"dir"`
+	Outcome    types.AuditOutcome `json:"outcome"`
+	Summary    string             `json:"summary"`
 }
 
 // backups answers what this fleet has backed up.
@@ -191,8 +195,9 @@ func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 		}
 		out.History = append(out.History, BackupRunRow{
 			ID: rec.ID, At: rec.Time.UTC(), Node: rec.Tags["node"],
-			Operator: rec.Actor, ActorSeat: rec.Tags["actor_seat"],
-			Dir: rec.Tags["dir"], Outcome: outcome, Summary: rec.Summary,
+			Actor: rec.Actor, ActorKind: rec.Tags["actor_kind"],
+			OperatorID: rec.Tags["operator_id"],
+			Dir:        rec.Tags["dir"], Outcome: outcome, Summary: rec.Summary,
 		})
 	}
 	return out, nil

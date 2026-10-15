@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // RunFleet is the contract suite every [coord.Fleet] must pass.
@@ -52,6 +53,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"budgets", budgetCases},
 		{"plane", planeCases},
 		{"payload", payloadCases},
+		{"payload_race", payloadRaceCases},
 		{"channels", channelCases},
 		{"follows", followCases},
 		{"fires", fireCases},
@@ -100,7 +102,7 @@ type fleetCase struct {
 // the cases about the origin itself: a backend refuses an activation without
 // one, so a case about something else states one and moves on.
 var anOrigin = coord.RevisionOrigin{
-	Author: "suite", AuthorKind: "operator", Source: "api",
+	Author: "suite", AuthorKind: iam.ActorOperator, Source: "api",
 	CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 }
 
@@ -155,6 +157,18 @@ func (h *fleetHarness) claim(key string, ttl time.Duration, at time.Time) bool {
 		h.t.Fatalf("Claim(%s): %v", key, err)
 	}
 	return ok
+}
+
+// report hands the errors a shared check found to the test.
+//
+// The checks are functions returning errors rather than case bodies for the
+// reason fleetchecks.go gives: a body that can only fail a
+// *testing.T is a body nothing in this package can prove fails at all.
+func (h *fleetHarness) report(errs []error) {
+	h.t.Helper()
+	for _, err := range errs {
+		h.t.Error(err)
+	}
 }
 
 func (h *fleetHarness) worked(scope string, keys ...string) map[string]bool {
@@ -314,22 +328,13 @@ var claimCases = []fleetCase{{
 	// held every claim for its bucket's age swallowed a webhook replay for
 	// the socket's window, and one that held every claim for the shortest
 	// let a reconnecting seat deliver a post twice.
+	//
+	// It travels the clock rather than waiting: the deadline is the
+	// record's, judged against the `now` the next caller passes, so a
+	// backend that reaped on its own clock instead could not pass it.
 	name: "a claim lapses at its own ttl and can then be taken again once",
 	fn: func(h *fleetHarness) {
-		at := h.now()
-		if !h.claim("mattermost|alice|p1", time.Minute, at) {
-			h.t.Fatal("the first claim was refused")
-		}
-		if h.claim("mattermost|alice|p1", time.Minute, at.Add(59*time.Second)) {
-			h.t.Fatal("a claim was taken again inside its own ttl")
-		}
-		later := at.Add(time.Minute + time.Second)
-		if !h.claim("mattermost|alice|p1", time.Minute, later) {
-			h.t.Fatal("a claim past its own ttl could not be taken again")
-		}
-		if h.claim("mattermost|alice|p1", time.Minute, later) {
-			h.t.Fatal("a lapsed claim was taken over by two callers")
-		}
+		h.report(CheckClaimLapsesAtItsOwnTTL(h.ctx, h.f, h.now()))
 	},
 }, {
 	// REFUSED, never clamped: a claim the store cannot keep for as long as
@@ -350,6 +355,23 @@ var claimCases = []fleetCase{{
 		if err := h.f.Release(h.ctx, "never|claimed"); err != nil {
 			h.t.Fatalf("Release on an unclaimed key: %v", err)
 		}
+	},
+}, {
+	// FAILS OPEN is the caller's polarity, and it only works if a lost
+	// race and a store that could not answer are distinguishable. An empty
+	// key is the one argument fault a backend can catch locally.
+	name: "an unnamed record is an error, not a race somebody else won",
+	fn:   func(h *fleetHarness) { h.report(CheckUnnamedRecordsAreRefused(h.ctx, h.f, h.now())) },
+}, {
+	// AND A RACE SOMEBODY ELSE WON IS NOT AN OUTAGE, above all over a
+	// record just removed: a create over the marker a removal leaves is a
+	// compare-and-set every loser of which was beaten by a first writer.
+	// The check covers every verb whose record can be removed, not just
+	// the claims — see it for why — and a replicated stream is where it
+	// bites, which internal/queue/jetstream/jetstreamtest carries it to.
+	name: "creates racing over a removed record are races, never outages",
+	fn: func(h *fleetHarness) {
+		h.report(CheckCreatesOverARemovedRecordAreRaces(h.ctx, h.f, h.now()))
 	},
 }, {
 	name: "exactly one of many concurrent callers claims",
@@ -527,7 +549,10 @@ var planeCases = []fleetCase{{
 }, {
 	name: "an activation is readable with the epoch the store assigned",
 	fn: func(h *fleetHarness) {
-		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`), At: h.now(), Origin: anOrigin})
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`),
+			At: h.now(), Origin: anOrigin,
+		})
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -543,15 +568,21 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
-	// THE AUTHOR TRAVELS WITH THE POINTER. A peer meets a revision for the
-	// first time when the pointer names it, so what the pointer drops, every
-	// node but the origin records as unknown — which is how every adopted
-	// revision came to read "peer" on the audit screen.
+	// THE AUTHOR TRAVELS WITH THE POINTER, whole. A peer meets a revision
+	// for the first time when the pointer names it, so what the pointer
+	// drops, every node but the origin records as unknown — which is how
+	// every adopted revision came to read "peer" on the audit screen. The
+	// credential is part of it: a person writing through their own machine
+	// token and the same person signed in are one author and two
+	// credentials, and a backend that dropped the second would have every
+	// other node's history unable to say which.
 	name: "a pointer carries the revision's origin to every reader",
 	fn: func(h *fleetHarness) {
 		written := h.now().Add(-time.Hour)
 		origin := coord.RevisionOrigin{
-			Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: written,
+			Author: "maya", AuthorKind: iam.ActorOperator,
+			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a",
+			Source:     "api", CreatedAt: written,
 		}
 		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Summary: "first", Payload: []byte("{}"),
@@ -567,9 +598,40 @@ var planeCases = []fleetCase{{
 		for name, read := range map[string]coord.RevisionOrigin{
 			"the activation answered": published.Origin, "the pointer read back": got.Origin,
 		} {
-			if read.Author != "maya" || read.AuthorKind != "operator" || read.Source != "api" ||
+			if read.Author != "maya" || read.AuthorKind != iam.ActorOperator ||
+				read.OperatorID != origin.OperatorID || read.Source != "api" ||
 				!read.CreatedAt.Equal(written) {
 				h.t.Fatalf("%s carries origin %+v, want %+v", name, read, origin)
+			}
+		}
+	},
+}, {
+	// AN AUTHOR KIND THIS BUILD CANNOT NAME IS CARRIED AS THE VALUE IT IS.
+	// The kind is an enum read off the wire, so a newer peer's kind arrives
+	// as a value nobody here has a constant for — and a backend that mapped
+	// it onto a kind that exists would have every node's history attribute
+	// the revision to the wrong sort of author, with nothing to say so.
+	name: "an author kind this build does not know round-trips unchanged",
+	fn: func(h *fleetHarness) {
+		unknown := iam.ActorKind("a_kind_from_a_newer_build")
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Origin: coord.RevisionOrigin{
+				Author: "x", AuthorKind: unknown, Source: "api", CreatedAt: h.now(),
+			},
+		})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Target(h.ctx)
+		if err != nil || !found {
+			h.t.Fatalf("Target: %v found=%v", err, found)
+		}
+		for name, read := range map[string]coord.RevisionOrigin{
+			"the activation answered": published.Origin, "the pointer read back": got.Origin,
+		} {
+			if read.AuthorKind != unknown || read.AuthorKind.Valid() {
+				h.t.Fatalf("%s carries kind %q, want %q unchanged", name, read.AuthorKind, unknown)
 			}
 		}
 	},
@@ -583,8 +645,8 @@ var planeCases = []fleetCase{{
 		for name, origin := range map[string]coord.RevisionOrigin{
 			"no origin at all": {},
 			"no author kind":   {Author: "maya", Source: "api", CreatedAt: h.now()},
-			"no source":        {Author: "maya", AuthorKind: "operator", CreatedAt: h.now()},
-			"no creation":      {Author: "maya", AuthorKind: "operator", Source: "api"},
+			"no source":        {Author: "maya", AuthorKind: iam.ActorOperator, CreatedAt: h.now()},
+			"no creation":      {Author: "maya", AuthorKind: iam.ActorOperator, Source: "api"},
 		} {
 			_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 				RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(), Origin: origin,
@@ -605,7 +667,7 @@ var planeCases = []fleetCase{{
 		// wrote it.
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
-			Origin: coord.RevisionOrigin{AuthorKind: "operator", Source: "api", CreatedAt: h.now()},
+			Origin: coord.RevisionOrigin{AuthorKind: iam.ActorOperator, Source: "api", CreatedAt: h.now()},
 		}); err != nil {
 			h.t.Fatalf("an origin with no author label: %v", err)
 		}
@@ -914,11 +976,12 @@ var planeCases = []fleetCase{{
 	},
 }, {
 	// A LATER ACTIVATION CARRIES A LATER INSTANT, whatever the activating
-	// node's clock said. The instant is what every row a configuration
-	// derives is stamped with, and a row refuses a stamp no newer than its
-	// own — so an activation from a node whose clock runs behind, or a
-	// republish of an older `activated_at`, was applied to no project and no
-	// knowledge container, silently. See [coord.ActivationAt].
+	// node's clock said. The instant is how a node tells which of two
+	// activations is newer — a booting node republishes its own only when it
+	// is later than the pointer's — so an activation from a node whose clock
+	// runs behind, or a republish of an older `activated_at`, left a node
+	// holding the replaced revision reading its own copy as the newer. See
+	// [coord.ActivationAt].
 	name: "an activation no later than the one it replaces is published after it",
 	fn: func(h *fleetHarness) {
 		first := h.now()
@@ -1887,6 +1950,87 @@ var payloadCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE BODY COMES BACK AS IT WENT IN. It is a sealed envelope, and what
+	// a peer adopts into its own history is what it read here, so a store
+	// that re-spelled it would hand every node a different copy of one
+	// revision. The real backend embeds it inside a JSON record, where
+	// encoding/json's default is to escape `<`, `>` and `&` — which a
+	// ciphertext never holds and a document may — so the case carries all
+	// three beside an envelope-shaped value.
+	name: "a sealed body round-trips byte for byte",
+	fn: func(h *fleetHarness) {
+		body := []byte(`{"__encrypted__":"enc:v1:2026-01:q8+/Zm9vYmFy==","note":"a<b && c>d"}`)
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: body, At: h.now(), Origin: anOrigin}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		if err != nil || !found {
+			h.t.Fatalf("Payload: found=%v err=%v", found, err)
+		}
+		if string(got) != string(body) {
+			h.t.Errorf("payload = %s, want the bytes activated, %s", got, body)
+		}
+	},
+}, {
+	// ONE FORM ON BOTH BACKENDS: the broker's record compacts what it
+	// embeds, so the twin must too, or a case certified on the twin
+	// certifies bytes the broker never hands back.
+	name: "a body is served in its compact form",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("  {\n  \"name\" : \"Acme\",\n  \"agents\": { }\n}\n"),
+			At: h.now(), Origin: anOrigin}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		if err != nil || !found {
+			h.t.Fatalf("Payload: found=%v err=%v", found, err)
+		}
+		if want := `{"name":"Acme","agents":{}}`; string(got) != want {
+			h.t.Errorf("payload = %q, want %q", got, want)
+		}
+	},
+}, {
+	// A BODY NO NODE COULD DECODE IS NOT PUBLISHED. It is a company
+	// document, sealed or not, so anything but a JSON object is a caller's
+	// mistake — and a pointer naming it is a fleet that converges on
+	// nothing. Refused before anything is written: the fleet stays where
+	// it was.
+	name: "a payload that is not a document is refused and moves nothing",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-good", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		for name, payload := range map[string][]byte{
+			"nothing":     nil,
+			"empty":       []byte(""),
+			"not json":    []byte("name: Acme"),
+			"truncated":   []byte(`{"name":`),
+			"a string":    []byte(`"enc:v1:k:abc"`),
+			"an array":    []byte(`[1,2]`),
+			"json null":   []byte("null"),
+			"blank space": []byte("   "),
+		} {
+			_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+				RevisionID: "rev-" + name, Payload: payload, At: h.now(), Origin: anOrigin})
+			if !errors.Is(err, coord.ErrPayloadNotDocument) {
+				h.t.Errorf("%s: Activate = %v, want ErrPayloadNotDocument", name, err)
+			}
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || target.RevisionID != "rev-good" {
+			h.t.Fatalf("a refused payload moved the pointer: %+v found=%v err=%v",
+				target, found, err)
+		}
+		if got, found, err := h.f.Payload(h.ctx, "rev-good"); err != nil || !found ||
+			string(got) != `{"v":1}` {
+			h.t.Errorf("a refused payload disturbed the body: %q found=%v err=%v",
+				got, found, err)
+		}
+	},
+}, {
 	// A caller mutating what it read must not reach the store: the body is
 	// handed to a decoder that unseals in place on some paths.
 	name: "a caller mutating a payload cannot reach the store",
@@ -1905,13 +2049,81 @@ var payloadCases = []fleetCase{{
 	},
 }}
 
+// payloadRaceCases hold the body and the pointer to ONE decision under
+// concurrent writers.
+var payloadRaceCases = []fleetCase{{
+	// THE BODY AND THE POINTER CANNOT COME APART. They were two keys written
+	// in two steps — the body, then the flip — so two nodes activating at
+	// once could each write a body, and the one whose flip landed FIRST was
+	// then pointed at by a pointer whose body the other had overwritten.
+	// Every peer read "no such revision" for the epoch the fleet was on
+	// until somebody activated again. The boot path does exactly this:
+	// two nodes starting together each publish the revision they hold,
+	// unconditionally. And an edit's compare-and-set only decided the
+	// pointer — the loser's body had already landed.
+	name: "racing activations leave the pointer's own body readable",
+	fn: func(h *fleetHarness) {
+		const writers = 8
+		for round := range 6 {
+			var wg sync.WaitGroup
+			for w := range writers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					id := fmt.Sprintf("rev-%d-%d", round, w)
+					req := coord.ActivationRequest{
+						RevisionID: id, At: h.now(), Origin: anOrigin,
+						Payload: []byte(fmt.Sprintf(`{"revision":%q}`, id)),
+					}
+					// Half race unconditionally, as two booting nodes do;
+					// half as editors naming what they read, where all but
+					// one lose the compare-and-set.
+					if w%2 == 1 && round > 0 {
+						req.Expect = fmt.Sprintf("rev-%d-0", round-1)
+					}
+					_, err := h.f.Activate(h.ctx, req)
+					if err != nil && !errors.Is(err, coord.ErrActivationRaced) {
+						h.t.Errorf("Activate(%s): %v", id, err)
+					}
+				}()
+			}
+			wg.Wait()
+			target, found, err := h.f.Target(h.ctx)
+			if err != nil || !found {
+				h.t.Fatalf("round %d: Target: %v found=%v", round, err, found)
+			}
+			body, found, err := h.f.Payload(h.ctx, target.RevisionID)
+			if err != nil {
+				h.t.Fatalf("round %d: Payload: %v", round, err)
+			}
+			if !found {
+				h.t.Fatalf("round %d: the fleet points at %s and its body is "+
+					"nowhere — every peer would fail to converge", round,
+					target.RevisionID)
+			}
+			if want := fmt.Sprintf(`{"revision":%q}`, target.RevisionID); string(body) != want {
+				h.t.Fatalf("round %d: the body of %s is %s", round, target.RevisionID, body)
+			}
+			// The next round's editors expect the round's first writer;
+			// point the fleet there so half of them can win.
+			if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+				RevisionID: fmt.Sprintf("rev-%d-0", round), At: h.now(), Origin: anOrigin,
+				Payload: []byte(fmt.Sprintf(`{"revision":"rev-%d-0"}`, round)),
+			}); err != nil {
+				h.t.Fatalf("round %d: re-point: %v", round, err)
+			}
+		}
+	},
+}}
+
 // ---- the sealed credentials -------------------------------------------- //
 
 func (h *fleetHarness) putSecret(name, sealed, keyID string) {
 	h.t.Helper()
 	err := h.f.PutSecret(h.ctx, coord.SecretRecord{
 		Name: name, Value: sealed, KeyID: keyID,
-		UpdatedAt: h.now(), UpdatedBy: "operator", Source: "cli",
+		UpdatedAt: h.now(), UpdatedBy: "jane.doe", UpdatedByKind: "operator",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a", Source: "cli",
 	})
 	if err != nil {
 		h.t.Fatalf("PutSecret(%s): %v", name, err)
@@ -1958,8 +2170,15 @@ var secretCases = []fleetCase{{
 		if rec.KeyID != "key-1" {
 			h.t.Errorf("KeyID = %q — a rotation sweep cannot find stale rows without it", rec.KeyID)
 		}
-		if rec.UpdatedBy != "operator" || rec.Source != "cli" {
-			h.t.Errorf("provenance lost: by=%q source=%q", rec.UpdatedBy, rec.Source)
+		// ALL FOUR, and the credential beside the author above all: a
+		// store that kept only one of the two names lost whichever it
+		// dropped — the author once the credential's row was swept, or
+		// the credential for good.
+		if rec.UpdatedBy != "jane.doe" || rec.UpdatedByKind != "operator" ||
+			rec.OperatorID != "pat:0192f00d-0000-7000-8000-00000000000a" ||
+			rec.Source != "cli" {
+			h.t.Errorf("provenance lost: by=%q kind=%q operator=%q source=%q",
+				rec.UpdatedBy, rec.UpdatedByKind, rec.OperatorID, rec.Source)
 		}
 	},
 }, {
@@ -2106,6 +2325,128 @@ var secretCases = []fleetCase{{
 			h.t.Fatal("deleting an empty name was accepted")
 		}
 	},
+}, {
+	// A CREATE IS THE FIRST WRITER'S. Two nodes minting the company's
+	// blind-index key at once each derive blinds under the key they wrote,
+	// and with a plain put the store keeps one of them — so the loser's
+	// blinds match nothing any other node computes. The second create must
+	// be told the row is somebody else's, and must not have touched it.
+	name: "a create writes only where no row is stored",
+	fn: func(h *fleetHarness) {
+		created, err := h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "iam/blind-index-key", Value: "v1:first", KeyID: "key-1",
+			UpdatedAt: h.now(),
+		})
+		if err != nil || !created {
+			h.t.Fatalf("the first create = (%v, %v), want it written", created, err)
+		}
+		created, err = h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "iam/blind-index-key", Value: "v1:second", KeyID: "key-1",
+			UpdatedAt: h.now(),
+		})
+		if err != nil || created {
+			h.t.Fatalf("the second create = (%v, %v), want it refused as "+
+				"somebody else's row", created, err)
+		}
+		if rec, _ := h.secret("iam/blind-index-key"); rec.Value != "v1:first" {
+			h.t.Fatalf("a refused create replaced the row: %q", rec.Value)
+		}
+		// AND A DELETED ROW IS ABSENT AGAIN: a create is not refused over
+		// the history of a key somebody destroyed.
+		if _, err = h.f.DeleteSecret(h.ctx, "iam/blind-index-key"); err != nil {
+			h.t.Fatalf("DeleteSecret: %v", err)
+		}
+		created, err = h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "iam/blind-index-key", Value: "v1:third", KeyID: "key-1",
+			UpdatedAt: h.now(),
+		})
+		if err != nil || !created {
+			h.t.Fatalf("a create after the row was deleted = (%v, %v), want "+
+				"it written", created, err)
+		}
+	},
+}, {
+	// A VERSION IS READ, AND EVERY WRITE MOVES IT. What a conditional write
+	// is conditioned on has to be on what a read hands back, and a write
+	// that left it where it was would let a caller holding the old one win
+	// against a row it never saw.
+	name: "every read carries the row's version and every write moves it",
+	fn: func(h *fleetHarness) {
+		h.putSecret("GITLAB_TOKEN", "v1:old", "key-1")
+		first, _ := h.secret("GITLAB_TOKEN")
+		if first.Version == 0 {
+			h.t.Fatal("a stored row reads back with no version, so nothing " +
+				"can be conditioned on it")
+		}
+		h.putSecret("GITLAB_TOKEN", "v2:new", "key-1")
+		second, _ := h.secret("GITLAB_TOKEN")
+		if second.Version == first.Version {
+			h.t.Fatalf("a rotation left the version at %d", first.Version)
+		}
+		rows, err := h.f.SecretValues(h.ctx)
+		if err != nil || len(rows) != 1 || rows[0].Version != second.Version {
+			h.t.Fatalf("the listing = (%+v, %v), want the row at version %d",
+				rows, err, second.Version)
+		}
+	},
+}, {
+	// AN UPDATE IS REFUSED OVER A ROW THAT MOVED, AND NEVER RESURRECTS ONE.
+	// A rekey re-seals the value it READ: written over an operator's
+	// rotation it silently reinstates the credential they replaced, and
+	// written after an operator deleted a credential it brings it back.
+	// Both are an update at a version the row no longer holds.
+	name: "an update writes only while the row is at the version read",
+	fn: func(h *fleetHarness) {
+		h.putSecret("GITLAB_TOKEN", "v1:old", "key-1")
+		read, _ := h.secret("GITLAB_TOKEN")
+		h.putSecret("GITLAB_TOKEN", "v2:rotated", "key-1")
+		wrote, err := h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v3:resealed-old", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, read.Version)
+		if err != nil || wrote {
+			h.t.Fatalf("an update at a version the row moved past = (%v, %v), "+
+				"want it refused", wrote, err)
+		}
+		if rec, _ := h.secret("GITLAB_TOKEN"); rec.Value != "v2:rotated" {
+			h.t.Fatalf("the refused update replaced the rotation: %q", rec.Value)
+		}
+		current, _ := h.secret("GITLAB_TOKEN")
+		wrote, err = h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v3:resealed", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, current.Version)
+		if err != nil || !wrote {
+			h.t.Fatalf("an update at the current version = (%v, %v), want it "+
+				"written", wrote, err)
+		}
+		// GONE IS NOT A VERSION.
+		gone, _ := h.secret("GITLAB_TOKEN")
+		if _, err = h.f.DeleteSecret(h.ctx, "GITLAB_TOKEN"); err != nil {
+			h.t.Fatalf("DeleteSecret: %v", err)
+		}
+		wrote, err = h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v4:resurrected", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, gone.Version)
+		if err != nil || wrote {
+			h.t.Fatalf("an update of a deleted row = (%v, %v), want it refused", wrote, err)
+		}
+		if _, found := h.secret("GITLAB_TOKEN"); found {
+			h.t.Fatal("an update brought a deleted row back")
+		}
+		// NOR IS ZERO: a caller that never read one has judged nothing.
+		if wrote, err := h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v5:blind", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, 0); err != nil || wrote {
+			h.t.Fatalf("an update at version zero = (%v, %v), want nothing written",
+				wrote, err)
+		}
+		if _, found := h.secret("GITLAB_TOKEN"); found {
+			h.t.Fatal("an update at version zero created the row")
+		}
+	},
 }}
 
 // ---- the integration reconcile status ---------------------------------- //
@@ -2134,7 +2475,7 @@ func (h *fleetHarness) integrationNames() []string {
 }
 
 var integrationCases = []fleetCase{
-	{"a recorded status reads back byte for byte", func(h *fleetHarness) {
+	{name: "a recorded status reads back byte for byte", fn: func(h *fleetHarness) {
 		// The value is OPAQUE to this store: internal/integration
 		// marshals a phase, an actor, a sentence and a findings list into
 		// it, and a backend that re-encoded on the way through would
@@ -2149,7 +2490,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a surface with no status is absent rather than empty", func(h *fleetHarness) {
+	{name: "a surface with no status is absent rather than empty", fn: func(h *fleetHarness) {
 		// The loop reads a missing key as "never reconciled, so due now".
 		// A backend that answered with a zero-length value instead would
 		// make that surface parse as a status whose phase is the empty
@@ -2160,7 +2501,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"the last write wins", func(h *fleetHarness) {
+	{name: "the last write wins", fn: func(h *fleetHarness) {
 		// No compare-and-set, deliberately — but NOT because the worker
 		// duty makes one node the only writer, which is the reason this
 		// used to give and is not true: the dashboard records a pass's
@@ -2175,7 +2516,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"every recorded surface is listed", func(h *fleetHarness) {
+	{name: "every recorded surface is listed", fn: func(h *fleetHarness) {
 		h.putIntegration("gitlab", `{}`)
 		h.putIntegration("slack", `{}`)
 		h.putIntegration("datadog", `{}`)
@@ -2185,7 +2526,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a deleted status is gone and the rest survive", func(h *fleetHarness) {
+	{name: "a deleted status is gone and the rest survive", fn: func(h *fleetHarness) {
 		h.putIntegration("gitlab", `{}`)
 		h.putIntegration("slack", `{}`)
 		if err := h.f.DeleteIntegrationStatus(h.ctx, "gitlab"); err != nil {
@@ -2197,7 +2538,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"deleting a status that is not there is the outcome asked for", func(h *fleetHarness) {
+	{name: "deleting a status that is not there is the outcome asked for", fn: func(h *fleetHarness) {
 		// The loop forgets every surface the company no longer declares,
 		// on every tick, so this is the common path rather than an edge
 		// case. Raising here would fill an operator's log with warnings
@@ -2207,7 +2548,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a surface name that is not a bare word survives the round trip", func(h *fleetHarness) {
+	{name: "a surface name that is not a bare word survives the round trip", fn: func(h *fleetHarness) {
 		// The KV backend escapes a key on the way in and unescapes it on
 		// the way out, and the mapping has to be injective in both
 		// directions. Nothing in integration.Kinds needs escaping today,
@@ -2220,7 +2561,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a status the caller mutates afterwards does not change the store", func(h *fleetHarness) {
+	{name: "a status the caller mutates afterwards does not change the store", fn: func(h *fleetHarness) {
 		// A caller reusing its marshalling buffer is ordinary, and a
 		// backend that kept the caller's slice would have the next
 		// reader see whatever that buffer holds by then.

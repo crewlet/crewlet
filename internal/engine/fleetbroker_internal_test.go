@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -11,10 +13,27 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+// brokerRing is the keyring every node of a broker case's fleet holds.
+var brokerRing = statelog.OneKey("k1", "the fleet broker cases' fleet key material")
+
+// mustBrokerWire is a node's broker envelopes over ring.
+func mustBrokerWire(t *testing.T, ring statelog.Keyring) *brokerWire {
+	t.Helper()
+	wire, err := newBrokerWire(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
 
 // fakeMember is a member's embedded broker as the fleet-broker surface asks it:
 // a metadata group it reports, and the removals it was asked to commit.
@@ -103,7 +122,15 @@ func (f *brokerFleet) engine(id string) *Engine { return f.engines[id] }
 
 // node builds one node's engine: its profile, a live presence lease advertising
 // it, and — on a member given one — its embedded broker, serving its subject.
+// It holds the fleet's keyring.
 func (f *brokerFleet) node(t *testing.T, profile placement.NodeProfile, member brokerMembership) *Engine {
+	t.Helper()
+	return f.nodeWith(t, profile, member, brokerRing)
+}
+
+// client is a started client of the fleet's broker, for a case that speaks on
+// it as something other than a node.
+func (f *brokerFleet) client(t *testing.T) *memory.Queue {
 	t.Helper()
 	ctx := t.Context()
 	q := f.broker.Client()
@@ -111,8 +138,17 @@ func (f *brokerFleet) node(t *testing.T, profile placement.NodeProfile, member b
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
-	e := &Engine{id: profile.ID, profile: profile,
-		backends: &Backends{Queue: q, Coord: f.leases, broker: member}}
+	return q
+}
+
+// nodeWith is [brokerFleet.node] for a node holding ring.
+func (f *brokerFleet) nodeWith(t *testing.T, profile placement.NodeProfile, member brokerMembership,
+	ring statelog.Keyring) *Engine {
+
+	t.Helper()
+	ctx := t.Context()
+	e := &Engine{id: profile.ID, profile: profile, brokerWire: mustBrokerWire(t, ring),
+		backends: &Backends{Queue: f.client(t), Coord: f.leases, broker: member}}
 	f.engines[profile.ID] = e
 	f.present(t, profile)
 	if err := e.serveFleetBroker(ctx); err != nil {
@@ -273,7 +309,8 @@ func TestAMemberIsRemovedOnlyOnceItIsGoneAndThroughAnotherMember(t *testing.T) {
 		t.Fatal("a refused removal reached a member anyway")
 	}
 
-	done, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c", By: "ops"})
+	done, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c",
+		By: iam.Actor{Name: "ops", Kind: iam.ActorHuman, OperatorID: "session:ops-1"}})
 	if err != nil {
 		t.Fatalf("removing a member that is gone: %v", err)
 	}
@@ -521,4 +558,247 @@ func TestTheBrokerFindingKindsAreClosed(t *testing.T) {
 	if BrokerFindingKind("dead").Valid() || BrokerFindingKind("").Valid() {
 		t.Error("a kind this build does not name reads as valid")
 	}
+}
+
+// A REMOVAL THE FLEET DID NOT SIGN REMOVES NOTHING. A member removes a voter
+// through its own system account, so a request anybody who can reach the
+// broker could write would change the quorum every election runs on — past
+// the grant, the step-up, the confirmation and the live-member refusal, which
+// all run on the asking node. Three ways to try — no signature, a signature
+// under the fleet's key id with somebody else's material, and the fleet's
+// signature over a request altered after it was made — and each is answered
+// that nothing ran, bound to no request, with nothing removed.
+func TestARemovalTheFleetDidNotSignRemovesNothing(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	a := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	fleet.node(t, member("node-a", placement.RoleData), a)
+	removal := brokerRequest{ID: signedask.NewID(), Deadline: time.Now().Add(time.Minute),
+		Op: brokerOpRemove, Peer: jetstream.PeerIDOf("node-b"), Node: "node-b", By: "mallory"}
+
+	unsigned, err := json.Marshal(removal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := mustBrokerWire(t, statelog.OneKey("k1", "not the fleet's material")).
+		SealRequest(removal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered, err := mustBrokerWire(t, brokerRing).SealRequest(removal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered = bytes.Replace(altered, []byte(jetstream.PeerIDOf("node-b")),
+		[]byte(jetstream.PeerIDOf("node-c")), 1)
+
+	asker := fleet.client(t)
+	for name, sent := range map[string][]byte{
+		"unsigned":                         unsigned,
+		"signed under somebody else's key": outsider,
+		"altered after it was signed":      altered,
+	} {
+		reply := rawBrokerReply(t, asker, "node-a", sent)
+		if reply.Code != brokerCodeUnauthenticated || reply.Request != "" {
+			t.Errorf("%s: answered %+v, want nothing run and bound to no request", name, reply)
+		}
+	}
+	if len(a.removed) != 0 {
+		t.Fatalf("a removal the fleet did not sign removed %v", a.removed)
+	}
+}
+
+// A SIGNED REMOVAL IS CARRIED OUT ONCE: a request captured off the wire and
+// sent back is refused as a replay, and the voter a member has since let back
+// in is not removed again. And who asked travels INSIDE the signature, as the
+// author, the kind and the credential — what the carrying member logs.
+func TestASignedRemovalIsCarriedOutOnce(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	a := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	fleet.node(t, member("node-a", placement.RoleData), a)
+	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
+	capture := &capturingQueue{EventQueue: leaf.backends.Queue}
+	leaf.backends.Queue = capture
+
+	by := iam.Actor{Name: "ops", Kind: iam.ActorHuman, OperatorID: "session:ops-1"}
+	if _, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c", By: by}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	sent := capture.payloads()
+	if len(sent) != 1 {
+		t.Fatalf("captured %d requests, want the one", len(sent))
+	}
+	opened := mustBrokerWire(t, brokerRing).Admit(sent[0], signedask.NewGuard(), time.Now())
+	if opened.Disposition != signedask.Admitted || opened.Request.By != by.Name ||
+		opened.Request.ByKind != by.Kind || opened.Request.OperatorID != by.OperatorID {
+		t.Fatalf("the removal crossed as %+v, want the asker's author, kind and credential "+
+			"inside the signature", opened)
+	}
+
+	// THE VOTER IS BACK, as a member that restarts under its name is.
+	a.mu.Lock()
+	a.group = groupOf("node-a", "node-b", "node-c")
+	a.mu.Unlock()
+	reply := rawBrokerReply(t, fleet.client(t), "node-a", sent[0])
+	if reply.Code != brokerCodeStale || reply.Request != opened.ID {
+		t.Fatalf("a replayed removal answered %+v, want it refused as stale", reply)
+	}
+	if !slices.Equal(a.removed, []string{"node-c"}) {
+		t.Fatalf("the member removed %v, want node-c once", a.removed)
+	}
+}
+
+// A REMOVAL UNDER A KEY A MEMBER DOES NOT HOLD IS CARRIED BY ONE THAT HOLDS IT:
+// the member that cannot verify it says it ran nothing, so the gesture asks the
+// next — the disposition a member with no metadata group gets — rather than
+// counting a refusal about this member's keyring as the group's answer.
+func TestARemovalUnderAnUnheldKeyIsCarriedByAMemberThatHoldsIt(t *testing.T) {
+	t.Parallel()
+	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+		brokerRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
+	}}
+	fleet := newBrokerFleet(t)
+	behind := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	ahead := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	fleet.node(t, member("node-a", placement.RoleData), behind)
+	fleet.nodeWith(t, member("node-b", placement.RoleData), ahead, rotated)
+	leaf := fleet.nodeWith(t, placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil, rotated)
+
+	done, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"})
+	if err != nil {
+		t.Fatalf("a removal a member holding the key could carry answered %v", err)
+	}
+	if done.By != "node-b" || len(behind.removed) != 0 || !slices.Equal(ahead.removed, []string{"node-c"}) {
+		t.Fatalf("carried by %q (behind removed %v, ahead removed %v), want the member "+
+			"holding the key", done.By, behind.removed, ahead.removed)
+	}
+}
+
+// A REPLY THE ASKER CANNOT BELIEVE IS NO ANSWER: one the fleet did not sign and
+// one the fleet signed for another request are, for a removal, a member that
+// heard the request and may have acted on it — an outcome nobody knows, never
+// a removal reported done — and, for a listing, a member that did not report
+// the group.
+func TestABrokerReplyTheAskerCannotBelieveIsNoAnswer(t *testing.T) {
+	t.Parallel()
+	for name, forge := range map[string]func(t *testing.T) []byte{
+		"not signed by the fleet": func(t *testing.T) []byte {
+			out, err := mustBrokerWire(t, statelog.OneKey("k1", "not the fleet's material")).
+				SealReply(brokerReply{Node: "node-a", Request: "whatever"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		},
+		"the fleet's answer to another request": func(t *testing.T) []byte {
+			group := groupOf("node-a", "node-b")
+			out, err := mustBrokerWire(t, brokerRing).SealReply(brokerReply{Node: "node-a",
+				Request: "somebody-elses", Group: &group})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fleet := newBrokerFleet(t)
+			fleet.present(t, member("node-a", placement.RoleData))
+			reply := forge(t)
+			stop, err := fleet.client(t).Serve(t.Context(), fleetBrokerSubject("node-a"),
+				func(context.Context, []byte) ([]byte, error) { return reply, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stop(context.Background()) })
+			leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
+				Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
+
+			if _, err := leaf.FleetBroker().Remove(t.Context(),
+				BrokerRemoval{Node: "node-c"}); !errors.Is(err, ErrRemovalOutcomeUnknown) {
+				t.Fatalf("a removal answered by a reply nobody can believe = %v, want "+
+					"ErrRemovalOutcomeUnknown", err)
+			}
+			view, err := leaf.FleetBroker().List(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if view.Group != nil || !strings.Contains(view.GroupError, "node-a answered, and its reply") {
+				t.Fatalf("a listing answered only by a reply nobody can believe = %+v (%q)",
+					view.Group, view.GroupError)
+			}
+		})
+	}
+}
+
+// A MEMBER WITHOUT ITS ENVELOPES DOES NOT SERVE, and a node without them asks
+// nobody: a subject that carries an instruction is never answered unsigned.
+func TestNoBrokerSubjectIsServedOrAskedUnsigned(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	e := &Engine{id: "node-a", profile: member("node-a", placement.RoleData),
+		backends: &Backends{Queue: fleet.client(t), Coord: fleet.leases,
+			broker: &fakeMember{group: groupOf("node-a", "node-c")}}}
+	if err := e.serveFleetBroker(t.Context()); !errors.Is(err, errNoBrokerWire) {
+		t.Fatalf("a member with no envelopes served: %v", err)
+	}
+	fleet.node(t, member("node-b", placement.RoleData), &fakeMember{group: groupOf("node-b", "node-c")})
+	leaf := &Engine{id: "leaf-1", profile: placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf},
+		backends: &Backends{Queue: fleet.client(t), Coord: fleet.leases}}
+	if _, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"}); !errors.Is(err, ErrNoBrokerMember) ||
+		!strings.Contains(err.Error(), errNoBrokerWire.Error()) {
+		t.Fatalf("a node with no envelopes asked anyway: %v", err)
+	}
+}
+
+// rawBrokerReply sends sent to member's subject as something other than a node
+// and reads the reply the member signed, verified but bound to nothing — which
+// no asker ever reads one as, and which a refusal bound to no request can only
+// be read as.
+func rawBrokerReply(t *testing.T, q queue.EventQueue, member string, sent []byte) brokerReply {
+	t.Helper()
+	replies, err := q.Ask(t.Context(), fleetBrokerSubject(member), sent, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("ask %s = (%d replies, %v), want the member to answer", member, len(replies), err)
+	}
+	_, domain := mustBrokerWire(t, brokerRing).Domains()
+	verifier, err := statelog.NewVerifier(domain, brokerRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, verdict := verifier.Open(replies[0])
+	if verdict != statelog.Verified {
+		t.Fatalf("the member's reply did not verify: %s", verdict)
+	}
+	var reply brokerReply
+	if err := json.Unmarshal(body, &reply); err != nil {
+		t.Fatal(err)
+	}
+	return reply
+}
+
+// capturingQueue forwards every ask and keeps the bytes it sent.
+type capturingQueue struct {
+	queue.EventQueue
+
+	mu   sync.Mutex
+	sent [][]byte
+}
+
+func (c *capturingQueue) Ask(ctx context.Context, subject string, request []byte,
+	want int) ([][]byte, error) {
+	c.mu.Lock()
+	c.sent = append(c.sent, slices.Clone(request))
+	c.mu.Unlock()
+	return c.EventQueue.Ask(ctx, subject, request, want)
+}
+
+func (c *capturingQueue) payloads() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.sent)
 }

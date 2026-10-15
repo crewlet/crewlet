@@ -32,7 +32,6 @@ import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
@@ -93,7 +92,9 @@ export interface FeedRow {
    * on a row read from history (`events`), absent on a live one. A listing
    * never carries the payload, so this is where a history row says what only
    * its payload holds: the node that published it (`node`), and the runtime
-   * audit's person, tool and directory (`actor_seat`, `tool`, `dir`).
+   * audit's tool and direction (`tool`, `dir`) and its author's kind and the
+   * credential it acted through (`actor_kind`, `operator_id`) — the author
+   * itself is the row's own `actor`.
    */
   tags?: Record<string, string>;
 }
@@ -289,7 +290,10 @@ export interface PhaseRound {
 export interface RunningCall {
   round: number;
   name: string;
-  arguments: string;
+  /** What the call was handed — part of the seat's BODY, so absent on a call
+   *  whose body is withheld from this reader ([LiveCall.body_withheld]); its
+   *  name and timing are status and always sent. */
+  arguments?: string;
   started_at: string;
 }
 
@@ -326,8 +330,15 @@ export interface LiveTurn {
  *  seat's state, not the state: the engine says whether a paused seat reads as
  *  stopped. */
 export interface Paused {
-  /** The person — the seat their token is bound to — or the token itself. */
+  /** The seat a bound person or token writes as, or the credential's own login. */
   by: string;
+  /** What `by` names, in `iam.ActorKind`'s vocabulary (`agent`, `human`,
+   *  `operator`, `system`) — a string, so a kind a newer engine adds arrives
+   *  as itself. */
+  by_kind: string;
+  /** The credential the pause was taken through (`pat:<id>`,
+   *  `session:<lineage>`, a token's login); absent when none made it. */
+  operator_id?: string;
   at: string;
   reason?: string;
   /** Whether the pause also ended the turn the seat was on. */
@@ -360,19 +371,29 @@ export interface LiveCall {
   phase: string;
   iteration: number;
   model: string;
-  trigger: Record<string, unknown> | null;
-  prompt: string;
+  /**
+   * THE BODY — `trigger`, `prompt`, `prompt_messages`, `response`,
+   * `tool_executions`, `round_narration`, `partial_round` and a running
+   * call's `arguments` — is the seat's TRAIL, and the engine sends it only to
+   * a reader who may read that seat's trail: an admin, or the seat's lead.
+   * Everybody else is sent the call's STATUS with every one of these keys
+   * absent, every body version zero and [body_withheld] set — so each is
+   * optional here, and a screen draws a withheld one as "not shown to you",
+   * never as an empty prompt.
+   */
+  trigger?: Record<string, unknown> | null;
+  prompt?: string;
   /**
    * The conversation as the phase was given it: the system and user
    * messages only. Typed rather than `unknown[]` — it was untyped, so the
    * live view could not read the system prompt off it and hardcoded "".
    */
-  prompt_messages: PromptMessage[] | null;
-  response: string;
+  prompt_messages?: PromptMessage[] | null;
+  response?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
-  tool_executions: ToolExecution[] | null;
+  tool_executions?: ToolExecution[] | null;
   /**
    * Per-round model turns — `{round, reasoning, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
@@ -430,17 +451,29 @@ export interface LiveCall {
    * The version of the copy this call holds of each heavy field
    * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
    * when its version moved; the store fills in the rest from what it holds.
-   * Always present, on every surface that carries a call.
+   * Always present, on every surface that carries a call. A call whose body
+   * is withheld from this reader names every body version ZERO, so the store
+   * never asks for a body it will not be sent (`mergeLiveCall`).
    */
   versions: CallVersions;
+  /**
+   * The engine withheld this call's BODY from this reader — see [prompt].
+   * Absent (or false) on a call sent whole.
+   */
+  body_withheld?: boolean;
 }
 
 /** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
 export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
 
-/** The `live_call{role}` answer: one seat's call in flight, whole, or null. */
+/** The `live_call{agent_id}` answer: one seat's call in flight, whole, or
+ *  null — asked and answered by the seat's AGENT ID, the key every overlay is
+ *  merged by, never by its name, which two seats may share. */
 export interface LiveCallAnswer {
-  role: string;
+  agent_id: string;
+  /** The handle the seat answers to — a label, never what the answer is
+   *  paired by. */
+  handle: string;
   live_call: LiveCall | null;
   /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
    *  present beside a null call too. The answer can reach the tab after a push
@@ -496,7 +529,6 @@ export interface Overlay {
   /** Why a `stopped` seat cannot take work; null on a seat that is not
    *  stopped. Always present, so a seat that started again sheds its reason. */
   stopped_reason?: StoppedReason | null;
-  runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
@@ -523,29 +555,57 @@ export interface Overlay {
   paused?: Paused | null;
 }
 
+/**
+ * One row of an `agents` push: a seat's overlay, and the AGENT ID that names
+ * the roster row it is merged onto — nothing else that names the seat, since
+ * the roster carries its name and handle as they are now and an event carries
+ * them as they were.
+ */
+export interface OverlayRow extends Overlay {
+  agent_id: string;
+}
+
 /** A seat row: static config identity, plus whatever overlay has been merged. */
 export interface AgentRow extends Overlay {
+  /** The seat's HANDLE — what every screen addresses it by. */
   id: string;
-  agent_id?: string;
+  /**
+   * The seat's AGENT ID, which the engine derives from its handle (ADR-0013):
+   * a handle never changes, so neither does this, and no two seats share it.
+   * THE key a live overlay, a sandbox run, a spend row and a phase record
+   * carry and pair with this row by — never `role`, which is prose two seats
+   * may share.
+   */
+  agent_id: string;
+  /** The seat's name. Display only: nothing pairs a row by it. */
   role: string;
   handle?: string;
-  /** Set by `applyAgents` when an overlay names a role the roster lacks. */
   [key: string]: unknown;
 }
 
 /** One in-flight detached coding run. */
 export interface SandboxEntry {
   turn_id: string;
+  /** What the seat was called when the run started — display only; the run
+   *  pairs with its seat's row by `agent_id`. */
   role: string;
   agent_handle: string;
   agent_id: string;
   coding_agent: string;
   sandbox_id: string;
-  task: string;
+  /**
+   * What the run was asked to do — the seat's TRAIL, sent only to an admin
+   * and the seat's lead ([body_withheld] says when it was withheld).
+   */
+  task?: string;
   /** The run record's own word: `launching`, `running`,
    *  `awaiting_clarification`, `reseed` or `answered`. */
   status: string;
   started_at: string;
+  /**
+   * The question a parked run asks — sent to whoever may read the seat's
+   * trail AND to the people it is put to, who answer it.
+   */
   question?: string;
   audience?: string;
   /** The item the launching turn is charged to, when it is on one. */
@@ -554,6 +614,8 @@ export interface SandboxEntry {
   owner?: string;
   /** When the run's box began being held paused while it waits on a person. */
   paused_at?: string;
+  /** The engine withheld the run's body (`task`) from this reader. */
+  body_withheld?: boolean;
 }
 
 /**
@@ -587,8 +649,16 @@ export interface SandboxRun {
   coding_agent: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
-  task_description: string;
-  question: string;
+  /**
+   * THE RUN'S BODY — `task_description`, `question`, `reply` and
+   * `bridge_calls` — is the launching seat's trail: sent to an admin and the
+   * seat's lead, and the `question` also to the people it is put to. Absent
+   * for everybody else, who are told so by [body_withheld].
+   */
+  task_description?: string;
+  question?: string;
+  /** What reached the waiting party, where something did — body. */
+  reply?: string;
   audience: string;
   /** Who the question is put to, resolved against the org chart when the run
    *  parked. Empty on a run that is not parked. */
@@ -628,6 +698,8 @@ export interface SandboxRun {
    * what the run did.
    */
   bridge_calls_elided?: number;
+  /** The engine withheld this run's body from this reader — see [task_description]. */
+  body_withheld?: boolean;
 }
 
 /** One call a bridged run made. */
@@ -683,6 +755,8 @@ export interface ModelRow extends Bucket {
 export interface WorkerRow extends Bucket {
   worker: string;
 }
+/** One SEAT's spend: one row per agent id, so two seats sharing a name are two
+ *  rows. `role` and `handle` are what the chart calls the seat now. */
 export interface AgentSpendRow extends Bucket {
   role: string;
   handle: string;
@@ -740,7 +814,13 @@ export interface Rollup {
   from?: string;
   to?: string;
   days?: number;
-  /** The handle this answer was narrowed to. */
+  /** The one seat this answer was narrowed to, by agent id — the identity
+   *  the usage domain records a seat under, and so the one it was filtered
+   *  by. Absent for the whole company. */
+  agent_id?: string;
+  /** That seat's handle NOW, read off the chart for a link to it — never the
+   *  handle the request typed. Absent for the whole company and for a seat
+   *  the chart no longer holds. */
   seat?: string;
   /** How far back a named window can reach. Absent on the live window. */
   horizon?: SpendHorizon;
@@ -768,8 +848,16 @@ export interface Rollup {
  * would be correct for a day and absent for every other range.
  */
 export interface SeriesBand extends Bucket {
-  /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
+  /**
+   * The band's key in each point's `groups`. Empty on, and only on, `other`.
+   * By seat it is the seat's agent id and by unit the unit's key — an
+   * IDENTITY, since two seats or two units may share a name — which is why
+   * `label` exists.
+   */
   group: string;
+  /** What a seat or unit band is called. Absent where `group` is already the
+   *  words: a phase, a model, a worker, a turn id. */
+  label?: string;
   handle?: string;
   /** How many seats spent in a UNIT band over the window. */
   seats?: number;
@@ -917,7 +1005,7 @@ export interface BudgetsAnswer {
  * anonymous, so it carries a charter, a tree, the budgets and each seat's
  * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
  * `llm` fields, contact identities, tool credentials, integration blocks and
- * schedules live here instead, behind the operator token.
+ * schedules live here instead, behind Admin.
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -987,9 +1075,13 @@ export interface ConfigRole {
   /**
    * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
    * itself and never under `integrations:`; a unit member takes its unit's.
+   * Guarded.
    */
   project?: string;
-  /** The knowledge container a root-level seat writes in, beside `project`. */
+  /**
+   * The knowledge container a root-level seat writes in, beside `project`.
+   * Guarded.
+   */
   space?: string;
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
@@ -1034,10 +1126,10 @@ export interface ConfigUnit {
   name: string;
   type?: string;
   /**
-   * The unit's STABLE IDENTITY, which a name is not — a rename moves
-   * everything keyed on the name and nothing keyed on this. Absent means the
-   * name IS the key, which is what `org.Unit.Key` falls back to. Guarded, so
-   * it is here rather than on [OrgUnit].
+   * The unit's KEY and STABLE IDENTITY, which a name is not — a rename moves
+   * nothing keyed on this. The engine mints it from the name on every write
+   * that stores a unit without one, so every stored unit carries it; [OrgUnit]
+   * carries the same value as `id`.
    */
   id?: string;
   purpose?: string;
@@ -1092,7 +1184,7 @@ export interface ConfigProblem {
   kind: ConfigProblemKind;
   /** The full line, exactly as the refusal's `detail` carries it. */
   message: string;
-  /** The engine-derived handle of the seat it is about. */
+  /** The handle of the seat it is about. */
   seat?: string;
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */
@@ -1172,8 +1264,8 @@ export type PhaseLLM =
  * reached anonymous readers the day it landed: contact identities, per-seat
  * credentials, placement labels and sandbox setup commands among them. What
  * is NOT here — `email`, `contact`, the authored `llm_*` fields,
- * `schedules`, `integrations`, `mcp_env` — is read through the operator-gated
- * `config` query instead, as [CompanyDocument].
+ * `schedules`, `integrations`, `mcp_env` — is read through the `config`
+ * query instead, as [CompanyDocument], which takes Admin.
  *
  * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
  * fields of the same name: a client re-running the precedence between a flat
@@ -1181,9 +1273,10 @@ export type PhaseLLM =
  * the grant rule between a shared server, a template and a unit's `mcp_env` —
  * would be a second implementation of a rule the engine already applies.
  *
- * `handle` is what the DOCUMENT declares, and empty where the engine derives
- * one from the name. The handle a seat actually runs under is
- * [DerivedSeat.handle]; this client never derives one of its own.
+ * `handle` is what the DOCUMENT declares — the engine mints one from the name
+ * on every write that stores a seat without one, and never moves it after. The
+ * handle a seat actually runs under is [DerivedSeat.handle]; this client never
+ * derives one of its own.
  */
 export interface OrgSeat {
   name: string;
@@ -1201,14 +1294,17 @@ export interface OrgSeat {
    * Every phase's provider chain as a turn resolves it, keyed by phase wire
    * name (`execute`, `review`, …): the first key is the model the phase runs
    * on, every later one a fallback in the order tried. Provider KEYS only.
-   * Absent on a human seat and on a company configuring no provider.
+   * Absent on a human seat, on a company configuring no provider, and for
+   * every reader but an admin — so an absent one says the seat has none only
+   * to an admin (`lib/seats.ts`'s `resolvedAbsence`).
    */
   llm?: Record<string, string[]>;
   /**
    * Where this seat's tools come from, in the registry's origin grammar:
    * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
    * order. The grant, not what is running — the node heartbeat's MCP report
-   * says whether a server started. Absent on a human seat.
+   * says whether a server started. Absent on a human seat and for every
+   * reader but an admin.
    */
   tool_sources?: string[];
   /**
@@ -1220,19 +1316,26 @@ export interface OrgSeat {
 }
 
 /**
- * One unit on the anonymous org projection, as `internal/api`'s `OrgUnit`
- * writes it.
+ * One unit on the org projection, as `internal/api`'s `OrgUnit` writes it.
  *
- * `id`, `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not
- * here: `internal/api/orgprojection_test.go` classifies every field of
- * `config.Unit` and fails the build over an unclassified one. A screen that
- * needs one of them reads the company document through the `config` query.
+ * `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not here:
+ * `internal/api/orgprojection_test.go` classifies every field of `config.Unit`
+ * and fails the build over an unclassified one. A screen that needs one of
+ * them reads the company document through the `config` query.
  */
 export interface OrgUnit {
+  /**
+   * The unit's KEY — its declared `id`, which the engine mints from the name
+   * where the document declares none — which is what a `manages:` entry and a
+   * seat's `unit:` resolve, what `/config/units/{id}` addresses, and what every
+   * route to a unit carries. `name` is prose and two units may share one, so
+   * nothing addresses a unit by it.
+   */
+  id: string;
   name: string;
   type?: string;
   purpose?: string;
-  /** The seat NAME the document declares as lead. Empty when it inherits one. */
+  /** The seat HANDLE the document declares as lead. Empty when it inherits one. */
   lead?: string;
   goals?: string[];
   channel?: string;
@@ -1243,7 +1346,7 @@ export interface OrgUnit {
 }
 
 /**
- * The company as the anonymous projection carries it: its charter, its seats
+ * The company as the overview's projection carries it: its charter, its seats
  * and units in the positions the document wrote them, and the hierarchy the
  * ENGINE derived from that document.
  *
@@ -1294,7 +1397,7 @@ export interface Derived {
 export interface DerivedSeat {
   /**
    * The seat's authored path in the document (`units[0].roles[1]`). Carried by
-   * the GUARDED config answers and omitted from the anonymous projection,
+   * the GUARDED config answers and omitted from the overview's projection,
    * which hands a reader no document to point into.
    */
   path?: string;
@@ -1303,12 +1406,18 @@ export interface DerivedSeat {
   kind: string;
   /**
    * The authored path of the seat's effective home unit, "" at the root.
-   * Omitted from the anonymous projection with `path`: there, membership is
+   * Omitted from the overview's projection with `path`: there, membership is
    * [DerivedUnit.seats].
    */
   unit_path?: string;
-  /** A root seat the engine moved into a unit because of its `unit:` reference. */
-  placed_by_ref: boolean;
+  /**
+   * A root seat the engine moved into a unit because of its `unit:` reference.
+   *
+   * Absent wherever `path` is — the projection hands a reader no document to
+   * have been moved in, so "not moved" would be an answer rather than an
+   * absence. Read it as false.
+   */
+  placed_by_ref?: boolean;
   /** Handle of the primary manager, by the engine's own rule. "" when none. */
   manager: string;
   /** Handles of every seat that manages this one, in engine order. */
@@ -1322,8 +1431,14 @@ export interface DerivedSeat {
 }
 
 export interface DerivedUnit {
-  /** Authored path; omitted from the anonymous projection, as on a seat. */
+  /** Authored path; omitted from the overview's projection, as on a seat. */
   path?: string;
+  /**
+   * The unit's KEY — what a `manages:` entry and a seat's placement resolve.
+   * `name` is prose and two units may share one, so a derived unit is matched
+   * to its authored unit by this.
+   */
+  id: string;
   name: string;
   /** The EFFECTIVE type, after the engine's default. */
   type: string;
@@ -1404,15 +1519,22 @@ export interface ToolRow {
 
 /** One declared schedule, as `schedule.Row` serialises it.
  *
- *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`, `scope_name`,
- *  `last_run` and `last_outcome`; the server sends `scope_type` and `scope_id`
- *  and has no last-run field at all — the ledger is a separate answer — so
- *  four of its nine fields rendered as `undefined` on every row. */
+ *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`,
+ *  `last_run` and `last_outcome`; the server sends `scope_type`, `scope_id`
+ *  and `scope_name` and has no last-run field at all — the ledger is a
+ *  separate answer — so three of its fields rendered as `undefined` on every
+ *  row. */
 export interface ScheduleRow {
   /** `role` or `unit`. */
   scope_type: string;
-  /** The seat handle or the unit name this schedule is scoped to. */
+  /** The scope's IDENTITY, which is what the at-most-once ledger keys a fire
+   *  on: a seat's agent id, or a unit's key. Opaque; read `scope_name` to
+   *  show or link it. */
   scope_id: string;
+  /** The same scope as a person reads it: the seat's handle, or the unit's
+   *  key. Display and links only; nothing is filed under it. A seat the
+   *  company no longer holds has no handle, and the engine sends its id. */
+  scope_name: string;
   name: string;
   cron: string;
   /** The zone this schedule FIRES in, resolved by the engine: its own
@@ -1447,7 +1569,11 @@ export interface ScheduleRow {
  *  can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
+  /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
   scope_id: string;
+  /** See `ScheduleRow.scope_name`, resolved at read time from the company the
+   *  node is running. */
+  scope_name: string;
   schedule_name: string;
   /** The tick this fire stands for, as the ledger's own at-most-once key. */
   fire_label: string;
@@ -1470,6 +1596,7 @@ export interface SchedulesAnswer {
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;
+  scope_name: string;
   schedule_name: string;
   runs: ScheduleRunRow[];
   /** The page filled, so older fires are past it. */
@@ -1709,6 +1836,12 @@ export interface RetentionDomain {
    *  `reserve_bytes`. ABSENT when the broker could not be asked — which is not
    *  zero headroom. */
   headroom_fraction?: number;
+  /** What the log took in over the trailing day — the rate `log_ceiling_short`
+   *  holds the ceiling against `min_age` of. ABSENT where nothing was measured
+   *  (a compacted log, one in its first two days, a node whose trim has not
+   *  ticked), and `0` only for a log that took in nothing: the two are
+   *  opposite facts and must never share a rendering. */
+  bytes_per_day?: number;
   /** Everything below it may already be gone; it never moves down within a
    *  generation. Meaningful only where `trim_floor_state` is `published`. */
   trim_floor: number;
@@ -1855,9 +1988,9 @@ export interface RetentionAlarm {
   remedy: string;
   /**
    * Every log the alarm stands on, each with its own measurement. Under
-   * `backup_age` these are the logs whose trim the missing or stale backup is
-   * holding, which raise no `trim_blocked` of their own. Absent for a
-   * node-wide condition.
+   * `backup_age` these are the logs the missing or stale backup has held past
+   * their replay window, which raise no `trim_blocked` of their own; a younger
+   * hold is listed nowhere. Absent for a node-wide condition.
    */
   domains?: RetentionAlarmDomain[];
 }
@@ -2059,6 +2192,11 @@ export type KnowledgeReason =
    *  the whole first index build, and rendering it as "nothing found" tells a
    *  reader the company has written nothing down. */
   | "building"
+  /** The caller holds Tracker and not Knowledge: the knowledge base is not
+   *  theirs to search, so nothing was searched — never "nothing matched". The
+   *  dashboard asks the question only with Knowledge (`lib/useSearchQuery.ts`),
+   *  and draws this for an answer that raced an access change. */
+  | "no_access"
   | (string & {});
 
 /**
@@ -2161,6 +2299,10 @@ export type ReadLevel = "linearizable" | "session" | "stale" | "consistent_prefi
 export interface WorkSummary {
   id: string;
   key: string;
+  /** The key is one ANOTHER task claimed first, so it opens that task and this
+   *  one is reached by its id. Never open a row by `key` directly: hand it to
+   *  `itemAddress`, which is the one place that rule is written. */
+  key_collision?: boolean;
   project: string;
   title: string;
   /** The slug a card is drawn under. On the ROW rather than only on the
@@ -2228,8 +2370,11 @@ export interface WorkRowSpend {
 
 /** Where `around=` placed one task in an answer's DRAWING order — the list's
  *  own sort, or a board read column by column and lane by lane — over the
- *  whole answer rather than the page. `prev`/`next` are keys, null at the
- *  ends; `position` is null past the count's ceiling. On a label board the
+ *  whole answer rather than the page. `prev`/`next` are ADDRESSES
+ *  (`tracker.ItemAddress`), null at the ends: a neighbour's key, or its id
+ *  where another task claimed that key first — stepping to the key would open
+ *  the claimant, which is not on this board. `position` is null past the
+ *  count's ceiling. On a label board the
  *  order counts cards, so `total_hint` here is the number drawn. */
 export interface WorkAround {
   position: number | null;
@@ -2774,9 +2919,6 @@ export interface WorkCommentsAnswer {
   title: string;
   comments: WorkComment[];
   next_cursor?: string;
-  /** The PERSON behind each comment an operator token wrote, by comment id:
-   *  `author` is the credential, which is the audit trail and not a name. */
-  comment_seats?: Record<string, string>;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2788,6 +2930,9 @@ export interface WorkCommentsAnswer {
 export interface WorkTaskRef {
   id: string;
   key: string;
+  /** The key is one another task claimed first, so it opens THAT task and
+   *  this one is reached by its id (`itemAddress`). */
+  key_collision?: boolean;
   title: string;
   status: WorkStatus;
 }
@@ -2841,6 +2986,10 @@ export interface WorkItemTurn {
 export interface WorkItemTurnsAnswer {
   item: string;
   key: string;
+  /** The key is one ANOTHER task claimed first, so it opens that task and this
+   *  one is reached by `item`. Never open the task by `key` directly: hand it
+   *  to `itemAddress`, which is the one place that rule is written. */
+  key_collision?: boolean;
   turns: WorkItemTurn[];
   next_cursor?: string;
   read_level?: ReadLevel;
@@ -2856,9 +3005,6 @@ export interface WorkChange {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it wrote this — who a
-   *  row DRAWS; `actor` stays the token, which is the audit trail. */
-  actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
   turn_id?: string;
@@ -2883,6 +3029,9 @@ export interface WorkLink {
   kind: string;
   other: string;
   key?: string;
+  /** The other end's `key_collision`: its key opens another task, so this end
+   *  is reached by `other`. See `linkedItem`. */
+  key_collision?: boolean;
   title?: string;
   status?: WorkStatus;
   note?: string;
@@ -2995,9 +3144,6 @@ export interface WorkChecklistItem {
   assignee?: string;
   parent?: string;
   order?: number;
-  /** The subtask this item BECAME, which renders it struck through with the
-   *  new key rather than deleted. */
-  promoted_to?: string;
 }
 
 export interface WorkChecklist {
@@ -3087,18 +3233,17 @@ export interface WorkItemDetail {
   units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
-  /** The person behind each comment an operator token wrote, by comment id. */
-  comment_seats?: Record<string, string>;
-  /** The PERSON behind the token that filed this task, off the create's own
-   *  history row: `task.reporter` is the credential, which is the audit trail
-   *  and not a name. Absent for a task a seat filed. */
-  reporter_seat?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
    *  ANSWER rather than on the task because it is derived rather than stored:
    *  `links` say what the relations are, not whether any blocker is open. */
   blocked?: boolean;
+  /** The task's `key_collision`, on the ANSWER for `blocked`'s reason: it is
+   *  derived rather than stored. The task's key opens the task that claimed
+   *  it first, so everything this screen hands onward — the board link, a
+   *  peek, a call to copy — goes by `detailItem`'s address. */
+  key_collision?: boolean;
   /** Where the due date stands against the COMPANY's today, computed where
    *  a row's `overdue` is: whole calendar days to the due day (negative once
    *  it has passed) and whether it is overdue (open work only). Absent for a
@@ -3142,12 +3287,11 @@ export interface PageSummary {
    *  engine on every read and never stored, so it cannot disagree with the
    *  page. */
   folder?: boolean;
-  /** The person behind `author` when the author is an operator's token. */
-  author_seat?: string;
   /** The last change to what the page SAYS (its create, a save or a rename),
-   *  which `updated_at` is not: a label, a watch or a move moves that. */
+   *  which `updated_at` is not: a label, a watch or a move moves that. Who
+   *  made it is named as `author` is: a seat's handle for a person or an
+   *  agent, a credential's login for one bound to no seat. */
   saved_by?: string;
-  saved_by_seat?: string;
   saved_at?: string;
 }
 
@@ -3205,9 +3349,6 @@ export interface PageComment {
 export interface PageRevision {
   version: number;
   author?: string;
-  /** The person behind an operator's token, from the history row the same
-   *  record wrote. */
-  author_seat?: string;
   message?: string;
   created_at: string;
 }
@@ -3236,9 +3377,6 @@ export interface PageChange {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it wrote this: who a row
-   *  DRAWS, while `actor` stays the token, which is the audit trail. */
-  actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
   /** The turn that made this change — what a wiki cannot have, and what makes
@@ -3255,6 +3393,12 @@ export interface PageActivityAnswer {
   changes: PageChange[];
   next_cursor?: string;
   read_level?: ReadLevel;
+  /** This node's checkpoint on the pages log and the prefix of it whose
+   *  records it applied — a tracker answer's two numbers, for the same
+   *  reason: a node holding a record it cannot decode moves its checkpoint
+   *  past it, and only the applied prefix stopping short says it is behind. */
+  log_seq?: number;
+  applied_through?: number;
   complete?: boolean;
 }
 
@@ -3280,10 +3424,6 @@ export interface PageDetail {
   onboarding: boolean;
   /** The page's body is empty: a folder, a page that only groups pages. */
   folder?: boolean;
-  /** The person behind the page's author when that is an operator's token. */
-  author_seat?: string;
-  /** The person behind each comment an operator's token wrote, by comment id. */
-  comment_seats?: Record<string, string>;
   /** For a tool-skill page: the seats it reached as a skill over thirty
    *  company days, most recent first. Absent on any other page. */
   skill_loaded_by?: SkillLoad[];
@@ -3420,10 +3560,23 @@ export interface SandboxTailAnswer {
 }
 
 /** A seat's phase history, newest first, with a cursor. */
+/** One seat's live state and finished calls, asked by its handle and answered
+ *  by the agent id that handle resolves to. */
 export interface AgentAnswer {
+  /** The handle the seat answers to NOW — a retired one asked for resolves. */
+  handle: string;
+  agent_id: string;
   role: string;
+  /** The live overlay, its call masked as every live call is ([LiveCall.body_withheld]). */
   live: Overlay | null;
+  /**
+   * The seat's finished phases. Each record's `payload` — the prompt and the
+   * answer — is its trail, and absent for a reader the engine withholds the
+   * trail from ([body_withheld]); the record's own columns are its status.
+   */
   llm_history: EventRecord[];
+  /** The engine withheld this seat's trail from this reader. */
+  body_withheld?: boolean;
   /** Pass back as `before` to page further into the record. */
   next: string;
   /** Which nodes the history came from — a seat's history is on every node
@@ -3449,15 +3602,23 @@ export interface RevisionMeta {
   parent_revision_id?: string;
   summary: string;
   source: string;
+  /** The revision's AUTHOR — a seat's handle for a person bound to one, a
+   *  login otherwise, `token:<id>` for a Tier A token, the engine's own name
+   *  for a write a timer made. */
   created_by: string;
   /**
-   * WHAT `created_by` names: `operator` for a person's credential (an API
-   * token, or the login running the CLI), `node` for the engine's own write
-   * (a boot seed, the reconcile loop). Always present. A kind a newer engine
-   * adds arrives as itself, so this is a string rather than a closed union a
-   * newer value would silently fall outside of.
+   * WHAT `created_by` names, in the engine's one vocabulary of authors
+   * (`iam.ActorKind`): `agent`, `human`, `operator` or `system` — the last for
+   * the engine's own write (a boot seed, the reconcile loop). Always present:
+   * the engine refuses to store a revision that does not say who wrote it. A
+   * kind a newer engine adds arrives as itself, so this is a string rather
+   * than a closed union a newer value would silently fall outside of.
    */
   created_by_kind: string;
+  /** The credential the revision was written through — a machine token's
+   *  `pat:<id>`, a browser session's `session:<lineage>` — and empty for a
+   *  write no credential made. */
+  operator_id: string;
   created_at: string;
   activated_at?: string;
   is_active?: boolean;
@@ -3783,24 +3944,27 @@ export interface SetupRun {
 
 export interface SetupListing {
   tools: SetupToolState[];
-  public_base_url: {
-    /** The RESOLVED address, empty when the reference resolves to nothing. */
+  /**
+   * Where a THIRD-PARTY APP reaches this deployment: the address every
+   * webhook, Slack request URL and GitHub App manifest on this screen is
+   * built on. The public listener's `api.public.external_url` where
+   * `api.public` is configured, and `api.external_url` otherwise —
+   * `config_path` names which key it was read from, since there are two once
+   * a public listener is set (the engine's `config.API.WebhookBase` and
+   * `WebhookBaseKey`). NEVER the address a person or a cookie uses: that is
+   * always `api.external_url`, which a vendor's address may not be.
+   *
+   * ONE FIELD WHERE THERE WERE FOUR. While this was a key in the company
+   * document — a Tier B pointer a node resolved per epoch — the screen also
+   * needed `present`, `resolved` and the variable's `reference`, because
+   * "configured and resolving to nothing" was a state a banner had to name.
+   * Both keys are Tier A, required on a node serving this screen and resolved
+   * before the file is decoded, so a node answering at all has an address and
+   * those three fields described a state that can no longer occur.
+   */
+  external_url: {
     value: string;
-    present: boolean;
-    /**
-     * Whether the configured value resolves to something. THREE-VALUED:
-     * `null` means this node cannot say, which is not the same as `false`.
-     * `present` alone is what a banner read once, so a `${VAR}` nobody
-     * exported rendered as "reach this engine at" and then nothing.
-     */
-    resolved?: boolean | null;
     config_path: string;
-    /**
-     * The variable the setting points at, empty for a literal. What makes
-     * an unresolved address actionable: "set it" is advice, "export
-     * PUBLIC_BASE_URL" is an instruction.
-     */
-    reference?: string;
   };
 }
 
@@ -3808,7 +3972,12 @@ export interface SecretRow {
   name: string;
   key_id: string;
   updated_at: string;
+  /** Who last stored the value, and — beside them — what sort of author and
+   *  the credential they stored it through, as a revision records the same
+   *  three. Both are empty on a row written before either was recorded. */
   updated_by: string;
+  updated_by_kind?: string;
+  operator_id?: string;
   source: string;
 }
 
@@ -3849,19 +4018,98 @@ export interface Frame {
   id?: number;
   what?: string;
   error?: string;
+  ts?: string;
+  /** The seat an `inbox_changed` frame is about. Only a socket WATCHING that
+   *  seat is sent one, so a frame here is already this tab's own. */
+  seat?: string;
+  /** On an `unauthorized` error frame: the rule that refused — see
+   *  {@link QueryRefusal}. Absent on every other frame. */
+  reason?: string;
+  /** On an `unauthorized` error frame: the grants any one of which would have
+   *  admitted the caller. An EMPTY list is an answer — no grant would. */
+  grants?: string[];
+  /** On a QUERY's `unavailable` error frame: the state log's own refusal
+   *  code, when one is behind the answer, or `no_active_revision` for a work,
+   *  page or search question on a node that has no company yet — see
+   *  {@link LogRefusal}. Never on a watch's, whose words stay in the node's
+   *  log because what the directory says about a login names its seat. */
+  refusal?: string;
   /**
-   * How long to wait before asking again, on an `unavailable` error frame and
-   * nowhere else — the socket's `Retry-After`, computed by the same engine
-   * helper as the REST 503's header.
-   */
-  retry_after_seconds?: number;
-  /**
-   * The refusal's own sentence, on a `bad_params` error frame and nowhere
-   * else: that refusal is written for the caller — it names the parameter to
-   * change — and every other failure's text stays in the node's log.
+   * The refusal's own words, on two error frames and nowhere else: a query's
+   * `unavailable` (what the state log's refusal is about and what changes it)
+   * and a `bad_params` (the parameter to change and what it accepts). Both are
+   * written FOR the caller; every other failure's text stays in the node's
+   * log, so this is never a path or a driver's message.
    */
   detail?: string;
-  ts?: string;
+  /** On an `unavailable` error frame, a query's or a watch's: seconds before
+   *  asking this node again, and ZERO when waiting will not change the
+   *  answer. Never omitted there — and waited out, through
+   *  `unavailableRetryMs`, by everything that asks again. */
+  retry_after?: number;
+}
+
+/**
+ * Why the engine refused a question on AUTHORITY — the machine-readable half of
+ * an `unauthorized` answer, which the socket's error frame carries under the
+ * same keys the REST envelope does.
+ *
+ * `grants` are the capabilities any ONE of which would have admitted the
+ * caller; an empty list means no capability would, and what is missing is a
+ * relation the org chart does not hold (leading the person, owning the record).
+ * `reason` is the deciding rule's own word (`not_self`, `no_grant`, …).
+ */
+export interface QueryRefusal {
+  reason: string;
+  grants: string[];
+}
+
+/**
+ * What an `unavailable` answer says beyond its code — the machine-readable half
+ * the socket's error frame carries under the keys a REST 503 does
+ * (`refusal`, `detail`, and the `Retry-After` header as `retry_after`).
+ *
+ * `unavailable` covers two opposite facts. A node that is catching up, or whose
+ * coordination store blinked, answers the same question a few seconds later;
+ * a node whose state log is full, that holds a record it cannot decode or whose
+ * broker refused the read's barrier answers it the same however often it is
+ * asked. `retryAfter` is what tells them apart, and its ZERO is the answer:
+ * asking this node again changes nothing, so a screen stops asking on a timer
+ * and says what would.
+ */
+export interface LogRefusal {
+  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or
+   *  `no_active_revision` where the node has not been handed a company yet
+   *  and the question is over its tracker or knowledge base — the code a REST
+   *  503 carries for it — or null where neither is behind the answer. */
+  code: string | null;
+  /** The refusal's own words: what it is about and what changes it. */
+  detail: string | null;
+  /** Seconds before asking THIS node again; zero when waiting will not
+   *  change the answer, and then nothing re-asks on a timer. Read through
+   *  `retryAfterMs`, which bounds it at `RETRY_AFTER_MAX_MS`. */
+  retryAfter: number;
+}
+
+/**
+ * An `inbox_changed` frame's data: one committed tracker batch moved this
+ * seat's inbox.
+ *
+ * IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame says only that the inbox
+ * should be asked again; what is in it is read through `work_inbox`, the
+ * question that decides who may read it. `unread_delta` is a HINT — it counts
+ * the notices the batch wrote, and a redelivery the engine has already
+ * collapsed may count one twice — so no screen adds it to a badge.
+ */
+export interface InboxChange {
+  handle: string;
+  unread_delta: number;
+  /** The id of the object the newest of those notices was written on: the
+   *  task for a task commit, the PERSON for a `prioritised` notice — whose
+   *  task `work_inbox` names as `task`. */
+  subject: string;
+  /** The reason that notice was routed under — one of `work_inbox`'s. */
+  reason: string;
 }
 
 /** The named answers the socket's request/response channel serves. */
@@ -3894,12 +4142,12 @@ export interface WorkActivityRecord {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it made this change —
-   *  who a row DRAWS; `actor` stays the token, which is the audit trail. */
-  actor_seat?: string;
   subject_kind: string;
   subject_id: string;
   subject_key?: string;
+  /** `subject_key` opens ANOTHER task — one that claimed it first — so the
+   *  subject is reached by `subject_id`. See `subjectItem`. */
+  subject_key_collision?: boolean;
   project?: string;
   excerpt?: string;
   fields?: Record<string, WorkDelta>;
@@ -3911,6 +4159,10 @@ export interface WorkActivityRecord {
   /** How a reader tells "nothing was announced" from "nothing happened" —
    *  which is the whole reason a quiet commit still writes a row. */
   notified: boolean;
+  /** An announcement a repair duty issued rather than the write it is about
+   *  — the mirror of a one-sided dependency, or the "ready" an unblocked
+   *  task's assignee never got — so a card read late says why it came then.
+   *  It says nothing about when the broker accepted the commit. */
   late?: boolean;
 }
 
@@ -3977,10 +4229,6 @@ export interface WorkDecisionEvidence {
 export interface WorkAskRow extends WorkSummary {
   comment: string;
   asked_by: string;
-  /** The person behind an operator token that asked — the seat it was bound
-   *  to — and absent where the asker already is a seat. Who a row draws;
-   *  `asked_by` stays the author. */
-  asked_by_seat?: string;
   asked_at: string;
   body: string;
   /** Present when the ask asks somebody to choose. */
@@ -3998,6 +4246,9 @@ export interface WorkAskRow extends WorkSummary {
 export interface WorkChecklistRow {
   task: string;
   task_key: string;
+  /** `task_key` opens another task, so the task is reached by `task`. See
+   *  `checklistTask`. */
+  task_key_collision?: boolean;
   task_title: string;
   checklist: string;
   item: string;
@@ -4077,12 +4328,18 @@ export interface WorkInboxNotice {
   /** The human-readable key, resolved by the applier so the read is an index
    *  range rather than a join. */
   subject_key?: string;
+  /** The id of the TASK this notice is about, absent when it names none: the
+   *  subject for a task commit, and the task a lead put at the top of the list
+   *  for a `prioritised` notice — whose subject is the PERSON while
+   *  `subject_key` is the task's. See `noticeItem`. */
+  task?: string;
+  /** The key STORED here now opens a task other than `task`, so the notice is
+   *  reached by `task` — asked of this key rather than read off the task,
+   *  because a task moved since answers to a new one. See `noticeItem`. */
+  subject_key_collision?: boolean;
   excerpt?: string;
   actor?: string;
   actor_kind?: string;
-  /** The person an operator token was bound to when it made this change —
-   *  what a row draws in place of the token's id. */
-  actor_seat?: string;
   /** The comment this change wrote and the agent turn that made it. */
   comment_id?: string;
   turn_id?: string;
@@ -4138,6 +4395,8 @@ export interface WorkInboxAnswer {
 export interface WorkRanked {
   id: string;
   key: string;
+  /** As `WorkSummary.key_collision`: the key opens another task. */
+  key_collision?: boolean;
   title: string;
   project: string;
   type: string;
@@ -4311,34 +4570,169 @@ export interface TurnsAnswer {
   coverage?: Coverage;
 }
 
-/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+/** Who the engine resolved this caller to — see `lib/viewer.ts`. */
 export interface Viewer {
-  /** The operator id the token resolves to, or "" for an anonymous caller. */
-  operator_id: string;
-  /** Whether this caller may ask the operator-gated questions. */
-  operator: boolean;
-  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
+  /** The principal's login: a person's dotted name, or a machine's `class:id`. */
+  login: string;
+  /** The capabilities this caller carries, after the node's ceiling. */
+  grants: string[];
+  /** The seat the identity directory binds this caller to, or "".
    *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
   handle: string;
+  /** That seat's display name, or "". */
   name: string;
+  /** That seat's kind — `human` or `agent` — or "" for no seat. */
   kind: string;
-  /** The tools `POST /operator/act/{tool}` serves this caller: every write
-   *  the operator catalogue holds for a token bound to a seat, and EMPTY for
-   *  an anonymous or unbound caller, who may not act (ADR-0024). */
+  /**
+   * The name this caller's OWN record is kept under — their inbox, pins,
+   * priorities and personal views: the seat for a bound person, the login for
+   * everybody the directory binds to none. Every tool writes their record under
+   * it, so every personal read asks by it. "" for a caller with no record.
+   */
+  owner: string;
+  /** The tools `POST /operator/act/{tool}` would serve this caller: the
+   *  catalogue's writes the authority table can admit them to before any
+   *  object is named, so a screen enables exactly the controls a press of
+   *  could be served. NOBODY IS REFUSED FOR BEING UNBOUND (ADR-0024): an
+   *  unbound credential acts under its own login. Empty on a node that has
+   *  not been handed a company — every press would be refused there. */
   acts: string[];
   /** The project this person's create lands in when it names none — the
    *  engine's own default for their seat, which `create_work_item` applies.
-   *  "" when their team and every team above it owns none. */
+   *  "" for a caller bound to no seat, and when their team and every team
+   *  above it owns none. */
   project: string;
-  /** Whether this caller's credential may CHANGE the company document.
-   *  False for an anonymous caller, and for every credential a managed
-   *  document's `api.auth.company_writers` does not list (ADR-0030). */
+  /** Whether this caller's credential may CHANGE the company document —
+   *  the engine's own `config.APIAuth.MayWriteCompany`, the rule its config
+   *  surface refuses a write with. False for an anonymous caller, and for
+   *  every credential a managed document's `api.auth.company_writers` does
+   *  not list (ADR-0030): a person's session, a machine token and a lead
+   *  among them. It says nothing about authority — Admin, or a lead's
+   *  subtree, still decides whether this caller may write at all. */
   config_writer: boolean;
-  /** The token ids that alone may change a managed company document — who
-   *  manages it — and EMPTY when it is not managed. Named to an operator
-   *  only; an anonymous caller is told none. */
+  /** The Tier A token ids that alone may change a managed company document —
+   *  who manages it — and EMPTY when it is not managed. An anonymous caller
+   *  is told none. */
   config_managed_by: string[];
 }
+
+// ---------------------------------------------------------------------------
+// The sign-in surface — `/auth`, read by `protocol/auth.ts`
+// ---------------------------------------------------------------------------
+
+/**
+ * What a session opened by a sign-in may do: everything its grants allow, or
+ * — on a deployment that requires a second factor the person does not hold —
+ * nothing but enrol one. The second is the code the engine refuses every
+ * other route with, so one string names it wherever it is met.
+ */
+export type SessionStatus = "signed_in" | "second_factor_enrolment_required";
+
+/**
+ * What every completed sign-in answers — a password, a redemption, a token
+ * exchange, a step-up, an enrolment's replacement session.
+ *
+ * NO BEARER IN IT. The cookie the response set is the credential, and a body
+ * carrying it too would put the one value most worth stealing where a script
+ * can read it.
+ */
+export interface SignedIn {
+  person: string;
+  /** The login as the estate holds it, which is how a screen names them. */
+  login: string;
+  seat?: string;
+  /** The absolute deadline, which no re-issue moves. */
+  expires_at: string;
+  position: string;
+  status: SessionStatus;
+}
+
+/** What an invitation's screen renders from, before anything is spent. */
+export interface InvitationView {
+  /** The address it is for, opened for this one answer. */
+  email: string;
+  /** Who sent it, or absent. */
+  invited_by?: string;
+  /** The login this form PROPOSES from the address, or absent when nothing in
+   *  it fits the grammar and the person must type one. */
+  login?: string;
+  /** The floor every password is held to. */
+  min_password_length: number;
+  /** The seat redeeming it binds the person to, as the chart calls it now —
+   *  with no handle where the chart no longer holds it. Every invitation
+   *  names one, because every person holds a human seat; one that names none
+   *  (absent, or empty) is one whose redemption the engine refuses, and the
+   *  screen says so before anybody types a password. */
+  seat?: { handle?: string; name?: string };
+  /** The login this BROWSER is signed in as, or absent for nobody: redeeming
+   *  ends that session, so the form says so first. */
+  signed_in_as?: string;
+}
+
+/** A password set from a reset link — and no session: the person signs in next. */
+export interface PasswordSet {
+  status: "password_set";
+  login: string;
+}
+
+/**
+ * A second factor's seed: the first leg of an enrolment, which stores nothing.
+ * The second leg sends `secret` back with a code derived from it.
+ */
+export interface SecondFactorSeed {
+  /** The seed in base32, for an app that is typed into. */
+  secret: string;
+  /** The `otpauth://` form an authenticator app opens, and scans as the setup's QR code. */
+  uri: string;
+}
+
+/** A completed enrolment. */
+export interface SecondFactorEnrolled {
+  status: "enrolled";
+  /** The whole session that replaced an enrolment-only one, or absent. */
+  session?: SignedIn;
+}
+
+/** The one and only time a set of recovery codes is readable. */
+export interface RecoveryCodes {
+  codes: string[];
+}
+
+/** Who a session is, as `GET /auth/session` answers — the part a screen reads. */
+export interface SessionAnswer {
+  person: string;
+  /** Their own name as their directory row holds it, or absent — what a screen
+   *  calls a person no seat names. */
+  name?: string;
+  login: string;
+  seat?: string;
+  /** `person` or `machine`: a machine holds no second factor to manage. */
+  kind: string;
+  /** What this node lets the caller do: their grants, cut to its ceiling. */
+  grants?: string[] | null;
+  /** The absolute deadline of the session the request carried, or absent for
+   *  a credential that is not a session. */
+  expires_at?: string;
+  /** The session the request carried, by the id a listing of the person's
+   *  sessions names it by — absent exactly where `expires_at` is. */
+  lineage?: string;
+  status: SessionStatus;
+}
+
+/** What a client reads before anybody signs in (`GET /auth/config`). */
+export interface AuthConfig {
+  /** The floor every password is held to, in characters. */
+  min_password_length: number;
+  /** Whether a person signing in with a password must hold a second factor. */
+  second_factor: "required" | "optional";
+}
+
+/**
+ * What changing your own password answers: the new session that keeps this
+ * browser signed in, or — where this node has not applied the change yet — the
+ * plain fact that every session ended, this browser's with them.
+ */
+export type PasswordChanged = SignedIn | { status: "password_changed"; detail: string };
 
 /** One seat a name could mean, and why. */
 export interface ColleagueCandidate {
@@ -4400,10 +4794,11 @@ export interface FeedWorkRow {
   cursor: string;
   actor?: string;
   actor_kind?: string;
-  /** The person a bound token's commit was made for. */
-  actor_seat?: string;
   task: string;
   key?: string;
+  /** The key is one another task claimed first, so a link built from it
+   *  opens THAT task and this row's is reached by its id (`itemAddress`). */
+  key_collision?: boolean;
   title?: string;
   project?: string;
   /** On a completion: the task's running totals, tokens only. */
@@ -4573,7 +4968,6 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
-  access: AccessAnswer;
   mcp_servers_status: McpServersStatusAnswer;
   credential_pool: CredentialPoolAnswer;
   backups: BackupsAnswer;

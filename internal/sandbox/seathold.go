@@ -76,6 +76,12 @@ import "context"
 // starts to need it and Release when it stops, once each: holds are keyed by
 // reason, so a second Hold would be the same hold and a Release the last of
 // it.
+//
+// CALLED WITH THE SEAT'S HANDLE, which is what this node's own counts are kept
+// under, and IMPLEMENTED ON ITS ID: the inbox a hold sits on is named by the
+// seat's id, a pure function of its immutable handle (ADR-0013), so the
+// implementation derives the id and holds the mailbox it names — as every
+// other hold on a seat's mailbox is keyed.
 type SeatHold interface {
 	Hold(ctx context.Context, handle string) error
 	Release(ctx context.Context, handle string) error

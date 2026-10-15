@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
-
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlab"

@@ -17,10 +17,17 @@ import {
   noticeNote,
   noticeTitle,
   readThrough,
+  rowItem,
+  rowName,
+  rowWho,
   snoozePresets,
+  type InboxRow,
 } from "./model.ts";
 import type { DecisionSubject } from "~/components/DecisionRow.tsx";
-import type { WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
+import type { SandboxRun, WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
+import { itemAddress } from "~/lib/work.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { withDerived } from "~/test/org.ts";
 
 function notice(id: string, extra: Partial<WorkInboxNotice> = {}): WorkInboxNotice {
   return {
@@ -242,4 +249,71 @@ describe("the quiet sentences", () => {
       "every seat's own state",
     );
   });
+});
+
+// A PARKED RUN'S TASK is a turn's: its work item carries no collision flag, so
+// the pane opens, threads and replies by the native task's id, since a key another
+// task claimed first would read and write the claimant's conversation.
+test("a parked run's task is addressed by its id", () => {
+  const run = {
+    work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
+  } as unknown as SandboxRun;
+  const row: InboxRow = {
+    kind: "decision",
+    key: "run:1",
+    subject: { kind: "run", at: "2026-09-27T10:00:00Z", run },
+    notices: [],
+  };
+  const item = rowItem(row);
+  expect(item && itemAddress(item)).toBe("t-dup");
+});
+
+// WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person writes AS their seat, so
+// the row is the seat and draws its name; a credential bound to no seat writes
+// under its own login, which is a name rather than a secret; and only a change
+// the engine made itself names nobody.
+describe("who a notice is from", () => {
+  const index = indexOrg(
+    withDerived({
+      name: "Acme",
+      roles: [{ handle: "maya", name: "Maya Ops", kind: "human" }],
+    }) as never,
+  );
+  const row = (extra: Partial<WorkInboxNotice>): InboxRow => ({
+    kind: "notice",
+    key: "r-1",
+    at: "2026-09-27T10:00:00Z",
+    notice: notice("r-1", extra),
+  });
+
+  test("a person is drawn as the seat they write as", () => {
+    const who = rowWho(row({ actor: "maya", actor_kind: "human" }), index);
+    expect(who?.name).toBe("Maya Ops");
+    expect(who?.kind).toBe("human");
+  });
+
+  test("a credential bound to no seat is drawn as its login, as a person", () => {
+    const who = rowWho(row({ actor: "ci.bot", actor_kind: "operator" }), index);
+    expect(who?.name).toBe("ci.bot");
+    expect(who?.kind).toBe("human");
+  });
+
+  test("the engine's own change names nobody, and the row says so", () => {
+    const r = row({ actor: "crewlet", actor_kind: "system" });
+    expect(rowWho(r, index)).toBeNull();
+    expect(rowName(r, null)).toBe("The engine");
+  });
+});
+
+// A NOTICE ON A DUPLICATE'S KEY is reached by its task's id: the key opens the
+// task that claimed it first.
+test("a notice whose key another task claimed is addressed by its task's id", () => {
+  const r: InboxRow = {
+    kind: "notice",
+    key: "r-1",
+    at: "2026-09-27T10:00:00Z",
+    notice: notice("r-1", { task: "t-dup", subject_key: "ENG-7", subject_key_collision: true }),
+  };
+  const item = rowItem(r);
+  expect(item && itemAddress(item)).toBe("t-dup");
 });

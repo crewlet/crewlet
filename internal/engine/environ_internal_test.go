@@ -22,7 +22,7 @@ func TestTheSecretStoreFrontsTheHandedEnvironment(t *testing.T) {
 		"SOME_TOKEN": "the-stale-one-from-dot-env",
 	}
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "the-rotated-one",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if !e.refreshSecrets(t.Context()) {

@@ -141,8 +141,14 @@ func deliverableMembersLocked(sub *subscription) []*consumer {
 //   - a process-wide delivery pause (PauseDelivery)        -> c.paused
 //   - a per-subscription hold (PauseTopic)                 -> c.pauses[m.key]
 //   - a deferral just applied, or an explicit Quiesce      -> c.quiescing[m.key]
+//   - a broker that went away ([Broker.Fail])              -> c.broker.down
 //
-// DETACH IS ASKED FIRST, and not for speed: it is the only one of the five
+// The last is the one the contract does not enumerate, because it is no
+// decision of the node's: a broker nobody can reach delivers to nobody, so an
+// Unquiesce that drains on this twin cannot hand out mail a consumer on the
+// real broker could not fetch.
+//
+// DETACH IS ASKED FIRST, and not for speed: it is the only one of the six
 // that a caller re-deriving the members from sub.members would never see, so
 // it is the one a reader has to find here. A consumer that has been dropped
 // is out of every other question's jurisdiction — its client may still be
@@ -153,7 +159,7 @@ func deliverableLocked(m *consumer) bool {
 		return false
 	}
 	c := m.client
-	if c == nil || !c.running || c.paused {
+	if c == nil || !c.running || c.paused || c.broker.down {
 		return false
 	}
 	if len(c.pauses[m.key]) > 0 {

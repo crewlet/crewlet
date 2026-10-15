@@ -9,7 +9,7 @@ import (
 // recently: a question somebody keeps asking outlives a flood of one-offs.
 func TestTheAnswerCacheEvictsTheLeastRecentlyUsed(t *testing.T) {
 	t.Parallel()
-	c := newAnswerCache(3)
+	c := NewAnswerCache(3)
 	for i := range 3 {
 		c.put(fmt.Sprint(i), KnowledgeAnswer{AnswerMD: fmt.Sprint(i)})
 	}
@@ -34,7 +34,7 @@ func TestTheAnswerCacheEvictsTheLeastRecentlyUsed(t *testing.T) {
 // sources, changes nothing the next caller is served.
 func TestACacheHitIsACopy(t *testing.T) {
 	t.Parallel()
-	c := newAnswerCache(2)
+	c := NewAnswerCache(2)
 	c.put("q", KnowledgeAnswer{AnswerMD: "a", Sources: []AnswerSource{{Ref: "p-1"}}})
 	hit, _ := c.get("q")
 	hit.Cached, hit.Sources[0].Ref = true, "changed"
@@ -44,13 +44,27 @@ func TestACacheHitIsACopy(t *testing.T) {
 	}
 }
 
-// THE PLAN'S SIZE, pinned: 256 answers per node.
+// THE PLAN'S SIZE, pinned: 256 answers per node, which is what a cache asked
+// for no particular size holds.
 func TestTheAnswerCacheHoldsTwoHundredFiftySixPerNode(t *testing.T) {
 	t.Parallel()
 	if AnswerCacheEntries != 256 {
 		t.Fatalf("AnswerCacheEntries = %d, want 256", AnswerCacheEntries)
 	}
-	if got := newAnswerKnowledge(OperatorDeps{}).cache.limit; got != AnswerCacheEntries {
-		t.Fatalf("the tool's cache holds %d, want AnswerCacheEntries", got)
+	if got := NewAnswerCache(0).limit; got != AnswerCacheEntries {
+		t.Fatalf("a cache of no stated size holds %d, want AnswerCacheEntries", got)
+	}
+}
+
+// THE CACHE IS THE NODE'S, NOT THE CATALOGUE'S. A surface builds its catalogue
+// per request, so a tool that built its own cache would answer every question
+// afresh: two catalogues over one AnswerDeps must share what it carries.
+func TestEveryCatalogueServesTheNodesOneCache(t *testing.T) {
+	t.Parallel()
+	cache := NewAnswerCache(2)
+	deps := OperatorDeps{Answer: AnswerDeps{Cache: cache}}
+	first, second := newAnswerKnowledge(deps), newAnswerKnowledge(deps)
+	if first.deps.Cache != cache || second.deps.Cache != cache {
+		t.Fatal("a catalogue's answer tool holds a cache other than the node's")
 	}
 }

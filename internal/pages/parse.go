@@ -71,7 +71,7 @@ type ParserOptions struct {
 func NewParser(opts ParserOptions) *Parser {
 	leads := make(Leads, len(opts.Leads))
 	for container, handle := range opts.Leads {
-		leads[strings.ToUpper(strings.TrimSpace(container))] = handle
+		leads[ContainerKey(container)] = handle
 	}
 	return &Parser{leads: leads, baseURL: strings.TrimRight(opts.BaseURL, "/")}
 }
@@ -106,7 +106,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		return nil, nil
 	}
 	base := p.inbound(record)
-	actor := writerOf(record)
+	actor := record.Actor
 
 	var targets []target
 	for _, handle := range record.Notify.Mentions {
@@ -144,26 +144,7 @@ func LeadWorthy(kind ChangeKind) bool {
 
 type target struct{ handle, via string }
 
-// writer is who made a change, under every name a recipient list can hold
-// them by.
-type writer struct{ actor, seat string }
-
-// writerOf is the record's writer: the actor it names and, for an operator,
-// the seat their token was bound to ([MutationRecord.ActorSeat]).
-func writerOf(record MutationRecord) writer {
-	return writer{actor: record.Actor, seat: record.ActorSeat}
-}
-
-// is reports whether handle is the writer.
-//
-// UNDER EITHER NAME, because a person's subscription is their SEAT while their
-// writes are recorded under their TOKEN: compared with the actor alone, a
-// founder who watches a page was woken by every save they made to it.
-func (w writer) is(handle string) bool {
-	return handle != "" && (handle == w.actor || handle == w.seat)
-}
-
-func (p *Parser) directed(base notify.Inbound, targets []target, actor writer,
+func (p *Parser) directed(base notify.Inbound, targets []target, actor string,
 	at time.Time, reg *notify.Registry) []notify.Routed {
 	var (
 		out     []notify.Routed
@@ -171,7 +152,7 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor writer,
 		dropped int
 	)
 	for _, t := range targets {
-		if t.handle == "" || actor.is(t.handle) || seen[t.handle] {
+		if t.handle == "" || t.handle == actor || seen[t.handle] {
 			continue
 		}
 		seen[t.handle] = true
@@ -201,25 +182,25 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor writer,
 }
 
 // leadCopy is the fallback: the lead of the unit that owns the container.
-func (p *Parser) leadCopy(base notify.Inbound, container string, actor writer,
+func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
 	at time.Time, reg *notify.Registry) []notify.Routed {
 	if container == "" {
 		return nil
 	}
-	lead := p.leads[strings.ToUpper(container)]
+	lead := p.leads[ContainerKey(container)]
 	if lead == "" {
 		log.Debug("pages_no_recipients", "container", container,
 			"page", base.Metadata[MetaTitle])
 		return nil
 	}
 	// A lead writing in their own container must not wake themselves.
-	if actor.is(lead) {
+	if lead == actor {
 		return nil
 	}
 	// AND THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT.
 	// The lead map is built from one epoch's org and this parser outlives
 	// that epoch, so a lead whose seat was removed or whose handle was
-	// renamed is a handle the company no longer employs — and routing to one
+	// changed is a handle the company no longer employs — and routing to one
 	// produces a delivery that resolves to nobody at the far end of the
 	// notification service, reported there as an undeliverable recipient
 	// rather than here, where the container that reached nobody is named.

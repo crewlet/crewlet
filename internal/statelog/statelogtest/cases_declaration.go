@@ -94,11 +94,11 @@ func Declaration(c Candidate) []error {
 	// still has to say whether the answer landed.
 	if c.Domain.OpsTable() == "" {
 		if c.Domain.ReadinessInput() {
-			add("%s keeps no operation ledger and gates seat admission — a "+
+			add("%s keeps no operation ledger and is a readiness input — a "+
 				"domain whose apply is total enough to need no ledger is one "+
 				"whose gaps are a coverage number rather than a fault, and "+
-				"shedding a company's seats for one is the outage the number "+
-				"exists to avoid", name)
+				"taking a node's copy of the estate out of service for one is "+
+				"the outage the number exists to avoid", name)
 		}
 		if len(spec.ArbitratedKinds) != 0 {
 			add("%s keeps no operation ledger and arbitrates %v — an arbitrated "+

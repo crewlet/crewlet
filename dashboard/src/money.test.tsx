@@ -37,6 +37,7 @@ import { Home } from "~/routes/home/Home.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -461,6 +462,25 @@ afterEach(() => {
 });
 
 /**
+ * What the frame itself asks, answered as the engine answers an admin with
+ * nothing waiting — unless a case names its own: who is reading, and the
+ * inbox and queue counts a reader holding Tracker is asked for.
+ */
+const FRAME_ANSWERS: Record<string, unknown> = {
+  viewer: {
+    login: "founder",
+    grants: ["admin", "tracker", "knowledge"],
+    handle: "ceo",
+    owner: "ceo",
+    name: "Chief",
+    kind: "human",
+    acts: [],
+  },
+  work_inbox: { notices: [] },
+  work_items: { items: [] },
+};
+
+/**
  * Mount one screen at one address, over a store holding the priced rollup and
  * a socket answering every question from `answers`.
  *
@@ -476,13 +496,17 @@ function mount(hash: string, view: ReactElement, answers: Record<string, unknown
   store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
   store.applyTokens(rollup());
   const socket = new LiveSocket(store);
+  // AN ADMIN READS EVERY SCREEN WHOLE — a seat's turns included — so no
+  // price can hide behind a lock this suite never opened.
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(answers[what] ?? {});
+    Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <FrameReadings>
-        <Router>{view}</Router>
-      </FrameReadings>
+      <SessionReading>
+        <FrameReadings>
+          <Router>{view}</Router>
+        </FrameReadings>
+      </SessionReading>
     </ClientContext.Provider>,
   );
 }

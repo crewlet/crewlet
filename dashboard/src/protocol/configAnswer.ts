@@ -15,6 +15,7 @@
  * network half is `configWrite.ts`.
  */
 
+import type { SeatHeldHolder } from "../contract/config.ts";
 import type { ConfigProblem, ConfigWarning, Derived } from "./types.ts";
 
 /** What the engine answered: its status, its parsed body and its entity tag.
@@ -38,13 +39,20 @@ export type ConfigConflictReason =
 
 /** What a refusal from the configuration surface means. */
 export type ConfigRefusal =
-  /** The credential was refused: this surface is guarded in full. */
-  | { readonly kind: "guarded" }
+  /**
+   * The engine refused the caller on AUTHORITY: this surface is guarded in
+   * full. `code` is the refusal's own — `unauthorized` for a grant the caller
+   * does not hold, `step_up_required` for a confirmation they declined,
+   * `csrf_origin`, `invalid_token` — because each sends a person somewhere
+   * different, and only the first is a grant to ask an administrator for.
+   */
+  | { readonly kind: "guarded"; readonly code: string }
   /**
    * `403 config_managed`: the credential was ACCEPTED and is not one the
-   * deployment lets change the company document — another system manages
-   * it (ADR-0030). Nothing was stored, and no retry with this token changes
-   * the answer; [managedSentence] is how a screen says so.
+   * deployment lets change the company document — another system manages it
+   * (ADR-0030), whatever grant or subtree the caller holds. Nothing was
+   * stored, and no retry with this credential changes the answer;
+   * [managedSentence] is how a screen says so.
    */
   | { readonly kind: "managed"; readonly managedBy: readonly string[] }
   | {
@@ -106,16 +114,51 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
-  // A MANAGED DOCUMENT'S REFUSAL IS NOT ABOUT THE TOKEN, which the engine
-  // accepted: it is about where the company is written (ADR-0030), so it is
-  // its own answer rather than a credential to replace.
+  // A MANAGED DOCUMENT'S REFUSAL IS NOT ABOUT THE CREDENTIAL, which the
+  // engine accepted: it is about where the company is written (ADR-0030), so
+  // it is its own answer rather than a grant to ask for. FIRST, because it is
+  // also a 403: read as a guarded refusal it would send a person who holds
+  // every grant to an administrator who cannot help them.
   if (answer.status === 403 && code === "config_managed") {
     const managedBy = Array.isArray(body.managed_by)
       ? body.managed_by.filter((id): id is string => typeof id === "string")
       : [];
     return { kind: "managed", managedBy };
   }
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded" };
+  // A WRITE REFUSED PART BY PART. Without Admin the engine admits a
+  // write only where everything it changes is inside a unit the caller leads,
+  // and its refusal names each part that is not (`refused`,
+  // `configapi.RefusedChange`): the caller holds what they need for the rest,
+  // so it is a problem with the draft, placed on each seat and unit it names,
+  // and not a refusal of the person. A caller who leads no unit is refused
+  // every part the same way, and a writer that knows its draft is the whole
+  // company reads that as the grant they lack (the builder's `classifyCheck`).
+  const refused = Array.isArray(body.refused) ? body.refused.filter(isRecord) : [];
+  if (answer.status === 403 && refused.length > 0) {
+    return {
+      kind: "problems",
+      problems: refused.map(refusedProblem),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
+  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", code };
+  // A 409 THAT IS NOT A RACE. `seat_held` refuses a write taking a human seat
+  // out of the company while something holds it — a person, a service
+  // account, an open invitation: nothing about it moves with a newer
+  // revision, so reading it as one offered to update a draft onto the very
+  // revision it was built on, for ever. It is a problem with the draft, one
+  // per held seat, which freeing the seat clears.
+  if (answer.status === 409 && code === "seat_held") {
+    return {
+      kind: "problems",
+      problems: heldSeatProblems(body.held, text(body.detail) || code),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =
       code === "no_active_revision"
@@ -148,6 +191,111 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     code,
     hint: text(body.hint),
   };
+}
+
+/**
+ * One part of a write the caller may not make, as a problem about the seat or
+ * the unit it is (`seat` by handle, `unit` by KEY — where a validation
+ * problem's `unit` is the unit's name, its kind `refused` says which) or
+ * about the company.
+ */
+function refusedProblem(entry: Record<string, unknown>): ConfigProblem {
+  const kind = text(entry.kind);
+  const id = text(entry.id);
+  return {
+    path: "",
+    segments: null,
+    kind: "refused",
+    ...(kind === "seat" ? { seat: id } : {}),
+    ...(kind === "unit" ? { unit: id } : {}),
+    message: refusedSentence(entry),
+  };
+}
+
+/** What a refused part says, by WHY the engine refused it. */
+export function refusedSentence(entry: Record<string, unknown>): string {
+  const kind = text(entry.kind);
+  const id = text(entry.id);
+  const value = text(entry.value);
+  const place = text(entry.place);
+  const op = text(entry.op) || "changed";
+  const grant = "takes Admin access";
+  const subject = kind === "seat" ? `@${id}` : `Unit ${id}`;
+  const where = place ? `in ${place}` : "at the company's top level";
+  if (kind === "document") {
+    return `This write changes nothing, and storing the company as it is ${grant}.`;
+  }
+  if (kind === "setting") return `The company's ${id} setting ${grant}.`;
+  switch (text(entry.why)) {
+    case "credential":
+      return `${subject}: ${value} is a credential, and setting, changing or clearing one ${grant}.`;
+    case "key":
+      return `${subject}: ${value} is how another system finds it, and changing it ${grant}.`;
+    case "self":
+      return `${subject}'s own lead and place decide who may change it, so changing them ${grant}.`;
+    // A REFERENCE AT THE ROOT names a root seat or nothing at all: the engine
+    // places both there, so neither is said to be a seat.
+    case "lead":
+      return place
+        ? `${subject}'s lead would be ${value}, in ${place}, outside the units you lead.`
+        : `${subject}'s lead would be ${value}, which names no seat inside the units you lead.`;
+    case "manages":
+      return place
+        ? `${subject} would manage ${value}, in ${place}, outside the units you lead.`
+        : `${subject} would manage ${value}, which names nothing inside the units you lead.`;
+    // The ADDED object, and where an entry already naming its id sits.
+    case "named":
+      return `${subject}: a lead or manages entry ${where} already names ${value}, outside the units you lead, so adding it ${grant}.`;
+    case "duplicate":
+      return `${value} answers to two seats or units, and only Admin access can change them.`;
+    default:
+      return text(entry.side) === "after"
+        ? `${subject} would sit ${where}, outside the units you lead.`
+        : `${subject} sits ${where}, outside the units you lead, so it cannot be ${op} here.`;
+  }
+}
+
+/**
+ * One problem per seat a `409 seat_held` names, each about that seat (by its
+ * handle) and naming the ONE thing holding it (`SeatHeldHolder`) with the
+ * command that frees it. A body that names none is one problem at document
+ * level carrying the refusal's own sentence.
+ *
+ * THE REMEDY IS THE HOLDER'S KIND. A person holds a human seat for as long as
+ * they exist, so they are MOVED to another human seat or removed — never
+ * unbound, which the engine refuses for a person; a service account is
+ * unbound; an open invitation is cancelled. One remedy for all of them told
+ * an administrator to unbind a person, which could never clear the refusal.
+ */
+function heldSeatProblems(held: unknown, detail: string): ConfigProblem[] {
+  const seats = isRecord(held) ? Object.entries(held).sort(([a], [b]) => a.localeCompare(b)) : [];
+  const problems = seats.map(([seat, claim]): ConfigProblem => ({
+    path: "",
+    segments: null,
+    kind: "seat_held",
+    seat,
+    message: `@${seat} ${heldBy(isRecord(claim) ? (claim as SeatHeldHolder) : {})}, then save again. The seat's page in the org chart says what holds it.`,
+  }));
+  return problems.length > 0
+    ? problems
+    : [{ path: "", segments: null, kind: "seat_held", message: detail }];
+}
+
+/** What holds one seat and how it is freed, as the middle of a sentence. */
+function heldBy(claim: SeatHeldHolder): string {
+  const id = text(claim.person);
+  const who = text(claim.login) || id;
+  if (id && text(claim.kind) === "machine") {
+    return `is held by the service account ${who}: unbind it first (crewlet iam unbind ${id})`;
+  }
+  if (id) {
+    return `is held by ${who}: move them to another human seat (crewlet iam bind ${id} SEAT) or remove them (crewlet iam remove ${id}) first`;
+  }
+  const invitation = text(claim.invitation);
+  if (invitation) {
+    return `is held by the open invitation ${invitation}: cancel it first (crewlet iam cancel-invite ${invitation})`;
+  }
+  return "is held: free it first";
 }
 
 /**

@@ -9,10 +9,12 @@
  * bands and wrong for a list whose fifth row is somebody's whole team.
  */
 
+import { useMemo } from "react";
 import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
+import { indexOrg, unitByKey, unitRoute, type Unit } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
@@ -33,18 +35,19 @@ export function ByUnit({
     groups: UNIT_GROUPS,
   });
   const rows = (units.data?.by_group ?? []).filter((b) => b.total_tokens > 0);
-  // A BAND LINKS TO A TEAM ONLY WHERE THE CHART HAS ONE BY THAT NAME: the
-  // root seats' band is "no unit", the residual is several, and a unit renamed
-  // since the window still names its old days.
+  // A BAND IS A UNIT'S KEY, labelled by the engine with its name — two units
+  // may share a name, so a band keyed on one pooled them — and it LINKS TO A
+  // TEAM ONLY WHERE THE CHART HOLDS ONE BY THAT KEY: the root seats' band is
+  // "no unit" and the residual is several.
   const org = useOrg();
-  const teams = new Set((org?.units ?? []).map((u) => u.name));
+  const index = useMemo(() => indexOrg(org), [org]);
   return (
     <Card className="spend-card spend-list">
       <div className="spend-card-head">
         <h2 className="spend-title">By team</h2>
         {words && <span className="spend-caption">{words}</span>}
       </div>
-      <QueryState error={units.error} detail={units.detail} loading={false}>
+      <QueryState error={units.error} refusal={units.refusal} detail={units.detail} loading={false}>
         {units.loading && !units.data ? (
           <Skeleton height="4.5rem" />
         ) : (
@@ -56,7 +59,7 @@ export function ByUnit({
             emptyLabel="No team's seats spent tokens in this window."
             data={rows.map((b) => ({
               id: b.group || "other",
-              label: b.other ? "Everyone else" : b.group,
+              label: b.other ? "Everyone else" : b.label || b.group,
               sub: b.other
                 ? plural(b.folded, "team")
                 : b.seats
@@ -64,7 +67,7 @@ export function ByUnit({
                   : undefined,
               value: b.total_tokens,
               display: fmtCount(b.total_tokens),
-              href: !b.other && teams.has(b.group) ? href(["agents", "teams", b.group]) : undefined,
+              href: teamHref(b.other ? null : unitByKey(index, b.group)),
               color: DATA_COLORS[0],
             }))}
           />
@@ -72,4 +75,9 @@ export function ByUnit({
       </QueryState>
     </Card>
   );
+}
+
+/** A team's page, where the chart holds the unit a band names. */
+function teamHref(unit: Unit | null): string | undefined {
+  return unit ? href(unitRoute(unit)) : undefined;
 }

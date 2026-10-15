@@ -5,7 +5,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { Shell } from "../Shell.tsx";
 import { Router } from "../router.tsx";
@@ -14,7 +14,26 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkProjectRow, WorkProjectsAnswer } from "~/protocol/index.ts";
 import type { Recent } from "~/lib/recents.ts";
 import type { ScopeAt } from "../scope.ts";
-import { NEW_PROJECT_HELD, figuresOf, panelOf, type PanelActions } from "./ProjectSwitcher.tsx";
+import { figuresOf, panelOf, type PanelActions } from "./ProjectSwitcher.tsx";
+import { CONFIG_WRITE_REASONS, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+
+// THE FRAME DIALS ITS SOCKET as soon as the viewer answers (`Shell.tsx`), and
+// jsdom's own WebSocket really dials: refused, it schedules a reconnect that
+// nothing here stops, which then fires after the environment is torn down and
+// throws on a `location` that is gone. A socket that never opens and never
+// closes is what every other suite mounting the frame stands in for it.
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+});
 
 afterEach(() => {
   cleanup();
@@ -70,7 +89,7 @@ function panel(
     query?: string;
     at?: ScopeAt | null;
     recents?: Recent[];
-    operator?: boolean;
+    newProject?: ConfigWriteAccess;
   } = {},
   acts = actions(),
 ) {
@@ -87,7 +106,7 @@ function panel(
           ? { scope: { kind: "project", key: "FAIR" }, lens: "tasks" }
           : over.at,
       recents: over.recents ?? [],
-      operator: over.operator ?? true,
+      newProject: over.newProject ?? { can: true },
     },
     acts,
   );
@@ -129,11 +148,22 @@ describe("the panel, as data", () => {
     expect(a.went).toEqual(["SPLIT", "all"]);
   });
 
-  test("the footer browses the projects and makes a new one, held with its reason without a credential", () => {
+  // NEW PROJECT IS HELD BY THE ORG CHART'S GATE, in its own words: the key
+  // mark only where a grant is what is missing, since offline is not cleared
+  // by asking an administrator.
+  test("the footer browses the projects and makes a new one, held with the gate's reason", () => {
     expect(panel().footer.map((o) => o.label)).toEqual(["Browse all projects", "New project…"]);
-    const held = panel({ operator: false }).footer.find((o) => o.id === "new");
-    expect(held?.held).toBe(NEW_PROJECT_HELD);
+    const held = panel({
+      newProject: { can: false, block: "no_grant", reason: CONFIG_WRITE_REASONS.no_grant },
+    }).footer.find((o) => o.id === "new");
+    expect(held?.held).toBe(CONFIG_WRITE_REASONS.no_grant);
     expect(held?.onSelect).toBeUndefined();
+    expect(held?.meta).toBeDefined();
+    const offline = panel({
+      newProject: { can: false, block: "offline", reason: CONFIG_WRITE_REASONS.offline },
+    }).footer.find((o) => o.id === "new");
+    expect(offline?.held).toBe(CONFIG_WRITE_REASONS.offline);
+    expect(offline?.meta).toBeUndefined();
   });
 
   test("while loading it draws placeholder rows and offers only New project", () => {
@@ -260,12 +290,15 @@ function mount(answers: Record<string, unknown>) {
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     if (what === "viewer") {
       return Promise.resolve({
-        operator_id: "U0FOUNDER",
-        operator: true,
+        login: "ada",
+        grants: ["tracker", "admin"],
         handle: "ada",
+        owner: "ada",
         name: "Ada",
         kind: "human",
         acts: [],
+        config_writer: true,
+        config_managed_by: [],
       });
     }
     return what in answers ? Promise.resolve(answers[what]) : new Promise(() => {});

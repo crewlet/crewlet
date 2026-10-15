@@ -30,6 +30,23 @@
  * recipients: the one reason of eighteen each person was reached under, and
  * whether it asked them anything. The three EMPTY answers are three different
  * facts and keep three sentences ([NobodyWoken]).
+ *
+ * # An ask is answered where it stands
+ *
+ * An open ask put to the reader carries its answer on its own row
+ * (`AnswerAsk`, the one write every surface answers an ask with), so a person
+ * who opened the task to answer it does not have to go to the Inbox to do so.
+ *
+ * # Asked, without Tracker
+ *
+ * The engine lets a person read a task an open ask names them on, and answer
+ * that ask, without holding Tracker (and nothing more: once the ask is
+ * answered, the task is the tracker's again). Its three histories are the
+ * tracker's questions and are refused to them, so for such a reader none is
+ * asked: the thread is the one the task's own answer carried (`thread`), the
+ * ask in it answerable on its row, and the changes, the turns and the
+ * comment box — which would only post what the engine refuses — are left out
+ * with one sentence that says what would open them.
  */
 
 import { useMemo, useState } from "react";
@@ -56,6 +73,9 @@ import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, needsWords } from "~/lib/access.ts";
+import { AnswerAsk } from "~/components/writes.tsx";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { renderMarkdown, plainText } from "~/lib/markdown.ts";
 import {
@@ -113,13 +133,21 @@ const EMPTY: Record<ActivityTab, string> = {
 
 export function Activity({
   item,
+  address,
   chrome,
   index,
   now,
   live,
   param = "activity",
+  thread,
 }: {
   item: WorkItem;
+  /**
+   * The task's address ([itemAddress]), which a comment, a reply, an ask and
+   * a link are posted on: the key, or the id where another task claimed the
+   * key first — the key would post them on the claimant.
+   */
+  address: string;
   chrome: RowChrome & LabelContext;
   index: OrgIndex;
   now: number;
@@ -128,17 +156,35 @@ export function Activity({
   /** The address key the tab is kept under — the peek's own, so a task page
    *  and the sub-task peeked over it do not move each other's tab. */
   param?: string;
+  /**
+   * The thread the task's own answer carried (`WorkItemDetail.comments`) —
+   * what a reader without Tracker, admitted to the task because an open ask
+   * names them, is shown in place of the paged thread they may not ask for.
+   */
+  thread?: readonly WorkComment[];
 }) {
   const [raw, setTab] = useParam(param, "all", "filter");
   const tab: ActivityTab = (ACTIVITY_TABS as readonly string[]).includes(raw)
     ? (raw as ActivityTab)
     : "all";
   const [replyTo, setReplyTo] = useState<WorkComment | null>(null);
+  const [answering, setAnswering] = useState<string | null>(null);
+  const viewer = useViewer();
+  // THE TRACKER'S HISTORIES, asked only of a reader holding it — see the
+  // file's doc for the reader admitted only as the person an ask names.
+  // A BROWSER NOBODY SIGNED IN ON is no asked person: it answers nothing, and
+  // is drawn the page every reader who cannot act is drawn, every control
+  // disabled with the reason.
+  const tracker = viewer.tracker;
+  const asked = !viewer.loading && !viewer.anonymous && !tracker;
 
   const { socket } = useClient();
-  const changesAsked = { task: item.key, limit: CHANGES_PAGE };
+  // BY ITS ID, which names this task and no other: a key two tasks hold
+  // reads the history, the comments and the turns of whichever claimed it
+  // first.
+  const changesAsked = { task: item.id, limit: CHANGES_PAGE };
   const changes = usePaged(
-    useQuery("work_activity", changesAsked, { pollMs: ACTIVITY_POLL_MS }),
+    useQuery("work_activity", changesAsked, { pollMs: ACTIVITY_POLL_MS, enabled: tracker }),
     changesAsked,
     (cursor) =>
       socket.query(
@@ -149,9 +195,9 @@ export function Activity({
     recordId,
     nextCursor,
   );
-  const commentsAsked = { item: item.key, limit: COMMENTS_PAGE };
+  const commentsAsked = { item: item.id, limit: COMMENTS_PAGE };
   const comments = usePaged(
-    useQuery("work_comments", commentsAsked, { pollMs: ACTIVITY_POLL_MS }),
+    useQuery("work_comments", commentsAsked, { pollMs: ACTIVITY_POLL_MS, enabled: tracker }),
     commentsAsked,
     (cursor) =>
       socket.query(
@@ -162,9 +208,9 @@ export function Activity({
     commentId,
     nextCursor,
   );
-  const turnsAsked = { id: item.key, limit: TURNS_PAGE };
+  const turnsAsked = { id: item.id, limit: TURNS_PAGE };
   const turns = usePaged(
-    useQuery("work_item_turns", turnsAsked, { pollMs: ACTIVITY_POLL_MS }),
+    useQuery("work_item_turns", turnsAsked, { pollMs: ACTIVITY_POLL_MS, enabled: tracker }),
     turnsAsked,
     (cursor) =>
       socket.query(
@@ -184,29 +230,51 @@ export function Activity({
     for (const answer of changes.answers) Object.assign(keys, answer.keys ?? {});
     return { ...chrome, taskKey: (id: string) => keys[id] ?? "" };
   }, [chrome, changes.answers]);
-  // THE PERSON BEHIND A TOKEN'S COMMENT, from every page of the thread.
-  const commentSeats = useMemo(() => {
-    const seats: Record<string, string> = {};
-    for (const answer of comments.answers) Object.assign(seats, answer.comment_seats ?? {});
-    return seats;
-  }, [comments.answers]);
 
+  // THE THREAD THIS READER IS SHOWN: the paged one, or — asked without
+  // Tracker — the one the task's answer carried, with nothing beside it.
+  const said = asked ? (thread ?? NO_COMMENTS) : comments.items;
   const drawn = useMemo(
     () =>
-      timeline(tab, {
-        changes: { items: changes.items, more: changes.more },
-        comments: { items: comments.items, more: comments.more },
-        turns: { items: turns.items, more: turns.more },
-      }),
-    [tab, changes.items, changes.more, comments.items, comments.more, turns.items, turns.more],
+      asked
+        ? timeline("comments", {
+            changes: { items: [], more: false },
+            comments: { items: said, more: false },
+            turns: { items: [], more: false },
+          })
+        : timeline(tab, {
+            changes: { items: changes.items, more: changes.more },
+            comments: { items: said, more: comments.more },
+            turns: { items: turns.items, more: turns.more },
+          }),
+    [asked, tab, said, changes.items, changes.more, comments.more, turns.items, turns.more],
   );
-  const shown: readonly Source[] =
-    tab === "all" ? ["changes", "comments", "turns"] : [tab === "turns" ? "turns" : tab];
-  const loading = shown.some((source) => paged[source].loading && paged[source].items.length === 0);
-  const errors = shown.map((source) => paged[source].error).filter(Boolean);
+  // THE ASKS STILL WAITING ON THIS READER, by the comment that asked: one put
+  // to their record or their login, not resolved, removed or answered by any
+  // comment in the thread drawn.
+  const mine = useMemo(() => {
+    const answered = new Set(said.flatMap((c) => (c.answers ? [c.answers] : [])));
+    const me = new Set([viewer.owner, viewer.login].filter(Boolean));
+    return new Set(
+      said
+        .filter((c) => c.ask && me.has(c.ask) && !c.resolved && !c.removed && !answered.has(c.id))
+        .map((c) => c.id),
+    );
+  }, [said, viewer.owner, viewer.login]);
+  const shown: readonly Source[] = asked
+    ? []
+    : tab === "all"
+      ? ["changes", "comments", "turns"]
+      : [tab === "turns" ? "turns" : tab];
+  // NOT DECIDED IS LOADING: while the viewer has not said what this reader
+  // holds, no history is asked, and "nothing has happened" would be a guess.
+  const loading =
+    viewer.loading ||
+    shown.some((source) => paged[source].loading && paged[source].items.length === 0);
+  const failed = shown.map((source) => paged[source]).filter((read) => read.error !== null);
   const paging = shown.some((source) => paged[source].paging);
   const pageError = shown.map((source) => paged[source].pageError).find(Boolean) ?? null;
-  const runningHere = live && (tab === "all" || tab === "turns") ? live : null;
+  const runningHere = live && !asked && (tab === "all" || tab === "turns") ? live : null;
 
   // THE NUMBER THE RUNNING TURN WILL HAVE: its own, where a parked segment was
   // already charged, and otherwise the one after every turn counted so far.
@@ -229,17 +297,27 @@ export function Activity({
           Activity
         </h2>
         <span className="spacer" />
-        <Segmented<ActivityTab>
-          ariaLabel="Which activity"
-          size="sm"
-          value={tab}
-          onChange={setTab}
-          options={ACTIVITY_TABS.map((value) => ({ value, label: TAB_LABEL[value] }))}
-        />
+        {!asked && (
+          <Segmented<ActivityTab>
+            ariaLabel="Which activity"
+            size="sm"
+            value={tab}
+            onChange={setTab}
+            options={ACTIVITY_TABS.map((value) => ({ value, label: TAB_LABEL[value] }))}
+          />
+        )}
       </div>
+      {asked && (
+        <p className="muted task-activity-empty">
+          {`You can read this task and answer what you were asked on it. ${needsWords(
+            "The rest of its activity",
+            [TRACKER],
+          )}`}
+        </p>
+      )}
 
-      {errors.map((error, i) => (
-        <QueryState key={i} error={error ?? null} loading={false} />
+      {failed.map((read, i) => (
+        <QueryState key={i} error={read.error} refusal={read.refusal} loading={false} />
       ))}
       {drawn.earlier.length > 0 && (
         <div className="task-earlier">
@@ -257,13 +335,13 @@ export function Activity({
           >
             Earlier activity
           </Button>
-          {pageError && <QueryState error={pageError} loading={false} />}
+          {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
         </div>
       )}
       {loading ? (
         <Skeleton variant="text" rows={4} label="Loading the activity" />
       ) : drawn.entries.length === 0 && !runningHere ? (
-        <p className="muted task-activity-empty">{EMPTY[tab]}</p>
+        <p className="muted task-activity-empty">{EMPTY[asked ? "comments" : tab]}</p>
       ) : (
         <ol className="task-feed">
           {drawn.entries.map((entry) => (
@@ -274,8 +352,18 @@ export function Activity({
               chrome={labels}
               index={index}
               now={now}
-              seatOfComment={(c) => commentSeats[c.id] ?? ""}
-              onReply={setReplyTo}
+              onReply={asked ? undefined : setReplyTo}
+              answer={
+                entry.kind === "comment" && mine.has(entry.comment.id)
+                  ? {
+                      item: address,
+                      label: item.key,
+                      open: answering === entry.comment.id,
+                      onOpenChange: (open) => setAnswering(open ? entry.comment.id : null),
+                      onAnswered: () => setAnswering(null),
+                    }
+                  : undefined
+              }
             />
           ))}
           {runningHere && (
@@ -290,13 +378,13 @@ export function Activity({
         </ol>
       )}
 
-      {(tab === "all" || tab === "comments") && (
+      {!asked && (tab === "all" || tab === "comments") && (
         <div className="task-compose">
           {replyTo && (
             <div className="task-compose-reply">
               <CornerDownLeftGlyph size="xs" />
               <span className="truncate">
-                {`Replying to ${chrome.seatName?.(commentSeats[replyTo.id] || replyTo.author) ?? replyTo.author}`}
+                {`Replying to ${chrome.seatName?.(replyTo.author) ?? replyTo.author}`}
               </span>
               <Button size="small" variant="ghost" onClick={() => setReplyTo(null)}>
                 Cancel reply
@@ -304,7 +392,8 @@ export function Activity({
             </div>
           )}
           <Composer
-            item={item.key}
+            item={address}
+            label={item.key}
             mode={compose}
             to={replyTo ? (chrome.seatName?.(replyTo.author) ?? replyTo.author) : item.key}
             index={index}
@@ -330,9 +419,21 @@ const nextCursor = (a: { next_cursor?: string }) => a.next_cursor ?? "";
 const pickRecords = (a: { records: WorkActivityRecord[] }) => a.records ?? [];
 const recordId = (r: WorkActivityRecord) => r.id;
 const pickComments = (a: { comments: WorkComment[] }) => a.comments ?? [];
+const NO_COMMENTS: readonly WorkComment[] = [];
 const commentId = (c: WorkComment) => c.id;
 const pickTurns = (a: { turns: WorkItemTurn[] }) => a.turns ?? [];
 const turnId = (t: WorkItemTurn) => t.turn_id;
+
+/** What an open ask put to the reader needs to be answered on its own row. */
+interface AnswerHere {
+  /** The task's address ([itemAddress]), which the answer is posted on. */
+  item: string;
+  /** What the answer's toast calls the task. */
+  label: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAnswered: () => void;
+}
 
 function FeedEntry({
   entry,
@@ -340,16 +441,18 @@ function FeedEntry({
   chrome,
   index,
   now,
-  seatOfComment,
   onReply,
+  answer,
 }: {
   entry: Entry;
   item: WorkItem;
   chrome: RowChrome & LabelContext;
   index: OrgIndex;
   now: number;
-  seatOfComment: (c: WorkComment) => string;
-  onReply: (c: WorkComment) => void;
+  /** Reply in the comment's thread — absent for a reader who may only answer. */
+  onReply: ((c: WorkComment) => void) | undefined;
+  /** Set on an open ask put to the reader: its answer, on its own row. */
+  answer: AnswerHere | undefined;
 }) {
   switch (entry.kind) {
     case "change":
@@ -358,11 +461,11 @@ function FeedEntry({
       return (
         <CommentRow
           comment={entry.comment}
-          seat={seatOfComment(entry.comment)}
           chrome={chrome}
           index={index}
           now={now}
           onReply={onReply}
+          answer={answer}
         />
       );
     case "turn":
@@ -370,9 +473,12 @@ function FeedEntry({
   }
 }
 
-/** Who a record names as its author: the person behind a token, or a seat. */
+/**
+ * Who a record names as its author (`iam.ActorFor`): the seat a bound person
+ * writes as, or the login of anybody bound to none.
+ */
 function actorOf(record: WorkActivityRecord, chrome: RowChrome): string {
-  const who = record.actor_seat || record.actor || "";
+  const who = record.actor || "";
   if (!who) return "The engine";
   return chrome.seatName?.(who) ?? who;
 }
@@ -485,25 +591,26 @@ function ChangeRow({
 /** A comment on the task: who said it, when, what, and what it asks. */
 function CommentRow({
   comment,
-  seat,
   chrome,
   index,
   now,
   onReply,
+  answer,
 }: {
   comment: WorkComment;
-  /** The person behind the token that wrote it, or "" where the author is a seat. */
-  seat: string;
   chrome: RowChrome;
   index: OrgIndex;
   now: number;
-  onReply: (c: WorkComment) => void;
+  onReply: ((c: WorkComment) => void) | undefined;
+  answer: AnswerHere | undefined;
 }) {
-  // THE PERSON, NEVER THE CREDENTIAL: a token's comment is drawn as the seat
-  // it was bound to, and one bound to nobody as "An operator".
-  const handle = seat || (comment.author_kind === "operator" ? "" : comment.author);
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity directory
+  // binds to a seat comments AS that seat, so the author is who they are;
+  // anybody bound to none is their login, which is the name their own record
+  // is kept under. A comment with no author at all is the engine's.
+  const handle = comment.author;
   const person = handle ? index.byHandle.get(handle) : undefined;
-  const name = handle ? (chrome.seatName?.(handle) ?? handle) : "An operator";
+  const name = handle ? (chrome.seatName?.(handle) ?? handle) : "The engine";
   const chosen = comment.choice
     ? (comment.decision?.options.find((o) => o.id === comment.choice)?.label ?? comment.choice)
     : "";
@@ -541,7 +648,7 @@ function CommentRow({
           )}
           {comment.resolved && <Tag variant="success">Resolved</Tag>}
           <span className="spacer" />
-          {!comment.removed && (
+          {!comment.removed && onReply && (
             <Button size="small" variant="ghost" onClick={() => onReply(comment)}>
               Reply
             </Button>
@@ -570,6 +677,21 @@ function CommentRow({
               ))}
             </ul>
           </div>
+        )}
+        {answer && (
+          <AnswerAsk
+            item={answer.item}
+            label={answer.label}
+            comment={comment.id}
+            asker={name}
+            options={comment.decision?.options ?? []}
+            {...(comment.decision?.recommended
+              ? { recommended: comment.decision.recommended }
+              : {})}
+            open={answer.open}
+            onOpenChange={answer.onOpenChange}
+            onAnswered={answer.onAnswered}
+          />
         )}
       </article>
     </li>
@@ -782,7 +904,7 @@ function Reached({ recordId, chrome }: { recordId: string; chrome: RowChrome }) 
   const routing = useQuery("work_routing", { record_id: recordId });
   return (
     <div className="task-routing">
-      <QueryState error={routing.error} loading={routing.loading}>
+      <QueryState error={routing.error} refusal={routing.refusal} loading={routing.loading}>
         {routing.data && <Routing answer={routing.data} chrome={chrome} />}
       </QueryState>
     </div>

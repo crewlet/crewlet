@@ -4,9 +4,11 @@ package queries
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
-	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -21,21 +23,20 @@ import (
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
 //
-// SCOPED, NOT OPERATOR-GATED. See [Sources.viewerParty]: a caller reads the
-// seat their own token is bound to, and naming anybody else's needs an
-// operator credential. Registering it operator-only would make the landing
-// screen the most-gated screen in the product, and the human teammate — one of
-// the two readers this dashboard is for — fictional.
+// THE TRACKER'S, AND SCOPED. It is a question of the tracker's records, so it
+// takes the tracker; within it, see [Sources.recordHandle]: a caller reads
+// their own record, and naming anybody else's is [authz.ActionInboxRead] —
+// theirs, whoever leads them, or an admin. Gated on admin alone, the landing
+// screen would be the most-gated screen in the product, and the human teammate
+// — one of the two readers this dashboard is for — fictional.
 func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
-	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.recordHandle(ctx, authz.ActionInboxRead,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
 	q := tracker.InboxQuery{
-		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
-		// notices a founder's own assistant produced name the token,
-		// and an inbox asked about the seat alone showed none of them.
-		Who:         who,
+		Handle:      handle,
 		Unread:      p.Bool("unread", false),
 		PrimaryOnly: p.Bool("primary_only", false),
 		Limit:       p.Int("limit", 0),
@@ -88,8 +89,15 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		}
 		q.Since = at
 	}
-	answer, err := s.Work.Inbox(ctx, q, time.Now().UTC())
-	if err != nil {
+	answer, err := s.Work.Inbox(ctx, q, s.clock())
+	switch {
+	case errors.Is(err, tracker.ErrBadQuery):
+		// THE CALLER'S, like a malformed `since` above: a cursor that is
+		// not a log position, or a position from another log. The cursor
+		// is parsed by the reader, and it used to be parsed inside the
+		// read's transaction, so a pasted-wrong cursor was a 500.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
 		return nil, err
 	}
 	return answer, nil

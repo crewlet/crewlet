@@ -59,35 +59,37 @@ func problemAt(t *testing.T, body refusal, path string) config.Problem {
 //
 // The detail is one line per failure for a person; the problems are the same
 // failures located by path and segments and classified, for a client that puts
-// each beside the field it is about. The derived hierarchy comes with every
-// refusal of a document that parsed, because a person fixing a misspelled lead
-// finds it in the chart it breaks, and with none that did not, because there is
-// no hierarchy to report.
+// each beside the field it is about.
 func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a put the validator refuses", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config",
-			strings.Replace(companyDoc, "handle: cto\n    llm: zulu", "handle: cto\n    llm: nowhere", 1), summaryHeader)
+			strings.Replace(companyDoc, "      type: anthropic", "      type: nowhere", 1), summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
-		p := problemAt(t, body, "roles[1].llm")
-		if p.Seat != "cto" || !reflect.DeepEqual(p.Segments, config.Path{"roles", 1, "llm"}) {
-			t.Errorf("problem = %+v, want it about cto with its segments", p)
+		p := problemAt(t, body, "providers.llm.zulu.type")
+		if !reflect.DeepEqual(p.Segments, config.Path{"providers", "llm", "zulu", "type"}) {
+			t.Errorf("problem = %+v, want it located with its segments", p)
 		}
 		if !strings.Contains(body.Detail, p.Message) {
 			t.Errorf("the problem's message %q is not a line of the detail %q", p.Message, body.Detail)
 		}
-		if body.Hint == "" || body.Derived == nil || len(body.Derived.Seats) != 2 {
-			t.Errorf("hint = %q, derived = %+v, want both", body.Hint, body.Derived)
+		if body.Hint == "" {
+			t.Errorf("hint = %q, want one", body.Hint)
+		}
+		// AND THE HIERARCHY the refused document derives, which a builder
+		// places the problems on.
+		if body.Derived == nil {
+			t.Error("a document the validator refused carries no derived hierarchy")
 		}
 	})
 
 	t.Run("a put that does not parse", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		res := s.do(t, http.MethodPut, "/config", companyDoc+"missionn: typo\n", summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "invalid_body")
 		p := problemAt(t, body, "missionn")
@@ -103,8 +105,8 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 
 	t.Run("a patch naming an unknown key", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		body := refusalOf(t, s.do(t, http.MethodPatch, "/config", `{"missionn": "typo"}`, summaryHeader),
 			http.StatusBadRequest, "invalid_patch")
 		if p := problemAt(t, body, "missionn"); p.Kind != "unknown_field" {
@@ -120,11 +122,11 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 	// stored document, which the caller never saw.
 	t.Run("a patch whose merged document has the wrong shape", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
-		body := refusalOf(t, s.do(t, http.MethodPatch, "/config", "roles: not-a-list\n", summaryHeader),
+		s := newSurface(t)
+		s.seed(t, companyDoc)
+		body := refusalOf(t, s.do(t, http.MethodPatch, "/config", "mcp_servers: not-a-list\n", summaryHeader),
 			http.StatusBadRequest, "invalid_patch")
-		p := problemAt(t, body, "roles")
+		p := problemAt(t, body, "mcp_servers")
 		if p.Line != 0 || strings.Contains(p.Message, "(line") || strings.Contains(body.Detail, "(line") {
 			t.Errorf("problem = %+v, detail = %q, want no line counted in the engine's merge", p, body.Detail)
 		}
@@ -134,46 +136,44 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 	// into, which is the document validated.
 	t.Run("an entity write the validator refuses", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
-		res := s.do(t, http.MethodPut, "/config/roles/cto",
-			`{"name": "CTO", "handle": "cto", "llm": "nowhere"}`, summaryHeader)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
+		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
+			`{"type": "nowhere", "model": "claude-sonnet-5"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
-		if p := problemAt(t, body, "roles[1].llm"); p.Seat != "cto" {
-			t.Errorf("problem = %+v, want it about cto", p)
-		}
-		if body.Derived == nil {
-			t.Error("the refusal carries no hierarchy")
+		if p := problemAt(t, body, "providers.llm.zulu.type"); p.Kind != "unknown_value" {
+			t.Errorf("problem = %+v, want it about the provider's type", p)
 		}
 	})
 
 	t.Run("an entity body this kind cannot read", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
-		res := s.do(t, http.MethodPut, "/config/roles/cto", `{"name": "CTO", "gaol": "x"}`, summaryHeader)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
+		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
+			`{"type": "anthropic", "modell": "x"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "invalid_body")
-		// Placed where the seat sits in the document, as a whole
+		// Placed where the provider sits in the document, as a whole
 		// document's typo is, with the line in the body that was sent.
-		p := problemAt(t, body, "roles[1].gaol")
+		p := problemAt(t, body, "providers.llm.zulu.modell")
 		if p.Kind != "unknown_field" || p.Line != 1 ||
-			!reflect.DeepEqual(p.Segments, config.Path{"roles", 1, "gaol"}) {
+			!reflect.DeepEqual(p.Segments, config.Path{"providers", "llm", "zulu", "modell"}) {
 			t.Errorf("problem = %+v, want an unknown_field with its segments on line 1", p)
 		}
 	})
 
 	t.Run("a revert the validator refuses", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		refused := s.seedStored(t, companyDoc, refusedByThisBuild)
-		s.seed(t, companyDoc, nil)
+		s.seed(t, companyDoc)
 		body := refusalOf(t, s.do(t, http.MethodPost, "/config/revisions/"+refused+"/revert", "", nil),
 			http.StatusBadRequest, "validation_error")
-		if p := problemAt(t, body, "roles[1].llm"); p.Seat != "cto" {
-			t.Errorf("problem = %+v, want it about cto", p)
+		if p := problemAt(t, body, "workers.researcher.model"); p.Kind != "unknown_value" {
+			t.Errorf("problem = %+v, want it about the worker's model", p)
 		}
-		if !strings.Contains(body.Hint, refused) || body.Derived == nil {
-			t.Errorf("hint = %q, derived = %+v, want the revision named and the hierarchy", body.Hint, body.Derived)
+		if !strings.Contains(body.Hint, refused) {
+			t.Errorf("hint = %q, want the revision named", body.Hint)
 		}
 	})
 }
@@ -193,7 +193,7 @@ func TestNoRefusalRepeatsARestoredCredentialOrItsLength(t *testing.T) {
 		datadog    = "DATADOGLITERAL"
 		confluence = "CONFLUENCELITERAL"
 	)
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, companyDoc, func(document map[string]any) {
 		integrations := document["integrations"].(map[string]any)
 		integrations["gitlab"].(map[string]any)["signing_secret"] = signing
@@ -302,8 +302,8 @@ func TestAPutIsRefusedForACLIAgentEntryItsProfileCannotRun(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
-			s.seed(t, companyDoc, nil)
+			s := newSurface(t)
+			s.seed(t, companyDoc)
 			doc := strings.Replace(companyDoc, "integrations:\n", "    sub:\n"+tc.entry+"integrations:\n", 1)
 			body := refusalOf(t, s.do(t, http.MethodPut, "/config?dry_run=true", doc, summaryHeader),
 				http.StatusBadRequest, "validation_error")

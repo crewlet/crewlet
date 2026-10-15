@@ -206,19 +206,26 @@ const workersPreamble = "Short-lived workers you can hand narrowly-scoped work "
 // that measured each one (`thread_context`, `personal_memory`, …), so a reader
 // can put a block beside what the prefetch recorded about it.
 func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
+	// ONE counter for BOTH renderings of this seat's direct reports — the
+	// identity line's name list and the roster's profiles. Planned once,
+	// here, because the two sections are two views of one team and a cap
+	// each would let them disagree about who is on it while the prompt paid
+	// for both budgets. See [planRoster].
+	reports := planRoster(seat, newRosterAllowance(rosterAllowanceTokens))
+
 	b := NewBuilder("\n")
 	identity := []struct {
 		key   string
 		lines []string
 	}{
-		{"identity", BuildIdentitySection(seat)},
+		{"identity", BuildIdentitySection(seat, reports)},
 		{"company_context", BuildOrgMissionVisionSection(seat)},
 		{"background", buildBackgroundSection(seat)},
 		{"responsibilities", buildResponsibilitiesSection(seat)},
 		{"behavioral_guidelines", buildGuidelinesSection(seat)},
 		{"unit", BuildUnitContextSection(seat)},
 		{"policies", BuildPoliciesSection(seat)},
-		{"team", BuildRosterSection(seat)},
+		{"team", BuildRosterSection(seat, reports)},
 		{"human_colleagues", BuildHumanColleaguesNote(seat)},
 	}
 	empty := true

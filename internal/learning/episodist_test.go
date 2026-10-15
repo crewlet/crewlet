@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 func episodist(t *testing.T, e *learning.Episodes,
@@ -201,13 +202,19 @@ func TestTwoRunsOfOneTriggerCollapseToOneEpisode(t *testing.T) {
 	}
 }
 
-// AN ABSENT WORK KEY STAYS ABSENT. A turn with no ledgerable trigger carries
-// no work key, and its turn id is a RUN: falling back to it arms the
-// counterparty guard with a value that means nothing, which is the exact
-// disarming [Counterparties.Record] keeps the last KEYED unit of work to
-// avoid.
+// AN ABSENT WORK KEY STAYS ABSENT, even when the turn id has a work key's
+// shape. A turn with no ledgerable trigger carries no work key, and its turn
+// id is a RUN: falling back to it arms the counterparty guard with a value that
+// means nothing, which is the exact disarming [Counterparties.Record] keeps the
+// last KEYED unit of work to avoid.
 func TestAnUnkeyedTurnAnswersNoWorkKey(t *testing.T) {
 	t.Parallel()
+	keyShaped := epTurn()
+	keyShaped.Event.TurnID, keyShaped.Event.WorkKey = workkey.Derive([]string{"evt-a"}), ""
+	if got := keyShaped.WorkKey(); got != "" {
+		t.Errorf("work key = %q, want empty: the turn id is a run whatever its shape", got)
+	}
+
 	// A turn with no trigger key: the turn id is a run, and there is no
 	// unit of work to answer with.
 	unkeyed := epTurn()
@@ -283,7 +290,7 @@ func TestTheGatesThatKeepEpisodesHonest(t *testing.T) {
 		},
 		{
 			name: "a turn with no seat", want: "no_handle",
-			mutate: func(tn *learning.Turn) { tn.Event.AgentHandle = "" },
+			mutate: func(tn *learning.Turn) { tn.Role = nil },
 		},
 	} {
 		turn := epTurn()

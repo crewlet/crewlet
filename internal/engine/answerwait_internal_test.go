@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -59,7 +60,25 @@ func inboxHolds(t *testing.T, e *Engine, handle string) []string {
 	if !ok {
 		t.Fatalf("the engine's queue (%T) does not report its holds", e.backends.Queue)
 	}
-	return q.PauseHolds(topics.AgentInbox(handle), topics.AgentInboxGroup(handle))
+	id := seatIn(t, e, handle)
+	return q.PauseHolds(topics.AgentInbox(id), topics.AgentInboxGroup(id))
+}
+
+// seatIn is the id the running company derives for a seat's handle — what its
+// inbox, its pause and its hold are keyed by. Asked of the company rather than
+// spelled from the handle, because a subject built from the handle is one
+// nothing holds, and every assertion over it would pass by being empty.
+func seatIn(t *testing.T, e *Engine, handle string) uuid.UUID {
+	t.Helper()
+	c := e.Company()
+	if c == nil || c.Org == nil {
+		t.Fatalf("no company to derive seat %q's id in", handle)
+	}
+	id, ok := org.DeriveAgentID(c.Org.Name, handle)
+	if !ok {
+		t.Fatalf("seat %q derives no id", handle)
+	}
+	return id
 }
 
 // A SEAT ITS RUNNING JOB HOLDS HAS ITS INBOX HELD, by the runtime the engine
@@ -168,8 +187,9 @@ func TestMayResumeAnswerNamesWhatEachRefusalWaitsOn(t *testing.T) {
 		t.Fatalf("a held, unpaused seat with a model was refused: %+v", refusal)
 	}
 
+	swe := seatIn(t, e, "swe")
 	e.pauses.mu.Lock()
-	e.pauses.pauses["swe"] = coord.SeatPause{Handle: "swe", By: "ana"}
+	e.pauses.pauses[swe] = coord.SeatPause{Seat: swe, By: "ana"}
 	e.pauses.mu.Unlock()
 	if refusal, refused := e.mayResumeAnswer(t.Context(), "swe"); !refused ||
 		refusal.Condition != waitPause || !refusal.Until.IsZero() {
@@ -177,7 +197,7 @@ func TestMayResumeAnswerNamesWhatEachRefusalWaitsOn(t *testing.T) {
 			refusal, refused)
 	}
 	e.pauses.mu.Lock()
-	delete(e.pauses.pauses, "swe")
+	delete(e.pauses.pauses, swe)
 	e.pauses.mu.Unlock()
 
 	e.notify.mu.Lock()
@@ -242,8 +262,9 @@ func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
 	coordinator, resumer := spyRuntime(t, e)
 
 	// A RUN WHOSE ANSWER IS RECORDED AND OWED, on a seat a person paused.
-	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Handle: "swe",
-		Pause: &coord.SeatPause{Handle: "swe", By: "ana"}})
+	swe := seatIn(t, e, "swe")
+	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: swe,
+		Pause: &coord.SeatPause{Seat: swe, By: "ana"}})
 	answeredRun(t, e.sandbox.Load().pending, "t-paused")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
@@ -251,7 +272,7 @@ func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
 		t.Fatalf("%d resumes ran on a paused seat", n)
 	}
 
-	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Handle: "swe"})
+	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: swe})
 	eventually(t, "the held-back answer to resume once the seat is resumed", func() bool {
 		return resumer.count() == 1
 	})

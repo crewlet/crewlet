@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -46,7 +46,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e, back, _ := trimmedTracker(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			const away = "node-away"
 			identity := identityLogs(t, s)
 
@@ -62,7 +62,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 					continue
 				}
 				write := logs[i].write
-				logs[i].write = func(ctx context.Context, by, opID, node string,
+				logs[i].write = func(ctx context.Context, by iam.Principal, opID, node string,
 					readmit bool) (statelog.Result, error) {
 
 					if faulted {
@@ -78,7 +78,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 				}
 			}
 
-			req := GateRequest{Node: away, OpID: "op-partial", By: "operator"}
+			req := GateRequest{Node: away, OpID: statelog.NewOpID(time.Now(), "partial"), By: gateOperator}
 			first, err := flaky.Evict(t.Context(), req)
 			if err != nil {
 				t.Fatalf("evict: %v", err)
@@ -156,15 +156,15 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	gate := e.native.Load().gate
-	identity := identityLogs(t, e.native.Load().log)
-	const opID = "op-shared"
+	gate := e.core.Load().gate
+	identity := identityLogs(t, e.core.Load().log)
+	opID := statelog.NewOpID(time.Now(), "evict")
 
-	first, err := gate.Evict(t.Context(), GateRequest{Node: "node-a", OpID: opID, By: "operator"})
+	first, err := gate.Evict(t.Context(), GateRequest{Node: "node-a", OpID: opID, By: gateOperator})
 	if err != nil || !first.Complete() {
 		t.Fatalf("evict node-a: %v (%+v)", err, first)
 	}
-	second, err := gate.Evict(t.Context(), GateRequest{Node: "node-b", OpID: opID, By: "operator"})
+	second, err := gate.Evict(t.Context(), GateRequest{Node: "node-b", OpID: opID, By: gateOperator})
 	if err != nil || !second.Complete() {
 		t.Fatalf("evict node-b under node-a's gesture id: %v (%+v)", err, second)
 	}
@@ -204,17 +204,17 @@ func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	gate := e.native.Load().gate
-	identity := identityLogs(t, e.native.Load().log)
+	gate := e.core.Load().gate
+	identity := identityLogs(t, e.core.Load().log)
 	const away = "node-away"
-	evict := GateRequest{Node: away, OpID: "op-evict", By: "operator"}
+	evict := GateRequest{Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator}
 
 	if res, err := gate.Evict(t.Context(), evict); err != nil || !res.Complete() {
 		t.Fatalf("evict: %v (%+v)", err, res)
 	}
 	publishCaughtUp(t, back, identity, away)
 	if res, err := gate.Readmit(t.Context(), GateRequest{
-		Node: away, OpID: "op-readmit", By: "operator"}); err != nil || !res.Complete() {
+		Node: away, OpID: statelog.NewOpID(time.Now(), "readmit"), By: gateOperator}); err != nil || !res.Complete() {
 		t.Fatalf("readmit: %v (%+v)", err, res)
 	}
 	for _, running := range identity {
@@ -253,7 +253,7 @@ func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 
 	// A NEW GESTURE IS WHAT EVICTS IT AGAIN, which the refusal says.
 	if res, err := gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict-again", By: "operator"}); err != nil || !res.Complete() {
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict-again"), By: gateOperator}); err != nil || !res.Complete() {
 		t.Fatalf("a fresh eviction after the refusal: %v (%+v)", err, res)
 	}
 }
@@ -273,10 +273,10 @@ func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	gate, _, recs := recordingGate(t, e, back)
 	trackerName := tracker.Domain{}.Name()
-	req := GateRequest{Node: "node-away", OpID: "op-lagging", By: "operator"}
+	req := GateRequest{Node: "node-away", OpID: statelog.NewOpID(time.Now(), "lagging"), By: gateOperator}
 
 	// THE FIRST GESTURE LANDS ON A LOG THIS NODE IS NOT APPLYING, so the
 	// tracker's answer is durable and unresolved here — after
@@ -353,7 +353,7 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 	}
 
 	res, err := gate.Evict(t.Context(), GateRequest{
-		Node: "node-away", OpID: "op-unread", By: "operator"})
+		Node: "node-away", OpID: statelog.NewOpID(time.Now(), "unread"), By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict: %v", err)
 	}
@@ -380,9 +380,36 @@ func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 	var wrote gateWrites
 	g, _ := fakeGate(&wrote, nil)
 	for _, node := range []string{"node*", "node 4", "-node", "node>", ""} {
-		_, err := g.Evict(t.Context(), GateRequest{Node: node, OpID: "op", By: "operator"})
+		_, err := g.Evict(t.Context(), GateRequest{Node: node,
+			OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator})
 		if !errors.Is(err, ErrInvalidGate) {
 			t.Fatalf("evicting %q answered %v, want ErrInvalidGate", node, err)
+		}
+	}
+	if got := wrote.sorted(); len(got) > 0 {
+		t.Fatalf("a refused request wrote %v", got)
+	}
+}
+
+// AN OPERATION ID THE GRAMMAR DID NOT MINT IS REFUSED BEFORE ANYTHING IS JUDGED.
+//
+// Every log's operation is derived from the gesture's id, and the publisher
+// reads the instant it was minted at to decide whether its ledger can vouch
+// for a retry: an id carrying none reads as minted at the epoch, so after any
+// ledger sweep the gesture answered `unknown` on every log without publishing
+// anything, however often it was run. The HTTP route refused such an id and
+// the gate itself took it. Mutation: drop the gate's own check and these reach
+// the logs.
+func TestAGateUnderAnOperationIDTheGrammarDidNotMintIsRefused(t *testing.T) {
+	t.Parallel()
+	var wrote gateWrites
+	g, _ := fakeGate(&wrote, nil)
+	for _, opID := range []string{"op-evict", "evict", "0192f00d zzz",
+		statelog.NewOpID(time.Now(), "evict") + " "} {
+		_, err := g.Evict(t.Context(), GateRequest{Node: "node-away", OpID: opID,
+			By: gateOperator})
+		if !errors.Is(err, ErrInvalidGate) {
+			t.Fatalf("evicting under %q answered %v, want ErrInvalidGate", opID, err)
 		}
 	}
 	if got := wrote.sorted(); len(got) > 0 {
@@ -401,7 +428,7 @@ func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 	t.Parallel()
 	var wrote gateWrites
 	g, _ := fakeGate(&wrote, errors.New("coordination is unreachable"))
-	req := GateRequest{Node: "node-away", OpID: "op-unjudged", By: "operator"}
+	req := GateRequest{Node: "node-away", OpID: statelog.NewOpID(time.Now(), "unjudged"), By: gateOperator}
 
 	_, err := g.Evict(t.Context(), req)
 	var unjudged *GateUnjudged
@@ -436,14 +463,14 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 	var wrote gateWrites
 	g, logs := fakeGate(&wrote, nil)
 	gone := make(chan struct{})
-	logs[0].write = func(context.Context, string, string, string, bool) (statelog.Result, error) {
+	logs[0].write = func(context.Context, iam.Principal, string, string, bool) (statelog.Result, error) {
 		wrote.add("tracker")
 		cancel()
 		close(gone)
 		return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 	}
 	second := logs[1].write
-	logs[1].write = func(ctx context.Context, by, opID, node string,
+	logs[1].write = func(ctx context.Context, by iam.Principal, opID, node string,
 		readmit bool) (statelog.Result, error) {
 		<-gone
 		if err := ctx.Err(); err != nil {
@@ -451,7 +478,7 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 		}
 		return second(ctx, by, opID, node, readmit)
 	}
-	res, err := g.Evict(ctx, GateRequest{Node: "node-away", OpID: "op-dropped", By: "operator"})
+	res, err := g.Evict(ctx, GateRequest{Node: "node-away", OpID: statelog.NewOpID(time.Now(), "dropped"), By: gateOperator})
 	if err != nil || !res.Complete() {
 		t.Fatalf("a gesture whose caller left after the first log: %v (%+v)", err, res)
 	}
@@ -586,8 +613,24 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			actions: []statelog.GateAction{statelog.GateRestore}, detail: "backup"},
 		"unnamed refusal": {gate: refused(statelog.Reason("from_a_newer_build")),
 			detail: "from_a_newer_build"},
-		"too large": {gate: DomainGate{Err: fmt.Errorf("statelog: record: %w",
-			queue.ErrTooLarge)}, detail: "max_payload"},
+		"eviction unknown": {gate: refused(statelog.ReasonEvictionUnknown),
+			actions: []statelog.GateAction{retry}, detail: "eviction state"},
+		// THE SHAPE A TOO-LARGE RECORD ACTUALLY HAS — a typed refusal whose
+		// detail names the limit that refused it and what moves it. A bare
+		// wrapped queue.ErrTooLarge stood here, which the state log never
+		// answers, so this row certified a branch no refusal reached while
+		// the real one was advised in its reason's name alone.
+		"too large": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: &statelog.Unavailable{Reason: statelog.ReasonRecordTooLarge,
+				Detail: "the record is 9000000 bytes before its signature and no " +
+					"retry places it, here or on any node: the NATS server's " +
+					"max_payload refused it",
+				Cause: queue.ErrTooLarge}},
+			detail: "the NATS server's max_payload refused it"},
+		"broker refused": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: &statelog.Unavailable{Reason: statelog.ReasonBrokerRefused,
+				Detail: "the broker refused the append: stream is sealed"}},
+			detail: "stream is sealed"},
 		// AN UNKNOWN THIS NODE'S LEDGER CANNOT VOUCH FOR is answered the
 		// same way to the same gesture every time here, so it is sent to a
 		// node whose ledger reaches back that far — never round the loop.
@@ -615,6 +658,49 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			if !a.Valid() {
 				t.Errorf("%s: action %q is not one this build names", name, a)
 			}
+		}
+	}
+}
+
+// A REFUSAL THAT CLEARS BY ITSELF IS NEVER ADVISED THAT NO RETRY CLEARS IT, and
+// one with no sentence of its own is advised in its own words.
+//
+// The table above names the reasons the gate has a sentence for. Every other
+// reason fell through to one arm that offered no action and named the reason
+// alone — which told an operator no retry cleared `eviction_unknown`, a state
+// the next read clears, and reduced a too-large record and a refusal the broker
+// named to a word, when the refusal's own detail is what says which limit to
+// raise or what the broker objected to. So every reason this build names is
+// walked: a retryable one offers the retry, the framework's own class
+// ([statelog.Reason.Retryable]) deciding rather than a list here, and every
+// one either carries its refusal's detail or is one the table gives a sentence.
+//
+// Mutation: drop the retryable arm and the eviction_unknown case and the first
+// half goes red; stop carrying the detail and the second does.
+func TestEveryGateRefusalIsAdvisedInItsOwnClassAndWords(t *testing.T) {
+	t.Parallel()
+	const words = "the refusal's own words"
+	// The reasons the table above gives a sentence of their own, which
+	// stands in for the detail.
+	sentenced := map[statelog.Reason]bool{
+		statelog.ReasonEvicted: true, statelog.ReasonWrongStream: true,
+		statelog.ReasonLogFull: true, statelog.ReasonSuperseded: true,
+		statelog.ReasonOpReused: true, statelog.ReasonSkew: true,
+		statelog.ReasonBehind: true, statelog.ReasonDeferred: true,
+		statelog.ReasonFloorUnknown: true, statelog.ReasonBelowFloor: true,
+		statelog.ReasonEvictionUnknown: true, statelog.ReasonOvertaken: true,
+		statelog.ReasonAbandoned: true,
+	}
+	for _, reason := range statelog.Reasons() {
+		remedy := DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: &statelog.Unavailable{Reason: reason, Detail: words}}.Remedy()
+		if reason.Retryable() && !remedy.Offers(statelog.GateRetrySameOp) {
+			t.Errorf("%s clears on this node by itself, and the gate advises %v: %q",
+				reason, remedy.Actions, remedy.Detail)
+		}
+		if !sentenced[reason] && !strings.Contains(remedy.Detail, words) {
+			t.Errorf("%s is advised %q, without the refusal's own detail", reason,
+				remedy.Detail)
 		}
 	}
 }
@@ -648,9 +734,8 @@ func (w *gateWrites) sorted() []string {
 // The logs come back beside it, sharing the gate's own, so a case may replace
 // one's write.
 func fakeGate(wrote *gateWrites, listErr error) (*NodeGate, []gateLog) {
-	write := func(domain string) func(context.Context, string, string, string,
-		bool) (statelog.Result, error) {
-		return func(context.Context, string, string, string, bool) (statelog.Result, error) {
+	write := func(domain string) gateWrite {
+		return func(context.Context, iam.Principal, string, string, bool) (statelog.Result, error) {
 			wrote.add(domain)
 			return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 		}
@@ -710,9 +795,9 @@ func (r *recorder) setProbe(fn func()) {
 func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, []gateLog,
 	map[string]*recorder) {
 	t.Helper()
-	s := e.native.Load().log
-	g := &NodeGate{live: e.native.Load().gate.live, readmissible: e.native.Load().gate.readmissible,
-		publishing: e.native.Load().gate.publishing}
+	s := e.core.Load().log
+	g := &NodeGate{live: e.core.Load().gate.live, readmissible: e.core.Load().gate.readmissible,
+		publishing: e.core.Load().gate.publishing}
 	recs := map[string]*recorder{}
 	var logs []gateLog
 	for _, running := range identityLogs(t, s) {
@@ -723,7 +808,7 @@ func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, []gateLo
 		if err != nil {
 			t.Fatalf("a recorded publisher for %s: %v", name, err)
 		}
-		gl, err := gateLogFor(running, pub, back.Store.Replicated().Reader(), s.nodeID, nil)
+		gl, err := gateLogFor(s, running, pub)
 		if err != nil {
 			t.Fatalf("the gate's writer for %s: %v", name, err)
 		}
@@ -790,9 +875,8 @@ func publishCaughtUp(t *testing.T, back *Backends, identity []*runningLog, node 
 // advised the same gesture here — which answers `unknown` again for ever.
 func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
 	t.Parallel()
-	answer := func(unvouched bool) func(context.Context, string, string, string,
-		bool) (statelog.Result, error) {
-		return func(context.Context, string, string, string, bool) (statelog.Result, error) {
+	answer := func(unvouched bool) gateWrite {
+		return func(context.Context, iam.Principal, string, string, bool) (statelog.Result, error) {
 			return statelog.Result{Outcome: statelog.OutcomeUnknown, Unvouched: unvouched}, nil
 		}
 	}
@@ -804,7 +888,7 @@ func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
 		live:       func(context.Context) ([]statelog.Presence, error) { return nil, nil },
 		publishing: normalMode.appends,
 	}
-	got, err := g.Evict(t.Context(), GateRequest{Node: "node-4", By: "ops",
+	got, err := g.Evict(t.Context(), GateRequest{Node: "node-4", By: gateOperator,
 		OpID: statelog.NewOpID(time.Now(), "evict-node-4")})
 	if err != nil {
 		t.Fatalf("evict: %v", err)

@@ -22,11 +22,19 @@ import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
 import {
   DESTINATIONS,
+  FRAMELESS,
   RESERVED_SEGMENTS,
   WORKSPACES,
+  grantsMissing,
+  isSidebarRow,
+  personalPath,
   sectionOf,
+  sectionOpen,
+  workspaceMissing,
   workspaceOf,
+  workspaceOpen,
   workspaceRow,
+  type WorkspaceRow,
 } from "./nav.ts";
 import { keyRow, sequenceWords } from "./keymap.ts";
 import {
@@ -42,6 +50,14 @@ import {
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
+
+/** Every Settings section's own address — the company's, beside the reader's
+ *  own two and General, which `nav gates by app` sets apart. */
+function settingsPaths(): string[][] {
+  return workspaceRow("settings")!
+    .sections.filter((s) => !s.elsewhere && !s.personal && s.path.length > 1)
+    .map((s) => s.path);
+}
 
 describe("parsing", () => {
   test("a bare hash is the overview", () => {
@@ -108,6 +124,26 @@ describe("navigation identity", () => {
     }
   });
 
+  // THE WORDS A READER LOOKS FOR A SCREEN BY are matched against what they
+  // type, which the palette lowercases; a word in capitals would never match.
+  // One a destination lists twice is noise, and one that IS another
+  // destination's name would offer this screen beside the one so called.
+  test("a destination's keywords are lowercase, its own, and nobody's name", () => {
+    const labels = new Set(DESTINATIONS.map((d) => d.label.toLowerCase()));
+    const seen = DESTINATIONS.filter((d) => (d.keywords ?? []).length > 0);
+    expect(seen.map((d) => d.key)).toContain("account");
+    for (const d of seen) {
+      const words = d.keywords ?? [];
+      expect(new Set(words).size, d.key).toBe(words.length);
+      for (const word of words) {
+        expect(word, d.key).toBe(word.toLowerCase().trim());
+        expect(word.length, d.key).toBeGreaterThan(1);
+        if (word !== d.label.toLowerCase())
+          expect(labels.has(word), `${d.key}: ${word}`).toBe(false);
+      }
+    }
+  });
+
   test("every workspace has its own jump chord, and they are the documented ones", () => {
     // `g` then a letter. Two rows sharing one makes the second unreachable
     // by keyboard, silently.
@@ -123,6 +159,7 @@ describe("navigation identity", () => {
       knowledge: "k",
       spend: "t",
       settings: "s",
+      account: "u",
     });
   });
 });
@@ -165,11 +202,15 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // NINE WORKSPACES, and the sidebar draws them and nothing else from the
-  // table: a section that became a sidebar row is a second column of
-  // navigation arriving one row at a time.
-  test("the sidebar's rows are the nine workspaces, in the story's order", () => {
-    expect(WORKSPACES.map((w) => w.key)).toEqual([
+  // NINE WORKSPACES ARE SIDEBAR ROWS, and the sidebar draws them and nothing
+  // else from the table: a section that became a sidebar row is a second
+  // column of navigation arriving one row at a time. The TENTH is the reader's
+  // own Account, which has no row — the user block at the sidebar's foot is
+  // the reader, and its menu links it — and is a workspace all the same, so
+  // the palette and its chord reach it.
+  test("the sidebar's rows are nine workspaces, in the story's order, and the menu holds the tenth", () => {
+    const rows = WORKSPACES.filter((w) => w.place !== "menu").map((w) => w.key);
+    expect(rows).toEqual([
       "home",
       "inbox",
       "me",
@@ -180,6 +221,7 @@ describe("the navigation grammar", () => {
       "spend",
       "settings",
     ]);
+    expect(WORKSPACES.filter((w) => w.place === "menu").map((w) => w.key)).toEqual(["account"]);
   });
 
   // A SECTION IS A PATH INSIDE ITS WORKSPACE, never a query and never a row:
@@ -209,6 +251,125 @@ describe("the navigation grammar", () => {
     expect(sections).toBeGreaterThan(25);
   });
 
+  // A LOCK GOES WHERE THE CLOSED THING IS, by ONE rule: any one of a
+  // section's permissions opens it (Admin counting every app), a section
+  // naming none is the overview everybody reads, and a workspace is closed
+  // only when nothing in it is open — needing its own permission beside its
+  // section's, never instead of it.
+  test("one rule opens a section, and a workspace only when nothing in it is", () => {
+    const settings = workspaceRow("settings")!;
+    const people = settings.sections.find((s) => s.key === "people")!;
+    expect(sectionOpen(people, ["admin"])).toBe(true);
+    expect(sectionOpen(people, ["tracker", "knowledge"]), "every app is not Admin").toBe(false);
+    expect(grantsMissing(people, ["admin"])).toEqual([]);
+    expect(grantsMissing(people, [])).toEqual(["admin"]);
+    // THE READER'S OWN SECTIONS NEED NOTHING.
+    for (const key of ["account", "appearance"]) {
+      const own = settings.sections.find((s) => s.key === key)!;
+      expect(sectionOpen(own, []), key).toBe(true);
+      expect(grantsMissing(own, []), key).toEqual([]);
+    }
+    // SETTINGS IS NEVER CLOSED: its You group is the reader's own.
+    expect(workspaceOpen(settings, [])).toBe(true);
+    expect(workspaceMissing(settings, [])).toEqual([]);
+    expect(workspaceOpen(workspaceRow("account")!, [])).toBe(true);
+    // A WORKSPACE'S OWN PERMISSION IS NEEDED BESIDE ITS SECTION'S.
+    const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["tracker"] };
+    expect(workspaceOpen(guarded, [])).toBe(false);
+    expect(workspaceMissing(guarded, [])).toEqual(["tracker"]);
+    expect(workspaceOpen(guarded, ["tracker"])).toBe(true);
+    // THE READER'S OWN ADDRESSES, which the frame draws for anybody signed in.
+    expect(personalPath(["account"])).toBe(true);
+    expect(personalPath(["settings", "appearance"])).toBe(true);
+    expect(personalPath(["settings"])).toBe(false);
+    expect(personalPath(["work"])).toBe(false);
+  });
+
+  // EVERY PLACE IS THE OVERVIEW'S, ONE APP'S, OR ADMIN'S — and the table says
+  // which, so the sidebar, the palette and the frame's lock read one answer.
+  // The tracker's screens open with Tracker (or Admin, which includes it) and
+  // nothing else; the knowledge base's with Knowledge; the company-wide
+  // transcripts and every Settings page but You and General with Admin; and
+  // the overview — Home, the agents' status, what is running, spend — with
+  // nothing at all. Mutation: drop a row's permission, or give a transcript
+  // an app's, and the matching line here goes red.
+  test("nav gates by app", () => {
+    const at = (...path: string[]) => sectionOf(path) ?? workspaceRow(workspaceOf(path))!;
+    const opens = (path: string[], held: string[]) => {
+      const row = workspaceRow(workspaceOf(path))!;
+      const section = sectionOf(path);
+      return workspaceOpen(row, held) && (!section || sectionOpen(section, held));
+    };
+    const TRACKER_ONLY = [["inbox"], ["me"], ["work"], ["work", "tasks"], ["spend", "tasks"]];
+    for (const path of TRACKER_ONLY) {
+      expect(opens(path, ["tracker"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["knowledge"]), path.join("/")).toBe(false);
+      expect(opens(path, []), path.join("/")).toBe(false);
+    }
+    for (const path of [["knowledge"], ["knowledge", "skills"]]) {
+      expect(opens(path, ["knowledge"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["tracker"]), path.join("/")).toBe(false);
+    }
+    const ADMIN_ONLY = [
+      ["live", "turns"],
+      ["live", "a2a"],
+      ["live", "events"],
+      ["knowledge", "diaries"],
+      ...settingsPaths().filter((p) => !["settings", "appearance"].includes(p[1] ?? "settings")),
+    ];
+    expect(ADMIN_ONLY.length).toBeGreaterThan(10);
+    for (const path of ADMIN_ONLY) {
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["tracker", "knowledge"]), path.join("/")).toBe(false);
+    }
+    const OVERVIEW = [
+      [],
+      ["agents"],
+      ["live"],
+      ["live", "runs"],
+      ["spend"],
+      ["spend", "budgets"],
+      ["settings"],
+      ["settings", "appearance"],
+      ["account"],
+    ];
+    for (const path of OVERVIEW) {
+      expect(opens(path, []), path.join("/") || "home").toBe(true);
+      expect(at(...path).grants ?? [], path.join("/") || "home").toEqual([]);
+    }
+  });
+
+  // ALREADY IN THE SIDEBAR is a fact about the sidebar: every row's landing,
+  // the empty fragment being Home's — and not the reader's Account, which is
+  // one segment long and has no row.
+  test("a sidebar row is a workspace's landing drawn as a row", () => {
+    expect(isSidebarRow([])).toBe(true);
+    for (const row of WORKSPACES.filter((w) => w.place !== "menu")) {
+      expect(isSidebarRow(row.path), row.key).toBe(true);
+    }
+    expect(isSidebarRow(["account"])).toBe(false);
+    expect(isSidebarRow(["work", "tasks"])).toBe(false);
+  });
+
+  // ONE PLACE, ONE DESCRIPTION. A cross-link is the place it leads to, drawn
+  // in another workspace's renderer, so its name, its glyph, its hint and what
+  // opens it are that place's: written out beside it, Settings' Account row
+  // said "two-step verification" where the palette said "second factor".
+  test("a cross-link is described exactly as the place it leads to", () => {
+    const links = WORKSPACES.flatMap((w) => w.sections.filter((s) => s.elsewhere));
+    expect(links.map((s) => s.key)).toEqual(expect.arrayContaining(["account", "budgets"]));
+    for (const link of links) {
+      const target = DESTINATIONS.find((d) => d.path.join("/") === link.path.join("/"));
+      expect(target, link.key).toBeDefined();
+      expect(link.label, link.key).toBe(target!.label);
+      expect(link.icon, link.key).toBe(target!.icon);
+      expect(link.hint, link.key).toBe(target!.hint);
+      expect(link.grants ?? [], link.key).toEqual(target!.grants ?? []);
+    }
+  });
+
   // EVERY DESTINATION IS ONE ADDRESS, resolved to the workspace it claims. Two
   // rows leading to one address are two names for one place, which is how a
   // reader comes to believe the second of them is broken.
@@ -228,7 +389,9 @@ describe("the navigation grammar", () => {
   // `#/work/views` is a list of saved views until somebody creates a project
   // called VIEWS, and then it is a project.
   test("no reserved segment is the shape of a minted key", () => {
-    for (const segment of RESERVED_SEGMENTS) {
+    // A FRAMELESS HEAD TOO: `#/login` is read before any workspace is, so a
+    // head the engine could mint would take the page that key names.
+    for (const segment of [...RESERVED_SEGMENTS, ...FRAMELESS]) {
       expect(KEY_SHAPE.test(segment), `${segment} is a project-key shape`).toBe(false);
       expect(ITEM_KEY_SHAPE.test(segment), `${segment} is an item-key shape`).toBe(false);
       expect(CONTAINER_SHAPE.test(segment), `${segment} is a container-key shape`).toBe(false);
@@ -239,6 +402,35 @@ describe("the navigation grammar", () => {
 
 describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
+
+  // THE SIGN-IN SCREENS take exactly the tail their address has. An
+  // invitation and a reset link are the exceptions: each screen answers a link
+  // that is not whole (an empty one) rather than Not Found, since its holder
+  // pasted it.
+  test("a sign-in screen is its exact address, and an invitation or a reset its one link", () => {
+    expect(resolve(["login"])).toMatchObject({ screen: "login", workspace: "" });
+    expect(resolve(["login", "x"]).resolved).toBe(false);
+    expect(resolve(["enrol"])).toMatchObject({ screen: "enrol", workspace: "" });
+    expect(resolve(["enrol", "x"]).resolved).toBe(false);
+    expect(resolve(["invite", `${uuid}.secret`])).toMatchObject({
+      screen: "invite",
+      link: `${uuid}.secret`,
+    });
+    expect(resolve(["invite", "a", "b"])).toMatchObject({ screen: "invite", link: "" });
+    expect(resolve(["reset", `${uuid}.secret`])).toMatchObject({
+      screen: "reset",
+      link: `${uuid}.secret`,
+      workspace: "",
+    });
+    expect(resolve(["reset", "a", "b"])).toMatchObject({ screen: "reset", link: "" });
+  });
+
+  // THE ACCOUNT IS IN THE FRAME, unlike the sign-in screens: it is a signed-in
+  // reader's page, under the frame's own reads, and takes no tail.
+  test("the account is its exact address, inside the frame", () => {
+    expect(resolve(["account"])).toMatchObject({ screen: "account", workspace: "account" });
+    expect(resolve(["account", "tokens"]).resolved).toBe(false);
+  });
 
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
     expect(resolve(["work", "ENG"])).toMatchObject({ screen: "project", key: "ENG" });
@@ -453,8 +645,7 @@ describe("the breadcrumb", () => {
   });
 
   // A SEAT IS NAMED BY ITS NAME AND ADDRESSED BY A SLUG, so an unresolved
-  // handle is drawn in the mono face and a resolved name is not. A unit's
-  // segment IS its name, so that one is deliberately not mono.
+  // handle is drawn in the mono face and a resolved name is not.
   test("a seat's crumb is its name, and an unnamed handle is an identifier", () => {
     const raw = crumbsFor(["agents", "seats", "agent-cto"]);
     expect(raw[raw.length - 1]?.label).toBe("agent-cto");
@@ -464,8 +655,21 @@ describe("the breadcrumb", () => {
     });
     expect(named[named.length - 1]?.label).toBe("Chief Technology Officer");
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
-    const unit = crumbsFor(["agents", "teams", "Platform"]);
-    expect(unit[unit.length - 1]?.mono, "a unit is addressed by its own name").toBeFalsy();
+  });
+
+  // A UNIT'S SEGMENT IS ITS KEY, so it follows the seat's rule rather than
+  // being drawn as prose: `platform-eng` is an address until the screen
+  // publishes the name it resolved it to. It was the unit's NAME once, which
+  // two units may share — keyed on it, two teams shared one page.
+  test("a unit's crumb is its name, and an unnamed key is an identifier", () => {
+    const raw = crumbsFor(["agents", "teams", "platform-eng"]);
+    expect(raw[raw.length - 1]?.label).toBe("platform-eng");
+    expect(raw[raw.length - 1]?.mono, "a key drawn as prose reads as a name").toBe(true);
+    const named = crumbsFor(["agents", "teams", "platform-eng"], {
+      "platform-eng": "Platform",
+    });
+    expect(named[named.length - 1]?.label).toBe("Platform");
+    expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
   });
 
   // A SEAT'S BADGE IN THE TRAIL IS THE ONE ITS PAGE DRAWS: an agent wears
@@ -689,6 +893,13 @@ describe("the information architecture", () => {
       ...WORKSPACES.map((w) => w.path),
       ...WORKSPACES.flatMap((w) => w.sections.filter((s) => !s.elsewhere).map((s) => s.path)),
       ...DESTINATIONS.map((d) => d.path),
+      // THE SCREENS OUTSIDE THE FRAME, which no workspace declares: a page a
+      // person is sent to before anything else opens is one somebody
+      // starting from the document has to be able to find.
+      // An invitation and a reset link are written down as the link each carries.
+      ...FRAMELESS.map((head) =>
+        head === "invite" || head === "reset" ? [head, "{id}.{secret}"] : [head],
+      ),
     ];
     for (const path of paths) {
       expect(

@@ -77,7 +77,7 @@ func TestAPagesRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 }
 
 // A RECORD EVERY BUILD MUST READ NEVER CARRIES A VERSIONED FIELD — a gate, the
-// read index's barrier and a reanchor's generation, stamped or pinned.
+// read index's barrier and a reanchor's generation, stamped or set.
 //
 // Each is what an older node cannot afford to hold back: a deferred gate
 // licenses every record it was meant to drop, a retained barrier is a deferral
@@ -95,9 +95,9 @@ func TestARecordEveryBuildReadsRefusesAVersionedField(t *testing.T) {
 		"a purge": {RecordEnvelope: RecordEnvelope{
 			Subject: PageSubject("stamp"), Op: OpPurge}},
 		"a barrier": {RecordEnvelope: RecordEnvelope{
-			V: baseRecordVersion, Subject: BarrierSubject(), Op: OpBarrier}},
+			Subject: BarrierSubject(), Op: OpBarrier}},
 		"a generation": {RecordEnvelope: RecordEnvelope{
-			V: baseRecordVersion, Subject: GenerationSubject(2), Op: OpGeneration}},
+			Subject: GenerationSubject(2), Op: OpGeneration}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -67,8 +68,15 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture) *runner.R
 		t.Fatalf("Register: %v", err)
 	}
 	// THE REAL LOADER, publishing through the same capture, so a load made
-	// inside a phase is seen with the phase the surface bound it to.
-	if _, err := builtin.Register(reg, builtin.Deps{ToolSkills: registry, Events: pub}); err != nil {
+	// inside a phase is seen with the phase the surface bound it to — and the
+	// REAL AUTHORITY DECISION, because every builtin is gated at registration
+	// and a nil Authorizer refuses: without one the load is refused before
+	// it reads anything, and no read is recorded for a reason that has
+	// nothing to do with what this file asserts.
+	if _, err := builtin.Register(reg, builtin.Deps{
+		ToolSkills: registry, Events: pub,
+		Authorize: builtin.Decide(authz.NoChart{}),
+	}); err != nil {
 		t.Fatalf("builtin.Register: %v", err)
 	}
 	role := &org.Role{

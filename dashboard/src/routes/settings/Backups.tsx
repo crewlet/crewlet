@@ -20,7 +20,7 @@
  * `backups` answers both; neither is derived from the other here.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Button,
   Card,
@@ -44,12 +44,15 @@ import { QueryState } from "~/components/common.tsx";
 import { CoverageNote, missingFrom } from "~/components/CoverageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, SeatCell, SeatLabel, StatusCell } from "~/app/frame/cells.tsx";
-import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
+import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
 import { eventHistorySpan, fmtBytes, fmtDateTime, plural, relTime } from "~/lib/format.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { ADMIN, needsWords } from "~/lib/access.ts";
+import { throughOf } from "~/lib/attribution.ts";
+import { useSeatOf, writerOf, WriterCell } from "./Audit.tsx";
 import {
   coverWords,
   OUTCOME_WORDS,
@@ -57,7 +60,7 @@ import {
   POLICY_WORDS,
   suggestDir,
 } from "~/lib/backups.ts";
-import { apiToken } from "~/protocol/index.ts";
+
 import type { BackupPointRow, BackupRunRow, BackupsAnswer } from "~/contract/backups.ts";
 import { RetentionPanels, RetentionStatus, useRetentionReport } from "./Retention.tsx";
 import { DomainScreen } from "./Domain.tsx";
@@ -70,13 +73,23 @@ const BACKUPS_POLL_MS = 60_000;
 export function Backups({ domain }: { domain?: string }) {
   const health = useEngineHealth();
   const [taking, setTaking] = useState(false);
-  // THE SECTION IS OPERATOR-SCOPED AND SAYS SO. Every answer below refuses a
-  // reader with no token, and a page of its own that drew nothing would be a
-  // blank screen under a heading that promises backups.
-  const operator = apiToken() !== "";
-  const page = operator && domain === undefined;
+  const viewer = useViewer();
+  // THE ENGINE DECIDES WHO READS THIS, and the refusal it answers is drawn
+  // with the grant that would have admitted the reader: a page that guessed
+  // from a credential's shape decided for a person the engine had not asked
+  // about. The button alone reads the viewer, because a press the engine will
+  // refuse is one to say no to before it is made.
+  const page = domain === undefined;
   const backups = useQuery("backups", undefined, { pollMs: BACKUPS_POLL_MS, enabled: page });
-  const retention = useRetentionReport(page);
+  // THE RETENTION REPORT IS ASKED ONCE FOR THE PAGE, and only of an admin,
+  // whom the engine decides it on: the alarms leading the page and the panels
+  // under them read this one answer, and asking for anybody else would refuse
+  // on every poll and paint the screen red for a reader who simply does not
+  // operate the fleet, under the backups' own refusal that already names the
+  // access.
+  const retention = useRetentionReport(page && viewer.admin);
+  const refused =
+    !viewer.loading && !viewer.admin ? needsWords("Taking a backup", [ADMIN]) : undefined;
   if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
   const node = health?.node;
   return (
@@ -86,29 +99,32 @@ export function Backups({ domain }: { domain?: string }) {
           variant="primary"
           size="small"
           leadingIcon={<PlusGlyph />}
-          disabledReason={operator ? undefined : "Taking a backup needs an operator token."}
-          title={operator ? undefined : "Taking a backup needs an operator token."}
+          disabledReason={refused}
+          title={refused}
           onClick={() => setTaking(true)}
         >
           Take a backup
         </Button>
       </PageActions>
-      <QueryState error={operator ? null : "unauthorized"} loading={false}>
-        {/* WHAT IS WRONG LEADS: the alarms, each once with the logs it
-            stands on, and the backup they ask for one press away. */}
-        <RetentionStatus retention={retention} onTakeBackup={() => setTaking(true)} />
-        <QueryState error={backups.error} loading={backups.loading && !backups.data}>
-          {backups.data ? (
-            <BackupRecord
-              answer={backups.data}
-              owner={retention.data ? (retention.data.backup_owner ?? "") : undefined}
-            />
-          ) : (
-            <Skeleton variant="text" rows={4} label="Loading the backups" />
-          )}
-        </QueryState>
-        <RetentionPanels thisNode={node} retention={retention} />
+      {/* WHAT IS WRONG LEADS: the alarms, each once with the logs it stands
+          on, and the backup they ask for one press away. */}
+      <RetentionStatus retention={retention} onTakeBackup={() => setTaking(true)} />
+      <QueryState
+        error={backups.error}
+        refusal={backups.refusal}
+        detail={backups.detail ?? undefined}
+        loading={backups.loading && !backups.data}
+      >
+        {backups.data ? (
+          <BackupRecord
+            answer={backups.data}
+            owner={retention.data ? (retention.data.backup_owner ?? "") : undefined}
+          />
+        ) : (
+          <Skeleton variant="text" rows={4} label="Loading the backups" />
+        )}
       </QueryState>
+      <RetentionPanels thisNode={node} retention={retention} />
       {taking && (
         <TakeBackupDialog
           node={node}
@@ -147,12 +163,12 @@ export function BackupRecord({
   owner?: string;
 }) {
   const now = useNow();
-  const org = useOrg();
+  const seatOf = useSeatOf();
   // HOW FAR BACK THE HISTORY READS, as the engine reported it: the history is
   // an event-log read, floored where the log is (`store.EventHistory`).
   const historySeconds = useEngineHealth()?.event_history_seconds;
   const span = eventHistorySpan(historySeconds);
-  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
+
   const newest = answer.points.find((p) => p.newest);
   const failed = answer.history.filter((r) => r.outcome === "failed").length;
   const requested = `${answer.history.length}${answer.more ? "+" : ""}`;
@@ -359,19 +375,26 @@ export function BackupRecord({
                 {
                   key: "who",
                   header: "Who",
-                  sortValue: (r) => r.actor_seat || r.operator,
+                  // WHO AND WITH WHAT, apart (`iam.ActorFor`): the person or
+                  // seat that asked, drawn as every audit trail draws a
+                  // writer, and the credential they asked through where it
+                  // names something else.
+                  sortValue: (r) => r.actor,
+                  cell: (r) => (
+                    <WriterCell
+                      writer={writerOf({ actor: r.actor, actorKind: r.actor_kind ?? "" }, seatOf)}
+                    />
+                  ),
+                },
+                {
+                  key: "through",
+                  header: "Through",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (r) => throughOf(r.actor, r.operator_id),
                   cell: (r) => {
-                    if (!r.actor_seat) return <SeatLabel name={r.operator} kind="human" />;
-                    const seat = who(r.actor_seat);
-                    return (
-                      <SeatCell
-                        handle={r.actor_seat}
-                        name={seat.name}
-                        kind={seat.kind ?? "human"}
-                        avatar={seat.avatar}
-                        title={`${seat.name}, through the operator token ${r.operator}`}
-                      />
-                    );
+                    const through = throughOf(r.actor, r.operator_id);
+                    return through ? <KeyCell value={through} /> : <EmptyValue label="Their own" />;
                   },
                 },
                 {

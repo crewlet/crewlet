@@ -73,6 +73,8 @@ type Work struct {
 }
 ```
 
+**A field the schema does not declare is refused, naming it**, and goes back to the model like any other rejected submission — at any depth, and in `submit_review` and a [`delegate`](#one-call-a-graph-of-tasks) call too, which decode the same way. Decoded the obvious way it was dropped, so a misspelt optional field was accepted as an answer the model did not give: a reviewer's misspelt `completed_work` never told the next round what had already landed, so it could fire the same post a second time, and a delegated task's `afer` for `after` ran at once, on input it was told to wait for.
+
 To hand a task off to a colleague the executor reaches them where the work lives — a chat mention, an issue comment or reassignment, or `a2a_ask` — and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is just a colleague-surface tool call.
 
 **Real code work** is the `run_sandbox` tool. For a role gated with `role.sandbox.enabled`, the executor calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the tool loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the agent reports and acts in the same turn. See [Code Sandbox](code-sandbox.md).
@@ -120,7 +122,29 @@ In both, the flat question is the answer — so the check is strictly stricter t
 
 `no_action` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), it must instead post a brief explanation via the originating channel's reply tool and report that as `delivered`. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. The executor's contract enforces this in prose, the decoder enforces it in code, and each third-party app's notification prompt carries the same rule on the triage side.
 
-The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (executor < 2,200, review < 750, and the whole turn < 3,000) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round — and on the Anthropic provider the conversation the loop has grown is cached behind it, so a round re-reads the history the round before it wrote as well. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
+The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (executor < 2,200, review < 800, and the whole turn < 4,000) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round — and on the Anthropic provider the conversation the loop has grown is cached behind it, so a round re-reads the history the round before it wrote as well. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
+
+---
+
+## The roster allowance
+
+One section does not grow with the diff — it grows with the company. A lead's direct reports are rendered **twice**: as a name list on the identity block's `Direct reports:` line, and as a profile block each under `## Your Team`. Both used to render every report, and neither stopped. A full agent profile measures ~119 tokens and a human's ~193 (a person also carries contact IDs, availability and hand-off guidance), so a lead of 25 measures ~4,028 tokens of roster alone — more than the *whole turn's* budget was. **A lead of an ordinary unit could not be prompted at all.**
+
+The two renderings now share **one allowance of 1,000 tokens**, spent from a single counter. One counter and not one each, because two caps of a thousand let the prompt pay two thousand: neither knows what the other spent, and nothing above them adds the two up. The counter is charged for *both* renderings of every report it admits, which is also why the two sections can never name different people.
+
+What the counter buys is a ladder, and a lead reads it in this order:
+
+| Rung | What renders | What it buys |
+|---|---|---|
+| **1 — full profile** | name, handle, background, goal, responsibilities; for a human, contact IDs, availability and hand-off guidance | What a lead actually assigns work from. Capped at **half** the allowance, because a profile costs 119–193 tokens against 7–12 for a name: undivided, it buys six profiles and then cannot afford the seventh colleague's *name* |
+| **2 — name and handle** | `- **Ana Ruiz** (ana-ruiz)`, and `— **human teammate**` where the seat is a person | That the team does not end at the last profile. The human marker survives the cap deliberately: it is how the lead knows this colleague answers asynchronously rather than taking an engine turn |
+| **3 — the closing line** | ``and 461 more — `lookup_colleague` names them`` | The only rung that gives the lead a **move**. It names the tool because a model told only that colleagues were omitted has nothing to do about it, and invents the missing names instead. Its cost is reserved *before* the first profile, so a truncated roster can never claim to be the whole team |
+
+The ladder only ever descends: a report that will not fit at rung 1 sends every later one to rung 2, so the profiles are the head of the chart's own order rather than whichever colleagues happened to have a short backstory. What this costs in practice: a lead of 25 gets three full profiles and **names every one of its reports**; a lead of 500 gets three full profiles, ~36 more names, and a lookup for the rest.
+
+**The allowance caps rendering, never authorization.** `manages` is untouched — it is read from the chart on every lookup, a seat still manages every report the allowance had no room to describe, `lookup_colleague` resolves any of them, and the dashboard's own chart still shows the whole team. A cap read as an authorization cap would be a lead silently stripped of reports it is still accountable for; `TestCappingTheRosterDoesNotCapManages` exists to keep that reading from ever becoming true.
+
+The whole turn's budget rose from 3,000 to 4,000 for this, and the raise **is** the allowance: the turn's own prose measures ~2,806 with a 100-tool catalogue, a mixed company pays another ~152 for the `## Human colleagues` note, and a lead of 500 now measures ~3,838. The review prompt is unmoved — it renders a one-line identity naming the reviewer's *manager*, not its reports, so a lead of 500 and a lead of one measure the same 771.
 
 ---
 
@@ -288,7 +312,7 @@ The whole graph is validated **before anything runs**: unique ids, resolvable `a
 
 ### A worker submits, it does not narrate
 
-A worker ends by calling `submit_result` with typed arguments, the same way every other phase in this engine ends. What comes back is **fields the parent can index** rather than prose it has to re-parse with another model call. The shape is the worker template's `output` schema, or a default `{result, notes}` when none is declared.
+A worker ends by calling `submit_result` with typed arguments, the same way every other phase in this engine ends. What comes back is **fields the parent can index** rather than prose it has to re-parse with another model call. The shape is the task's own `output`, else the worker template's `output` schema, else a default `{result, notes}` — so a task's `output` is also the one way an **inline** worker, which has no template, answers in fields. A task's `output` is held to the rule a template's is held to at load (below) and refused **before anything runs**, naming the task: a schema no submission can satisfy would spend the worker's whole round budget failing to answer.
 
 A worker that answers in prose is asked again — at most twice in a row — to call `submit_result`, since text is not recorded (the [tool loop's finishing corrective](#round-cap-extension-judge)); one that still never submits reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth on the one question the parent asked, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
 
@@ -768,12 +792,32 @@ sequenceDiagram
   A turn whose executor runs as a [coding CLI's own agentic
   loop](subscription-llm-backends.md) cannot take a note at all — its rounds are
   the CLI's — and says so: `steer_unsupported`.
+- **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
+  or an administrator (`admin`) — never a seat, and never any reader,
+  since everybody signed in holds a credential. The seat is the one thing the
+  asking node cannot know, because the turn runs wherever its seat is held, so
+  the decision takes two steps: first on the turn as named — `admin` admits
+  there and then, and a caller who leads nobody is refused with
+  exactly the answer a seat they do not lead gets — and otherwise a **probe**
+  asks the node running the turn which seat it is, and the note is decided on
+  that seat before it is offered. A probe nobody answers is `unavailable`,
+  never a refusal: no answer says nothing about whose turn it was.
 - **One node answers.** Every node serves the subject and the note names the
   turn; the node running it is the only one that can answer, so nothing has to
   know where a turn runs. It keeps answering `closed` (the tool's
   `not_running`) for the last 256 turns it ended, because a note races a turn's
   end by seconds. No answer at all inside the two-second budget is `unknown`,
   never `not_running`: a reply lost on the way back looks exactly like none.
+- **Only a note the fleet signed reaches a turn.** The running node offers the
+  note as the person it names on the asking node's decision that they may, so
+  the scatter and every answer to it are signed under the fleet keyring and
+  bound to one request — an id and a deadline inside the signature, the answer
+  naming the id — by the same rule every state-log record and every estate
+  request is held to
+  ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
+  A note the fleet did not sign, or one captured and sent again, is answered
+  by nobody; one under a key the running node does not hold is answered that
+  it took nothing, and the tool says the keyring is what to fix.
 - **A note is one note.** Its id is the person's request id, so a retry of one
   request is answered `accepted` without being read twice. A turn holds at most
   **five** unread notes (`conflict` past that) of at most **2,000 characters**
@@ -810,7 +854,7 @@ whose indicator carries no text):
 | That run settled instead of resuming — its box could not be read back, its row carried no suspended conversation, or a claim it took could not be given back | Indicator cleared: the record is deleted and the box reclaimed, so the suspended turn is never resumed. The same hold and the same rule as a park; only the reason differs |
 | The resumed turn came back, the run's record could not be READ to find out which box to settle, and the store ended the run anyway | Indicator cleared. The store is asked to end the run while it is still the claim the tail took, and a claim it does end is a turn nothing will resume. Staying quiet would leave the row in a claim no poll, redelivery, answer or reaper picks up, with the indicator over it |
 | That same settle DECLINED, because the resumed turn had called `run_sandbox` again before it returned | Indicator **left standing**, and what it now describes is the relaunched job. The ending is licensed for the claim alone, so a row the relaunch took back through launching is left to whoever moved it, no stop is reported, and that turn is coming back after all: the relaunched job's completion resumes the same `turn_id`, exactly as the suspended-for-a-run row above says |
-| The seat is removed from the company and not restored within the retirement grace | Indicator cleared as each of its runs is ended. The hold has usually gone down with the seat already; this covers the order in which it has not |
+| The seat leaves the company's agent seats — removed from the chart, or made a person's and not an agent's again within the retirement grace | Indicator cleared as each of its runs is ended. The hold has usually gone down with the seat already; this covers the order in which it has not |
 | That run's resume | The hold taken back, never a second indicator over the first — and cleared when the resumed turn ends. A resume driven by a person's ANSWER has no hold left to take back and raises a fresh indicator off the answer's own thread |
 | A resume that never reached its turn — a reply this build cannot read, a runner it could not build — or one whose turn broke without writing outside the engine | **Held where a box's completion drove it, cleared where a person's answer did.** The claim reverts to exactly where it was taken from, and the two routes came from opposite facts: a live run, so the retry finds a box still working and nothing could put a cleared indicator back; or a question still open, so the run is awaiting that same person again — and nothing is left claiming otherwise, because this frame is the only thing that clears it: the coordinator's revert reports no stop (the same revert on the completion route puts a run back to a box that *is* still working), and the message that carried the answer is **handed back rather than run**, so no fresh turn comes along to raise an indicator in its place. The next attempt at that message raises its own. It used to fall through and be worked as an ordinary chat message, which answered the person with a turn instead of with the coding run they were replying to. Where the revert itself cannot be written there is no retry on either route — the row is stuck in the claim — so the run is settled and the indicator cleared |
 | This node hands the seat to a peer, or shuts down | Indicator cleared, because a kept-alive one would otherwise be re-asserted by a node that is no longer running the turn |

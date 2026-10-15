@@ -214,8 +214,8 @@ func (n *Notify) filedTo(was, now Task) {
 // already repaired from the applier's own row, but the wake a seat is
 // delivered carried no key, so the turn it started was charged to a bare
 // uuid — a row every turn list drew as `native:<uuid>` — and its prompt had
-// no key to read the task by. Stamped here, at the one point both creates
-// (a task, a promoted sub-task) pass through with the key in hand.
+// no key to read the task by. Stamped here, at the one point a create passes
+// through with the key in hand.
 func (n *Notify) keyed(key string) {
 	if n == nil || key == "" {
 		return
@@ -342,9 +342,8 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 // BY ITEM ID rather than by position, because a checklist is reordered and
 // renamed constantly and a positional diff would report the whole list as
 // changed the first time somebody dragged a line. An item counts as touched
-// when it appeared, disappeared, or changed in any way its assignee would care
-// about — its text, its done flag, its owner, or the subtask it was promoted
-// into.
+// when it appeared, disappeared, or changed in a way its assignee would care
+// about — see [itemTouched].
 //
 // The set is SORTED and deduped, because two nodes read the record rather than
 // re-deriving it and a slice in map order would put two spellings of one
@@ -363,7 +362,7 @@ func checklistAssignees(before, after Task) []string {
 		switch {
 		case !held:
 			mark(item)
-		case previous != item:
+		case itemTouched(previous, item):
 			// BOTH OWNERS, because a reassigned item is news to the
 			// person who had it as much as to the person who has it.
 			mark(item)
@@ -381,6 +380,21 @@ func checklistAssignees(before, after Task) []string {
 	}
 	sort.Strings(out)
 	return capHandles(out, MaxChecklists)
+}
+
+// itemTouched reports whether an item changed in a way its assignee would care
+// about: its text, its done flag, or who holds it.
+//
+// NAMED FIELDS, NOT THE STRUCT. It was `!=` over the whole item, which asked
+// two wrong questions at once. `Parent` is a POINTER, so two decodings of one
+// unchanged nested item — the stored one and the one a checklist write
+// re-sends — compared unequal by address, and every nested item's assignee was
+// woken by any edit to its list. And `Order` and `Parent` are LAYOUT: dragging
+// one line renumbers its neighbours, so the reorder this function's own doc
+// says must not report the whole list woke everybody on it.
+func itemTouched(before, after ChecklistItem) bool {
+	return before.Name != after.Name || before.Done != after.Done ||
+		before.Assignee != after.Assignee
 }
 
 // itemsByID flattens a task's checklists to their items.
@@ -714,11 +728,6 @@ func bodyText(body string) string {
 // removal on the `from` side alone, which is [paramsText]'s shape for the same
 // reason.
 //
-// PROMOTIONS ARE COUNTED SEPARATELY, and that is not decoration: promoting an
-// item to a subtask is a `checklist` commit ([PromoteIntent]) that moves
-// neither the done count nor the total, so counts alone would record nothing
-// for it.
-//
 // IN DOCUMENT ORDER, unlike the people sets above and like a person's
 // `priorities`: a checklist collection renders in the order it is stored, so
 // that order is something somebody arranged rather than an artefact of how a
@@ -730,21 +739,14 @@ func checklistText(lists []Checklist) string {
 	}
 	out := make([]string, 0, len(lists))
 	for _, list := range lists {
-		done, promoted := 0, 0
+		done := 0
 		for _, item := range list.Items {
 			if item.Done {
 				done++
 			}
-			if item.PromotedTo != nil {
-				promoted++
-			}
 		}
-		entry := fmt.Sprintf("%s: %d of %d done", checklistName(list), done,
-			len(list.Items))
-		if promoted > 0 {
-			entry += fmt.Sprintf(" (%d promoted)", promoted)
-		}
-		out = append(out, entry)
+		out = append(out, fmt.Sprintf("%s: %d of %d done", checklistName(list),
+			done, len(list.Items)))
 	}
 	return listText(out)
 }

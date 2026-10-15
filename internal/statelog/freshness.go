@@ -38,9 +38,11 @@ import "time"
 // lag, and a node that has not reached the floor within [ReadBudget] refuses
 // `behind` rather than serving rows from before the write.
 //
-// A floor on ANOTHER stream is refused `wrong_stream`, never waited for: a
-// position names its stream, and a caller pasting one across domains would
-// otherwise wait out the whole budget for a sequence that means nothing here.
+// A floor on ANOTHER stream is refused, never waited for — and refused as the
+// REQUEST's mistake ([ErrForeignPosition]) rather than as a state of the node: a
+// position names its stream, a caller pasting one across domains would
+// otherwise wait out the whole budget for a sequence that means nothing here,
+// and every node in the fleet refuses it the same.
 type Freshness struct {
 	// Level is the level asked for, EMPTY when the caller said nothing —
 	// which is not a fifth state: the SURFACE resolves it, through

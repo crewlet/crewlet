@@ -1,15 +1,17 @@
 /**
  * What the operators of this company did to it.
  *
- * # Why it is one screen and not five
+ * # Why it is one screen and not six
  *
  * Every write in this product is attributed — the tracker records the actor
  * and their kind on every commit, the knowledge base does the same, a config
- * revision names who created it, and a credential row names who last stored
- * it. Four subsystems, four honest records, and until now four places to look:
- * a question as ordinary as "what did we change last Tuesday" meant reading
- * the tracker's feed, the wiki's feed, the config history and the credential
- * table, each in its own chrome, each ordered differently.
+ * revision names who created it, a credential row names who last stored it,
+ * and the identity estate keeps its own trail of who enrolled, signed in and
+ * changed whom. Five subsystems, five honest records, and until now five places
+ * to look: a question as ordinary as "what did we change last Tuesday" meant
+ * reading the tracker's feed, the wiki's feed, the config history, the
+ * credential table and the directory's trail, each in its own chrome, each
+ * ordered differently.
  *
  * So this is the one screen that reads them together, in one order, over one
  * window. It writes nothing and asks no new question of the engine.
@@ -17,27 +19,38 @@
  * # It is about WHO WAS WRITING, not about a list of people
  *
  * The two feeds narrow on `actor_kinds` rather than on a set of handles, and
- * that is the whole design: an `operator` commit carries a TOKEN's own label
- * where an `agent` one carries a seat handle, so the two name spaces are
- * disjoint — and the set of people is the roster, which changes. An audit
- * assembled from handles would quietly lose every commit made by somebody who
- * has since left the company, which is the one commit somebody is looking for.
+ * that is the whole design. Every record names its author the one way
+ * `iam.ActorFor` does: a person the identity directory binds to a seat writes
+ * AS that seat, kind `human`; a credential bound to none — a machine or a
+ * Tier A token — writes under its WHOLE login, kind `operator`; a seat in its own turn is kind
+ * `agent`; and the engine is
+ * `system`. A login always carries a separator a seat handle cannot, so the
+ * name spaces are disjoint — and the set of people is the roster, which
+ * changes. An audit assembled from handles would quietly lose every commit
+ * made by somebody who has since left the company, which is the one commit
+ * somebody is looking for.
  *
- * The three kinds are held apart and LABELLED rather than filtered down to
- * one, because "the engine did this" is as much an answer as "a person did":
- * a bulk edit nobody asked for is the thing an operator opens an audit
- * to find.
+ * The kinds are held apart and LABELLED rather than filtered down to one,
+ * because "the engine did this" is as much an answer as "a person did": a bulk
+ * edit nobody asked for is the thing an operator opens an audit to find.
+ *
+ * # And THROUGH WHICH CREDENTIAL
+ *
+ * A machine token acts as its owner, and a browser session is one of a
+ * person's several, so the author alone reads a token's write as one its owner
+ * made by hand. Every source records the credential beside the author
+ * (`operator_id`: `pat:<id>`, `session:<lineage>`), and the Through column says
+ * it wherever it names something the author does not ([throughOf]).
  *
  * # A config revision says who wrote it, and this screen believes it
  *
- * Every revision records its writer's KIND beside the label (`operator` or
- * `node`), and the pointer a peer adopts from carries both — so this row
- * reads the same on every node. It used to be drawn as an operator's
- * unconditionally, which labelled a node's boot seed and the reconcile loop's
- * reload after sealing a credential as a person's write. The configuration is
- * the one source read WHOLE rather than narrowed to people: a revision the
- * engine made is a change to the company as much as one a person made, and
- * the row's kind says which it was.
+ * Every revision records its writer's KIND beside the name, and the pointer a
+ * peer adopts from carries both — so this row reads the same on every node. It
+ * used to be drawn as an operator's unconditionally, which labelled a node's
+ * boot seed and the reconcile loop's reload after sealing a credential as a
+ * person's write. The configuration is the one source read WHOLE rather than
+ * narrowed to people: a revision the engine made is a change to the company as
+ * much as one a person made, and the row's kind says which it was.
  *
  * # The fifth source: what a person did at runtime
  *
@@ -46,16 +59,27 @@
  * a verb that changes no tracker or wiki record at all — a backup — left
  * nothing anywhere. The runtime audit is that record (`operator_acted` and
  * `backup_requested`, each with the envelope source `operator`), and it is read
- * here as `Runtime`: every call, whatever became of it, with the person the
- * credential is bound to and the node that served it. The arguments are never
- * in it — they are the company's content, and they already live in the history
- * of whatever they changed.
+ * here as `Runtime`: every call, whatever became of it, under the author and
+ * kind the engine recorded (`actor`, and the `actor_kind` and `operator_id`
+ * tags) and the node that served it. The arguments are never in it — they are
+ * the company's content, and they already live in the history of whatever they
+ * changed.
+ *
+ * # The sixth source: the identity estate's own trail
+ *
+ * Who invited whom, who signed in and when, whose grants changed, which
+ * credential was revoked — `GET /iam/audit`, the directory's trail, behind the
+ * same Admin access this screen takes. Its author is named the same way
+ * every other record's is; its KIND is the record's own word, the principal's
+ * (`person`, `machine`, `seat`, `engine`), because that is what the identity
+ * estate records and redrawing it in another vocabulary would claim a reading
+ * the record does not make.
  *
  * # What each source can and cannot be asked
  *
- * The tracker's feed and the runtime audit take a wall-clock window; the
- * wiki's pages on a LOG POSITION, and the config and credential reads take
- * neither. So those three are fetched as their newest page and narrowed to the
+ * The tracker's feed and the runtime audit take a wall-clock window, and the
+ * identity trail one instant it resolves to a log position; the wiki's pages
+ * on a LOG POSITION, and the config and credential reads take neither. So those three are fetched as their newest page and narrowed to the
  * window HERE — and the screen says so rather than implying its window is the
  * engine's. A row count from a client-side narrowing is a count over what was
  * loaded, never over what exists, which is the rule every list in this product
@@ -77,18 +101,21 @@ import { QueryState } from "~/components/common.tsx";
 import { DownloadButton } from "~/ui/primitives.tsx";
 import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { indexOrg, kindOfAuthor, seatLookup, type SeatBadge, type SeatKind } from "~/lib/seats.ts";
-import { useTimeRange, type Offer } from "~/lib/range.ts";
-import { rest } from "~/protocol/index.ts";
-import { useRest } from "~/lib/useRest.ts";
+import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
+import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
+import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
+import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { needsWords } from "~/lib/access.ts";
+import { throughOf } from "~/lib/attribution.ts";
 import type { FeedRow, SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
+import { itemPath, subjectItem } from "~/lib/work.ts";
 
 /**
  * The window this screen offers.
@@ -113,19 +140,20 @@ const AUDIT_OFFER: Offer = {
  * nothing else — and a loop that chased cursors until the window was covered
  * would make the cost of opening this screen a property of how busy the
  * company has been, with no bound a reader could see. 200 is the tracker
- * feed's own maximum page (`tracker.MaxActivityRows`), the runtime audit's is
- * the same so the two windowed sources reach equally far back, and the others
- * are sized to it: the footer says what was loaded, and a window wider than the
- * page reaches is reported rather than silently cut.
+ * feed's own maximum page (`tracker.MaxActivityRows`); the runtime audit and
+ * the identity trail are asked for the same so the three windowed sources
+ * reach equally far back, and the others are sized to it: the footer says what
+ * was loaded, and a window wider than the page reaches is reported rather than
+ * silently cut.
  */
-const PAGE = { work: 200, pages: 100, config: 50, runtime: 200 } as const;
+const PAGE = { work: 200, pages: 100, config: 50, runtime: 200, identity: 200 } as const;
 
 /** How often the feeds are re-read. An audit is read, not watched. */
 const POLL_MS = 60_000;
 
-/** The four places a company's own writes are recorded, and the runtime
- *  audit of every call a person made. */
-const SOURCES = ["work", "knowledge", "config", "credentials", "runtime"] as const;
+/** The places a company's own writes are recorded, the runtime audit of every
+ *  call a person made, and the identity estate's own trail. */
+const SOURCES = ["work", "knowledge", "config", "credentials", "runtime", "identity"] as const;
 type Source = (typeof SOURCES)[number];
 
 const SOURCE_LABEL: Record<Source, string> = {
@@ -134,6 +162,7 @@ const SOURCE_LABEL: Record<Source, string> = {
   config: "Configuration",
   credentials: "Credentials",
   runtime: "Runtime",
+  identity: "Identity",
 };
 
 type RuntimeType = (typeof RUNTIME_AUDIT_TYPES)[number];
@@ -171,12 +200,50 @@ function isRuntimeType(type: string): type is RuntimeType {
 }
 
 /**
+ * One entry of the identity estate's trail, as `GET /iam/audit` answers it
+ * (`iamapi.auditView`).
+ *
+ * DECLARED HERE, beside its one reader, rather than in `~/contract`: no engine
+ * test reads it.
+ */
+export interface IdentityAuditEntry {
+  id: string;
+  /** `change` or `session`. */
+  class: string;
+  /** What the entry is about: `person`, `email` (an invitation's address), `session`, … */
+  object_kind: string;
+  object_id?: string;
+  /** The person it concerns, by id. */
+  person?: string;
+  /** The login that person holds now; absent for nobody, or somebody removed. */
+  login?: string;
+  /** What was done: `invite`, `enrol`, `update`, `revoke`, `open`, `close`, … */
+  op: string;
+  actor?: string;
+  /** The PRINCIPAL's kind — `person`, `machine`, `seat`, `engine`. */
+  actor_kind?: string;
+  operator_id?: string;
+  reason?: string;
+  summary?: string;
+  at?: string;
+  position: number;
+}
+
+/** One page of the identity trail, newest first, and where the next starts. */
+interface IdentityAuditPage {
+  events?: IdentityAuditEntry[];
+  /** The position to page back from, zero at the end. */
+  next?: number;
+  position?: string;
+}
+
+/**
  * One recorded action, whichever subsystem recorded it.
  *
- * A SHAPE THIS SCREEN OWNS, deliberately, rather than a union of four wire
+ * A SHAPE THIS SCREEN OWNS, deliberately, rather than a union of six wire
  * types: the whole point is that they are read together, and a grid whose
- * every cell begins by asking which of four kinds of row it is holding is a
- * grid with four renderings in it.
+ * every cell begins by asking which of six kinds of row it is holding is a
+ * grid with six renderings in it.
  */
 export interface AuditEntry {
   id: string;
@@ -184,16 +251,20 @@ export interface AuditEntry {
   source: Source;
   /** What was done, in the subsystem's own word. */
   kind: string;
-  /** The handle or token label recorded on the write. */
+  /** The seat handle or login recorded on the write. */
   actor: string;
-  /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
+  /**
+   * The kind the record names its author with — `agent`, `human`,
+   * `operator`, `system`, or on the identity trail the principal's own
+   * `person`, `machine`, `seat`, `engine` — empty where none was recorded.
+   */
   actorKind: string;
   /**
-   * The seat an operator token was BOUND to when it wrote this, where the
-   * record carries one (the tracker's `actor_seat`). `actor` stays the token,
-   * which is the audit trail; this is the person the row draws.
+   * The credential the write was made through, where it names something the
+   * actor does not — a person's machine token or browser session — and empty
+   * otherwise ([throughOf]).
    */
-  actorSeat?: string;
+  through: string;
   /** What it was done to, as a person would name it. */
   subject: string;
   /** Where that object lives, where it still has an address. */
@@ -237,7 +308,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
       // the only evidence it existed, so a link here would be a NotFound on
       // the one row a reader most wants to follow.
-      path: record.kind === "purged" ? undefined : ["work", record.subject_key],
+      path: record.kind === "purged" ? undefined : itemPath(subjectItem(record)),
     };
   }
   switch (kind) {
@@ -267,6 +338,34 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
   }
 }
 
+/**
+ * WHAT AN IDENTITY ENTRY WAS ABOUT. A person, a session and an address are an
+ * id, a lineage and a blind, so they are named by the LOGIN of the person the
+ * entry concerns where the engine names one — a column of id prefixes said
+ * whose session opened and whose row changed to nobody — and otherwise by
+ * their kind with the id shortened, except the email, whose id is a keyed
+ * blind that says nothing and must never be read as the address. Every one is
+ * the People & access screen's to show.
+ */
+function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" | "path"> {
+  const id = entry.object_id ?? "";
+  const path = ["settings", "people"];
+  switch (entry.object_kind) {
+    case "email":
+      return { subject: "an address", path };
+    case "person":
+      if (entry.login) return { subject: entry.login, path };
+      break;
+    case "session":
+      if (entry.login) return { subject: `${entry.login}'s session`, path };
+      break;
+  }
+  return {
+    subject: id ? `${entry.object_kind} ${short(id)}` : entry.object_kind,
+    path,
+  };
+}
+
 /** A case-blind substring match. */
 function includes(value: string, needle: string): boolean {
   return value.toLowerCase().includes(needle.toLowerCase());
@@ -280,16 +379,16 @@ function short(id: string): string {
 /**
  * A source's rows, or none at all.
  *
- * FOUR SOURCES AND ONE BAD ANSWER MUST NOT COST THE OTHER THREE. This screen
- * is the only one that reads four subsystems at once, so what is a blank page
- * anywhere else is three subsystems' worth of history lost here — and the
+ * SIX SOURCES AND ONE BAD ANSWER MUST NOT COST THE OTHER FIVE. This screen is
+ * the only one that reads six subsystems at once, so what is a blank page
+ * anywhere else is five subsystems' worth of history lost here — and the
  * failure mode is not hypothetical: `config_audit` is the one question in this
  * set that answers a BARE ARRAY rather than an object, so `?? []` covers a
  * null and does not cover anything else, and iterating whatever arrived is a
  * throw that takes the whole screen with it.
  *
  * It is not a guard against the engine. It is a guard against the SET: a
- * screen that composes four independent reads has four chances at that throw,
+ * screen that composes six independent reads has six chances at that throw,
  * and an audit is the last screen that should go blank.
  */
 function list<T>(value: T[] | null | undefined): T[] {
@@ -297,71 +396,94 @@ function list<T>(value: T[] | null | undefined): T[] {
 }
 
 /**
+ * A socket read's answer, or none where the engine refused it on authority.
+ *
+ * `useQuery` keeps its last answer through a failed ask, which is right for a
+ * node that blinked and wrong for a refusal: a source whose grant was taken
+ * away mid-session would go on drawing its rows under the sentence saying it
+ * is withheld. A refusal replaces what was on screen, as it does for a REST
+ * read.
+ */
+function held<T>(read: QueryResult<T>): T | null {
+  return read.error === "unauthorized" ? null : read.data;
+}
+
+/**
  * Who a row's writer IS, as the Who column draws them.
  *
- * AN OPERATOR IS A PERSON, AND A TOKEN IS NOT A SEAT. An `operator` write
- * carries the TOKEN's name as its actor, and the chart has no seat by that
- * name — so the cell drew every operator as the chart's default, the agent's
- * squircle, and linked "maya" to a seat page that does not exist. So:
+ * A LOGIN IS NOT A SEAT. An `operator` write carries a credential's whole
+ * login as its actor — a machine, or `token:<id>` — and the chart has no seat
+ * by that name, so a
+ * cell that looked it up drew the chart's default, the agent's squircle, and
+ * linked it to a seat page that does not exist. So:
  *
- *  - a token BOUND to a person (`actorSeat`) draws that person's seat, as a
- *    person, linking to it — the token stays in the tooltip and in the CSV;
- *  - an unbound token draws the human circle and its name as PLAIN TEXT,
- *    since there is no page to link to;
- *  - a seat's own write takes the chart's kind, or where the chart no longer
- *    holds the seat, the kind the write was recorded under;
+ *  - a seat's write — an agent in its turn, or a person writing AS the seat
+ *    the directory binds them to — draws that seat, linking to it, with the
+ *    chart's kind or, where the chart no longer holds the seat, the kind the
+ *    write was recorded under;
+ *  - a login draws the human circle and its name as PLAIN TEXT, since there is
+ *    no page to link to;
  *  - `system` names a duty rather than anybody, and an empty actor is the
  *    engine itself.
+ *
+ * The identity trail's principal kinds read the same way: `machine` is a
+ * login, `engine` the system, `seat` a seat, and a `person` is their seat
+ * where the chart holds one by that handle and their login where it does not.
  */
 export type Writer =
-  | {
-      as: "seat";
-      handle: string;
-      name: string;
-      kind?: SeatKind;
-      avatar?: AgentAvatar | null;
-      token?: string;
-    }
-  | { as: "token"; name: string }
+  | { as: "seat"; handle: string; name: string; kind?: SeatKind; avatar?: AgentAvatar | null }
+  | { as: "login"; name: string }
   | { as: "system"; name: string }
   | { as: "engine" };
 
-export function writerOf(
-  row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat">,
-  who: (handle: string) => SeatBadge,
-): Writer {
+/** A seat by its handle, as the Who cell draws it — or null where the chart holds none. */
+export type SeatOf = (
+  handle: string,
+) => { name: string; kind?: SeatKind; avatar?: AgentAvatar | null } | null;
+
+export function writerOf(row: Pick<AuditEntry, "actor" | "actorKind">, seatOf: SeatOf): Writer {
   if (!row.actor) return { as: "engine" };
-  if (row.actorKind === "operator") {
-    if (!row.actorSeat) return { as: "token", name: row.actor };
-    const seat = who(row.actorSeat);
-    // A PERSON EITHER WAY: a token is only ever bound to a person, so a seat
-    // the chart no longer holds is still drawn as one.
-    return {
-      as: "seat",
-      handle: row.actorSeat,
-      name: seat.name,
-      kind: seat.kind ?? "human",
-      token: row.actor,
-    };
+  switch (row.actorKind) {
+    case "operator":
+    case "machine":
+      return { as: "login", name: row.actor };
+    case "system":
+    case "engine":
+      // THE ENGINE, NAMED: a config revision the engine wrote carries the
+      // node that seeded it or the loop that made it, and neither is a seat
+      // to link to or a person to draw.
+      return { as: "system", name: row.actor };
   }
-  // A NODE IS THE ENGINE, NAMED: a config revision the engine wrote carries
-  // the node that seeded it or the loop that made it, and neither is a seat
-  // to link to or a person to draw.
-  if (row.actorKind === "system" || row.actorKind === "node") {
-    return { as: "system", name: row.actor };
-  }
-  const seat = who(row.actor);
+  const seat = seatOf(row.actor);
+  if (!seat && row.actorKind === "person") return { as: "login", name: row.actor };
   return {
     as: "seat",
     handle: row.actor,
-    name: seat.name,
-    kind: seat.kind ?? kindOfAuthor(row.actorKind),
-    avatar: seat.avatar,
+    name: seat?.name ?? row.actor,
+    kind: seat?.kind ?? kindOfAuthor(row.actorKind === "seat" ? "agent" : row.actorKind),
+    avatar: seat?.avatar ?? null,
   };
 }
 
+/**
+ * THE CHART'S ANSWER ABOUT A HANDLE — the seat, or none — since the only thing
+ * a screen naming a writer asks of the chart is how to draw them. One hook, so
+ * every surface that names who did something (this trail, a backup's history)
+ * draws the same writer the same way.
+ */
+export function useSeatOf(): SeatOf {
+  const org = useOrg();
+  return useMemo<SeatOf>(() => {
+    const index = indexOrg(org);
+    return (handle) => {
+      const seat = index.byHandle.get(handle);
+      return seat ? { name: seat.name, kind: seat.kind, avatar: seat.avatar } : null;
+    };
+  }, [org]);
+}
+
 /** The Who cell: one [Writer], drawn. */
-function WriterCell({ writer }: { writer: Writer }) {
+export function WriterCell({ writer }: { writer: Writer }) {
   switch (writer.as) {
     case "seat":
       return (
@@ -370,12 +492,9 @@ function WriterCell({ writer }: { writer: Writer }) {
           name={writer.name}
           kind={writer.kind}
           avatar={writer.avatar}
-          {...(writer.token
-            ? { title: `${writer.name}, through the operator token ${writer.token}` }
-            : {})}
         />
       );
-    case "token":
+    case "login":
       return <SeatLabel name={writer.name} kind="human" />;
     case "system":
       return <TextCell>{writer.name}</TextCell>;
@@ -391,11 +510,11 @@ function WriterCell({ writer }: { writer: Writer }) {
 /**
  * WHOSE WRITES COUNT AS AN OPERATOR'S.
  *
- * A person at the dashboard and a token acting for the company are the two
- * kinds an audit is about, and they are DIFFERENT kinds rather than two
- * spellings of one: the tracker refuses to record a token under a seat handle
- * precisely so that this distinction survives. Both are asked for, and the
- * rows say which.
+ * A person and a credential acting for the company are the two kinds an audit
+ * is about, and they are DIFFERENT kinds rather than two spellings of one: a
+ * person bound to a seat writes as the seat, kind `human`, and a credential
+ * bound to none writes under its own login, kind `operator`, precisely so that
+ * the distinction survives. Both are asked for, and the rows say which.
  */
 const OPERATOR_KINDS = "operator,human";
 
@@ -404,11 +523,16 @@ export function Audit() {
   const searchBox = useRef<HTMLInputElement>(null);
   useSearchTarget(searchBox);
   const now = useNow();
-  const org = useOrg();
-  // THE CHART'S TWO ANSWERS ABOUT A HANDLE — the name and the kind — since
-  // the only thing this screen asks of the chart is how to draw a writer.
-  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
-  const range = useTimeRange(now, AUDIT_OFFER, false);
+  const seatOf = useSeatOf();
+  // THE WINDOW MOVES ONCE A POLL, NOT ONCE A SECOND. Every windowed source is
+  // keyed on the edges it is asked with, and anchored on the one-second clock
+  // those edges were a new question every tick: the tracker's feed and the
+  // fleet-wide event read were asked once a second where the poll says once a
+  // minute, and an answer slower than a second — the event read waits up to
+  // two for a node that does not answer — was dropped for the next tick's, so
+  // its rows never arrived. Rounded UP to the poll, the window still ends at or
+  // after now, so the newest row is in it.
+  const range = useTimeRange(Math.ceil(now / POLL_MS) * POLL_MS, AUDIT_OFFER, false);
   const { since, until } = range;
   const [actor, setActor] = useParam("actor", "");
   const [kind, setKind] = useParam("kind", "");
@@ -445,10 +569,34 @@ export function Audit() {
     { pollMs: POLL_MS },
   );
   const secrets = useSecrets();
+  const identity = useIdentityTrail(windowParam(range.window), since);
+  // A REFUSAL ON AUTHORITY WITHHOLDS ONE SOURCE; IT DOES NOT FAIL THE SCREEN.
+  // The section opens on Admin, and the sources answer to different access —
+  // the tracker's history to Tracker, the wiki's to Knowledge, the
+  // configuration's revisions to Admin — so a source withheld from a reader
+  // the engine has narrowed (a node that refuses admin keeps every app) is an
+  // ordinary answer. The banner replaces the whole grid, so one refused source hid
+  // every row of the sources the reader may read and had already read; each
+  // says what it withheld instead, as the two REST reads do. The banner is for
+  // the first read that failed for any other reason, its code and refusal
+  // shown together.
+  const reads = [
+    { read: work, gesture: "Reading the tracker's history" },
+    { read: knowledge, gesture: "Reading the knowledge base's history" },
+    { read: config, gesture: "Reading the configuration's revisions" },
+    { read: runtime, gesture: "Reading the runtime audit" },
+  ];
+  const failed = reads
+    .map(({ read }) => read)
+    .find((read) => read.error !== null && read.error !== "unauthorized");
+  const workData = held(work);
+  const knowledgeData = held(knowledge);
+  const configData = held(config);
+  const runtimeData = held(runtime);
 
   const rows = useMemo<AuditEntry[]>(() => {
     const out: AuditEntry[] = [];
-    for (const record of list(work.data?.records)) {
+    for (const record of list(workData?.records)) {
       out.push({
         id: `work:${record.id}`,
         at: record.at,
@@ -456,7 +604,7 @@ export function Audit() {
         kind: record.kind,
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
-        ...(record.actor_seat ? { actorSeat: record.actor_seat } : {}),
+        through: throughOf(record.actor ?? "", record.operator_id),
         ...workSubject(record),
         // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
         // It also keeps a body's newlines out of a CSV field, where they are
@@ -464,7 +612,7 @@ export function Audit() {
         detail: plainText(record.excerpt ?? ""),
       });
     }
-    for (const change of list(knowledge.data?.changes)) {
+    for (const change of list(knowledgeData?.changes)) {
       out.push({
         id: `page:${change.id}`,
         at: change.at,
@@ -472,6 +620,7 @@ export function Audit() {
         kind: change.kind,
         actor: change.actor ?? "",
         actorKind: change.actor_kind ?? "",
+        through: throughOf(change.actor ?? "", change.operator_id),
         subject: change.title || change.page_id,
         // A PURGED PAGE HAS NO TITLE, and no page to open: its entry is the
         // record it ever existed.
@@ -479,7 +628,7 @@ export function Audit() {
         detail: plainText(change.excerpt ?? ""),
       });
     }
-    for (const revision of list(config.data)) {
+    for (const revision of list(configData)) {
       out.push({
         id: `config:${revision.revision_id}`,
         at: revision.created_at,
@@ -494,6 +643,7 @@ export function Audit() {
         // "operator", so a node's seed and the reconcile loop's reloads were
         // drawn as a person's writes.
         actorKind: revision.created_by_kind ?? "",
+        through: throughOf(revision.created_by ?? "", revision.operator_id),
         subject: revision.revision_id.slice(0, 8),
         path: ["settings", "config", "revisions", revision.revision_id],
         detail: revision.summary ?? "",
@@ -511,13 +661,16 @@ export function Audit() {
         // it was last stored.
         kind: "stored",
         actor: row.updated_by ?? "",
-        actorKind: "operator",
+        // THE RECORDED KIND, where there is one, never a guess: a person bound
+        // to a seat and a Tier A token read alike under one.
+        actorKind: row.updated_by_kind ?? "",
+        through: throughOf(row.updated_by ?? "", row.operator_id),
         subject: row.name,
         path: ["settings", "secrets"],
         detail: row.source ? `from ${row.source}` : "",
       });
     }
-    for (const event of list(runtime.data?.events)) {
+    for (const event of list(runtimeData?.events)) {
       // A TYPE THIS BUILD DOES NOT KNOW is a newer node's record: drawn under
       // its own type name rather than dropped, because an audit that loses
       // a row during an upgrade is the wrong way round.
@@ -530,15 +683,31 @@ export function Audit() {
         source: "runtime",
         ...what,
         actor: event.actor ?? "",
-        actorKind: "operator",
-        ...(event.tags?.actor_seat ? { actorSeat: event.tags.actor_seat } : {}),
+        // THE KIND AND THE CREDENTIAL THE ENGINE RECORDED, off the row's
+        // promoted tags: a call is an operator's only where its author was
+        // bound to no seat.
+        actorKind: event.tags?.actor_kind ?? "",
+        through: throughOf(event.actor ?? "", event.tags?.operator_id),
         ...(event.tags?.node ? { node: event.tags.node } : {}),
         ...(event.failed ? { failed: true as const } : {}),
         detail: event.summary ?? "",
       });
     }
+    for (const entry of list(identity.page?.events)) {
+      out.push({
+        id: `identity:${entry.id}`,
+        at: entry.at ?? "",
+        source: "identity",
+        kind: entry.op,
+        actor: entry.actor ?? "",
+        actorKind: entry.actor_kind ?? "",
+        through: throughOf(entry.actor ?? "", entry.operator_id),
+        ...identitySubject(entry),
+        detail: entry.summary || entry.reason || "",
+      });
+    }
     return out;
-  }, [work.data, knowledge.data, config.data, secrets.rows, runtime.data]);
+  }, [workData, knowledgeData, configData, secrets.rows, runtimeData, identity.page]);
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
@@ -549,10 +718,9 @@ export function Audit() {
         const at = Date.parse(row.at);
         if (Number.isNaN(at) || at < from || at > to) return false;
         if (kind && row.source !== kind) return false;
-        // THE TOKEN OR THE PERSON IT IS BOUND TO: a reader looking for
-        // somebody types the name the row draws, and the row draws the seat.
-        if (actor && ![row.actor, row.actorSeat ?? ""].some((name) => includes(name, actor)))
-          return false;
+        // THE NAME THE ROW DRAWS, or the credential beside it: a reader
+        // looking for one of somebody's tokens types the token.
+        if (actor && ![row.actor, row.through].some((name) => includes(name, actor))) return false;
         return true;
       })
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -573,20 +741,25 @@ export function Audit() {
     // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
     // so a full one whose oldest row is still after the window's start is a
     // busy week reaching further back than a page — the same test.
-    oldest(list(work.data?.records), PAGE.work, "Work");
+    oldest(list(workData?.records), PAGE.work, "Work");
     oldest(
-      list(runtime.data?.events).map((event) => ({ at: event.timestamp })),
+      list(identity.page?.events).map((entry) => ({ at: entry.at ?? "" })),
+      PAGE.identity,
+      "Identity",
+    );
+    oldest(
+      list(runtimeData?.events).map((event) => ({ at: event.timestamp })),
       PAGE.runtime,
       "Runtime",
     );
-    oldest(list(knowledge.data?.changes), PAGE.pages, "Knowledge");
+    oldest(list(knowledgeData?.changes), PAGE.pages, "Knowledge");
     oldest(
-      list(config.data).map((revision) => ({ at: revision.created_at })),
+      list(configData).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
       "Configuration",
     );
     return short;
-  }, [work.data, runtime.data, knowledge.data, config.data, since]);
+  }, [workData, identity.page, runtimeData, knowledgeData, configData, since]);
 
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [
@@ -609,7 +782,7 @@ export function Audit() {
         header: "Who",
         shrink: true,
         sortValue: (row) => row.actor,
-        cell: (row) => <WriterCell writer={writerOf(row, who)} />,
+        cell: (row) => <WriterCell writer={writerOf(row, seatOf)} />,
       },
       {
         // THE KIND IS ITS OWN COLUMN. It shared the Who cell, where a chip
@@ -626,6 +799,22 @@ export function Audit() {
             <Tag appearance="outline">{row.actorKind}</Tag>
           ) : (
             <EmptyValue label="No kind recorded" />
+          ),
+      },
+      {
+        // THE CREDENTIAL BESIDE THE AUTHOR, in a track of its own for the
+        // reason the kind has one.
+        key: "through",
+        header: "Through",
+        shrink: true,
+        sortValue: (row) => row.through,
+        cell: (row) =>
+          row.through ? (
+            <span className="mono truncate" title={row.through}>
+              {row.through}
+            </span>
+          ) : (
+            <EmptyValue label="No credential beside the author" />
           ),
       },
       {
@@ -677,8 +866,20 @@ export function Audit() {
           ),
       },
     ],
-    [now, who],
+    [now, seatOf],
   );
+
+  // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
+  // authority, with the grants its refusal named, and the two REST reads.
+  const withheld = [
+    ...reads
+      .filter(({ read }) => read.error === "unauthorized")
+      .map(({ read, gesture }) =>
+        needsWords(gesture, read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : []),
+      ),
+    secrets.withheld,
+    identity.withheld,
+  ].filter((sentence) => sentence !== "");
 
   const loading = work.loading || knowledge.loading || config.loading || runtime.loading;
   return (
@@ -734,7 +935,7 @@ export function Audit() {
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
-      <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime list" />
+      <CoverageNote coverage={[runtimeData?.coverage]} what="the runtime list" />
       {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
           the card's subtitle: a header line is one line, and an earlier
           sentence there was cut at "those rows are the newest, n…", its whole
@@ -745,15 +946,26 @@ export function Audit() {
           {truncated.length === 1 ? "shows only its newest rows." : "show only their newest rows."}
         </Callout>
       )}
+      {withheld.length > 0 && (
+        <Callout variant="warning">
+          {withheld.map((sentence) => (
+            <p key={sentence}>{sentence}</p>
+          ))}
+        </Callout>
+      )}
       <QueryState
-        error={work.error ?? knowledge.error ?? config.error ?? runtime.error}
+        error={failed?.error ?? null}
+        // THE REFUSAL OF THE READ WHOSE CODE IS SHOWN, never another's: reads
+        // failing for different reasons must not pair one's code with a
+        // second's grants.
+        refusal={failed?.refusal ?? null}
         loading={loading}
       >
         <Card padding="none">
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            subtitle="Writes, runtime calls and configuration revisions"
+            subtitle="Writes, runtime calls, access changes and configuration revisions"
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -777,27 +989,103 @@ export function Audit() {
 }
 
 /**
- * The credential rows, over REST.
+ * The credential rows, over REST — and, where they could not be read, a
+ * sentence saying so.
  *
  * `/secrets` IS NOT A SOCKET QUESTION and deliberately is not one: it is the
  * route that can reveal a value, so it is guarded in full, reads included, and
- * a read of it is logged. This screen asks for the listing, which carries who
- * last stored each name and when — never a value, and it does not pass
- * `?reveal`.
+ * a reveal is logged. This screen asks for the listing, which carries who last
+ * stored each name and when — never a value, and it does not pass `?reveal`.
+ *
+ * BEST EFFORT, like every other credential read on a screen that is not about
+ * credentials: a reader without the grant for `/secrets` still has an audit of
+ * everything else, and a failed read here must not take the tracker's and the
+ * wiki's rows down with it. But best effort is not SILENT: its failure is the
+ * `withheld` sentence the notice carries.
  */
-function useSecrets(): { rows: SecretRow[] | null } {
-  // BEST EFFORT, like every other credential read on a screen that is not
-  // about credentials: an operator without the scope for `/secrets` still has
-  // an audit of everything else, and a failed read here must not take the
-  // tracker's and the wiki's rows down with it — so its refusal is simply no
-  // rows. It re-reads when a token is set, which this read never did: an
-  // operator who set one here saw the credential rows only after leaving the
-  // screen and coming back.
+function useSecrets(): { rows: SecretRow[] | null; withheld: string } {
   const secrets = useRest(
     "/secrets",
     (signal) => rest.get("/secrets", signal) as Promise<{ secrets?: SecretRow[] } | null>,
+    { pollMs: POLL_MS },
   );
-  return { rows: secrets.data ? (secrets.data.secrets ?? []) : null };
+  return {
+    rows: secrets.data ? (secrets.data.secrets ?? []) : null,
+    withheld: withheldSentence(CREDENTIALS_WITHHELD, secrets),
+  };
+}
+
+/**
+ * The identity estate's trail from the window's start, newest first, over REST
+ * — and, where it could not be read, a sentence saying so.
+ *
+ * `at=` IS AN INSTANT the route resolves once into a log position: the trail
+ * pages by position because no two nodes' clocks are compared. Best effort for
+ * the reason the credentials are: a reader the directory's trail is refused to
+ * keeps the rest of the audit, and is told what is missing.
+ *
+ * KEYED ON THE WINDOW, NOT ITS START. A REST read whose key changes is a new
+ * question, which shows nothing until it answers — so keyed on `since`, which
+ * moves with the clock, the trail's rows left the grid every time the window
+ * moved, and a read slower than the window was aborted by the next one and
+ * never answered at all. The start is read when each read is ASKED, the first
+ * and every poll after it, so the window still advances.
+ */
+function useIdentityTrail(
+  question: string,
+  since: string,
+): { page: IdentityAuditPage | null; withheld: string } {
+  const read = useRest(
+    `/iam/audit?window=${question}`,
+    (signal) => {
+      const params = new URLSearchParams({ at: since, limit: String(PAGE.identity) });
+      return rest.get(`/iam/audit?${params}`, signal) as Promise<IdentityAuditPage | null>;
+    },
+    { pollMs: POLL_MS },
+  );
+  return { page: read.data, withheld: withheldSentence(IDENTITY_WITHHELD, read) };
+}
+
+/**
+ * What one best-effort source is called in the sentence that says it fell
+ * short: the gesture its refusal names a grant for, the source as a subject,
+ * and its rows.
+ */
+interface Withheld {
+  gesture: string;
+  subject: string;
+  rows: string;
+}
+
+const CREDENTIALS_WITHHELD: Withheld = {
+  gesture: "Listing the credentials' writes",
+  subject: "The credentials",
+  rows: "their writes",
+};
+
+const IDENTITY_WITHHELD: Withheld = {
+  gesture: "Reading the identity trail",
+  subject: "The identity trail",
+  rows: "its entries",
+};
+
+/**
+ * Why one best-effort source's rows are not all in this audit, as one
+ * sentence — or "" when they are.
+ *
+ * THREE CASES, because the reader does something different about each: a
+ * refusal names the grant that would list them; a read that failed with
+ * nothing held says none of them are here; and one that failed while an
+ * earlier answer is still on screen says those rows may be behind.
+ */
+function withheldSentence(source: Withheld, read: RestResult<unknown>): string {
+  if (read.error === null) return "";
+  if (read.error.unauthorized) {
+    return needsWords(source.gesture, read.error instanceof RestError ? read.error.grants : []);
+  }
+  return read.data === null
+    ? `${source.subject} could not be read, so none of ${source.rows} are listed here.`
+    : `${source.subject} could not be read again, so ${source.rows} are as they were last read.`;
 }
 
 /**
@@ -810,13 +1098,13 @@ function useSecrets(): { rows: SecretRow[] | null } {
  */
 export function auditCsv(rows: AuditEntry[]): string {
   return toCsv(
-    ["at", "where", "who", "who_kind", "who_seat", "what", "to", "detail", "node", "failed"],
+    ["at", "where", "who", "who_kind", "through", "what", "to", "detail", "node", "failed"],
     rows.map((row) => [
       row.at,
       SOURCE_LABEL[row.source],
       row.actor,
       row.actorKind,
-      row.actorSeat ?? "",
+      row.through,
       row.kind,
       row.subject,
       row.detail,

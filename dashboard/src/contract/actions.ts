@@ -2,11 +2,16 @@
  * Every change the dashboard makes, as the tool the engine runs for it.
  *
  * The dashboard writes through ONE route — `POST /operator/act/{tool}`, as the
- * person the presented token is bound to (ADR-0024) — and the tools behind it
- * are the operator catalogue's, the same implementations a person's own
+ * principal the request resolves to (ADR-0024): a person the identity
+ * directory binds to a seat writes as that seat, a credential nobody is bound
+ * through under its own login, and nobody is refused for being unbound — what
+ * each may do is the authority table's, as on every surface. The tools behind
+ * it are the operator catalogue's, the same implementations a person's own
  * assistant calls. This table is what the dashboard is allowed to send there:
  * `protocol/act.ts` takes only a key of it, and only the arguments its row
- * names.
+ * names, as the body's `args`; the operation is the request's
+ * `Idempotency-Key`, minted once per gesture and sent again on its retry,
+ * never an `op_id` argument, which the route refuses.
  *
  * ONE ROW PER TOOL A CONTROL PRESSES, and no other: `app/source.test.ts` holds
  * the keys to the `useAct("…")` literals outside the suites, both ways, so a
@@ -22,17 +27,19 @@
  *  - `refreshes` — questions OUTSIDE that domain's session set
  *    (`contract/domains.ts`) that the write also moves, asked again without a
  *    floor because they cannot take one;
- *  - `scope` — `person` for a change any bound person makes to the company's
- *    work in their own name, `company` for one that rewrites what every seat's
- *    tracker means (a project's settings, the catalogue), which a screen
- *    offers only where it says so.
+ *  - `scope` — `person` for a change somebody makes to the company's work in
+ *    their own name, `company` for one that rewrites what every seat's tracker
+ *    means (a project's settings, the catalogue), which a screen offers only
+ *    where it says so. It is the authority table's: a write decided by a
+ *    container's lead or by admin is `company`.
  *
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
  * served by the act transport and is not a read, every argument is one its
- * schema takes, every required one is present, and every scope is the
- * engine's. A renamed argument in Go is a red build here rather than a button
- * that is refused `invalid` the first time somebody presses it.
+ * schema takes, every required one is present, and every scope is the one its
+ * authority class gives it. A renamed argument in Go is a red build here
+ * rather than a button the tools' own gate refuses `invalid_body` — an
+ * argument the tool does not declare — the first time somebody presses it.
  */
 export const ACTIONS = {
   create_work_item: {
@@ -115,7 +122,7 @@ export const ACTIONS = {
     // "EDIT PROJECT" on a project's page: the lead's target date. A project's
     // settings are what every seat's tracker reads, so this is a COMPANY
     // write, offered only on the project's own page — and the engine decides
-    // who may make it (the project's lead, or a person acting as themselves).
+    // who may make it: the project's lead, or an admin.
     args: ["project", "target_date"],
     domain: "tracker",
     refreshes: [],
@@ -237,8 +244,10 @@ export const ACTIONS = {
   },
   save_work_view: {
     // "+ VIEW": the query on screen, saved under a name on this container,
-    // shared or kept to the person who saved it.
-    args: ["container", "name", "type", "params", "owner"],
+    // shared, or kept to the person who saved it with `personal` — whose
+    // record it is the engine decides from the caller, never from a name a
+    // screen sends.
+    args: ["container", "name", "type", "params", "personal"],
     domain: "tracker",
     refreshes: [],
     scope: "person",

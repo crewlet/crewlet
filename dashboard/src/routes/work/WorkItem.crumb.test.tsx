@@ -18,6 +18,7 @@ import { WorkItem } from "./WorkItem.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { FRAME_ANSWERS } from "~/test/viewer.ts";
 import { resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -56,7 +57,7 @@ function mount(answers: Record<string, unknown>) {
   store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(answers[what] ?? {});
+    Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>

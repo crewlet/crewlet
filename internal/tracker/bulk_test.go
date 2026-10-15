@@ -112,13 +112,7 @@ func TestABulkAdmittedWithNoLeaseIsCountedApart(t *testing.T) {
 		{"unanswered", func(_ *testing.T, r *roundTrip) {
 			r.claimOn(unansweredClaims{Backend: r.claims})
 		}, "fail_open"},
-		{"refused_by_the_gate", func(t *testing.T, r *roundTrip) {
-			if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{
-				Owner: "old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion - 1, Ungated: true,
-			}); err != nil || lease == nil {
-				t.Fatalf("stage a lower-protocol node: (%v, %v)", lease, err)
-			}
-		}, "fail_open"},
+		{"refused_by_the_gate", stageAnOlderNode, "fail_open"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -148,6 +142,36 @@ type unansweredClaims struct{ coord.Backend }
 
 func (unansweredClaims) TryAcquire(context.Context, string, coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	return nil, "", fmt.Errorf("%w: the store did not answer", coord.ErrUnavailable)
+}
+
+// stageAnOlderNode puts this rig's writer one lease protocol AHEAD of a live
+// node, which is the arrangement the mixed-version gate refuses every claim
+// in: a node on this build's protocol holds its presence lease, and the
+// writer claims as the build after it.
+//
+// THE WRITER IS MOVED UP rather than the peer staged below, because this build
+// may already speak the lowest protocol there is — and a protocol of zero or
+// less is not "older", it is "this build" ([coord.AcquireOptions.Protocol]),
+// so a peer staged one below the first version is a peer the gate never sees.
+func stageAnOlderNode(t *testing.T, r *roundTrip) {
+	t.Helper()
+	if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{
+		Owner: "old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion, Ungated: true,
+	}); err != nil || lease == nil {
+		t.Fatalf("stage a node on this build's protocol: (%v, %v)", lease, err)
+	}
+	r.claimOn(newerClaims{Backend: r.claims})
+}
+
+// newerClaims is a coordination store this rig's writer reaches as the build
+// after this one: every claim it makes states the next lease protocol.
+type newerClaims struct{ coord.Backend }
+
+func (n newerClaims) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	opts.Protocol = coord.ProtocolVersion + 1
+	return n.Backend.TryAcquire(ctx, resource, opts)
 }
 
 // bulkCalls is the bulk calls counter on this rig, by result.

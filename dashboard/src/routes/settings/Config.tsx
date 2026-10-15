@@ -20,7 +20,6 @@
 import { useCallback, useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import {
-  Button,
   ButtonLink,
   Callout,
   Card,
@@ -59,6 +58,7 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import type { ConfigChange, FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -117,10 +117,17 @@ const NO_REVISION = {
  * names.
  *
  * THE KIND IS THE REVISION'S OWN WORD, never inferred from the label: the name
- * spaces overlap (an operator token may be called `node`), and a label alone
- * drew a node's boot seed and the reconcile loop's reloads as a person's
- * writes. Every revision carries its kind; the label may be empty (a write
- * made with no operator identity), which is said as such.
+ * spaces overlap (a seat's handle and a person's login can read alike), and a
+ * label alone drew a node's boot seed and the reconcile loop's reloads as a
+ * person's writes. The kinds are the engine's author kinds — `agent`, `human`
+ * (a person writing as the seat the directory binds them to), `operator`
+ * (anybody bound to none, under their whole login) and `system` (the engine
+ * itself). Every revision carries its kind; the label may be empty, which is
+ * said as such.
+ *
+ * AND THE CREDENTIAL BESIDE THE NAME ([authorLabel]), where it is not the name
+ * itself: a machine token acting as its owner writes under the owner's login,
+ * and which of their credentials wrote a revision is what an incident asks.
  */
 export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   const name = revision.created_by;
@@ -131,8 +138,15 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
     // reader can least do without. In a revisions table (`.grid-cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
-    <span className="row gap-1 revision-author" title={name ? `${name} · ${kind}` : undefined}>
-      {name ? <TextCell>{name}</TextCell> : <EmptyValue label="No name recorded" />}
+    <span
+      className="row gap-1 revision-author"
+      title={name ? `${authorLabel(name, revision.operator_id)} · ${kind}` : undefined}
+    >
+      {name ? (
+        <TextCell>{authorLabel(name, revision.operator_id)}</TextCell>
+      ) : (
+        <EmptyValue label="No name recorded" />
+      )}
       <Tag appearance="outline">{kind}</Tag>
     </span>
   );
@@ -360,6 +374,13 @@ function RevisionBody({
             },
             { label: "Source", value: revision.source },
             { label: "Created by", value: <RevisionAuthor revision={revision} /> },
+            {
+              label: "Through",
+              value: throughOf(revision.created_by, revision.operator_id) ? (
+                <span className="mono">{throughOf(revision.created_by, revision.operator_id)}</span>
+              ) : undefined,
+              title: "the credential the revision was written through",
+            },
             { label: "Created", value: fmtDateTime(revision.created_at) },
             {
               label: "Activated",
@@ -425,7 +446,7 @@ export function RevisionPeek({ id }: { id: string }) {
   return (
     <>
       {audit.loading && !audit.data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={audit.error} loading={audit.loading}>
+      <QueryState error={audit.error} refusal={audit.refusal} loading={audit.loading}>
         {/* NOT AN EMPTY RAIL. A `peek=revision:` arrives from a pasted URL as
             often as from a row, and naming the id that resolved to nothing —
             and the window it was looked for in — is more use than a header
@@ -649,7 +670,7 @@ export function ConfigScreen({
       {revisionPath !== undefined && (
         <>
           {audit.loading && !audit.data && <Skeleton variant="text" rows={4} label="Loading" />}
-          <QueryState error={audit.error} loading={audit.loading}>
+          <QueryState error={audit.error} refusal={audit.refusal} loading={audit.loading}>
             {audit.data && !addressed && (
               <EmptyState
                 icon={<ClockGlyph size="xl" />}
@@ -702,7 +723,7 @@ export function ConfigScreen({
       {!onRevision && lens === "active" && (
         <>
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
-          <QueryState error={active.error} loading={active.loading}>
+          <QueryState error={active.error} refusal={active.refusal} loading={active.loading}>
             {active.data ? (
               <Card>
                 <Card.Header
@@ -753,6 +774,7 @@ export function ConfigScreen({
           {ids.loading && !ids.data && <Skeleton variant="text" rows={4} label="Loading" />}
           <QueryState
             error={ids.error}
+            refusal={ids.refusal}
             loading={ids.loading}
             empty={
               noRevision
@@ -825,7 +847,7 @@ export function ConfigScreen({
                 ) : one.loading && !one.data ? (
                   <Skeleton variant="text" rows={6} label="Loading" />
                 ) : (
-                  <QueryState error={one.error} loading={one.loading}>
+                  <QueryState error={one.error} refusal={one.refusal} loading={one.loading}>
                     {one.data ? (
                       <CodeBlock
                         plain
@@ -881,6 +903,7 @@ export function ConfigScreen({
           ) : (
             <QueryState
               error={diff.error}
+              refusal={diff.refusal}
               loading={diff.loading}
               empty={
                 diff.data?.changes?.length
@@ -921,6 +944,7 @@ export function ConfigScreen({
           {audit.loading && <Skeleton variant="text" rows={5} label="Loading" />}
           <QueryState
             error={audit.error}
+            refusal={audit.refusal}
             loading={audit.loading}
             empty={
               rows.length

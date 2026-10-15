@@ -79,14 +79,16 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg, seatLookup, useSeatBadgeOf } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { requestToken, rest, RestError } from "~/protocol/index.ts";
+import { rest, RestError } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { ADMIN, needsWords } from "~/lib/access.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
   INTEGRATION_TOOLS,
   type IntegrationRow,
   type IntegrationTool,
-  type IntegrationToolState,
   type ReconcileFinding,
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
@@ -808,7 +810,7 @@ export function disconnectOrder(
   //
   // The button is rendered from the ROWS (`!absent && onDisconnect`), and
   // `sections` comes from `GET /setup/integrations`, which is a separate
-  // request that can 401 for want of an operator token or fail transiently.
+  // request that can be refused for want of a grant or fail transiently.
   // With the key set taken from `sections` alone, that window rendered a
   // Disconnect button whose dialog computed an EMPTY list, issued no DELETE
   // at all, and then ran onDone() and closed exactly as it does after a real
@@ -1304,15 +1306,18 @@ function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * Why an action that opens the settings form cannot be pressed, or undefined.
  *
  * A WRITE CONTROL IS NEVER HIDDEN (dashboard rule 4): it is disabled with the
- * one sentence that says why. `/setup` is guarded in full, so a reader with no
- * operator token has no form to open, and a listing that answered nothing for
- * this tool has none either — which is a different sentence, because the
- * token would not help.
+ * one sentence that says why. `/setup` is guarded in full, so a reader the
+ * engine refused has no form to open, and a listing that answered nothing for
+ * this tool has none either — which is a different sentence, because no
+ * access would help.
+ *
+ * THE ACCESS, NAMED: reading what a tool needs and connecting it are both
+ * Admin's.
  */
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
-    ? "Setting up integrations needs an operator token."
+    ? needsWords("Setting up integrations", [ADMIN])
     : "The engine did not say what this integration needs, so there is no form to open.";
 }
 
@@ -1923,8 +1928,10 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
  */
 export function useSetup(): {
   byKey: Map<string, SetupToolState>;
-  base: SetupListing["public_base_url"] | null;
+  base: SetupListing["external_url"] | null;
   guarded: boolean;
+  /** The access the refusal named, when [guarded] — see `lib/access.ts`'s `needsWords`. */
+  needs: string[];
   /**
    * True until this read has answered ONCE, however it answered.
    *
@@ -1948,7 +1955,7 @@ export function useSetup(): {
   reload: () => void;
 } {
   // THE ONE REST LOADER, which supersedes a read that is still in flight: four
-  // things start one here — mount, a token change, the tab becoming visible
+  // things start one here — mount, a sign-in, the tab becoming visible
   // and useRecheck, which fires the same read twice 700 ms apart — and before
   // it every answer was written into state unconditionally, so whichever
   // landed last was what the screen held.
@@ -1973,8 +1980,9 @@ export function useSetup(): {
   const { reload } = setup;
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
-    base: listing?.public_base_url ?? null,
+    base: listing?.external_url ?? null,
     guarded: setup.error?.unauthorized ?? false,
+    needs: setup.error?.grants ?? [],
     // ANSWERED, not answered WELL. A refusal is a state the screen can render
     // honestly, with the banner and no buttons; waiting is not.
     loading: setup.loading,
@@ -2049,6 +2057,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
       </Card.Header>
       <QueryState
         error={deliveries.error}
+        refusal={deliveries.refusal}
         loading={deliveries.loading}
         empty={
           deliveries.data && rows.length === 0
@@ -2239,13 +2248,14 @@ const PASS_IDLE_POLL_MS = 60_000;
  *
  * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
  * registry answers anything about a pass, and `/setup` is guarded in full —
- * so a reader with no operator token is REFUSED here rather than shown an
+ * so a reader without Admin is REFUSED here rather than shown an
  * empty history, and `guarded` is what tells those two apart.
  */
 function useSetupRuns(kinds: string[]): {
   runs: SetupRun[];
   scope: string;
   guarded: boolean;
+  needs: string[];
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
@@ -2293,6 +2303,7 @@ function useSetupRuns(kinds: string[]): {
     runs,
     scope: answer.data?.scope ?? "",
     guarded: answer.error?.unauthorized ?? false,
+    needs: answer.error?.grants ?? [],
     loading: answer.loading,
   };
 }
@@ -2318,7 +2329,13 @@ const EMPTY_RUNS: SetupRun[] = [];
 function useSetupRun(
   kind: string,
   id: string,
-): { run: SetupRun | null; missing: boolean; guarded: boolean; loading: boolean } {
+): {
+  run: SetupRun | null;
+  missing: boolean;
+  guarded: boolean;
+  needs: string[];
+  loading: boolean;
+} {
   // FOLLOWED TO ITS END, and only while it is going: the row that opened this
   // may have been a pass that was running when the list answered.
   const [running, setRunning] = useState(false);
@@ -2339,6 +2356,7 @@ function useSetupRun(
     run,
     missing: answer.error?.status === 404,
     guarded: answer.error?.unauthorized ?? false,
+    needs: answer.error?.grants ?? [],
     loading: answer.loading,
   };
 }
@@ -2461,7 +2479,7 @@ function concludedLine(run: SetupRun): string {
  */
 function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
-  const { runs, scope, guarded, loading } = useSetupRuns(kinds);
+  const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -2475,11 +2493,11 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   if (guarded) {
     // NOT AN EMPTY HISTORY. `/setup` is guarded in full, reads included, so
     // this reader is being refused rather than told nothing has run — and the
-    // banner at the top of the screen is where the token is supplied.
+    // refusal names the grant that would have admitted them.
     return (
       <Card>
         <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <span className="t-caption">Set an operator token to see passes.</span>
+        <span className="t-caption">{needsWords("Seeing passes", needs)}</span>
       </Card>
     );
   }
@@ -2640,7 +2658,7 @@ function PassDetail({
   name: string;
   now: number;
 }) {
-  const { run, missing, guarded, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, needs, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
@@ -2657,7 +2675,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">Reading one pass needs an operator token.</span>
+          <span className="int-row-note-when">{needsWords("Reading one pass", needs)}</span>
         </span>
       </div>
     );
@@ -2796,7 +2814,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
  */
 export function IntegrationPeek({ kind }: { kind: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("integrations", undefined, {
+  const { data, loading, error, refusal } = useQuery("integrations", undefined, {
     enabled: kind !== "",
     // The same slow cadence the screen uses at rest: traffic counters move
     // slowly, and a peek is read for seconds rather than watched.
@@ -2854,7 +2872,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
       />
       <div className="col gap-3">
         {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-        <QueryState error={error} loading={loading}>
+        <QueryState error={error} refusal={refusal} loading={loading}>
           {data && present.length === 0 && (
             <EmptyState
               size="compact"
@@ -2988,6 +3006,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 type Show = "all" | "connected" | "available";
 
 export function Integrations({ kind }: { kind?: string }) {
+  const viewer = useViewer();
   // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
   // who manages it; a credential's rotation stays open.
   const managed = useManagedConfig();
@@ -3023,6 +3042,7 @@ export function Integrations({ kind }: { kind?: string }) {
     data,
     loading,
     error,
+    refusal,
     refetch: reread,
   } = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
@@ -3154,42 +3174,16 @@ export function Integrations({ kind }: { kind?: string }) {
       {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
           is one setting, and a screen that asked for it per integration would
           ask the operator to keep seven copies consistent. */}
-      {setup.base && !setup.base.present && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>No public address is set, so apps can’t deliver here.</span>
-            <span className="t-caption">
-              Set <InlineCode>{setup.base.config_path}</InlineCode> to this deployment’s HTTPS
-              address.
-            </span>
-          </span>
-        </Callout>
-      )}
-      {/* SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the
-          engine answers `resolved` beside `present` as a three-valued field.
-          The banner read `present` alone, so a `${VAR}` pointing at an
-          environment variable nobody exported rendered as "Third-party apps
-          reach this engine at" followed by an empty code span — the one
-          screen that exists to say where deliveries land, saying nothing, on
-          exactly the misconfiguration it should name. */}
-      {setup.base?.present && setup.base.resolved !== false && (
+      {/* ALWAYS SET: the address vendors deliver to is Tier A (the public
+          listener's `api.public.external_url` where one is configured, and
+          `api.external_url` otherwise, `config_path` naming which), required
+          on every node serving this screen and resolved before the file is
+          decoded, so a node that answers at all has an address, and the
+          states that described its absence can no longer occur. */}
+      {setup.base && (
         <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
           <span>
             Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
-          </span>
-        </Callout>
-      )}
-      {setup.base?.present && setup.base.resolved === false && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              <InlineCode>{setup.base.config_path}</InlineCode> points to{" "}
-              <InlineCode>
-                {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
-              </InlineCode>
-              , which isn’t set, so apps can’t deliver here.
-            </span>
-            <span className="t-caption">Set it and re-activate the revision.</span>
           </span>
         </Callout>
       )}
@@ -3200,15 +3194,18 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       {setup.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          <span>Setting up integrations needs an operator token.</span>
+          <span>{needsWords("Reading the integrations' setup state", setup.needs)}</span>
           <span className="spacer" />
-          {/* The same door QueryState opens, for the same reason: with
-              anonymous reads allowed the socket is never refused, so a banner
-              that only NAMES the missing credential leaves the reader with
-              nothing on the page that can supply it. */}
-          <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={requestToken}>
-            Set token
-          </Button>
+          {/* THE DOOR, FOR A READER WHO IS NOBODY: a banner that only NAMES
+              the missing credential leaves them nothing on the page that can
+              supply it. A signed-in reader lacks a GRANT, which signing in
+              again as themselves would not change, so they get the sentence
+              alone. */}
+          {viewer.anonymous && (
+            <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
+              Sign in
+            </Button>
+          )}
         </Callout>
       )}
 
@@ -3290,7 +3287,7 @@ export function Integrations({ kind }: { kind?: string }) {
       {((loading && !data) || setup.loading) && (
         <Skeleton variant="text" rows={6} label="Loading" />
       )}
-      <QueryState error={error} loading={loading} empty={undefined}>
+      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
         {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
             holding a tile for every tool is not empty, and the sentence is
             worth reading before the list, not after it. */}

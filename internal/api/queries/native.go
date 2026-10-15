@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -129,6 +131,12 @@ type WorkReader interface {
 		loc *time.Location) (tracker.DecisionsAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
+	// Thread is the read a comment's write makes to find the question it
+	// answers — here so `work_item` can ask [tracker.AskedOn] whether an
+	// open ask on the item names the caller, through the SAME read the
+	// answer they would post is resolved by (see [Sources.workItem]).
+	Thread(ctx context.Context, q tracker.ThreadQuery,
+		fresh statelog.Freshness) (tracker.ResolvedThread, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -146,38 +154,28 @@ type PageReader interface {
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	now := s.clock()
 	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
-	// defaults it stands for rather than a key nothing reads. The viewer
-	// is a parameter here for the reason it is on the view strip: this
-	// surface is guarded, so the caller already holds the company's own
-	// credential, and what it selects is whose queue to render.
+	// defaults it stands for rather than a key nothing reads.
+	//
+	// THE VIEWER IS THE CALLER and is not a parameter at all. It was one,
+	// read out of the bag and deleted from it again — so a screen selected
+	// WHOSE queue to render by typing a handle, on a surface where
+	// `preset=my_queue`, `preset=priorities` and every personal expansion
+	// resolve against it. Whose record that is has an answer now: the
+	// principal the guard resolved, under the name every tool writes their
+	// record with — [iam.RecordOwner] — so `preset=priorities` reads back
+	// the list `set_priorities` wrote for an unbound caller too.
+	//
 	// THE VIEWER'S OWN PROJECT comes from the chart, because
 	// `preset=my_queue` asks what is unclaimed in THEIR container and an
 	// unscoped second arm offers every unassigned task in the company.
-	//
-	// AND IT IS TAKEN OUT OF THE BAG, which is the whole of why it is read
-	// into a variable first. `viewer` is a property of the SURFACE — its
-	// credential, its turn's seat — and not of the grammar: it is absent
-	// from [tracker.QueryKeys], and `checkKeys` refuses a key nothing
-	// parses rather than ignoring it. Handed on inside the map it made
-	// every call that named a viewer a `bad_params` refusal, and took
-	// `preset=my_queue` with it — the preset expands from `viewer.Handle`,
-	// so it is answerable only on a surface that HAS a viewer, and this is
-	// that surface. The comment above described the behaviour this call did
-	// not have.
-	values := p.Values()
-	viewer := strings.TrimSpace(p.String("viewer"))
-	delete(values, "viewer")
-	// AND BOTH OF THE VIEWER'S NAMES, for the one key in this grammar
-	// that names a PERSON rather than filtering rows: `priorities=` reads
-	// somebody's own record, and a record written before their credential
-	// was keyed on their seat is filed under the credential. Without the
-	// alias, `preset=priorities` was the one tab of My work's seven that
-	// stayed empty for exactly the person the preset is for.
-	party := s.partyOf(viewer)
-	q, err := s.Work.ExpandedQuery(ctx, values, tracker.Viewer{
-		Handle:     party.Handle,
-		OperatorID: party.OperatorID,
-		Project:    s.projectOf(viewer),
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_items")
+	}
+	viewer := iam.RecordOwner(principal)
+	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
+		Handle:  viewer,
+		Project: s.projectOf(viewer),
 		// THE COMPANY'S OWN CLOCK (ADR-0018), which every relative date
 		// in the grammar and the due bands and overdue marks on every row
 		// are cut on. This was UTC, so for the hours between the
@@ -185,7 +183,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// day from the one a seat's own `list_work_items` resolved.
 	}, now, s.zone())
 	switch {
-	case transient(err):
+	case unavailableHere(err):
 		// NOT A REFUSAL OF THE REQUEST: the expansion is read through
 		// the estate router, and no copy could answer it yet.
 		return nil, err
@@ -205,8 +203,8 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
 	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
 	// reason the level is: it is a property of this SURFACE rather than of
-	// the grammar, so `unit=` takes a team's id or its name and finds the
-	// work filed under either — see [tracker.Units].
+	// the grammar, so `unit=` takes either spelling of a team — its key or
+	// its name — and finds the work filed under each — see [tracker.Units].
 	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
@@ -313,18 +311,90 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
 	// the calendar the board's overdue mark was cut on — see
 	// [tracker.DueStanding].
+	//
+	// DECIDED BEFORE IT IS ANSWERED, and twice for somebody without the
+	// tracker — see [Sources.mayReadItem].
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_item")
+	}
+	unread, err := s.mayReadItem(ctx, principal, authz.Object{
+		Kind: authz.KindTask, ID: ref, Unresolved: true})
+	if err != nil {
+		return nil, err
+	}
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
 		Units: s.chartUnits(),
 		Clock: &tracker.DayClock{Now: s.clock(), Zone: s.zone()},
 	}, fresh)
 	switch {
+	case unread && errors.Is(err, tracker.ErrNoTask):
+		// A MISSING ITEM IS THE REFUSAL A CALLER NOT ASKED ON IT GETS, to
+		// somebody the item would have been decided for: "no such item"
+		// before "you may not" would tell a person without the tracker
+		// which keys exist.
+		if _, refusal := s.mayReadItem(ctx, principal,
+			authz.Object{Kind: authz.KindTask, ID: ref}); refusal != nil {
+			return nil, refusal
+		}
+		return nil, ErrNotFound
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
 	}
+	if unread {
+		asked, err := tracker.AskedOn(ctx, s.Work, detail.Task.ID,
+			iam.RecordOwner(principal), fresh)
+		if err != nil {
+			// THE PROBE COULD NOT READ THE THREAD, which says nothing
+			// about whether this caller was asked: unknown, never a
+			// refusal a person would take as "you were not asked".
+			return nil, fmt.Errorf("%w: this node cannot yet say whether an "+
+				"open ask on %s names you: %w", ErrUnavailable, ref, err)
+		}
+		object := authz.Object{Kind: authz.KindTask, ID: detail.Task.ID,
+			Container: detail.Task.Project}
+		if asked {
+			object.Asked = iam.RecordOwner(principal)
+		}
+		if _, err := s.mayReadItem(ctx, principal, object); err != nil {
+			return nil, err
+		}
+	}
 	return detail, nil
+}
+
+// mayReadItem decides `get_work_item` ([authz.ActionWorkRead]) on object for
+// principal, and renders the decision as the error this surface refuses with.
+//
+// # Read the item, then decide again — only for somebody without the tracker
+//
+// A tracker holder reads any item, which the table answers before anything is
+// read. Somebody WITHOUT it reads one item: the one an open ask on it names
+// them on (ADR-0033's asked arm), so they can read what they were asked and
+// answer it. Only the item says whether an ask names them, so the table
+// answers that caller [authz.ErrUnresolved] — read it, resolve its asks, and
+// ask again — and this reports it as unread=true with no error. The second
+// decision, on the object the read resolved, is the answer.
+//
+// AN UNDECIDABLE DECISION IS [ErrUnavailable] and never a refusal, for
+// [Sources.mayRead]'s reason.
+func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
+	object authz.Object) (unread bool, err error) {
+
+	d := authz.Decide(ctx, principal, authz.ActionWorkRead, object, s.Chart, s.clock())
+	switch {
+	case object.Unresolved && errors.Is(d.Err, authz.ErrUnresolved):
+		return true, nil
+	case d.Unknown():
+		return false, fmt.Errorf("%w: this node cannot decide %s on %s yet: %w",
+			ErrUnavailable, authz.ActionWorkRead, object.ID, d.Err)
+	case !d.Allowed:
+		return false, refused("work_item", d)
+	}
+	return false, nil
 }
 
 // workComments answers one page of a task's thread, walking back from the
@@ -382,13 +452,14 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 		"applied_through": detail.AppliedThrough,
 		"complete":        detail.Complete,
 	}
+	if detail.KeyCollision {
+		// THE KEY IS NOT THIS TASK'S ADDRESS when another task claimed it
+		// first, so the pane that links back to the task links by its id —
+		// see [tracker.ItemAddress].
+		out["key_collision"] = true
+	}
 	if detail.CommentsCursor != "" {
 		out["next_cursor"] = detail.CommentsCursor
-	}
-	if len(detail.CommentSeats) > 0 {
-		// WHO A TOKEN'S COMMENT IS FROM, as a person — see
-		// [tracker.TaskDetail.CommentSeats].
-		out["comment_seats"] = detail.CommentSeats
 	}
 	if detail.Incomplete != nil {
 		out["incomplete"] = detail.Incomplete
@@ -432,31 +503,25 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 
 // workViews answers one container's view strip.
 //
-// # Why `viewer` is a parameter, and why naming somebody else needs a
-// credential
+// # Why the viewer is the CALLER and not a parameter
 //
 // A personal view is private to its OWNER, and the reader enforces that in
-// SQL. What `viewer=` selects is WHOSE strip to render — their personal views
-// and their pins — so it has to be a parameter: a screen reaches this before
-// it knows who is looking, and `work_views` is asked for a container rather
-// than for a person.
+// SQL. What the viewer selects is WHOSE strip to render — their personal views
+// and their pins — and it used to be a `viewer=` parameter on the reasoning
+// that a screen reaches this before it knows who is looking.
 //
-// It used to be unchecked, on the reasoning that the whole surface is guarded
-// so the caller already holds the company's own credential and can read every
-// task, comment and page in it anyway. That reasoning has the same hole
-// [Sources.workPerson] records: `api.allow_anonymous_read` opens this surface,
-// and then `viewer=` is a free choice of whose record to read. Anybody could
-// walk the org chart — which `org` answers — and page through every seat's
-// pinned views by handle. So the parameter now takes the scope rule the other
-// personal questions take, through [Sources.viewerPins]: your own, or an
-// operator credential for anybody else's.
+// A screen knows now. The principal the guard resolved names whose record it
+// is, so the parameter had exactly one honest value and any other was a free
+// choice of whose record to read: anybody could walk the org chart — which
+// `org` answers — and page through every seat's pinned views by handle.
 //
-// Absent is still the SHARED strip: no pins and no personal views but the
-// shared ones, which is what a screen draws before it knows who is looking,
-// and what the sidebar and the board ask for on every poll. That is why the
-// rule is [Sources.viewerPins] rather than [Sources.viewerParty] — the
-// refusal an absent handle earns on a question ABOUT somebody would refuse a
-// strip that has a perfectly good answer.
+// THE VIEWER IS [iam.RecordOwner]'s, the name `set_pins` and `save_work_view`
+// write under. It was the principal's SEAT, which is nothing for an unbound
+// person or a token — so their assistant pinned views and saved personal ones
+// under their login, and their strip, read under no name, showed the shared
+// views alone. A caller the engine can name nothing for still gets the shared
+// strip, which is the documented meaning of an empty
+// [tracker.ViewQuery.Viewer].
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -466,26 +531,29 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
-	if err != nil {
-		return nil, err
+	// THE CALLER'S OWN STRIP, never a handle they typed. See
+	// [Sources.workItems] for why the parameter is gone.
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_views")
 	}
-	// COUNTS ARE A VIEWER'S, because only a viewer has pins: `counts=true`
-	// on the shared strip is refused by name rather than answered with no
-	// counts, which would read as a person with nothing pinned.
+	viewer := iam.RecordOwner(principal)
+	// COUNTS ARE THE CALLER'S, because only a record has pins: `counts=true`
+	// asked by a credential the engine can name no record for is refused by
+	// name rather than answered with no counts, which would read as a
+	// person with nothing pinned.
 	counts := p.Bool("counts", false)
-	if counts && !viewer.Named() {
-		return nil, fmt.Errorf("%w: counts=true needs viewer= — the counts "+
-			"are of the views PINNED for somebody, and the shared strip "+
-			"has no pins", ErrBadParams)
+	if counts && viewer == "" {
+		return nil, errNoPins
 	}
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
 		// THE CHART, so `container=unit:engineering` and
 		// `container=unit:eng` reach one strip — the same rule that
-		// upper-cases a project key, for the container kind that has
-		// two spellings. See [tracker.Units].
+		// upper-cases a project key, for the container kind a person
+		// can spell more than one way: by key or by name. See
+		// [tracker.Units].
 		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
@@ -514,30 +582,38 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	return out, nil
 }
 
-// workSavedViews answers every saved view a viewer can see, in EVERY
+// errNoPins is `counts=true` asked by a credential the engine can name no
+// record for: the counts are of the views PINNED on the caller's own record,
+// and a caller with none has nothing pinned to count — which an answer with no
+// counts would state as a fact rather than as the refusal it is.
+var errNoPins = fmt.Errorf("%w: counts=true counts the views pinned on your "+
+	"own record, and this credential names nobody whose own record there is",
+	ErrBadParams)
+
+// workSavedViews answers every saved view the CALLER can see, in EVERY
 // container, each row carrying the container it lives in.
 //
 // A SIBLING OF [Sources.workViews] rather than a `container=` it accepts: a
 // strip is one container's tabs and this is one PERSON's views — the
 // inventory of what somebody saved and the sidebar's pinned group. Both used
 // to ask the workspace strip, so a view saved on a project board appeared in
-// neither and could be pinned from nowhere. `viewer=` and `counts=true` take
-// [Sources.workViews]' rules, for its reasons: whose pins is a personal
-// question, and only a viewer has pins to count.
+// neither and could be pinned from nowhere. Whose views and `counts=true` take
+// [Sources.workViews]' rules, for its reasons: the viewer is the caller's own
+// record ([iam.RecordOwner]) and never a name they typed, and only a record
+// has pins to count.
 func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
 	fresh, err := freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
-	if err != nil {
-		return nil, err
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_saved_views")
 	}
+	viewer := iam.RecordOwner(principal)
 	counts := p.Bool("counts", false)
-	if counts && !viewer.Named() {
-		return nil, fmt.Errorf("%w: counts=true needs viewer= — the counts "+
-			"are of the views PINNED for somebody, and nobody named has none",
-			ErrBadParams)
+	if counts && viewer == "" {
+		return nil, errNoPins
 	}
 	listing, err := s.Work.EveryView(ctx, tracker.EveryViewQuery{
 		Viewer: viewer,
@@ -586,8 +662,10 @@ func viewContainer(p Params) (tracker.Container, error) {
 		// A PROJECT KEY IS UPPER-CASE wherever it is minted, and the
 		// tracker's own scope parser upper-cases it for the same reason:
 		// a strip asked for as `project:eng` must be the strip a task
-		// query scoped to `project:ENG` belongs to.
-		id = strings.ToUpper(id)
+		// query scoped to `project:ENG` belongs to. THROUGH
+		// [tracker.ProjectKey], the tracker's one spelling of that rule,
+		// rather than a copy of it here that could drift from the rest.
+		id = tracker.ProjectKey(id)
 	}
 	return tracker.Container{Kind: kind, ID: id}, nil
 }
@@ -619,19 +697,22 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// SCOPED BY [Sources.viewerParty], the same rule `work_my_work` and
-// `work_inbox` take: an absent handle is the caller's own seat, and naming
-// anybody else's needs an operator credential.
+// SCOPED BY [Sources.recordHandle], the same rule `work_my_work` and
+// `work_inbox` take: an absent handle is the caller's own record, and naming
+// anybody else's is [authz.ActionPersonRead] — theirs, whoever leads them, or
+// an admin, each with the tracker.
 //
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
-// That reasoning has a hole in it that the other two do not: `api.allow_
-// anonymous_read` opens this surface, and this answer carries the richest
-// personal record the engine keeps — somebody's unread notices, what they mean
-// to work on next, and who set that order. The parameter selected whose. A
-// scope rule two of the three personal questions follow is not a rule.
+// That reasoning stopped holding once a guarded surface meant "somebody
+// signed in" rather than "the operator": every person holding the tracker
+// reaches this question, and its answer carries the richest personal record
+// the engine keeps — somebody's unread notices, what they mean to work on
+// next, and who set that order. The parameter selected whose. A scope rule
+// two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -640,16 +721,12 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	state, err := s.Work.Person(ctx, tracker.PersonQuery{
-		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
-		// record a person's own assistant has been writing is filed
-		// under the credential it wrote with, so a read of the seat
-		// alone reports an inbox nothing has ever been read in.
-		Who:         who,
+		Handle:      handle,
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +737,13 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 
 func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	f := pages.Filter{
-		Container: strings.ToUpper(strings.TrimSpace(p.String("container"))),
+		// THE KNOWLEDGE BASE'S OWN CANONICAL FORM ([pages.ContainerKey]),
+		// never a copy of it: eleven copies of this rule had drifted and
+		// six did not trim. And canonical HERE, before the read, because
+		// the read's deferral scope is composed from the value as handed
+		// in — a `container=eng` would ask whether a record held against
+		// `eng` is pending, which no writer ever files one under.
+		Container: pages.ContainerKey(p.String("container")),
 		ParentID:  strings.TrimSpace(p.String("parent")),
 		Label:     strings.TrimSpace(p.String("label")),
 		Watcher:   strings.TrimSpace(p.String("watcher")),
@@ -792,21 +875,6 @@ func badParams(field, got string, allowed []string) error {
 		ErrBadParams, field, got, strings.Join(allowed, ", "))
 }
 
-// RetryAfter is how long a caller should wait before asking again, or zero
-// when nothing here can say.
-//
-// DERIVED FROM THE REFUSAL rather than a constant, because the refusal derives
-// it from the observed drain: a flat hint sends a caller back too early on a
-// node grinding through a bulk apply and holds one waiting on a node that
-// caught up in milliseconds.
-func RetryAfter(err error) time.Duration {
-	var refused *statelog.Refused
-	if errors.As(err, &refused) {
-		return refused.RetryAfter
-	}
-	return 0
-}
-
 // ---- projects ----------------------------------------------------------- //
 
 // workProjects answers the company's projects with their maintained counts.
@@ -887,10 +955,9 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 	}
 	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
 		Unit: strings.TrimSpace(p.String("unit")),
-		// THROUGH THE CHART, so `?unit=` takes the unit's id or its
-		// name — see [tracker.Units]. A screen sends whichever of the
-		// two it was handed, and the rows hold whichever was current
-		// when each was written.
+		// THROUGH THE CHART, so `?unit=` takes the unit's key or its
+		// name — see [tracker.Units]. A screen sends whichever it was
+		// handed, and each row holds the unit's key.
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
@@ -953,10 +1020,20 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 				[]string{"workspace", "project:<KEY>"})
 		}
 	}
-	for _, kind := range strings.Split(p.String("kinds"), ",") {
-		if kind = strings.TrimSpace(kind); kind != "" {
-			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
+	// A KIND THIS BUILD DOES NOT HAVE IS REFUSED NAMING THE SET, for the
+	// reason `actor_kinds` below is: it reached the reader as it came and
+	// matched no row, so a mistyped filter answered an empty feed that
+	// looks exactly like a quiet company.
+	for _, name := range strings.Split(p.String("kinds"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
+		kind := tracker.ChangeKind(name)
+		if !kind.Valid() {
+			return nil, badParams("kinds", name, names(tracker.ChangeKinds))
+		}
+		q.Kinds = append(q.Kinds, kind)
 	}
 	// WHO WAS WRITING, which is the audit screen's whole question: every
 	// commit a token or a person made, across the company, rather than one
@@ -1005,29 +1082,34 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		notified := p.Bool("notified", true)
 		q.Notified = &notified
 	}
-	answer, err := s.Work.Activity(ctx, q, time.Now().UTC())
-	if err != nil {
-		switch {
-		case errors.Is(err, tracker.ErrNoTask):
-			return nil, ErrNotFound
-		case errors.Is(err, statelog.ErrUnavailable), transient(err):
-			return nil, err
-		}
+	answer, err := s.Work.Activity(ctx, q, s.clock())
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case errors.Is(err, tracker.ErrBadQuery):
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller
-		// asked a question this surface will not run, and the message
-		// names the keys that make it runnable.
+		// asked a question this surface will not run — a text search
+		// wider than the feed can scan, a cursor or a `since` from
+		// another log — and the message names what makes it runnable.
+		//
+		// BY ITS SENTINEL and nothing wider. Every failure that was not
+		// the state log's used to take this arm, so a store this node
+		// could not read was answered 400 as the caller's mistake.
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
 	}
 	return answer, nil
 }
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerParty]. This
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.recordHandle]. This
 	// was registered operator-only and demanded a handle, which is why
 	// routes/MyWork.tsx picked the alphabetically first seat: there was no
 	// way for the screen to know whose day it was drawing.
-	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.recordHandle(ctx, authz.ActionMyWork,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -1036,12 +1118,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
-		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty].
-		// Every block here matches rows by handle, and the rows a
-		// person's own credential wrote carry the TOKEN's name: the
-		// seven tabs a founder opened on their own day were empty
-		// while they were reporter and watcher on eleven items.
-		Who: who,
+		Handle: handle,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
 		// somebody's day, not a read-back of a write they just made —
 		// see [freshness] and [Sources.workItems].

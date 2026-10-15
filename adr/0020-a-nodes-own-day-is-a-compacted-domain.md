@@ -3,14 +3,14 @@
 - **Status:** accepted
 - **Authority:** `internal/usage`
 - **Enforced-by:** `internal/usage.TestADepartedNodesSpendIsStillAnswered`
-- **Measured:** the stream holds one message per (node, company day, seat, schedule or person) for 181 days, so its size is a census rather than a rate: a three-node fleet of forty seats and twenty schedules is about 32 600 messages, and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB against the 1 GiB default ceiling. A person's day is a handful of spend cells — well under 1 KiB — and only for the people who asked a question that day, so it moves neither figure. A seat-day's page reads are capped at 256 (page, via) entries — under 200 KiB with a full-length search query in every entry, and under 1 MiB however those queries are spelled — so no record approaches the transport's 8 MiB message ceiling (`queue.MaxPayloadBytes`).
+- **Measured:** the stream holds one message per (node, company day, seat, schedule or person) for 181 days, so its size is a census rather than a rate: a three-node fleet of forty seats and twenty schedules is about 32 600 messages, and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB against the 1 GiB default ceiling. A person's day is a handful of spend cells — well under 1 KiB — and only for the people who asked a question that day, so it moves neither figure. A seat-day's page reads are capped at 256 (page, via) entries — under 200 KiB with a full-length search query in every entry, and under 1 MiB however those queries are spelled — so no record approaches the largest the log takes (`statelog.MaxTransportRecordBytes`, the transport's 8 MiB message ceiling less what an append adds to a record).
 - **Cost-when-tried:** spend, turn and read history was a query over `crewlet_events`, the NODE estate's own audit log, so every answer described the node that happened to serve it. A three-node fleet showed a third of its spend on whichever node the dashboard reached; a "90 days" chart was drawn over the thirty the audit log keeps, with the previous window silently empty at 30 and 90 days; and a node that left the fleet took its share of the company's history with it, so every window after its departure under-reported by exactly what it had spent.
 - **Tag-status:** unreleased
 
 ## The decision
 
 What each node's seats and schedules did each company day is the state-log
-framework's **fourth domain**, `usage`, and it is **compacted**: stream
+framework's **fifth domain**, `usage`, and its second **compacted** one: stream
 `CREWLET_USAGE_LOG`, one message per subject, a 181-day age bound. Its answer to
 "who has to agree on it?" is *every node, and only the current value* — the
 compacted-changelog answer of ADR-0014, applied to aggregates rather than to a
@@ -27,6 +27,31 @@ REPLACES the object's rows under a monotone position guard. Every node's
 applier writes every node's days into its replicated estate, so any node
 answers for the fleet — including for a node that has gone, and a node that
 joins later replays the days from the stream alone.
+
+**A node's day is the rows it keeps.** A data node also writes the custody
+batches of nodes without `data` (ADR-0025), and until a batch's claim settles
+two data nodes can hold it — so a day counts only what its node keeps, and the
+fleet's sum holds every row once. A turn's figures are read off the ONE record
+that ends it, which states the whole turn — its reviews, its send-backs, every
+segment's duration — because its other records reach the data nodes a custody
+batch at a time, kept by whichever node won each claim, and a resumed turn
+leaves its first segment on another node: summed from what each node held,
+the turn was counted short on one node and nowhere on the rest. So a row
+changes only the day it falls on — but for a turn whose end states no tally —
+one a build before that record ended, or one this build ended after resuming a
+park such a build made — which is read off its records as it always was — and
+a batch settled as kept changes the days its rows fall on, however far back;
+the node derives every such day again, except one older than its event log is
+read back, which keeps the value it was last published at rather than be
+replaced by a derivation of rows partly swept. A day derived again keeps the instants it
+was first cut on, so a moved company clock never moves rows between days
+already published, and no day — today and yesterday included — is ever
+published below what the fleet holds of it: inside the read floor a day only
+grows, so a smaller derivation proves the node's own log lost rows — a
+restore, an emptied store, a parked turn's earliest records swept — rather
+than that the day shrank, and what goes out is the derivation JOINED with the
+fleet's record, every figure at the larger of the two, which on an ordinary
+day is the derivation itself. `internal/usage`'s publisher says how.
 
 **The horizon is the applier's.** A record for day D deletes every row older
 than D minus 181 days in the transaction that writes D, which is a pure function

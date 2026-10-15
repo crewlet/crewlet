@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -65,6 +64,12 @@ func profileFor(t *testing.T, roles []string) placement.NodeProfile {
 
 // engineOn wires just enough engine for the park and pause hooks: they reach
 // the queue and the topic grammar and nothing else.
+// engineOn is an engine with a queue and a company.
+//
+// A COMPANY IS NOT SCENERY HERE. A seat's inbox is named by the seat's ID, so
+// a park or a pause has to resolve the handle through the running company —
+// and an engine without one cannot address a mailbox at all, which is what it
+// now says rather than publishing to a subject named after nothing.
 func engineOn(t *testing.T) (*Engine, queue.EventQueue) {
 	t.Helper()
 	q := memory.New()
@@ -72,7 +77,30 @@ func engineOn(t *testing.T) (*Engine, queue.EventQueue) {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	return &Engine{backends: &Backends{Queue: q}}, q
+
+	// NO MODEL PROVIDER, deliberately: every case on this engine is about
+	// the no-model park, and a company that HAS one lifts the hold the
+	// moment the pause takes it — which is the engine doing its job and
+	// would leave each of them asserting over an engine that had already
+	// converged.
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: CEO
+    handle: ceo
+  - name: CTO
+    handle: cto
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	company, err := NewCompany(cfg)
+	if err != nil {
+		t.Fatalf("NewCompany: %v", err)
+	}
+	e := &Engine{backends: &Backends{Queue: q}}
+	e.epoch.current.Store(company)
+	return e, q
 }
 
 func TestAParkRepublishesOntoTheSeatsOwnInbox(t *testing.T) {
@@ -82,7 +110,7 @@ func TestAParkRepublishesOntoTheSeatsOwnInbox(t *testing.T) {
 	// again.
 	e, q := engineOn(t)
 	var got []string
-	if err := q.Subscribe(t.Context(), topics.AgentInbox("ceo"), "probe",
+	if err := q.Subscribe(t.Context(), seatInbox(e, "ceo"), "probe",
 		func(_ context.Context, evt *events.Event) queue.Result {
 			got = append(got, evt.ID.String())
 			return queue.Ack()
@@ -134,7 +162,7 @@ func TestAPauseTakesAStableHoldNotTheProseReason(t *testing.T) {
 		t.Fatalf("pause: %v", err)
 	}
 	holds := q.(*memory.Queue).PauseHolds(
-		topics.AgentInbox("ceo"), topics.AgentInboxGroup("ceo"))
+		seatInbox(e, "ceo"), seatInboxGroup(e, "ceo"))
 	if !slices.Contains(holds, pauseReasonNoTurnEngine) {
 		t.Errorf("holds = %v, want the stable key %q", holds, pauseReasonNoTurnEngine)
 	}
@@ -151,8 +179,8 @@ func TestAPausedInboxStopsDelivering(t *testing.T) {
 	// broker will serve.
 	e, q := engineOn(t)
 	var delivered int
-	if err := q.Subscribe(t.Context(), topics.AgentInbox("ceo"),
-		topics.AgentInboxGroup("ceo"),
+	if err := q.Subscribe(t.Context(), seatInbox(e, "ceo"),
+		seatInboxGroup(e, "ceo"),
 		func(context.Context, *events.Event) queue.Result {
 			delivered++
 			return queue.Ack()
@@ -391,7 +419,7 @@ func TestEveryDerivableReplyReachesTheLoop(t *testing.T) {
 // so nothing here can see it.
 func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	t.Parallel()
-	boot := config.DefaultBootstrap()
+	boot := testBootstrap(t)
 	boot.Node.ID = "node-7"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -418,11 +446,17 @@ func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	}
 
 	// ONE OF EACH KIND the process holds for itself: the host's presence, a
-	// seat and a fleet duty.
+	// seat and a fleet duty. The seat's lease is named by its DERIVED id
+	// (ADR-0013), which the running chart answers.
+	running := e.Company().Org
+	ceo, derived := running.AgentIDFor(running.Role("ceo"))
+	if !derived {
+		t.Fatal("the running chart derives no id for the ceo seat")
+	}
 	leases := e.backends.Coord
 	resources := []string{
 		coord.NodeResource("node-7"),
-		coord.SeatResource("ceo"),
+		coord.SeatResource(ceo),
 		coord.WorkerResource(objectCollectorDuty),
 	}
 	eventually(t, "the presence, a seat and a duty", func() bool {

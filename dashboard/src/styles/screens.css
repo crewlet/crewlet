@@ -1247,11 +1247,14 @@ a.oc-key:hover {
    width: pushed down by the free space when the seat says little, and held at
    the bottom of the view while a long goal scrolls under it, so Open profile
    and Message are always where the eye ends. The rail body's side and bottom
-   padding is taken back so the rule spans it. */
+   padding is taken back so the rule spans it. A vacant human seat adds Invite
+   and Create for an admin, which the canvas-width rail cannot
+   hold on one line, so the foot WRAPS rather than squeezing Open profile. */
 .seat-peek-foot {
   position: sticky;
   bottom: calc(-1 * var(--spacing-6));
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-2);
   margin: auto calc(-1 * var(--spacing-4)) calc(-1 * var(--spacing-6));
   padding: var(--spacing-3) var(--spacing-4);
@@ -1620,6 +1623,14 @@ a.prof-row:hover {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* IN A PADDED CARD THE BODY IS THE INSET. The list's own padding is for the
+   FLUSH card a seat's Setup draws it in (`padding="none"`, no body); inside a
+   card at its own inset — the Account's Profile — that padding doubled the
+   left edge, and the obvious way out, a flush card, left the first fact
+   touching the header's rule. */
+.crewlet-card__body .prof-facts {
+  padding: 0;
 }
 .prof-tools {
   display: flex;
@@ -10003,6 +10014,106 @@ a.live-row:focus-visible {
 }
 .model-part {
   white-space: nowrap;
+}
+
+/* ---- Signing in ----------------------------------------------------------
+   The screens a browser is on BEFORE it holds a session the frame can use —
+   `#/login`, `#/invite/…`, `#/enrol` — drawn outside the frame, so this is the
+   one page in the product that is its own scroller. The document does not
+   scroll (`body` is `overflow: hidden`, see base.css), which is right for the
+   frame and would cut a tall form off here; so the page takes the viewport
+   and scrolls itself.
+
+   ONE COLUMN AT A READING WIDTH. A form wider than a sentence spreads four
+   fields across a monitor for nothing, and the card is the whole page. */
+.signin {
+  height: 100dvh;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: var(--spacing-8) var(--spacing-4);
+  background: var(--color-surface-background);
+}
+
+.signin-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  width: 100%;
+  max-width: 52ch;
+  margin-block-end: auto;
+}
+
+/* BOUNDED ON BOTH AXES, and sized on neither: the mark is 3:2 and meets its
+   box, so a box of any other ratio letterboxes it. */
+.signin-mark {
+  align-self: center;
+  width: auto;
+  height: auto;
+  max-height: var(--size-control-md);
+  max-width: 100%;
+}
+
+.signin-body,
+.signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.signin-body {
+  margin-top: var(--spacing-4);
+}
+
+/* A SUBMIT DOES NOT STRETCH. Every button on these forms states one gesture,
+   and a full-width bar reads as the page's own edge rather than a control. */
+.signin-form > button {
+  align-self: flex-start;
+}
+
+/* A key and its copy control, or a set of codes and its two controls: one
+   line that wraps rather than overflowing a phone. */
+.signin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.signin-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+/* One step that holds more than a sentence — the QR code, the way round it
+   and the key — as a column of its own. INSIDE the list item rather than on
+   it: a flex item is no longer a list item, and the step would lose its
+   number. */
+.signin-step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
+.signin-codes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+/* TWO COLUMNS OF CODES, because ten single-word lines are a list a person
+   copies by eye and loses their place in; two of five are a card. */
+.signin-code-list {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: var(--spacing-2) var(--spacing-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 /* ---- Settings › Appearance -----------------------------------------------

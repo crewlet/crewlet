@@ -176,13 +176,18 @@ describe("a sidebar section that throws", () => {
   test("costs its own list and never the navigation above it", async () => {
     location.hash = "#/live";
     await mount({
+      // A READER WITH A RECORD AND TRACKER: the pinned views are theirs, read
+      // under the owner their record is kept by, and the tracker's question.
       viewer: {
-        operator_id: "",
-        operator: false,
+        login: "ada",
+        grants: ["tracker"],
         handle: "ada",
+        owner: "ada",
         name: "Ada",
         kind: "human",
         acts: [],
+        config_writer: false,
+        config_managed_by: [],
       },
       work_saved_views: {
         complete: true,

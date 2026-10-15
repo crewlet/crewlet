@@ -30,7 +30,7 @@ roles:
 
 func watchdogEngine(t *testing.T) *Engine {
 	t.Helper()
-	boot := config.DefaultBootstrap()
+	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &boot)

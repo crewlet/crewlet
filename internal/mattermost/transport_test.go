@@ -45,10 +45,16 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
-			json.NewEncoder(w).Encode(map[string]string{
-				"SiteURL": inst.siteURL,
-				"TimeBetweenUserTypingUpdatesMilliseconds": inst.throttle,
-			})
+			// AS MATTERMOST ANSWERS IT: a request carrying no session gets
+			// the LIMITED client config — what a sign-in page needs, the
+			// Site URL among it — and only a signed-in one gets the rest,
+			// the typing cadence included. Which is why the instance is
+			// read on a seat's token rather than as nobody.
+			conf := map[string]string{"SiteURL": inst.siteURL}
+			if token != "" {
+				conf["TimeBetweenUserTypingUpdatesMilliseconds"] = inst.throttle
+			}
+			json.NewEncoder(w).Encode(conf)
 		case strings.HasSuffix(r.URL.Path, "/thread"):
 			inst.mu.Lock()
 			inst.reads = append(inst.reads, token)
@@ -186,7 +192,7 @@ func TestStartRegistersBothHalvesOfTheIdentity(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe", IsBot: true},
 	})
-	reg := notify.NewRegistry(seatOrg(t))
+	reg := notify.NewRegistry(seatOrg(t), nil)
 	tr := transport(t, inst, func(o *mattermost.TransportOptions) {
 		o.Registry = func() *notify.Registry { return reg }
 	})
@@ -347,6 +353,12 @@ func TestASiteURLTheServerCannotUseIsWarnedAbout(t *testing.T) {
 
 // The server ENFORCES the typing cadence: sending faster is rejected, so a
 // guessed value that is too eager produces an indicator that never appears.
+//
+// And it tells only a SIGNED-IN client what the cadence is: the config an
+// anonymous request gets is the limited one a sign-in page reads, so an
+// instance read made as nobody runs every indicator at the default. Mutation:
+// read the instance with no token and the refresh is the default rather than
+// the server's 2 s (the default is 5 s, so this value tells the two apart).
 func TestTheTypingCadenceComesFromTheServer(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},

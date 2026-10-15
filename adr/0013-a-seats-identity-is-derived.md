@@ -12,6 +12,9 @@ An agent seat's runtime id is a UUIDv5 over the organisation name and the
 seat's handle. Every node computes the same id from configuration alone — no
 database, no running instance, no lookup, and no agreement protocol.
 
+A handle is immutable in the company document: changing it is a removal and a
+creation, refused while a person is bound to the removed seat.
+
 That is what lets a node act on a seat it does not run. A delivery won by node
 A for a seat node B owns still has to be attributed, routed, budgeted and
 recorded against that seat's identity, and node A has none of B's rows. The

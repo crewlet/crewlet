@@ -98,6 +98,33 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 	}
 }
 
+// THE READ IS MEASURED FROM THE INSTANT IT IS HANDED, never from a second
+// reading of this package's clock.
+//
+// Every caller heads its answer with [store.PhaseTokenQuery.Window] at an
+// instant of its own, and the rows beneath that heading are that window's only
+// if the read measures from the same instant — the one the caller pins on the
+// query. A day back from an instant two days ago is a window this package's
+// clock would never choose, so which of the two records comes back says which
+// instant the read was measured from.
+func TestAPhaseTokenReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	wall := time.Now().UTC()
+	at := wall.Add(-48 * time.Hour)
+	seedPhase(t, log, "then", at.Add(-time.Hour), "PM", 1, 0)
+	seedPhase(t, log, "now", wall.Add(-time.Hour), "PM", 2, 0)
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1, At: at})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	if len(got) != 1 || got[0].EventID != "then" {
+		t.Errorf("a day back from %s read %+v, want the one record inside it — "+
+			"the rows are not the window the caller's heading names", at, got)
+	}
+}
+
 // A PINNED WINDOW IS CUT AND FLOORED AT ITS OWN INSTANT.
 //
 // A fleet cuts the spend window on the asker's clock and sends the instant

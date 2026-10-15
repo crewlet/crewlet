@@ -95,13 +95,13 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 		{"work_person",
 			func() error {
 				_, err := reader.Person(ctx, tracker.PersonQuery{
-					Who: tracker.PartyOf("ana"), Level: stale, MaxLag: time.Second,
+					Handle: "ana", Level: stale, MaxLag: time.Second,
 				}, now)
 				return err
 			},
 			func() error {
 				_, err := reader.Person(ctx, tracker.PersonQuery{
-					Who: tracker.PartyOf("ana"), Level: stale, MaxLagSeq: 1,
+					Handle: "ana", Level: stale, MaxLagSeq: 1,
 				}, now)
 				return err
 			}},
@@ -149,13 +149,13 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 		{"work_my_work",
 			func() error {
 				_, err := reader.MyWork(ctx, tracker.MyWorkQuery{
-					Who: tracker.PartyOf("ana"), Level: stale, MaxLag: time.Second,
+					Handle: "ana", Level: stale, MaxLag: time.Second,
 				}, now, time.UTC)
 				return err
 			},
 			func() error {
 				_, err := reader.MyWork(ctx, tracker.MyWorkQuery{
-					Who: tracker.PartyOf("ana"), Level: stale, MaxLagSeq: 1,
+					Handle: "ana", Level: stale, MaxLagSeq: 1,
 				}, now, time.UTC)
 				return err
 			}},

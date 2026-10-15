@@ -2,7 +2,9 @@ package pages
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,8 +65,12 @@ type Store struct {
 	// read here is paired with an expectation.
 	db store.ReplicatedReader
 
+	// reserved names the containers a SEAT may not write to, or not add a
+	// page to, and every container a page may be created in at all. See
+	// [Options.Reserved].
+	reserved func() Reserved
+
 	now      func() time.Time
-	newID    func() string
 	newSeqID func() string
 }
 
@@ -80,6 +86,90 @@ type Options struct {
 	// test can pin it and so nothing on the write path reads a clock the
 	// applier is forbidden.
 	Now func() time.Time
+
+	// Reserved names the containers this company holds back from an
+	// AGENT's writes — see [Reserved] for the two and what each refuses;
+	// a refused write answers [ErrReserved] — and the spaces it DECLARES,
+	// outside which nobody creates a page ([Reserved.Declared]).
+	//
+	// NIL DECLARES NOTHING, so a store built without it creates no page:
+	// the declared spaces are the one rule here that binds a person as well
+	// as an agent, and a seam whose absence meant "anywhere" would be the
+	// way a surface wired later created pages in containers nobody named.
+	//
+	// # Why it is here and not at a tool
+	//
+	// It was one check at `write_page`, so a seat that could not CREATE a
+	// page in the skills container could still save over one, rename one
+	// and comment on one — and every surface that grows later inherits
+	// the same hole, silently, because nothing says the rule exists. The
+	// store is the one place every write path goes through.
+	//
+	// # Why the ACTOR and not the authority table
+	//
+	// Because this is not a question about capability. internal/authz
+	// decides who may write a page at all, and — for a person — who may
+	// write a tool skill; what is left here is a rule about what an AGENT
+	// cannot see from anything it holds: that a page in the skills
+	// container is machinery rather than knowledge, and that the org root
+	// is the company's own canon rather than a team's notebook. A person
+	// publishing into either on purpose is what those containers are for.
+	//
+	// A FUNCTION because the keys are Tier B: `knowledge.skills_container`
+	// and `knowledge.root_space` move on an apply, and this store is built
+	// once per node.
+	Reserved func() Reserved
+}
+
+// Reserved is what a company holds back from an AGENT's writes.
+//
+// TWO CONTAINERS, AND THEY ARE NOT RESERVED FOR THE SAME REASON, so they do not
+// refuse the same gestures. Folding them into one list is what made every
+// write into the org root a refusal whose sentence was false: the root is
+// searched and routed like any other container, and only the skills container
+// is not.
+type Reserved struct {
+	// Skills is the tool-skills container, and EVERY write an agent makes
+	// there is refused — a create, a save, a rename and every comment
+	// gesture. Its pages are machinery the engine injects into a phase of
+	// every seat's turn as an instruction, and it is excluded from
+	// knowledge search and from routing: a page a seat writes there is
+	// either never read or read by every seat as an order, and a remark on
+	// one reaches nobody. Empty is a company with tool skills turned off.
+	Skills string
+
+	// Root is the organisation's own container — what is true of the
+	// whole company, starting with the Onboarding page every seat reads
+	// first — and an agent may not ADD a page there. A new page at the top
+	// of the company is a person's decision; a seat publishes into its own
+	// team's space. The pages already there are ordinary pages, searched
+	// and routed like any other, so a seat keeping one current, renaming
+	// it or remarking on it is ordinary upkeep and is not refused.
+	Root string
+
+	// Declared is every container key the company DECLARES — each unit's
+	// and each seat's `space:`, `knowledge.root_space` and
+	// `knowledge.skills_container` — and a page is CREATED only in one of
+	// them, by anybody: [ErrInvalid] naming the key and how a space is
+	// declared otherwise.
+	//
+	// # Why a create, and why a person too
+	//
+	// A container is a space the org chart names — who leads it, who is
+	// woken by what happens in it, which team's knowledge it is — and a
+	// page filed under a key nothing declares belongs to nobody: no lead
+	// tidies it, no routing reaches it, and a typo of a real key splits a
+	// team's knowledge in two with nothing to say so. That is a fact about
+	// the KEY rather than about who typed it, which is why this, unlike the
+	// two above, refuses a person exactly as it refuses an agent — the same
+	// rule a task's create holds an undeclared project to. Only a create
+	// asks: a save cannot move a page across containers and a rename keeps
+	// its container, so every other write is already inside a space that
+	// was declared when the page was made.
+	//
+	// THE MEANINGFUL ZERO: nil and empty both declare nothing, and every
+	// create is refused.
+	Declared []string
 }
 
 // NewStore builds the knowledge base over its own log.
@@ -96,7 +186,8 @@ func NewStore(opts Options) (*Store, error) {
 	}
 	s := &Store{
 		publisher: opts.Publisher, db: opts.DB, now: opts.Now,
-		newID: uuid.NewString, newSeqID: newTimeOrderedID,
+		reserved: opts.Reserved,
+		newSeqID: newTimeOrderedID,
 	}
 	if s.now == nil {
 		s.now = nowUTC
@@ -293,7 +384,6 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 		Actor:      actor.Name(),
 		ActorKind:  actor.Kind,
 		OperatorID: actor.OperatorID,
-		ActorSeat:  actor.recordedSeat(),
 		TurnID:     actor.TurnID,
 		Chain:      actor.Chain,
 		Notify:     notify,
@@ -352,6 +442,9 @@ var (
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("pages: the page kept changing under this write")
 
+	// ErrReserved reports a container the engine holds for itself.
+	ErrReserved = errors.New("pages: that container is reserved")
+
 	// ErrParent reports a parent a page cannot be filed under: a page that
 	// does not exist or was purged, one in the trash, one in another
 	// container, or the page itself or one beneath it. Every such refusal
@@ -368,59 +461,261 @@ type Actor struct {
 	Handle     string
 	Kind       AuthorKind
 	OperatorID string
+	TurnID     string
+	Chain      []string
 
-	// Seat is the person an OPERATOR's token is bound to
-	// (`contact.crewlet_operator_id`), and empty for an unbound token and for
-	// every other kind, whose Handle is already a seat.
+	// OpKey is the caller's own operation key: the value a RETRY of this
+	// same gesture reproduces, which every write here derives its operation
+	// id from when it is set.
 	//
-	// THE TOKEN STAYS THE AUTHOR (Handle, which [Actor.Name] records) because
-	// a knowledge base whose author field is chosen by the writer is not an
-	// audit trail. The seat is what everything about the PERSON reads: whose
-	// subscription a watch changes, who is not woken by their own write, and
-	// who a history row draws. A token is not somebody who can be told about a
-	// page: a wake for one reaches no seat at all.
-	Seat string
-
-	TurnID string
-	Chain  []string
+	// ON THE ACTOR because it travels with the call and not with the store,
+	// for the same reason the actor does — and because it is what the
+	// tracker's actor already carries (`builtin.Actor.WorkKey`), so the two
+	// domains take a retry key the same way. EMPTY MINTS A FRESH ID PER
+	// CALL, which is right for every caller that will never retry the same
+	// gesture — and wrong for the one that must: an HTTP write whose answer
+	// was `unknown` can only be retried safely under the SAME id, because
+	// the operation ledger is what recognises a second arrival, and a fresh
+	// one would append the trash, the rename or the comment twice.
+	//
+	// AN OPERATION ID THE ENGINE MINTED, held to [statelog.CheckCallerOpID]
+	// by every surface that takes one and by every write here, which refuses
+	// an actor carrying any other: the ids derived from it carry its instant
+	// — see [Store.operation].
+	OpKey string
 }
 
-// Name is how this actor is recorded and rendered.
+// operation is the id one write is published under: derived from the actor's
+// [Actor.OpKey] when there is one, and freshly minted when there is not.
+//
+// THE VERB AND THE OBJECT ARE PART OF THE DERIVATION, so one key covers every
+// record one gesture writes — a save and the rename that follows it are two
+// records, and one id for both would have the ledger collapse the second as a
+// redelivery of the first. The verb is also the id's NAME, which is what a
+// reader of the ledger finds it by, so it never holds a dot: in the grammar a
+// dot begins a gesture's STEP ([statelog.StepOpID]), and `comment.edit` would
+// read as the edit step of an operation called `comment`.
+//
+// AND WHAT THE WRITE SAYS IS PART OF IT: content is the write's own input —
+// the new page, the save, the title, the reason — digested whole. The ledger
+// answers an operation it already holds BEFORE the write is decided
+// ([statelog.Result.Collapsed]), so derived from the key, the verb and the
+// object alone, the same key sent with another body, another title or another
+// reason was the first write's operation: answered from the ledger, with
+// nothing of the second written — a change reported as made and silently
+// dropped. The human write surface bound its key to the request for exactly
+// that reason before handing it here; bound here, every caller that brings a
+// key is held to it, and a retry — which resends the same input — is still the
+// same operation.
+//
+// AND IT CARRIES THE KEY'S OWN INSTANT. The key is an operation id the engine
+// minted — every surface that takes one holds it to
+// [statelog.CheckCallerOpID] — and the ledger vouches for a retry by the
+// instant its id carries ([statelog.OpMintedAt]), so a derivation that
+// dropped it (a name-based uuid over the key) would be read as minted before
+// every loss the ledger ever had, and once it had swept anything such a write
+// was answered `unknown` without being published, on every attempt.
+//
+// An error is an input that will not encode, which is a type this package
+// declared wrongly rather than anything a caller sent.
+func (s *Store) operation(actor Actor, verb, object string, content any) (string, error) {
+	key := strings.TrimSpace(actor.OpKey)
+	if key == "" {
+		return s.newSeqID(), nil
+	}
+	said, err := json.Marshal(content)
+	if err != nil {
+		return "", fmt.Errorf("pages: digest what a %s says: %w", verb, err)
+	}
+	sum := sha256.Sum256(said)
+	at, _ := statelog.OpMintedAt(key)
+	return statelog.DeriveOpID(at, verb, key, object, hex.EncodeToString(sum[:])), nil
+}
+
+// pageIDOf is the id a create gives its page: a FUNCTION OF THE OPERATION, so
+// the retry an `unknown` asks for names the page its first attempt created.
+//
+// Minted per call instead, a keyed retry of a create that had landed was
+// answered from the ledger ([statelog.Result.Collapsed]) with a page id this
+// call had just made up — one no row, no link and no later read would ever
+// find — while the page the operation did create went unreported. A fresh
+// operation is a fresh id either way, since [statelog.NewOpID] carries random
+// bits, so nothing changes for a caller that brings no key.
+func pageIDOf(opID string) string {
+	return uuid.NewSHA1(pageIDNamespace, []byte(opID)).String()
+}
+
+// pageIDNamespace scopes [pageIDOf]. FIXED for the life of the format: a new
+// one would give a retry that straddles an upgrade a second page.
+var pageIDNamespace = uuid.MustParse("b4c1e7a2-5f39-5d08-8e6b-1a2f9c3d7e45")
+
+// landed is the answer to a write this call did not decide: a retry of an
+// operation that had ALREADY LANDED under an earlier copy
+// ([statelog.Result.Collapsed]).
+//
+// # Why it is read back rather than taken from the decision
+//
+// The framework answers such a retry from its ledger before any decision runs,
+// or from the broker's duplicate acknowledgement after one ran and was never
+// stored — so whatever a write computes inside its decision is either empty or
+// describes a record nothing published. Every write here that answered with
+// the page its decision read reported, on exactly the retry an `unknown` asks
+// for, a page with no id, no title and version zero, as success. What the
+// operation DID is on the rows, so that is what is answered: the page as this
+// node holds it now, at the earlier copy's revision.
+//
+// # When the rows cannot say
+//
+// The earlier copy may not have applied here yet — the outcome then says
+// `pending` and where to wait — or the page may be gone since (a purge, or the
+// retry of one). Neither is a failure of this write, which did land, so the
+// answer carries the page's identity and nothing a row would have to vouch for.
+func (s *Store) landed(ctx context.Context, identity Page, opID string,
+	result statelog.Result) (Written, error) {
+
+	out := Written{
+		Page: identity, Revision: writtenRevision(result, 0), ChangeID: opID,
+		Outcome: result,
+	}
+	page, _, err := s.headAt(ctx, identity.ID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return out, nil
+	case err != nil:
+		return out, fmt.Errorf("pages: page %s was written by an earlier copy "+
+			"of operation %s; read what it wrote: %w", identity.ID, opID, err)
+	}
+	out.Page = page
+	return out, nil
+}
+
+// landedComment is [Store.landed] for a remark: the comment as this node's
+// rows hold it, or the identity the operation pins where they hold none.
+func (s *Store) landedComment(ctx context.Context, identity Comment,
+	opID string) (Comment, error) {
+
+	var held Comment
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		held, err = readCommentTx(ctx, tx, identity.PageID, identity.ID)
+		return err
+	})
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return identity, nil
+	case err != nil:
+		return identity, fmt.Errorf("pages: comment %s was written by an earlier "+
+			"copy of operation %s; read what it wrote: %w", identity.ID, opID, err)
+	}
+	return held, nil
+}
+
+// Name is how this actor is recorded and rendered: its handle, BARE.
 //
 // AN OPERATOR HAS NO SEAT HANDLE, and that is the whole shape of the operator
-// surface: a write there carries the TOKEN's own name and author kind
+// surface: a write there carries the CREDENTIAL's own name — the login
+// [iam.ActorFor] records it under on every other row — and author kind
 // `operator`, and there is deliberately no way for a caller to name a seat to
-// act as — a knowledge base whose author field is chosen by the writer is not
+// act as: a knowledge base whose author field is chosen by the writer is not
 // an audit trail.
-func (a Actor) Name() string {
-	if a.Handle != "" {
-		return a.Handle
-	}
-	if a.OperatorID != "" {
-		return "operator:" + a.OperatorID
-	}
-	return "operator:anonymous"
-}
+//
+// NO PREFIX AND NO FALLBACK. This rendered `"operator:" + OperatorID` for an
+// actor with no handle, which was a second spelling of one party: the kind is
+// already a column on the row, and the audit feed — which reads this history
+// beside the tracker's, where the same operator is the bare name — showed one
+// person as two. A write with no handle is refused instead ([Actor.validate]).
+func (a Actor) Name() string { return a.Handle }
 
-// recordedSeat is the seat a record carries as `actor_seat`: an operator's
-// bound seat, and nothing for any other kind, whose actor already IS its seat.
-func (a Actor) recordedSeat() string {
+// subscriber is the handle this actor's own subscription to a page is kept
+// under — a create's author watching what they wrote, a save's `watch` — and
+// EMPTY FOR AN OPERATOR.
+//
+// A seat or a person bound to one writes under a handle a wake can reach; an
+// operator writes under the credential's own login, which is no seat, so a
+// subscription kept under it is a watcher nothing can wake and a `watch: false`
+// that published a record and woke every real watcher for a change to nobody's
+// subscription. It was keyed on the handle being EMPTY, which held only while
+// an operator carried none — every surface names one now ([Actor.Name]) — so
+// the KIND is what says there is no seat.
+func (a Actor) subscriber() string {
 	if a.Kind == AuthorOperator {
-		return a.Seat
-	}
-	return ""
-}
-
-// Person is the seat this actor writes as: the seat an operator's token is
-// bound to, the seat itself for every other kind, and nobody for an unbound
-// token. It is whose subscription the actor's own writes change, and whose
-// team space a write that names none lands in; for an unbound token there is
-// neither, because nothing a wake or a default could reach is a seat.
-func (a Actor) Person() string {
-	if a.Kind == AuthorOperator {
-		return a.Seat
+		return ""
 	}
 	return a.Handle
+}
+
+// refuseReserved refuses an AGENT's write to a container the company holds
+// back from it — see [Reserved] for which gesture each one refuses.
+//
+// creating is whether the write ADDS a page, which is the one gesture the org
+// root refuses; every write path passes it, so the difference between the two
+// reservations is stated here once rather than at each caller.
+//
+// THE CONTAINER KEY IS CANONICALISED on both sides, because an operator types
+// `eng` in one file and `ENG` in another and a comparison that read them as
+// two containers would let a seat write to the one it was refused.
+func (s *Store) refuseReserved(actor Actor, container string, creating bool) error {
+	if s.reserved == nil || actor.IsHuman() {
+		return nil
+	}
+	key := ContainerKey(container)
+	if key == "" {
+		return nil
+	}
+	held := s.reserved()
+	// THE SKILLS CONTAINER FIRST, because its rule is the stronger: a
+	// company that named one key for both is refused every write there.
+	if skills := ContainerKey(held.Skills); skills != "" && skills == key {
+		return fmt.Errorf("%w: %s holds this company's tool skills — pages the "+
+			"engine injects into seats' turns as instructions, excluded from "+
+			"knowledge search and from routing — so a page a seat writes "+
+			"there is either never read or read by every seat as an order. "+
+			"Write it somewhere a reader will find it, or ask a person to "+
+			"publish or change the skill", ErrReserved, key)
+	}
+	if root := ContainerKey(held.Root); creating && root != "" && root == key {
+		return fmt.Errorf("%w: %s is the organisation's own container — what "+
+			"is true of the whole company, starting with the Onboarding page "+
+			"every seat reads first — and a new page there is a person's "+
+			"decision. Write this in your team's space, or ask a person to "+
+			"publish it at the top of the company; the pages already there "+
+			"can be edited and commented on as usual", ErrReserved, key)
+	}
+	return nil
+}
+
+// refuseUndeclared refuses a page created in a container this company does
+// not declare — see [Reserved.Declared].
+//
+// NEITHER OF [Store.refuseReserved]'s EARLY RETURNS: a store with no reserved
+// seam declares nothing, and a person is held to the declared spaces exactly
+// as an agent is.
+func (s *Store) refuseUndeclared(container string) error {
+	var held Reserved
+	if s.reserved != nil {
+		held = s.reserved()
+	}
+	key := ContainerKey(container)
+	declared := make([]string, 0, len(held.Declared))
+	for _, raw := range held.Declared {
+		space := ContainerKey(raw)
+		if space == key {
+			return nil
+		}
+		if space != "" && !slices.Contains(declared, space) {
+			declared = append(declared, space)
+		}
+	}
+	slices.Sort(declared)
+	where := "this company declares none yet"
+	if len(declared) > 0 {
+		where = "write in one of: " + strings.Join(declared, ", ")
+	}
+	return invalid("container", "%s is not a space this company declares — a "+
+		"page lives in a declared space: a unit's or a seat's `space:`, "+
+		"`knowledge.root_space`, or the tool-skills container "+
+		"(`knowledge.skills_container`). Declare it in the company document, "+
+		"or %s", key, where)
 }
 
 // IsHuman reports an actor a notification treats as a person.
@@ -430,12 +725,26 @@ func (a Actor) validate() error {
 	if !a.Kind.Valid() {
 		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
 	}
-	// EVERY KIND BUT AN OPERATOR MUST NAME ITS SEAT. An operator is named
-	// by the token it presented, which [Actor.Name] renders; a seat or an
-	// agent with no handle is a change nobody made.
-	if a.Kind != AuthorOperator && strings.TrimSpace(a.Handle) == "" {
-		return invalid("actor.handle",
-			"an %s write must name the seat it acts as", a.Kind)
+	// A KEY IS AN OPERATION ID THE ENGINE MINTED, or no key. Every id a
+	// write derives from it carries the key's own instant ([Store.operation]),
+	// and a key outside the grammar carries none — read as minted at the
+	// epoch, which is before every loss the ledger will ever have, so once it
+	// had swept anything each such write would be answered `unknown` without
+	// being published, on every attempt, for ever. Refused here, at the one
+	// boundary every write passes, rather than trusted to every surface.
+	if key := strings.TrimSpace(a.OpKey); key != "" {
+		if err := statelog.CheckCallerOpID(key); err != nil {
+			return invalid("actor.op_key", "%v", err)
+		}
+	}
+	// EVERY KIND MUST NAME ITS AUTHOR: a seat or a person the handle they
+	// act as, an operator the credential's own login. A write with no
+	// handle is a change nobody made, and there is no name to fall back on
+	// that is not a second spelling of somebody — see [Actor.Name].
+	if strings.TrimSpace(a.Handle) == "" {
+		return invalid("actor.handle", "an %s write must name who made it — "+
+			"the seat or the person it acts as, or for an operator the "+
+			"credential's own login", a.Kind)
 	}
 	return nil
 }

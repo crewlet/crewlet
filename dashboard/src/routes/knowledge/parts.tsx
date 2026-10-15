@@ -5,14 +5,17 @@
  *
  * # Who a handle is
  *
- * A write a person made through their own token records the TOKEN, which is
- * the audit trail, and the engine names the person behind it beside it
- * (`author_seat`, `saved_by_seat`, `actor_seat`). A screen draws the person:
- * [drawnBy] is the one rule, so a page's author, its last save and its
- * activity never name one person three ways. A seat is drawn with the face
- * the chart gives it ([usePeople]): the page reader rebuilt every badge from a
- * name and a kind, which dropped each agent's own character and drew a seat
- * the chart no longer holds as an agent.
+ * Every author, last saver, commenter, revision author and change actor is ONE
+ * NAME, the one the record carries (`iam.ActorFor`): a person writes AS their
+ * seat, so the name is the seat's handle, and a credential the directory binds
+ * to no seat writes under its own login. A handle the chart holds is drawn as
+ * that seat, with the face the chart gives it ([usePeople]), and anything else
+ * is a login, drawn as its own words. There is no second name beside the
+ * author to prefer over it, so a page's author, its last save and its activity
+ * can never name one person three ways; a change the engine itself made names
+ * nobody and is drawn as the engine ([changedBy]). The page reader rebuilt every badge
+ * from a name and a kind, which dropped each agent's own character and drew a
+ * seat the chart no longer holds as an agent.
  *
  * # Colour is a state, never a kind
  *
@@ -50,7 +53,14 @@ import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PAGE_CHANGES } from "~/contract/pages.ts";
-import type { PageChange, PageContainer, PageStatus, SearchMode } from "~/protocol/index.ts";
+import type {
+  LogRefusal,
+  PageChange,
+  PageContainer,
+  PageStatus,
+  QueryRefusal,
+  SearchMode,
+} from "~/protocol/index.ts";
 import { repeatsTitle } from "./page/body.ts";
 
 /** How often the spaces are read again: a space is created by a config apply. */
@@ -82,14 +92,6 @@ export function usePeople(): Who {
   return useSeatBadgeOf();
 }
 
-/**
- * The handle a row draws for something somebody wrote: the person behind an
- * operator's token where the engine names one, else the actor itself.
- */
-export function drawnBy(actor: string | undefined, seat: string | undefined): string {
-  return seat || actor || "";
-}
-
 const CHANGE_WORDS = new Map<string, { verb: string; phrase: string }>(
   PAGE_CHANGES.map((c) => [c.kind, { verb: c.verb, phrase: c.phrase }]),
 );
@@ -117,6 +119,16 @@ export function changeWords(kind: string): { verb: string; phrase: string } {
 export function changeNote(change: Pick<PageChange, "excerpt" | "title">): string {
   const note = plainText(change.excerpt ?? "");
   return repeatsTitle(note, change.title ?? "") ? "" : note;
+}
+
+/**
+ * Who made a change, as the one name a row draws: the name the record carries
+ * (`iam.ActorFor`), a seat's handle or a credential's login, and "" for the
+ * engine's own change, which a row draws as the engine rather than as the name
+ * it writes under.
+ */
+export function changedBy(change: Pick<PageChange, "actor" | "actor_kind">): string {
+  return change.actor_kind === "system" ? "" : (change.actor ?? "");
 }
 
 /** A seat's face, sized for a line of text, and named by the words beside it. */
@@ -194,6 +206,8 @@ export function useSpaces(): {
   read: boolean;
   loading: boolean;
   error: QueryErrorCode | null;
+  /** Why the read was refused, beside `error`: what `QueryState` names. */
+  refusal: QueryRefusal | LogRefusal | null;
 } {
   const containers = useQuery("containers", undefined, { pollMs: SPACES_POLL_MS });
   return {
@@ -201,6 +215,7 @@ export function useSpaces(): {
     read: containers.data !== null,
     loading: containers.loading,
     error: containers.error,
+    refusal: containers.refusal,
   };
 }
 

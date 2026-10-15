@@ -13,14 +13,17 @@
  * workspace a reader opens is usually already in memory, so the round trip
  * the old comment worried about is spent while nobody is waiting on it.
  *
- * # One chunk per workspace, plus the org editor
+ * # One chunk per workspace, plus the org editor and the sign-in screens
  *
  * Each `routes/<workspace>/index.ts` is the whole of what this file imports
  * from that workspace, and it is imported ONLY here, by `import()` — a static
  * import of a workspace's module from the frame would pull it back into the
- * entry without a sound. `routes/org` is the one chunk that is not a
- * workspace: the builder is a section of Agents, and it is bigger than any
- * whole workspace, so it is its own (see `routes/org/OrgEdit.tsx`).
+ * entry without a sound. Two chunks are not workspaces. `routes/org`: the
+ * builder is a section of Agents, and it is bigger than any whole workspace,
+ * so it is its own (see `routes/org/OrgEdit.tsx`). And `routes/signin`, the
+ * screens drawn outside the frame, which a reader who is signed in never
+ * needs — so it is the one chunk the idle prefetch leaves alone ([CHUNKS]):
+ * a reader who needs it is already on it.
  *
  * # A failed load is a ChunkLoadError, and it can be retried
  *
@@ -58,25 +61,32 @@ const LOADERS = {
   knowledge: () => import("~/routes/knowledge/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
-} satisfies Record<Workspace | "org", () => Promise<unknown>>;
+  account: () => import("~/routes/account/index.ts"),
+  signin: () => import("~/routes/signin/index.ts"),
+} satisfies Record<Workspace | "org" | "signin", () => Promise<unknown>>;
 
-/** A chunk: a workspace, or the org editor. */
+/** A chunk: a workspace, the org editor, or the sign-in screens. */
 export type Chunk = keyof typeof LOADERS;
 
 /** What a chunk's `index.ts` exports. */
 export type ChunkModule<C extends Chunk> = Awaited<ReturnType<(typeof LOADERS)[C]>>;
 
-/** Every chunk, in the order the idle prefetch fetches them: the sidebar's. */
+/**
+ * Every chunk the idle prefetch fetches, in the order it fetches them: the
+ * sidebar's. NOT `signin` — see the note above.
+ */
 export const CHUNKS: readonly Chunk[] = [...WORKSPACES.map((ws) => ws.key), "org"];
 
 /** What a chunk is called in a sentence a reader sees. */
 export function chunkLabel(chunk: Chunk): string {
   if (chunk === "org") return "Edit org";
+  if (chunk === "signin") return "sign-in";
   return WORKSPACES.find((ws) => ws.key === chunk)?.label ?? chunk;
 }
 
 /** Which chunk draws a resolved screen. */
 export function chunkOf(route: Resolved): Chunk {
+  if (route.workspace === "") return "signin";
   return route.screen === "org-edit" ? "org" : route.workspace;
 }
 

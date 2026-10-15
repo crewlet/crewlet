@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -44,12 +45,12 @@ func TestEverySurfaceHasADisconnector(t *testing.T) {
 // short-circuits before the vendor step is ever reached.
 type noopWriter struct{}
 
-func (noopWriter) Apply(context.Context, []byte, string, string) error { return nil }
-func (noopWriter) Seat(context.Context, string) ([]byte, error)        { return nil, nil }
-func (noopWriter) SetSeat(context.Context, string, []byte, string, string) error {
+func (noopWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
+func (noopWriter) Seat(context.Context, string) ([]byte, error)           { return nil, nil }
+func (noopWriter) SetSeat(context.Context, string, []byte, string, iam.Actor) error {
 	return nil
 }
-func (noopWriter) Reload(context.Context, string, string) error { return nil }
+func (noopWriter) Reload(context.Context, string, iam.Actor) error { return nil }
 
 // A NODE WITH NO ACTIVE REVISION DOES NOT DIE ON A DISCONNECT IT CANNOT DO.
 //
@@ -78,7 +79,8 @@ func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) 
 				t.Fatal("precondition: a zero engine must have no active revision")
 			}
 
-			_, err := e.disconnectors()[kind].Disconnect(t.Context(), true)
+			_, err := e.disconnectors()[kind].Disconnect(t.Context(),
+				integration.TeardownRequest{RemoveSeats: true})
 
 			if !errors.Is(err, integration.ErrDisconnectUnavailable) {
 				t.Errorf("Disconnect = %v, want %v", err,
@@ -167,7 +169,7 @@ roles:
 func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}
@@ -188,7 +190,7 @@ func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 			Handle:  "sre-lead",
 			Secrets: []string{"SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL"},
 		}},
-	})
+	}, testParty)
 	if err != nil {
 		t.Fatalf("forgetRemoved: %v", err)
 	}
@@ -212,7 +214,7 @@ func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}
@@ -223,7 +225,8 @@ func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	if err := e.forgetRemoved(t.Context(), integration.KindJira, provision.Removed{}); err != nil {
+	if err := e.forgetRemoved(t.Context(), integration.KindJira, provision.Removed{},
+		testParty); err != nil {
 		t.Fatalf("forgetRemoved: %v", err)
 	}
 
@@ -233,25 +236,30 @@ func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING SAYS SO RATHER THAN CLAIMING IT CLEANED UP.
+// A TEARDOWN WITH NOWHERE TO FORGET INTO FAILS, AND THE BLOCK STAYS.
 //
-// It cannot open a sealed row at all. Failing the disconnect would hold a
-// surface in PhaseDisconnecting for ever on a node that will never be able to
-// finish; claiming success would report a completeness it did not achieve. It
-// logs the names and lets the block drop.
-func TestANodeWithNoKeyringReportsTheCredentialsItCannotDelete(t *testing.T) {
+// It used to log the names and let the block drop, on the argument that a
+// node with no keyring could never open a sealed row and would otherwise hold
+// the surface disconnecting for ever. There is no such node now — every node
+// holds the keyring the rows were sealed under — so a sink that cannot be
+// built is an engine wired without its secret store, and dropping the block
+// over it would leave the dead values sealed with nothing left to retry.
+func TestATeardownWithNoSecretStoreFailsRatherThanDroppingTheBlock(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	if _, err := e.SetupSink("test"); err == nil {
-		t.Fatal("precondition: a node with no keyring must refuse a sink")
+	if _, err := e.SetupSink(testParty); err == nil {
+		t.Fatal("precondition: an engine with no secret store must refuse a sink")
 	}
 
 	err := e.forgetRemoved(t.Context(), integration.KindAtlassian, provision.Removed{
 		Accounts: []provision.Removal{{Handle: "sre-lead", Secrets: []string{"SRE_TOKEN"}}},
-	})
-	if err != nil {
-		t.Errorf("forgetRemoved = %v: a node that cannot open a sealed row would "+
-			"hold the surface disconnecting for ever", err)
+	}, testParty)
+	if err == nil {
+		t.Fatal("forgetRemoved = nil over credentials it could not delete, so the " +
+			"block would drop with them still sealed and nothing would retry")
+	}
+	if !strings.Contains(err.Error(), "atlassian teardown") {
+		t.Errorf("the failure does not name the teardown it failed: %v", err)
 	}
 }
 
@@ -282,7 +290,7 @@ func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 	e.epoch.current.Store(company)
 	e.UseConfigWriter(noopWriter{})
 
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}
@@ -301,7 +309,7 @@ func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 			Handle: "sre-lead", Secrets: []string{"SRE_ATLASSIAN_TOKEN"},
 		}}},
 	}}
-	removed, err := d.Disconnect(t.Context(), true)
+	removed, err := d.Disconnect(t.Context(), integration.TeardownRequest{RemoveSeats: true})
 	if err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
@@ -313,5 +321,37 @@ func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 	if got := e.Resolve("${SRE_ATLASSIAN_TOKEN}"); got != "" {
 		t.Errorf("SRE_ATLASSIAN_TOKEN = %q after its account was removed: the "+
 			"seat still maps to an account that no longer exists", got)
+	}
+}
+
+// A DISCONNECT IS RECORDED AS WHOEVER ASKED FOR IT.
+//
+// The loop carries a disconnect out minutes after the request, on whichever
+// node holds its duty, and the revision that drops the block — kept for ever —
+// was recorded as the loop's own, while a FORCED disconnect, which drops it
+// inside the request, recorded the person. The row carries who asked
+// ([integration.State.RequestedBy]) and the teardown writes as them.
+// Mutation: drop the block as the loop and the case goes red.
+func TestADisconnectIsRecordedAsWhoeverAskedForIt(t *testing.T) {
+	for name, tc := range map[string]struct{ by, want iam.Actor }{
+		"a person asked": {testParty, testParty},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, company := sealingEngine(t, "https://jira.example.com")
+			e.epoch.current.Store(company)
+			writer := &seatWriter{seats: map[string]map[string]any{}}
+			e.UseConfigWriter(writer)
+
+			d := vendorDisconnect{engine: e, kind: integration.KindAtlassian,
+				pass: &removingPass{}}
+			if _, err := d.Disconnect(t.Context(),
+				integration.TeardownRequest{By: tc.by}); err != nil {
+				t.Fatalf("Disconnect: %v", err)
+			}
+			if _, documents := writer.recorded(); len(documents) != 1 ||
+				documents[0] != tc.want {
+				t.Errorf("the block was dropped as %+v, want %+v", documents, tc.want)
+			}
+		})
 	}
 }

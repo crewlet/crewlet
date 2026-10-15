@@ -53,8 +53,16 @@ function api(agents: AgentRow[], sandboxes: SandboxEntry[] = []): BuilderApi {
   return { agents, sandboxes } as unknown as BuilderApi;
 }
 
+/** A roster row: its `id` is the handle the seat runs under. */
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
-  ({ id: "a1", role: "Dev", handle: "dev", activity: "idle", ...over }) as AgentRow;
+  ({
+    id: "dev",
+    agent_id: "id-dev",
+    role: "Dev",
+    handle: "dev",
+    activity: "idle",
+    ...over,
+  }) as AgentRow;
 
 describe("a seat's live state", () => {
   /*
@@ -74,17 +82,19 @@ describe("a seat's live state", () => {
   });
 
   /*
-   * AND BY THE SAVED NAME when no handle was ever reported, which is what a
-   * company written without handles gives every seat.
+   * AND NEVER BY A NAME. Every seat the chart serves carries its handle, and a
+   * name is prose two seats may share: a live row matched by name would show
+   * one seat's state on another that happens to be called the same.
    */
-  test("falls back to the saved name when the seat runs under no handle", () => {
+  test("a live row under another handle is not this seat's, whatever it is called", () => {
     render(
       <LiveState
-        api={api([agent({ handle: undefined, role: "Dev", activity: "stopped" })])}
-        view={seat({ saved: { handle: undefined, name: "Dev" }, handle: undefined })}
+        api={api([agent({ id: "dev-2", handle: "dev-2", role: "Dev", activity: "working" })])}
+        view={seat()}
       />,
     );
-    expect(screen.getByText("stopped")).toBeDefined();
+    expect(screen.queryByText("working")).toBeNull();
+    expect(screen.getByText("offline")).toBeDefined();
   });
 
   /*

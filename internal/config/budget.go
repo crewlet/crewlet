@@ -1,6 +1,9 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -84,12 +87,37 @@ func (b TokenBudget) Ceilings() org.TokenCeilings {
 }
 
 // tokenBudgetFields decodes the mapping without re-entering TokenBudget's own
-// unmarshaler; see [phaseLLMFields] for why a distinct type is the way.
+// unmarshalers; see [phaseLLMFields] for why a distinct type is the way.
 type tokenBudgetFields TokenBudget
 
 // A custom unmarshaler is matched structurally, so a signature that drifts by
 // one character would stop being called with nothing saying so.
-var _ yaml.Unmarshaler = (*TokenBudget)(nil)
+var (
+	_ yaml.Unmarshaler = (*TokenBudget)(nil)
+	_ json.Unmarshaler = (*TokenBudget)(nil)
+)
+
+// errTokenBudgetShape is the refusal of a budget that is neither a mapping nor
+// a number, in both encodings.
+var errTokenBudgetShape = errors.New("token_budget must be a mapping of " +
+	"ceilings per calendar window — `day`, `week` and `month`, each " +
+	"optional — e.g. `token_budget: {day: 2000000}`")
+
+// oneNumberRefusal is the refusal of `token_budget: <number>`, in both
+// encodings: the author's own number in the example when it could be a
+// ceiling, so the line to write is one they can paste — a 0 or a negative was
+// never a ceiling, and echoing it would suggest one.
+func oneNumberRefusal(value string) string {
+	example := "40000000"
+	if n, err := strconv.Atoi(value); err == nil && n >= 1 {
+		example = strconv.Itoa(n)
+	}
+	return "token_budget is a ceiling per calendar window, not one number: " +
+		"one number was a ceiling for the life of the deployment, which no " +
+		"window is. Write it under the window it should reset on, e.g. " +
+		"`token_budget: {month: " + example + "}` — `day`, `week` and `month` " +
+		"are each optional, and a window with no key has no ceiling"
+}
 
 // UnmarshalYAML accepts the mapping, through the strict decoder, and refuses
 // every other shape by what the author should write instead.
@@ -117,54 +145,65 @@ func (b *TokenBudget) UnmarshalYAML(node *yaml.Node) error {
 		*b = TokenBudget(fields)
 		return nil
 	case node.Kind == yaml.ScalarNode && node.ShortTag() == "!!int":
-		// The author's own number in the example when it could be a
-		// ceiling, so the line to write is one they can paste; a 0 or a
-		// negative was never a ceiling, and echoing it would suggest one.
-		example := "40000000"
-		if n, err := strconv.Atoi(node.Value); err == nil && n >= 1 {
-			example = strconv.Itoa(n)
-		}
-		return nodeFault(node, "token_budget is a ceiling per calendar "+
-			"window, not one number: one number was a ceiling for the life "+
-			"of the deployment, which no window is. Write it under the "+
-			"window it should reset on, e.g. `token_budget: {month: "+
-			example+"}` — `day`, `week` and `month` are each optional, and "+
-			"a window with no key has no ceiling")
+		return nodeFault(node, oneNumberRefusal(node.Value))
 	default:
-		return nodeFault(node, "token_budget must be a mapping of ceilings "+
-			"per calendar window — `day`, `week` and `month`, each optional — "+
-			"e.g. `token_budget: {day: 2000000}`")
+		return nodeFault(node, errTokenBudgetShape.Error())
 	}
+}
+
+// UnmarshalJSON is [TokenBudget.UnmarshalYAML] for the JSON door: a document
+// reaches the engine through it as well — a `PUT /config` body, a stored
+// revision — and encoding/json's own word on
+// `"token_budget": 10000000` names a Go type rather than the line to write.
+//
+// LENIENT ABOUT A KEY IT DOES NOT KNOW, where the YAML reader is strict, for
+// [DecodeCompany]'s reason: a stored revision is read by peers on other
+// builds, and refusing a window a newer build added would make a mixed fleet
+// an outage in the older direction. Strictness is the import's, which reads
+// YAML. A 0 decodes, as it does from YAML, and [Company.Validate] refuses it
+// at the key.
+func (b *TokenBudget) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	switch {
+	case len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")):
+		*b = TokenBudget{}
+		return nil
+	case trimmed[0] == '{':
+		var fields tokenBudgetFields
+		if err := json.Unmarshal(trimmed, &fields); err != nil {
+			// NAMED AT THE KEY, and never at the decoding type: the
+			// library's own word for `{"day": "many"}` names a struct
+			// nobody wrote.
+			var typed *json.UnmarshalTypeError
+			if errors.As(err, &typed) && typed.Field != "" {
+				return fmt.Errorf("token_budget.%s must be a whole number of "+
+					"tokens, got a JSON %s", typed.Field, typed.Value)
+			}
+			return fmt.Errorf("token_budget: %w", err)
+		}
+		*b = TokenBudget(fields)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(trimmed, &n); err == nil {
+		return errors.New(oneNumberRefusal(n.String()))
+	}
+	return errTokenBudgetShape
 }
 
 // validate refuses a ceiling below one token, at the key to remove.
+//
+// THE COMPANY'S OWN BLOCK ONLY, and through internal/org's one rule
+// ([org.TokenCeilings.Faults]), which a seat's budget is held to as well — by
+// [org.Role.Validate], which [Company.Validate] runs over every seat. A seat's
+// block is not checked here too: it would report the same key twice, once in
+// each package's words.
 func (b TokenBudget) validate(path Path) error {
 	var p problems
-	for i, ceiling := range b.byPeriod() {
-		if ceiling == nil || *ceiling >= 1 {
-			continue
-		}
-		window := period.Periods[i]
-		p.add(at(path, string(window)), ErrOutOfRange,
-			"must be at least 1 token, got %d: a window is left without a "+
-				"ceiling by leaving its key out, never by writing 0 — remove "+
-				"`token_budget.%s` for no %s ceiling",
-			*ceiling, window, adjective(window))
+	for _, f := range b.Ceilings().Faults() {
+		p.add(at(path, string(f.Window)), ErrOutOfRange, "%s", f.Error())
 	}
 	return p.err()
-}
-
-// adjective is how a sentence names a window's ceiling: "no daily ceiling".
-func adjective(p period.Period) string {
-	switch p {
-	case period.Day:
-		return "daily"
-	case period.Week:
-		return "weekly"
-	case period.Month:
-		return "monthly"
-	}
-	return string(p)
 }
 
 // windowPairs is every pair of windows one scope can cap together, shorter
@@ -253,6 +292,79 @@ func holds(outer, inner period.Period) bool {
 	return false
 }
 
+// IdleCeiling is one seat ceiling the company's own budget makes unable to
+// refuse the seat a turn: everything a seat spends is the company's spend too,
+// so a company ceiling at or below the seat's, on a window that holds the
+// seat's whole ([holds]), is always reached first.
+type IdleCeiling struct {
+	// Window is the seat's window, and Ceiling its ceiling there.
+	Window  period.Period
+	Ceiling int
+
+	// Over is the company window that is reached first, and Limit its
+	// ceiling: the smallest company ceiling that idles this one when several
+	// do, because that is the one an author has to get under for the seat's
+	// key to do anything.
+	Over  period.Period
+	Limit int
+}
+
+// IdleUnder is every ceiling in seat that this budget — the company's — leaves
+// idle, in [period.Periods] order.
+//
+// ONE JUDGEMENT, read by [Company.Warnings] over the document's own two
+// ceilings, so a write that leaves a seat's ceiling idle is told so in the
+// answer that stored it. Kept as a method on the company's budget so the
+// boundary cases the rule is about — an equal ceiling, a day under a month, a
+// week that straddles two months — are decided in one place.
+//
+// A ceiling below one on either side is not judged: validation owns a ceiling
+// that cannot be met, and a warning beside that refusal would be advice about
+// a key that has to go anyway.
+func (b TokenBudget) IdleUnder(seat org.TokenCeilings) []IdleCeiling {
+	company := b.Ceilings()
+	var out []IdleCeiling
+	for _, window := range period.Periods {
+		ceiling, capped := seat[window]
+		if !capped || ceiling < 1 {
+			continue
+		}
+		var over period.Period
+		limit := 0
+		for _, outer := range period.Periods {
+			o, held := company[outer]
+			if !held || o < 1 || o > ceiling || !holds(outer, window) {
+				continue
+			}
+			if limit == 0 || o < limit {
+				over, limit = outer, o
+			}
+		}
+		if limit == 0 {
+			continue
+		}
+		out = append(out, IdleCeiling{Window: window, Ceiling: ceiling, Over: over, Limit: limit})
+	}
+	return out
+}
+
+// Sentence is what an author is told about an idle ceiling of the seat called
+// handle: which company ceiling reaches first, and the two ways out.
+func (i IdleCeiling) Sentence(handle string) string {
+	reason := fmt.Sprintf("the company's (%d)", i.Limit)
+	if i.Over != i.Window {
+		reason = fmt.Sprintf("the company's token_budget.%s (%d), and a %s lies inside one %s",
+			i.Over, i.Limit, i.Window, i.Over)
+	}
+	return fmt.Sprintf(
+		"seat %q's token_budget.%s (%d) is at or above %s, so it can "+
+			"never refuse this seat a turn: everything a seat spends is "+
+			"the company's spend too, so the company's ceiling is reached "+
+			"first. Remove it, or lower it below %d to hold this seat to "+
+			"a share of the company's",
+		handle, i.Window, i.Ceiling, reason, i.Limit)
+}
+
 // budgetWarnings is every ceiling in the company that can never refuse a
 // turn: one another ceiling in the same budget always reaches first (see
 // [TokenBudget.warnings]), and a seat's ceiling at or above a company ceiling
@@ -270,7 +382,6 @@ func holds(outer, inner period.Period) bool {
 // go anyway.
 func (c *Company) budgetWarnings() []Warning {
 	out := c.TokenBudget.warnings(field("token_budget"))
-	company := c.TokenBudget.Ceilings()
 	for role, path := range c.EachRole() {
 		seat := role.Seat()
 		if !seat.IsAgent() {
@@ -278,40 +389,8 @@ func (c *Company) budgetWarnings() []Warning {
 		}
 		here := at(path, "token_budget")
 		own := role.TokenBudget.warnings(here)
-		for i, ceiling := range role.TokenBudget.byPeriod() {
-			window := period.Periods[i]
-			if ceiling == nil || *ceiling < 1 {
-				continue
-			}
-			// The company ceiling that leaves this one idle, and the
-			// smallest of them when several do: that is the one an author
-			// has to get under for this key to do anything.
-			var over period.Period
-			limit := 0
-			for _, outer := range period.Periods {
-				o, capped := company[outer]
-				if !capped || o < 1 || o > *ceiling || !holds(outer, window) {
-					continue
-				}
-				if limit == 0 || o < limit {
-					over, limit = outer, o
-				}
-			}
-			if limit == 0 {
-				continue
-			}
-			reason := fmt.Sprintf("the company's (%d)", limit)
-			if over != window {
-				reason = fmt.Sprintf("the company's token_budget.%s (%d), and a %s lies inside one %s",
-					over, limit, window, over)
-			}
-			own = append(own, advisory(at(here, string(window)), fmt.Sprintf(
-				"seat %q's token_budget.%s (%d) is at or above %s, so it can "+
-					"never refuse this seat a turn: everything a seat spends is "+
-					"the company's spend too, so the company's ceiling is reached "+
-					"first. Remove it, or lower it below %d to hold this seat to "+
-					"a share of the company's",
-				seat.Handle(), window, *ceiling, reason, limit)))
+		for _, idle := range c.TokenBudget.IdleUnder(role.TokenBudget.Ceilings()) {
+			own = append(own, advisory(at(here, string(idle.Window)), idle.Sentence(seat.Handle())))
 		}
 		for i := range own {
 			own[i].Seat = seat.Handle()

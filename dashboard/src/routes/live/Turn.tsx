@@ -152,11 +152,14 @@ import {
 import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED, WATCH_TAB } from "~/lib/turns.ts";
+import { itemAddress, turnItem } from "~/lib/work.ts";
 import type {
   EventEnvelope,
   EventRecord,
   FeedRow,
   LiveCall,
+  LogRefusal,
+  QueryRefusal,
   TurnRow,
   TurnStage,
   WorkItemRef,
@@ -319,6 +322,8 @@ export interface TurnView {
   turnId: string;
   loading: boolean;
   error: string | null;
+  /** What the refusal said beyond its code — see `useQuery`. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Oldest first: a turn is read forwards. */
   events: EventRecord[];
   /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */
@@ -425,7 +430,7 @@ export function useTurnView(turnId: string): TurnView {
   // GUARDED ON THE ID. A rail is opened from a pasted `peek=turn:` as often as
   // from a row, and an empty one would ask the engine for a turn with no id
   // and be refused on the way in.
-  const { data, loading, error, refetch } = useQuery(
+  const { data, loading, error, refusal, refetch } = useQuery(
     "turn",
     { turn_id: turnId },
     { enabled: turnId !== "" },
@@ -616,8 +621,15 @@ export function useTurnView(turnId: string): TurnView {
           field(opened, "work_item") ??
           liveCall?.work_item ??
           null) as WorkItemRef | null);
-  const role = phases[0]?.role ?? (rec.summary?.actor || str(opened, "role"));
-  const seat = seatRow ?? agents.find((a) => a.role === role);
+  // WHOSE TURN, by the AGENT ID its phases (or its own records) name, paired
+  // with the roster by that id. Never by the role NAME, which namesakes share:
+  // a second "Engineer" was drawn as the first one's turn.
+  const agentId =
+    phases.find((p) => p.agentId)?.agentId ||
+    str(rec.summary, "agent_id") ||
+    str(opened, "agent_id");
+  const seat = seatRow ?? (agentId ? agents.find((a) => a.agent_id === agentId) : undefined);
+  const role = seat?.role || phases[0]?.role || rec.summary?.actor || str(opened, "role");
   const startedAt =
     tsKey(str(opened, "started_at")) ||
     (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
@@ -649,6 +661,7 @@ export function useTurnView(turnId: string): TurnView {
     turnId,
     loading,
     error,
+    refusal,
     events,
     cut,
     attempt,
@@ -1629,7 +1642,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // attaches to a bug report.
   const view = useTurnView(turnId);
   const badgeOf = useSeatBadgeOf();
-  const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
+  const { loading, error, refusal, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs, story } = view;
   const [tab, setTab] = useTab<TurnTab>("tab", TURN_TABS);
   const [span, setSpan] = useParam("span", "", "filter");
@@ -1694,12 +1707,10 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
   // `app/crumbs.ts` for the seat crumb, which leads back to what is running
   // for that seat.
-  const ordinal = useTurnOrdinal(
-    view.workItem?.key ?? "",
-    turnId,
-    running,
-    view.startedAt || view.span.from,
-  );
+  // ASKED FOR AND OPENED BY ITS ADDRESS ([turnItem]): a key another task
+  // claimed first would number and open the claimant.
+  const taskAddress = view.workItem?.key ? itemAddress(turnItem(view.workItem)) : "";
+  const ordinal = useTurnOrdinal(taskAddress, turnId, running, view.startedAt || view.span.from);
   const crumb = turnCrumbLabel(view, ordinal);
   const seatAvatar = view.handle ? badgeOf(view.handle).avatar : null;
   usePageLabels({
@@ -1760,8 +1771,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
   const [pausing, setPausing] = useState(false);
-  const itemKey = view.workItem?.key ?? "";
-  const openTask = useCallback(() => nav.to(["work", itemKey]), [nav, itemKey]);
+  const openTask = useCallback(() => nav.to(["work", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
       ...(attempt?.rows ?? [])
@@ -1825,7 +1835,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           },
         ]
       : []),
-    ...(itemKey
+    ...(taskAddress
       ? [
           {
             key: "task",
@@ -1940,6 +1950,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
         // turn deep-linked the moment it started answers with nothing while
@@ -2273,7 +2284,9 @@ export function TurnPeek({ turnId }: { turnId: string }) {
   const nothing = view.events.length === 0 && view.phases.length === 0;
   if (nothing) {
     if (view.loading) return <Skeleton variant="text" rows={6} label="Loading the turn" />;
-    if (view.error) return <QueryState error={view.error} loading={false} />;
+    if (view.error) {
+      return <QueryState error={view.error} refusal={view.refusal} loading={false} />;
+    }
     return (
       <EmptyState
         size="compact"
@@ -2304,7 +2317,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
             something — a query answer, or a phase off the stream — so passing
             the in-flight flag here would blank a running turn's rail every
             time the query it does not need re-ran on a reconnect. */}
-        <QueryState error={view.error} loading={false}>
+        <QueryState error={view.error} refusal={view.refusal} loading={false}>
           {/* THE SAME WARNING THE PAGE CARRIES, because every count in the
               header above is made from these rows: a cut turn holds its
               opening and its ending and not its middle, and a rail that said

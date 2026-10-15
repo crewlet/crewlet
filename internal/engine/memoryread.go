@@ -35,10 +35,10 @@ func (e *Engine) armMemoryReads(ctx context.Context) error {
 		Profiles:      learning.NewCounterparties(db),
 		Onboarding:    learning.NewOnboarding(db),
 		Conversations: ledgerstore.NewConversations(db),
-		AgentID:       e.agentIDOf,
 	}
 	owner := e.node.Owner()
-	attached := e.node.Attached
+	// BY THE SEAT'S ID, which is how a read names the seat it is about.
+	attached := e.node.AttachedSeats
 	e.memoryReads = &memread.Reader{Owner: owner, Local: stores}
 	if e.backends.Queue == nil {
 		// A NODE WITH NO BROKER IS THE FLEET, and its store the only copy
@@ -73,18 +73,3 @@ func (e *Engine) stopMemoryReads(ctx context.Context) {
 // holding the seat — what the API answers `agent_memory` and `conversations`
 // from. Nil on a node with no store.
 func (e *Engine) MemoryReads() *memread.Reader { return e.memoryReads }
-
-// agentIDOf derives a seat's agent id — what its diary and onboarding marker
-// are keyed by — from its handle, through the CURRENT epoch; "" for a handle
-// the company has no agent seat for, or before any company is running.
-func (e *Engine) agentIDOf(handle string) string {
-	c := e.Company()
-	if c == nil {
-		return ""
-	}
-	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle(handle))
-	if !ok {
-		return ""
-	}
-	return id.String()
-}

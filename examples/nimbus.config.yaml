@@ -9,7 +9,7 @@
 #     export LLM_MODEL="your-provider/model-id"
 #     export LLM_API_KEY="<your-llm-provider-key>"
 #     export OPENAI_API_KEY="<for-embeddings>"
-#     # optional — only if you enable the `secrets:` keyring below.
+#     # The keyring every node needs — see `secrets:` below.
 #     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
 #     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
 #
@@ -29,8 +29,8 @@
 #   - coordination: where seat leases live (a fleet needs the shared slot)
 #   - node        : this process's identity, roles and labels
 #   - api         : host / port / bearer-auth tokens
-#   - secrets     : optional encryption keyring — encrypts the whole
-#                   Tier B company config at rest (see below)
+#   - secrets     : the keyring (REQUIRED) — signs every state-log record
+#                   and seals the Tier B company config at rest (see below)
 #   - logging     : how loud this node is (level), in what shape (format)
 #                   and where it writes (stderr, plus an optional rotating
 #                   file — and `stderr: false` hands the stream to that file)
@@ -68,12 +68,18 @@ logging:
 # process.
 #
 # store_dir is NOT optional, and not merely inadvisable: leaving it empty
-# selects an in-memory server, and this company runs the engine's own
-# tracker and knowledge base (see tracker.backend and knowledge.backend in
-# the company document), whose logs live on that stream.  A restart would
-# recreate them empty and this node would stop serving for good, so the
-# engine refuses the pairing outright rather than losing the records —
-# `crewlet validate` refuses it too, naming stream.store_dir.
+# selects an in-memory server, and this company's own records live on that
+# stream.  The people who sign in to it do whatever backends it names —
+# the identity estate is a state-log domain — and its work items and its
+# pages do too, because it runs the engine's own tracker and knowledge
+# base (see tracker.backend and knowledge.backend in the company
+# document).  A restart would recreate those logs empty and this node
+# would stop serving for good, so the engine refuses to boot without one
+# rather than losing the records — `crewlet validate` refuses it too,
+# naming stream.store_dir.  That is a rule about a broker MEMBER, which a
+# node holding `data` always is; a node without `data` is a leaf of the
+# members' broker with JetStream off, keeps no stream at all, and is
+# refused a store_dir (docs/guides/satellite-nodes.md).
 #
 # `type: nats` dials an external NATS server or cluster instead, and takes
 # `url` (plus `credentials` / `token` / `tls` where the estate demands
@@ -111,12 +117,12 @@ store:
 # `local` keeps the leases inside this process — correct for exactly one
 # node, and catastrophic for more than one, since every node would hold
 # every lease and run every seat.  A fleet needs `embedded-kv`: the leases
-# live in a replicated KV riding the STREAM's own NATS connection, which
-# is what stops two processes running the same seat.  One connection
-# deliberately — two to the same broker fail independently, so a node
-# could go on renewing live leases over a working connection while the one
-# carrying its inbox is dead: alive to its peers, deaf to its work.  See
-# docs/guides/fleet.md.
+# live in a replicated KV on the STREAM's own NATS broker, which is what
+# stops two processes running the same seat.  On an embedded broker the KV
+# holds a second connection beside the queue's, and both are watched:
+# either one closing for good stops the node, so it never goes on renewing
+# leases over one while the one carrying its inbox is dead — alive to its
+# peers, deaf to its work.  See docs/guides/fleet.md.
 coordination:
   type: local
 
@@ -159,46 +165,136 @@ api:
   # docs/guides/deployment.md).
   port: 80
 
-  auth:
-    tokens:
-      # The id is what a write's audit row records, and what a human seat
-      # binds to with ``contact.crewlet_operator_id`` — so a person acting
-      # through the dashboard acts as themselves rather than as a token.
-      # An UNBOUND token is ordinary: an operator outside the org chart, a
-      # pipeline, an automation.  It acts as ``operator:<id>`` under this
-      # label and is never refused for it.
-      - id: founder
-        token: "${CREWLET_API_TOKEN_FOUNDER}"
+  # REQUIRED once a port is set.  Where a PERSON reaches this deployment —
+  # not where the process binds.  Its scheme decides the session cookie's
+  # Secure flag and its __Host- prefix, its host is the origin every write
+  # is checked against, and it is the base of every link a person follows:
+  # ${crewlet_base_url} in tool-skill prose, a page change's notification,
+  # an invitation and a password link.  With no public listener below it
+  # is also where vendors and sandboxes reach the webhook, OTLP and bridge
+  # routes, so every webhook URL and pasted app manifest is built on it.
+  # The engine usually sits behind a TLS-terminating proxy and therefore
+  # cannot read any of that off the request itself.
+  #
+  # Behind a proxy this is the PUBLIC address (https://nimbus.example.com),
+  # not http://localhost.
+  external_url: "http://localhost"
 
-# ── Secret encryption at rest (OPTIONAL) ──────────────────────────────
+  # A SECOND LISTENER for the routes a vendor or a sandbox box has to reach
+  # — /webhooks/, /otlp/ and /mcp/ — so the dashboard, the REST API and the
+  # sign-in routes can stay off the public internet.  With a port set those
+  # routes are served there and nowhere else, everything else stays on
+  # api.port, and external_url here is the address every webhook, app
+  # manifest and per-run sandbox endpoint is built on (required once the
+  # port is set on an ingress node).  The walkthrough serves everything on
+  # one port, so it is left out.
+  # public:
+  #   port: 8443
+  #   external_url: "https://hooks.nimbus.example.com"
+
+  # Peers whose X-Forwarded-For and X-Forwarded-Proto are believed, as CIDR
+  # blocks.  Empty (the default) takes the peer address as the client
+  # address, which is right for a node reached directly.  Behind a proxy,
+  # name the proxy's own block — without it every caller shares one rate
+  # limit bucket, and with 0.0.0.0/0 (refused) every caller would choose
+  # their own.
+  # trusted_proxies: ["10.0.0.0/8"]
+
+  auth:
+    # PEOPLE sign in with a login and a password, always — there is no
+    # switch for it.  Nobody holds one until they are invited onto a human
+    # seat: the founder token below invites the first person onto theirs
+    # (that seat's Invite in Agents › Org chart, or `crewlet iam invite
+    # <address> -seat jane-founder`), and stays the break-glass credential
+    # after that.
+    #
+    # Whether a person must also hold a second factor (an authenticator
+    # app).  Unset is `required`.  `optional` is this walkthrough's posture
+    # — the dashboard is reached on loopback, where no password crosses a
+    # network — and validation refuses it on an address a browser reaches
+    # over the network unless `accept_insecure: true` says so out loud.  A
+    # deployment reached off loopback leaves this line out.
+    totp: optional
+
+    # The shortest password anybody may choose.  Unset is the engine's own
+    # floor of 12, which nothing lowers.
+    # min_password_length: 16
+
+    # A MANAGED company document: the ids of the tokens below that alone
+    # may change it, for a deployment whose company something else — a
+    # GitOps pipeline, a Kubernetes operator — is the source of.  Set, every
+    # other credential (a person's session, a machine token, a lead editing
+    # their own team) is refused `403 config_managed` on a write that would
+    # change the document; a reload and the secret store stay open.  Unset,
+    # as here, the document is edited by whoever holds admin.  See
+    # docs/concepts/configuration.md#managed-configuration.
+    # company_writers: [gitops]
+
+    # Whether THIS NODE grants admin to those who hold it.  `serve` is the
+    # node an administrator signs in on; `refuse` clamps admin away here and
+    # keeps every app, for a node published to the people who use the
+    # company.  Required once a port is set, with no default: admin is host
+    # access, and whether a node publishes it is the operator's decision.
+    admin: serve
+
+    tokens:
+      # This DEPLOYMENT's machine credentials — break-glass, the operator
+      # CLI, a pipeline.  At least one is required once a port is set: the
+      # identity estate of a fresh deployment is empty, so this is what
+      # creates the first person, and on a running one it is the way back
+      # in when nobody can sign in.
+      #
+      # The id is what a write's audit row records.
+      - id: founder
+        # 26 characters at minimum, checked on what the ${VAR} resolves to.
+        # Generate one with `crewlet secrets keygen`.
+        token: "${CREWLET_API_TOKEN_FOUNDER}"
+        # What this credential may do: `admin`, `tracker`, `knowledge`.
+        # Required and non-empty: a credential's blast radius is stated
+        # where it is pinned, never inferred.  This one is the founder's,
+        # so it is admin, which includes every app.  A pipeline that only
+        # files work would be `[tracker]`.
+        grants: [admin]
+
+# ── The keyring (REQUIRED) ────────────────────────────────────────────
 #
-# Uncomment to encrypt the ENTIRE Tier B company config at rest. With a
-# keyring configured, the whole company payload is stored as one opaque
-# AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org chart,
-# policies, model choices, and every secret are ciphertext in the store.
-# The keyring below is the sole root of trust: it lives here in Tier A /
-# the environment, never in the store.
+# The keyring is this deployment's root of trust, and it does two jobs.
 #
-# Without this block (the default), Tier B is stored verbatim — secrets
-# are `${VAR}` references resolved from the environment at construction
-# time.
+# It SIGNS every record on every state log, and every request a node
+# without `data` sends the estate service on a data node. The broker has no
+# auth of its own, so a signature is the only thing that says a record or a
+# request came from this fleet rather than from anything else that can reach
+# the cluster port — and a record is whatever the next node applies, a
+# request whatever a data node runs as the actor it names. A node with no
+# keyring refuses to start for that reason, and `crewlet validate` refuses a
+# file without one.
 #
-# Enable it:
+# It SEALS the Tier B company config at rest: every write stores the
+# whole company document as one opaque AES-256-GCM blob
+# (`{"__encrypted__": "enc:v1:…"}`) — the org chart, policies, model
+# choices, integrations and every secret as ciphertext. The seal is also
+# what says a node of this fleet wrote it, so a node refuses a revision
+# stored unsealed.
+#
+# Set it up:
 #   1. Mint a key + snippet:   crewlet secrets keygen -key-id 2026-01
 #   2. Export the printed key:  export CREWLET_SECRET_KEY_2026_01=<base64>
-#   3. Uncomment the block, then encrypt the active revision once:
-#        crewlet config seal
-#   Afterwards only this key is needed to read the config.
+#
+# Every node in a fleet needs the SAME keyring: one keyed differently
+# would refuse every peer's records.
 #
 # Rotate the master key with `crewlet config rekey` (keep the old key in
 # `keys` until it succeeds). See docs/concepts/configuration.md#secrets.
 #
-# secrets:
-#   active_key_id: "2026-01"          # which key seals NEW writes
-#   keys:
-#     - id: "2026-01"                 # colon-free id; stamped into every envelope
-#       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes)
-#     # During a rotation, keep the previous key here so its ciphertext
-#     # still decrypts, then drop it once `crewlet config rekey` completes:
+secrets:
+  active_key_id: "2026-01"          # which key seals NEW writes and signs every record
+  keys:
+    - id: "2026-01"                 # colon-free id; stamped into every envelope and record
+      material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes)
+#     # During a rotation, keep the previous key here so what it sealed
+#     # still opens: drop it only once `crewlet secrets rekey` and a re-seal
+#     # of the company document (POST /config/reload, or `crewlet config
+#     # rekey` on a stopped node) have run and the rest of the runbook holds —
+#     # docs/concepts/secret-store.md, "Rotating the keyring":
 #     # - id: "2025-07"
 #     #   material: "${CREWLET_SECRET_KEY_2025_07}"

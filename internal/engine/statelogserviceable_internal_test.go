@@ -36,7 +36,7 @@ import (
 // they were asked during the bursts.
 func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -64,7 +64,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -77,7 +77,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// which is a different case from the one under test.
 	waitUntil(t, 20*time.Second, "the applier to drain its log",
 		running.runner.Drained)
-	if ok, domain := e.SeatsServiceable(); !ok {
+	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("a caught-up node cannot keep its seats: %s", domain)
 	}
 
@@ -94,7 +94,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 		t.Fatalf("encode a barrier: %v", err)
 	}
 	seq, _, err := log.Append(t.Context(),
-		spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
+		spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, running.signer.Seal(body))
 	if err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
@@ -121,12 +121,12 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// claims, because a seat attaching here would act on rows that are
 	// behind; serviceability keeps what is held, because rows that are
 	// behind catch up and dropping the work would be pure loss.
-	if e.NativeHydrated(t.Context()) {
+	if e.StateLogHydrated(t.Context()) {
 		t.Error("the node admits new seats with a record unapplied, so a seat " +
 			"attaches to a copy that is behind and answers \"there is no such " +
 			"item\" about work it was just handed")
 	}
-	if ok, domain := e.SeatsServiceable(); !ok {
+	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node gave up every seat it holds over %s being one record "+
 			"behind — on a company doing nothing but filing work items that is "+
 			"the whole seat roster moving on every write", domain)
@@ -164,7 +164,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// AND THE FLEET VIEW STILL SAYS SO. The shed is what must not happen;
 	// reporting the node as caught up would be the opposite error, and is
 	// how an operator watching a node fall behind would see nothing.
-	for _, row := range e.NativeStatus(t.Context()) {
+	for _, row := range e.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}

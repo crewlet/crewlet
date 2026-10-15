@@ -17,7 +17,7 @@
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
+import { dataColor } from "@crewlethq/ui";
 import { TimeSeries } from "./charts.tsx";
 
 afterEach(cleanup);

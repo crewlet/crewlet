@@ -15,7 +15,10 @@ import (
 // listing showed it. The name is the field that survives.
 func TestAnAccountNameCarriesItsSeatAndReadsBack(t *testing.T) {
 	t.Parallel()
-	for _, seat := range []struct{ role, handle string }{
+	for _, seat := range []struct {
+		role   string
+		handle string
+	}{
 		{"SRE Lead", "sre-lead"},
 		{"", "cto"},
 		{"Head of Engineering (interim)", "head-eng"},

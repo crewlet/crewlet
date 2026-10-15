@@ -38,17 +38,19 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		"org":           map[string]any{"windows": []types.BudgetWindow{}},
 		"seats":         []any{},
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		// No epoch: the ceilings and the clock are unknown, so nothing on
 		// this screen can be stated.
 		return out, nil
 	}
 	out["timezone"] = company.Location().String()
-	organization, err := company.Organization()
-	if err != nil {
-		//nolint:nilerr // An unbuildable org means nothing on this screen can
-		// be stated; empty windows with durable:false say exactly that.
+	// THE COMPANY'S OWN ORG, the one this node built when it applied the
+	// epoch, rather than one re-derived from the document per read: both
+	// come from ONE read of the epoch, so they never describe two revisions.
+	if roster == nil {
+		// A node with no organization has no seats and no ceilings to state;
+		// empty windows with durable:false say exactly that.
 		return out, nil
 	}
 
@@ -78,12 +80,12 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	}
 	out["durable"] = true
 	out["org"] = map[string]any{
-		"windows": engine.BudgetWindows(coord.Caps(organization.TokenBudget), read(coord.OrgScope)),
+		"windows": engine.BudgetWindows(coord.Caps(roster.TokenBudget), read(coord.OrgScope)),
 	}
 
 	seats := []any{}
-	for role := range organization.AllRoles() {
-		id, ok := organization.AgentIDFor(role)
+	for role := range roster.AllRoles() {
+		id, ok := roster.AgentIDFor(role)
 		if !ok {
 			// A human seat spends nothing: it is addressable and never
 			// spawned, so a row for it would be a permanent zero a reader

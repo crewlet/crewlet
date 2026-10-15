@@ -173,7 +173,9 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 	}
 
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))
-	registered := e.notify.gitlab.register(e.Registry(), c, env)
+	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
+		return e.notify.gitlab.register(reg, c, env)
+	})
 	if registered == 0 {
 		// Enabled with no seat identity is a company mid-setup —
 		// `crewlet gitlab provision` has not run — or an instance that

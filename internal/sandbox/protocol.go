@@ -58,6 +58,23 @@
 // claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
 // and every launch the lease that launched it ([CoordinatorOptions.Lease]).
 //
+// EVERY SUBJECT A RUN IS REACHED ON IS NAMED BY THE ROW'S SEAT ID — its
+// completion and start on the seat's control subject, an answer by turn and a
+// reply handed back on its inbox — through one parse of the id the row carries
+// as text ([controlSubject], [inboxSubject]), because a seat's mailbox is named
+// by its id, derived from its immutable handle (ADR-0013). The handle the row
+// carries beside it is a label and this node's bookkeeping key, never an
+// address: the coordinator's per-seat counts, holds and retries are keyed by it,
+// and whatever maps one of them onto a lease or a mailbox maps the handle to
+// the id first. An answer by turn is stamped with that same id
+// ([AnswerDesk.Deliver]) and dropped by any seat whose run does not carry it
+// ([Coordinator.AnswerByTurn]).
+//
+// WHO ANSWERED is recorded as iam.ActorFor makes it of a principal — the
+// author, its kind and the credential it came through ([RecordedAnswer.By]) —
+// on the row and on every announcement of what became of the answer, never as a
+// seat beside an actor.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

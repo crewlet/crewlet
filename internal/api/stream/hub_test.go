@@ -6,31 +6,59 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
 // drain reads everything currently queued for a client.
-func drain(c *stream.Client) []stream.Envelope {
-	var out []stream.Envelope
+func drain(c *stream.Client) []*stream.Frame {
+	var out []*stream.Frame
 	for {
 		select {
-		case env, ok := <-c.Out():
+		case frame, ok := <-c.Out():
 			if !ok {
 				return out
 			}
-			out = append(out, env)
+			out = append(out, frame)
 		default:
 			return out
 		}
 	}
 }
 
+// decodeData unmarshals a frame's `data` member into v.
+//
+// THE BYTES, not a Go value: a client now receives what one encode produced
+// for its whole posture, so a test that reached into an Envelope would be
+// asserting about something no browser ever sees.
+func decodeData(t *testing.T, frame *stream.Frame, v any) {
+	t.Helper()
+	var outer struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(frame.Raw(), &outer); err != nil {
+		t.Fatalf("decode %s: %v", frame.Raw(), err)
+	}
+	if err := json.Unmarshal(outer.Data, v); err != nil {
+		t.Fatalf("decode the %s frame's data %s: %v", frame.Kind(), outer.Data, err)
+	}
+}
+
+// dataOf is a frame's `data` member as an object.
+func dataOf(t *testing.T, frame *stream.Frame) map[string]any {
+	t.Helper()
+	var out map[string]any
+	decodeData(t, frame, &out)
+	return out
+}
+
 func TestABroadcastReachesEveryClient(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(a)
 	h.Register(b)
 	if got := h.Clients(); got != 2 {
@@ -41,7 +69,7 @@ func TestABroadcastReachesEveryClient(t *testing.T) {
 
 	for name, c := range map[string]*stream.Client{"a": a, "b": b} {
 		got := drain(c)
-		if len(got) != 1 || got[0].Kind != stream.KindEvent {
+		if len(got) != 1 || got[0].Kind() != stream.KindEvent {
 			t.Errorf("%s received %+v", name, got)
 		}
 	}
@@ -50,7 +78,7 @@ func TestABroadcastReachesEveryClient(t *testing.T) {
 func TestAnUnregisteredClientStopsReceiving(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 	h.Unregister(c)
 
@@ -70,7 +98,7 @@ func TestASlowClientLosesItsOldestEnvelope(t *testing.T) {
 	// makes the screen right — dropping it to keep an older one would
 	// leave the tab further behind than doing nothing.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 
 	const overflow = stream.QueueDepth + 100
@@ -83,13 +111,13 @@ func TestASlowClientLosesItsOldestEnvelope(t *testing.T) {
 		t.Fatalf("queued = %d, want the depth of %d", len(got), stream.QueueDepth)
 	}
 	// The NEWEST survived.
-	last, _ := got[len(got)-1].Data.(map[string]any)
-	if last["n"] != overflow-1 {
+	last := dataOf(t, got[len(got)-1])
+	if last["n"] != float64(overflow-1) {
 		t.Errorf("newest queued = %v, want %d", last["n"], overflow-1)
 	}
 	// The OLDEST went.
-	first, _ := got[0].Data.(map[string]any)
-	if first["n"] == 0 {
+	first := dataOf(t, got[0])
+	if first["n"] == float64(0) {
 		t.Error("the oldest envelope survived an overflow")
 	}
 	if c.Dropped() != overflow-stream.QueueDepth {
@@ -103,7 +131,7 @@ func TestOneSlowClientDoesNotStallAnother(t *testing.T) {
 	// is shared by every client, so one tab that stopped reading would
 	// otherwise stop the fan-out for all of them.
 	h := stream.NewHub()
-	slow, fast := stream.NewClient(), stream.NewClient()
+	slow, fast := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(slow)
 	h.Register(fast)
 
@@ -142,7 +170,7 @@ func TestUnregisteringReleasesTheClientsWriter(t *testing.T) {
 	// closing it leaves that goroutine parked for the life of the process,
 	// one per tab that ever connected.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 
 	writerDone := make(chan struct{})
@@ -165,7 +193,7 @@ func TestClosingAClientTwiceIsSafe(t *testing.T) {
 	// Both ends reach it: the transport closes when the socket dies, and
 	// the hub closes when it is shutting down.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 	h.Unregister(c)
 	h.Unregister(c)
@@ -176,7 +204,7 @@ func TestABroadcastAfterCloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	// A send on a closed channel panics, and the closing end is not the
 	// broadcasting one — so the race is real rather than theoretical.
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h := stream.NewHub()
 	h.Register(c)
 	c.Close()
@@ -186,7 +214,7 @@ func TestABroadcastAfterCloseDoesNotPanic(t *testing.T) {
 func TestClosingTheHubDisconnectsEveryone(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(a)
 	h.Register(b)
 	h.Close()
@@ -212,7 +240,7 @@ func TestTheHubIsSafeUnderConcurrentUse(t *testing.T) {
 	for range 4 {
 		wg.Go(func() {
 			for range 100 {
-				c := stream.NewClient()
+				c := stream.NewClient(reader)
 				h.Register(c)
 				go drain(c)
 				h.Unregister(c)
@@ -249,7 +277,7 @@ func TestAPushEncodesAsTheClientExpects(t *testing.T) {
 	if got["ts"] != "2026-06-14T12:00:00Z" {
 		t.Errorf("ts = %v", got["ts"])
 	}
-	for _, absent := range []string{"id", "what", "error"} {
+	for _, absent := range []string{"id", "what", "error", "seat"} {
 		if _, present := got[absent]; present {
 			t.Errorf("a push carried the query-answer field %q", absent)
 		}
@@ -279,8 +307,9 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 	t.Parallel()
 	// The client switches on the value. Prose there would make every
 	// message a new case nobody handles.
-	for _, code := range []string{
-		"unknown_query", "unauthorized", "bad_params", "query_failed",
+	for _, code := range []httpjson.Code{
+		stream.CodeUnknownQuery, stream.CodeUnauthorized,
+		stream.CodeBadParams, stream.CodeQueryFailed,
 	} {
 		raw, err := stream.Encode(stream.Envelope{
 			Kind: stream.KindError, ID: 1, What: "config", Error: code,
@@ -292,7 +321,7 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if got["error"] != code {
+		if got["error"] != string(code) {
 			t.Errorf("error = %v, want %q", got["error"], code)
 		}
 		if _, present := got["data"]; present {
@@ -300,3 +329,9 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 		}
 	}
 }
+
+// reader is an administrator's audience, so it receives every kind the
+// fan-out tests exercise and every seat's body whole. A test about WHO receives
+// what builds its own.
+var reader = stream.NewAudience(iam.Principal{Login: "erin.ng",
+	Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin}}, nil)

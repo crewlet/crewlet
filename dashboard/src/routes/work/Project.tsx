@@ -91,6 +91,8 @@ import {
   targetLabel,
   typeName,
   unfinished,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
 import { describeChange, foldChartReapplies, reapplySentence } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
@@ -223,7 +225,7 @@ export function Project({ projectKey }: { projectKey: string }) {
       </PageActions>
 
       {state.loading && !detail && <Skeleton variant="text" rows={4} label="Loading the project" />}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {detail && (
           <TabPanel id={LENS_PANEL} value={lens} className="work-main">
             {/* A FINDING ON THE PROJECT'S OWN RECORD is over every lens, not
@@ -296,7 +298,7 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
         {/* A FAILED BREAKDOWN IS NOT AN EMPTY ONE. This is the only read that
             can say how the open work is distributed, so a refusal rendered as
             no rows would read as a project whose every task is in one status. */}
-        <QueryState error={census.error} loading={census.loading}>
+        <QueryState error={census.error} refusal={census.refusal} loading={census.loading}>
           {census.data && (
             <div className="col">
               {statusCounts(census.data.groups ?? []).map((line) => (
@@ -408,7 +410,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
       >
         <Card.Title>Latest changes</Card.Title>
       </Card.Header>
-      <QueryState error={feed.error} loading={feed.loading}>
+      <QueryState error={feed.error} refusal={feed.refusal} loading={feed.loading}>
         {feed.data &&
           (records.length > 0 ? (
             <div className="col gap-2">
@@ -433,7 +435,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                   <div className="col gap-1" key={record.id}>
                     <div className="row gap-2">
                       {record.subject_key ? (
-                        <a className="mono t-link" href={href(["work", record.subject_key])}>
+                        <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
                           {record.subject_key}
                         </a>
                       ) : (
@@ -511,7 +513,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={6} label="Loading the project" />
       )}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {detail && (
           <>
             {/* THE SAME FOUR PARTS IN THE SAME ORDER as the page — see
@@ -650,7 +652,7 @@ function projectLede(detail: WorkProjectDetail): string {
  *
  * IT NAMES HOW WORK GETS FILED, because a reader looking at an empty project
  * is looking for the way in — and the way in is on the state itself: New task,
- * filing into this project, as the person the token is bound to.
+ * filing into this project, as the person signed in.
  */
 function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
   return (
@@ -678,7 +680,7 @@ function NoSuchProject({ projectKey }: { projectKey: string }) {
       size="compact"
       icon={<LayoutDashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
-      description="It may have been renamed. See Projects."
+      description="Nothing in the org declares this project key, and renaming a team moves none. See Projects."
     />
   );
 }

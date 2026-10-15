@@ -36,7 +36,7 @@ import (
 // one, so this boots the engine over its own broker and checks both halves.
 func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -71,7 +71,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if stats.CreatedAt.IsZero() {
 		t.Fatal("the broker reports no creation instant, so nothing below can be checked")
 	}
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -123,7 +123,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running = e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	running = e2.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -159,7 +159,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	// AND THE OPERATOR SURFACE SAYS SO rather than reporting a caught-up
 	// loop: a stopped applier has a lag of zero, and the row read as ready
 	// for as long as nobody looked at the error beside the number.
-	for _, row := range e2.NativeStatus(t.Context()) {
+	for _, row := range e2.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
@@ -189,7 +189,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -249,7 +249,7 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -322,7 +322,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Errorf("reads on a rebuilt log refuse with %q, want %q", code,
 			statelog.RefuseWrongStream)
 	}
-	for _, row := range e.NativeStatus(t.Context()) {
+	for _, row := range e.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
@@ -356,7 +356,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 //     asks only whether the cursor is HIGH ENOUGH passes one that is too high.
 func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -383,7 +383,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		back.Close(context.Background())
 		t.Fatalf("the write before the restore: %+v, %v", res, err)
 	}
-	end := endOf(t, e.native.Load().log.Domain(tracker.Domain{}.Name()))
+	end := endOf(t, e.core.Load().log.Domain(tracker.Domain{}.Name()))
 	e.Stop(context.Background())
 
 	// THE CHECKPOINT MOVES PAST THE LOG'S END, and nothing else does: the
@@ -415,7 +415,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running := e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e2.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -461,7 +461,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	}
 
 	// AND THE READS, FROM THE SAME FACT, and the operator surface with them.
-	health, err := e2.native.Load().log.health(t.Context(), running)
+	health, err := e2.core.Load().log.health(t.Context(), running)
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Error("the health names a rebuild — this stream kept its instant, and " +
 			"an operator told it was recreated looks for a delete that never happened")
 	}
-	for _, row := range e2.NativeStatus(t.Context()) {
+	for _, row := range e2.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
@@ -532,8 +532,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 				t.Fatalf("stage the checkpoint: %v", err)
 			}
 
-			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{},
-				appendTo, nil)
+			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -566,16 +565,19 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	path := filepath.Join(t.TempDir(), "crewlet.db")
 	db := storetest.OpenNode(t, path, store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
+	boot := testBootstrap(t)
 	// The estate the runtime's start opens below, migrated already.
 	storetest.Seed(t, store.EstateReplicated, store.ReplicatedPath(path, ""))
-	ceilings, err := sizeCeilings(t.Context(), q, config.DefaultBootstrap().Stream,
+	ceilings, err := sizeCeilings(t.Context(), q, boot.Stream,
 		64<<30, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
+	// THE KEYRING A BOOT HANDS EVERY DOMAIN: a runner verifies every
+	// record against it and refuses to start without one.
 	s := &stateLog{
 		mode: statelog.ModeNormal, nodeID: "node-a", db: db,
-		ceilings: ceilings, run: t.Context(),
+		ceilings: ceilings, run: t.Context(), ring: recordKeyring(&boot),
 	}
 	// THE REPLICATED ESTATE FIRST, as the runtime's own start opens it
 	// before any log's checkpoint is read.
@@ -635,7 +637,7 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 // aRunningNodeOf is [aRunningNode] running the given company.
 func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -672,8 +674,19 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 // THROUGH THE BROKER'S OWN API rather than the queue's, which remembers what
 // it has provisioned and would no-op — and a broker-level rebuild is precisely
 // a stream this process did not create.
+//
+// AT THE CEILING AND THE MESSAGE LIMIT THE STREAM HAD, as an operator's rebuild
+// of a log would be: the node sized both, and a log of an arbitrary size is
+// one whose gate reserve — seven of its largest appends and a mebibyte — may
+// be all of it, so every ordinary write after the rebuild would be refused
+// for a reason the rebuild is not about.
 func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	t.Helper()
+	old, err := js.Stream(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("read the stream before rebuilding it: %v", err)
+	}
+	was := old.CachedInfo().Config
 	if err := js.DeleteStream(t.Context(), spec.Name); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
@@ -683,7 +696,8 @@ func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	time.Sleep(2 * time.Millisecond)
 	if _, err := js.CreateStream(t.Context(), natsjs.StreamConfig{
 		Name: spec.Name, Subjects: spec.Subjects,
-		MaxBytes: 16 << 20, Duplicates: spec.Duplicates,
+		MaxBytes: was.MaxBytes, MaxMsgSize: was.MaxMsgSize,
+		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("rebuild the stream: %v", err)
 	}

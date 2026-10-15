@@ -87,7 +87,7 @@ func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level:    seatReadLevel,
 	})
 	if err != nil {
-		return readFailure(tracker.GetWorkCatalogueTool, err), nil
+		return readFailure(ctx, tracker.GetWorkCatalogueTool, err), nil
 	}
 	return jsonResult(answer)
 }
@@ -159,10 +159,6 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	if t.deps.CatalogueWriter == nil {
 		return unconfigured(tracker.WriteWorkCatalogueTool), nil
 	}
-	actor, denied := bindRequest(actor, tracker.WriteWorkCatalogueTool, args)
-	if denied != "" {
-		return failed(denied), nil
-	}
 	_, hasTypes := args["types"]
 	_, hasFields := args["fields"]
 	if !hasTypes && !hasFields {
@@ -205,7 +201,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		opID := opIDFor(actor, t.Name(), "types", "workspace", args)
 		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
-			return writeFailure(actor, tracker.WriteWorkCatalogueTool, err), nil
+			return writeFailure(ctx, actor, tracker.WriteWorkCatalogueTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			// THE FIELDS WAIT FOR IT: a call answered with one half's
@@ -216,8 +212,8 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 				next = "The fields were NOT written: the call stopped here, " +
 					"before them. " + next
 			}
-			return unknownOutcome(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
-				"the types were written", opID, result.Unvouched, next)), nil
+			return unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+				"the types were written", opID, result.Unvouched, next), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		call.add(result.Result)
@@ -230,7 +226,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		opID := opIDFor(actor, t.Name(), "fields", "workspace", args)
 		result, err := writer.WriteFields(ctx, opID, fields)
 		if err != nil {
-			failure := writeFailure(actor, tracker.WriteWorkCatalogueTool, err)
+			failure := writeFailure(ctx, actor, tracker.WriteWorkCatalogueTool, err)
 			if hasTypes {
 				return partlyWritten(failure, "The types were replaced", "the fields",
 					call), nil
@@ -242,8 +238,8 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 			if hasTypes {
 				next = "The types WERE written. " + next
 			}
-			return unknownOutcome(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
-				"the fields were written", opID, result.Unvouched, next)), nil
+			return unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+				"the fields were written", opID, result.Unvouched, next), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		call.add(result.Result)

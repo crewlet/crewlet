@@ -22,8 +22,8 @@ func TestTheLeadMapReadsTheTrackersOwnField(t *testing.T) {
 			{Name: "Ops Lead", DeclaredHandle: "ops"},
 		},
 		Units: []*org.Unit{
-			{Name: "Engineering", Lead: "CTO", Project: "eng", Space: "PLATFORM"},
-			{Name: "Operations", Lead: "Ops Lead", Space: "OPS"},
+			{Name: "Engineering", Lead: "cto", Project: "eng", Space: "PLATFORM"},
+			{Name: "Operations", Lead: "ops", Space: "OPS"},
 		},
 	}
 	o.Normalize()
@@ -47,7 +47,7 @@ func TestAnInheritedLeadOwnsTheProject(t *testing.T) {
 		Name:  "nimbus",
 		Roles: []*org.Role{{Name: "CTO", DeclaredHandle: "cto"}},
 		Units: []*org.Unit{{
-			Name: "Engineering", Lead: "CTO",
+			Name: "Engineering", Lead: "cto",
 			Children: []*org.Unit{{Name: "Platform", Project: "PLAT"}},
 		}},
 	}

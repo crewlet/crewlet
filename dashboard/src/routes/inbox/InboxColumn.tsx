@@ -2,11 +2,12 @@
  * The Inbox's list: Needs you, then Updates, then the two quiet links to what
  * was snoozed and what was read already.
  *
- * EVERY ROW SAYS THE SAME THREE THINGS, whatever it is: WHO (the person or
- * seat behind it, never a token id), WHAT, in up to three lines and never cut
- * at the edge, and the TASK it is about, as a quiet link of its own under the
- * row that opens the task beside the inbox. A row that drew its kind in a
- * different shape would make a reader learn four lists to read one.
+ * EVERY ROW SAYS THE SAME THREE THINGS, whatever it is: WHO (whoever the
+ * record names, `iam.ActorFor`: the seat a person or a bound credential writes
+ * as, or the login of a credential bound to none), WHAT, in up to three lines
+ * and never cut at the edge, and the TASK it is about, as a quiet link of its
+ * own under the row that opens the task beside the inbox. A row that drew its
+ * kind in a different shape would make a reader learn four lists to read one.
  */
 
 import type { ReactNode } from "react";
@@ -25,12 +26,14 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
 import { firstLine } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
+import type { ItemRef } from "~/lib/work.ts";
 import {
   askQuestion,
   budgetLine,
   moment,
   noticeText,
   noticeTitle,
+  rowItem,
   rowKey,
   rowName,
   rowWho,
@@ -39,6 +42,7 @@ import {
   type Who,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
+import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 
 /** What the list holds beyond its two groups, read only when opened. */
 export interface Later {
@@ -81,7 +85,7 @@ export function InboxColumn({
   settled: ReadonlyMap<string, string>;
   selected: string;
   onOpen: (key: string) => void;
-  /** Task titles by key, where the row does not carry its own. */
+  /** Task titles by id and by unclaimed key ([titleOf]), for a row that carries none. */
   titles: ReadonlyMap<string, string>;
   index: OrgIndex;
   now: number;
@@ -91,7 +95,7 @@ export function InboxColumn({
   quiet: { title: string; hint: string } | null;
   /** More unread updates lie past the page. */
   more: boolean;
-  /** The reader is a person, so there are notices to read at all. */
+  /** The reader has a record of their own (`ViewerState.owner`), so there are notices. */
   bound: boolean;
   /** A read's refusal, drawn where its rows would be. */
   refusal?: ReactNode;
@@ -102,7 +106,7 @@ export function InboxColumn({
       row={row}
       index={index}
       now={now}
-      title={titles.get(rowKey(row))}
+      title={titleOf(titles, rowItem(row))}
       settled={settled.get(row.key)}
       selected={row.key === selected}
       onOpen={() => onOpen(row.key)}
@@ -205,7 +209,11 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
         case "ask":
           return { text: askQuestion(row.subject.ask) };
         case "run":
-          return { text: firstLine(row.subject.run.question ?? "") || "Parked on a question" };
+          return {
+            text:
+              firstLine(row.subject.run.question ?? "") ||
+              (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
+          };
         case "seat":
           return { text: budgetLine(row.subject.seat.window?.period) };
       }
@@ -258,7 +266,7 @@ function InboxItem({
   onOpen: () => void;
 }) {
   const who = rowWho(row, index);
-  const key = rowKey(row);
+  const item = rowItem(row);
   const words = rowWords(row, index);
   const qualifier = settled ? null : qualifierOf(row);
   const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
@@ -276,10 +284,31 @@ function InboxItem({
       doneLabel={settled}
       selected={selected}
       onClick={onOpen}
-      aside={key ? <TaskLink item={key} title={title ?? taskTitleOf(row)} /> : undefined}
+      aside={
+        item ? (
+          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} />
+        ) : undefined
+      }
     >
       {words.text}
     </Row>
+  );
+}
+
+/**
+ * A task's title from the one `work_items` read the screen makes for every
+ * row's task, BY ID FIRST: that read is by key, and a key two tasks hold
+ * answers both, so only the id says which title is this row's. The key is the
+ * fallback for a vendor item, which a turn names by key alone, and is listed
+ * only for the task that claimed it.
+ */
+export function titleOf(
+  titles: ReadonlyMap<string, string>,
+  item: ItemRef | null,
+): string | undefined {
+  if (!item) return undefined;
+  return (
+    (item.id ? titles.get(item.id) : undefined) ?? (item.key ? titles.get(item.key) : undefined)
   );
 }
 
@@ -302,7 +331,12 @@ export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null;
       </span>
     );
   }
-  // AN OPERATOR'S TOKEN BOUND TO NOBODY is a person all the same, drawn as one
-  // with no name behind it rather than as the credential.
-  return <SeatAvatar name="Operator" kind="human" size={size} decorative />;
+  // A CHANGE THE ENGINE MADE ITSELF names nobody: every person and every
+  // credential bound to no seat is named by the record ([rowWho]), so what is
+  // left is the engine's own mark.
+  return (
+    <span className="attention-icon inbox-badge" aria-hidden="true">
+      <Mark name="cpu" size="sm" />
+    </span>
+  );
 }

@@ -215,7 +215,7 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	// passing, done by the job that runs it.
 	sweep, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.node,
-		DB: r.db,
+		DB: r.db, Verifier: r.verifier,
 	})
 	if err != nil {
 		t.Fatalf("build the ledger's owner: %v", err)

@@ -190,6 +190,9 @@ export interface AgentMemory {
 /** One agent seat's row of `memory_overview`: its totals and newest note,
  *  counted by the node holding it. */
 export interface MemoryOverviewSeat {
+  /** The seat's agent id, which a row is matched by; `handle` is the handle it
+   *  answers to now, which a list draws. */
+  agent_id: string;
   handle: string;
   diary_total: number;
   episodes_total: number;

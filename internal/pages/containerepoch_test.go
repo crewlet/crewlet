@@ -49,7 +49,7 @@ func (r *roundTrip) container(key string) pages.Container {
 func TestAnOlderActivationDoesNotWalkAContainerBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	newer := activation(0).Add(300 * time.Millisecond)
+	newer := activation(0).Add(3 * time.Millisecond)
 
 	if !r.ensure(newer, "ENG", "Platform", "ships it") {
 		t.Fatal("the first write wrote nothing — want a create")
@@ -59,10 +59,11 @@ func TestAnOlderActivationDoesNotWalkAContainerBack(t *testing.T) {
 	}
 	end := r.logEnd()
 
-	// THE EARLIER ACTIVATION, arriving second, inside the same second.
+	// THE EARLIER ACTIVATION, three milliseconds older, arriving second —
+	// apart at the stamp's own resolution, which is all the guard can see.
 	if r.ensure(activation(0), "ENG", "Engineering", "builds it") {
-		t.Error("an activation 300ms older than the one applied wrote — it " +
-			"walks the newer names back")
+		t.Error("an activation three milliseconds older than the one applied " +
+			"wrote — it walks the newer names back")
 	}
 	if got := r.logEnd(); got != end {
 		t.Errorf("the older activation put %d record(s) on the log", got-end)
@@ -71,7 +72,7 @@ func TestAnOlderActivationDoesNotWalkAContainerBack(t *testing.T) {
 		t.Errorf("the container reads (%q, %q), want the newer activation's", c.Name, c.Purpose)
 	}
 
-	// AND A NEWER ONE STILL WRITES, even with nothing but the epoch to say:
+	// AND A NEWER ONE STILL WRITES, even with nothing but the stamp to say:
 	// a container not re-stamped would let an activation between the two
 	// walk it back.
 	if !r.ensure(activation(1), "ENG", "Platform", "ships it") {
@@ -86,11 +87,11 @@ func TestAnOlderActivationDoesNotWalkAContainerBack(t *testing.T) {
 // A REAPPLY OF ONE ACTIVATION WRITES NOTHING, AND SETS RIGHT WHAT AN EQUAL
 // ACTIVATION WALKED BACK.
 //
-// Every boot of every node reapplies the activation it holds, so a reapply that
-// wrote would be a record per boot per container. But two activations inside
-// one millisecond share a stamp, and the one that lost the race can land its
-// settings second — so a reapply that finds DIFFERENT settings at its own
-// stamp writes them back.
+// Every boot of every node reapplies the activation it holds, so a reapply
+// that wrote would be a record per boot per container. But the guard lets an
+// EQUAL stamp through, so a write that lands at the current activation's stamp
+// with other settings stands until a reapply puts it back — so a reapply that
+// finds DIFFERENT settings at its own stamp writes them back.
 func TestAReapplyWritesOnlyWhatDiffers(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

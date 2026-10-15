@@ -1,39 +1,30 @@
 package tracker_test
 
 import (
-	"encoding/json"
 	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// WHO NOT TO WAKE IS A PARTY, NOT A HANDLE.
+// WHO NOT TO WAKE IS THE AUTHOR, AND A BOUND PERSON'S AUTHOR IS THEIR SEAT.
 //
 // A wake is dropped for the person who made the change — telling somebody what
-// they just did is noise a model spends a round on — and the comparison was
-// against the record's AUTHOR alone. That author is the token on
-// `/operator/mcp`, deliberately and permanently, while a bound operator's own
-// gestures land on their SEAT: the watch a create leaves, the watch a comment
-// leaves. So the record said `founder`, the candidate said `jane-founder`, and
-// the exclusion matched neither — a founder was woken by every item their own
-// assistant filed and every comment it left, each one an addressed turn about
-// work they had just done themselves.
-//
-// The record now carries the bound seat beside the author
-// ([tracker.MutationRecord.ActorSeat]) and the exclusion reads both. The
-// author fields are untouched: this changes who is woken and nothing about
-// who wrote it.
+// they just did is noise a model spends a round on. A person bound to a seat
+// writes AS that seat, kind `human`, with the credential they acted through
+// beside it (iam.ActorFor), so the handle their own gestures land on — the
+// watch a create leaves, the watch a comment leaves — is the record's author
+// and one comparison drops it. A record authored by the credential instead
+// woke a founder for every item their own assistant filed.
 
-// operatorRecord is a record written through `/operator/mcp` by a token the
-// company bound to a human seat — the author is the credential, the kind says
-// it is not a seat, and the seat travels beside them.
-func operatorRecord(n *tracker.Notify, seat string) tracker.MutationRecord {
+// personRecord is a record written through a person's own credential by
+// somebody the identity directory binds to a human seat: the author is the
+// seat, and the credential rides beside it.
+func personRecord(n *tracker.Notify, seat string) tracker.MutationRecord {
 	record := parseRecord(n)
-	record.Actor = "founder"
-	record.ActorKind = tracker.AuthorOperator
-	record.OperatorID = "founder"
-	record.ActorSeat = seat
+	record.Actor = seat
+	record.ActorKind = tracker.AuthorHuman
+	record.OperatorID = "pat:founder-laptop"
 	return record
 }
 
@@ -46,7 +37,7 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 			Kind: tracker.ChangeCreated,
 			Snapshot: tracker.Snapshot{
 				Key: "ENG-1", Project: "ENG", Title: "wire it",
-				Assignee: "cy", Reporter: "founder",
+				Assignee: "cy", Reporter: "jane-founder",
 				Watchers: []string{"jane-founder", "cy"},
 			},
 		},
@@ -56,15 +47,15 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 			Kind: tracker.ChangeComment, Excerpt: "shipping this today",
 			Snapshot: tracker.Snapshot{
 				Key: "ENG-1", Project: "ENG", Assignee: "cy",
-				Reporter: "founder", Watchers: []string{"jane-founder", "di"},
-				CommentAuthorKind: tracker.AuthorOperator,
+				Reporter: "jane-founder", Watchers: []string{"jane-founder", "di"},
+				CommentAuthorKind: tracker.AuthorHuman,
 			},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
-				t.Context(), delivery(t, operatorRecord(notify, "jane-founder")),
+				t.Context(), delivery(t, personRecord(notify, "jane-founder")),
 				registry(t, "cy", "di", "jane-founder"))
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
@@ -75,9 +66,8 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 			}
 			if slices.Contains(woken, "jane-founder") {
 				t.Errorf("%s woke %v — the person who made the change is on "+
-					"that list under the seat their own credential is bound "+
-					"to, and being told what you just did is a turn spent on "+
-					"nothing", name, woken)
+					"that list under the seat they write as, and being told "+
+					"what you just did is a turn spent on nothing", name, woken)
 			}
 			// AND EVERYBODY ELSE STILL HEARS IT. An exclusion that
 			// widened until it reached the other watchers would be a
@@ -94,12 +84,12 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 //
 // An unblocked notice is about ANOTHER task becoming workable, so the person
 // who closed the blocker is exactly who needs to hear it — [Reason.WakesActor]
-// is that exception, and an exclusion that read the seat without honouring it
-// would take the whole feature away from the one person it is for.
+// is that exception, and an exclusion that dropped the author without honouring
+// it would take the whole feature away from the one person it is for.
 func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 	t.Parallel()
 	routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
-		t.Context(), delivery(t, operatorRecord(&tracker.Notify{
+		t.Context(), delivery(t, personRecord(&tracker.Notify{
 			Kind: tracker.ChangeStatus,
 			Snapshot: tracker.Snapshot{
 				Key: "ENG-1", Project: "ENG",
@@ -119,51 +109,5 @@ func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 	}
 	if got := routed[0].Metadata[tracker.MetaVia]; got != string(tracker.ReasonUnblocked) {
 		t.Errorf("the notice was routed via %q, want %q", got, tracker.ReasonUnblocked)
-	}
-}
-
-// AND A WRITER WITH NO SEAT BOUND ROUTES EXACTLY AS BEFORE.
-//
-// Every seat, every human at the dashboard and every token nobody bound is a
-// party of ONE — the author's own handle, which is what the exclusion
-// compares against. The wire says so too: a record with no bound seat carries
-// no `actor_seat` key at all, so it says nothing it has no value for.
-func TestAnUnboundWriterRoutesAsBefore(t *testing.T) {
-	t.Parallel()
-	// `ana` is [parseRecord]'s own author, and a watcher here.
-	record := parseRecord(&tracker.Notify{
-		Kind: tracker.ChangeStatus,
-		Snapshot: tracker.Snapshot{
-			Key: "ENG-1", Project: "ENG", Assignee: "cy",
-			Watchers: []string{"ana", "di"},
-		},
-	})
-	payload, err := record.Encode()
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	var wire map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &wire); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if _, held := wire["actor_seat"]; held {
-		t.Errorf("a record with no bound seat carries %s — a field with no "+
-			"value is omitted from the wire", payload)
-	}
-	routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
-		t.Context(), delivery(t, record), registry(t, "ana", "cy", "di"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	var woken []string
-	for _, r := range routed {
-		woken = append(woken, r.To.Handle)
-	}
-	if slices.Contains(woken, "ana") {
-		t.Errorf("the writer was woken about their own change: %v", woken)
-	}
-	if !slices.Contains(woken, "cy") || !slices.Contains(woken, "di") {
-		t.Errorf("the change reached %v, want the assignee and the other "+
-			"watcher", woken)
 	}
 }

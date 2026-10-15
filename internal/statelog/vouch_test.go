@@ -231,7 +231,9 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 		// The first copy lands on one subject and this node applies none
 		// of it; the retry is decided on another, where its expectation
 		// is current, so only the broker's dedupe can collapse it.
-		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", op, nil, []byte("one"))
+		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", op, nil,
+			signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-a"},
+				op, "one")))
 		if err != nil {
 			t.Fatalf("the first copy: %v", err)
 		}
@@ -391,8 +393,8 @@ func TestAnUnknownSaysWhetherTheLedgerCouldVouch(t *testing.T) {
 				// A PEER'S RECORD LANDS ABOVE THE ANCHOR, so the
 				// resolution has something to weigh...
 				seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a",
-					"peer-op", nil, probeRecord(statelog.Stamp{
-						Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "theirs"))
+					"peer-op", nil, signedByPeer(t, h, probeRecord(statelog.Stamp{
+						Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "theirs")))
 				if err != nil {
 					t.Errorf("land the peer's record: %v", err)
 					return

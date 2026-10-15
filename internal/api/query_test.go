@@ -17,11 +17,16 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -45,6 +50,22 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		}
 	}
 
+	// A COMPANY, so a seat question has a seat to resolve: `agent` is asked
+	// by handle and answered from the projection by the agent id it
+	// resolves to.
+	company, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	ceo, ok := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	if !ok {
+		t.Fatal("the fixture's CEO is no agent seat")
+	}
+
 	// ON THE SUITE'S CLOCK, as the app is: the live spend window is aged
 	// and labelled by the projection's own clock, so a projection on the
 	// wall clock beside an app pinned to [clock] answers a REST call and a
@@ -52,13 +73,29 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "task", Payload: map[string]any{
+			"agent_id": ceo.String(), "role": "CEO", "task_id": "t-1",
+		},
 	})
+
+	// AND A NODE HOLDING THE SEAT the live state shows at work: a seat no
+	// node holds is `unplaced`, which the socket's placement tick writes
+	// onto the shared projection the moment a socket opens — so with no
+	// lease, the question asked over REST before any socket and again over
+	// one after it read two different (and both honest) states.
+	leases := coordmemory.New()
+	if lease, _, err := leases.TryAcquire(t.Context(), coord.SeatResource(ceo),
+		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Hour}); err != nil || lease == nil {
+		t.Fatalf("hold the CEO's seat: %v (%v)", err, lease)
+	}
 
 	opts := api.Options{
 		State: state,
-		Sources: queries.Sources{State: state, Events: eventfan.Solo("node-a", db.Events()),
-			Usage: db.Replicated()},
+		Sources: queries.Sources{
+			State: state, Events: eventfan.Solo("node-a", db.Events()),
+			Usage: db.Replicated(), Company: companySource(t, company),
+			Coord: leases,
+		},
 		Now: func() time.Time { return clock },
 	}
 	if mutate != nil {
@@ -75,7 +112,7 @@ func overREST(t *testing.T, a *api.App, what string, params url.Values) (int, an
 		target += "?" + params.Encode()
 	}
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, target, nil)))
 	res := rec.Result()
 	var body any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -91,7 +128,8 @@ func overSocket(t *testing.T, a *api.App, what string, params map[string]any) ma
 	t.Cleanup(srv.Close)
 
 	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream", nil)
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + fixtureToken}}})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -148,7 +186,7 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 		rest   url.Values
 		socket map[string]any
 	}{
-		{"agent", url.Values{"role": {"Lead"}}, map[string]any{"role": "Lead"}},
+		{"agent", url.Values{"id": {"ceo"}}, map[string]any{"id": "ceo"}},
 		{"events", url.Values{"limit": {"3"}}, map[string]any{"limit": float64(3)}},
 		{"events", url.Values{"actor": {"Lead"}}, map[string]any{"actor": "Lead"}},
 		{"trace", url.Values{"trace_id": {"tr-1"}}, map[string]any{"trace_id": "tr-1"}},
@@ -173,6 +211,29 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 			t.Errorf("%s answered differently:\n  REST   %#v\n  socket %#v",
 				tc.what, rest, socket)
 		}
+	}
+}
+
+// AN APP'S CLOCK IS THE CLOCK ITS QUESTIONS ARE ANSWERED ON.
+//
+// The case above asks each question once per transport, at two instants, and
+// compares the answers — so an answer that reads the wall clock can only agree
+// with itself when both asks land in the same second. `tokens` labels its
+// window with the instant it was asked, and the case failed under load when
+// its REST ask and its socket ask straddled a second: the app's clock was
+// pinned ([seededApp]), and never reached the questions, which kept a wall
+// clock of their own.
+func TestAPinnedAppClockPinsItsAnswers(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	status, body := overREST(t, a, "tokens", nil)
+	if status != http.StatusOK {
+		t.Fatalf("tokens: status = %d (%v)", status, body)
+	}
+	answer, _ := body.(map[string]any)
+	if want := clock.Format(time.RFC3339); answer["until"] != want {
+		t.Errorf("tokens ends at %v, want the app's clock %s — an answer on the "+
+			"wall clock differs from itself one second later", answer["until"], want)
 	}
 }
 
@@ -228,6 +289,12 @@ func TestAnUnknownQuestionIsRefusedOnBothTransports(t *testing.T) {
 	if got := body.(map[string]any)["error"]; got != "unknown_query" {
 		t.Errorf("REST error = %v", got)
 	}
+	// THE ENVELOPE, sentence and all. The query surface answered its
+	// refusals as a bare `{"error": code}`, so the family of routes a
+	// dashboard reads most was the one whose refusals had nothing to show.
+	if got := body.(map[string]any)["message"]; got != httpjson.CodeUnknownQuery.Message() {
+		t.Errorf("REST message = %v, want the code's own sentence", got)
+	}
 
 	socket := overSocket(t, a, "nonsense", nil)
 	if socket["kind"] != "error" || socket["error"] != "unknown_query" {
@@ -247,6 +314,9 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 	if got := body.(map[string]any)["error"]; got != "bad_params" {
 		t.Errorf("REST error = %v, want bad_params — `query_failed` names a "+
 			"fault of this node for a request the caller has to change", got)
+	}
+	if got := body.(map[string]any)["message"]; got != httpjson.CodeBadParams.Message() {
+		t.Errorf("REST message = %v, want the code's own sentence", got)
 	}
 
 	// AND THE SOCKET SAYS THE SAME THING. It said `query_failed` — the
@@ -302,10 +372,10 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	t.Parallel()
 	// The reason reaches the LOG, not the caller: it can carry a database
-	// path or a driver's own message, and this route is reachable under
-	// the anonymous read posture.
+	// path or a driver's own message, and being admitted to a question does
+	// not make a caller somebody that path is meant for.
 	a := seededApp(t, nil)
-	a.Queries().Register("boom", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("boom", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
 		return nil, errors.New("open /var/lib/crewlet/crewlet.db: permission denied")
 	})
 
@@ -328,12 +398,12 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	a := seededApp(t, nil)
-	a.Queries().Register("blip", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("blip", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
 		return nil, fmt.Errorf("list leases: %w", coord.ErrUnavailable)
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/blip", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/blip", nil)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("REST status = %d, want 503", rec.Code)
 	}
@@ -343,8 +413,207 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 	if !strings.Contains(rec.Body.String(), `"unavailable"`) {
 		t.Errorf("REST body = %s, want the unavailable code", rec.Body.String())
 	}
-	if socket := overSocket(t, a, "blip", nil); socket["error"] != "unavailable" {
+	socket := overSocket(t, a, "blip", nil)
+	if socket["error"] != "unavailable" {
 		t.Errorf("socket answer = %v, want unavailable", socket)
+	}
+	// NO REFUSAL IS BEHIND IT, and the hint is the health tick's.
+	if _, named := socket["refusal"]; named {
+		t.Errorf("a coordination blip named a state-log refusal: %v", socket)
+	}
+	if got := socket["retry_after"]; got != float64(stream.HealthInterval/time.Second) {
+		t.Errorf("socket retry_after = %v, want the health tick's %s", got,
+			stream.HealthInterval)
+	}
+}
+
+// A NATIVE QUESTION ON A NODE WITH NO COMPANY IS ONE ANSWER ON BOTH TRANSPORTS.
+//
+// The company's own tracker and knowledge base come up with its first
+// revision, and until then every question over them is answered for what it
+// is: no company yet, come back at the reconcile poll, and why. REST answered
+// that — `503 no_active_revision`, the poll's fifteen seconds and the halves'
+// sentence — while the socket read the same error through the reading it
+// shares with REST, found no state-log refusal behind it and sent a bare
+// `unavailable` at the health tick's five: one question, two hints, and the
+// reason on one channel only. And a half the company keeps with a vendor is
+// the question this node does not have, on both.
+//
+// Mutation: drop the no-company arm from [stream.UnavailableOf] and the socket
+// answers five seconds and no refusal.
+func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testing.T) {
+	t.Parallel()
+	poll := httpjson.RetrySeconds(httpjson.NoActiveRevisionRetry)
+
+	t.Run("no company yet", func(t *testing.T) {
+		t.Parallel()
+		a := seededApp(t, nil)
+		a.Queries().Register("board", queries.Everybody(),
+			func(context.Context, queries.Params) (any, error) {
+				return nil, api.NativeAbsent(false, "tracker")
+			})
+
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/board", nil)))
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("REST body: %v", err)
+		}
+		if rec.Code != http.StatusServiceUnavailable ||
+			body["error"] != string(httpjson.CodeNoActiveRevision) ||
+			body["detail"] != httpjson.NativeHalvesNotUp {
+			t.Errorf("REST = %d %v, want 503 %s with the halves' sentence",
+				rec.Code, body, httpjson.CodeNoActiveRevision)
+		}
+		if got := rec.Header().Get("Retry-After"); got != fmt.Sprint(poll) {
+			t.Errorf("REST Retry-After = %q, want the reconcile poll's %d", got, poll)
+		}
+
+		socket := overSocket(t, a, "board", nil)
+		if socket["error"] != "unavailable" ||
+			socket["refusal"] != string(httpjson.CodeNoActiveRevision) ||
+			socket["detail"] != httpjson.NativeHalvesNotUp {
+			t.Errorf("socket answer = %v, want unavailable naming %s in the "+
+				"halves' words", socket, httpjson.CodeNoActiveRevision)
+		}
+		if got := socket["retry_after"]; got != float64(poll) {
+			t.Errorf("socket retry_after = %v, want the reconcile poll's %d — "+
+				"what REST told the same caller", got, poll)
+		}
+	})
+
+	t.Run("a half the company keeps elsewhere", func(t *testing.T) {
+		t.Parallel()
+		a := seededApp(t, nil)
+		a.Queries().Register("board", queries.Everybody(),
+			func(context.Context, queries.Params) (any, error) {
+				return nil, api.NativeAbsent(true, "tracker")
+			})
+		status, answered := overREST(t, a, "board", nil)
+		body, _ := answered.(map[string]any)
+		if status != http.StatusNotFound || body["error"] != "unknown_query" {
+			t.Errorf("REST = %d %v, want 404 unknown_query", status, body)
+		}
+		if socket := overSocket(t, a, "board", nil); socket["error"] != "unknown_query" {
+			t.Errorf("socket answer = %v, want unknown_query", socket)
+		}
+	})
+}
+
+// A STATE-LOG REFUSAL IS UNAVAILABLE ON BOTH TRANSPORTS, CARRYING ITS CODE,
+// ITS WORDS AND ITS OWN HINT.
+//
+// A linearizable read whose barrier the broker refused — a full log, a sealed
+// stream — reached the caller as a 500 `query_failed` with the refusal's words
+// sent only to the log, and a refusal waiting cannot clear, a record this node
+// cannot decode, always had. Neither is a fault. Both transports now answer
+// `unavailable` with the refusal's code and detail, and the hint is the state
+// log's: none at all for a refusal no wait changes, so a client is told what
+// to do rather than to poll, and the derived hint for a node that is behind.
+func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		refused *statelog.Refused
+		retry   string
+	}{
+		{"a log at its byte ceiling", &statelog.Refused{Code: statelog.RefuseLogFull,
+			Level: statelog.ReadLinearizable, Detail: "raise the stream's byte ceiling"}, ""},
+		{"a barrier the broker refused", &statelog.Refused{Code: statelog.RefuseBrokerRefused,
+			Level: statelog.ReadLinearizable, Detail: "code 10109: sealed"}, ""},
+		// THE CONTROL: a refusal that clears keeps its derived hint.
+		{"a node that is behind", &statelog.Refused{Code: statelog.RefuseBehind,
+			Level: statelog.ReadLinearizable, Detail: "40 000 records behind",
+			RetryAfter: 12 * time.Second}, "12"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("refused", queries.Everybody(),
+				func(context.Context, queries.Params) (any, error) {
+					return nil, fmt.Errorf("read the board: %w", tc.refused)
+				})
+
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/refused", nil)))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("REST status = %d, want 503 — a refusal is not a fault", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != tc.retry {
+				t.Errorf("REST Retry-After = %q, want %q", got, tc.retry)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("REST body: %v", err)
+			}
+			if body["error"] != "unavailable" || body["refusal"] != string(tc.refused.Code) ||
+				body["detail"] != tc.refused.Detail {
+				t.Errorf("REST body = %v, want unavailable carrying %s and its words",
+					body, tc.refused.Code)
+			}
+
+			socket := overSocket(t, a, "refused", nil)
+			if socket["error"] != "unavailable" || socket["refusal"] != string(tc.refused.Code) ||
+				socket["detail"] != tc.refused.Detail {
+				t.Errorf("socket answer = %v, want unavailable carrying %s and its words",
+					socket, tc.refused.Code)
+			}
+			wantSeconds := 0.0
+			if tc.retry != "" {
+				wantSeconds = 12
+			}
+			if got, ok := socket["retry_after"].(float64); !ok || got != wantSeconds {
+				t.Errorf("socket retry_after = %v, want %v — its zero is the answer, "+
+					"so it is never omitted", socket["retry_after"], wantSeconds)
+			}
+		})
+	}
+}
+
+// A FLOOR ON ANOTHER DOMAIN'S LOG IS THE CALLER'S MISTAKE ON BOTH TRANSPORTS,
+// AND A NODE ON A REBUILT STREAM IS STILL THIS NODE'S REFUSAL.
+//
+// `min_position=CREWLET_PAGES_LOG@1:5` on a tracker question is refused
+// identically by every node however long anybody waits, so it is `400
+// bad_params` over REST and `bad_params` on the socket — the request is what
+// has to change. It was answered as the reader's `wrong_stream` refusal: a 503
+// with no Retry-After, a frame telling the dashboard to send the person to
+// another node or an operator. The control is that refusal's other meaning,
+// which is a state of the node: a checkpoint past its log's end, or a stream
+// rebuilt under it, stays `unavailable` on both.
+func TestAFloorOnAnotherLogIsABadRequestOnBothTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("read the board: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignPosition),
+			http.StatusBadRequest, "bad_params"},
+		{"a node whose stream was rebuilt under it, the control",
+			fmt.Errorf("read the board: %w", &statelog.Refused{
+				Code: statelog.RefuseWrongStream, Level: statelog.ReadStale,
+				Detail: "the stream was recreated under this node"}),
+			http.StatusServiceUnavailable, "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("floored", queries.Everybody(),
+				func(context.Context, queries.Params) (any, error) { return nil, tc.err })
+
+			status, answered := overREST(t, a, "floored", nil)
+			body, _ := answered.(map[string]any)
+			if status != tc.status || body["error"] != tc.code {
+				t.Errorf("REST = %d %v, want %d %s", status, body, tc.status, tc.code)
+			}
+			if socket := overSocket(t, a, "floored", nil); socket["error"] != tc.code {
+				t.Errorf("socket answer = %v, want %s", socket, tc.code)
+			}
+		})
 	}
 }
 
@@ -365,37 +634,60 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
 	t.Parallel()
 	// The REST route and the socket make the same decision, so a route
-	// that read its own params and forgot the operator check is not a
-	// shape this can take.
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
-	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+	// that read its own params and forgot the admin check is not a shape
+	// this can take.
+	a := seededApp(t, nil)
+	ran := make(chan struct{}, 1)
+	a.Queries().Register("secrets", queries.Requires(iam.GrantAdmin), func(context.Context, queries.Params) (any, error) {
+		ran <- struct{}{}
 		return map[string]any{"ok": true}, nil
 	})
 
-	status, body := overREST(t, a, "secrets", nil)
-	if status != http.StatusUnauthorized {
-		t.Errorf("REST status = %d, want 401", status)
+	// WITH NO CREDENTIAL, BOTH TRANSPORTS REFUSE BEFORE THE QUESTION IS
+	// REACHED — which is where the refusal moved when the anonymous read
+	// posture went. It used to arrive from the query layer as
+	// `unauthorized`, because an anonymous caller got as far as asking;
+	// now the guard answers `invalid_token` on the REST route and closes
+	// the handshake on the socket. What this pins is that they still make
+	// the SAME decision, which is the whole point of the case: a route
+	// that read its own params and forgot the check is not a shape this
+	// can take.
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/secrets", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("REST status = %d, want 401", rec.Code)
 	}
-	if got := body.(map[string]any)["error"]; got != "unauthorized" {
-		t.Errorf("REST error = %v", got)
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+	if conn, _, err := websocket.Dial(t.Context(),
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream", nil); err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Error("the socket opened with no credential, so the question was reachable")
 	}
-	if got := overSocket(t, a, "secrets", nil); got["error"] != "unauthorized" {
-		t.Errorf("socket answer = %v", got)
+	select {
+	case <-ran:
+		t.Error("the admin-only question ran for a caller with no credential")
+	default:
+	}
+
+	// AND THE REGISTRY'S OWN CHECK STILL REFUSES, asked directly with
+	// nobody resolved. It is what the guard's exemption list is checked
+	// against: a question registered as admin's must not answer merely
+	// because the route it arrived on was not guarded.
+	if _, err := a.Queries().Answer(t.Context(), "secrets", nil); err == nil {
+		t.Error("the registry answered an admin-only question to nobody")
 	}
 }
 
 func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	t.Parallel()
-	// The counterfactual: the guard attaches the operator, and the route
-	// reads it from the same place every other route does.
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	// The counterfactual: the guard attaches an admin's principal, and the
+	// route reads it from the same place every other route does.
+	b := closedPosture()
 	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
 
 	seen := make(chan string, 1)
-	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", queries.Requires(iam.GrantAdmin), func(context.Context, queries.Params) (any, error) {
 		seen <- "ran"
 		return map[string]any{"ok": true}, nil
 	})
@@ -406,7 +698,7 @@ func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	a.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 for an operator", rec.Code)
+		t.Fatalf("status = %d, want 200 for an admin", rec.Code)
 	}
 	select {
 	case <-seen:

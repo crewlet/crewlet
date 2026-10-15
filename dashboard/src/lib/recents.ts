@@ -16,7 +16,29 @@
  * makes it throw — and a palette that crashed on a storage setting would be
  * worse than one with no recents.
  *
- * # ONE READER, SO ONE ORDER: MOST RECENTLY VISITED FIRST
+ * # …AND PER READER within it
+ *
+ * One desk is not one person: a shared machine is the ordinary case for a
+ * dashboard people sign in to, and a single list per browser drew the last
+ * person's recent titles — a colleague's review, an incident, a person's page
+ * — in the next person's palette. So each principal the tab is read
+ * by (`lib/reader.ts`) has a list of their own, under a key of its own, and a
+ * tab that has not learned its reader yet draws none and records none: there
+ * is nobody to show them to.
+ *
+ * # …AND GONE WHEN ITS READER IS
+ *
+ * A key of one's own keeps a list out of the next person's palette, and not
+ * out of their browser: every title in it — a colleague's review, an incident
+ * — is one read of `localStorage` away for whoever sits down next. So a
+ * sign-out deletes every reader's list, and a sign-in deletes every list but
+ * the signing-in person's own ([forgetOtherReaders], which `lib/session.ts`
+ * calls): the session cookie is the browser's, one person at a time, so a
+ * list whose reader is not the one signed in belongs to somebody who has left
+ * this browser. What it costs is a person's own list after they sign out; the
+ * same person signing in again after their session lapsed keeps theirs.
+ *
+ * # ONE SURFACE, SO ONE ORDER: MOST RECENTLY VISITED FIRST
  *
  * The palette is the only surface that draws this list, and it is opened
  * fresh, ranks what it offers and closes — so it has a re-sort boundary, and
@@ -35,6 +57,7 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { currentReader, forgetReadersUnder, onReader } from "./reader.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { resolves } from "~/app/routes.ts";
 
@@ -53,7 +76,13 @@ export interface Recent {
   workspace: string;
 }
 
-const KEY = STORAGE_KEYS.recents;
+/** Where every reader's recents are kept: [recentsKey]'s prefix. */
+const RECENTS_PREFIX = STORAGE_KEYS.recents;
+
+/** The storage key a reader's recents are kept under. */
+export function recentsKey(reader: string): string {
+  return `${RECENTS_PREFIX}${reader}`;
+}
 
 /**
  * How many are kept.
@@ -84,13 +113,16 @@ export const MaxRecents = 8;
  * were gone at the second tab's next click. `lib/starred.ts` had the same
  * shape and it was worse there, because a star is a decision somebody made.
  */
-let cache: Recent[] | null = null;
+let cache: { reader: string; rows: Recent[] } | null = null;
 const listeners = new Set<() => void>();
 
-/** What is STORED, parsed fresh. The base of every write. */
-function stored(): Recent[] {
+/** No reader, no list: the same empty array every time, for a stable snapshot. */
+const NOBODY: Recent[] = [];
+
+/** What is STORED for this reader, parsed fresh. The base of every write. */
+function stored(reader: string): Recent[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(recentsKey(reader));
     const parsed: unknown = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxRecents) : [];
   } catch {
@@ -101,11 +133,13 @@ function stored(): Recent[] {
   }
 }
 
-/** The snapshot this tab renders. See [cache]. */
+/** The snapshot this tab renders: its reader's list. See [cache]. */
 function read(): Recent[] {
-  if (cache) return cache;
-  cache = stored();
-  return cache;
+  const reader = currentReader();
+  if (reader === null) return NOBODY;
+  if (cache?.reader === reader) return cache.rows;
+  cache = { reader, rows: stored(reader) };
+  return cache.rows;
 }
 
 /**
@@ -138,10 +172,10 @@ function valid(row: unknown): row is Recent {
   );
 }
 
-function write(next: Recent[]): void {
-  cache = next;
+function write(reader: string, next: Recent[]): void {
+  cache = { reader, rows: next };
   try {
-    localStorage.setItem(KEY, JSON.stringify(next));
+    localStorage.setItem(recentsKey(reader), JSON.stringify(next));
   } catch {
     // Out of quota, or storage refused. The list still works for this tab's
     // lifetime, which is the case that matters while somebody is working.
@@ -171,20 +205,38 @@ function write(next: Recent[]): void {
  */
 export function remember(entry: Recent, named: boolean): void {
   if (entry.path.length === 0 || entry.workspace === "") return;
+  // NOBODY TO REMEMBER IT FOR: a place visited before the tab knows who reads
+  // it would land in no list, or in the wrong one.
+  const reader = currentReader();
+  if (reader === null) return;
   const key = entry.path.join("/");
   // STORED, NOT THE RENDER SNAPSHOT — see [cache]. A write replaces the whole
   // key, so building it on what this tab last painted hands back a list
   // missing everything another tab has done since.
-  const held = stored();
+  const held = stored(reader);
   const was = held.find((r) => r.path.join("/") === key);
   const label = was && !named ? was.label : entry.label;
   const rest = held.filter((r) => r !== was);
-  write([{ path: entry.path, label, workspace: entry.workspace }, ...rest].slice(0, MaxRecents));
+  write(
+    reader,
+    [{ path: entry.path, label, workspace: entry.workspace }, ...rest].slice(0, MaxRecents),
+  );
 }
 
-/** Drop everything. For the palette's own "clear" command. */
+/**
+ * Delete every reader's list but `keep`'s — everybody's, where `keep` is null.
+ * See "…AND GONE WHEN ITS READER IS" above.
+ */
+export function forgetOtherReaders(keep: string | null): void {
+  forgetReadersUnder(RECENTS_PREFIX, keep === null ? null : recentsKey(keep));
+  cache = null;
+  for (const fn of listeners) fn();
+}
+
+/** Drop this reader's list. For the palette's own "clear" command. */
 export function forgetAll(): void {
-  write([]);
+  const reader = currentReader();
+  if (reader !== null) write(reader, []);
 }
 
 /**
@@ -203,14 +255,18 @@ export function forgetAll(): void {
 function subscribe(fn: () => void): () => void {
   if (listeners.size === 0) window.addEventListener("storage", follow);
   listeners.add(fn);
+  // AND THE READER: a tab learning who reads it draws that person's list.
+  const unread = onReader(fn);
   return () => {
+    unread();
     listeners.delete(fn);
     if (listeners.size === 0) window.removeEventListener("storage", follow);
   };
 }
 
 function follow(e: StorageEvent): void {
-  if (e.key !== null && e.key !== KEY) return;
+  const reader = currentReader();
+  if (e.key !== null && (reader === null || e.key !== recentsKey(reader))) return;
   cache = null;
   for (const fn of listeners) fn();
 }

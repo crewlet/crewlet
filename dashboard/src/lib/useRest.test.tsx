@@ -3,8 +3,8 @@
  *
  * Each case is a rule one of the four hand-rolled loaders it replaced either
  * broke or kept by remembering to: an answer nobody was waiting for, a screen
- * that had gone, a token that changed, a refusal left beside the last answer,
- * and a wait the engine named.
+ * that had gone, a refusal left beside the last answer, and a wait the engine
+ * named.
  */
 
 import { act, cleanup, renderHook } from "@testing-library/react";
@@ -13,7 +13,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { restErrorCode, useRest } from "./useRest.ts";
 import { ClientContext } from "./store-hooks.ts";
-import { clearToken, LiveSocket, RestError, Store, storeToken } from "~/protocol/index.ts";
+import { LiveSocket, RestError, Store } from "~/protocol/index.ts";
 
 afterEach(() => {
   cleanup();
@@ -37,7 +37,8 @@ function scripted<T>() {
   return { read, calls };
 }
 
-const refused = (status: number, retryAfter: string | null = null) =>
+/** A refusal, with the `Retry-After` it carried in whole seconds, or none. */
+const refused = (status: number, retryAfter: number | null = null) =>
   new RestError(status, { error: "refused" }, retryAfter);
 
 describe("an answer belongs to the read that asked for it", () => {
@@ -130,7 +131,7 @@ describe("a retry is the engine's to schedule", () => {
     vi.useFakeTimers();
     const { read, calls } = scripted<string>();
     const { result } = renderHook(() => useRest("/setup/integrations", read));
-    await act(async () => calls[0]!.reject(refused(503, "4")));
+    await act(async () => calls[0]!.reject(refused(503, 4)));
     expect(result.current.code).toBe("unavailable");
 
     await act(async () => {
@@ -160,14 +161,17 @@ describe("a retry is the engine's to schedule", () => {
       await vi.advanceTimersByTimeAsync(600_000);
     });
     expect(read).toHaveBeenCalledTimes(1);
-    expect(result.current.code).toBe("query_failed");
+    // AND IT SAYS SO: unavailable, with a refusal whose zero wait tells the
+    // banner that asking again will not change it.
+    expect(result.current.code).toBe("unavailable");
+    expect(result.current.refusal).toMatchObject({ retryAfter: 0 });
   });
 
   test("a newer read cancels the older read's retry", async () => {
     vi.useFakeTimers();
     const { read, calls } = scripted<string>();
     const { result } = renderHook(() => useRest("/secrets", read));
-    await act(async () => calls[0]!.reject(refused(503, "5")));
+    await act(async () => calls[0]!.reject(refused(503, 5)));
     void act(() => void result.current.reload());
     await act(async () => calls[1]!.resolve("rows"));
     await act(async () => {
@@ -178,24 +182,6 @@ describe("a retry is the engine's to schedule", () => {
 });
 
 describe("what makes it read again", () => {
-  // Every route this loader reads is guarded, and the refusal on screen is
-  // usually the one a new token answers. The Audit screen's own loader never
-  // listened, so a token set there showed nothing until a navigation.
-  test("a changed token re-reads, loudly", async () => {
-    const { read, calls } = scripted<string>();
-    const { result } = renderHook(() => useRest("/secrets", read));
-    await act(async () => calls[0]!.reject(refused(401)));
-
-    act(() => {
-      storeToken("sk-test");
-    });
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(result.current.loading).toBe(true);
-    await act(async () => calls[1]!.resolve("rows"));
-    expect(result.current.data).toBe("rows");
-    clearToken();
-  });
-
   test("a poll re-reads quietly, keeping what is on screen", async () => {
     vi.useFakeTimers();
     const { read, calls } = scripted<string>();
@@ -263,8 +249,10 @@ describe("the code a refusal renders as", () => {
     [0, null, "closed"],
     [400, null, "bad_params"],
     [404, null, "not_found"],
-    [503, "2", "unavailable"],
-    [503, null, "query_failed"],
+    [503, 2, "unavailable"],
+    // A 503 THE ENGINE WROTE IS UNAVAILABLE whether or not it named a wait;
+    // naming none says waiting will not change it, which the refusal carries.
+    [503, null, "unavailable"],
     [500, null, "query_failed"],
   ] as const)("status %i with Retry-After %j is %s", (status, hint, code) => {
     expect(restErrorCode(refused(status, hint))).toBe(code);

@@ -24,10 +24,10 @@ import "github.com/crewlet/crewlet/internal/events/types"
 // touchTurn records that an event of turn `turnID` happened on this seat, at
 // `stage`.
 //
-// It creates the turn when the seat is on none — the start may have been missed
-// or overtaken — and replaces a turn the
-// seat was on only with a NEWER one: an event of an older turn arriving late is
-// not the seat moving back to it.
+// It creates the turn when the seat is on none — the start may have been
+// missed or overtaken — and replaces a turn the seat was on only with a NEWER
+// one: an event of an older turn arriving late is not the seat moving back to
+// it.
 func (s *LiveState) touchTurn(agent *agentLive, env Envelope, payload map[string]any, stage Stage) {
 	turnID := str(payload, "turn_id")
 	if turnID == "" {
@@ -179,12 +179,12 @@ func (s *LiveState) applyTurnStarted(agent *agentLive, env Envelope, payload map
 // turn that launched it is still running and goes on to complete on its own —
 // so a turn in any other stage only learns that it carried a failure.
 func (s *LiveState) endLostRun(env Envelope, payload map[string]any) bool {
-	role := str(payload, "role", "agent_role")
+	id := str(payload, "agent_id")
 	turnID := str(payload, "turn_id")
-	if role == "" || turnID == "" {
+	if id == "" || turnID == "" {
 		return false
 	}
-	agent := s.agents[role]
+	agent := s.agents[id]
 	if agent == nil {
 		return false
 	}

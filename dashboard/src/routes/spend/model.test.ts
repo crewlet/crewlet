@@ -153,7 +153,7 @@ describe("the by-agent lines", () => {
         totals: { input_tokens: 400, output_tokens: 0, total_tokens: 400, calls: 2 },
         by_agent: [row("ceo", 100, 4), row("swe", 300, 0), row("idle", 0, 0)],
       }),
-      (h) => (h === "swe" ? day : undefined),
+      (id) => (id === "id-swe" ? day : undefined),
     );
     expect(lines.map((l) => l.row.handle)).toEqual(["swe", "ceo"]);
     expect(lines.map((l) => l.share)).toEqual([0.75, 0.25]);

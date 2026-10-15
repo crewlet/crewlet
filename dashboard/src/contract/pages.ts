@@ -13,6 +13,9 @@ export interface TurnPlace {
   /** The task's id. */
   id: string;
   key: string;
+  /** The key is one another task claimed first, so it opens THAT task and this
+   *  one is reached by its id — every link to it goes by `itemAddress`. */
+  key_collision?: boolean;
   title: string;
   /** The task's own "Turn n" — 0 for a run with no counted row there. */
   ordinal: number;
@@ -73,6 +76,9 @@ export interface PageLink {
 export interface TaskLink {
   id: string;
   key: string;
+  /** The key is one another task claimed first, so it opens THAT task and this
+   *  one is reached by its id — every link to it goes by `itemAddress`. */
+  key_collision?: boolean;
   title: string;
   status: string;
   via: string[];

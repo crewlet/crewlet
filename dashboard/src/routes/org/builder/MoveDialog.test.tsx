@@ -57,7 +57,7 @@ describe("a seat", () => {
     expect(view.state().log.ops[0]).toMatchObject({
       type: "move",
       target: "seat:dev",
-      to: { parent: "unit:Sales", after: "seat:account-executive" },
+      to: { parent: "unit:sales", after: "seat:account-executive" },
       clearLeads: [],
     });
     expect(view.onClose).toHaveBeenCalledTimes(1);
@@ -112,8 +112,8 @@ describe("a seat", () => {
     choose("Sales");
     fireEvent.click(screen.getByRole("checkbox", { name: "Clear lead" }));
     fireEvent.click(moveButton());
-    expect(view.state().log.ops[0]).toMatchObject({ clearLeads: [{ unit: "unit:Engineering" }] });
-    const engineering = locate(view.state().draft, "unit:Engineering");
+    expect(view.state().log.ops[0]).toMatchObject({ clearLeads: [{ unit: "unit:engineering" }] });
+    const engineering = locate(view.state().draft, "unit:engineering");
     expect(engineering?.kind === "unit" && engineering.node.data.lead).toBeUndefined();
   });
 
@@ -145,7 +145,9 @@ describe("a seat", () => {
         { name: "Other" },
       ],
     };
-    const agents: AgentRow[] = [{ id: "1", role: "Runner", handle: "runner", activity: "working" }];
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "1", role: "Runner", handle: "runner", activity: "working" },
+    ];
     open(keyedState(doc), "seat:runner", { agents });
     choose("Other");
     expect(screen.getByText(/Schedule sweep on Ops would have nobody to run it/)).toBeDefined();
@@ -157,8 +159,10 @@ describe("a seat", () => {
 
 describe("a unit", () => {
   test("a unit that moves with a seat working inside it names that seat", () => {
-    const agents: AgentRow[] = [{ id: "1", role: "SRE", handle: "sre", activity: "working" }];
-    open(keyedState(fixtureCompany()), "unit:Platform", { agents });
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "1", role: "SRE", handle: "sre", activity: "working" },
+    ];
+    open(keyedState(fixtureCompany()), "unit:platform", { agents });
     expect(
       screen.getByText("SRE is working now. The change applies to its next turn."),
     ).toBeDefined();
@@ -177,14 +181,14 @@ describe("a unit", () => {
         },
       },
     });
-    open(state, "unit:Engineering");
+    open(state, "unit:engineering");
     const labels = destinations();
     expect(labels).not.toContain("Engineering");
     expect(labels).not.toContain("Engineering / Platform");
     expect(labels).toContain("Sales");
     cleanup();
 
-    const view = open(state, "unit:Platform");
+    const view = open(state, "unit:platform");
     choose("The company (top level)");
     expect(
       screen.getByText("Platform would inherit no lead instead of VP Engineering."),
@@ -193,8 +197,8 @@ describe("a unit", () => {
     fireEvent.click(moveButton());
     expect(view.state().log.ops[0]).toMatchObject({
       type: "move",
-      target: "unit:Platform",
-      to: { parent: "company", after: "unit:Sales" },
+      target: "unit:platform",
+      to: { parent: "company", after: "unit:sales" },
     });
   });
 });

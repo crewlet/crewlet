@@ -34,7 +34,7 @@ func TestAFeedOnlyPageAndItsAxisAreTheFeedsRowsOnEveryNode(t *testing.T) {
 	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Hour)
 	appendTo(t, mine, store.EventRecord{ID: "mine-work", Type: "agent_phase_completed",
 		Category: "task", Time: base.Add(time.Minute), TraceID: "trace-1",
-		Tags: map[string]string{"agent_role": "Lead"}})
+		Tags: map[string]string{"agent_role": "Lead", "agent_id": "agent-lead"}})
 	appendTo(t, peer, store.EventRecord{ID: "peer-cause", Type: "webhook_received",
 		Category: "webhook", Time: base.Add(2 * time.Minute), TraceID: "trace-1"})
 	appendTo(t, peer, store.EventRecord{ID: "peer-spend", Type: unfed[0],
@@ -57,7 +57,7 @@ func TestAFeedOnlyPageAndItsAxisAreTheFeedsRowsOnEveryNode(t *testing.T) {
 	if got := page(store.ListQuery{Limit: 10, FeedOnly: true}); !slices.Equal(got, []string{"mine-work", "peer-cause"}) {
 		t.Errorf("a feed-only page = %v, want every row but the peer's accounting row", got)
 	}
-	if got := page(store.ListQuery{Limit: 10, RelatedAgent: "Lead", FeedOnly: true}); !slices.Equal(got, []string{"mine-work", "peer-cause"}) {
+	if got := page(store.ListQuery{Limit: 10, RelatedAgent: "agent-lead", FeedOnly: true}); !slices.Equal(got, []string{"mine-work", "peer-cause"}) {
 		t.Errorf("a related agent's feed-only page = %v, want its work and its cause, "+
 			"without the trace's accounting a peer holds", got)
 	}

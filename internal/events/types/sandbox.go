@@ -247,10 +247,11 @@ const (
 	// writes on one row failed in a row.
 	SandboxFailureClaimStranded = "claim_unreverted"
 
-	// SandboxFailureSeatRemoved is a run of a seat that was removed from the
-	// company and not restored within the mailbox retirement grace. It is
-	// ended when the seat's mailbox is retired, because no resume, answer or
-	// completion can reach a seat that is gone.
+	// SandboxFailureSeatRemoved is a run of a seat that left the company's
+	// agent seats — removed from the chart, or made a person's and not an
+	// agent's again within the mailbox retirement grace. It is ended when the
+	// seat's mailbox is retired, because no resume, answer or completion can
+	// reach a seat that is gone.
 	SandboxFailureSeatRemoved = "seat_removed"
 
 	// SandboxFailureResumeBroken is a run whose resume broke BEFORE the turn
@@ -322,22 +323,32 @@ type SandboxAnswerGiven struct {
 	// TurnID is the run the answer is for — the parked run's own key.
 	TurnID string `json:"turn_id"`
 
-	// AgentHandle is the seat that run belongs to, which is the inbox this
-	// travels on; carried in the payload as well so the dispatcher that
-	// routes it can refuse one that reached the wrong seat.
+	// Agent is the seat that run belongs to, by its derived id, and its
+	// inbox is the one this travels on (topics.AgentInbox) — carried in
+	// the payload as well so the dispatcher that routes it can refuse one
+	// that reached the wrong seat. The id, because the inbox is named by
+	// it (ADR-0013).
+	Agent string `json:"agent_id"`
+
+	// AgentHandle is the seat's handle when the answer was given, for a
+	// person reading the log line. Never compared: [Agent] is the routing
+	// identity.
 	AgentHandle string `json:"agent_handle"`
 
 	// Answer is the person's reply, verbatim. Redacted where it is spliced
 	// into the suspended conversation, like a chat reply.
 	Answer string `json:"answer"`
 
-	// AnsweredBy is the credential the answer was given under — the
-	// operator token's own id — and AnsweredBySeat the person that token
-	// is bound to, empty for a token nobody bound. Two facts for the
-	// reason `operator_acted` records two: an audit asks what a credential
-	// did, a person reads who answered.
+	// AnsweredBy, AnsweredByKind and OperatorID are who answered, in the
+	// three halves iam.ActorFor makes of a principal: the author (the seat
+	// for a person the identity directory binds to one, the login for
+	// anybody else), what sort of author that is (iam.ActorKind's
+	// vocabulary), and the credential the answer came through. Three facts
+	// for the reason `operator_acted` records three: a person reads who
+	// answered, an audit asks what a credential did.
 	AnsweredBy     string `json:"answered_by"`
-	AnsweredBySeat string `json:"answered_by_seat,omitempty"`
+	AnsweredByKind string `json:"answered_by_kind"`
+	OperatorID     string `json:"operator_id,omitempty"`
 
 	// LaunchID is the QUESTION this answers: the job the run held when it
 	// asked, off the row the answer was accepted against. Every new question
@@ -362,13 +373,13 @@ type SandboxAnswerGiven struct {
 // EventType is the "sandbox_answer_given" wire type.
 func (SandboxAnswerGiven) EventType() string { return "sandbox_answer_given" }
 
+// AgentID is the seat whose run the answer is for.
+func (e SandboxAnswerGiven) AgentID() string { return e.Agent }
+
 // SummaryFor names who answered, for a log line: the event itself is never on
 // a feed.
 func (e SandboxAnswerGiven) SummaryFor(actor string) string {
-	who := e.AnsweredBySeat
-	if who == "" {
-		who = e.AnsweredBy
-	}
+	who := e.AnsweredBy
 	if who == "" {
 		who = actor
 	}
@@ -449,12 +460,15 @@ type SandboxRunAnswered struct {
 	Via     AnswerVia     `json:"via"`
 	Outcome AnswerOutcome `json:"outcome"`
 
-	// AnsweredBy is who gave the answer: the chat sender's id on that
-	// transport, or the operator credential. AnsweredBySeat is the person
-	// in the chart where that is known — the seat an operator token is
-	// bound to — and empty otherwise.
+	// AnsweredBy, AnsweredByKind and OperatorID are who gave the answer.
+	// By the operator route they are [SandboxAnswerGiven.AnsweredBy]'s three
+	// halves. By chat, AnsweredBy is the sender as that transport names
+	// them and AnsweredByKind is `human`, with no OperatorID: the chat
+	// surface vouched for the sender, and no credential of this engine's
+	// was presented.
 	AnsweredBy     string `json:"answered_by,omitempty"`
-	AnsweredBySeat string `json:"answered_by_seat,omitempty"`
+	AnsweredByKind string `json:"answered_by_kind,omitempty"`
+	OperatorID     string `json:"operator_id,omitempty"`
 }
 
 // EventType is the "sandbox_run_answered" wire type.

@@ -144,7 +144,7 @@ func (s *heldPublishes) asked() []heldPublish {
 func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 1500 * time.Millisecond
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	b.Coordination.LeaseTTLSeconds = ttl.Seconds()

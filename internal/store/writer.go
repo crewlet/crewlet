@@ -136,16 +136,27 @@ var tagKeys = map[string]string{
 	// the ONLY record of which host's disk holds the copy, and the backup
 	// record deliberately leaves the node to the envelope.
 	"node": "node",
-	// The RUNTIME AUDIT's three dimensions (types.OperatorActed and
-	// types.BackupRequested, the only events that carry them): the person
-	// the acting credential is bound to, the operator tool a call ran, and
-	// the directory a backup was written to. Tags for the reason every one
-	// here is — the Audit log and the backup history draw these rows from a
+	// The RUNTIME AUDIT's dimensions (types.OperatorActed and
+	// types.BackupRequested): the operator tool a call ran and the directory
+	// a backup was written to, which only those two carry, and beside the
+	// author the row's `actor` column already holds, WHAT SORT of author it
+	// is and the CREDENTIAL it acted through — the two halves of
+	// iam.ActorFor that are not the name. Tags for the reason every one here
+	// is — the Audit log and the backup history draw these rows from a
 	// listing, which never selects the payload, and without them a row
-	// could say only the summary's prose about who did what and where.
-	"actor_seat": "actor_seat",
-	"tool":       "tool",
-	"dir":        "dir",
+	// could say only the summary's prose about who did what, through what,
+	// and where.
+	//
+	// `operator_id` is a field of the same meaning wherever a payload
+	// carries it — a seat pause, a sandbox answer, a sign-in, a revision's
+	// activation — so the tag is one dimension across every type rather
+	// than the audit's alone: "what did this credential do" is a filter on
+	// a listing. There is no seat beside the actor, because there is no
+	// second author: a person bound to a seat is recorded AS the seat.
+	"actor_kind":  "actor_kind",
+	"operator_id": "operator_id",
+	"tool":        "tool",
+	"dir":         "dir",
 }
 
 // The two events that carry an LLM call's cost: a phase's record, and an

@@ -117,7 +117,12 @@ const (
 	// SkipRecent — the newest local snapshot is younger than the
 	// interval, and still names every domain at the generation this node
 	// stands at. One from a generation a domain has since left is not a
-	// recent snapshot of anything a joiner can adopt, whatever its age.
+	// recent snapshot of anything a joiner can adopt, whatever its age —
+	// nor is one short of a domain this node runs, taken by the build
+	// before a domain was added: every joiner that runs it refuses it
+	// wholesale, so it suppresses nothing, and the
+	// node logs `statelog_snapshot_recent_but_short` as it takes a
+	// complete one rather than resting on an artefact nobody can adopt.
 	SkipRecent SkipReason = "recent"
 
 	// SkipAheadOfLog — this node's checkpoint sits PAST the log's last
@@ -685,14 +690,26 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 	}
 	// RECENT MEANS ADOPTABLE, not merely young. A joiner asks for an
 	// artefact at the generation each domain is on and refuses any other, so
-	// once a reanchor or an adoption has moved one of this node's domains,
-	// the artefact it holds is a snapshot nobody can use — and the interval
-	// would have kept it the node's only one for up to a day, leaving every
-	// peer the reanchor left behind with no donor to adopt from.
-	if found && s.now().Sub(newest.TakenAt) < s.deps.Interval && s.current(newest) {
-		return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
-			"the newest local snapshot is %s old, inside the %s interval",
-			s.now().Sub(newest.TakenAt).Round(time.Second), s.deps.Interval)}
+	// once a reanchor or an adoption has moved one of this node's domains —
+	// or the build that took it ran a domain fewer — the artefact it holds is
+	// a snapshot nobody can use, and the interval would have kept it the
+	// node's only one for up to a day, leaving every peer with no donor to
+	// adopt from.
+	if found && s.now().Sub(newest.TakenAt) < s.deps.Interval {
+		if s.current(newest) {
+			return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
+				"the newest local snapshot is %s old, inside the %s interval, and "+
+					"names every domain at the generation this node stands at",
+				s.now().Sub(newest.TakenAt).Round(time.Second), s.deps.Interval)}
+		}
+		covers := slices.Sorted(maps.Keys(newest.Domains))
+		s.log.Info("statelog_snapshot_recent_but_short",
+			"taken_at", newest.TakenAt, "covers", covers,
+			"missing", missingFrom(covers, s.domainNames()),
+			"detail", "taking a complete one now rather than waiting out the "+
+				"interval: an artefact that names no position for a domain this "+
+				"node runs, or names one at a generation it has since left, is "+
+				"refused by every joiner")
 	}
 
 	free, storeSize, err := s.space()
@@ -728,11 +745,17 @@ func (s *Snapshotter) scrubList() []string {
 	return slices.Compact(out)
 }
 
-// newest is when this node's newest complete snapshot was taken.
+// newest is when this node's newest complete snapshot was taken, and which
+// domains it names.
 //
 // COMPLETE, which is what the manifest means: a copy with no manifest beside
 // it is the debris of a run that did not finish, and treating it as a snapshot
 // would let one crashed attempt suppress every later one.
+//
+// THE MANIFEST COMES BACK WHOLE, because "recent" is not a fact about time
+// alone: whether the artefact names every domain this node runs, at the
+// generation each stands at, is what decides whether any joiner could adopt
+// it — see [Snapshotter.current].
 func (s *Snapshotter) newest() (Manifest, bool, error) {
 	entries, err := os.ReadDir(s.deps.Dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -756,6 +779,28 @@ func (s *Snapshotter) newest() (Manifest, bool, error) {
 		}
 	}
 	return newest, found, nil
+}
+
+// domainNames is every domain this node runs, which is the set an artefact has
+// to name to be adoptable anywhere.
+func (s *Snapshotter) domainNames() []string {
+	out := make([]string, 0, len(s.deps.Domains))
+	for _, d := range s.deps.Domains {
+		out = append(out, d.Domain.Name())
+	}
+	return out
+}
+
+// missingFrom is the domains this node runs that an artefact does not name,
+// which is exactly what makes it unadoptable.
+func missingFrom(covers []string, running []string) []string {
+	var missing []string
+	for _, name := range running {
+		if !slices.Contains(covers, name) {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // current reports whether a manifest names every registered log at the

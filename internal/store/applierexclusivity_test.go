@@ -567,6 +567,27 @@ var allowedReplicatedWriter = []allowance{
 			"claim no identity, but they are still written only from a " +
 			"committed record.",
 	},
+	{
+		Prefix: "internal/iamdomain/apply", Kind: mechanism,
+		Why: "The identity estate's applier, across the files it is split " +
+			"over: the record and its two gates, the person and their " +
+			"credentials, the claims, the sessions, the log's own gates, " +
+			"the authentication trail, and the erasure a removal performs " +
+			"on the rows that outlive the person. It is also the one " +
+			"applier in the tree that NEVER DECRYPTS — every sealed value " +
+			"it writes passes through as bytes, and the erasure finds one " +
+			"by its envelope's shape, so no apply depends on a keyring.",
+	},
+	{
+		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,
+		Why: "The identity estate's retention sweep, which is applier code " +
+			"in a file the apply* prefix does not cover — named rather than " +
+			"inferred, for internal/tracker/fieldvalues.go's reason. It is a " +
+			"RECORD rather than a local delete because those rows are " +
+			"identity-claimed: two nodes sweeping on their own clocks would " +
+			"hold different bytes, and the claim that N copies are identical " +
+			"would become a claim about how synchronised they are.",
+	},
 
 	{
 		Prefix: "internal/learning/memsync/codec.go", Kind: notReplicated,

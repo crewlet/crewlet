@@ -325,6 +325,113 @@ What follows are the prerequisites that legitimately vary by machine.
   dashboard calls is a new proxy entry in the same change, and a route it
   stops calling takes its entry with it.
 
+  **A dashboard suite waits for the work, never for the clock.** `findBy*`
+  and `waitFor` poll the page against a one-second deadline, so a case that
+  waited that way for a screen to finish passed on a quiet machine and failed
+  on a loaded one — four full runs sharing four cores each failed two to four
+  of the org builder's cases, none of which had done anything wrong. A
+  screen that takes its time as an argument is handed time the suite moves:
+  the builder's testkit mounts the lens on a `SuiteClock`, and `settle()`
+  waits for every answer the lens has out and every timer due within the
+  check's debounce. One that does not is flushed with `act` where its work is
+  promises, or driven by fake timers faked only for the calls that arm and
+  cancel one. And a role query is scoped with `within` to the toolbar, dialog
+  or chart it is about: asked by name, it computes the accessible name of
+  every candidate in its container, and in jsdom each element of each name
+  costs a computed style matched against the whole user-agent stylesheet.
+  Not every suite holds to this: the org builder's suites, and the screens
+  that ran out of time under load (the audit, the retention gesture, a seat's
+  settings, the work list's Display menu, the sign-in form), wait for the
+  work, while more than forty others still poll with `findBy*` and
+  `waitFor`. Those are not a pattern to copy — a suite you write, or a case
+  you change, waits for the work.
+
+  **What a case does ends with the case.** A case that times out is failed,
+  not stopped: its function goes on running beside the cases after it. React
+  keeps one `act` scope count for the process, so an `act` it opens beside the
+  next case's leaves every later render in the file queued and never flushed —
+  one timeout read as the rest of the file failing — a `findBy` or `waitFor`
+  it still has out polls the next case's page, where it can find what that
+  case drew, and a `render` or `cleanup` it makes draws into that page or
+  takes it away. So every case runs in an async context of its own
+  (`aroundEach` in `src/test/setup.ts`, over `src/test/cases.ts`, which loads
+  no testing library so a file with no document pays for none), and
+  `src/test/inCase.ts` binds the testing library to it. A suite imports the
+  library from there and nowhere else — `inCase.source.test.ts` fails a file
+  that takes it, or React's own `act`, from anywhere else — so the import that
+  gives a suite the library is the one that binds it: its `act`, `render`,
+  `renderHook` and `cleanup`, refused once their case has ended; its `poll`,
+  which a suite uses in place of Vitest's `vi.waitFor` — that one cannot be
+  bound, goes on looking after its case has ended, and advances whatever fake
+  clock is installed before every look, which by then is the next case's, so
+  the same gate refuses it and `vi.waitUntil` and `expect.poll` with it; and
+  the library's own waits and `fireEvent`, through the library's `asyncWrapper`
+  and `eventWrapper` — the wait's wrapper restated rather than wrapped, because
+  after a wait finds what it looked for the library lets one turn of the page's
+  timer pass before it puts the act environment back, and on a fake clock
+  nothing moves that timer, so a wrapper round the library's could not end a
+  wait held there, or the scopes outside it. When the case ends, every act
+  scope, wait and poll it still has out is closed before the next case begins —
+  innermost first, because each puts back on exit the act count or act
+  environment it found on entry, and closed in any other order a scope opened
+  inside another left React's count raised — and everything it asks for after
+  that is refused before it opens. What the binding does not reach is what a
+  late case writes to the page's globals itself — the fake clock through `vi`,
+  `location.hash`, a stub — in a `catch` or `finally` its refusal passes
+  through, or past an await of something that is none of the above, such as a
+  promise of its own: every act, wait and poll rejects at its case's end, which
+  throws a late case out at the first of them it awaits. Node carries the
+  context through the case's own awaits and timers, so a case that timed out
+  inside a promise of its own and resumes later still reads its own, ended case
+  — which is what a helper every case shares (`answered()`, a suite's
+  `settle()`) could not tell before, and why the flush used to be handed to
+  each case. A case that holds the page's timers advances them as `answered`'s
+  `step`, so the refusal comes before the timers move.
+  `src/test/inCase.test.tsx` holds each of these to a pair: a case that really
+  runs out of its time with something out (`test.fails` on a budget it always
+  spends), and the case after it, which first holds it to having failed by that
+  timeout — `test.fails` passes on any failure at all — and then reads what the
+  late one came to.
+
+  **And the harness's own waits end with it too.** The builder's testkit
+  retires a lens when the case that mounted it finishes (`onTestFinished`):
+  it wakes every wait on the lens's engine, which holds answers back until
+  the case releases them — a wait the binding could close but not wake. A
+  suite that waits for the page without a lens — a move landing, an element
+  the page draws — waits through `waitInCase` (`viewTestkit.tsx`), which
+  listens for the event with no deadline and stops listening the same way.
+  And a case waits only on the lens it mounted: `mountBuilder` hands the
+  case its lens's `settle`, `checked` and `navigate`, because those used to
+  be found in a variable the last mount wrote, and a late `settle()` settled
+  the NEXT case's lens — a value, which no context makes right.
+  `testkit.test.tsx` holds each of those waits to a pair.
+
+  **A warning fails the case that printed it.** `src/test/setup.ts` watches
+  `console.error` and `console.warn` around every case and fails one that
+  wrote to either, after the suite's own teardown so what an unmount says
+  counts too — and fails the FILE for what it wrote outside every case: while
+  it loaded, in a `beforeAll` or an `afterAll`, or between cases, which no
+  case can be blamed for and a per-case watch never heard. Vitest shows nothing a passing case prints, so every warning the
+  suite used to print was a defect nobody saw: a list keyed on a field its
+  fixture lacked, a stand-in observer reporting mid-commit, an announcement
+  with no live region mounted — the application had none — and the audit
+  asking the engine once a second. A case that expects a warning silences that
+  one itself, `vi.spyOn(console, "error").mockImplementation(...)` for the call
+  it is about, and puts it back; the watcher (`src/test/console.ts`) restores
+  both methods when the case ends whatever the case did.
+
+  **A stand-in for the browser answers when the browser would.** jsdom has no
+  layout, so the chart suites install a ResizeObserver of their own, and one
+  that reports from inside `observe()` reports in the middle of React's
+  commit, because `observe()` is called from a ref. A real observer delivers
+  in the event loop's rendering step with React idle, which is what the design
+  system's resize handler is written for: it flushes its sizes synchronously,
+  and inside a commit that flush is a `flushSync` inside a lifecycle — eight
+  warnings about the harness that read as a defect in the chart. Both of the
+  builder's observers, `LayoutObserver` (`viewTestkit.tsx`) and the reference
+  chart's (`src/testing.tsx`), record what they observe and report it inside
+  `act` once the render has committed.
+
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
   `static/dashboard` with your source change — `git add -A`, so the new
@@ -444,7 +551,17 @@ cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
 `internal/e2e` runs a real engine, a real broker and the real API, then
 replays the frames its socket produced through the dashboard's own
 `protocol.js`. Both halves of the wire protocol are checked against each other
-there and nowhere else, so it needs node too:
+there and nowhere else, so it needs node too.
+
+It is also where a FLEET signs a person in. On a clustered fleet, a Tier A
+token invites somebody onto a human seat, they redeem the link and sign in on
+one member, and the same cookie must then read, write as them and open the
+live socket on the other member — never `401` while it catches up — while a handshake from a
+foreign origin is refused and a sign-out everywhere on the second member is
+refused on the first. The sign-in surface, the identity directory and the
+human write surface it serves are built by `api.NewHumanSurfaces`, the
+constructor `crewlet run` calls, so a seam added to them reaches the suite with
+no copy to update:
 
 ```bash
 make test-solo   # internal/e2e, and every other package that runs alone
@@ -653,6 +770,20 @@ Go module itself went the length of the rewrite that way.
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
 neither the weekly schedule nor Dependabot's default release cooldown.
+
+**Promoting an indirect dependency to a direct one is a change to the module's
+surface**, and `go mod tidy` is what records it — a `// indirect` marker that
+should have gone, or one that should have stayed, fails `go mod tidy -diff` in
+`make check`. `golang.org/x/crypto` is direct because `internal/iam/credential`
+calls `argon2` from it: a password hash is the one piece of cryptography in
+this tree that is not hand-written, because it is maintained by the same people
+who maintain the standard library's crypto and there is no second
+implementation of it to disagree with. Everything beside it in that package —
+TOTP, the recovery codes, the token digests — is `crypto/hmac`, `crypto/sha1`,
+`crypto/sha256` and `encoding/base32`, which is the dependency rule working
+rather than an inconsistency: a module earns its place against what `std`
+already does, and for forty lines of RFC 6238 arithmetic `std` does all of
+it.
 
 ### A bump merges itself
 
@@ -907,7 +1038,14 @@ an older build:
   keyed on the filename, so editing a file that already ran silently never
   re-runs it: a database that applied it keeps the old shape while the code
   assumes the new one. Reshape with a new numbered migration under
-  `internal/store/schema/`.
+  `internal/store/schema/`. A **replicated** migration also carries three
+  rules, checked by
+  `internal/store.TestNoReplicatedMigrationDeclaresAConstraintTheApplyCannotSurvive`:
+  no foreign key, no `UNIQUE` outside a primary key, and no `COLLATE`. Each
+  one aborts an apply transaction deterministically on every data node, so a
+  constraint that would flag an anomaly on one machine stalls the whole
+  fleet's log instead; uniqueness a writer must see whole is arbitrated on the
+  record's subject. The node estate is not governed by them.
 - **This build must be a good older peer to the next.** A rolling upgrade
   will put this build and its successor on one stream and one coordination
   store, so the forward mechanisms stay: the event envelope evolves
@@ -1024,8 +1162,9 @@ Required, and drawn from this set:
 ### Scope
 
 The scope names the **component** the change lands in. For code that is the
-package directory under `internal/` — `agent`, `api`, `coord`, `engine`,
-`gitlab`, `knowledge`, `mattermost`, `mcp`, `notify`, `queue`,
+package directory under `internal/` — `agent`, `api`, `authz`,
+`coord`, `engine`, `gitlab`, `iam`, `knowledge`, `mattermost`, `mcp`, `notify`,
+`queue`,
 `sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
 reader can go from a subject line to a directory without guessing. Two scopes
 name a component by the name people use rather than by its import path:

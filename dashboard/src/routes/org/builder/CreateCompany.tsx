@@ -8,11 +8,18 @@
  * `applyTemplate` operation, so the whole start is a single undo and is
  * checked by the engine exactly like any other draft.
  *
- * NO INVENTED IDENTITY. A human seat reaches people through a contact
+ * YOUR OWN SEAT IS OFFERED ON, named for the role. Every person holds a human
+ * seat for as long as they exist, and is invited or created onto one from
+ * the org chart — so a company started with no human seat is one nobody,
+ * the operator included, can join until somebody adds one. Unticking it is
+ * still an answer (an agents-only company run through API tokens), and a
+ * deliberate one.
+ *
+ * NO INVENTED CONTACT. A human seat reaches people through a contact
  * identity, and a template never writes one it was not given: the only
- * identity here is the one the operator types for their own seat. The
+ * identity here is the one the operator may type for their own seat. The
  * "Leads are people" option therefore creates human leads without identities,
- * and the review lists each one until it has one.
+ * which the engine admits, and the review lists each one.
  *
  * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
  * `providers.llm`, which no screen edits), so the next steps after a
@@ -73,8 +80,10 @@ export function CreateCompany({
   const [mission, setMission] = useState("");
   const [template, setTemplate] = useState<TemplateId>("new_company");
   const [leads, setLeads] = useState<LeadsAre>("agents");
-  const [ownSeat, setOwnSeat] = useState(false);
-  const [seatName, setSeatName] = useState("");
+  // ON, AND NAMED: see the file's doc. A name left empty is refused by the
+  // template, so a box ticked from the start starts with one.
+  const [ownSeat, setOwnSeat] = useState(true);
+  const [seatName, setSeatName] = useState("Founder");
   const [identity, setIdentity] = useState<HumanContactKey>(CONTACT_IDENTITIES[0]!.key);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -148,7 +157,7 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each team lead is a person and needs a contact identity."
+                ? "Each team lead is a person, with no contact identity until you add one, so no agent can mention them yet."
                 : "Each team lead is an agent."}
             </span>
           </div>
@@ -157,7 +166,7 @@ export function CreateCompany({
         <Checkbox
           framed
           label="Add a seat for yourself"
-          description="At the top, so agents can reach you."
+          description="At the top, so agents can reach you. It’s the seat you’ll hold: once the company exists, invite or create yourself on it from the org chart."
           checked={ownSeat}
           onCheckedChange={setOwnSeat}
           disabled={disabled}
@@ -183,7 +192,9 @@ export function CreateCompany({
               label={CONTACT_IDENTITIES.find((c) => c.key === identity)!.label}
               value={value}
               onChange={setValue}
+              required={false}
               disabled={disabled}
+              help="Leave it empty if you will work only through the dashboard: no agent can then mention you."
             />
           </div>
         )}
@@ -252,7 +263,7 @@ crewlet config import company.yaml
 
 # Or: patch the running configuration
 curl -X PATCH "$CREWLET_URL/config" \\
-  -H "Authorization: Bearer $CREWLET_TOKEN" \\
+  -H "Authorization: Bearer $CREWLET_API_TOKEN" \\
   -H "Content-Type: application/merge-patch+json" \\
   -H "X-Summary: add a model provider" \\
   -d '{"providers":{"llm":{"default":{"type":"anthropic",

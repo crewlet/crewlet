@@ -39,7 +39,8 @@ type AskView struct {
 	// Comment is the ask's own id — what an answer names in `answers`.
 	Comment string `json:"comment"`
 
-	// AskedOf is the handle the question was put to.
+	// AskedOf is the person the question was put to, by their seat's
+	// handle.
 	AskedOf string `json:"asked_of"`
 
 	// Open is true while nobody has answered or resolved it and it has not

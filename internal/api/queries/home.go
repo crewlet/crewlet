@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -75,6 +77,24 @@ var FeedKinds = []FeedKind{FeedCompleted, FeedCreated, FeedHandoff, FeedSchedule
 // Valid reports whether a kind off the wire is one of the five.
 func (k FeedKind) Valid() bool { return slices.Contains(FeedKinds, k) }
 
+// object is the kind of object a row of this kind is about, which is what
+// decides the app it belongs to ([authz.AppFor]) and so who the feed shows it
+// to: the tracker's three are tasks, a page change a page, and a schedule's
+// run the company's own declaration, which is no app's.
+//
+// A KIND NOT NAMED HERE IS THE TRACKER'S, so one added without a row here is
+// held to an app rather than shown to everybody. [feedKinds] refuses a kind
+// that is not one of the five, so none reaches here today.
+func (k FeedKind) object() authz.ObjectKind {
+	switch k {
+	case FeedPage:
+		return authz.KindPage
+	case FeedSchedule:
+		return authz.KindCompany
+	}
+	return authz.KindTask
+}
+
 // DefaultFeedPage is what one screen of the landing feed shows before "Load
 // older"; the ceiling is the tracker's [tracker.MaxFeedPage], shared by every
 // source so one merged page never needs more than one page of any of them.
@@ -131,12 +151,16 @@ type FeedPageChange struct {
 // than on a screen that sees one page at a time.
 type FeedScheduleRun struct {
 	ScopeType string `json:"scope_type"`
+	// ScopeID is the scope's IDENTITY, which the ledger keys a fire on, and
+	// ScopeName what it is called now — see [scopeNames].
 	ScopeID   string `json:"scope_id"`
+	ScopeName string `json:"scope_name"`
 	Name      string `json:"name"`
-	Target    string `json:"target,omitempty"`
-	Outcome   string `json:"outcome,omitempty"`
-	TraceID   string `json:"trace_id,omitempty"`
-	TurnID    string `json:"turn_id,omitempty"`
+	// Target is the seat the run was dispatched to, by its handle.
+	Target  string `json:"target,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	TraceID string `json:"trace_id,omitempty"`
+	TurnID  string `json:"turn_id,omitempty"`
 
 	// Runs is how many consecutive runs this row stands for, at least one;
 	// Since is the oldest one's instant, set only when Runs is above one.
@@ -210,11 +234,21 @@ const feedSourceReads = 4
 // the last row of it this page consumed. So a row is never repeated and never
 // skipped however the three interleave, and a source that has nothing more
 // stops being asked.
+//
+// EVERYBODY'S, AND EACH KIND SHOWN BY ITS APP (ADR-0033): the work the
+// tracker records to whoever holds the tracker, the pages to whoever holds the
+// knowledge base, and the schedules' runs — the company's own machinery — to
+// everybody, through [authz.Shows]. A kind the caller may not see is DROPPED
+// from what is read, named in `kinds=` or not, never refused: a refusal of
+// `kinds=page` would confirm to somebody without the knowledge base that the
+// company keeps pages, and an answer of the rows they may see is the one they
+// asked for.
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	kinds, err := feedKinds(p.String("kinds"), s.feedKept())
 	if err != nil {
 		return nil, err
 	}
+	kinds = slices.DeleteFunc(kinds, func(k FeedKind) bool { return !shows(ctx, k.object()) })
 	for _, kind := range kinds {
 		if (kind == FeedPage && s.Pages == nil) || (kind == FeedSchedule && s.Usage == nil) {
 			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node — the "+
@@ -274,8 +308,11 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 		}
 	}
 	if slices.Contains(kinds, FeedSchedule) && cursor[feedSourceSchedule] != feedEnd {
+		// ONE CHART READING for every schedule row this answer names,
+		// however many pages of the source it reads.
+		names := s.scopeNames()
 		if openErr := open(feedSourceSchedule, func(position string) (feedPageOf, error) {
-			return s.feedSchedules(ctx, actor, position, limit)
+			return s.feedSchedules(ctx, names, actor, position, limit)
 		}); openErr != nil {
 			return nil, openErr
 		}
@@ -378,8 +415,8 @@ func foldRun(last *FeedEntry, entry FeedEntry) bool {
 }
 
 // feedKept is the kinds this node keeps a source for: the tracker's three
-// always (the question is registered on the tracker), and the page and
-// schedule kinds where their domains are here.
+// always (the question is registered only where the tracker is kept), and the
+// page and schedule kinds where their domains are here.
 func (s Sources) feedKept() []FeedKind {
 	out := []FeedKind{FeedCompleted, FeedCreated, FeedHandoff}
 	if s.Usage != nil {
@@ -488,8 +525,8 @@ func (s Sources) feedPages(ctx context.Context, actor, position string, limit in
 
 // feedSchedules reads one page of the schedules' RUNS — the fires the
 // scheduler dispatched, never a tick it skipped (see [FeedScheduleRun]).
-func (s Sources) feedSchedules(ctx context.Context, actor, position string,
-	limit int) (feedPageOf, error) {
+func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
+	position string, limit int) (feedPageOf, error) {
 
 	var src feedPageOf
 	q := usage.ScheduleRunsQuery{Target: actor, Outcome: string(schedule.OutcomeFired), Limit: limit}
@@ -508,9 +545,10 @@ func (s Sources) feedSchedules(ctx context.Context, actor, position string,
 	for _, run := range runs {
 		src.entries = append(src.entries, FeedEntry{Kind: FeedSchedule, At: run.FiredAt,
 			Schedule: &FeedScheduleRun{
-				ScopeType: run.ScopeType, ScopeID: run.ScopeID, Name: run.Name,
-				Target: run.Target, Outcome: run.Outcome, TraceID: run.TraceID,
-				TurnID: run.TurnID, Runs: 1,
+				ScopeType: run.ScopeType, ScopeID: run.ScopeID,
+				ScopeName: names.of(types.ScheduleScope(run.ScopeType), run.ScopeID),
+				Name:      run.Name, Target: run.Target,
+				Outcome: run.Outcome, TraceID: run.TraceID, TurnID: run.TurnID, Runs: 1,
 			}})
 		src.positions = append(src.positions,
 			run.FiredAt.UTC().Format(time.RFC3339Nano)+"|"+run.Key())
@@ -536,11 +574,24 @@ type DecisionItem struct {
 // most [tracker.MaxDecisions], with the full count and the oldest one's
 // instant beside the page.
 //
-// THE SAME SCOPE RULE AS `work_my_work` — see [Sources.viewerParty]: a caller
-// reads the person their own token is bound to, and naming anybody else needs
-// an operator credential.
+// THE SAME SCOPE RULE AS `work_my_work` — see [Sources.recordHandle]: no
+// `handle` is the caller's own record, and naming anybody else's is
+// [authz.ActionPersonRead] — theirs, whoever leads them, or an admin, each
+// with the tracker — decided on the record the name resolves to.
+//
+// BUT YOUR OWN NEEDS NO TRACKER, which is why this is everybody's question
+// rather than the tracker's (ADR-0033): a person kept off the tracker is still
+// asked things — and may read the item an open ask names them on, and post the
+// answer, without it (`get_work_item`'s and `comment_on_work_item`'s asked
+// arm). A list of what is waiting on them that refused them would leave the
+// only way to find those asks closed.
+//
+// AND A CODING RUN'S QUESTION IS SHOWN AS THE BOARD SHOWS IT ([serialiseRun]):
+// to the people it is put to — the record being read, when it is the caller's
+// own — and its seat's trail to whoever reads that.
 func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
-	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -552,15 +603,15 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			oldest = &at
 		}
 	}
-	answer := map[string]any{"handle": who.Handle}
+	answer := map[string]any{"handle": handle}
 	if s.Work != nil {
 		fresh, err := freshness(p)
 		if err != nil {
 			return nil, err
 		}
 		asks, err := s.Work.Decisions(ctx, tracker.DecisionsQuery{
-			Who:   who,
-			Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+			Handle: handle,
+			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 			MinPosition: fresh.MinPosition,
 		}, s.clock(), s.zone())
 		if err != nil {
@@ -583,17 +634,18 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		handles := who.Handles()
+		reach := s.runReach(ctx)
 		for _, run := range runs {
 			// WAITING ON AN ANSWER — [sandbox.Awaiting], a reseeded run
 			// included, since its answer can still arrive — and put to
 			// this person: [putTo] asks both, as the board's audience
 			// filter does.
-			if !putTo(run, handles) {
+			if !putTo(run, handle) {
 				continue
 			}
 			at := waitingSince(run)
-			items = append(items, DecisionItem{Kind: "run", At: at, Run: serialiseRun(run)})
+			items = append(items, DecisionItem{Kind: "run", At: at,
+				Run: serialiseRun(run, reach(run))})
 			total++
 			older(at)
 		}

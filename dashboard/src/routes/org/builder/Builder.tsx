@@ -2,23 +2,32 @@
  * Agents › Edit org (`#/agents/edit`), the builder: editing the
  * organization, and creating the company where none exists.
  *
- * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
- * stored token proves nothing (an engine with `api.auth.disabled` needs none,
- * and a rotated one is refused), so `GET /config` is read on mount and again
- * whenever the operator token changes, and its answer decides:
+ * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being
+ * signed in proves nothing about the access the configuration is read and
+ * written under (Admin), so `GET /config` is read
+ * on mount and again whenever somebody else signs in on this tab, and its
+ * answer decides:
  *
  * | `GET /config` answers                            | The builder shows |
  * |---|---|
  * | 200                                              | edit mode |
  * | 404 `no_active_revision`, no company in the org  | create mode |
  * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
- * | 401 or 403                                       | a request for a token, worded by whether one is stored |
+ * | 401 or 403                                       | a request to sign in, worded by whether anybody is |
  * | any other 404 (`no_route`), or a body not JSON    | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
- * A token change mid-edit re-reads without discarding the draft: the draft
- * and its log stay on screen, the check runs again under the new token, and a
+ * A new reader mid-edit re-reads without discarding the draft: the draft and
+ * its log stay on screen, the check runs again for the new reader, and a
  * refusal pauses editing rather than throwing the work away.
+ *
+ * A LEAD EDITS THE UNITS THEY LEAD. A person without Admin who leads
+ * a unit (`lib/leadScope.ts`) is not refused here: the builder opens one unit
+ * they lead as a document of its own (`model/scope.ts`), read and written at
+ * `/config/units/{key}`, and the toolbar says which and offers the others.
+ * Until the frame knows who is reading, and what a reader who might lead
+ * leads, every answer waits as loading: a refusal read too early is a lead
+ * told they may not edit, and their kept draft forgotten with it.
  *
  * WHAT THIS COMPONENT OWNS is everything with a lifetime: the reducer, the
  * dry-run check (`useCheck.ts`), the live region, the shortcuts, the
@@ -53,10 +62,16 @@ import { matchesRow } from "~/app/keymap.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { useManagedConfig } from "~/lib/useWriteAccess.ts";
-import { managedSentence } from "~/protocol/configAnswer.ts";
+import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
+import {
+  CONFIG_WRITE_GRANT,
+  CONFIG_WRITE_REASONS,
+  configGuardedReason,
+  useManagedConfig,
+} from "~/lib/useWriteAccess.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
+import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -69,22 +84,27 @@ import {
   type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
-import { allUnits, locate, type Draft } from "./model/draft.ts";
+import { allSeats, allUnits, handleOf, locate, unitIdOf, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
   builderReducer,
-  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
-  isBaseKeyed,
   type BuilderAction,
   type BuilderState,
   type LastChange,
 } from "./model/reducer.ts";
 import { describeOperation } from "./model/operations.ts";
-import type { CheckOutcome, CheckStatus } from "./model/scheduler.ts";
+import {
+  saveRules,
+  STEP_UP_REQUIRED,
+  type CheckOutcome,
+  type CheckStatus,
+} from "./model/scheduler.ts";
 import { readyToUpdate } from "./model/writes.ts";
+import { scopedTransport } from "./model/scope.ts";
+import { companyIdentities } from "./nodeFacts.ts";
 import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
 import {
@@ -94,10 +114,9 @@ import {
   type HttpAnswer,
 } from "./model/transport.ts";
 import type { DraftStorage } from "./model/persistence.ts";
-import { clearDraft } from "./model/persistence.ts";
+import { clearDraft, keptScope } from "./model/persistence.ts";
 import { deriveChanges } from "./model/changes.ts";
-import { saveRules } from "./model/scheduler.ts";
-import { seatsNeedingContact } from "./model/templates.ts";
+import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
@@ -270,7 +289,7 @@ export type Posture =
     }
   | { readonly kind: "create" }
   | { readonly kind: "behind" }
-  | { readonly kind: "guarded"; readonly tokenStored: boolean }
+  | { readonly kind: "guarded"; readonly signedIn: boolean }
   | { readonly kind: "unserved" }
   | { readonly kind: "unreachable"; readonly detail: string }
   | { readonly kind: "failed"; readonly detail: string };
@@ -286,7 +305,7 @@ export interface OrgKnowledge {
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 /** Decides the builder's posture from `GET /config`'s answer and the org snapshot. */
-export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: boolean): Posture {
+export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boolean): Posture {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
   if (answer.status === 200) {
@@ -299,7 +318,7 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: bo
     }
     return { kind: "edit", document: answer.body, revision };
   }
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", tokenStored };
+  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", signedIn };
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
@@ -330,12 +349,19 @@ interface StatusLook {
 }
 
 /**
- * How the toolbar reads a check status. A refusal of the token is worded by
- * whether one is stored: "refused" names a credential the browser does not
- * hold when the operator has cleared it, which sends them looking for a
- * wrong token rather than a missing one.
+ * How the toolbar reads a check status. A refusal is worded by what lifts it,
+ * from the refusal's own `code`: nobody signed in is asked to sign in, a
+ * step-up the person declined is theirs to confirm, and only a refusal of
+ * ACCESS names Admin — said about a declined confirmation, it sent an admin
+ * to another admin for nothing. Anything else
+ * is "Refused", and the banner beneath carries its sentence.
  */
-function statusLook(status: CheckStatus, problems: number, tokenStored: boolean): StatusLook {
+function statusLook(
+  status: CheckStatus,
+  problems: number,
+  signedIn: boolean,
+  code: string,
+): StatusLook {
   switch (status) {
     case "checking":
       return { label: "Checking", tone: "neutral", icon: RotateCwGlyph };
@@ -348,14 +374,30 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
     case "conflict":
       return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
-      return {
-        label: tokenStored ? "The engine refused the token" : "Needs an operator token",
-        tone: "danger",
-        icon: KeyGlyph,
-      };
+      return { label: guardedLabel(code, signedIn), tone: "danger", icon: KeyGlyph };
     case "managed":
       return { label: "Managed by another system", tone: "neutral", icon: ShieldGlyph };
   }
+}
+
+/** The toolbar's word for a refusal on authority (see [statusLook]). */
+function guardedLabel(code: string, signedIn: boolean): string {
+  if (!signedIn) return "Needs sign-in";
+  if (code === STEP_UP_REQUIRED) return "Needs confirmation";
+  return configGuardedReason(code) === CONFIG_WRITE_REASONS.no_grant
+    ? "Needs Admin access"
+    : "Refused";
+}
+
+/**
+ * The code the refusal the check stands on named, or "" for none. Read, like
+ * [conflictOf], from THE LAST ANSWER WHATEVER GENERATION IT WAS FOR: a
+ * refusal halts the check too, so a draft that changes afterwards hears no
+ * newer answer.
+ */
+function guardedCodeOf(state: BuilderState): string {
+  const outcome = state.check.outcome;
+  return outcome?.status === "guarded" ? outcome.code : "";
 }
 
 /**
@@ -388,7 +430,7 @@ function managedByOf(state: BuilderState): readonly string[] | null {
 // Selection in the URL
 // ---------------------------------------------------------------------------
 
-/** The URL filters that name a node: a unit by name, a seat by handle. */
+/** The URL filters that name a node: a unit by its key, a seat by its handle. */
 interface SelectionParams {
   readonly unit: string;
   readonly seat: string;
@@ -413,10 +455,10 @@ function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
   const found = locate(state.draft, key);
   if (!found) return null;
   if (found.kind === "unit") {
-    const name = found.node.data.name;
-    return name ? { unit: name, seat: "" } : null;
+    const id = unitIdOf(found.node);
+    return id ? { unit: id, seat: "" } : null;
   }
-  const handle = handlesOf(state).get(key);
+  const handle = handleOf(found.node);
   return handle ? { unit: "", seat: handle } : null;
 }
 
@@ -425,12 +467,13 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
   if (params.seat) {
     const direct = seatKey(params.seat);
     if (locate(state.draft, direct)) return direct;
-    for (const [key, handle] of handlesOf(state)) if (handle === params.seat) return key;
+    for (const { seat } of allSeats(state.draft))
+      if (handleOf(seat) === params.seat) return seat.key;
     return null;
   }
   if (params.unit) {
     for (const { unit } of allUnits(state.draft)) {
-      if (unit.data.name === params.unit) return unit.key;
+      if (unitIdOf(unit) === params.unit) return unit.key;
     }
   }
   return null;
@@ -471,8 +514,7 @@ function addKindOf(value: string): AddKind | null {
  * sets and this removes, as `add=` is), which is a change to the section's
  * URL grammar rather than to this effect.
  *
- * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, keyed by the
- * engine's handles (a link names a seat by the handle it runs under), in edit
+ * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, in edit
  * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
  * outcome is unknown, a conflict. The request waits through all of those
  * rather than opening a form that could not be applied, and a reader who
@@ -616,7 +658,11 @@ function BuilderScreen({
   const nav = useNavigator();
   const toast = useToast();
   const org = useOrg();
-  const { connected, authRejected } = useConnection();
+  const { authRejected, accessRefused } = useConnection();
+  // WHO IS READING: a signed-in reader refused is refused a GRANT, and one
+  // nobody signed in is asked to sign in — two different repairs.
+  const viewer = useViewer();
+  const signedIn = !viewer.anonymous;
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const [narrowDefault] = useState(prefersTable);
@@ -655,7 +701,62 @@ function BuilderScreen({
 
   // ---- Reading the configuration -----------------------------------------
 
-  const [read, setRead] = useState<{ answer: HttpAnswer; seq: number } | null>(null);
+  const orgName = org?.name ?? "";
+  // WHAT THE ORG SNAPSHOT SAYS IS KNOWN ONCE IT HAS ARRIVED, or once the
+  // socket was refused and none will. The slice is null until the snapshot
+  // (the socket's first frame, or the REST fallback's read) fills it, and the
+  // socket OPENING proves nothing: the snapshot follows the open. Read off the
+  // open, a lead's scope was computed from no org at all, so their first read
+  // went out as the company's and its refusal forgot the draft they kept, and
+  // a node behind the fleet answering before its snapshot was offered create
+  // mode.
+  const orgKnown = org !== null || authRejected || accessRefused !== null;
+
+  // WHICH DOCUMENT THIS BUILDER EDITS: the company, or — for a reader without
+  // Admin who leads a unit — one unit they lead (see the module doc):
+  // the one they chose, else the one holding the node the address they
+  // arrived at names, else the first.
+  //
+  // A RELOAD CHOOSES THE UNIT A KEPT DRAFT WAS MADE OF. Nothing else holds
+  // which unit a lead chose — the toolbar writes no address, and a seat the
+  // draft added has none the chart knows — and opened on another unit, the
+  // kept draft would be discarded as that unit's (`useDraftKeeping`).
+  const leads = useLeadScope();
+  const writesCompany = viewer.grants.includes(CONFIG_WRITE_GRANT);
+  const undecided = viewer.asking || (!writesCompany && viewer.handle !== "" && !orgKnown);
+  const [chosen, setChosen] = useState<string | null>(() => keptScope(storage));
+  const [arrivedAt] = useState(() => ({ unit: unitParam, seat: seatParam }));
+  const scope =
+    writesCompany || leads.tops.length === 0
+      ? null
+      : chosen !== null && leads.tops.some((t) => t.key === chosen)
+        ? chosen
+        : (leads.units.get(arrivedAt.unit) ??
+          leads.seats.get(arrivedAt.seat) ??
+          leads.tops[0]!.key);
+  const companyName = useRef(orgName);
+  companyName.current = orgName;
+  // The document a read is made of, and the one the draft's own checks and
+  // saves are about: the second follows the draft (`state.scope`), so a draft
+  // with work stays on its own unit whatever the reader is offered next.
+  const readTransport = useMemo(
+    () =>
+      scope === null ? transport : scopedTransport(transport, scope, () => companyName.current),
+    [transport, scope],
+  );
+  const draftTransport = useMemo(
+    () =>
+      state.scope === null
+        ? transport
+        : scopedTransport(transport, state.scope, () => companyName.current),
+    [transport, state.scope],
+  );
+
+  const [read, setRead] = useState<{
+    answer: HttpAnswer;
+    seq: number;
+    scope: string | null;
+  } | null>(null);
   const reading = useRef<{ seq: number; controller: AbortController } | null>(null);
   const readSeq = useRef(0);
   // A save loads the stored revision even though it names the base the draft
@@ -669,39 +770,44 @@ function BuilderScreen({
       const controller = new AbortController();
       reading.current = { seq, controller };
       if (force) forceLoad.current = true;
-      transport.current(controller.signal).then(
+      readTransport.current(controller.signal).then(
         (answer) => {
           if (reading.current?.seq !== seq) return;
           reading.current = null;
-          setRead({ answer, seq });
+          setRead({ answer, seq, scope });
         },
         () => {
           // Aborted by a newer read or by the unmount, which own the answer.
         },
       );
     },
-    [transport],
+    [readTransport, scope],
   );
 
+  // Nothing is read before it is known WHAT to read: a lead's first read of
+  // the company would only be refused.
   useEffect(() => {
+    if (undecided) return;
     load();
     return () => reading.current?.controller.abort();
-  }, [load]);
+  }, [load, undecided]);
 
-  const orgName = org?.name ?? "";
-  // The store starts with an empty projection, so an empty one proves nothing
-  // until the socket has connected (and delivered its snapshot) or been
-  // refused; a projection that names a company is known however it arrived.
-  const orgKnown = connected || authRejected || orgName !== "";
   const posture = useMemo(
     (): Posture =>
-      read
-        ? postureOf(read.answer, { known: orgKnown, name: orgName }, apiToken() !== "")
+      read && !undecided && read.scope === scope
+        ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
         : { kind: "loading" },
-    [read, orgKnown, orgName],
+    [read, undecided, scope, orgKnown, orgName, signedIn],
   );
 
-  const check = useCheck({ state, stateRef, dispatch: dispatchRaw, loaded, transport, clock });
+  const check = useCheck({
+    state,
+    stateRef,
+    dispatch: dispatchRaw,
+    loaded,
+    transport: draftTransport,
+    clock,
+  });
 
   // Adopt what a read found: the company to edit, or nothing to create from.
   const adopted = useRef<{ seq: number; kind: Posture["kind"] } | null>(null);
@@ -722,14 +828,22 @@ function BuilderScreen({
     // revision already, and reading the same revision over it would throw the
     // edit away unasked for a document that differs from the one sent only by
     // the engine's own normalization.
+    //
+    // ANOTHER UNIT OF A LEAD'S is opened only over a draft with no changes
+    // (`LeadUnit`), and opening it is what the lead asked for: what it loses is
+    // a redo history at most.
     if (posture.kind === "edit") {
-      const stale = current.mode !== "edit" || current.base.revision !== posture.revision;
-      if (!loaded || ((force || stale) && !hasWork)) {
+      const switched = current.scope !== read.scope;
+      const stale =
+        switched || current.mode !== "edit" || current.base.revision !== posture.revision;
+      const keeps = switched ? hasChanges(current) : hasWork;
+      if (!loaded || ((force || stale) && !keeps)) {
         dispatchRaw({
           type: "load",
           mode: "edit",
           document: posture.document,
           revision: posture.revision,
+          ...(read.scope === null ? {} : { scope: read.scope }),
         });
         setLoaded(true);
       }
@@ -741,19 +855,23 @@ function BuilderScreen({
     }
   }, [read, posture, loaded]);
 
-  // A NEW TOKEN IS A NEW READER. The draft stays on screen; storage forgets
-  // it (the tab may have changed hands), and both the configuration and the
-  // check are asked again under the new credential.
+  // SOMEBODY ELSE SIGNING IN IS A NEW READER. The draft stays on screen;
+  // storage forgets it (the tab may have changed hands), and both the
+  // configuration and the check are asked again for the new reader. The
+  // first answer the viewer gives is not a change — it is who was reading
+  // all along.
   const { reset, requestReset } = check;
-  useEffect(
-    () =>
-      onTokenChanged(() => {
-        requestReset();
-        dispatchRaw({ type: "tokenChanged" });
-        load();
-      }),
-    [requestReset, load],
-  );
+  const reader = viewer.loading ? null : viewer.login;
+  const lastReader = useRef<string | null>(null);
+  useEffect(() => {
+    if (reader === null) return;
+    const before = lastReader.current;
+    lastReader.current = reader;
+    if (before === null || before === reader) return;
+    requestReset();
+    dispatchRaw({ type: "readerChanged" });
+    load();
+  }, [reader, requestReset, load]);
 
   // An org push follows every apply, so the configuration may have moved
   // under the draft: check again rather than wait for the next edit. A create
@@ -808,7 +926,7 @@ function BuilderScreen({
     onConflict: () => {},
     onRefused: () => {},
   });
-  const save = useSave({ stateRef, transport, keys, events: saveEvents });
+  const save = useSave({ stateRef, transport: draftTransport, keys, events: saveEvents });
 
   // A SAVE A PREVIOUS VISIT NEVER HEARD BACK FROM is settled before its kept
   // log is offered: it may have landed, and the log replayed onto its own
@@ -818,43 +936,54 @@ function BuilderScreen({
     if (keeping.unsettled) resume(keeping.unsettled);
   }, [keeping.unsettled, resume]);
 
-  // Read at render: a token change always dispatches, so this is current.
-  const tokenStored = apiToken() !== "";
+  // WHICH REFUSAL HOLDS THE BUILDER, by its code. A refused READ of the
+  // configuration is a grant (a read asks for no step-up), so only a refused
+  // check or save names anything else, and every one is worded as every other
+  // writer of the company document words it ([configGuardedReason]). The one
+  // a person lifts on the spot is a step-up they declined: a check sent again
+  // asks them to confirm again (`protocol/rest.ts`).
+  const guarded = posture.kind === "guarded" || status === "guarded";
+  const guardedCode =
+    posture.kind !== "guarded" && status === "guarded" ? guardedCodeOf(state) : "";
+  const stepUp = guardedCode === STEP_UP_REQUIRED;
+
   // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): the engine says
   // so on the viewer, and the builder stays a reader of it — every control
   // drawn, every one disabled with who manages it — rather than collecting a
   // draft the engine refuses at the save, or that the managing system
-  // replaces at its next reconcile if this credential were let through.
+  // replaces at its next reconcile if this credential were let through. It
+  // holds whoever reads, an admin and a lead's own unit alike:
+  // where the company is written is not a question of who may write it.
   //
   // AND IF THE ENGINE SAYS SO FIRST — a check answered `config_managed`
   // before the viewer did — the check's own answer decides the same way.
   const viewerManaged = useManagedConfig();
-  const viewerManagedBy = useViewer().configManagedBy;
   const checkManagedBy = status === "managed" ? managedByOf(state) : null;
-  const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewerManagedBy : null);
+  const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewer.configManagedBy : null);
   const managed = managedBy === null ? null : managedSentence(managedBy);
+
+  // Why editing is paused, as the sentence the live region says after
+  // "Editing is paused."
   const readOnlyReason = useMemo((): string | null => {
-    if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
+    if (save.unsettled || keeping.unsettled) {
+      return "The outcome of the last save is not known yet.";
+    }
     if (managedBy !== null) {
-      return `this company's configuration is managed by ${managedBy.join(", ") || "another system"}`;
+      return `This company's configuration is managed by ${managedBy.join(", ") || "another system"}.`;
     }
-    if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
-    if (posture.kind === "guarded" || status === "guarded") {
-      return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
-    }
-    if (status === "conflict") return "the configuration changed since this draft was started";
-    if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
+    if (keeping.offer) return "A kept draft is waiting for Keep or Discard.";
+    if (guarded) return signedIn ? configGuardedReason(guardedCode) : "Nobody is signed in.";
+    if (status === "conflict") return "The configuration changed since this draft was started.";
     return null;
   }, [
     save.unsettled,
     keeping.unsettled,
     managedBy,
     keeping.offer,
-    posture.kind,
+    guarded,
+    guardedCode,
     status,
-    loaded,
-    state,
-    tokenStored,
+    signedIn,
   ]);
   const readOnly = !loaded || readOnlyReason !== null;
 
@@ -866,7 +995,7 @@ function BuilderScreen({
         action.type === "redo" ||
         action.type === "discard";
       if (mutates && readOnlyReason !== null) {
-        announce(`Editing is paused because ${readOnlyReason}.`);
+        announce(`Editing is paused. ${readOnlyReason}`);
         return;
       }
       dispatchRaw(action);
@@ -933,10 +1062,9 @@ function BuilderScreen({
     [],
   );
 
-  // A NODE HELD ACROSS A KEYING OF THE BASE KEEPS ITS PLACE. Until the first
-  // check answers, a seat that declares no handle is keyed by its path, and
-  // the answer re-keys the base by the engine's handles; a save re-keys the
-  // nodes it created. The reducer lists what moved (`state.rekeyed`), and an
+  // A NODE HELD ACROSS A SAVE KEEPS ITS PLACE. A save re-keys the nodes it
+  // created, from the keys they were minted with to their handles and unit
+  // keys. The reducer lists what moved (`state.rekeyed`), and an
   // open dialog or the selection reads its node through that list in the
   // very render the keys change: followed a render later, an open editor was
   // drawn as gone ("This node is no longer in the draft") for that render and
@@ -1006,7 +1134,7 @@ function BuilderScreen({
   const openIfWritable = useCallback(
     (next: DialogRequest) => {
       if (readOnlyReason !== null) {
-        announce(`Editing is paused because ${readOnlyReason}.`);
+        announce(`Editing is paused. ${readOnlyReason}`);
         return;
       }
       openDialog(next);
@@ -1054,10 +1182,11 @@ function BuilderScreen({
   }, [loaded, state, readOnlyReason, dialog, unitParam, seatParam, nav, openDialog]);
 
   const exitFullscreen = useFullscreenExit();
-  const askForToken = useCallback(() => {
-    // The token dialog belongs to the shell, outside the fullscreen element.
+  const signIn = useCallback(() => {
+    // The sign-in screen is the shell's, outside the fullscreen element; the
+    // move goes through the leave guard, so a draft with work is asked about.
     exitFullscreen();
-    requestToken();
+    goSignIn();
   }, [exitFullscreen]);
 
   // ---- Updating onto a newer revision -------------------------------------------
@@ -1085,9 +1214,10 @@ function BuilderScreen({
       setUpdateNote({ busy: true, message: null });
       try {
         const ready = await readyToUpdate(
-          transport,
+          draftTransport,
           { baseRevision: base, conflictRevisionId },
           controller.signal,
+          stateRef.current.scope,
         );
         if (controller.signal.aborted) return;
         if (ready.kind === "ready") {
@@ -1116,7 +1246,7 @@ function BuilderScreen({
         // Aborted: the Builder went away, or a newer attempt replaced this one.
       }
     },
-    [transport],
+    [draftTransport],
   );
 
   const conflict = status === "conflict" ? conflictOf(state) : null;
@@ -1134,14 +1264,12 @@ function BuilderScreen({
   // against this base, and moving the base under the offer would refuse its
   // Keep.
   //
-  // THROUGH THE UPDATE, NEVER A PLAIN READ. A document read from `GET
-  // /config` keys the seats that declare no handle by their paths until the
-  // next check answers, so every node something held lost its key for that
-  // moment: an open editor with a typed, unapplied form was drawn as gone
-  // and mounted again empty, and the selection was cleared. The update reads
-  // the newer revision with the engine's description of it
-  // (`writes.readyToUpdate`), so the base is keyed by handle at once and an
-  // existing seat keeps its key across the two revisions.
+  // THROUGH THE UPDATE, NEVER A PLAIN READ. A plain read replaces the draft
+  // whole, so an open editor with a typed, unapplied form was drawn as gone
+  // and mounted again empty, and the selection was cleared. The update
+  // rebases the draft onto the newer revision (`writes.readyToUpdate`), and
+  // a node keyed by its seat's handle or its unit's key keeps that key across
+  // the two revisions.
   const draftIsEmpty = state.log.ops.length === 0 && state.log.undone.length === 0;
   const keptPending = keeping.pending || keeping.offer !== null;
   useEffect(() => {
@@ -1270,6 +1398,7 @@ function BuilderScreen({
 
   // ---- The context --------------------------------------------------------------
 
+  const identities = useMemo(() => companyIdentities(org), [org]);
   const api = useMemo((): BuilderApi => {
     const byNode = problemsCurrent ? state.check.problems.byNode : new Map();
     const sources = (key: NodeKey, severity: PlacedProblem["severity"]) =>
@@ -1296,6 +1425,7 @@ function BuilderScreen({
       announce,
       focusNode,
       readOnly,
+      identities,
       agents,
       sandboxes,
       keys,
@@ -1312,6 +1442,7 @@ function BuilderScreen({
     announce,
     focusNode,
     readOnly,
+    identities,
     agents,
     sandboxes,
     keys,
@@ -1325,11 +1456,11 @@ function BuilderScreen({
   // ---- Rendering --------------------------------------------------------------
 
   if (!loaded) {
-    return <PostureScreen posture={posture} onRetry={() => load()} onSetToken={askForToken} />;
+    return <PostureScreen posture={posture} onRetry={() => load()} onSignIn={signIn} />;
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
-  const look = statusLook(status, problemCount, tokenStored);
+  const look = statusLook(status, problemCount, signedIn, guardedCode);
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
@@ -1347,7 +1478,11 @@ function BuilderScreen({
   // providers.llm and places its seats, then holds every delivery on the
   // seat's inbox until an apply brings a provider (engine/nomodels.go). The
   // dashboard writes none, so the builder says where one comes from.
-  const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
+  // A lead's draft holds one unit and no settings, so it says nothing either way.
+  const noProvider =
+    state.mode === "edit" &&
+    state.scope === null &&
+    !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
   /*
@@ -1550,6 +1685,15 @@ function BuilderScreen({
               items={toolbarItems}
               trigger={selectedView ? selectedName : "Add"}
             />
+            {state.scope !== null && (
+              <LeadUnit
+                tops={leads.tops}
+                scope={state.scope}
+                name={state.draft.units[0]?.data.name ?? ""}
+                locked={changed || readOnly}
+                onChoose={setChosen}
+              />
+            )}
             <span className="spacer" />
             {/* ON THE TABLE ONLY: the visualization draws it at the end of the
                 chart's own zoom bar, where the console chart keeps it. */}
@@ -1585,19 +1729,28 @@ function BuilderScreen({
             {managed}
           </Callout>
         )}
-        {(posture.kind === "guarded" || status === "guarded") && (
+        {/* A DECLINED STEP-UP IS CHECKED AGAIN, NOT SIGNED OUT OF: the person
+            holds the grant and is signed in, and the check sent again is what
+            asks them to confirm. */}
+        {guarded && (
           <Callout
             variant="danger"
             icon={<KeyGlyph />}
             action={
-              <Button variant="secondary" size="small" onClick={askForToken}>
-                Set token
-              </Button>
+              stepUp ? (
+                <Button variant="secondary" size="small" onClick={reset}>
+                  Check again
+                </Button>
+              ) : (
+                <Button variant="secondary" size="small" onClick={signIn}>
+                  {signedIn ? "Sign in as somebody else" : "Sign in"}
+                </Button>
+              )
             }
           >
-            {tokenStored
-              ? "Token refused. Your draft is kept; set another token to keep editing."
-              : "Set an operator token to edit. Your draft is kept."}
+            {signedIn
+              ? `${configGuardedReason(guardedCode)} Your draft is kept.`
+              : "Sign in to edit. Your draft is kept, and leaving to sign in asks first."}
           </Callout>
         )}
         {posture.kind === "unreachable" && (
@@ -1665,7 +1818,7 @@ function BuilderScreen({
                     against that base. Settings › Configuration compares with
                     the active revision unless told otherwise, and the base
                     against the active one reads every change backwards. */}
-                {state.base.revision && conflict.currentRevisionId && (
+                {state.scope === null && state.base.revision && conflict.currentRevisionId && (
                   <ButtonLink
                     size="small"
                     variant="ghost"
@@ -1691,11 +1844,6 @@ function BuilderScreen({
           >
             The configuration changed since you started editing.
             {updateNote.message && <span className="org-builder-note">{updateNote.message}</span>}
-          </Callout>
-        )}
-        {loaded && !isBaseKeyed(state) && status === "unreachable" && (
-          <Callout variant="warning" icon={<PlugGlyph />}>
-            Waiting for the engine. Editing starts once it answers.
           </Callout>
         )}
         {keeping.offer && (
@@ -1912,6 +2060,48 @@ function BuilderScreen({
   );
 }
 
+/**
+ * Which unit a lead's draft is about, and the others they lead.
+ *
+ * ONE UNIT PER DRAFT: the engine writes a lead's unit whole at its own
+ * address, so a change to a second unit is a second draft. Another unit is
+ * offered only while this draft has nothing to lose, and opening it reads that
+ * unit as the builder reads the company.
+ */
+function LeadUnit({
+  tops,
+  scope,
+  name,
+  locked,
+  onChoose,
+}: {
+  tops: readonly LedUnit[];
+  scope: string;
+  name: string;
+  locked: boolean;
+  onChoose: (key: string) => void;
+}) {
+  const label = `Editing ${name || scope} as its lead`;
+  if (tops.length < 2) return <Tag variant="neutral">{label}</Tag>;
+  return (
+    <Menu
+      label="Units you lead"
+      trigger={label}
+      items={tops.map((top) => {
+        const held = locked && top.key !== scope;
+        return {
+          key: top.key,
+          label: top.name,
+          checked: top.key === scope,
+          disabled: held,
+          ...(held ? { description: "Save or discard this draft to open another unit." } : {}),
+          onSelect: () => onChoose(top.key),
+        };
+      })}
+    />
+  );
+}
+
 /** The review, with the changes derived from the draft as it stands. */
 function ReviewPanel({
   state,
@@ -1944,9 +2134,9 @@ function ReviewPanel({
     [state, current],
   );
   const outcome = current ? state.check.outcome : null;
-  const needsContact = useMemo(
+  const withoutContact = useMemo(
     () =>
-      seatsNeedingContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
+      seatsWithoutContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
     [state.draft],
   );
   return (
@@ -1958,7 +2148,7 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      needsContact={needsContact}
+      withoutContact={withoutContact}
       writeId={writeId}
       phase={phase}
       onSave={onSave}
@@ -1999,7 +2189,7 @@ function DialogHost({
   onDiscard,
 }: {
   dialog: OpenDialog;
-  /** Reads a key the dialog holds through the base's last keying (`state.rekeyed`). */
+  /** Reads a key the dialog holds through the last save's keying (`state.rekeyed`). */
   follow: (key: NodeKey) => NodeKey;
   surfaces: BuilderSurfaces;
   onClose: () => void;
@@ -2097,11 +2287,11 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
 function PostureScreen({
   posture,
   onRetry,
-  onSetToken,
+  onSignIn,
 }: {
   posture: Posture;
   onRetry: () => void;
-  onSetToken: () => void;
+  onSignIn: () => void;
 }) {
   const retry = (
     <Button variant="secondary" onClick={onRetry}>
@@ -2127,14 +2317,14 @@ function PostureScreen({
         <EmptyState
           icon={<KeyGlyph />}
           title={
-            posture.tokenStored
-              ? "The engine refused this browser's token."
-              : "Editing the organization needs an operator token."
+            posture.signedIn
+              ? "Reading the configuration needs Admin access."
+              : "Editing the organization needs you to sign in."
           }
-          description="The configuration is guarded, reads included."
+          description="The configuration is guarded, reads included. A unit's lead edits the units they lead here without it."
           action={
-            <Button variant="primary" onClick={onSetToken}>
-              Set token
+            <Button variant="primary" onClick={onSignIn}>
+              {posture.signedIn ? "Sign in as somebody else" : "Sign in"}
             </Button>
           }
         />

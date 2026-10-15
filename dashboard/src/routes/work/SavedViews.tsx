@@ -46,8 +46,8 @@ import { Button, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
+
 import { PinButton } from "~/components/writes.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 import { viewRun } from "~/lib/work.ts";
@@ -128,20 +128,25 @@ function viewMarks(view: WorkView): ReactNode[] {
 
 export function SavedViews({ id }: { id?: string }) {
   const nav = useNavigator();
-  const viewer = useViewer();
   const org = useOrg();
   // AN OWNER IS A PERSON, and the chart is what turns their handle into the
-  // name they are actually called. A handle that is not in it — an operator
-  // writing through the MCP surface owns views too — falls through to the
-  // handle itself rather than to nothing.
-  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
-  // THE VIEWER IS SENT, which is what makes pins and personal views appear at
-  // all: without one the engine answers the SHARED views, so this screen
-  // showed every reader the same list and no pin could ever render. AND EVERY
-  // CONTAINER — see the file's doc.
-  const views = useQuery("work_saved_views", viewer.handle ? { viewer: viewer.handle } : {}, {
-    pollMs: 120_000,
-  });
+  // name they are actually called. A name that is not in it — the LOGIN a
+  // person the directory binds to no seat keeps their views under, or a
+  // machine token's — falls through to the name itself rather than to nothing.
+  const index = useMemo(() => indexOrg(org), [org]);
+  const who = useMemo(() => seatLookup(index), [index]);
+  // THE VIEWER IS THE CALLER, and the engine knows who that is: every view the
+  // reader can see, in whichever container it was saved, with THEIR pins
+  // marked — the record kept under their own name, a seat or a login — and no
+  // parameter that could choose somebody else's. AND EVERY CONTAINER — see the
+  // file's doc.
+  const views = useQuery(
+    "work_saved_views",
+    {},
+    {
+      pollMs: 120_000,
+    },
+  );
   usePageCoverage(views.data);
 
   const saved = useMemo(
@@ -160,7 +165,8 @@ export function SavedViews({ id }: { id?: string }) {
     // this screen has, so a refusal rendered as "no saved view with that id"
     // tells a reader their view was deleted when the truth is that nothing
     // was read at all — and they act on it, by saving a second copy.
-    if (views.error) return <QueryState error={views.error} loading={false} />;
+    if (views.error)
+      return <QueryState error={views.error} refusal={views.refusal} loading={false} />;
     if (!one) {
       return (
         // DASHBOARD IS THE NEAREST GLYPH THERE IS. Our `columns` mark is
@@ -178,9 +184,9 @@ export function SavedViews({ id }: { id?: string }) {
     // chart — so `ada-okonkwo` and "Ada Okonkwo" appeared on one page as if
     // they were two people. Resolved once, here, and handed to both.
     //
-    // FALLING BACK TO THE HANDLE rather than to nothing: an operator writing
-    // through the MCP surface owns views too and holds no seat, and their
-    // handle is still the thing to say.
+    // FALLING BACK TO THE NAME rather than to nothing: a person bound to no
+    // seat, or a machine token, keeps views under a login, and that login is
+    // still the thing to say.
     //
     // AND THE KIND TRAVELS WITH IT, because the badge draws the dashed ring
     // off it: a name alone makes a human owner look like an agent.
@@ -201,7 +207,7 @@ export function SavedViews({ id }: { id?: string }) {
           icon="columns-3"
           identifier={one.key}
           title={one.name}
-          facts={viewFacts(one, owner)}
+          facts={viewFacts(one, index)}
         />
         <ViewFacts view={one} />
         <div className="row gap-2 wrap">
@@ -238,6 +244,7 @@ export function SavedViews({ id }: { id?: string }) {
       )}
       <QueryState
         error={views.error}
+        refusal={views.refusal}
         loading={views.loading}
         empty={
           saved.length
@@ -280,7 +287,7 @@ export function SavedViews({ id }: { id?: string }) {
               // view is SHARED, a setting somebody chose.
               cell: (v) =>
                 v.owner ? (
-                  <SeatCell handle={v.owner} {...who(v.owner)} />
+                  <OwnerCell owner={v.owner} index={index} />
                 ) : (
                   <span className="t-caption">shared</span>
                 ),
@@ -351,7 +358,28 @@ export function SavedViews({ id }: { id?: string }) {
  * dropped, and [ViewFacts] below is now what it was always named for: the
  * parameters the view actually carries.
  */
-function viewFacts(view: WorkView, owner?: { name: string; kind?: SeatKind }): Fact[] {
+/**
+ * A view's owner, wherever the screen names one.
+ *
+ * A SEAT is drawn as every column in the product draws one — its badge and
+ * name, linking to its page. A name NO SEAT ANSWERS TO is a LOGIN: a person the
+ * identity directory binds to no seat keeps their personal views under it
+ * (`iam.RecordOwner`), and so does a machine token. A login has no seat page,
+ * so it is named rather than drawn as a link to one that would answer "no such
+ * seat".
+ */
+function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
+  const seat = index.byHandle.get(owner);
+  return seat ? (
+    <SeatCell handle={owner} name={seat.name} kind={seat.kind} />
+  ) : (
+    <span className="mono truncate" title={`${owner} holds no seat`}>
+      {owner}
+    </span>
+  );
+}
+
+function viewFacts(view: WorkView, index: OrgIndex): Fact[] {
   const marks = viewMarks(view);
   return [
     { label: "Shape", value: view.type },
@@ -361,7 +389,7 @@ function viewFacts(view: WorkView, owner?: { name: string; kind?: SeatKind }): F
       // field nobody filled in — so it is a word and never a dash.
       label: "Owner",
       value: view.owner ? (
-        <SeatCell handle={view.owner} {...owner} />
+        <OwnerCell owner={view.owner} index={index} />
       ) : (
         <span className="t-caption">shared</span>
       ),

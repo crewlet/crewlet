@@ -33,9 +33,10 @@
  *
  * Mark as read, Snooze and "Mark all read" each name exactly what they mark
  * (`mark_inbox{read}`, `{snooze}`, `{read_through}` at the newest update
- * loaded) as the person the token is bound to (ADR-0024). The engine changes
- * that and nothing else, and the list is re-read at the position the write
- * answered with, so a row moves only once the engine says it has.
+ * loaded) as the person signed in (ADR-0024), on the record they are kept
+ * under (`ViewerState.owner`, `iam.RecordOwner`). The engine changes that and
+ * nothing else, and the list is re-read at the position the write answered
+ * with, so a row moves only once the engine says it has.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -50,6 +51,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { decisionSubjects, seatConditionsOf } from "~/components/DecisionRow.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { UnboundRemedy } from "~/components/people.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -60,7 +62,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
-import { InboxColumn, taskTitleOf } from "./InboxColumn.tsx";
+import { InboxColumn, taskTitleOf, titleOf } from "./InboxColumn.tsx";
 import { InboxPane } from "./InboxPane.tsx";
 import { usePagedInbox } from "./pages.tsx";
 import {
@@ -70,11 +72,16 @@ import {
   nextAfter,
   noticeRows,
   readThrough,
+  rowItem,
   rowKey,
   type InboxRow,
 } from "./model.ts";
 
-/** The notices and the decisions are asked again on this beat: nothing pushes either. */
+/**
+ * The notices and the decisions are asked again on this beat. The notices are
+ * pushed as well (`refetchOnInboxOf`), so for them this is the backstop for a
+ * push lost to a reconnect; the decisions are not, so for them it is the beat.
+ */
 const INBOX_POLL_MS = 30_000;
 
 /**
@@ -129,34 +136,43 @@ export function Inbox() {
   const [snoozedOpen, setSnoozedOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
 
-  const handle = viewer.handle;
-  const bound = handle !== "";
+  // A RECORD OF THEIR OWN: anybody signed in, bound to a seat or not, is
+  // asked by the name their record is kept under (`ViewerState.owner`). Asked
+  // by `handle`, an unbound reader had no inbox here at all while their
+  // assistant wrote notices to their login. PUSHED AS WELL AS POLLED: the
+  // engine sends `inbox_changed` when a committed batch moves that record
+  // (`refetchOnInboxOf`), and the poll stays, because a frame lost to a
+  // reconnect is never sent again.
+  const owner = viewer.owner;
+  const bound = owner !== "";
   const updatesRead = useQuery(
     "work_inbox",
-    bound ? { handle, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
-    { enabled: bound, pollMs: INBOX_POLL_MS },
+    bound ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
+    { enabled: bound, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   usePageCoverage(updatesRead.data);
   // THE SNOOZED COUNT IS READ WHETHER OR NOT THE LIST IS OPEN, because the link
   // says it; `only` IS WHAT WAS PUT OFF, and nothing else.
   const snoozed = usePagedInbox(
-    bound ? { handle, limit: INBOX_PAGE, snoozed: "only" } : undefined,
+    bound ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
     INBOX_POLL_MS,
+    owner,
   );
   // EARLIER IS READ ONLY ONCE IT IS OPENED: every notice not snoozed, of which
   // the read ones are listed (`earlierOf`).
   const earlier = usePagedInbox(
     bound && earlierOpen
-      ? { handle, limit: INBOX_PAGE, unread: false, snoozed: "exclude" }
+      ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude" }
       : undefined,
     INBOX_POLL_MS,
+    owner,
   );
   const decisions = useQuery("decisions", undefined, {
     enabled: bound,
     pollMs: INBOX_POLL_MS,
   });
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
-  const person = useQuery("work_person", bound ? { handle } : undefined, { enabled: bound });
+  const person = useQuery("work_person", bound ? { handle: owner } : undefined, { enabled: bound });
   const attention = useAttention();
 
   const rows = useMemo(
@@ -256,7 +272,9 @@ export function Inbox() {
   });
 
   // THE TASKS' TITLES, in one read for every row that does not carry its own:
-  // a notice names its task by key alone.
+  // a notice names its task by key and id alone. The read is by key, and a key
+  // two tasks hold answers both, so a title is filed under its task's ID and
+  // under its key only for the task that claimed it ([titleOf]).
   const keys = useMemo(() => {
     const wanted = new Set<string>();
     for (const r of [...order, ...(selected ? [selected] : [])]) {
@@ -270,10 +288,14 @@ export function Inbox() {
     keys.length > 0 ? { key: keys.join(","), show_closed: true, limit: keys.length } : undefined,
     { enabled: keys.length > 0 },
   );
-  const titles = useMemo(
-    () => new Map((tasks.data?.items ?? []).map((t) => [t.key, t.title] as const)),
-    [tasks.data],
-  );
+  const titles = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const t of tasks.data?.items ?? []) {
+      out.set(t.id, t.title);
+      if (!t.key_collision) out.set(t.key, t.title);
+    }
+    return out;
+  }, [tasks.data]);
 
   const loaded = updatesRead.data?.notices ?? [];
   const quiet = inboxQuiet({
@@ -296,17 +318,19 @@ export function Inbox() {
         <MarkAllRead through={bound ? readThrough(loaded) : null} />
       </PageActions>
 
-      {/* THREE VIEWER STATES, three sentences, and only one of them is
-          anybody's fault. The conditions a person decides are listed for all
+      {/* THREE VIEWER STATES, three sentences, and an unbound reader's says
+          what binding would add (`UnboundRemedy`): it is a service account or
+          a token's session, ordinary, never a person, since every person holds
+          a human seat. The conditions a person decides are listed for all
           three, which is why the screen is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
-          Set a token bound to your seat to see your updates.
+          Nobody is signed in. Sign in to see your updates and decisions.
         </Callout>
       ) : viewer.unbound ? (
-        <Callout variant="warning" className="inbox-callout">
-          No seat uses token <code className="inline">{viewer.operatorID}</code>. Bind it in Edit
-          org.
+        <Callout variant="info" className="inbox-callout">
+          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so these
+          are the updates kept under that login. <UnboundRemedy login={viewer.login} />
         </Callout>
       ) : null}
 
@@ -350,13 +374,27 @@ export function Inbox() {
               // read's own refusal, where the rows it would have given go.
               (updatesRead.error || decisions.error || snoozed.error || earlier.error) && (
                 <>
-                  <QueryState error={updatesRead.error} loading={false}>
+                  <QueryState
+                    error={updatesRead.error}
+                    refusal={updatesRead.refusal}
+                    detail={updatesRead.detail}
+                    loading={false}
+                  >
                     {null}
                   </QueryState>
-                  <QueryState error={decisions.error} loading={false}>
+                  <QueryState
+                    error={decisions.error}
+                    refusal={decisions.refusal}
+                    detail={decisions.detail}
+                    loading={false}
+                  >
                     {null}
                   </QueryState>
-                  <QueryState error={snoozed.error ?? earlier.error} loading={false}>
+                  <QueryState
+                    error={snoozed.error ?? earlier.error}
+                    refusal={snoozed.error ? snoozed.refusal : earlier.refusal}
+                    loading={false}
+                  >
                     {null}
                   </QueryState>
                 </>
@@ -371,7 +409,9 @@ export function Inbox() {
             now={now}
             zone={zone}
             maxSnoozeAhead={person.data?.max_snooze_ahead}
-            title={selected ? (titles.get(rowKey(selected)) ?? taskTitleOf(selected)) : undefined}
+            title={
+              selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
+            }
             onBack={phone ? () => nav.filter({ row: null }) : undefined}
             onSettled={(label) => selected && settle(selected, label)}
           />

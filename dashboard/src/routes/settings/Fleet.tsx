@@ -117,7 +117,7 @@ export function BrokerCell({ broker }: { broker: string }) {
 function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
-  const { data, loading, error } = useQuery("fleet", undefined, { pollMs: POLL_MS });
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, { pollMs: POLL_MS });
   // THE BROKER'S MEMBERSHIP, polled beside the lease table on the same
   // cadence: a member that died is noticed on both at once.
   const broker = useQuery("fleet_broker", undefined, { pollMs: POLL_MS });
@@ -161,7 +161,7 @@ function FleetScreen() {
           <span>Refresh failed ({error}). Showing the last good reading.</span>
         </Callout>
       )}
-      {error && !data && <QueryState error={error} loading={false} />}
+      {error && !data && <QueryState error={error} refusal={refusal} loading={false} />}
 
       {data && (
         <Card padding="none">
@@ -530,6 +530,7 @@ function FleetScreen() {
           <BrokerMembership
             answer={broker.data ?? undefined}
             error={broker.error}
+            refusal={broker.refusal}
             onChanged={broker.refetch}
           />
 
@@ -655,7 +656,7 @@ function nodeFlags(node: FleetNode, thisNode?: string): React.ReactNode {
  */
 export function NodeScreen({ id }: { id: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("fleet", undefined, {
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -674,7 +675,7 @@ export function NodeScreen({ id }: { id: string }) {
       </PageActions>
 
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (node ? (
             <>
@@ -735,7 +736,7 @@ export function NodeScreen({ id }: { id: string }) {
  */
 export function NodePeek({ id }: { id: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("fleet", undefined, {
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -745,7 +746,7 @@ export function NodePeek({ id }: { id: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (node ? (
             <>

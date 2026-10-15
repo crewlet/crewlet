@@ -33,17 +33,18 @@ import (
 //
 // # Arrays replace, and that is the rule rather than an omission
 //
-// RFC 7396 has no way to address a list element, so `roles: [...]` in a patch
-// replaces the whole roster. That is exactly the edit the per-entity routes
-// exist for — `PUT /config/roles/{handle}` changes one seat — and inventing a
-// list syntax here would give two answers to one question.
+// RFC 7396 has no way to address a list element, so a list in a patch
+// replaces the whole list. That is exactly the edit the per-entity routes
+// exist for — `PUT /config/mcp-servers/{name}` changes one tool server and
+// `PUT /config/roles/{handle}` one seat, wherever in the tree it sits — and
+// inventing a list syntax here would give two answers to one question.
 //
 // That is an argument about THIS format, and the obvious reply is to reach for
 // one that does address list members — RFC 6902, or a Kubernetes-style merge
 // key. Neither replaces the entity routes, and the reason is not about
-// formats: a patch addresses by STRUCTURE and a seat is addressed by
-// IDENTITY, which is why the same handle reaches a seat whether it sits at
-// the root or three units down.
+// formats: a patch addresses by STRUCTURE and an entity is addressed by
+// IDENTITY, which is why a server's name reaches it wherever it sits in
+// `mcp_servers`, and goes on reaching it after one above it is removed.
 //
 // # `null` deletes
 //

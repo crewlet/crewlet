@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -108,7 +109,9 @@ func sealingOptions(t *testing.T, doc string) engine.Options {
 // be re-activated.
 func seal(t *testing.T, e *engine.Engine, name, value string) {
 	t.Helper()
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(iam.ActorFor(iam.Principal{
+		Kind: iam.KindMachine, Login: iam.TokenLogin("test-operator"),
+	}))
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}
@@ -223,6 +226,58 @@ func TestARotatedCredentialRestartsOnlyTheChildItReaches(t *testing.T) {
 	after, ok := e.ToolsFor("cto").Lookup("tracker_probe")
 	if !ok || after.Tool != neighbour.Tool {
 		t.Error("the rotation restarted a child whose credential did not move")
+	}
+}
+
+// A SEAT THE COMPANY NO LONGER DECLARES LOSES ITS CHILDREN AT THE APPLY'S
+// PASS, NOT AT ITS RELEASE.
+//
+// A child is the seat's identity at the vendor, and a revision that removes
+// the role says the company no longer has that identity. The release that
+// follows stops the children too, but the release waits for placement: an
+// apply's ask for a pass is honoured at most once per sweep interval, so a
+// node can go on holding a removed seat until the next tick. A child kept for
+// that long would go on acting at the vendor for an agent the company has let
+// go. Here the tick is an hour away, and the one ask the interval honours is
+// spent on a revision that adds a seat. So the revision that removes the CTO
+// leaves the seat held, and only the apply's own pass can stop its child.
+func TestASeatTheCompanyNoLongerDeclaresLosesItsChildrenWhileStillHeld(t *testing.T) {
+	t.Parallel()
+	doc := convergingCompany(nil)
+	e := newEngine(t, engine.WithSweepEvery(sealingOptions(t, doc), time.Hour))
+	seal(t, e, "CEO_TRACKER_TOKEN", "ceo-token")
+	reactivate(t, e, doc)
+	claimed(t, e, 2)
+	if got := describes(t, e, "cto", "tracker_probe"); got != "SEAT_TOKEN=cto-secret" {
+		t.Fatalf("precondition: the CTO's child reports %q", got)
+	}
+	kept, ok := e.ToolsFor("ceo").Lookup("tracker_probe")
+	if !ok {
+		t.Fatal("precondition: the CEO has no child")
+	}
+
+	// Spend the interval's one honoured ask on a revision that adds a seat.
+	withCFO := doc + "  - name: CFO\n    handle: cfo\n    llm: zulu\n"
+	reactivate(t, e, withCFO)
+	waitEstablished(t, e, 3)
+
+	cto := "  - name: CTO\n    handle: cto\n    llm: zulu\n    mcp_env:\n" +
+		"      tracker:\n        SEAT_TOKEN: \"cto-secret\"\n"
+	if strings.Count(withCFO, cto) != 1 {
+		t.Fatalf("premise: the document does not declare the CTO as %q", cto)
+	}
+	reactivateAndSettle(t, e, strings.Replace(withCFO, cto, "", 1))
+
+	if !slices.Contains(e.Node().Host().Held(), "cto") {
+		t.Fatalf("premise: the sweep released the CTO (held %v), so the release "+
+			"and not the apply's pass is what stopped its child", e.Node().Host().Held())
+	}
+	if names := surfaceOf(t, e, "cto"); slices.Contains(names, "tracker_probe") {
+		t.Errorf("the CTO's child is still running for a seat the published company "+
+			"no longer declares: %v", names)
+	}
+	if after, ok := e.ToolsFor("ceo").Lookup("tracker_probe"); !ok || after.Tool != kept.Tool {
+		t.Error("retiring a removed seat's child restarted or dropped a declared seat's child")
 	}
 }
 

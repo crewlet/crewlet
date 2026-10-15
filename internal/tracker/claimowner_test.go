@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -153,11 +152,7 @@ func TestASecondBulkOnTheSameNodeIsRefused(t *testing.T) {
 func TestAClaimTheGateRefusedIsNotAnotherWalk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{
-		Owner: "old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion - 1, Ungated: true,
-	}); err != nil || lease == nil {
-		t.Fatalf("stage a lower-protocol node: (%v, %v)", lease, err)
-	}
+	stageAnOlderNode(t, r)
 
 	release, err := r.writer.Admit(t.Context(), 10)
 	if err != nil {

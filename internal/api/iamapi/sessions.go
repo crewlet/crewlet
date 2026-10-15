@@ -1,0 +1,147 @@
+package iamapi
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+)
+
+// sessionView is one session as the directory renders it.
+//
+// THE LINEAGE AND NOTHING DERIVED FROM THE COOKIE. A lineage is in every
+// audit row and is not a secret; a bearer is, and a listing carrying anything
+// a session could be resumed from would make this the surface worth
+// attacking.
+type sessionView struct {
+	Lineage   string    `json:"lineage"`
+	Person    string    `json:"person"`
+	Epoch     uint64    `json:"epoch"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+	EndedWhy  string    `json:"ended_reason,omitempty"`
+	Live      bool      `json:"live"`
+
+	// EnrolmentOnly is a session opened on a password alone where a second
+	// factor is required, which may do nothing but enrol one.
+	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
+}
+
+// GetSessions is `GET /iam/people/{id}/sessions`.
+func (s *Service) GetSessions(w http.ResponseWriter, r *http.Request) {
+	held, err := s.directory.Sessions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.unavailable(w, r, "read a person's sessions", err)
+		return
+	}
+	now := s.now()
+	out := make([]sessionView, 0, len(held))
+	for _, row := range held {
+		out = append(out, sessionView{
+			Lineage: row.Lineage, Person: row.PersonID, Epoch: row.Epoch,
+			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
+			EndedAt: row.EndedAt, EndedWhy: row.EndedWhy,
+			Live: row.Live(now), EnrolmentOnly: row.EnrolmentOnly,
+		})
+	}
+	httpjson.Write(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+// DeleteSessions is `DELETE /iam/people/{id}/sessions`.
+//
+// # One record, not N deletes
+//
+// It bumps the person's REVOCATION EPOCH, which every bearer they hold
+// carries the value it was minted at — so one write ends every session and
+// every token at once, including the ones minted on nodes this one has never
+// spoken to. Ending them individually would be N records, would race with a
+// session opening during the sweep, and would leave whatever was minted
+// between the first delete and the last.
+//
+// # Two arms, two proofs — decided by the table, not here
+//
+// The person themselves is asked for no recent proof, because this is the first
+// thing they do on finding an intruder in their account; an administrator
+// ending somebody else's is asked `step_up`, because it signs a colleague out
+// of everything and stops every pipeline they run. Both
+// are one verb's row (internal/authz, `selfRecency`), so the route states
+// nothing about either.
+func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
+	writer, ok := s.writerFor(r.Context())
+	if !ok {
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+		return
+	}
+	id := r.PathValue("id")
+	reason := reasonOr(r.URL.Query().Get("reason"),
+		byCaller(r.Context(), "every session ended"))
+	op, ok := s.opIDFor(w, r, "sessions-revoke", nil)
+	if !ok {
+		return
+	}
+	opID := op.key
+	revoked, err := writer.Revoke(r.Context(), id, op.id, reason)
+	if err == nil && ownLanding(revoked) {
+		log.InfoContext(r.Context(), "iam_sessions_revoked",
+			"person", id, "position", revoked.Position.String())
+		// SOMEBODY ENDING THEIR OWN is a sign-out everywhere; anybody
+		// else ending them is a revocation, and the trail says which
+		// because the second is the row an investigation looks for.
+		why := types.EndRevoked
+		if principal, how := iam.From(r.Context()); how == iam.Resolved &&
+			principal.ID.String() == id {
+			why = types.EndLogoutAll
+		}
+		s.audit.Emit(r.Context(), types.IAMSessionEnded{
+			Person: id, Reason: why, By: callerName(r.Context()),
+			OperatorID: callerOperator(r.Context()),
+		})
+	}
+	s.answerWrite(w, r, opID, revoked, err, map[string]any{"id": id})
+}
+
+// PostInvalidateAll is `POST /iam/invalidate-all`.
+//
+// # It is the restore runbook's last step, and it is admin's
+//
+// Admin, a person present and a recent proof — stated once on the authority
+// table's row and again on the record (internal/iamdomain), which also refuses
+// it through a machine token ([iamdomain.ErrTokenRefused]): a restore is run by
+// whoever runs the deployment, and ending every session and machine token at
+// once ends every person's authority. It used to need two separate grants, one
+// asked at the route and the other only at the record, so a caller the route
+// let through was refused a step later — and the argument that a machine token
+// could never reach this gesture rested on that unstated second check. It now
+// rests on two stated ones: the row's `presence` and the record's own lock.
+//
+// A backup taken before a revocation restores the session rows that revocation
+// ended, so a pre-restore bearer would work again — a cookie, or a machine
+// token revoked after the copy was taken. The fleet-wide generation is the only
+// number that can be pushed forward without reading anybody's row, and both
+// carry it.
+func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
+	writer, ok := s.writerFor(r.Context())
+	if !ok {
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+		return
+	}
+	principal, _ := iam.From(r.Context())
+	reason := reasonOr(r.URL.Query().Get("reason"),
+		"every session in the company was invalidated")
+	op, ok := s.opIDFor(w, r, "sessions-invalidate", nil)
+	if !ok {
+		return
+	}
+	opID := op.key
+	bumped, err := writer.InvalidateAll(r.Context(), op.id, reason)
+	if err == nil && ownLanding(bumped) {
+		log.WarnContext(r.Context(), "iam_generation_bumped",
+			"by", iam.ActorFor(principal).Name,
+			"position", bumped.Position.String(),
+			"detail", "every session in this company is now invalid")
+	}
+	s.answerWrite(w, r, opID, bumped, err, nil)
+}

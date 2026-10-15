@@ -584,7 +584,7 @@ function serving(
     return answers[what as QueryName] ?? {};
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -1876,7 +1876,7 @@ test("rows past the first page are reachable", async () => {
     what === "work_items" ? pages[String(params?.cursor ?? "")] : {},
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(withDerived({ name: "Acme", roles: [] }) as never);
   mountWork();
   await waitFor(() => expect(screen.getByText("a task called 2")).toBeTruthy());

@@ -58,14 +58,6 @@ const (
 )
 
 // ChecklistOps are the gestures a caller may send — all of them.
-//
-// A PROMOTION IS NOT ONE. Marking an item as having become a subtask is the
-// parent half of [Writer.PromoteItem], a [PromoteIntent] resolved by
-// [settlePromote], because it has outcomes no gesture here has: a mark that is
-// already there is nothing to write, which is what makes the sequence's
-// parent step re-runnable; an item deleted meanwhile is a warning rather than
-// a refusal, since the subtask already stands; and an item that already became
-// ANOTHER task is refused rather than re-pointed.
 var ChecklistOps = []ChecklistOp{
 	ChecklistAddList, ChecklistRemoveList, ChecklistRenameList,
 	ChecklistAddItem, ChecklistRemoveItem, ChecklistRenameItem,
@@ -278,8 +270,8 @@ func newItem(lists []Checklist, adding []ChecklistItem, item ChecklistItem) (Che
 	if err := checkChecklistName(item.Name, MaxChecklistItemName, "checklist item name"); err != nil {
 		return ChecklistItem{}, err
 	}
-	// ONLY WHAT A NEW LINE CAN CARRY: a name and an owner. Done, nesting and
-	// a promotion are later gestures about a line that exists.
+	// ONLY WHAT A NEW LINE CAN CARRY: a name and an owner. Done and nesting
+	// are later gestures about a line that exists.
 	return ChecklistItem{
 		ID: item.ID, Name: strings.TrimSpace(item.Name),
 		Assignee: strings.TrimSpace(item.Assignee),

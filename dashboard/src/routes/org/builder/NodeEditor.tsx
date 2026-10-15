@@ -53,6 +53,8 @@ import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { handleLabel } from "~/lib/seats.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { SeatHolding, canManagePeople, useHumanSeats } from "~/components/people.tsx";
 import { TOOL_TONE, toolRollup } from "~/lib/toolState.ts";
 import type { IntegrationTool } from "~/contract/integrations.ts";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
@@ -89,24 +91,34 @@ import {
   ACKNOWLEDGEMENT_TEXT,
   EditorSection,
   NodeProblems,
-  NotConnected,
   ReadOnlyFact,
   Refusal,
   ScreenLink,
-  UNIQUE_NAME_HELP,
+  IDENTITY_FIXED,
+  IDENTITY_HELP,
+  NAME_HELP,
   UnitTypeField,
   placeOnFields,
   unitTypeLabel,
 } from "./dialogParts.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import type { AvatarCharacter } from "~/lib/avatar.ts";
-import { declaredHandle, type Segment } from "./model/document.ts";
-import { allSeats, allUnits, locate, type DraftSeat, type DraftUnit } from "./model/draft.ts";
+import type { Segment } from "./model/document.ts";
+import {
+  allUnits,
+  handleOf,
+  locate,
+  unitIdOf,
+  type DraftSeat,
+  type DraftUnit,
+} from "./model/draft.ts";
+import { mintHandle } from "./model/identity.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
-import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
-import { kindOf, type EditPartIntent } from "./model/operations.ts";
+import { COMPANY_KEY, isMintedKey, mintKey, type NodeKey } from "./model/keys.ts";
+import { kindOf, withoutMasked, type EditPartIntent } from "./model/operations.ts";
 import type { PlacedProblem } from "./model/problems.ts";
-import { handlesOf, recordIntent } from "./model/reducer.ts";
+import { recordIntent } from "./model/reducer.ts";
+import { scopeLimit } from "./model/scope.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import { datadogEnabled, datadogFallback } from "./chartModel.ts";
 import {
@@ -119,16 +131,18 @@ import {
   derivedUnitOf,
   gitLabAccessLevel,
   hasGitLabProvisioning,
+  identityProblemOf,
   isConnected,
   isWholeReference,
   mattermostBotUsername,
   nameOfHandle,
   placementSummary,
   providerOrder,
+  seatLabels,
+  takenIdentities,
   toolCredentialNames,
   unpinnedProvider,
 } from "./nodeFacts.ts";
-import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import {
   AvatarPicker,
   Button,
@@ -640,8 +654,12 @@ function ownsFieldPaths(company: CompanyDocument): Segment[][] {
 }
 
 /**
- * The tracker project and knowledge space a seat or unit owns: ownership for
- * routing, not a permission, on whichever backend the company runs.
+ * The tracker project and knowledge space a unit or a root seat OWNS: where
+ * its unrouted work is filed and where it writes pages, on whichever backend
+ * runs the tracker and the knowledge base. Vendor-neutral fields of the
+ * document (`project`, `space`), never a vendor's block, which no unit and no
+ * seat carries. Not a permission. Each is drawn only where the company runs
+ * that backend: with none, there is nothing to own, and the section says so.
  */
 function Owns({
   who,
@@ -651,6 +669,7 @@ function Owns({
   onSpace,
   errorFor,
   disabled,
+  keyLimit,
   focusProject = false,
 }: {
   who: "seat" | "unit";
@@ -660,13 +679,15 @@ function Owns({
   onSpace: (next: string) => void;
   errorFor: (path: readonly Segment[]) => string | undefined;
   disabled: boolean;
+  /** Why a lead's draft may not change either (`model/scope.ts`), or `null`. */
+  keyLimit: string | null;
   /** Start on the project field: the editor was opened at its Project part. */
   focusProject?: boolean;
 }) {
   const { state } = useBuilder();
   const company = state.draft.company;
   return (
-    <EditorSection title="Owns">
+    <EditorSection title="Owns" hint={keyLimit ?? undefined}>
       <div className="builder-pair">
         {backendFor(company, "tracker") !== "none" ? (
           <ConfigField
@@ -675,9 +696,13 @@ function Owns({
             value={project}
             onChange={onProject}
             required={false}
-            disabled={disabled}
+            disabled={disabled || keyLimit !== null}
             autoFocus={focusProject}
-            help={`Where unrouted work for this ${who} goes. Not a permission.`}
+            help={
+              who === "unit"
+                ? "Where unrouted work for this unit goes. Not a permission."
+                : "Where unrouted work for this seat goes, for a seat at the top level: a seat inside a unit takes its unit's. Not a permission."
+            }
             error={errorFor(PROJECT)}
           />
         ) : (
@@ -690,7 +715,7 @@ function Owns({
             value={space}
             onChange={onSpace}
             required={false}
-            disabled={disabled}
+            disabled={disabled || keyLimit !== null}
             help={`Where this ${who} writes pages nobody else is named for. Not a permission.`}
             error={errorFor(SPACE)}
           />
@@ -717,8 +742,10 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   const { refusal, apply } = useApply(api, COMPANY_KEY, onClose);
   const [acknowledged, setAcknowledged] = useState(false);
   const { errorFor, rest } = placeOnFields(placedOn(api, COMPANY_KEY), COMPANY_FIELDS);
-
-  const disabled = api.readOnly;
+  // A LEAD'S DRAFT of one unit holds the company's name and nothing else of
+  // it: the charter is shown, and changing it is the company grant's.
+  const limit = scopeLimit(state.scope, state.draft, COMPANY_KEY, "edit");
+  const disabled = api.readOnly || limit !== null;
 
   // ASKED OF THE FORM THAT RENAMES, AND ONLY THEN. The question is about what
   // this Apply does, so a name nobody typed in (a draft renamed by an earlier
@@ -730,11 +757,12 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   const renaming =
     savedName !== "" && renames(initial.name, form.name) && form.name.trim() !== savedName;
   const blocked =
-    form.name.trim() === ""
+    limit ??
+    (form.name.trim() === ""
       ? "The company needs a name."
       : renaming && !acknowledged
         ? "Confirm what renaming the company does."
-        : null;
+        : null);
 
   const parts = companyParts(initial, form);
   // ONE PANEL, NO TABS: the charter is four fields, and a tab row over four
@@ -815,9 +843,16 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
  * field this form does NOT draw (a project on a company that runs no tracker)
  * is listed at the top rather than attached to a field nobody can see.
  */
-function unitFieldPaths(company: CompanyDocument, data: ConfigUnit): Segment[][] {
+function unitFieldPaths(
+  company: CompanyDocument,
+  data: ConfigUnit,
+  { minted }: { minted: boolean },
+): Segment[][] {
   return [
     ["name"],
+    // A saved unit's key is a read-only fact, so a problem about it belongs at
+    // the top of the form with the rest; a key this draft chose is a field.
+    ...(minted ? [["id"] as Segment[]] : []),
     ["type"],
     ["purpose"],
     ["lead"],
@@ -856,11 +891,17 @@ function UnitEditor({
     presetProject(preset),
   );
   const { refusal, apply } = useApply(api, key, onClose);
+  const minted = isMintedKey(key);
   const { errorFor, rest } = placeOnFields(
     placedOn(api, key),
-    unitFieldPaths(state.draft.company, unit.data),
+    unitFieldPaths(state.draft.company, unit.data, { minted }),
   );
   const disabled = api.readOnly;
+  // A LEAD'S OWN UNIT keeps its lead, which decides who may change the unit,
+  // and every unit keeps the keys another system finds it by
+  // (`model/scope.ts`); every other field stays theirs to edit.
+  const leadLimit = scopeLimit(state.scope, state.draft, key, "lead");
+  const keyLimit = scopeLimit(state.scope, state.draft, key, "key");
 
   // What the unit inherits when it declares nothing: the lead and channel the
   // unit above it resolved to, as the last check reported them.
@@ -869,7 +910,10 @@ function UnitEditor({
   const inheritedLead = above?.lead ? nameOfHandle(state, above.lead) : "";
   const inheritedChannel = above?.channel ?? "";
 
-  const seatNames = [...new Set([...allSeats(state.draft)].map(({ seat }) => seat.data.name))];
+  // A LEAD IS WRITTEN AS A HANDLE and offered by name. One the draft holds no
+  // seat of stays on offer as what it is, or the choice would show nothing
+  // and the first change of the form would silently clear it.
+  const labels = seatLabels(state.draft);
   const leadChoices: FieldChoice[] = [
     {
       value: "",
@@ -878,19 +922,25 @@ function UnitEditor({
           ? `No lead (inherits ${inheritedLead} from ${parent.data.name})`
           : "No lead",
     },
-    ...seatNames.map((name) => ({ value: name, label: name })),
+    ...[...labels].map(([handle, label]) => ({ value: handle, label })),
+    ...(initial.lead !== "" && !labels.has(initial.lead)
+      ? [{ value: initial.lead, label: `@${initial.lead} (names no seat)` }]
+      : []),
   ];
 
-  const blocked = form.name.trim() === "" ? "A unit needs a name." : null;
-  const renamed = renames(initial.name, form.name);
+  const keyProblem = minted
+    ? identityProblemOf(takenIdentities(state, api.identities), "unit", form.id, initial.id)
+    : null;
+  const blocked =
+    form.name.trim() === "" ? "A unit needs a name." : keyProblem !== null ? keyProblem : null;
 
-  const parts = unitParts(key, initial, form);
+  const parts = unitParts(key, initial, form, { editableKey: minted });
   const credentials = toolCredentialNames(unit.data).length > 0;
   const tabs: EditorTab[] = [
     {
       id: "profile",
       label: "Profile",
-      paths: [["name"], ["type"], ["purpose"], ["goals"]],
+      paths: [["name"], ["id"], ["type"], ["purpose"], ["goals"]],
       content: (
         <EditorSection title="Unit">
           <ConfigField
@@ -898,10 +948,24 @@ function UnitEditor({
             value={form.name}
             onChange={(name) => set({ name })}
             disabled={disabled}
-            help={UNIQUE_NAME_HELP.unit}
+            help={NAME_HELP.unit}
             error={errorFor(["name"])}
           />
-          {renamed && <RenameUnitPreflight unit={key} stored={!isMintedKey(key)} />}
+          {minted ? (
+            <ConfigField
+              label="Key"
+              kind="id"
+              value={form.id}
+              onChange={(id) => set({ id: id.trim() })}
+              disabled={disabled}
+              help={IDENTITY_HELP.unit}
+              error={keyProblem ?? errorFor(["id"])}
+            />
+          ) : (
+            <ReadOnlyFact label="Key" reason={IDENTITY_FIXED.unit}>
+              <InlineCode>{unitIdOf(unit)}</InlineCode>
+            </ReadOnlyFact>
+          )}
           <UnitTypeField
             value={form.type}
             onChange={(type) => set({ type })}
@@ -943,9 +1007,9 @@ function UnitEditor({
               choices={leadChoices}
               value={form.lead}
               onChange={(lead) => set({ lead })}
-              disabled={disabled}
+              disabled={disabled || leadLimit !== null}
               autoFocus={section === "leadership"}
-              help="Sub-units without a lead inherit this one."
+              help={leadLimit ?? "Sub-units without a lead inherit this one."}
               error={errorFor(["lead"])}
             />
             <ConfigField
@@ -953,12 +1017,13 @@ function UnitEditor({
               value={form.channel}
               onChange={(channel) => set({ channel })}
               required={false}
-              disabled={disabled}
+              disabled={disabled || keyLimit !== null}
               placeholder={inheritedChannel}
               help={
-                inheritedChannel && parent
+                keyLimit ??
+                (inheritedChannel && parent
                   ? `Empty inherits ${inheritedChannel} from ${parent.data.name}.`
-                  : "A unit below that names no channel inherits this one."
+                  : "A unit below that names no channel inherits this one.")
               }
               error={errorFor(["channel"])}
             />
@@ -981,6 +1046,7 @@ function UnitEditor({
             onSpace={(space) => set({ space })}
             errorFor={errorFor}
             disabled={disabled}
+            keyLimit={keyLimit}
           />
           <EditorSection title="Knowledge">
             <ListInput
@@ -1034,7 +1100,7 @@ function UnitEditor({
       name={unit.data.name || "this unit"}
       dirty={dirty}
       blocked={blocked}
-      blockedPath={["name"]}
+      blockedPath={form.name.trim() === "" ? ["name"] : ["id"]}
       readOnly={api.readOnly}
       refusal={refusal}
       problems={rest}
@@ -1065,7 +1131,7 @@ function seatFieldPaths(
   data: ConfigRole,
   { human, minted }: { human: boolean; minted: boolean },
 ): Segment[][] {
-  const seatBlock = (tool: "slack" | "mattermost") =>
+  const seatBlock = (tool: "mattermost") =>
     isConnected(company, tool) && isRecord(getPath(data, ["integrations", tool]));
   return [
     ["name"],
@@ -1122,7 +1188,7 @@ function SeatEditor({
   const company = state.draft.company;
   const minted = isMintedKey(key);
   const human = kindOf(data) === "human";
-  const handle = handlesOf(state).get(key);
+  const handle = handleOf(seat);
   const { initial, form, set, dirty } = useForm<SeatForm>(
     () => seatForm(data, gitLabAccessLevel(company, handle)),
     presetProject(preset),
@@ -1133,20 +1199,25 @@ function SeatEditor({
     seatFieldPaths(company, data, { human, minted }),
   );
   const disabled = api.readOnly;
-  // The handle the engine derives from the name, which is the seat's handle
-  // while it declares none of its own.
-  const derivedHandle = declaredHandle(data) === undefined ? handle : undefined;
+  // A LEAD'S DRAFT keeps the keys another system finds a seat by
+  // (`model/scope.ts`), on a seat it added as on a saved one.
+  const keyLimit = scopeLimit(state.scope, state.draft, key, "key");
+  const handleProblem = minted
+    ? identityProblemOf(takenIdentities(state, api.identities), "seat", form.handle, initial.handle)
+    : null;
 
   const budgetErrors = human ? {} : tokenBudgetErrors(form.tokenBudget);
   const blocked =
     form.name.trim() === ""
       ? "A seat needs a name."
-      : Object.keys(budgetErrors).length > 0
-        ? "Correct the token budget first."
-        : null;
+      : handleProblem !== null
+        ? handleProblem
+        : Object.keys(budgetErrors).length > 0
+          ? "Correct the token budget first."
+          : null;
 
   const parts = seatParts(key, data, initial, form, { editableHandle: minted });
-  const shownHandle = minted ? form.handle.trim() || derivedHandle : handle;
+  const shownHandle = minted ? form.handle.trim() || handle : handle;
   const subtitle = (
     <>
       {shownHandle ? <span className="mono">{handleLabel(shownHandle)}</span> : null}
@@ -1163,7 +1234,7 @@ function SeatEditor({
           value={form.name}
           onChange={(name) => set({ name })}
           disabled={disabled}
-          help={UNIQUE_NAME_HELP.seat}
+          help={NAME_HELP.seat}
           error={errorFor(["name"])}
         />
         <ConfigField
@@ -1172,43 +1243,26 @@ function SeatEditor({
           value={form.email}
           onChange={(email) => set({ email })}
           required={false}
-          disabled={disabled}
+          disabled={disabled || keyLimit !== null}
+          help={keyLimit ?? undefined}
           error={errorFor(["email"])}
         />
       </div>
-      {minted && (
+      {minted ? (
         <ConfigField
           label="Handle"
           kind="id"
           value={form.handle}
-          onChange={(value) => set({ handle: value })}
-          required={false}
+          onChange={(value) => set({ handle: value.trim() })}
           disabled={disabled}
-          help={
-            form.handle.trim() !== ""
-              ? "The handle this seat's memory, mailbox and mentions attach to."
-              : // The engine derived that handle from the name the draft
-                // held at its last check, so it is only still the answer
-                // while the name has not changed since.
-                derivedHandle && !renames(initial.name, form.name)
-                ? `Leave empty for ${derivedHandle}.`
-                : "Leave empty to derive it from the name."
-          }
-          error={errorFor(["handle"])}
+          help={IDENTITY_HELP.seat}
+          error={handleProblem ?? errorFor(["handle"])}
         />
+      ) : (
+        <HandleFact seat={seat} dirty={dirty} onClose={onClose} />
       )}
       <FactList
         items={[
-          ...(minted
-            ? []
-            : [
-                {
-                  key: "handle",
-                  label: "Handle",
-                  value: <InlineCode>{handle ?? ""}</InlineCode>,
-                  reason: "A seat’s handle can’t change.",
-                },
-              ]),
           {
             key: "kind",
             label: "Kind",
@@ -1314,6 +1368,7 @@ function SeatEditor({
           content: (
             <>
               {identity}
+              <SeatHolder seat={{ handle, name: data.name }} minted={minted} />
               {persona}
             </>
           ),
@@ -1324,17 +1379,12 @@ function SeatEditor({
           paths: [["contact"], ["availability"]],
           content: (
             <>
+              {/* OPTIONAL, AND SAID SO: a person who works only through the
+                  dashboard has no chat account to declare, and the engine
+                  warns rather than refuses a human seat with none. */}
               <EditorSection
                 title="Contact identities"
-                aside={
-                  <Tag
-                    size="xs"
-                    variant={errorFor(["contact"]) ? "warning" : "neutral"}
-                    appearance="soft"
-                  >
-                    At least one
-                  </Tag>
-                }
+                hint={`How agents mention and reach the person, and how their activity is attributed. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
               >
                 {errorFor(["contact"]) && (
                   <Callout variant="danger" role="alert">
@@ -1351,7 +1401,7 @@ function SeatEditor({
                       value={form.contact[identity]}
                       onChange={(value) => set({ contact: { ...form.contact, [identity]: value } })}
                       required={false}
-                      disabled={disabled}
+                      disabled={disabled || keyLimit !== null}
                     />
                   ))}
                 </div>
@@ -1410,6 +1460,9 @@ function SeatEditor({
           content: (
             <>
               {reports}
+              {/* AN AGENT SEAT'S ONLY: the engine refuses a human seat a
+                  project or a space (`org.Role.humanForbidden`), since nothing
+                  files work for a person by them. */}
               <Owns
                 who="seat"
                 focusProject={section === "project"}
@@ -1419,6 +1472,7 @@ function SeatEditor({
                 onSpace={(space) => set({ space })}
                 errorFor={errorFor}
                 disabled={disabled}
+                keyLimit={keyLimit}
               />
               <ScheduleToggles
                 data={data}
@@ -1508,7 +1562,9 @@ function SeatEditor({
       name={data.name || "this seat"}
       dirty={dirty}
       blocked={blocked}
-      blockedPath={form.name.trim() === "" ? ["name"] : ["token_budget"]}
+      blockedPath={
+        form.name.trim() === "" ? ["name"] : handleProblem !== null ? ["handle"] : ["token_budget"]
+      }
       readOnly={api.readOnly}
       refusal={refusal}
       problems={rest}
@@ -1519,6 +1575,153 @@ function SeatEditor({
       onApply={() => apply(parts)}
       onClose={onClose}
     />
+  );
+}
+
+/**
+ * A saved seat's handle, which never changes, and the one way to put the role
+ * under another: REPLACING the seat (`model/operations.ts`'s `ReplaceSeat`).
+ *
+ * A SEAT WITH ANOTHER HANDLE IS ANOTHER SEAT — a new mailbox, new memory and a
+ * new agent id — so this says so before it records anything, and the old
+ * seat's work stays with the old handle. It is its own step, like a deletion,
+ * because it replaces the node this form is editing.
+ */
+function HandleFact({
+  seat,
+  dirty,
+  onClose,
+}: {
+  seat: DraftSeat;
+  dirty: boolean;
+  onClose: () => void;
+}) {
+  const api = useBuilder();
+  const { state } = api;
+  const handle = handleOf(seat);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const taken = takenIdentities(state, api.identities);
+  const next = typed ?? mintHandle(seat.data.name, taken);
+  const problem = identityProblemOf(taken, "seat", next, "");
+  const uncarried = withoutMasked(seat.data).masked;
+
+  function replace() {
+    if (problem !== null || api.readOnly) return;
+    const intent = {
+      type: "replaceSeat",
+      target: seat.key,
+      key: mintKey(api.keys),
+      handle: next,
+    } as const;
+    const answer = recordIntent(state, intent);
+    if (!answer.ok) {
+      setRefusal(answer.message);
+      return;
+    }
+    api.dispatch({ type: "record", intent });
+    onClose();
+  }
+
+  return (
+    <>
+      <ReadOnlyFact
+        label="Handle"
+        reason={
+          dirty
+            ? `${IDENTITY_FIXED.seat} Apply or discard the changes in this form before replacing it.`
+            : IDENTITY_FIXED.seat
+        }
+      >
+        <span className="row wrap">
+          <InlineCode>{handle}</InlineCode>
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={dirty || api.readOnly}
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+          >
+            Replace this seat…
+          </Button>
+        </span>
+      </ReadOnlyFact>
+      {open && (
+        <EditorSection
+          title={`Replace ${handleLabel(handle)}`}
+          hint={`This is a new seat: a new mailbox, new memory and a new agent id. ${seat.data.name || "This seat"}'s work, memory and history stay with ${handleLabel(handle)}, which stops running once the change is saved. The new seat takes its place and fields, and every lead, manages entry and Datadog fallback naming ${handleLabel(handle)} moves to it.`}
+        >
+          <Refusal message={refusal} />
+          {uncarried.length > 0 && (
+            <Callout variant="warning">
+              These credentials do not carry over: {uncarried.join(", ")}. {handleLabel(handle)}{" "}
+              holds them as values the dashboard never shows, so the new seat starts without them. A{" "}
+              <InlineCode>${"{NAME}"}</InlineCode> reference carries over as written.
+            </Callout>
+          )}
+          <ConfigField
+            label="New handle"
+            kind="id"
+            value={next}
+            onChange={(value) => {
+              setTyped(value.trim());
+              setRefusal(null);
+            }}
+            help={IDENTITY_HELP.seat}
+            error={problem ?? undefined}
+          />
+          <div className="row">
+            <span className="spacer" />
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Keep this seat
+            </Button>
+            <Button variant="danger" disabled={problem !== null} onClick={replace}>
+              Replace seat
+            </Button>
+          </div>
+        </EditorSection>
+      )}
+    </>
+  );
+}
+
+/**
+ * Who holds a human seat, and the gestures that fill or free it: the one
+ * [SeatHolding] the seat's page, its peek and its card on the chart draw
+ * (`components/people.tsx`), for every signed-in reader — the directory
+ * answers each holder's name to everybody and the gestures to an admin — and
+ * nothing at all, asked of nobody, before somebody has said who this is.
+ *
+ * NOT A DRAFT EDIT. Inviting or creating a person, and cancelling the
+ * invitation that holds the seat, write the identity directory about the seat
+ * the RUNNING company holds, at once and whatever becomes of this draft — so
+ * Apply and Undo reach none of them. A seat this draft added holds nobody yet,
+ * since the directory knows only the seats a saved revision declares, and says
+ * so instead of offering a gesture the engine would refuse.
+ */
+function SeatHolder({ seat, minted }: { seat: { handle: string; name: string }; minted: boolean }) {
+  const viewer = useViewer();
+  const reads = !viewer.asking && !viewer.anonymous;
+  const seats = useHumanSeats(reads && !minted);
+  if (!reads) return null;
+  return (
+    <EditorSection title="Person">
+      {minted ? (
+        <p className="builder-note muted">
+          A person is invited or created on this seat once the organization is saved: the identity
+          directory holds only the seats a saved revision declares.
+        </p>
+      ) : (
+        <SeatHolding
+          seat={seat}
+          seats={seats}
+          manages={canManagePeople(viewer.grants)}
+          held={viewer.grants}
+          you={viewer.handle === seat.handle}
+        />
+      )}
+    </EditorSection>
   );
 }
 
@@ -1544,23 +1747,31 @@ function Reports({
   autoFocus: boolean;
 }) {
   const { state } = useBuilder();
-  const seatNames = new Set<string>();
+  // AN ENTRY IS A HANDLE OR A UNIT KEY, offered by name. One the draft holds
+  // nothing of stays on offer as what it is, so it reads as written and the
+  // form does not drop it on the next Apply.
+  const labels = seatLabels(state.draft);
+  const self = handleOf(seat);
   const options: TagsInputOption[] = [];
-  for (const { seat: other } of allSeats(state.draft)) {
-    if (other.key === seat.key || seatNames.has(other.data.name)) continue;
-    seatNames.add(other.data.name);
-    options.push({ value: other.data.name, label: other.data.name, group: "Seats" });
+  for (const [handle, label] of labels) {
+    if (handle !== self) options.push({ value: handle, label, group: "Seats" });
   }
   for (const { unit } of allUnits(state.draft)) {
+    const key = unitIdOf(unit);
     // A manages entry that names both a seat and a unit names the seat, so a
-    // unit sharing a seat's name is not offered as a second meaning of it.
-    if (seatNames.has(unit.data.name) || unit.data.name === seat.data.name) continue;
+    // unit keyed like a seat is not offered as a second meaning of it.
+    if (labels.has(key)) continue;
     options.push({
-      value: unit.data.name,
-      label: unit.data.name,
+      value: key,
+      label: unit.data.name || key,
       group: "Units",
       description: "every seat in it",
     });
+  }
+  for (const entry of value) {
+    if (!options.some((o) => o.value === entry)) {
+      options.push({ value: entry, label: `@${entry} (names nothing)`, group: "Seats" });
+    }
   }
 
   const derived = derivedSeatOf(state, seat.key);
@@ -1726,7 +1937,7 @@ function IntegrationsSection({
   disabled,
 }: {
   data: ConfigRole;
-  handle: string | undefined;
+  handle: string;
   minted: boolean;
   initial: SeatForm;
   form: SeatForm;
@@ -1748,7 +1959,7 @@ function IntegrationsSection({
   // which reaches this screen as its mask, is a bot somebody manages by hand
   // and whose username is theirs to correct.
   const provisioned = isRecord(mattermost) && isWholeReference(mattermost.bot_token);
-  const defaultUsername = handle === undefined ? "" : mattermostBotUsername(company, handle);
+  const defaultUsername = mattermostBotUsername(company, handle);
   const gitlabDefault = defaultGitLabAccessLevel(company);
 
   const integrations = useQuery("integrations", undefined, {});
@@ -1835,13 +2046,11 @@ function IntegrationsSection({
               ]}
               value={form.accessLevel}
               onChange={(accessLevel) => set({ accessLevel })}
-              disabled={disabled || handle === undefined}
+              disabled={disabled}
               help={
-                handle === undefined
-                  ? "Available once the seat’s handle is checked."
-                  : minted
-                    ? "Follows the seat’s handle."
-                    : "The level this seat's GitLab account joins the group with."
+                minted
+                  ? "Follows the seat’s handle."
+                  : "The level this seat's GitLab account joins the group with."
               }
             />
           )}
@@ -1852,7 +2061,7 @@ function IntegrationsSection({
         <ToolCard tool="slack" tools={tools}>
           <p className="builder-note muted">
             {isRecord(slack)
-              ? "This seat speaks as its own Slack app, in its unit's channel."
+              ? "This seat speaks as its own Slack app, in its unit's channel, whose credentials are set from Integrations."
               : "This seat has no Slack app of its own."}{" "}
             <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
@@ -2008,7 +2217,7 @@ const CONTACT_VENDOR: Readonly<Record<HumanContactKey, Vendor>> = {
  * The seat's settings the builder shows and does not edit: one row each in one
  * list, the reason on hover, and one link to where they are edited.
  */
-function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | undefined }) {
+function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
   const { state } = useBuilder();
   const company = state.draft.company;
   const facts: FactListItem[] = [];
@@ -2069,7 +2278,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
     // A block that is switched off wakes nobody, whatever its route_to says,
     // which is how the engine reads it and how the chart draws it.
     const on = datadogEnabled(company);
-    const fallback = handle !== undefined && datadogFallback(company) === handle;
+    const fallback = datadogFallback(company) === handle;
     facts.push({
       key: "datadog",
       label: (

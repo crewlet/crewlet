@@ -51,6 +51,43 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 			coord.FireRetention, schedule.DefaultCatchupMax)
 	}
 
+	// The setup-state window is bounded from BOTH sides, and neither bound
+	// is a number this engine chooses. Above it is GitHub's: the one-time
+	// code a manifest conversion returns dies at an hour, so a state valid
+	// for longer lets somebody complete a flow whose code is already gone
+	// — and the failure they are shown names the code rather than the
+	// wait, which sends them to the wrong place entirely. Below it is a
+	// person at a browser: a window that closes during a round trip to
+	// GitHub and two clicks refuses the operator who did exactly what was
+	// asked.
+	//
+	// It is checked here rather than in internal/api/setupapi because the
+	// record is what enforces it: the claim that spends a state lapses at
+	// this TTL, so a manifestTTL longer than it would be a token still
+	// validating after the record that spends it has lapsed — which is the
+	// replay the record exists to stop. setupapi's manifestTTL IS this
+	// constant for that reason.
+	if coord.SetupOnceRetention >= time.Hour {
+		t.Errorf("coord.SetupOnceRetention %v outlives GitHub's one-hour one-time code, so "+
+			"a setup link can be completed after the code behind it is dead and the "+
+			"operator is shown a failure naming the code rather than the wait",
+			coord.SetupOnceRetention)
+	}
+	if coord.SetupOnceRetention < 5*time.Minute {
+		t.Errorf("coord.SetupOnceRetention %v can close during the task it covers — a "+
+			"browser round trip to the vendor and two clicks — so the operator who "+
+			"did exactly what was asked is refused", coord.SetupOnceRetention)
+	}
+	// And the claims store must be able to keep it: a claim asking for
+	// longer than [coord.MaxClaimTTL] is an error, and the setup flow fails
+	// closed on every error, so a window past the ceiling would refuse
+	// every callback rather than spend one.
+	if coord.SetupOnceRetention > coord.MaxClaimTTL {
+		t.Errorf("coord.SetupOnceRetention %v is longer than the claims store keeps a "+
+			"claim (coord.MaxClaimTTL %v), so every setup callback is refused",
+			coord.SetupOnceRetention, coord.MaxClaimTTL)
+	}
+
 	// A rebase is inherited while it lies within the state log's mint
 	// horizon of the attempt reading it, and the bucket's age counts from
 	// the write, which is no earlier than the instant recorded. A bucket

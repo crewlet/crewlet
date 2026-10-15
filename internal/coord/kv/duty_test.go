@@ -56,7 +56,7 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 
 	// The seat lease bucket keeps its own ceiling: moving duties out of it
 	// widened nothing for seats.
-	_, _, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	_, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: productionSeatTTL + time.Second,
 	})
 	if !errors.Is(err, errTTLTooLong) {

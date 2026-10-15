@@ -12,8 +12,7 @@ import (
 const slackDoc = `{
   "name": "Acme",
   "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-  "integrations": {"public_base_url": "https://engine.example.com"},
-  "roles": [
+    "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Jane Founder", "handle": "founder", "kind": "human",
      "contact": {"github_login": "jane"}}
@@ -45,11 +44,7 @@ func slackSeatRows(t *testing.T, s *surface) map[string]map[string]any {
 func TestASlackSeatCarriesTheManifestItsAppIsBuiltFrom(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", slackDoc,
-		map[string]string{"X-Summary": "a company with an agent"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -96,14 +91,8 @@ func TestASlackSeatCarriesTheManifestItsAppIsBuiltFrom(t *testing.T) {
 // would be worse than offering nothing, because it looks finished.
 func TestASlackSeatOffersNoManifestWithoutAPublicAddress(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
-	doc := strings.Replace(slackDoc,
-		`"integrations": {"public_base_url": "https://engine.example.com"},`, "", 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company with no public address"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s := newSurfaceWithNoExternalURL(t)
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -116,88 +105,17 @@ func TestASlackSeatOffersNoManifestWithoutAPublicAddress(t *testing.T) {
 	// one: a block with nothing in it and no reason given is an instruction
 	// pointing at what is not there, and the cause is one edit away.
 	note, _ := seat["manifest_note"].(string)
-	if !strings.Contains(note, "public_base_url") {
+	if !strings.Contains(note, "api.external_url") {
 		t.Errorf("manifest_note = %q, and it does not name the setting to fix", note)
 	}
 }
 
-// A REFERENCE IS NOT AN ADDRESS, and the manifest is COPIED INTO SLACK.
-//
-// public_base_url is a Tier B field, so a whole ${VAR} is a legal way to
-// write it and the document stores it verbatim. Read raw, the manifest an
-// operator pastes carried "${PUBLIC_URL}/webhooks/slack/sre-lead" where an
-// address belongs: Slack refuses the app, and nothing anywhere names the
-// cause. The same mistake was measured on the Atlassian pass, which sent the
-// literal ${ATLASSIAN_ORG_ID} to Atlassian.
-func TestAnUnresolvedBaseProducesNoManifestRatherThanALiteralOne(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	doc := strings.Replace(slackDoc, `"public_base_url": "https://engine.example.com"`,
-		`"public_base_url": "${PUBLIC_URL}"`, 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company whose address is a reference"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
-
-	seat := slackSeatRows(t, s)["sre-lead"]
-	if seat == nil {
-		t.Fatal("the roster does not list the agent")
-	}
-	text, _ := seat["manifest"].(string)
-	if strings.Contains(text, "${") {
-		t.Errorf("the manifest carries a reference where an address belongs:\n%s", text)
-	}
-	if text != "" {
-		t.Errorf("a manifest was built from an address this node cannot read:\n%s", text)
-	}
-	if note, _ := seat["manifest_note"].(string); note == "" {
-		t.Error("nothing says why there is no manifest")
-	}
-	// AND THE BANNER TOO, which is the same value shown rather than pasted.
-	if url, _ := seat["public_url"].(string); strings.Contains(url, "${") {
-		t.Errorf("public_url = %q, which is a reference rather than an address", url)
-	}
-}
-
-// A RESOLVED REFERENCE IS AN ADDRESS. The point is to read the value, not to
-// refuse the shape.
-func TestAResolvedBaseReferenceBuildsARealManifest(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	doc := strings.Replace(slackDoc, `"public_base_url": "https://engine.example.com"`,
-		`"public_base_url": "${PUBLIC_URL}"`, 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company whose address is a reference"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
-	if err := s.vault.Set(t.Context(), "PUBLIC_URL", "https://engine.example.com",
-		"test", "test", pinned); err != nil {
-		t.Fatal(err)
-	}
-
-	text, _ := slackSeatRows(t, s)["sre-lead"]["manifest"].(string)
-	if !strings.Contains(text, "https://engine.example.com/webhooks/slack/sre-lead") {
-		t.Errorf("the manifest does not carry the address the reference reads as:\n%s", text)
-	}
-}
-
-// A NAME SLACK WOULD REFUSE SAYS SO, on the seat it belongs to.
-//
-// Slack caps an app name, so a long role name produces no manifest. Swallowed,
-// that left one seat's block empty under a help line telling the operator to
-// paste a manifest, with nothing anywhere naming the one-line fix.
 func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	doc := strings.Replace(slackDoc, `"name": "SRE Lead"`,
 		`"name": "Site Reliability Engineering Team Lead For Europe"`, 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company with a long role name"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, doc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -225,12 +143,8 @@ func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 // transport's answer is the only one there is.
 func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 	t.Parallel()
-	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0ACME"})
-	res := s.do(t, http.MethodPut, "/config", slackDoc,
-		map[string]string{"X-Summary": "a company with an agent"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0ACME"}, fixtureWebhookBase)
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if detail, _ := seat["detail"].(string); detail != "App A0ACME" {
@@ -247,11 +161,7 @@ func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 func TestASlackSeatWithNoKnownAppNamesItsCredential(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", slackDoc,
-		map[string]string{"X-Summary": "a company with an agent"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	detail, _ := seat["detail"].(string)

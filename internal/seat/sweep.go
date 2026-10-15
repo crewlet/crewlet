@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -228,7 +230,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			// is the standing cost this skips.
 			fleetFull = true
 		default:
-			claimed, blocked = h.claimUpTo(ctx, plan.Groups, groupRoom, room)
+			claimed, blocked = h.claimUpTo(ctx, byHandle, plan.Groups, groupRoom, room)
 		}
 	}
 
@@ -490,20 +492,23 @@ func (h *Host) roomLocked(plan placement.Plan) []int {
 // A GATE REFUSAL ENDS THE PASS: the gate is fleet-wide, so every other claim
 // this pass could make would be refused the same way, and each of them would
 // judge the gate again to learn it.
-func (h *Host) claimUpTo(ctx context.Context, groups []placement.Group, groupRoom []int,
-	room int) ([]string, int) {
+//
+// byHandle is the pass's seats by handle: a group names its seats by handle,
+// and a claim needs the whole seat, because its lease is named by the id.
+func (h *Host) claimUpTo(ctx context.Context, byHandle map[string]placement.Seat,
+	groups []placement.Group, groupRoom []int, room int) ([]string, int) {
 
 	var claimed []string
-	for _, c := range h.claimOrder(ctx, groups, groupRoom) {
+	for _, c := range h.claimOrder(ctx, byHandle, groups, groupRoom) {
 		if len(claimed) >= room {
 			break
 		}
 		if groupRoom[c.group] <= 0 {
 			continue
 		}
-		took, refused, stop := h.tryClaim(ctx, c.handle)
+		took, refused, stop := h.tryClaim(ctx, c.seat)
 		if took {
-			claimed = append(claimed, c.handle)
+			claimed = append(claimed, c.seat.Handle)
 			groupRoom[c.group]--
 		}
 		if refused == coord.RefusedProtocol {
@@ -522,7 +527,20 @@ func (h *Host) claimUpTo(ctx context.Context, groups []placement.Group, groupRoo
 
 // tryClaim takes one seat, reporting whether it was established, why it was
 // refused if it was, and whether the pass must stop claiming altogether.
-func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused coord.Refusal, stop bool) {
+func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, refused coord.Refusal, stop bool) {
+	handle := seat.Handle
+	// A SEAT WITH NO ID CANNOT BE CLAIMED, and refusing here is what keeps
+	// that loud: its lease resource, its mailbox subject and its consumer
+	// group are all built from the id, so claiming it would take a lease
+	// nothing can name and attach a consumer to a subject nothing publishes
+	// to — a seat that reads as served and receives nothing.
+	if handle == "" || seat.ID == uuid.Nil {
+		log.WarnContext(ctx, "seat_claim_unidentified", "seat", handle,
+			"hint", "this seat has no derivable id, so it has no lease and no "+
+				"mailbox; a human seat is never claimed, and an agent seat "+
+				"without one is a company whose name or handle derives nothing")
+		return false, "", false
+	}
 	unlock := h.lockSeat(handle)
 	defer unlock()
 
@@ -553,7 +571,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	// would all credit this node with that much time it never held, on the
 	// one stamp nothing has renewed since.
 	asked := h.now()
-	lease, refused, err := h.backend.TryAcquire(ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, refused, err := h.backend.TryAcquire(ctx, coord.SeatResource(seat.ID), coord.AcquireOptions{
 		Owner: h.owner,
 		TTL:   h.ttl,
 		// The STABLE node id, not the incarnation: the hint has to survive
@@ -591,11 +609,11 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 		h.giveBackUnattached(ctx, handle, *lease)
 		return false, "", true
 	}
-	h.held[handle] = &heldSeat{lease: *lease, renewedAt: asked, establishing: true}
+	h.held[handle] = &heldSeat{seat: seat, lease: *lease, renewedAt: asked, establishing: true}
 	h.mu.Unlock()
 	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
-	if err := h.notifyAcquire(ctx, handle, *lease); err != nil {
+	if err := h.notifyAcquire(ctx, seat, *lease); err != nil {
 		// A seat whose takeover pipeline failed must not stay claimed: it
 		// would look owned to the fleet while nothing runs it. Give it
 		// straight back so a peer can try — and back off here, because
@@ -629,7 +647,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	// whatever the acquire hook was refused while the seat established is
 	// waiting on exactly this. See [Hooks.OnEstablished].
 	if entry != nil {
-		h.notifyEstablished(ctx, handle, *lease)
+		h.notifyEstablished(ctx, seat, *lease)
 	}
 
 	// Counted as claimed only once the seat is ESTABLISHED. The hook gives
@@ -658,8 +676,8 @@ func (h *Host) giveBackUnattached(ctx context.Context, handle string, lease coor
 // candidate is a seat a pass may try, and the index of its group in the
 // plan — the room it is claimed against.
 type candidate struct {
-	handle string
-	group  int
+	seat  placement.Seat
+	group int
 }
 
 // claimOrder is the unheld seats this node may run, in the groups it has room
@@ -690,7 +708,9 @@ type candidate struct {
 // Seats this node recently failed to acquire are skipped until their backoff
 // expires — negative stickiness, the mirror of the positive kind. Peers are
 // unaffected.
-func (h *Host) claimOrder(ctx context.Context, groups []placement.Group, groupRoom []int) []candidate {
+func (h *Host) claimOrder(ctx context.Context, byHandle map[string]placement.Seat,
+	groups []placement.Group, groupRoom []int) []candidate {
+
 	now := h.now()
 	h.mu.Lock()
 	for handle, until := range h.acquireBackoffs {
@@ -745,8 +765,9 @@ func (h *Host) claimOrder(ctx context.Context, groups []placement.Group, groupRo
 	for i, handles := range perGroup {
 		var rest []candidate
 		for _, handle := range handles {
-			c := candidate{handle: handle, group: i}
-			if _, ok := hinted[coord.SeatResource(handle)]; ok {
+			c := candidate{seat: byHandle[handle], group: i}
+			// The hint is on the LEASE, which is named by the seat's id.
+			if _, ok := hinted[coord.SeatResource(c.seat.ID)]; ok {
 				out = append(out, c)
 				continue
 			}
@@ -1147,6 +1168,6 @@ func (h *Host) unserviceable(ctx context.Context) (unfit bool, reason string) {
 			unfit, reason = false, ""
 		}
 	}()
-	ok, why := h.serviceable()
+	ok, why := h.serviceable(ctx)
 	return !ok, why
 }

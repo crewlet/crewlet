@@ -1,0 +1,215 @@
+package engine
+
+import (
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// A NODE RUNNING NO COMPANY ANSWERS UNKNOWN, NEVER SEATLESS.
+//
+// The zero [SeatView] is what a view over no engine is, and the one answer it
+// must not give is "no seat" — [session.ResolveSeat] reads that as the
+// seatless arm and hands somebody bound to a lead's seat an empty handle,
+// which is the silent fall-through the whole three-valued shape exists to
+// prevent. Seat errors and HumanSeats reports no running company, so a person
+// is then 503 rather than served.
+func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) {
+	t.Parallel()
+	var view SeatView
+	if _, found, err := view.Seat(t.Context(), "platform-lead"); err == nil {
+		t.Errorf("Seat answered found=%v with no error, so a view with no "+
+			"company would report every seat in the company as gone", found)
+	}
+	if seats, running := view.HumanSeats(); running {
+		t.Errorf("HumanSeats answered %v as a running company's seats, so a "+
+			"node with none would list a company with no people", seats)
+	}
+	// AND THROUGH THE RESOLVER, which is where it matters: the row must
+	// be `stalled` rather than `seatless`.
+	binding := session.ResolveSeat(t.Context(), view,
+		session.PersonRow{Found: true, Seat: "platform-lead"})
+	if binding.Row != session.SeatRowStalled {
+		t.Errorf("row %q, want %q", binding.Row, session.SeatRowStalled)
+	}
+	if binding.Handle() != "" {
+		t.Errorf("handle %q from a node that cannot answer", binding.Handle())
+	}
+}
+
+// A BINDING'S SEAT IS THE SEAT THE RUNNING COMPANY HOLDS UNDER ITS HANDLE, and
+// it is gone the moment an applied revision no longer holds it.
+//
+// The running company is what every surface on this node routes, attributes
+// and authorizes by, so a seat it does not hold is conclusively absent — not
+// "not yet": there is no log this node can be behind on.
+//
+// The control is the seat before the apply: found, and human.
+func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
+	t.Parallel()
+	e := bootDirectoryNode(t, nil)
+	view := SeatViewOf(e)
+
+	seat, found, err := view.Seat(t.Context(), founderSeat)
+	if err != nil || !found || seat.Handle != founderSeat ||
+		seat.Kind != session.SeatKindHuman || seat.Name != "Dana Founder" {
+		t.Fatalf("the founder's seat reads %+v (found %v, %v), want the human "+
+			"seat the company holds", seat, found, err)
+	}
+	if seat, found, err := view.Seat(t.Context(), "ceo"); err != nil || !found ||
+		seat.Kind == session.SeatKindHuman {
+		t.Errorf("the CEO reads %+v (found %v, %v), want an agent seat", seat, found, err)
+	}
+	if handles := humanHandles(t, view); !slices.Contains(handles, founderSeat) ||
+		slices.Contains(handles, "ceo") {
+		t.Errorf("the human seats are %v, want the founder's and no agent's", handles)
+	}
+
+	// THE FOUNDER'S SEAT LEAVES THE COMPANY in one apply.
+	without := directoryConfig(t)
+	var roles []config.Role
+	for _, role := range without.Roles {
+		if role.Handle != founderSeat {
+			roles = append(roles, role)
+		}
+	}
+	without.Roles = roles
+	if _, _, err := e.Apply(t.Context(), without, time.Now()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if seat, found, err := view.Seat(t.Context(), founderSeat); err != nil || found {
+		t.Errorf("the removed seat reads %+v (found %v, %v), want it absent — a "+
+			"leaver's seat is refused at once", seat, found, err)
+	}
+	if handles := humanHandles(t, view); slices.Contains(handles, founderSeat) {
+		t.Errorf("the human seats are %v after the founder's seat left", handles)
+	}
+}
+
+// humanHandles is the running company's human seats, by handle.
+func humanHandles(t *testing.T, view SeatView) []string {
+	t.Helper()
+	seats, running := view.HumanSeats()
+	if !running {
+		t.Fatal("HumanSeats: the node runs no company")
+	}
+	handles := make([]string, 0, len(seats))
+	for _, seat := range seats {
+		if seat.Kind != session.SeatKindHuman {
+			t.Errorf("HumanSeats listed %+v, which is not a human seat", seat)
+		}
+		handles = append(handles, seat.Handle)
+	}
+	return handles
+}
+
+// SeatViewOf OVER A NIL ENGINE IS THE ZERO VALUE, not a panic: the wiring
+// builds it before it knows whether this node runs a company.
+func TestSeatViewOfANilEngineIsTheZeroValue(t *testing.T) {
+	t.Parallel()
+	if view := SeatViewOf(nil); view.engine != nil {
+		t.Errorf("SeatViewOf(nil) carries an engine: %+v", view)
+	}
+}
+
+// THE LAG IS A DURATION DERIVED FROM THIS APPLIER'S OWN DRAIN RATE.
+//
+// "Four hundred records behind" is not a length of time until something says
+// how fast this node applies them, and what reads the answer compares it
+// against [statelog.StallGrace]. Until this existed the figure handed to the
+// session tables was hardcoded at zero, so the `stalled` arm of both tables
+// could never fire and a node an hour behind authenticated as a caught-up
+// one.
+func TestTheLagIsRecordsOverTheDrainRate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		last, applied uint64
+		drain         float64
+		want          time.Duration
+	}{
+		{"caught up", 100, 100, 10, 0},
+		{"a position past the head reads as caught up", 100, 101, 10, 0},
+		{"sixty records at ten a second", 160, 100, 10, 6 * time.Second},
+		{"one record at one a second", 101, 100, 1, time.Second},
+		{
+			// A RATE OF ZERO IS FLOORED AT ONE rather than divided
+			// by: a node with no measured rate is the one least able
+			// to claim it is nearly caught up, so one second per
+			// record is the deliberately pessimistic reading.
+			name: "no measured rate is one record per second",
+			last: 190, applied: 100, drain: 0,
+			want: 90 * time.Second,
+		},
+		{
+			// AND A FRACTIONAL RATE TRUNCATES TOWARDS THE SAME
+			// FLOOR rather than towards zero seconds, for the same
+			// reason: half a record a second is slower than one, and
+			// rounding it up to one understates the lag — which is
+			// the direction that serves a stalled node's sessions.
+			name: "a rate below one is floored at one",
+			last: 130, applied: 100, drain: 0.5,
+			want: 30 * time.Second,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := lagDurationOf(tc.last, tc.applied, tc.drain); got != tc.want {
+				t.Errorf("lag %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// AND IT CROSSES THE STALL GRACE, which is the only threshold that reads it.
+func TestALagPastTheStallGraceIsVisibleAsOne(t *testing.T) {
+	t.Parallel()
+	behind := uint64(statelog.StallGrace/time.Second) + 1
+	if got := lagDurationOf(100+behind, 100, 1); got <= statelog.StallGrace {
+		t.Errorf("lag %s does not exceed the %s grace, so the tables that "+
+			"read it can never reach their stalled arm", got,
+			statelog.StallGrace)
+	}
+}
+
+// THE STORE AND THE READ ARE THE SAME NUMBER, which is what makes the
+// heartbeat's sample reachable from the request path at all.
+func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
+	t.Parallel()
+	var d runningLog
+	if got := d.Lag(); got != 0 {
+		t.Errorf("an unobserved domain reports %s, want 0", got)
+	}
+	d.lagNanos.Store(int64(7 * time.Second))
+	if got := d.Lag(); got != 7*time.Second {
+		t.Errorf("lag %s, want 7s", got)
+	}
+}
+
+// THE NODE'S OWN WRITER IS AN ADMINISTRATOR, AND NOTHING ELSE.
+//
+// An identity gesture is performed on behalf of a person who does not exist:
+// the person an invitation redeems into, the company's first person included.
+// It goes through this node's own writer, and the domain refuses an
+// administrative record from a party that does not hold admin.
+//
+// This pairing had already drifted once — the writer held one capability and
+// the domain asked for another — so every bootstrap and every redemption was
+// refused on a real deployment, invisibly, because the surface that drives
+// them is exercised against a stub writer. Pinned EXACTLY, because admin is
+// every app beside it and a list carrying anything more is a name the
+// vocabulary does not have. Mutation: write as [tracker, knowledge] and the
+// node cannot redeem an invitation; this goes red.
+func TestTheNodesOwnWriterIsAnAdministrator(t *testing.T) {
+	t.Parallel()
+	if !slices.Equal(nodeWriterGrants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("the node writes identity records as %v, want [admin] — "+
+			"without it a fresh deployment cannot create its first person "+
+			"and an invitation cannot be redeemed", nodeWriterGrants)
+	}
+}

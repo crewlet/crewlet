@@ -16,10 +16,11 @@
  *    reads that follow wait for it and a person watching a spinner deserves
  *    to know why;
  *  - `unknown`: a toast that STAYS: "Could not confirm. It may have
- *    landed", with a Retry that sends the SAME request id, which the engine
- *    derives the same operations from, so a retry is the first attempt again
- *    rather than a second change. Never retried on its own: whether to try
- *    again is the person's call about their own change;
+ *    landed", with a Retry that sends the SAME operation key, which the engine
+ *    scopes to the person and takes as the write's identity, so a retry is
+ *    the first attempt again rather than a second change. Never retried on
+ *    its own: whether to try again is the person's call about their own
+ *    change;
  *  - `refused` — the engine's reason, held on the hook (`refusal`) for the
  *    control to draw beside itself, where it stays until the next press:
  *    a refusal in a toast is gone before the person has read which field it
@@ -34,7 +35,7 @@ import { useToast } from "@crewlethq/ui";
 import { isAbort } from "~/protocol/rest.ts";
 import {
   act,
-  newRequestId,
+  newActOpID,
   type ActionArgs,
   type ActionTool,
   type ActResult,
@@ -46,7 +47,13 @@ export interface Refusal {
   sentence: string;
   /** The engine's own remedy, where it sent one. */
   hint: string;
-  /** Sending it again may succeed; the Retry reuses the request id. */
+  /**
+   * The grants any one of which would have admitted this person, where the
+   * refusal was on authority — empty otherwise. What would change the answer,
+   * which a sentence alone cannot say for a gate the person cannot see.
+   */
+  grants: readonly string[];
+  /** Sending it again may succeed; the Retry reuses the operation key. */
   retryable: boolean;
 }
 
@@ -88,8 +95,8 @@ export interface Act<T extends ActionTool> {
    */
   run: (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) => Promise<ActResult | null>;
   /**
-   * Send the press `refusal` answered again — its arguments and its request
-   * id — or nothing when there is no refusal to retry.
+   * Send the press `refusal` answered again — its arguments and its operation
+   * key — or nothing when there is no refusal to retry.
    */
   retry: () => Promise<ActResult | null>;
   /** Forget a refusal the person dismissed. */
@@ -103,13 +110,13 @@ export const PENDING_SENTENCE = "Sent. This node has not applied it yet.";
 export const UNKNOWN_TITLE = "Could not confirm. It may have landed";
 
 /**
- * One press: what was sent, under which request id, and what it is called.
+ * One press: what was sent, under which operation key, and what it is called.
  * Every retry of a press sends THIS object again, never "whatever was pressed
  * last" — see [useAct].
  */
 interface Press<T extends ActionTool> {
   args: ActionArgs<T>;
-  requestId: string;
+  opId: string;
   label: PressLabel;
 }
 
@@ -134,8 +141,8 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   // to its own press rather than read from a shared "last press". A toast's
   // Retry is a closure made when its answer arrived and may be clicked many
   // presses later; reading the latest press there re-sent a DIFFERENT change
-  // under a different request id — press A came back unknown, press B went
-  // out, and A's still-visible Retry sent B while A was never retried.
+  // under a different operation key — press A came back unknown, press B
+  // went out, and A's still-visible Retry sent B while A was never retried.
   const [refused, setRefused] = useState<{ refusal: Refusal; press: Press<T> } | null>(null);
   // WHETHER THIS BROWSER MAY ACT NOW, read when a Retry is pressed rather than
   // when its toast was made: a toast outlives the render that drew it, and a
@@ -158,7 +165,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
       setRefused(null);
       let result: ActResult;
       try {
-        result = await act(tool, press.args, { requestId: press.requestId, signal });
+        result = await act(tool, press.args, { opId: press.opId, signal });
       } catch (err) {
         // ABANDONED, which is the caller's own doing and not an answer:
         // nothing to report, and nothing to retry.
@@ -196,7 +203,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
           toast.show({
             // ONE TOAST PER PRESS, replaced rather than stacked when its own
             // Retry comes back unknown again.
-            id: `act-unknown-${press.requestId}`,
+            id: `act-unknown-${press.opId}`,
             variant: "warning",
             title: UNKNOWN_TITLE,
             message: `${press.label.done}? ${result.reason}`,
@@ -209,6 +216,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
             refusal: {
               sentence: result.sentence,
               hint: result.hint,
+              grants: result.grants,
               retryable: result.retryable,
             },
             press,
@@ -220,11 +228,11 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
     [tool, toast],
   );
 
-  // A NEW PRESS IS A NEW REQUEST ID, minted here in the handler and never
+  // A NEW PRESS IS A NEW OPERATION KEY, minted here in the handler and never
   // per attempt: only a retry of that press reuses it.
   const run = useCallback(
     (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) =>
-      send({ args, requestId: newRequestId(), label }, options?.signal),
+      send({ args, opId: newActOpID(), label }, options?.signal),
     [send],
   );
 

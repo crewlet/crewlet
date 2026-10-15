@@ -282,7 +282,7 @@ func TestEditingAProjectIsNotAChangeToItsWork(t *testing.T) {
 
 	if _, err := r.writer.WriteProject(t.Context(), "op-triage", "ENG",
 		tracker.ProjectEdit{DefaultAssignee: ptr("bo")},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 		t.Fatalf("edit the project: %v", err)
 	}
 	r.drain()

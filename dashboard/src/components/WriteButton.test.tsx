@@ -96,7 +96,7 @@ test("a press in flight does not press again", () => {
 
 test("a refusal the node caused offers to try again, under the same request", () => {
   const w = write({
-    refusal: { sentence: "This node is shutting down.", hint: "", retryable: true },
+    refusal: { sentence: "This node is shutting down.", hint: "", retryable: true, grants: [] },
   });
   render(
     <WriteButton write={w} onPress={() => {}}>
@@ -113,7 +113,7 @@ test("a refusal the request caused offers no retry: the same request would be re
   render(
     <WriteButton
       write={write({
-        refusal: { sentence: "views: v9 is not a view", hint: "", retryable: false },
+        refusal: { sentence: "views: v9 is not a view", hint: "", retryable: false, grants: [] },
       })}
       onPress={() => {}}
     >
@@ -132,6 +132,7 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
           sentence: "`title` is 600 bytes and a task's title holds at most 256.",
           hint: "",
           retryable: false,
+          grants: [],
         },
       })}
       onPress={() => {}}

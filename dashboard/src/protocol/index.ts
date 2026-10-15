@@ -13,9 +13,25 @@
 
 export { Store } from "./store.ts";
 export type { StoreState, Slice } from "./store.ts";
-export { LiveSocket, QueryError, queryErrorCode } from "./socket.ts";
+export {
+  LiveSocket,
+  QueryError,
+  isLogRefusal,
+  queryErrorCode,
+  unavailableRetryMs,
+} from "./socket.ts";
+export { retryAfterMs } from "./retry.ts";
 export { api } from "./api.ts";
-export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, retryAfterSeconds } from "./rest.ts";
+export {
+  rest,
+  RestError,
+  REQUEST_TIMEOUT_MS,
+  isAbort,
+  lastAnsweredAt,
+  refusedGrants,
+  retryAfterSeconds,
+  whenRequestsSettle,
+} from "./rest.ts";
 export { keepsOperation, layoutOpID, newGateOpID } from "./gate.ts";
 export type { GateAction } from "./gate.ts";
 export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS } from "./broker.ts";
@@ -30,18 +46,24 @@ export type {
   MetaPeer,
 } from "./broker.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
+export { auth } from "./auth.ts";
 export {
-  apiToken,
-  storeToken,
-  clearToken,
-  requestToken,
-  onTokenRequested,
-  onTokenChanged,
-} from "./authToken.ts";
+  confirmStepUp,
+  currentSessionNeed,
+  needSession,
+  onSessionNeed,
+  onStepUpAsked,
+  sessionNeedsEnrolment,
+  sessionRestored,
+  setStepUpConfirmer,
+  stepUpAsked,
+} from "./signin.ts";
+export type { SessionNeed, StepUpConfirmer } from "./signin.ts";
+export { SessionKeepAlive, SESSION_KEEPALIVE_MS } from "./keepalive.ts";
 // THE WRITE AND THE FLOOR IT RAISES, so the replay can hand a captured
 // `/operator/act` answer to the client's own `act` and read the floor back off
 // the client's own `SessionFloors` — the floor a later read then names.
-export { act } from "./act.ts";
-export type { ActResult } from "./act.ts";
+export { act, newActOpID } from "./act.ts";
+export type { ActErrorCode, ActResult } from "./act.ts";
 export { SessionFloors, domainOf } from "./session.ts";
 export type * from "./types.ts";

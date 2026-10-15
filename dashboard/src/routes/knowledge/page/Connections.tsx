@@ -30,8 +30,9 @@ import type {
 import { fmtDateCompact, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { readCount, readVia } from "~/lib/pageReads.ts";
 import { shortAge } from "~/lib/seats.ts";
+import { itemPath } from "~/lib/work.ts";
 import type { PageRevision, PageSummary } from "~/protocol/index.ts";
-import { Face, drawnBy, pagePath, type Who } from "../parts.tsx";
+import { Face, pagePath, type Who } from "../parts.tsx";
 
 /** How many rows a connection draws before "Show more": a glance, the rest a press away. */
 const CONNECTION_ROWS = 3;
@@ -189,7 +190,9 @@ function LinkedFrom({
                 <li key={`t:${row.t.id}`}>
                   <a
                     className="knowledge-link"
-                    href={href(["work", row.t.key])}
+                    // BY ITS ADDRESS ([itemPath]): a key another task claimed
+                    // first opens that task, not the one linking here.
+                    href={href(itemPath(row.t))}
                     title={row.t.via.map((v) => TASK_VIA[v] ?? v).join(" and ")}
                   >
                     <StatusMark status={row.t.status} />
@@ -395,7 +398,7 @@ export function Revisions({
       ) : (
         <ul className="knowledge-revision-list" role="list">
           {history.map((rev) => {
-            const by = drawnBy(rev.author, rev.author_seat);
+            const by = rev.author ?? "";
             return (
               <li key={rev.version}>
                 <button

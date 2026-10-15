@@ -618,7 +618,7 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 		parkOnAQuestion(t, rig)
 		rig.resumer.failWith(ErrResumeAbandoned)
 		rig.resumer.beforeTurn = true
-		given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "use main",
+		given := types.SandboxAnswerGiven{TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "use main",
 			LaunchID: rig.get("t1").LaunchID}
 		ev := events.New(given, events.TraceContext{})
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {

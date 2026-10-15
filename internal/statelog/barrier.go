@@ -105,23 +105,33 @@ const DefaultBarrierBudget = 5 * time.Second
 // stream's end is, so each log a node runs has its own index proving its own
 // end, and a reader of one log never waits on an append to another.
 //
+// signer is the fleet keyring's signer for the domain: a barrier is a record
+// on the log like any other, so it is signed like any other.
+//
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is
 // admitted through, and refused on a domain that keeps none.
-func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
-	encode func(Envelope) ([]byte, error), gen func() uint32,
+func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
+	admission Admission, encode func(Envelope) ([]byte, error), gen func() uint32,
 	rec *metrics.Recorder) (*ReadIndex, error) {
 	if err := spec.Instantiates(d); err != nil {
+		return nil, err
+	}
+	// A BARRIER IS A RECORD ON THE DOMAIN'S OWN LOG, so it is signed like
+	// any other: an unsigned one would let anyone who can reach the broker
+	// satisfy a linearizable read's proof of quorum.
+	signed, err := signing(log, signer, d.Name())
+	if err != nil {
 		return nil, err
 	}
 	if encode == nil {
 		return nil, fmt.Errorf("statelog: read index for %q has no encoder", d.Name())
 	}
 	switch {
-	case KeepsGateReserve(d) && admission == nil:
+	case ReservationOf(d).Kept && admission == nil:
 		return nil, fmt.Errorf("statelog: read index for %q has no admission, so "+
 			"its barriers would fill the gate reserve an eviction needs", d.Name())
-	case !KeepsGateReserve(d) && admission != nil:
+	case !ReservationOf(d).Kept && admission != nil:
 		return nil, fmt.Errorf("statelog: read index for %q was given an "+
 			"admission, and its log keeps no gate reserve", d.Name())
 	}
@@ -133,7 +143,7 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
 			"barrier writes no rows at all", d.Name(), class)
 	}
 	return &ReadIndex{
-		log:       log,
+		log:       signed,
 		stream:    spec.Name,
 		subject:   wireSubject(spec.SubjectPrefix, Subject{Kind: BarrierKind}),
 		domain:    d.Name(),
@@ -236,6 +246,11 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		}
 		body, err := r.encode(env)
 		if err != nil {
+			// LOGGED HERE, once, for the reason [barrierAppendError]
+			// logs: every reader waiting on this run is told the
+			// refusal's own sentence, never these words.
+			log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+				"stage", "encode", "error", err.Error())
 			run.err = fmt.Errorf("statelog: encode a barrier: %w", err)
 			return
 		}
@@ -281,21 +296,55 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 	}()
 }
 
-// barrierAppendError is what a barrier append that did not land tells the
-// readers waiting on it.
+// barrierAppendError is what a barrier append the broker did not store means
+// to the read waiting on it, decided by the same [classify] a write's append
+// is.
 //
-// A FULL LOG IS NAMED AS ONE. The append's own error was handed on raw, and
-// the read path's mapping ([barrierRefusal]) only knows a full log by its
-// refusal reason — so every linearizable read on a full log was refused
-// `no_quorum`, a majority that did not agree and a thing worth coming back
-// for, where the truth was a byte ceiling an operator has to raise.
+// A REFUSAL THE BROKER NAMED IS A REFUSAL, NOT A MISSED QUORUM. The error went
+// back wrapped and unclassified, and the read mapped anything that was not
+// already an [Unavailable] to `no_quorum` — so a log at its ceiling, which
+// refuses the barrier exactly as it refuses a write, was answered as a failed
+// election: retryable, with a four-second hint, from a node that will refuse
+// the next barrier identically until an operator resizes the log. And
+// `log_full`, the refusal the read vocabulary has for it, was reachable only
+// from a test's fake appender that returned one ready-made.
+//
+// What nobody answered stays unclassified, and is the missed quorum it was —
+// and so does an answer saying the barrier may yet land ([faultUnsettled]): a
+// barrier carries no message id, so the one such answer it can meet is a
+// store that closed under an entry raft had committed, which is a stream
+// restarting and clears exactly as a missed quorum does.
+//
+// THAT ERROR IS LOGGED HERE, once per append, and never told to a caller: it
+// is the transport's or the broker's own words, and every reader waiting on
+// the append is told [barrierRefusal]'s sentence instead. A refusal the broker
+// NAMED is different — its words are the remedy, so they travel on the
+// refusal's detail.
 func barrierAppendError(subject string, err error) error {
-	if f, detail := classify(err); f == faultFull {
+	switch f, detail := classify(err); f {
+	case faultFull:
 		return &Unavailable{
 			Reason: ReasonLogFull,
-			Detail: fmt.Sprintf("the broker refused the barrier on %s: %s", subject, detail),
-			Cause:  err,
+			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: "+
+				"%s — a full log refuses appends rather than dropping records, "+
+				"so raise the stream's byte ceiling or unblock the trim "+
+				"(`crewlet retention status` names the term holding it)",
+				subject, detail),
+			Cause: err,
+		}
+	case faultTooLarge, faultRefused:
+		// A BARRIER IS A FEW HUNDRED BYTES, so a broker that refuses one
+		// as too large is one whose limit refuses every record; either way
+		// it is the broker's decision, and the detail carries its words —
+		// and, for a limit, which one and what moves it.
+		return &Unavailable{
+			Reason: ReasonBrokerRefused,
+			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: %s",
+				subject, detail),
+			Cause: err,
 		}
 	}
+	log.Warn("statelog_barrier_unconfirmed", "subject", subject,
+		"stage", "append", "error", err.Error())
 	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
 }

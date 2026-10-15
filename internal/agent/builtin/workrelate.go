@@ -335,7 +335,8 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 }
 
 // resolveThread reads the conversation a comment is joining, or returns the
-// model-facing refusal.
+// refusal — as a result carrying a read's error where one failed, for the
+// reason [WorkDeps.resolveRef] gives.
 //
 // THE PARTICIPANTS ARE BEST EFFORT AND THE ANSWER IS NOT, which is the reader's
 // own split: a participant list that came up short wakes somebody as a watcher
@@ -357,6 +358,16 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 		// comment an inference would apply to.
 		return d.inferOnly(ctx, q)
 	}
+	return d.readThread(ctx, q)
+}
+
+// readThread is [WorkDeps.resolveThread] without its best-effort arm: every
+// read failure is the refusal, inference included. The answer-only arm reads
+// this way, because there an inference nobody could make is not a remark that
+// answers nothing — it is the whole of what would have admitted the caller.
+func (d WorkDeps) readThread(ctx context.Context,
+	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
+
 	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
@@ -366,7 +377,7 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 		if refusal, ok := answerRefusal(err); ok {
 			return tracker.ResolvedThread{}, refusalOf(refusal)
 		}
-		return tracker.ResolvedThread{}, refusalOf(readFailure(CommentOnWorkTool, err))
+		return tracker.ResolvedThread{}, refusalOf(readFailure(ctx, CommentOnWorkTool, err))
 	}
 	return resolved, nil
 }
@@ -379,8 +390,9 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 // answered was told "could not read the tracker … do not conclude the item
 // does not exist" and to try again — a retry that refused identically, over a
 // sentence that had dropped the one thing the reader said, which comment was
-// wrong and why. Each has its own class because each asks something different
-// of the caller: a mistyped id is not_found, a question that was somebody
+// wrong and why. The reader's error rides beneath the class ([refusedBy]), so a
+// caller branching on the tracker's sentinel still finds it. Each has its own
+// class because each asks something different of the caller: a mistyped id is not_found, a question that was somebody
 // else's is forbidden, an answered one is already_answered, and a remark or a
 // removed comment is an argument to change.
 func answerRefusal(err error) (tools.Result, bool) {
@@ -401,14 +413,14 @@ func answerRefusal(err error) (tools.Result, bool) {
 		// NOT "CHANGE `answers`": nothing about the call is wrong, the
 		// question simply has its answer — and the reader's sentence
 		// names who gave it and when, which is where to look.
-		return refused(class, fmt.Sprintf("%s was refused: %s. Nothing was "+
-			"posted.", CommentOnWorkTool, tracker.Sentence(err))), true
+		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing "+
+			"was posted.", CommentOnWorkTool, tracker.Sentence(err))), true
 	}
 	// THE ARGUMENT THE SENTENCE NAMES, not always `answers`: a choice
 	// that is not one of the ask's options is refused through this same
 	// read, and telling that caller to change `answers` sent it to edit
 	// the one argument that was right.
-	return refused(class, fmt.Sprintf("%s was refused: %s. Nothing was "+
+	return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing was "+
 		"posted — change the argument this names (`answers`, or `choice`) "+
 		"and comment again.", CommentOnWorkTool, tracker.Sentence(err))), true
 }

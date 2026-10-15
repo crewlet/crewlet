@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // Where the certification suite binds to the Jira reconcile.
@@ -318,9 +317,9 @@ func outstandingCompany() *org.Organization {
 //
 // [integrationtest.Reconciler.Outstanding] asks for a world where something
 // is wrong IN A WAY A PERSON MUST ACT ON, and the cheap way to satisfy that
-// is one broken thing. This deployment is broken in all three of the ways a
-// Jira pass can report, because the three come from three different walks and
-// a world that exercises one certifies nothing about the other two:
+// is one broken thing. This deployment is broken in both of the walks a Jira
+// pass reports from, because the two are different walks and a world that
+// exercises one certifies nothing about the other:
 //
 //   - THE SEAT WALK. Two seats with no account — see outstandingCompany —
 //     which is `identity_failed`, owed by the admin who can issue a token.
@@ -328,18 +327,13 @@ func outstandingCompany() *org.Organization {
 //     which is `ingress_blocked` on the key: every issue routed by that
 //     project reaches nobody, and Jira answers the same 404 for a project a
 //     credential may not browse.
-//   - THE INGRESS HALF. The signing secret resolves to nothing and the sink
-//     is [provision.ReadOnly] — a node with no keyring — so the pass has
-//     nothing to sign deliveries with, mints nothing and registers nothing.
-//     That is `ingress_blocked` on `integrations.jira.webhook_secret`.
 //
-// WebhookBase IS SET even so, and deliberately. The obvious way to produce an
-// ingress finding is to leave the public base empty, and it is the wrong one
-// here: ensureWebhook then returns before it reads anything, so the entire
-// webhook half — the secret resolution, the keyring check, the guard that
-// registers no hook without a key to sign it — is skipped, and a suite driven
-// over that world would be certifying a pass that stopped early. The keyring
-// route reaches all of it and stops at the last possible moment.
+// AND THE INGRESS HALF RUNS TO THE END. The signing secret resolves to
+// nothing and this instance holds no hook, so the first pass asks the sink,
+// mints a secret, seals it and registers the hook; every later pass finds the
+// sealed value and the hook and changes nothing. WebhookBase is set for that
+// reason: left empty, ensureWebhook returns before it reads anything, and a
+// suite driven over that world would be certifying a pass that stopped early.
 //
 // NOTHING HERE RAISES, which is a property and not an accident: the four
 // findings cases Fatalf on an error, so a world that failed mid-pass would
@@ -347,7 +341,7 @@ func outstandingCompany() *org.Organization {
 // org credential answers, the refused seat is refused with a STATUS (a
 // connection the instance never answers is a fault, by design — see
 // TestASeatLookupTheInstanceDidNotAnswerIsAFaultNotAMissingAccount), the
-// project 404s, and ReadOnly answers rather than erroring.
+// project 404s, and the sink seals.
 func outstandingWorld(t *testing.T) (*instance, jira.Options) {
 	t.Helper()
 	inst := newInstance(t)
@@ -372,10 +366,7 @@ func outstandingWorld(t *testing.T) (*instance, jira.Options) {
 			}
 			return v
 		},
-		// A NODE WITH NO KEYRING. The loop hands a pass this sink when it
-		// cannot seal anything, and it is the one shape that produces an
-		// ingress finding with the public base set.
-		Sink:        provision.ReadOnly(),
+		Sink:        newSink(),
 		WebhookBase: convergedBase,
 	}
 }
@@ -506,9 +497,8 @@ func assertOutstanding(t *testing.T, inst *instance, opts jira.Options) {
 			"findings cases will read a fault instead of findings: %v", err)
 	}
 	want := []integration.Finding{
-		// The ingress half, the seat walk twice, the project walk — in
-		// Findings' own order, which two passes have to agree on.
-		{Kind: integration.FindingIngressBlocked, Subject: "integrations.jira.webhook_secret"},
+		// The seat walk twice, the project walk — in Findings' own order,
+		// which two passes have to agree on.
 		{Kind: integration.FindingIdentityFailed, Subject: "lead"},
 		{Kind: integration.FindingIdentityFailed, Subject: "swe"},
 		{Kind: integration.FindingIngressBlocked, Subject: "ENG"},
@@ -530,14 +520,19 @@ func assertOutstanding(t *testing.T, inst *instance, opts jira.Options) {
 				f.Kind, f.Subject, actor)
 		}
 	}
-	// AND NOTHING WAS REGISTERED. The ingress finding says this deployment
-	// has no key to sign a delivery with; a hook registered anyway would
-	// make the instance deliver and the engine's own route refuse every
-	// delivery, and the finding would then be describing a world that no
-	// longer exists.
-	if res.Hooked != "" || inst.mutations() != 0 {
-		t.Errorf("a hook was registered with no key to sign it: %q, %d write(s)",
-			res.Hooked, inst.mutations())
+	// AND THE INGRESS HALF REACHED ITS LAST STEP: a secret minted into the
+	// variable the config names, sealed, and the one hook registered with
+	// it. A world whose pass stopped before that would leave every clause
+	// certifying half a reconciler.
+	if want := convergedBase + "/webhooks/jira"; res.Hooked != want {
+		t.Errorf("Hooked = %q, want the hook this pass registers at %q", res.Hooked, want)
+	}
+	if got := inst.mutations(); got != 1 {
+		t.Errorf("the first pass made %d write(s) at the instance, want the one "+
+			"registration", got)
+	}
+	if sealed := opts.Sink.(*sink).value("JIRA_WEBHOOK_SECRET"); sealed == "" {
+		t.Error("the hook was registered with no secret sealed for the route to verify with")
 	}
 }
 
@@ -552,7 +547,7 @@ func TestTheJiraReconcilerMeetsTheContract(t *testing.T) {
 	t.Run("the converged fixture is the steady state", func(t *testing.T) {
 		assertConverged(t, inst, recorder, opts)
 	})
-	t.Run("the outstanding fixture reports the three walks", func(t *testing.T) {
+	t.Run("the outstanding fixture reports the two walks", func(t *testing.T) {
 		assertOutstanding(t, outInst, outOpts)
 	})
 
@@ -609,9 +604,9 @@ func TestTheJiraReconcilerMeetsTheContractOnASecretOnlyTheSinkHolds(t *testing.T
 	// what differs between these two runs is where the CONVERGED world's
 	// signing secret lives, which is a claim about writes. The findings
 	// cases read the outstanding world, and nothing about the sealed-value
-	// window changes what a Jira with two unreachable seats, a missing
-	// project and no keyring reports.
-	t.Run("the outstanding fixture reports the three walks", func(t *testing.T) {
+	// window changes what a Jira with two unreachable seats and a missing
+	// project reports.
+	t.Run("the outstanding fixture reports the two walks", func(t *testing.T) {
 		assertOutstanding(t, outInst, outOpts)
 	})
 
@@ -822,64 +817,6 @@ func (s *cancellingSink) Record(ctx context.Context, name, value string) error {
 	}
 	s.cancel()
 	return nil
-}
-
-// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT FOR EVER.
-//
-// The loop hands a pass [provision.ReadOnly] when the node cannot seal
-// anything, and that sink answers ErrNoSink from Record. This pass went
-// straight to Record, so a deployment that had simply not set secrets.keys
-// had its Jira pass raise on every tick for the life of the deployment, with
-// the dashboard reporting the engine working on it — which is precisely the
-// permanent-fault posture ReadOnly was introduced to remove.
-func TestANodeWithNoKeyringReportsTheMissingSigningSecretRatherThanFaulting(t *testing.T) {
-	t.Parallel()
-	inst, _, opts := convergedWorld(t)
-	opts.Sink = provision.ReadOnly()
-	opts.Value = func(v string) string {
-		if v == "${JIRA_WEBHOOK_SECRET}" {
-			return ""
-		}
-		return v
-	}
-
-	res, err := jira.Reconcile(context.Background(), opts)
-	if err != nil {
-		t.Fatalf("a node with no keyring faulted rather than reporting: %v", err)
-	}
-	findings := res.Findings()
-	var found *integration.Finding
-	for i, f := range findings {
-		if f.Subject == "integrations.jira.webhook_secret" {
-			found = &findings[i]
-		}
-	}
-	if found == nil {
-		t.Fatalf("nothing reports why no hook was registered: %+v", findings)
-	}
-	if found.Kind != integration.FindingIngressBlocked {
-		t.Errorf("kind is %q, want %q — the field's own setup requirement "+
-			"declares that this is what an absent value produces",
-			found.Kind, integration.FindingIngressBlocked)
-	}
-	// BOTH WAYS OUT, because either one clears it and an operator who is
-	// told only about the keyring cannot use the one they already have.
-	for _, want := range []string{"secrets.keys", "integrations.jira.webhook_secret"} {
-		if !strings.Contains(found.Detail, want) {
-			t.Errorf("the finding does not name %s: %q", want, found.Detail)
-		}
-	}
-	// AND NOTHING WAS REGISTERED. Jira signs a delivery with whatever the
-	// hook was registered under, and this deployment holds no key to verify
-	// one with, so a hook here would make the instance deliver and the edge
-	// refuse every delivery.
-	if res.Hooked != "" || inst.mutations() != 0 {
-		t.Errorf("a hook was registered with no key to sign it: %q, %d write(s)",
-			res.Hooked, inst.mutations())
-	}
-	if report := integration.Classify(findings); report.Phase == integration.PhaseReady {
-		t.Errorf("a deployment nothing can deliver to classified ready: %+v", report)
-	}
 }
 
 // A SEAT LOOKUP THE INSTANCE DID NOT ANSWER IS A FAULT, NOT A MISSING

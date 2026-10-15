@@ -30,13 +30,23 @@ func peerCopyIn(t *testing.T, h *harness, writer, opID string, gen uint32) state
 	h.applier.auto = false
 	h.applier.mu.Unlock()
 	seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", opID, nil,
-		probeRecord(statelog.Stamp{Gen: gen, Writer: writer}, opID, "the peer's"))
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: gen, Writer: writer}, opID, "the peer's")))
 	if err != nil {
 		t.Fatalf("land %s's copy: %v", writer, err)
 	}
 	at := statelog.Position{Stream: probeStream, Generation: h.gen.Load(), Seq: seq}
 	h.applier.advance(at)
 	return at
+}
+
+// signedByPeer is body as a peer publishes it: a frame signed under the fleet
+// keyring, which is all a state log holds. A peer signs with the same keyring
+// this node verifies under, so a frame signed here is one a peer would have
+// written — and a body appended raw is one the publisher's reader of its log
+// refuses as not this fleet's.
+func signedByPeer(t *testing.T, h *harness, body []byte) []byte {
+	t.Helper()
+	return testSigner(t, h.deps.Domain).Seal(body)
 }
 
 // A WRITE COLLAPSED ONTO ANOTHER NODE'S GATED COPY OF ITS OPERATION IS TOLD
@@ -204,16 +214,19 @@ var reasonDecisions = map[statelog.Reason]reasonDecision{
 	statelog.ReasonDeleted: {gate: true},
 	// Not a gate's at all: refusals made before or instead of an append,
 	// about this node, the log or the operation.
-	statelog.ReasonDeferred:     {},
-	statelog.ReasonBehind:       {},
-	statelog.ReasonBelowFloor:   {},
-	statelog.ReasonFloorUnknown: {},
-	statelog.ReasonLogFull:      {},
-	statelog.ReasonSkew:         {},
-	statelog.ReasonOpReused:     {},
-	statelog.ReasonLogTruncated: {},
-	statelog.ReasonWrongStream:  {},
-	statelog.ReasonSuperseded:   {},
+	statelog.ReasonEvictionUnknown: {},
+	statelog.ReasonDeferred:        {},
+	statelog.ReasonBehind:          {},
+	statelog.ReasonBelowFloor:      {},
+	statelog.ReasonFloorUnknown:    {},
+	statelog.ReasonLogFull:         {},
+	statelog.ReasonRecordTooLarge:  {},
+	statelog.ReasonBrokerRefused:   {},
+	statelog.ReasonSkew:            {},
+	statelog.ReasonOpReused:        {},
+	statelog.ReasonLogTruncated:    {},
+	statelog.ReasonWrongStream:     {},
+	statelog.ReasonSuperseded:      {},
 }
 
 // ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the three that drop a record for
@@ -327,6 +340,7 @@ func TestAPublisherIsNotBuiltWithoutAReaderOfItsLog(t *testing.T) {
 		Fence: struct{ statelog.Fence }{}, Gates: struct{ statelog.Gates }{},
 		Waiter: struct{ statelog.Waiter }{}, Voids: struct{ statelog.Voids }{},
 		Identity:  struct{ statelog.Identity }{},
+		Signer:    testSigner(t, probeDomain{}),
 		Admission: noCeiling(t), NodeID: "node-a",
 		Generation: func() uint32 { return 1 },
 	}
@@ -334,7 +348,10 @@ func TestAPublisherIsNotBuiltWithoutAReaderOfItsLog(t *testing.T) {
 		!strings.Contains(err.Error(), "reader of its log") {
 		t.Fatalf("a publisher with no reader of its log was built (%v)", err)
 	}
-	deps.Records = struct{ statelog.LogReader }{}
+	deps.Records = statelog.VerifiedLog{
+		Log:      struct{ statelog.LogReader }{},
+		Verifier: testVerifier(t, probeDomain{}),
+	}
 	if _, err := statelog.NewPublisher(deps); err != nil {
 		t.Fatalf("a publisher with every dependency was refused: %v", err)
 	}
@@ -374,7 +391,8 @@ func reanchorRules(t *testing.T, generation, voidAfter, voidBefore uint32,
 func land(t *testing.T, h *harness, opID string) {
 	t.Helper()
 	if _, _, err := h.log.Append(t.Context(), probePrefix+".object.filler", opID, nil,
-		probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-c"}, opID, "filler")); err != nil {
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-c"},
+			opID, "filler"))); err != nil {
 		t.Fatalf("land %s: %v", opID, err)
 	}
 }
@@ -524,10 +542,14 @@ func TestAPublisherIsNotBuiltWithoutItsReanchorRules(t *testing.T) {
 	t.Parallel()
 	deps := statelog.Deps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
-		Log: struct{ statelog.Appender }{}, Records: struct{ statelog.LogReader }{},
+		Log: struct{ statelog.Appender }{},
+		Records: statelog.VerifiedLog{
+			Log: struct{ statelog.LogReader }{}, Verifier: testVerifier(t, probeDomain{}),
+		},
 		Rows: struct{ statelog.Rows }{}, Fence: struct{ statelog.Fence }{},
 		Gates: struct{ statelog.Gates }{}, Waiter: struct{ statelog.Waiter }{},
 		Identity:  struct{ statelog.Identity }{},
+		Signer:    testSigner(t, probeDomain{}),
 		Admission: noCeiling(t), NodeID: "node-a",
 		Generation: func() uint32 { return 1 },
 	}

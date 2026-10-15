@@ -224,7 +224,9 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	for {
-		_, created, err := fleetOnLeader.CreateMailbox(ctx, coord.MailboxRecord{Handle: "ana"})
+		_, created, err := fleetOnLeader.CreateMailbox(ctx, coord.MailboxRecord{
+			Seat: mailboxSeat("ana"), Handle: "ana",
+		})
 		if err == nil && created {
 			break
 		}
@@ -282,7 +284,7 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 			"a lease the quorum holds", released)
 	}
 	readCtx, cancel = within()
-	_, found, err := fleetOnCut.Mailbox(readCtx, "ana")
+	_, found, err := fleetOnCut.Mailbox(readCtx, mailboxSeat("ana"))
 	cancel()
 	if err == nil {
 		t.Errorf("a fleet record read through the cut member answered found=%v "+

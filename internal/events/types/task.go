@@ -8,13 +8,13 @@ import (
 
 // The seat's WAKE, and it is the only task event left.
 //
-// It carries `role` — the agent's seat, and the key every projection groups an
-// agent by. Load-bearing, not decorative: the event store tags a row's
-// agent_role from it and the live projection keys on it, so a task event
-// published without one is invisible to both. That is what happened — an
-// agent's current task never appeared on a dashboard and a seat stayed
-// "working" past the end of its turn, because the event carried the role only
-// in the envelope's source, which neither consumer reads.
+// It carries the agent's seat as `agent_id` and `role` — its id, which the live
+// projection keys an agent by, and its name, which the event store tags a
+// row's agent_role from. Load-bearing, not decorative: a task event published
+// without them is invisible to both. That is what happened — an agent's
+// current task never appeared on a dashboard and a seat stayed "working" past
+// the end of its turn, because the event carried the seat only in the
+// envelope's source, which neither consumer reads.
 //
 // # Why there is no task LIFECYCLE here any more
 //

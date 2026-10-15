@@ -89,25 +89,34 @@ func (m *muxRefusal) WriteHeader(status int) {
 	}
 }
 
+// NoRoute writes the answer for a route this node does not serve: `404
+// no_route`, naming the method and the path.
+//
+// THE MUX'S OWN ANSWER, and exported for the two other answers that must be
+// INDISTINGUISHABLE from it. A route that IS registered but serves a half this
+// company does not run — the work surface on a company whose tracker is a
+// vendor's, the operator's MCP surface with no native backend — answers in
+// exactly the bytes the route's absence would have: a handler that wrote its
+// own "not served here" would be the one refusal a client told apart from a
+// missing route, and a route that is absent by configuration and one that is
+// absent by build must read the same. And the public listener's refusal of a
+// route that exists on api.port is this answer byte for byte, because a
+// different wording there would tell anybody on the internet that a private
+// admin port exists and which paths it serves.
+func NoRoute(w http.ResponseWriter, r *http.Request) {
+	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
+		"detail": fmt.Sprintf("this node serves nothing at %s %s",
+			r.Method, r.URL.Path),
+		"hint": "Check the path. A route this node's build does not have, " +
+			"or one its configuration does not enable, is absent rather " +
+			"than refused.",
+	})
+}
+
 func (m *muxRefusal) Write(p []byte) (int, error) {
 	if m.refused {
 		// The mux's own text, which the JSON above replaced.
 		return len(p), nil
 	}
 	return m.ResponseWriter.Write(p)
-}
-
-// NoRoute answers r with the mux's own 404: the path is served by nothing here.
-//
-// Exported for the one other answer that must be INDISTINGUISHABLE from it: the
-// public listener's refusal of a route that exists on api.port. A different
-// wording there would tell anybody on the internet that a private admin port
-// exists and which paths it serves, so that refusal is this one, byte for byte.
-func NoRoute(w http.ResponseWriter, r *http.Request) {
-	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
-		"detail": fmt.Sprintf("this node serves nothing at %s %s", r.Method, r.URL.Path),
-		"hint": "Check the path. A route this node's build does not have, " +
-			"or one its configuration does not enable, is absent rather " +
-			"than refused.",
-	})
 }

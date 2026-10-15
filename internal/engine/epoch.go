@@ -97,18 +97,13 @@ func (e *Engine) RecheckGitHub() {
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
-func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
-	if c != nil {
-		// STAMPED BEFORE IT IS PUBLISHED, so no reader ever sees this
-		// epoch without the instant its configuration took effect — the
-		// one fact about it every node agrees on. See [Company.ActivatedAt].
-		if !activatedAt.IsZero() {
-			activatedAt = activatedAt.UTC()
-		}
-		c.ActivatedAt = activatedAt
-	}
+//
+// IT DOES NOT STAMP THE ACTIVATION: the company arrives here stamped, by
+// [stampActivation] where it was built, because the native halves an apply
+// starts and the reconcile it runs read the company before it is installed.
+func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 	if c != nil && !e.indexes(c) {
-		e.refreshParties(c)
+		e.refreshParties(ctx, c)
 	}
 	e.epoch.current.Store(c)
 	if c != nil && c.Models == nil {
@@ -127,6 +122,25 @@ func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
+}
+
+// stampActivation records on c the instant the fleet activated the revision it
+// was built from — UTC, and zero for one no activation has named.
+//
+// ONCE, AS THE COMPANY IS BUILT, on both paths that build one — [New] and
+// [Engine.Apply] — and never again: a [Company] is published rather than
+// mutated, so a stamp written after construction would be a write to an epoch
+// a reader may already hold, and a stamp written at install would be missing
+// from everything that reads the company between the build and the publish.
+// See [Company.ActivatedAt] for what reads it.
+func stampActivation(c *Company, activatedAt time.Time) {
+	if c == nil {
+		return
+	}
+	if !activatedAt.IsZero() {
+		activatedAt = activatedAt.UTC()
+	}
+	c.ActivatedAt = activatedAt
 }
 
 // indexes reports whether the live party registry was built from exactly this
@@ -195,30 +209,17 @@ func embeddingWidth(c *Company) int {
 //
 // activatedAt is the instant the fleet activated cfg — the activation
 // pointer's own ([coord.Activation.At]) — and it is what every clause that
-// must agree across nodes about WHEN this configuration took effect reads:
-// the chart apply stamps each project with it, so an older configuration
-// arriving late on another node cannot walk a newer one back. Zero is a
-// configuration no activation named, whose chart is not applied; see
-// [Engine.applyChart].
+// must agree across nodes about WHEN this configuration took effect reads: the
+// chart apply stamps each project and each knowledge container with it, so an
+// older configuration arriving late on another node cannot walk a newer one
+// back. Zero is a configuration no activation named, whose chart is not
+// applied; see [Engine.applyChart].
 func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	activatedAt time.Time) (configplane.ApplyStatus, []string, error) {
 	e.applying.Lock()
 	defer e.applying.Unlock()
 	if e.stopped {
 		return configplane.StatusError, nil, errStopped
-	}
-	// THE RULES THAT NEED BOTH TIERS, before anything is touched — the same
-	// check [New] makes of the company a node boots with. A boot was the
-	// only place it ran, so a node that booted unconfigured, or on the
-	// vendor backends, accepted a revision whose native backend would keep
-	// its log on an in-memory stream: now that an apply brings the native
-	// runtime up, that revision would start the unrecoverable state the
-	// rule exists to refuse.
-	if err := config.CheckTiers(e.boot, cfg); err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the revision was refused before anything changed; "+
-				"this node still serves the previous epoch")
-		return configplane.StatusError, nil, fmt.Errorf("engine: apply: %w", err)
 	}
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
@@ -235,6 +236,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 				"this node still serves the previous epoch")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
+	stampActivation(next, activatedAt)
 	applied = append(applied, "company")
 	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
 	// a part of, before anything below mutates this node — because a
@@ -250,16 +252,19 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 				"this node still serves the previous epoch")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
-	// THE NATIVE RUNTIME, on a node whose first company on a native backend
-	// this is — before the tools, which are registered only where its
-	// halves exist, and before the inbound edge, whose parsers include its
-	// own. See [Engine.startNativeFor], and the bug it fixes.
+	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
+	// tools, which are registered only where they exist, and before the
+	// inbound edge, whose parsers include their own. The state log and the
+	// identity estate they ride are the CORE's, running since boot on every
+	// data node, so this starts only what depends on the company — and on a
+	// node without `data`, only which halves it reaches through a data node.
+	// See [Engine.startNativeFor], and the bug it fixes.
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the native tracker and knowledge base could not be "+
-				"started for this node's first company on them; the previous "+
-				"epoch is still current")
+				"started for this node's first company; the previous epoch is "+
+				"still current")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	if startedNative {
@@ -267,7 +272,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	// THE SANDBOX RUNTIME, on a node that has never run one and whose
 	// revision reaches a sandbox cell — before the tools for the reason the
-	// native runtime is: run_sandbox and an agent-mode executor are offered
+	// native halves are: run_sandbox and an agent-mode executor are offered
 	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
 	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
 	if err != nil {
@@ -328,8 +333,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// ADDED is unresolvable while the epoch that has it is already
 	// current — and during a rollout the new company is the one being
 	// adopted, so the window that favours it is the right one.
-	e.refreshParties(next)
-	applied = append(applied, "parties")
+	//
+	// IT IS NOT NAMED IN `applied` HERE, because [Engine.followCompany]
+	// names it once for both paths — and it is that function's guarantee
+	// that the registry answers for the published company, not this
+	// call's. What this call buys is only which of the two windows the
+	// apply spends, and an apply refused between here and the publish has
+	// indexed a company nobody can reach, which costs a rebuild and
+	// nothing else.
+	e.refreshParties(ctx, next)
 	if e.inboundStarted() {
 		// The TRACKER is rebuilt on the same edge and for the same
 		// reason: its lead map is derived from the org, so a node that
@@ -366,10 +378,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// and the answer just changed here. See [integration.Worker.MarkStale].
 	e.integrations.MarkStale()
 	// The NATIVE backends' parsers are on the same edge and rebuilt for
-	// the same reason. Their projectors, index, stores and feeds are NOT:
-	// those follow a coordination family, which a company revision does
-	// not change — see [Engine.reconcileNative].
-	e.reconcileNative(ctx, next, activatedAt)
+	// the same reason. Their appliers, index, stores and feeds are NOT:
+	// those follow a log, which a company revision does not change — see
+	// [Engine.reconcileNative].
+	e.reconcileNative(ctx, next)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left
 	// running. See [Engine.reconcileSkills].
@@ -377,7 +389,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.installEpoch(next, activatedAt)
+	e.installEpoch(ctx, next)
 	applied = append(applied, "epoch")
 
 	// THE SWEEP, rebuilt when this apply started the native runtime — its
@@ -390,68 +402,24 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		applied = append(applied, "maintenance")
 	}
 
-	// AFTER the epoch is published, because a seat registry is a clone of
-	// the CURRENT company's surface: rebuilding from `next` before it is
-	// current would hand every held seat the new revision's builtins while
-	// its turns still read the outgoing epoch — and an apply refused after
-	// this point would leave them cloned from a revision that never became
-	// current. And each held seat's per-role CHILDREN are then reconciled
-	// against this epoch and the snapshot refreshed above, by the seat's own
-	// runner and NOT WAITED FOR: a child whose resolved spec did not move is
-	// left running, one whose credential this apply sealed or rotated is
-	// restarted, and one that never started is started — but a start is a
-	// handshake that can take a whole startup timeout, and every stage below
-	// would wait behind it with the new epoch already current. See
-	// seatservers.go.
-	e.reconcileSeatServers(ctx)
-	applied = append(applied, "seat_tools")
-
-	// AFTER the epoch is published, because this reads the seat list off
-	// the CURRENT company: a revision that adds a role adds a seat, and
-	// until something creates its mailbox every event published to it is
-	// dropped rather than retained. Nil on an engine built without a node
-	// — `crewlet validate` applies to nothing.
-	if e.node != nil {
-		e.node.EnsureMailboxes(ctx)
-		// AND THE MAIL A COMPANY WITH NO MODEL HELD BACK is let through
-		// once this epoch has one. Here, after the seat tools are refiled,
-		// because the first thing a released inbox does is run a turn, and
-		// that turn must find everything it reads already current.
-		if next.Models != nil {
-			e.releaseModelHolds(ctx)
-		}
-		// AND A SEAT PARKED ON ITS BUDGET whose ceilings this revision
-		// changed, for the same reason and in the same place: the first
-		// thing a released inbox does is judge a delivery against the
-		// counters, and it must do so under the ceilings now current.
-		e.reconcileBudgetParks(ctx, next)
-		// AND A RETRIED RESUME WAITING ON EITHER: an apply is the event
-		// that brings a model and the one that moves a ceiling, so the
-		// answers waiting on them are re-checked under the epoch now
-		// current. One still refused waits again, on whatever refuses it.
-		if next.Models != nil {
-			e.readmitAnswers(waitTurnEngine)
-		}
-		e.readmitAnswers(waitBudget)
-		// AND A PAUSE WHOSE SEAT THIS REVISION REMOVED goes with the seat,
-		// or a seat later added under the same handle would arrive paused
-		// by somebody who paused a different role. See seatpause.go.
-		e.clearRemovedSeatPauses(ctx, next)
-		applied = append(applied, "mailboxes")
-	}
 	// THE BACKGROUND PASSES follow the revision too, and after the swap:
 	// their loops walk the CURRENT epoch's roster, and the passes handed to
 	// them hold this revision's models and knobs. The loops keep running
 	// and keep their clocks. See [Engine.reconfigureLearningPasses].
+	//
 	e.reconfigureLearningPasses(ctx, next)
 	applied = append(applied, "learning_passes")
-	// AFTER the epoch is published too, and for a sharper version of the
-	// same reason: the tick reads schedules off the CURRENT company, so
-	// arming from `next` before it is current would open a window in which
-	// the loop fires the outgoing company's crons. A founder's first
-	// schedule starts the loop here; their last one removed stops it.
-	e.reconcileScheduler(ctx, next)
-	applied = append(applied, "scheduler")
+
+	// AND EVERYTHING DERIVED FROM THE COMPANY ITSELF — the parties, the
+	// seat tool surfaces, the tracker's projects, the knowledge
+	// containers, the mailboxes, the scheduler and the open sockets. All
+	// of it AFTER the pointer moves, each for its own reason and all for
+	// one: an apply refused later must not have rebuilt the derived state
+	// of an epoch that never became current.
+	//
+	// THE SAME LIST A BOOT RUNS, through the same function. See
+	// [Engine.followCompany].
+	applied = append(applied, e.followCompany(ctx, next)...)
 
 	log.InfoContext(ctx, "config_applied",
 		"company", next.Config.Name, "seats", len(next.Seats()),
@@ -463,16 +431,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// nobody, and every one it removed still held. HERE, at the end, and
 	// not beside the swap: a seat's acquisition reads what the stages after
 	// the swap install — the refiled seat tools, its mailbox, the released
-	// model holds, the sandbox runtime — so a pass asked for at the swap
-	// would claim seats onto a node still half applied. See
-	// [seat.Host.Resweep] for what bounds the pass.
+	// model holds, the sandbox runtime — which [Engine.followCompany] has
+	// just run, so a pass asked for at the swap would claim seats onto a node
+	// still half applied. See [seat.Host.Resweep] for what bounds the pass.
 	if e.node != nil && seatsMoved(previous, next) {
 		e.node.Host().Resweep()
 	}
-	// LAST, after the epoch is current and everything derived from it has
-	// been rebuilt, so a surface that reads the company on this signal
-	// reads the one now serving rather than the one being replaced.
-	e.notifyApplied(ctx)
 	return configplane.StatusOK, applied, nil
 }
 

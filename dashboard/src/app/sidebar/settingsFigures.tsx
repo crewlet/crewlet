@@ -3,15 +3,17 @@
  *
  * # Polled only while Settings is open
  *
- * `fleet`, `retention` and `integrations` are operator-only answers with no
- * push behind them, so a figure drawn from one is a poll. The frame is mounted
- * for the life of the tab and React will not let a hook be called
- * conditionally, so the hook runs on every screen — and a hook that polled
- * unconditionally would ask an operator's engine three questions on a timer
- * for the whole life of every tab, on screens that draw none of the answers,
- * and ask a reader without a credential three refusals on the same timer. So
- * each query is ENABLED only while the Settings column is on screen and the
- * reader holds an operator credential; everywhere else the hook asks nothing.
+ * `fleet`, `retention` and `integrations` are guarded answers with no push
+ * behind them, so a figure drawn from one is a poll. The frame is mounted for
+ * the life of the tab and React will not let a hook be called conditionally,
+ * so the hook runs on every screen — and a hook that polled unconditionally
+ * would ask the engine three questions on a timer for the whole life of every
+ * tab, on screens that draw none of the answers, and ask a reader without
+ * Admin three refusals on the same timer. So each query is ENABLED only while
+ * the Settings column is on screen and the section its figure is drawn beside
+ * is open to the reader (`nav.ts`'s `sectionOpen` — Nodes, Backups and
+ * Integrations take Admin, which is the answers' own); everywhere else the
+ * hook asks nothing.
  *
  * # What each figure is
  *
@@ -45,6 +47,7 @@ import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { sectionOpen, workspaceRow } from "../nav.ts";
 
 /** One row's figure, in the column's own three shapes. */
 export interface SectionFigure {
@@ -152,33 +155,48 @@ export function settingsFigures({
 }
 
 /**
- * The column's figures, asking the three operator answers only while `here`
- * (the Settings column is drawn) and only for an operator. See the file doc.
+ * Whether a reader holding `grants` may open the Settings section `key` — by
+ * the one rule the column draws its locks by (`sectionOpen`), so a figure is
+ * never asked for beside a section the column locks: each of these answers is
+ * Admin's, and a refusal on a timer is a refusal nobody reads.
+ */
+function opens(key: string, grants: readonly string[]): boolean {
+  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
+  return section !== undefined && sectionOpen(section, grants);
+}
+
+/**
+ * The column's figures, asking each guarded answer only while `here` (the
+ * Settings column is drawn) and only of a reader its section opens for. See
+ * the file doc.
  */
 export function useSettingsSidebar({
   here,
-  operator,
+  grants,
   health,
   published,
 }: {
   here: boolean;
-  operator: boolean;
+  /** What the reader holds — the frame's `useHeldGrants`, empty while nobody has said. */
+  grants: readonly string[];
   health: EngineHealth | null | undefined;
   /** The `fleet` answer a screen on the page already polls — see
    *  `usePublishFleet`. While one is published the column asks nothing. */
   published: { answer: FleetAnswer | null } | null;
 }): Record<string, SectionFigure> {
-  const enabled = here && operator;
+  const nodes = here && opens("nodes", grants);
+  const backups = here && opens("backups", grants);
+  const connect = here && opens("integrations", grants);
   const fleet = useQuery("fleet", undefined, {
-    enabled: enabled && published === null,
+    enabled: nodes && published === null,
     pollMs: SETTINGS_POLL_MS.fleet,
   });
   const retention = useQuery("retention", undefined, {
-    enabled,
+    enabled: backups,
     pollMs: SETTINGS_POLL_MS.retention,
   });
   const integrations = useQuery("integrations", undefined, {
-    enabled,
+    enabled: connect,
     pollMs: SETTINGS_POLL_MS.integrations,
     // CONNECTING HAPPENS IN ANOTHER TAB — the vendor's own app — and coming
     // back is the strongest sign the roll-up moved; see `useQuery`.
@@ -186,8 +204,8 @@ export function useSettingsSidebar({
   });
   return settingsFigures({
     health,
-    fleet: !enabled ? null : published ? published.answer : fleet.data,
-    retention: enabled ? retention.data : null,
-    integrations: enabled ? integrations.data : null,
+    fleet: !nodes ? null : published ? published.answer : fleet.data,
+    retention: backups ? retention.data : null,
+    integrations: connect ? integrations.data : null,
   });
 }

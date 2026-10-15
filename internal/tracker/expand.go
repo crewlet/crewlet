@@ -110,29 +110,10 @@ var expansionRefused = []string{
 type Viewer struct {
 	Handle string
 
-	// OperatorID is the `api.auth.tokens[].id` bound to that seat with
-	// `contact.crewlet_operator_id`, and empty for every seat that has
-	// none — which is every agent, and every human whose company never
-	// gave them a credential.
-	//
-	// IT IS AN ALIAS AND NEVER AN ADDRESS. Nothing expands to it and
-	// nothing renders it: what it reaches is the person's OWN STATE
-	// written while the credential was not yet bound to their seat, which
-	// is the one thing in this grammar a person can hold under two names.
-	// See [Party] and [Query.PriorityListOf].
-	OperatorID string
-
 	// Project is the viewer's home container, empty where their unit owns
 	// none — which narrows `my_queue` to their own assignments rather than
 	// widening it to everybody's backlog.
 	Project string
-}
-
-// Party is the viewer as the two identities their own records may be filed
-// under. A viewer with no credential bound is a party of one, which is every
-// seat.
-func (v Viewer) Party() Party {
-	return Party{Handle: v.Handle, OperatorID: v.OperatorID}
 }
 
 // Expand resolves `view=` and `preset=` into the parameters they stand for.
@@ -162,6 +143,17 @@ func (r *Reader) Expand(ctx context.Context, params map[string]any,
 		viewDefaults = defaults
 	}
 	return mergeExpansion(params, presetDefaults, viewDefaults, viewer.Handle)
+}
+
+// savedDefaults is what a saved view's own parameters contribute to an
+// expansion: all of them, since the save refuses every key [expansionRefused]
+// names.
+func savedDefaults(params map[string]string) MapParams {
+	out := make(MapParams, len(params))
+	for key, value := range params {
+		out[key] = value
+	}
+	return out
 }
 
 // mergeExpansion is the whole of what a read's parameters mean once a preset
@@ -198,17 +190,6 @@ func mergeExpansion(caller map[string]any, preset, view MapParams,
 		return nil, err
 	}
 	return MapParams(resolved), nil
-}
-
-// savedDefaults is what a saved view's own parameters contribute to an
-// expansion: a COPY of them, so nothing the expansion does to its inputs
-// reaches the decoded row.
-func savedDefaults(params map[string]string) MapParams {
-	out := make(MapParams, len(params))
-	for key, value := range params {
-		out[key] = value
-	}
-	return out
 }
 
 // resolveViewerKeys substitutes the reader for every `me` a query names.
@@ -278,29 +259,38 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 		// something to pick up — it is `preset=blocked`'s answer, and
 		// putting it here would mean the two presets returned the same
 		// rows for the wrong reason.
-		mine := MapParams{"assignee": viewer.Handle}
-		unclaimed := MapParams{"assignee": "none"}
-		if home := strings.TrimSpace(viewer.Project); home != "" {
-			// THE SECOND ARM IS SCOPED TO THE VIEWER'S OWN PROJECT.
-			// Unscoped it would offer every unassigned task in the
-			// company, which is the widest possible reading of "what
-			// can I pick up" and the one nobody meant.
-			unclaimed["container"] = ContainerProject + ":" + home
-		}
-		branches, err := json.Marshal([]MapParams{mine, unclaimed})
-		if err != nil {
-			return nil, fmt.Errorf("tracker: build the %s branches: %w",
-				PresetMyQueue, err)
-		}
-		return MapParams{
-			"any":          string(branches),
+		out := MapParams{
 			"status_group": open,
 			"blocked":      "false",
 			// PRIORITY THEN DUE, which is the order
 			// `tracker_tasks_queue_idx` is built in — so the preset
 			// the index is named for is the query it serves.
 			"sort": "-priority,due",
-		}, nil
+		}
+		home := strings.TrimSpace(viewer.Project)
+		if home == "" {
+			// A VIEWER WITH NO PROJECT OF THEIR OWN HAS NO SECOND ARM.
+			// The unclaimed arm is "the work in MY project nobody
+			// holds", and with no project it used to go UNSCOPED —
+			// every unassigned task in the company, the widest reading
+			// of "what can I pick up" and the one this arm is scoped to
+			// prevent. A seat whose unit files no project, and every
+			// token or service account the directory binds to no seat,
+			// pick up what they hold.
+			out["assignee"] = viewer.Handle
+			return out, nil
+		}
+		// THE SECOND ARM IS SCOPED TO THE VIEWER'S OWN PROJECT.
+		mine := MapParams{"assignee": viewer.Handle}
+		unclaimed := MapParams{"assignee": "none",
+			"container": ContainerProject + ":" + home}
+		branches, err := json.Marshal([]MapParams{mine, unclaimed})
+		if err != nil {
+			return nil, fmt.Errorf("tracker: build the %s branches: %w",
+				PresetMyQueue, err)
+		}
+		out["any"] = string(branches)
+		return out, nil
 	case PresetPriorities:
 		if viewer.Handle == "" {
 			return nil, fmt.Errorf("tracker: preset=%s is one person's own "+
@@ -377,57 +367,7 @@ func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	if err != nil {
 		return Query{}, err
 	}
-	q, err := ParseQuery(merged, now, loc)
-	if err != nil {
-		return Query{}, err
-	}
-	return q.forViewer(viewer.Party()), nil
-}
-
-// forViewer gives the viewer's second name to the keys that name a PERSON.
-//
-// ONE PLACE for both readers of a query that knows its viewer — a surface's
-// [Reader.ExpandedQuery] and a pinned view's count in [Reader.Views] — so the
-// count beside a pin cannot miss the questions a founder asked through their
-// own credential while the board it opens finds them.
-func (q Query) forViewer(viewer Party) Query {
-	if viewer.Handle == "" {
-		return q
-	}
-	// AND THE PRIORITY LIST'S OWNER GETS THEIR SECOND NAME, which the
-	// parser could not give them: `priorities=` names a PERSON, a person
-	// bound to an operator token may hold a record under the credential
-	// they wrote it with, and the only such person this read knows the
-	// two names of is the VIEWER. A surface that lets somebody filter by
-	// another person's list passes the handle alone, which is the record
-	// every write makes now — see [Writer.Record].
-	if q.PriorityListOf.Named() && q.PriorityListOf.Handle == viewer.Handle {
-		q.PriorityListOf = viewer
-	}
-	// AND SO DOES THE ASKER, for the same reason and with the same limit:
-	// `asked_by=` names a person, the questions a founder put through
-	// their own credential are authored by the token, and the viewer is
-	// the one person this read knows both names of. "Asked by me" is the
-	// question that needs it — the dashboard asks it with the viewer's
-	// own seat.
-	//
-	// IN EVERY `any=` BRANCH TOO, since a branch is a predicate like the
-	// top level and "asked by me, or assigned to me" is a disjunction a
-	// person writes. A COPY of the branches, because a Query is a value
-	// and its slice is shared with whoever holds the original.
-	if q.AskedBy.Named() && q.AskedBy.Handle == viewer.Handle {
-		q.AskedBy = viewer
-	}
-	if len(q.Any) > 0 {
-		branches := slices.Clone(q.Any)
-		for i := range branches {
-			if branches[i].AskedBy.Named() && branches[i].AskedBy.Handle == viewer.Handle {
-				branches[i].AskedBy = viewer
-			}
-		}
-		q.Any = branches
-	}
-	return q
+	return ParseQuery(merged, now, loc)
 }
 
 // stringOf renders a parameter value the way [MapParams] does.

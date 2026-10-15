@@ -185,7 +185,7 @@ var protocolCases = []testCase{
 		h.claim(coord.NodeResource("old"), coord.AcquireOptions{
 			Owner: "old:1", TTL: LongTTL, Protocol: 1, Ungated: true,
 		})
-		h.refused(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.refused("seat:ceo", coord.AcquireOptions{
 			Owner: "new:1", TTL: LongTTL, Protocol: 2,
 		}, coord.RefusedProtocol)
 	}},
@@ -218,28 +218,28 @@ var protocolCases = []testCase{
 		newer := coord.AcquireOptions{Owner: "new:1", TTL: LongTTL, Protocol: 2}
 
 		// Alive and holding no seat yet: its PRESENCE refuses.
-		h.refused(coord.SeatResource("engineer"), newer, coord.RefusedProtocol)
+		h.refused("seat:engineer", newer, coord.RefusedProtocol)
 
 		// Draining — presence given up at the first step, the seat still
 		// served until it is handed over: its SEAT refuses.
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "old:1", TTL: LongTTL, Protocol: 1,
 		})
 		if !h.release(coord.NodeResource("old"), "old:1", presence.Epoch) {
 			h.t.Fatal("release of the older node's presence reported failure")
 		}
-		h.refused(coord.SeatResource("engineer"), newer, coord.RefusedProtocol)
+		h.refused("seat:engineer", newer, coord.RefusedProtocol)
 
 		// It crashes: the seat lapses, and the duty and the walk claim
 		// are all it left.
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "old:1", TTL: ShortTTL, Protocol: 1,
 		})
 		h.lapse()
 		if still := h.mustHold(coord.WorkerResource("learning"), "old:1"); still.Epoch != duty.Epoch {
 			h.t.Fatalf("the older duty moved from epoch %d to %d", duty.Epoch, still.Epoch)
 		}
-		if lease := h.claim(coord.SeatResource("engineer"), newer); lease.Protocol != 2 {
+		if lease := h.claim("seat:engineer", newer); lease.Protocol != 2 {
 			h.t.Fatalf("the newer claim recorded protocol %d, want 2", lease.Protocol)
 		}
 
@@ -279,7 +279,7 @@ var protocolCases = []testCase{
 		if duty.Protocol != 3 {
 			h.t.Fatalf("ungated claim recorded protocol %d, want 3", duty.Protocol)
 		}
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "node-b:1", TTL: LongTTL, Protocol: 3,
 		})
 	}},

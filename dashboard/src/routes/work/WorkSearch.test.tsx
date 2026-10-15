@@ -20,6 +20,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vi
 import { WorkSearch } from "./WorkSearch.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { BugGlyph } from "@crewlethq/icons/glyphs";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
@@ -73,7 +74,11 @@ function mount(
   const socket = new LiveSocket(store);
   (
     socket as unknown as { query: (w: string, p: Record<string, unknown>) => Promise<unknown> }
-  ).query = (_what, params) => {
+  ).query = (what, params) => {
+    // THE READER HOLDS TRACKER, which the task search is asked under.
+    if (what === "viewer") {
+      return Promise.resolve({ login: "jane", owner: "jane", grants: ["tracker"] });
+    }
     asked.push(params);
     const mode = params.mode ?? "hybrid";
     // THE WIRE SHAPE: every search answer carries its whole outcome.
@@ -90,9 +95,11 @@ function mount(
   };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <WorkSearch />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <WorkSearch />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }

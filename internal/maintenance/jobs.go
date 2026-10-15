@@ -35,6 +35,13 @@ const (
 	// swept table a human actually reads — the dashboard's schedules view
 	// — and a week of scheduled runs is both a useful history and a
 	// trivial number of rows.
+	//
+	// internal/usage READS IT TOO (the engine hands it to the usage
+	// publisher as PublisherDeps.FireHistory): a day older than this is
+	// derived again without its schedules, since the sweep may have cut
+	// into its fires and a short schedule-day would replace a whole one on
+	// every node. Shortening it shortens how far back a re-derived day
+	// keeps its schedules.
 	ScheduledRunRetention = 7 * 24 * time.Hour
 
 	// ConversationRetention is how long a seat remembers what it already
@@ -85,6 +92,44 @@ const (
 	// observes. Keeping every profile for ever costs unbounded growth on a
 	// table the fleet copies between nodes.
 	CounterpartyRetention = 180 * 24 * time.Hour
+
+	// RevisionRetention is how long a superseded company_config revision
+	// is kept.
+	//
+	// # The table had no horizon at all
+	//
+	// A node keeps its OWN copy of every revision it has ever met, in an
+	// append-only table, and nothing deleted from it — so a company that
+	// edits its configuration daily accumulates a row per edit per node
+	// for the life of the deployment, each row a copy of the whole
+	// document — every seat's address among it, which this sweep is
+	// what eventually removes.
+	//
+	// # The floor, which is a relation rather than a number
+	//
+	// An audit row that names a revision must still be able to open it, so
+	// this may never fall below [store.EventRetention] — the audit log's
+	// own horizon. That relation, not this value, is the thing to preserve
+	// if either moves; TestARevisionOutlivesTheAuditRowThatNamesIt is what
+	// holds it, because the two constants are in different packages and
+	// nothing else connects them.
+	//
+	// # Four hundred days, and why not a year
+	//
+	// The gestures that reach furthest back into configuration history are
+	// ANNUAL: a reorganisation repeated each year, a compliance review, a
+	// renewal that changes an integration. Exactly 365 days makes finding
+	// last year's revision a coin flip on the day the gesture is repeated
+	// — it is gone if this year's run is a day late. Four hundred days is
+	// that cycle plus five weeks, which is the margin an annual thing
+	// actually drifts by.
+	//
+	// It costs little: the active revision and its whole parent chain are
+	// kept whatever their age (see [store.Configs.Purge]), so what this
+	// bounds is abandoned branches — each one company document, its org
+	// chart included, and nothing of the company's work, which lives in
+	// the state logs rather than in a revision.
+	RevisionRetention = 400 * 24 * time.Hour
 )
 
 // StoreJobs is the sweep for everything in the main store.
@@ -123,16 +168,75 @@ func StoreJobs(db *store.DB) []Job {
 	}
 }
 
+// ConfigJobs is the sweep for the company's stored configuration revisions.
+//
+// [NodeLocal], for the reason every job in [StoreJobs] is: this is the node's
+// own file, and each node adopts its own copy of every revision it meets. A
+// fleet singleton would tidy the node holding the duty and let the table grow
+// for ever on every other — which looks exactly like a sweep that works, to
+// the operator who checks the node it ran on.
+//
+// SEPARATE FROM [StoreJobs] because it is armed separately: this is the one
+// sweep whose rows are the CONTROL PLANE's, and a deployment reading the job
+// list wants to see it named rather than folded into a general store sweep.
+func ConfigJobs(db *store.DB) []Job {
+	if db == nil {
+		return nil
+	}
+	return []Job{Purge("company_config", NodeLocal, Fixed(RevisionRetention),
+		db.Configs().Purge)}
+}
+
 // OpsLedger is the slice of a state-log applier this sweep calls. Declared
 // here, by the consumer, like every other seam in this tree.
 type OpsLedger interface {
 	// PurgeOps deletes this node's operation rows applied before cutoff,
 	// reporting how many went.
 	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// PurgeOpsOfKind is PurgeOps over one subject kind's rows.
+	PurgeOpsOfKind(ctx context.Context, kind string, cutoff time.Time) (int64, error)
+
+	// PurgeAnchors deletes this node's arbitration anchors below the
+	// domain's published trim floor, reporting how many went.
+	//
+	// KEYED ON THE FLOOR AND NOT ON A CUTOFF, which is why it does not
+	// take one: an anchor answers what a subject's last record expects,
+	// and a row above the floor must stay however old it is, because an
+	// anchor read as absent hands the next writer an expectation the
+	// broker refuses for ever. The caller has no floor to pass — the
+	// domain publishes its own — so the seam asks for none.
+	PurgeAnchors(ctx context.Context) (int64, error)
+}
+
+// OpsHorizon is one domain's operation-ledger horizon, declared at its
+// registration entry.
+//
+// PER DOMAIN, because the question the ledger answers is "did my operation
+// land", asked by a RETRYING CLIENT: a seat told to carry an op id forward and
+// re-ask on its next wake, after a weekend. That client is the same for every
+// domain today, which is why they all take the framework's default — but the
+// horizon is the domain's to state, so a domain whose writers re-ask on a
+// different rhythm says so where it is declared rather than changing a
+// constant every other domain reads.
+type OpsHorizon struct {
+	Ledger    OpsLedger
+	Retention time.Duration
+
+	// Kinds are the subject kinds whose rows go sooner than Retention,
+	// each with its own horizon — a kind no slow client writes, whose op
+	// ids are re-asked inside the publisher's resolve budget if at all.
+	// The identity domain's sessions are the one today: a row per sign-in
+	// and per sign-out, kept a month for a question nobody asks after an
+	// hour. Empty is "one horizon for the whole ledger".
+	Kinds map[string]time.Duration
 }
 
 // StatelogJobs sweeps each registered domain's operation ledger: one job per
-// ledger, named `<domain>_ops` after the domain it is keyed by.
+// ledger, named `<domain>_ops` after the domain it is keyed by, one more per
+// subject kind with a horizon of its own (`<domain>_ops_<kind>`), and one for
+// the domain's arbitration anchors (`<domain>_anchors`). Every horizon here is
+// this build's own and never moves, so each is [Fixed].
 //
 // [NodeLocal], and that is what this job is FOR. Every `<domain>_ops` migration
 // says the table is swept and ships `<domain>_ops_swept_idx` for the range
@@ -147,19 +251,51 @@ type OpsLedger interface {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
-func StatelogJobs(ledgers map[string]OpsLedger, retention Horizon) []Job {
+func StatelogJobs(domains map[string]OpsHorizon) []Job {
 	// SORTED, so the log's job order is the same on every node and every
 	// tick. A map's iteration order would make one node's sweep line look
 	// like a different sweep from its peer's.
-	names := slices.Sorted(maps.Keys(ledgers))
+	names := slices.Sorted(maps.Keys(domains))
 
-	jobs := make([]Job, 0, len(names))
+	jobs := make([]Job, 0, 2*len(names))
 	for _, name := range names {
-		ledger := ledgers[name]
+		domain := domains[name]
 		jobs = append(jobs, Job{
-			Name: name + "_ops", Scope: NodeLocal, Horizon: retention,
+			Name: name + "_ops", Scope: NodeLocal, Horizon: Fixed(domain.Retention),
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
-				return ledger.PurgeOps(ctx, cutoff)
+				return domain.Ledger.PurgeOps(ctx, cutoff)
+			},
+		})
+		// A KIND WITH A HORIZON OF ITS OWN is a job of its own, so its
+		// deletions are reported under a name that says which rows went
+		// and the default job's count keeps meaning what it did. Sorted
+		// for the reason the domains are.
+		for _, kind := range slices.Sorted(maps.Keys(domain.Kinds)) {
+			jobs = append(jobs, Job{
+				Name: name + "_ops_" + kind, Scope: NodeLocal,
+				Horizon: Fixed(domain.Kinds[kind]),
+				Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
+					return domain.Ledger.PurgeOpsOfKind(ctx, kind, cutoff)
+				},
+			})
+		}
+		jobs = append(jobs, Job{
+			// AND THE ANCHORS, which had no sweep at all:
+			// `0001_the_state_log_lands.sql` ships
+			// `statelog_anchor_swept_idx` and states that the sweep
+			// needs it, and nothing ever wrote the delete. One row
+			// per arbitrated subject, for the life of the
+			// deployment, in the replicated estate and therefore in
+			// every snapshot artefact and every backup.
+			//
+			// NO HORIZON, because this one is not keyed on a clock:
+			// the cutoff is the domain's own published trim floor,
+			// which the ledger reads for itself. A horizon here
+			// would be a second opinion about what a log still
+			// holds.
+			Name: name + "_anchors", Scope: NodeLocal,
+			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
+				return domain.Ledger.PurgeAnchors(ctx)
 			},
 		})
 	}

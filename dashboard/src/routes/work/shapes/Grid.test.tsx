@@ -27,9 +27,13 @@ import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
 // about the column's other cells, so it reads as an anonymous, connected tab.
 vi.mock("~/lib/viewer.ts", () => ({
   useViewer: () => ({
-    operatorID: "",
-    operator: false,
+    login: "",
+    grants: [],
+    admin: false,
+    tracker: false,
+    knowledge: false,
     handle: "",
+    owner: "",
     name: "",
     acts: [],
     kind: "",
@@ -44,7 +48,7 @@ vi.mock("~/lib/viewer.ts", () => ({
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useConnection: () => ({ connected: true }) };
+  return { ...actual, useConnection: () => ({ connected: true, accessRefused: null }) };
 });
 
 afterEach(() => {
@@ -218,17 +222,16 @@ test("an operator's removal is marked as one, beside the name", () => {
   expect(screen.getByText("operator")).toBeTruthy();
 });
 
-// AND A TOKEN BOUND TO A SEAT NAMES THE PERSON, as the change log names the
-// same removal: the token is the audit trail (`actor`), the person is who the
-// row is about (`actor_seat`). The trash drew "founder" beside a log saying
-// Jane Founder.
-test("a removal made through a bound token names the person, not the token", () => {
+// AND A PERSON BOUND TO A SEAT IS NAMED AS THE SEAT, as the change log names
+// the same removal: they write AS the seat (`iam.ActorFor`), and the
+// credential they wrote through is the audit trail's half, never their name.
+test("a removal a bound person made names the seat they write as, not the credential", () => {
   const removals = new Map([
-    ["t-1", removal({ actor: "founder", actor_kind: "operator", actor_seat: "ada" })],
+    ["t-1", removal({ actor: "ada", actor_kind: "human", operator_id: "pat:t-1" })],
   ]);
   mount("table", [row({})], removals);
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
-  expect(screen.queryByText("founder")).toBeNull();
+  expect(screen.queryByText("pat:t-1")).toBeNull();
 });
 
 // ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only

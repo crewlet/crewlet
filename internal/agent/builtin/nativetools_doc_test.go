@@ -123,7 +123,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
 			Org: func() *org.Organization { return company }, Actor: actor},
-		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Actor: actor},
+		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
 	}) {
 		if !slices.Contains(seat, tool.Name()) {

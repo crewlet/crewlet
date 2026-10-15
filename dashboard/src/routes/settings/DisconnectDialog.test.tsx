@@ -9,7 +9,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 
 type Sent = { method: string; path: string; body: unknown };
@@ -28,7 +28,6 @@ function stubFetch(sent: Sent[], status = 202) {
   );
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();

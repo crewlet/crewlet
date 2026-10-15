@@ -30,6 +30,21 @@ const (
 	// Measured back from the instant a read is ASKED AT — taken once per
 	// answer, or the one its caller pinned (see [EventLog]) — and never from
 	// a fresh read of the clock in each half of one answer.
+	//
+	// A READ THAT PINS NO INSTANT IS MEASURED FROM THE WALL CLOCK, which is
+	// a rule every FIXTURE has to obey and one of them did not. The floor
+	// of such a read is [now], deliberately, so a row's timestamp, the read
+	// floor and the retention sweep cannot disagree about what "now" is.
+	// So a suite that writes rows at an ABSOLUTE date and reads them back
+	// without pinning the read works until the window passes that date, and
+	// then fails for ever, on every machine at once, with no change to any
+	// file and nothing in the failure naming a clock. internal/api/webhooks
+	// lost a whole package to exactly that. Anchor a fixture clock relative
+	// to time.Now, or pin the read to the instant the fixture is written at.
+	//
+	// Appending BELOW the floor is still legal, and has to be: the floor's
+	// own tests and the retention sweep's prove what they prove by writing
+	// a stale row on purpose.
 	EventHistory = 30 * 24 * time.Hour
 
 	// EventRetention is how long rows are kept — one day past the read
@@ -124,6 +139,14 @@ type EventRecord struct {
 	// `/events?work_key=` can never disagree about which unit of work it
 	// belongs to.
 	WorkKey string `json:"work_key,omitempty"`
+
+	// AgentID is the agent seat the event is about, when it is about one:
+	// the derived id (ADR-0013), which a namesake does not share.
+	// Named on the row rather than left for a reader to dig out of Tags
+	// because a feed narrowed to one seat filters its LIVE rows the same way
+	// the store filtered these, and livestate.FeedRow carries it under the
+	// same name. A copy of the tag, as the promoted column is.
+	AgentID string `json:"agent_id,omitempty"`
 
 	// Payload is the full serialized event. Nil on a listing — see above.
 	Payload json.RawMessage `json:"payload,omitempty"`
@@ -225,11 +248,13 @@ type ListQuery struct {
 	// and it reads the partial index schema/0034 ships.
 	ChannelID string
 
-	// AgentID selects the events ONE SEAT published, by the id every node
-	// derives for it ([org.DeriveAgentID]) — the promoted `agent_id`
-	// column. NOT a role name, which two unit seats share and a rename
-	// changes, and NOT [ListQuery.RelatedAgent], which matches by name the
-	// events that merely involve a seat and pulls in their traces.
+	// AgentID selects the events about ONE agent seat, by the id every node
+	// derives for it ([org.DeriveAgentID], ADR-0013) — the promoted and
+	// indexed `agent_id` column. It is what a seat's own "all activity" view
+	// asks by: it used to ask by Actor with the seat's NAME, which two seats
+	// may share, so a namesake's events were listed as this seat's. NOT
+	// [ListQuery.RelatedAgent], which also matches the events that merely
+	// name the seat as a party and pulls in their traces.
 	AgentID string
 
 	// Suspended selects by whether a completion record PARKED its turn — the
@@ -284,13 +309,15 @@ type ListQuery struct {
 	// is filled from the same payload field as the row's `work_item` tag.
 	WorkItem string
 
-	// RelatedAgent is a broad filter: events whose actor is the agent, or
-	// whose tags name it as agent_role / target / recipient / sender, plus
-	// every event sharing a trace with one of those — so the inbound
-	// webhook that caused the agent's work shows up beside it.
+	// RelatedAgent is a broad filter, by an AGENT ID: the events that
+	// involve that agent — its own, and every one naming it as a party
+	// (see [DB.SetEventSeats]) — plus every event sharing a trace with one
+	// of those, so the inbound webhook that caused the agent's work shows up
+	// beside it.
 	//
-	// It over-fetches and post-filters, so a page shorter than Limit does
-	// NOT mean history is exhausted here; only a zero-row page does.
+	// The trace siblings ride on the page they were found from, so a page
+	// shorter than Limit does NOT mean history is exhausted here; only a
+	// zero-row page does.
 	RelatedAgent string
 
 	// FeedOnly selects the rows the ACTIVITY FEED carries: every stored type
@@ -470,7 +497,7 @@ var ErrIncompleteRecord = errors.New("store: incomplete event record")
 // present the same (time, id) pair. Raising instead would make every one of
 // them log a write failure that describes nothing wrong.
 func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
-	row, err := prepareEvent(rec)
+	row, err := prepareEvent(rec, l.db.eventSeatsNow())
 	if err != nil {
 		return err
 	}
@@ -483,19 +510,25 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 }
 
 // eventRow is a record made ready for its insert — its identity checked, its
-// tags encoded and its spend derived — so the insert itself can run inside
-// whichever transaction the caller holds: its own ([EventLog.Append]), or one
-// that writes a whole custody batch ([EventLog.WriteCustody]).
+// tags encoded, its spend derived and its parties resolved — so the insert
+// itself can run inside whichever transaction the caller holds: its own
+// ([EventLog.Append]), or one that writes a whole custody batch
+// ([EventLog.WriteCustody]).
 type eventRow struct {
 	rec     EventRecord
 	tags    map[string]string
 	tagJSON string
 	payload string
 	spend   Spend
+	parties []string
 }
 
-// prepareEvent readies one record for its insert, or refuses it.
-func prepareEvent(rec EventRecord) (eventRow, error) {
+// prepareEvent readies one record for its insert, or refuses it. seats is what
+// a handle the record names resolves to an agent id through ([partiesOf]): the
+// writing node's, which is the custody keeper's for a batch it writes for a
+// stateless node — the chart both run is the company's, so the two resolve one
+// handle to one id.
+func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 	// The identity is checked here because SQL cannot check it. NOT NULL
 	// catches a missing column; it does not catch a zero one, and both
 	// halves of this key have a zero value that stores fine and then reads
@@ -581,7 +614,8 @@ func prepareEvent(rec EventRecord) (eventRow, error) {
 		spend.WorkKey = tags["work_key"]
 	}
 	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON),
-		payload: string(payload), spend: spend}, nil
+		payload: string(payload), spend: spend,
+		parties: partiesOf(tags, seats)}, nil
 }
 
 // insert writes the row and its party rows inside tx.
@@ -612,7 +646,7 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 	); err != nil {
 		return err
 	}
-	for _, party := range partiesOf(rec.Actor, tags) {
+	for _, party := range r.parties {
 		if _, err := tx.ExecContext(ctx, partyInsertSQL,
 			party, EncodeTime(rec.Time), rec.ID); err != nil {
 			return err
@@ -627,28 +661,96 @@ const partyInsertSQL = `
 INSERT INTO crewlet_event_parties (party, event_time, event_id) VALUES (?, ?, ?)
 ON CONFLICT (party, event_time, event_id) DO NOTHING`
 
-// partiesOf names every agent an event involves, deduplicated.
+// SeatResolver answers the AGENT id of the seat a handle names, and false for a
+// handle no agent seat answers to, which is a human seat, a stranger or
+// nobody.
+type SeatResolver func(handle string) (agentID string, ok bool)
+
+// SetEventSeats installs what the event log resolves a handle an event names
+// through, to file that event under the agent it involves. Nil files every
+// event under its own agent alone.
 //
-// THE ACTOR AND THE FOUR TAGS, and the set is exactly what the RelatedAgent
-// filter used to test in Go — moved to write time so the read can be an index
-// seek. Deduplicated here rather than left to the conflict clause, because an
-// event whose actor is also its sender is the common case, not the rare one.
-func partiesOf(actor string, tags map[string]string) []string {
-	seen := make(map[string]struct{}, len(agentTagKeys)+1)
-	var out []string
-	add := func(name string) {
-		if name == "" {
-			return
-		}
-		if _, dup := seen[name]; dup {
-			return
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
+// # Why the store is handed it
+//
+// Because it cannot compute the answer. An agent id is a UUIDv5 over the
+// company's name and the seat's handle (ADR-0013), and whether a handle names
+// an agent seat at all is the org's to say. Only a process holding the org can
+// say it, and the engine installs one reading its live epoch, so the row is keyed
+// on what the chart said when the event was written.
+//
+// A handle that is not open takes it as nothing, like every other setter here:
+// there is no log on it to file anything under.
+func (d *DB) SetEventSeats(seats SeatResolver) {
+	if d == nil {
+		return
 	}
-	add(actor)
-	for _, key := range agentTagKeys {
-		add(tags[key])
+	if seats == nil {
+		d.eventSeats.Store(nil)
+		return
+	}
+	d.eventSeats.Store(&seats)
+}
+
+// eventSeatsNow is the installed resolver, or nil.
+func (d *DB) eventSeatsNow() SeatResolver {
+	if d == nil {
+		return nil
+	}
+	if held := d.eventSeats.Load(); held != nil {
+		return *held
+	}
+	return nil
+}
+
+// partiesOf names every agent an event involves, by AGENT ID, deduplicated.
+//
+// # Why ids, never names
+//
+// The index was keyed on NAMES — the actor, the `agent_role` tag and the
+// participant tags as they came — and a seat's name is prose two seats may
+// share: a seat's related events listed every namesake's work as its own. An
+// agent id names exactly one seat, so it is what the index
+// holds: the event's own `agent_id`, and each seat a participant tag names,
+// resolved through seats.
+//
+// # Which tags name a seat
+//
+// [seatTagKeys] on every event, and `sender` only on an A2A channel's own
+// records (those carrying `channel_id`): there it is the seat that spoke, and
+// on an external notification it is the name somebody has at a vendor, which
+// resolved as a handle filed a stranger's message under whichever seat
+// shared it. Deduplicated here rather than left to the conflict clause,
+// because an event naming its own agent as a participant is the common case.
+func partiesOf(tags map[string]string, seats SeatResolver) []string {
+	seen := make(map[string]struct{}, len(seatTagKeys)+2)
+	var out []string
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	add(tags["agent_id"])
+	if seats == nil {
+		return out
+	}
+	resolve := func(handle string) {
+		if handle == "" {
+			return
+		}
+		if id, ok := seats(handle); ok {
+			add(id)
+		}
+	}
+	for _, key := range seatTagKeys {
+		resolve(tags[key])
+	}
+	if tags["channel_id"] != "" {
+		resolve(tags["sender"])
 	}
 	return out
 }
@@ -744,8 +846,8 @@ func (q ListQuery) predicate(at time.Time) (from string, where []string, args []
 	addEq("category", q.Category)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
-	addEq("turn_id", q.TurnID)
 	addEq("agent_id", q.AgentID)
+	addEq("turn_id", q.TurnID)
 	addIndexed("work_key", q.WorkKey)
 	addIndexed("work_item", q.WorkItem)
 	addIndexed("channel_id", q.ChannelID)
@@ -1280,6 +1382,24 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 	); err != nil {
 		return 0, fmt.Errorf("store: purge event parties: %w", err)
 	}
+	// AND THE CUSTODY BATCHES THIS NODE SETTLED, on the same horizon,
+	// counted from the settle: a record exists to turn away a redelivery
+	// of its batch (see [EventLog.WriteCustody]), which a group makes when
+	// an acknowledgement was lost — within the delivery's own retries,
+	// minutes after the settle, and never a retention window later.
+	if _, err := l.db.sql.ExecContext(ctx,
+		"DELETE FROM custody_settled WHERE settled_at < ?", cutoff,
+	); err != nil {
+		return 0, fmt.Errorf("store: purge settled custody batches: %w", err)
+	}
+	// AND THE CUT OF EVERY USAGE DAY that ended before the same horizon: the
+	// usage publisher never derives a day older than the read floor again,
+	// so its recorded window ([DB.PinUsageDay]) answers nothing any more.
+	if _, err := l.db.sql.ExecContext(ctx,
+		"DELETE FROM usage_day_windows WHERE end_at < ?", cutoff,
+	); err != nil {
+		return 0, fmt.Errorf("store: purge the cuts of old usage days: %w", err)
+	}
 	var total int64
 	for {
 		res, err := l.db.sql.ExecContext(ctx,
@@ -1376,11 +1496,16 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 		tags = map[string]string{}
 	}
 	rec.Tags = tags
+	rec.AgentID = tags["agent_id"]
 	rec.Failed = types.Failed(rec.Type, false, tags["failed"] == "true")
 }
 
-// agentTagKeys are the tag keys that mean "this event involves that agent".
-var agentTagKeys = []string{"agent_role", "target", "recipient", "sender"}
+// seatTagKeys are the tag keys that name a SEAT of this company by a handle
+// wherever they appear — an A2A channel's two ends and the one that closed it,
+// and the seat a vendor delivery was addressed to — so each resolves to a party
+// of the event. See [partiesOf] for `sender`, which names one only on an A2A
+// channel's records, and for why `agent_role`, a name, is not here at all.
+var seatTagKeys = []string{"requester", "target", "recipient", "closed_by"}
 
 func truncate(recs []EventRecord, limit int) []EventRecord {
 	if limit > 0 && len(recs) > limit {
@@ -1391,7 +1516,8 @@ func truncate(recs []EventRecord, limit int) []EventRecord {
 
 // PhaseTokenQuery selects the phase records a spend breakdown aggregates.
 type PhaseTokenQuery struct {
-	// SinceDays is the window, in whole days back from now. Zero or less
+	// SinceDays is the window, in whole days back from the instant the
+	// read is measured from (see [EventLog.PhaseTokens]). Zero or less
 	// takes DefaultPhaseTokenDays.
 	SinceDays int
 
@@ -1410,8 +1536,10 @@ type PhaseTokenQuery struct {
 	Since time.Time
 	Until time.Time
 
-	// AgentRole restricts the rollup to one seat. Empty is the whole org.
-	AgentRole string
+	// AgentID restricts the rollup to one seat, by the agent id every phase
+	// row promotes. Empty is the whole org. Never the role name beside it,
+	// which two seats may share.
+	AgentID string
 
 	// Limit keeps only the newest Limit records of the window. Zero or less
 	// is the WHOLE window, and that is what a rollup must ask for: see the
@@ -1456,7 +1584,9 @@ func (q PhaseTokenQuery) at() time.Time { return askedAt(q.At) }
 // Exported because the CALLER labels the answer: a rollup headed with the
 // window that was asked for, over rows from the window that was served, is a
 // lie about the numbers beside it — and the clamp lives here, where the floor
-// is defined, rather than being re-derived at every surface.
+// is defined, rather than being re-derived at every surface. The caller sets
+// [PhaseTokenQuery.At] to the same now it passes here, which is what makes the
+// heading and the rows one evaluation rather than two readings of a clock.
 //
 // TOTAL IN BOTH EDGES: an unbounded top edge means "up to now", and what this
 // reports is now rather than the zero time. It answered the zero once and
@@ -1594,31 +1724,24 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // is the query that makes a live screen slow — and a boolean on the
 // shared query type would put that mistake one keystroke away.
 //
-// Matched on EITHER identifier, because a caller holds whichever the seat page
-// gave it: the roster carries the handle-derived agent id and the projection
-// keys on the role name. Both are promoted columns, so neither is a scan.
+// Matched on the seat's AGENT ID alone, the promoted column every phase row
+// carries. It was matched on the id OR the role name, because the projection
+// once keyed seats by name — and a name is prose two seats may share, so a
+// seat's page listed its namesake's calls among its own.
 //
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
 //
 // more reports that the seat holds phases past this page — see [pastPage].
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
-	if agentID == "" && agentRole == "" {
+func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
+	// An EMPTY id names no seat, and bound as one it would match every row
+	// that carries none — every non-agent event in the window.
+	if agentID == "" {
 		return nil, false, nil
 	}
-	query := agentPhaseSQL
-	args := []any{EncodeTime(askedAt(at).Add(-EventHistory))}
-	// ONLY THE IDENTIFIERS THE CALLER ACTUALLY HAS.
-	//
-	// It was `(agent_id = ? OR agent_role = ?)` with both bound
-	// unconditionally, so an EMPTY one matched every row that carries
-	// none: a handle the roster could not resolve to a role asked for that
-	// seat's phases and was answered every non-agent event in the window.
-	// The guard above catches only the case where BOTH are empty.
-	clause, ids := seatClause(agentID, agentRole)
-	query += clause
-	args = append(args, ids...)
+	query := agentPhaseSQL + ` AND agent_id = ?`
+	args := []any{EncodeTime(askedAt(at).Add(-EventHistory)), agentID}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
@@ -1631,30 +1754,6 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 	}
 	rows, more = pastPage(rows, AgentPhaseLimit)
 	return rows, more, nil
-}
-
-// seatClause narrows to a seat by whichever identifier the caller holds.
-//
-// A caller passes the handle-derived agent id, the role name, or both — the
-// roster carries one and the projection keys on the other — and binding an
-// EMPTY one is how a filter turns into a match on every row that has none.
-// Returns an empty clause when the caller holds neither, which its own callers
-// treat as "no seat named" rather than "every seat".
-func seatClause(agentID, agentRole string) (string, []any) {
-	var terms []string
-	var args []any
-	if agentID != "" {
-		terms = append(terms, "agent_id = ?")
-		args = append(args, agentID)
-	}
-	if agentRole != "" {
-		terms = append(terms, "agent_role = ?")
-		args = append(args, agentRole)
-	}
-	if len(terms) == 0 {
-		return "", nil
-	}
-	return " AND (" + strings.Join(terms, " OR ") + ")", args
 }
 
 // phasesSQL is AgentPhases without the seat filter.
@@ -1677,12 +1776,14 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // makes a live screen slow. A boolean on the shared type would put that
 // one keystroke away.
 //
-// `agentID` narrows to ONE SEAT, by the id every node derives for its handle
+// `agentID` narrows to ONE SEAT, by the id every node derives for it
 // ([org.DeriveAgentID]) — the promoted `agent_id` column [ListQuery.AgentID]
-// reads — and empty means the company. Not a role name: two unit seats stamped
-// from one template share one, so a role filter answered "this seat's phases"
-// with every such seat's, and a rename changes it while the history keeps the
-// old one. more reports that records exist past this page — see [pastPage].
+// reads — and empty means the company. Not a role name, for
+// [EventLog.AgentPhases]' reason: two seats may share one — two unit seats
+// stamped from one template among them — so a role filter answered "this
+// seat's phases" with every such seat's, and a rename changes it while the
+// history keeps the old one. more reports that records exist past this page —
+// see [pastPage].
 func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
 	query := phasesSQL
 	args := []any{EncodeTime(askedAt(at).Add(-EventHistory))}
@@ -1747,6 +1848,20 @@ const MaxPhasePage = 60
 // this reads as zero, which is what the cache share did until 0032: every
 // rollup reported a cache that never hit. The price stays in the payload for
 // the reason given at phaseTokenSQL.
+//
+// # The window is measured from q.At, which is the CALLER's instant
+//
+// Every caller labels its answer with [PhaseTokenQuery.Window] — that is why
+// the method is exported — and a label is only true of the rows beneath it if
+// both are ONE evaluation of the window. Read here off this package's own
+// clock, the rows were the window ending at a second reading of the time: in
+// production microseconds after the label's, enough for a record stamped in
+// between to be counted by a rollup headed as ending before it; and under a
+// caller's pinned clock a different window altogether, so a test that pinned
+// the API's clock read a rollup headed with June over October's rows. So a
+// caller that labels its answer sets [PhaseTokenQuery.At] to the instant the
+// label is cut against, and a zero At — a caller that labels nothing — is now,
+// read ONCE for the whole answer.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
 	since, until := q.Window(q.at())
 
@@ -1759,9 +1874,9 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// window headed "counted through now" is a number with no window.
 	sql := phaseTokenSQL + " AND event_time < ?"
 	args := []any{EncodeTime(since), EncodeTime(until)}
-	if q.AgentRole != "" {
-		sql += " AND agent_role = ?"
-		args = append(args, q.AgentRole)
+	if q.AgentID != "" {
+		sql += " AND agent_id = ?"
+		args = append(args, q.AgentID)
 	}
 	if q.Before != nil {
 		sql += " AND (event_time, event_id) < (?, ?)"

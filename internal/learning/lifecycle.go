@@ -1267,27 +1267,38 @@ func cleanStrings(in []string) []string {
 
 // ---- the model-backed summarizer ------------------------------------- //
 
-// CompleteFunc is one call to a model on one seat's behalf: the ROLE whose
-// chain answers, a system prompt, a user prompt, and the text that came back.
+// CompleteFunc is one call to a model on one seat's behalf: the HANDLE of the
+// seat whose chain answers, a system prompt, a user prompt, and the text that
+// came back.
 //
 // The narrowest thing that can stand for "an LLM" — no provider, no message
 // types, no telemetry. Everything the engine wraps around a model call (the
-// role's auxiliary provider chain, the token budget, the usage event) lives on
+// seat's auxiliary provider chain, the token budget, the usage event) lives on
 // the engine's side of this function, which is why this package still imports
 // nothing but the store.
 //
-// The role is a NAME rather than a resolved provider for the same reason:
+// THE HANDLE RATHER THAN THE DISPLAY NAME, because the handle is what
+// addresses a seat: it names the inbox, derives the agent id, and is what the
+// org chart resolves. It was the name, and every compaction on a company whose
+// seats declare handles failed with "this revision has no such role" — the
+// memory stayed uncompacted and the failure was logged on a path whose whole
+// contract is best effort.
+//
+// It is the handle the rows are keyed on (see the package doc).
+//
+// It is an identifier rather than a resolved provider for the reason above:
 // resolving it is the engine's job, and a resolved chain here would put the
 // provider types back in this package's imports.
-type CompleteFunc func(ctx context.Context, role, system, user string) (string, error)
+type CompleteFunc func(ctx context.Context, handle, system, user string) (string, error)
 
-// FitFunc rewrites one text that will not fit budget bytes, on a role's
+// FitFunc rewrites one text that will not fit budget bytes, on one seat's
 // behalf — the engine's compactor, behind a function for [CompleteFunc]'s
 // reason: the compactor and the chain it runs on stay on the engine's side of
-// it, metered there like any auxiliary call. field says which of a
-// turn's two accounts the text is, because what a rewrite must keep differs:
-// a task keeps what was asked and where, an outcome what was delivered.
-type FitFunc func(ctx context.Context, role string, field EpisodeField, text string, budget int) (string, error)
+// it, metered there like any auxiliary call. The seat is named by its HANDLE,
+// for [CompleteFunc]'s reason too. field says which of a turn's two accounts
+// the text is, because what a rewrite must keep differs: a task keeps what was
+// asked and where, an outcome what was delivered.
+type FitFunc func(ctx context.Context, handle string, field EpisodeField, text string, budget int) (string, error)
 
 // EpisodeField names one of a turn's prose fields a [FitFunc] is asked to
 // condense.
@@ -1326,12 +1337,15 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 	if len(c.Episodes) == 0 {
 		return Summary{}, errors.New("learning: summarizer got an empty cluster")
 	}
-	// THE ROLE IS PASSED THROUGH, which is what [Cluster.Role] is hoisted
-	// out of the episodes for: it selects the seat's auxiliary provider
-	// chain and attributes the token spend. Dropping it here would compact
-	// every seat's memory on whichever single model the wiring happened to
-	// close over, in a company whose whole point is that seats differ.
-	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c, m.condense(ctx, c)))
+	// THE CLUSTER'S HANDLE, not its role: [Cluster] carries both because
+	// they answer different questions, and this one is "which seat's
+	// chain" — it selects the seat's auxiliary provider chain and
+	// attributes the token spend. Dropping it here would compact every
+	// seat's memory on whichever single model the wiring happened to close
+	// over, in a company whose whole point is that seats differ. The role
+	// is prose, and it reaches the model inside the rendered cluster where
+	// prose belongs.
+	raw, err := m.complete(ctx, c.Handle, CompactorSystemPrompt, RenderCluster(c, m.condense(ctx, c)))
 	if err != nil {
 		return Summary{}, err
 	}
@@ -1430,7 +1444,7 @@ func (m modelSummarizer) condense(ctx context.Context, c Cluster) map[string]str
 	group.SetLimit(condenseParallel)
 	for _, j := range jobs {
 		group.Go(func() error {
-			rewritten, err := m.fit(ctx, c.Role, j.field, j.flat, perTurnDetail)
+			rewritten, err := m.fit(ctx, c.Handle, j.field, j.flat, perTurnDetail)
 			if err != nil {
 				log.DebugContext(ctx, "episode_field_not_condensed", "agent_handle", c.Handle,
 					"field", string(j.field), "bytes", len(j.flat), "error", err.Error())

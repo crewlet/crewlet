@@ -91,16 +91,19 @@ export function Spend() {
   // and nothing is drawn that is not this window's.
   const refused = tokens.error === "bad_params";
   const rollup = refused ? null : tokens.data;
+  // EACH SEAT'S DAY BY ITS AGENT ID, the key the spend row carries too
+  // (`agentLines`).
   const dayOf = useMemo(() => {
-    const byHandle = new Map<string, BudgetWindow | undefined>();
+    const byAgent = new Map<string, BudgetWindow | undefined>();
     for (const a of agents) {
-      if (a.handle)
-        byHandle.set(
-          a.handle,
+      if (a.agent_id) {
+        byAgent.set(
+          a.agent_id,
           a.budget?.windows?.find((w) => w.period === "day"),
         );
+      }
     }
-    return (handle: string) => byHandle.get(handle);
+    return (agentID: string) => byAgent.get(agentID);
   }, [agents]);
   const lines = useMemo(() => agentLines(rollup, dayOf), [rollup, dayOf]);
   const words = rollup ? windowWords(rollup, named) : null;
@@ -123,7 +126,14 @@ export function Spend() {
       {/* THE REFUSAL, ABOVE THE FIGURES IT IS ABOUT — in the engine's own
           words where it has some: a window too long, or starting before the
           history, says which and what to change. */}
-      {tokens.error && <QueryState error={tokens.error} detail={tokens.detail} loading={false} />}
+      {tokens.error && (
+        <QueryState
+          error={tokens.error}
+          refusal={tokens.refusal}
+          detail={tokens.detail}
+          loading={false}
+        />
+      )}
 
       {!refused && (
         <div className="spend">

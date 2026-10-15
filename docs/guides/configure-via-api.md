@@ -1,6 +1,6 @@
 # Configure Nimbus via the `/config/*` API
 
-End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot `PUT /config` (recommended), then per-entity edits you'd run afterwards to evolve the company live.
+End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot import of the whole file (recommended), then the per-entity edits you'd run afterwards to evolve the company live, its org chart included.
 
 Every request below assumes:
 
@@ -20,9 +20,34 @@ See the [Configuration concept doc](../concepts/configuration.md) for the two-ti
 
 ---
 
-## Option 1 — Single full-document PUT (recommended for bootstrap)
+## Option 1 — Import the whole file (recommended for bootstrap)
 
-The simplest path. Send the whole `company.yaml` in one request; the engine validates, persists as a new revision, appends an activation epoch, and spawns the whole company. Every node in the deployment converges on that epoch — see [Control Plane](../concepts/control-plane.md).
+The simplest path. `crewlet config import` validates the whole `company.yaml`
+and sends it to the running node's `PUT /config`, which persists it as a new
+revision and activates it; every node converges on that epoch and spawns the
+company (see [Control Plane](../concepts/control-plane.md)). It authenticates
+the way every command that talks to a node does, with `CREWLET_API_TOKEN`:
+
+```bash
+export CREWLET_API_TOKEN="$TOKEN"
+crewlet config import examples/nimbus.company.yaml \
+  -config examples/nimbus.config.yaml -api "$CREWLET_URL" \
+  -summary "bootstrap Nimbus"
+```
+
+Verify:
+
+```bash
+curl -s $CREWLET_URL/health                                       # configured: true
+curl -s $CREWLET_URL/config -H "$AUTH" | jq '.name'               # "Nimbus"
+curl -s $CREWLET_URL/config/revisions -H "$AUTH" | jq '.[0]'      # newest first
+curl -s $CREWLET_URL/agents -H "$AUTH" | jq 'length'              # 7 agent seats spawned
+```
+
+### The same write, over the API alone
+
+The command is a `PUT /config` of the whole file, and a script can send it
+itself:
 
 ```bash
 curl -X PUT $CREWLET_URL/config \
@@ -36,7 +61,7 @@ A revision summary is required on every write. It travels in the `X-Summary`
 header, or as a top-level `_summary` key in the body:
 
 ```bash
-curl -X PUT http://localhost:8080/config \
+curl -X PUT http://localhost:8000/config \
   -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.company.yaml)"
@@ -54,6 +79,16 @@ Response is `201 Created` with the new `revision_id` and `epoch`, the
 `warnings` the engine has about the document (a lead or a `manages` entry that
 names nobody, for example) and the `derived` hierarchy it will run. See
 [What a write answers](../reference/api-endpoints.md#what-a-write-answers).
+
+**Every seat's handle and every unit's key is written into the stored
+document.** A seat that declares no `handle` gets the one its `name` derives,
+and a unit with no `id` gets one minted from its name, before the revision is
+stored — so a correction to a name made by editing the stored document (`GET`
+then `PUT`, `PATCH`, the per-entity routes below) keeps the identity, and the
+seat its agent id, mailbox and memory. A file you import is minted afresh each
+time: correct a name in one that leaves the `handle` or `id` out and the import
+replaces that seat or unit. Declare both in any file you keep, or start it
+from `crewlet config export`, which writes every one of them.
 
 To check a document without writing it, send the same request with
 `?dry_run=true`. Nothing is stored or activated, no summary is needed, and the
@@ -85,15 +120,6 @@ curl -X PUT $CREWLET_URL/config \
   --data-binary @nimbus.company.json
 ```
 
-Verify:
-
-```bash
-curl -s $CREWLET_URL/health $AUTH                                 # configured: true
-curl -s $CREWLET_URL/config -H "$AUTH" | jq '.name'               # "Nimbus"
-curl -s $CREWLET_URL/config/revisions -H "$AUTH" | jq '.[0]'      # newest first
-curl -s $CREWLET_URL/agents | jq 'length'                         # 7 agent seats spawned
-```
-
 If anything else has touched `/config` since you last read it, supply `If-Match`:
 
 ```bash
@@ -118,10 +144,15 @@ knowledge scope).
 
 ```
 PUT /config/roles/{handle}
-PUT /config/units/{name}
+PUT /config/units/{id}
 PUT /config/llm-providers/{key}
 PUT /config/mcp-servers/{name}
 ```
+
+Each is addressed by the thing the *document* resolves it by, never by its
+display name: a seat by its handle, a unit by its key (`id`), a provider by its
+key under `providers.llm`, a server by its `name`. `GET` on the collection
+lists exactly those, which is the list to address from.
 
 Why bother, when `PUT /config` already works? Because that write makes every
 edit a company-wide one. Changing one seat's goal means sending back a
@@ -156,8 +187,8 @@ The `config_entities` query still lists a collection and still answers a
 prefer `GET /config/{kind}/{id}`, whose body is exactly what `PUT` takes.
 
 The response is `201 Created` with the new `revision_id`, `epoch`, `warnings`
-and `derived` hierarchy, exactly as a full PUT would be: the write changed one
-entity and created one revision.
+and `derived` hierarchy, exactly as a full PUT would be: the write changed one entity and
+created one revision.
 
 ### What a write actually does
 
@@ -168,14 +199,16 @@ consequences worth knowing before you script against it:
 
 - **The whole company is validated, not just your entity.** A seat naming an
   `llm` provider that no longer exists is fine on its own and breaks the
-  company; you get `400 validation_error` naming the field. This is the point
-  of validating whole — you never see the rest of the document, so it is the
-  one place that break can be caught.
-- **An unknown field is refused, not dropped.** A body carrying `gaol` where
-  you meant `goal` is `400 invalid_body` naming the field, exactly as the
-  whole-document parser refuses an unknown key. A decoder that ignored what it
-  did not recognise would answer `201` and store a seat with no goal, and this
-  is the surface most likely to be hand-edited in a hurry.
+  company; you get `400 validation_error` naming the field, even though
+  nothing in the body you sent is about it. This is the point of
+  validating whole — you never see the rest of the document, so it is the one
+  place that break can be caught.
+- **An unknown field is refused, not dropped.** A body carrying `heders`
+  where you meant `headers` is `400 invalid_body` naming the field, exactly as
+  the whole-document parser refuses an unknown key. A decoder that ignored what
+  it did not recognise would answer `201` and store a server that sends no
+  credentials, and this is the surface most likely to be hand-edited in a
+  hurry.
 - **A plain `PUT` never creates.** An id the active revision does not carry
   is `404 no_such_entity`: naming one that is not there is far more often a
   typo than an intent to add one. To ADD an MCP server or an LLM provider,
@@ -187,11 +220,13 @@ consequences worth knowing before you script against it:
   not send `If-Match` beside it (`400 conflicting_preconditions`): the create
   lands on the revision active when it commits, compare-and-set. A seat and a
   unit are not created by address (`400 not_creatable`) — each has a place in
-  the chart the path does not name — so add those through `PUT /config`.
+  the chart the path does not name — so add one by replacing the unit it sits
+  in, or through `PUT /config`; see
+  [Adding, moving and removing seats and units](#adding-moving-and-removing-seats-and-units).
 
   ```bash
-  curl -X PUT http://localhost:8080/config/mcp-servers/linear \
-    -H "Authorization: Bearer $CREWLET_TOKEN" \
+  curl -X PUT http://localhost:8000/config/mcp-servers/linear \
+    -H "Authorization: Bearer $CREWLET_API_TOKEN" \
     -H "If-None-Match: *" \
     -H "X-Summary: add the linear server" \
     -d '{"name":"linear","transport":"http","url":"https://mcp.example.com",
@@ -199,22 +234,21 @@ consequences worth knowing before you script against it:
   ```
 - **The path is the identity, and a `PUT` never renames.** `PUT
   /config/roles/ceo` replaces whatever is at `ceo`; a body carrying a
-  different handle is `400 identity_mismatch` rather than a move. The handle
-  is effectively permanent — the seat's durable id derives from it, so a
-  rename orphans that seat's diary, its onboarding marker and its counterparty
-  profiles — and nothing that references the old name travels with the splice.
-  The check is on the **derived** handle, so `{"name": "Chief Executive"}`
-  with no `handle` is refused too: an omitted handle is derived from the name,
-  which makes a display-name edit a rename by accident. Keep `handle` in the
-  body and change whatever else you like. Renaming is a full-document edit.
-- **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
-  answers `405`. Removal is a full-document edit — deleting a seat strands its
-  mailbox and its in-flight work, and deleting a provider silently repoints every role that named it. If
-  that is going to happen, it should happen in a document you looked at, and
-  land as one reviewable revision. Export, edit, `PUT /config`.
-
-A seat inside a unit is reachable by handle like any other — you do not have
-to know which list it lives in, or how deeply the unit is nested.
+  different handle is `400 identity_mismatch` rather than a move. A seat's
+  handle and a unit's key are permanent — the seat's durable id derives from
+  its handle, so a different handle is a different seat with an empty mailbox
+  and no memory — and a server's name is the key every seat declares its
+  credentials under, so nothing that references the old name travels with the
+  splice. A body that leaves `handle` (or a unit's `id`) out keeps the one the
+  path names, so editing a display name is never a rename. Keep the identity
+  and change whatever else you like.
+- **`PUT` is the only verb.** There is no `DELETE /config/mcp-servers/tracker`;
+  the path answers `405`. Removal is a whole-document edit, unlike a create:
+  adding a server or a provider changes nothing that already names one, while
+  deleting a provider silently repoints every seat whose model chain named it,
+  and deleting a server leaves every `mcp_env` block keyed on it read by
+  nothing. If that is going to happen, it should happen in a document you
+  looked at, and land as one reviewable revision: export, edit, `PUT /config`.
 
 A write keeps what the node's own build cannot represent. During a rolling
 upgrade a node may hold a document a newer node wrote, with settings its
@@ -231,6 +265,77 @@ hurry. A node with no active revision answers `409 no_active_revision` — there
 is nothing to splice into.
 
 ---
+
+### Adding, moving and removing seats and units
+
+A seat or a unit has a **place** — the unit it sits in — and the entity path
+names none, so neither is created or moved by address. Each is a change to the
+unit that holds it: read that unit with `GET /config/units/{id}`, add, move or
+drop the seat in its `roles`, or the unit in its `children`, and `PUT` it back
+— or make the change in the whole document with `PUT` or `PATCH /config`. A
+seat at the company root is added through the whole document. The answer's
+`derived` hierarchy shows where everything landed.
+
+**A human seat something holds cannot be taken away.** A write that removes
+one — or turns it into an agent seat — is refused `409 seat_held` while the
+[identity directory](../concepts/identity-and-access.md) binds somebody to it
+at any stage short of their removal, or while an open invitation names it,
+since an invitation holds its seat until it is redeemed, cancelled or lapses.
+The answer names the one thing holding each seat under `held` — a holder by
+`person`, `kind`, `login` and `stage`, or an invitation by its `invitation` id
+and `expires_at`, never the invitee's address — and the remedy follows the
+holder, each a gesture for an administrator:
+
+| What holds the seat | Free it with |
+|---|---|
+| A person | Move them to another human seat (`PATCH /iam/people/{person}` with `seat`, or `crewlet iam bind <person> <seat>`) or remove them. A person always holds a seat, so unbinding one is refused |
+| A service account | Unbind it (`PATCH /iam/people/{person}` with `seat: ""`, or `crewlet iam unbind <person>`) or move it |
+| An open invitation | Cancel it (`DELETE /iam/invitations/{invitation}`, or `crewlet iam cancel-invite <invitation>`) |
+
+Then send the write again. A node that cannot read the directory refuses such
+a write `503 identity_unavailable` rather than allowing it. An offline
+`crewlet config import` has no directory to ask, so the binding it strands is
+reported by `crewlet iam check`, and an invitation to a seat it removed is
+refused when somebody tries to redeem it.
+
+### A lead editing their own team
+
+A person who leads a unit needs no `admin` to change what is inside it.
+Signed in as themselves, they read and write the seats and units of their team
+— the unit they lead and every unit beneath it — through the same entity
+routes, with the same `If-Match` and `X-Summary`:
+
+```bash
+# Read one seat of the team, and its ETag
+curl -si $CREWLET_URL/config/roles/sre -H "$AUTH"
+
+# Check the edit first: a dry run judges it exactly as the write will
+curl -X PUT "$CREWLET_URL/config/roles/sre?dry_run=true" -H "$AUTH" \
+  -H 'Content-Type: application/json' -H "If-Match: \"$REV\"" --data-binary @sre.json
+
+curl -X PUT $CREWLET_URL/config/roles/sre -H "$AUTH" \
+  -H 'Content-Type: application/json' -H "If-Match: \"$REV\"" \
+  -H "X-Summary: give the SRE its on-call goal" --data-binary @sre.json
+```
+
+Everything the write changes has to be inside their team, where it was and
+where it lands: a seat added, edited, moved between two of their teams or
+removed, a sub-team added or removed, the seats and sub-teams inside their
+unit reordered, their own unit's name or purpose. Handing their unit to
+another `lead:`, removing, moving or reordering it among its siblings, naming somebody
+outside it in a `lead:` or `manages:` entry, setting or changing a project,
+space, channel, address or contact id, changing a credential, naming a
+`${VAR}` in any field, and any setting take `admin`. A write that reaches past them
+is refused whole —
+`403 unauthorized` with a `refused` list naming every part, the place it
+reaches and why; see [A lead edits their own
+team](../reference/api-endpoints.md#a-lead-edits-their-own-team). A seat or a
+unit outside their team, and a name the company does not have, is refused
+`403` at its own address before the body is read, in the same words either
+way. The whole document (`GET /config`) stays `admin`'s, so a lead edits
+through the entity routes rather than a `GET` and `PUT` of `/config`. While
+the document is [managed by another system](#when-another-system-manages-the-document),
+a lead's edit is refused `403 config_managed` like everybody else's.
 
 ## Read paths
 
@@ -282,16 +387,28 @@ writer in every node's Tier A:
 api:
   auth:
     tokens:
-      - {id: gitops, token: "${CREWLET_API_TOKEN_GITOPS}"}
-      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+      - id: gitops
+        token: "${CREWLET_API_TOKEN_GITOPS}"
+        grants: [admin]
+      - id: founder
+        token: "${CREWLET_API_TOKEN_FOUNDER}"
+        grants: [admin]
     company_writers: [gitops]
 ```
+
+The list names a credential rather than granting one: the pipeline's token
+still needs `admin`, as every write of the document does, and the list is
+asked only once that permission has admitted it.
 
 The pipeline keeps writing as above, with `Authorization: Bearer
 $CREWLET_API_TOKEN_GITOPS` and an `If-Match` on the revision it last wrote, so a
 person's reload in between is a `409` it re-reads rather than one it
 overwrites. Everyone else still reads — `GET /config`, the history, the diffs —
-and is refused a change:
+and is refused a change. That is every credential the list does not name, the
+ones holding `admin` included: a person signed in to the dashboard, a
+machine token acting as its owner, and a [lead editing their own
+team](#a-lead-editing-their-own-team), whose edit is exactly the one the
+pipeline's next reconcile would overwrite:
 
 ```bash
 curl -X PATCH $CREWLET_URL/config -H "$AUTH" \
@@ -326,19 +443,27 @@ classified, beside the `detail` that renders them.
 | `400` | `invalid_body` | The body is not YAML or JSON, or its shape is not a company's (an unknown key, a list where a mapping belongs). `Content-Type` is not what decides it |
 | `400` | `invalid_patch` | A `PATCH` body that could not be merged, or that names a key the document does not have |
 | `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
-| `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
+| `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body — asked once the write is admitted and its document checked, so a write you may not make is refused for that first |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
+| `400` | `conflicting_preconditions` | A per-entity `PUT` carrying both `If-None-Match: *` and `If-Match`; send one |
+| `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |
+| `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
-| `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this token is not one of `api.auth.company_writers`; `managed_by` names the writers. A write and its dry run alike |
+| `403` | `unauthorized` | The credential holds neither `admin`, which the route takes, nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
+| `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this credential is not one of the Tier A tokens `api.auth.company_writers` lists; `managed_by` names the writers. A write and its dry run alike, asked once the grant has admitted the caller and before the body is read |
+| `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
-| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
+| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `admin` is told: a lead is refused `403` as for one outside their team |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
 | `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
+| `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it or an open invitation names it; `held` names the one thing holding each seat. Move or remove a person, unbind a service account, or cancel the invitation first |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
-| `412` | `already_configured` | `If-None-Match: *` sent while a revision is active on this node or anywhere in the fleet |
+| `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
+| `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
+| `503` | `identity_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After` |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

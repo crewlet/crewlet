@@ -27,6 +27,7 @@ import { Button, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { needsWords } from "~/lib/access.ts";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -114,6 +115,12 @@ export function WriteButton<T extends ActionTool>({
  * THE ENGINE'S SENTENCE NAMES ITS ARGUMENTS IN BACKTICKS ("`labels` …"), which
  * is the one mark a tool's sentence carries for a value — so it is drawn as
  * one, in the refusal's own ink, rather than as punctuation around a word.
+ *
+ * A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the access the deciding
+ * rule would have admitted this person on ("needs Tracker access"), from the
+ * answer itself and never written here — a permission named in this file is
+ * a second statement of the rule, and the one that goes stale the day the
+ * rule moves.
  */
 export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) {
   const { refusal, busy } = write;
@@ -122,6 +129,9 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
     <span className="write-refusal" role="alert">
       <span>{marked(refusal.sentence, "inherit")}</span>
       {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
+      {refusal.grants.length > 0 && (
+        <span className="t-caption">{needsWords("This", refusal.grants)}</span>
+      )}
       {refusal.retryable && (
         <Button size="small" variant="ghost" loading={busy} onClick={() => void write.retry()}>
           Try again

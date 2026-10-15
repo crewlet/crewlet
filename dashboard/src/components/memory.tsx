@@ -175,7 +175,12 @@ function WholeEpisode({
         </Button>
       }
     >
-      <QueryState error={whole.error} detail={whole.detail} loading={whole.loading}>
+      <QueryState
+        error={whole.error}
+        refusal={whole.refusal}
+        detail={whole.detail}
+        loading={whole.loading}
+      >
         {whole.data &&
           (e ? (
             <div className="col gap-3">

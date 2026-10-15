@@ -14,8 +14,12 @@
  * `routes.ts`, what the trail says is `crumbs.ts`, which workspaces and
  * sections exist is `nav.ts`, and what the sidebar shows is `sidebar/`. This
  * file wires them together and owns exactly the things nothing else can: the
- * palette, the token dialog, the page context a screen describes itself
- * through, and the peek column.
+ * palette, the watch on the viewer's own inbox, the strip that reports a
+ * degraded connection, the page context a screen describes itself through,
+ * and the peek column. Who is signed in is the sidebar's user block
+ * (`sidebar/UserBlock.tsx`), and signing in is a screen outside the frame
+ * (`App.tsx`): the frame holds no credential and asks for none, because the
+ * browser's only credential is the session cookie the engine set.
  *
  * # The peek is a column of the sheet
  *
@@ -55,7 +59,6 @@ import { CommandPalette } from "./palette/Palette.tsx";
 import { LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
-import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
 import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
 import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
@@ -66,13 +69,14 @@ import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
-import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
+import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
+import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
-import { onTokenRequested } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
@@ -334,15 +338,35 @@ export function FrameReadings({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The frame, and the one thing only the frame does: DIAL THE SOCKET.
+ *
+ * The socket is made at boot and lives for the tab (`main.tsx`), and it is
+ * dialled here because the frame is the one part of this dashboard that needs
+ * a session. Dialled at boot, every signed-out page — the sign-in, an
+ * invitation's, a reset link's — dialled `/ws/stream` once and read its
+ * refusal and the degraded-mode snapshot: three `401`s in the console of a page
+ * that needs nobody. A sign-in does not dial either: it lands here, and the
+ * frame dials for the session it reads.
+ *
+ * AND ONLY FOR SOMEBODY. The frame asks `GET /auth/session` first
+ * (`lib/frameSession.ts`): a `401` is nobody, which `rest.ts` turns into the
+ * sign-in the app follows, and nothing is dialled; any session is dialled,
+ * whatever access it holds, because the socket serves everybody the overview
+ * and decides each push by the reader's access; any other failure says
+ * nothing about a session, and the dial's own handshake decides.
+ */
 export function Shell({ children }: { children: ReactNode }) {
   return (
-    <FrameReadings>
-      {/* WORK'S SCOPE SWITCHER: the panel the trail's last crumb opens on
-          Work's pages, and the same panel centred for G then P anywhere. */}
-      <ProjectSwitcherProvider>
-        <Frame>{children}</Frame>
-      </ProjectSwitcherProvider>
-    </FrameReadings>
+    <SessionReading>
+      <FrameReadings>
+        {/* WORK'S SCOPE SWITCHER: the panel the trail's last crumb opens on
+            Work's pages, and the same panel centred for G then P anywhere. */}
+        <ProjectSwitcherProvider>
+          <Frame>{children}</Frame>
+        </ProjectSwitcherProvider>
+      </FrameReadings>
+    </SessionReading>
   );
 }
 
@@ -351,9 +375,33 @@ function Frame({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket, store } = useClient();
-  const { connected, authRejected } = useConnection();
+  const { connected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
+  const session = useFrameSession();
+  // WHAT THE READER HOLDS — the frame's one reading (`useHeldGrants`), which
+  // Settings' column locks its sections by, as the sidebar locks its rows.
+  // Read off the viewer alone, the column drew no lock at all until the
+  // socket answered.
+  const held = useHeldGrants();
+
+  // DIAL FOR SOMEBODY — see [Shell] — when the session is first read. A read
+  // that failed on anything but a `401` says nothing about the session, and
+  // the handshake decides.
+  const serves = session.answer !== null;
+  const undecided =
+    session.answer === null && session.error !== null && session.error.status !== 401;
+  useEffect(() => {
+    if (serves || undecided) socket.start();
+  }, [serves, undecided, socket]);
+  // A REFUSAL THE SOCKET MET IS ASKED ABOUT AGAIN: a seat taken out of the
+  // chart closes an open socket, and the session read before it still names
+  // the seat — so the panel would say who the reader is from a reading the
+  // refusal has just made stale.
+  const { reload: readSessionAgain } = session;
+  useEffect(() => {
+    if (accessRefused !== null) void readSessionAgain();
+  }, [accessRefused, readSessionAgain]);
   // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
   // TIMESTAMP. The formatters read the preference when they are called, so
   // the frame subscribes and re-renders; the screen is a child of this render
@@ -370,12 +418,11 @@ function Frame({ children }: { children: ReactNode }) {
   // AND ONE THAT ASKED FOR A NARROWER PEEK — a canvas, which the rail shrinks
   // rather than narrows. See `app/frame/peekWidth.ts`.
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
-  const [tokenOpen, setTokenOpen] = useState(false);
   // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
-  // holds it for the reason it holds the palette: three doors (the sidebar's
-  // head, a screen's page bar, a board lane) open ONE sheet, and a route
-  // change does not close it (the reader may have followed
-  // a link to check a name while filing).
+  // holds it for the reason it holds the palette: every door (a screen's page
+  // bar, a board lane, a seat's Message) opens ONE sheet, and a route change
+  // does not close it (the reader may have followed a link to check a name
+  // while filing).
   const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
   const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
 
@@ -387,15 +434,20 @@ function Frame({ children }: { children: ReactNode }) {
   const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
   const [ownStar, setOwnStar] = useState(false);
 
-  // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
-  // dialog forever. Everything after that is the state bar.
+  // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
+  // `inbox_changed` frames. The shell owns it because the shell outlives every
+  // screen: a watch taken by the Inbox screen would end the moment the reader
+  // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
+  // has to stay current. UNDER `owner` — the seat when bound, the login when
+  // not — because that is the record the engine pushes about. The socket
+  // re-sends it on every reconnect. ONLY WITH TRACKER: `inbox_changed` is the
+  // tracker's push, and a watch from anybody else is a refusal on every
+  // reconnect.
   useEffect(() => {
-    socket.onAuthRejected(() => setTokenOpen(true));
-  }, [socket]);
-
-  // And from anywhere else that discovers it needs a credential — an
-  // auth-gated answer on a screen the socket was never refused for.
-  useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
+    if (viewer.owner === "" || !viewer.tracker) return;
+    socket.watch(viewer.owner);
+    return () => socket.watch("");
+  }, [socket, viewer.owner, viewer.tracker]);
 
   // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
   const [legendOpen, setLegendOpen] = useState(false);
@@ -427,10 +479,7 @@ function Frame({ children }: { children: ReactNode }) {
   // the way out, and this covers every OTHER way — Back and Forward, a
   // phone's back gesture, a restored history entry — where a palette left
   // open would go on offering what it ranked for the screen just left. The
-  // drawer is the kit's, and `navigationKey` closes it the same way. NOT THE
-  // TOKEN DIALOG: a credential prompt is about the reader's access rather
-  // than where they are, and dismissing it on a navigation would lose the one
-  // thing the socket asked for.
+  // drawer is the kit's, and `navigationKey` closes it the same way.
   useEffect(() => {
     setPaletteOpen(false);
   }, [route.hash]);
@@ -477,21 +526,21 @@ function Frame({ children }: { children: ReactNode }) {
     [],
   );
 
-  const openToken = useCallback(() => setTokenOpen(true), []);
   const degraded = degradationOf({
     authRejected,
+    accessRefused,
     connected,
     configured: engine?.configured,
-    onSetToken: openToken,
+    onSignIn: goSignIn,
     onConfig: () => nav.to(["settings", "config"]),
   });
 
   // THE SETTINGS COLUMN'S FIGURES — the health push the frame already holds,
-  // and three operator answers asked only while the column is on screen. See
-  // `sidebar/settingsFigures.tsx`.
+  // and three guarded answers asked only while the column is on screen and
+  // only of a reader whose grants reach them. See `sidebar/settingsFigures.tsx`.
   const figures = useSettingsSidebar({
     here: row?.renderer === "column",
-    operator: viewer.operator,
+    grants: held ?? [],
     health: engine,
     published: publishedFleet,
   });
@@ -526,7 +575,7 @@ function Frame({ children }: { children: ReactNode }) {
           fill={filling}
           navigationKey={route.hash}
           toggleLabel="Navigation"
-          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />}
+          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
           topbar={
             <PageHeader
               crumbs={crumbs}
@@ -555,12 +604,7 @@ function Frame({ children }: { children: ReactNode }) {
               className="section-frame"
               style={{ "--section-column": `${column}px` } as CSSProperties}
             >
-              <SectionColumn
-                row={row}
-                path={route.path}
-                operator={viewer.operator}
-                figures={figures}
-              />
+              <SectionColumn row={row} path={route.path} grants={held} figures={figures} />
               <div className="section-body">{screen}</div>
             </div>
           ) : (
@@ -588,15 +632,6 @@ function Frame({ children }: { children: ReactNode }) {
           </LayerBoundary>
         )}
         {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
-        {tokenOpen && (
-          <TokenDialog
-            onClose={() => setTokenOpen(false)}
-            onSaved={(token) => {
-              socket.setToken(token);
-              socket.reconnect();
-            }}
-          />
-        )}
         {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
             without moving focus (the switcher's "3 projects"). */}
         <Announcer />

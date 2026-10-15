@@ -56,9 +56,8 @@ const OrgScope = "org"
 
 // AgentScope is one seat's counter key.
 //
-// Keyed on the DERIVED agent id rather than the handle, matching the diary and
-// the episodes: renaming a handle then starts a fresh budget rather than
-// inheriting the spend of whoever held the name before.
+// Keyed on the seat's DERIVED agent id — the uuid over its handle (ADR-0013) —
+// as its lease, its mailbox and its diary are.
 func AgentScope(agentID string) string { return "agent:" + agentID }
 
 // Windows is the window of each period a charge is counted in, or a read is
@@ -531,15 +530,17 @@ type Budgets interface {
 	// charge of nothing, which writes nothing and reads nothing, exactly as
 	// PostCharge answers one.
 	//
-	// It exists for the spend nobody's SEAT made: a person asking the
+	// It exists for the spend no seat's TURN made: a person asking the
 	// company's knowledge a question from the dashboard (the operator
-	// surface's `answer_knowledge`). A person has no agent scope and no
-	// seat ceiling — `token_budget` is on the company and on roles that
-	// run turns — so there is no seat half to charge, and inventing a
-	// scope for one would put a row in every listing that no ceiling can
-	// ever judge. The company's windows are what that spend is judged by,
-	// and a counter that did not hear about it would hand the next turn
-	// room the answer had already used.
+	// surface's `answer_knowledge`). The answer runs on the auxiliary model
+	// of the seat the person is bound to, but it is the person's question
+	// and not a turn of that seat, and a seat's ceiling — `token_budget` on
+	// a role that runs turns — is set for the turns it runs; so there is
+	// no seat half to charge, and inventing a scope for the person would
+	// put a row in every listing that no ceiling can ever judge. The
+	// company's windows are what that spend is judged by, and a counter
+	// that did not hear about it would hand the next turn room the answer
+	// had already used.
 	//
 	// AFTER THE FACT for PostCharge's reason: an answer is one model call
 	// whose size is known only from its reply. The caller gates BEFORE the

@@ -116,9 +116,10 @@ const org = {
 };
 
 const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane",
   kind: "human",
 };
@@ -140,7 +141,9 @@ function mount(id?: string, { refuse = false, answer = pool() } = {}) {
   const query = vi.fn((what: string) => {
     if (what === "viewer") return Promise.resolve(OPERATOR);
     if (what === "credential_pool") {
-      return refuse ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(answer);
+      return refuse
+        ? Promise.reject(new QueryError("unauthorized", { reason: "operator", grants: ["admin"] }))
+        : Promise.resolve(answer);
     }
     return new Promise(() => {});
   });
@@ -319,7 +322,10 @@ test("a key the engine does not know is said, not drawn as an empty model", asyn
 test("a refused reader sees the refusal alone — no tiles, no empty list", async () => {
   const { view } = mount(undefined, { refuse: true });
   await settle();
-  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
+  // THE ENGINE'S REFUSAL, naming the grant that would have admitted the reader.
+  expect(
+    await screen.findByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText(/No model configured/)).toBeNull();
 });

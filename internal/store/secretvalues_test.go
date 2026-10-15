@@ -13,6 +13,11 @@ import (
 
 var secretClock = time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
 
+// byOperator is who every case writes as: a person through their own machine
+// token, so each of the three provenance columns carries a distinct value.
+var byOperator = secrets.Author{Name: "operator", Kind: "operator",
+	OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+
 // ring builds a keyring with the named keys, the first active.
 func ring(t *testing.T, ids ...string) secrets.Keyring {
 	t.Helper()
@@ -49,7 +54,7 @@ func secretStore(t *testing.T, k secrets.Keyring) (*store.SecretValues, *store.D
 
 func mustSet(t *testing.T, s *store.SecretValues, name, value string) {
 	t.Helper()
-	if err := s.Set(context.Background(), name, value, "operator", "cli", secretClock); err != nil {
+	if err := s.Set(context.Background(), name, value, byOperator, "cli", secretClock); err != nil {
 		t.Fatalf("Set(%s): %v", name, err)
 	}
 }
@@ -158,7 +163,7 @@ func TestAWrongKeyringRaisesRatherThanReturningNothing(t *testing.T) {
 func TestWithoutAKeyringTheStoreRefusesEverything(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, secrets.Keyring{})
-	if err := s.Set(context.Background(), "TOKEN", "v", "op", "cli", secretClock); !errors.Is(err, secrets.ErrNoKeyring) {
+	if err := s.Set(context.Background(), "TOKEN", "v", byOperator, "cli", secretClock); !errors.Is(err, secrets.ErrNoKeyring) {
 		t.Errorf("Set err = %v, want secrets.ErrNoKeyring", err)
 	}
 	if _, err := s.Get(context.Background(), "TOKEN"); !errors.Is(err, secrets.ErrNoKeyring) {
@@ -215,7 +220,10 @@ func TestAListingIsMetadataOnly(t *testing.T) {
 	if list[0].Name != "ALPHA" || list[1].Name != "ZETA" {
 		t.Fatalf("order = %s, %s", list[0].Name, list[1].Name)
 	}
-	if list[0].UpdatedBy != "operator" || list[0].Source != "cli" {
+	// ALL THREE, which is the row's whole provenance: the author, what sort
+	// of author, and the credential beside them.
+	if got := (secrets.Author{Name: list[0].UpdatedBy, Kind: list[0].UpdatedByKind,
+		OperatorID: list[0].OperatorID}); got != byOperator || list[0].Source != "cli" {
 		t.Errorf("provenance = %+v", list[0])
 	}
 	if !list[0].UpdatedAt.Equal(secretClock) {
@@ -275,11 +283,11 @@ func TestRekeyMovesOnlyWhatIsNotAlreadyActive(t *testing.T) {
 	after := db.SecretValues(cipher)
 	// A value written after the rotation is already on the active key and
 	// must not be touched by the pass.
-	if err = after.Set(context.Background(), "NEW_C", "c", "op", "cli", secretClock); err != nil {
+	if err = after.Set(context.Background(), "NEW_C", "c", byOperator, "cli", secretClock); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 
-	moved, err := after.Rekey(context.Background(), "k2", "operator", secretClock)
+	moved, err := after.Rekey(context.Background(), "k2")
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
@@ -300,12 +308,20 @@ func TestRekeyMovesOnlyWhatIsNotAlreadyActive(t *testing.T) {
 	}
 
 	// AND THE POINT OF THE PASS: nothing is left under the retired key, so
-	// it can be dropped from the config.
+	// it can be dropped from the config — while every row goes on saying who
+	// stored it. A rekey re-seals a value it did not choose; it used to stamp
+	// its own caller and `rekey` over each row it moved.
 	list, err := after.List(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	for _, r := range list {
+		if got := (secrets.Author{Name: r.UpdatedBy, Kind: r.UpdatedByKind,
+			OperatorID: r.OperatorID}); got != byOperator || r.Source != "cli" ||
+			!r.UpdatedAt.Equal(secretClock) {
+			t.Errorf("%s records %+v, %q at %s after a rekey, want who stored it",
+				r.Name, got, r.Source, r.UpdatedAt)
+		}
 		if r.KeyID != "k2" {
 			t.Errorf("%s is still on %s after a rekey", r.Name, r.KeyID)
 		}
@@ -318,7 +334,7 @@ func TestRekeyingTwiceMovesNothingTheSecondTime(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, ring(t, "k1"))
 	mustSet(t, s, "TOKEN", "v")
-	if moved, err := s.Rekey(context.Background(), "k1", "op", secretClock); err != nil || len(moved) != 0 {
+	if moved, err := s.Rekey(context.Background(), "k1"); err != nil || len(moved) != 0 {
 		t.Fatalf("Rekey on an already-active row = %v, %v", moved, err)
 	}
 }
@@ -346,7 +362,7 @@ func TestARekeyAbortsOnARowItCannotOpen(t *testing.T) {
 		t.Fatalf("insert orphan: %v", err)
 	}
 
-	if moved, err := s.Rekey(context.Background(), "k1", "op", secretClock); err == nil {
+	if moved, err := s.Rekey(context.Background(), "k1"); err == nil {
 		t.Fatalf("the pass reported success having moved %v", moved)
 	}
 }
@@ -362,7 +378,7 @@ func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, ring(t, "k1"))
 	for _, name := range []string{"", "gitlab token", "gitlab-token", "9LIVES"} {
-		err := s.Set(context.Background(), name, "value", "operator", "cli", secretClock)
+		err := s.Set(context.Background(), name, "value", byOperator, "cli", secretClock)
 		if !errors.Is(err, secrets.ErrInvalidName) {
 			t.Errorf("Set(%q) = %v, want secrets.ErrInvalidName", name, err)
 		}

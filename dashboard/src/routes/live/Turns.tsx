@@ -295,7 +295,7 @@ export function Turns() {
           <Card.Title>Turns that ended</Card.Title>
         </Card.Header>
         {series.error && !series.data ? (
-          <QueryState error={series.error} loading={false} />
+          <QueryState error={series.error} refusal={series.refusal} loading={false} />
         ) : series.data ? (
           <Histogram
             bars={bars}
@@ -361,6 +361,7 @@ export function Turns() {
       )}
       <QueryState
         error={list.error}
+        refusal={list.refusal}
         loading={list.loading}
         empty={
           rows.length
@@ -477,7 +478,7 @@ export function Turns() {
       {(rows.length > 0 || more || pageError) && (
         <div className="row gap-2">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : more ? (
             <Button
               size="small"

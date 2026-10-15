@@ -229,9 +229,10 @@ function answering(
     if (what === "viewer") {
       return Promise.resolve(
         answers.viewer ?? {
-          operator_id: "U0FOUNDER",
-          operator: true,
+          login: "U0FOUNDER",
+          grants: ["admin", "tracker", "knowledge"],
           handle: "ada",
+          owner: "ada",
           name: "Ada Lovelace",
           kind: "human",
         },
@@ -330,11 +331,18 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
-        { role: "A", activity: "working" },
-        { role: "B", activity: "working" },
-        { role: "C", activity: "idle", live_call: { in_progress: true, versions: ZERO_VERSIONS } },
-        { role: "D", activity: "needs" },
+      store.applySeats([
+        { id: "a", agent_id: "a", handle: "a", role: "A", activity: "working" },
+        { id: "b", agent_id: "b", handle: "b", role: "B", activity: "working" },
+        {
+          id: "c",
+          agent_id: "c",
+          handle: "c",
+          role: "C",
+          activity: "idle",
+          live_call: { in_progress: true, versions: ZERO_VERSIONS },
+        },
+        { id: "d", agent_id: "d", handle: "d", role: "D", activity: "needs" },
       ] as never),
     );
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
@@ -345,11 +353,17 @@ describe("the sidebar's figures", () => {
   // The running turns, from every screen
   // ---------------------------------------------------------------------------
 
+  /** A roster row for the seat named `role`, its handle and agent id derived
+   *  from the name the way these fixtures write them. */
+  function seat(role: string, over: Record<string, unknown> = {}) {
+    const handle = role.toLowerCase();
+    return { id: handle, agent_id: `a-${handle}`, handle, role, ...over };
+  }
+
   /** A seat the engine calls working, on `turn`, started at minute `at`. */
   function workingSeat(role: string, turn: string, at: number, item = "") {
     return {
-      role,
-      handle: role.toLowerCase(),
+      ...seat(role),
       activity: "working",
       turn: {
         turn_id: turn,
@@ -382,22 +396,22 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     expect(runningRows(), "no group while nothing runs").toEqual([]);
-    act(() =>
-      store.applyAgents([
-        workingSeat("CTO", "t-late", 9),
-        workingSeat("SWE", "t-early", 1, "ENG-412"),
-        { role: "PM", handle: "pm", activity: "needs" },
-        { role: "QA", handle: "qa", activity: "idle" },
-      ] as never),
-    );
+    const roster = [
+      workingSeat("CTO", "t-late", 9),
+      workingSeat("SWE", "t-early", 1, "ENG-412"),
+      seat("PM", { activity: "needs" }),
+      seat("QA", { activity: "idle" }),
+    ];
+    act(() => store.applySeats(roster as never));
     const rows = runningRows();
     expect(rows.map((r) => r.href)).toEqual([watching("t-early"), watching("t-late")]);
     // THE SEAT'S NAME, AND THE ITEM ITS TURN IS CHARGED TO as the row's lead.
     expect(rows[0]!.text).toContain("SWE");
     expect(rows[0]!.text).toContain("ENG-412");
     expect(rows[1]!.text).toContain("CTO");
-    // A TURN THAT STARTS IS APPENDED; the rows above it hold their places.
-    act(() => store.applyAgents([workingSeat("Ops", "t-new", 20)] as never));
+    // A TURN THAT STARTS IS APPENDED; the rows above it hold their places —
+    // here on a seat the roster gains, which is how a new seat arrives.
+    act(() => store.applySeats([...roster, workingSeat("Ops", "t-new", 20)] as never));
     expect(runningRows().map((r) => r.href)).toEqual([
       watching("t-early"),
       watching("t-late"),
@@ -412,9 +426,9 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
+      store.applySeats([
         workingSeat("A", "t-a", 1),
-        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        seat("Fresh", { activity: "working", turn: null, live_call: null }),
         workingSeat("B", "t-b", 2),
         workingSeat("C", "t-c", 3),
         workingSeat("D", "t-d", 4),
@@ -448,9 +462,9 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket, <Home key="home" />);
     act(() =>
-      store.applyAgents([
+      store.applySeats([
         workingSeat("A", "t-a", 1),
-        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        seat("Fresh", { activity: "working", turn: null, live_call: null }),
         workingSeat("B", "t-b", 2),
         workingSeat("C", "t-c", 3),
         workingSeat("D", "t-d", 4),
@@ -473,8 +487,7 @@ describe("the sidebar's figures", () => {
     act(() =>
       store.applyAgents(
         ["C", "D", "E"].map((role) => ({
-          role,
-          handle: role.toLowerCase(),
+          agent_id: `a-${role.toLowerCase()}`,
           activity: "idle",
           turn: null,
           live_call: null,
@@ -495,9 +508,9 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
-        { role: "P", handle: "p", activity: "working", turn: null, live_call: null },
-        { role: "Q", handle: "q", activity: "working", turn: null, live_call: null },
+      store.applySeats([
+        seat("P", { activity: "working", turn: null, live_call: null }),
+        seat("Q", { activity: "working", turn: null, live_call: null }),
       ] as never),
     );
     const rows = runningRows();
@@ -512,7 +525,7 @@ describe("the sidebar's figures", () => {
     location.hash = watching("t-b");
     const { store, socket } = answering({});
     mountShell(store, socket);
-    act(() => store.applyAgents([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
+    act(() => store.applySeats([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
       a.getAttribute("href"),
@@ -535,19 +548,19 @@ describe("the sidebar's figures", () => {
     chord();
     expect(location.hash).toBe("#/live");
     location.hash = "#/";
-    act(() => store.applyAgents([workingSeat("A", "t-a", 1)] as never));
+    act(() => store.applySeats([workingSeat("A", "t-a", 1)] as never));
     chord();
     expect(location.hash).toBe(watching("t-a"));
     location.hash = "#/";
-    act(() => store.applyAgents([workingSeat("B", "t-b", 2)] as never));
+    act(() => store.applySeats([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
     chord();
     expect(location.hash).toBe("#/live");
   });
 
-  // A PIN IS A PERSON'S, so every saved view is asked for WITH the viewer —
-  // the shared views carry no pins, which is why the sidebar this replaced
-  // never drew one — across every container, and with the engine's own counts.
-  test("pinned views are asked for as the viewer, and draw the view's own total", async () => {
+  // A PIN IS A PERSON'S, and the engine reads the caller's own off the request
+  // that asks — there is no `viewer=` to name somebody else's — across every
+  // container, and with the engine's own counts.
+  test("pinned views are asked for as the caller, and draw the view's own total", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
       {
@@ -580,7 +593,8 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket);
     await settle();
     const views = asked.find((a) => a.what === "work_saved_views");
-    expect(views?.params).toMatchObject({ viewer: "ada", counts: true });
+    expect(views?.params).toMatchObject({ counts: true });
+    expect(views?.params).not.toHaveProperty("viewer");
     // NOT ONE CONTAINER'S STRIP: a pin made on a project board lives there.
     expect(views?.params).not.toHaveProperty("container");
     // A PIN RUNS THE VIEW: the list with the view's key as `view=`, not the
@@ -702,13 +716,11 @@ describe("the sidebar's figures", () => {
     ).toHaveLength(1);
   });
 
-  // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar and
-  // the sidebar's head `+`, not a second form each, and not the palette it
-  // stood in for until the sheet landed.
-  test.each([
-    ["Home's New task", "button", /^New task$/],
-    ["the sidebar's head +", "button", /^New task$/],
-  ] as const)("%s opens the frame's New task sheet", async (who, role, name) => {
+  // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not
+  // a second form, and not the palette it stood in for until the sheet landed.
+  // AND IT IS THE ONLY ONE ON HOME: the sidebar's head carries no `+`, so a
+  // second New task there is a door nobody decided to put back.
+  test("Home's New task opens the frame's New task sheet, the only one on the page", async () => {
     location.hash = "#/home";
     const { store, socket } = answering({
       work_workload: { rows: [] },
@@ -717,11 +729,11 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket, <Home key="home" />);
     await settle();
-    const presses = screen.getAllByRole(role, { name });
-    // The page bar's button comes after the sidebar's in document order.
-    const press = who === "Home's New task" ? presses[presses.length - 1]! : presses[0]!;
+    const presses = screen.getAllByRole("button", { name: /^New task$/ });
+    expect(presses).toHaveLength(1);
+    expect(document.querySelector(".side-head button")).toBeNull();
     await act(async () => {
-      fireEvent.click(press);
+      fireEvent.click(presses[0]!);
     });
     await waitFor(() => expect(screen.getByRole("dialog", { name: "New task" })).toBeTruthy());
   });
@@ -830,23 +842,33 @@ describe("the page header", () => {
     expect(screen.getByRole("navigation", { name: "Live sections" })).toBeDefined();
   });
 
-  // SETTINGS DRAWS A COLUMN, with a lock on a guarded section for a reader
-  // without the credential, and the section the reader is on marked.
-  test("Settings draws its sections as a column, locked where guarded", async () => {
+  // SETTINGS DRAWS A COLUMN, with a lock on a section for a reader holding
+  // none of its grants — naming the grant — and the section the reader is on
+  // marked.
+  test("Settings draws its sections as a column, locked where the reader lacks the grant", async () => {
     location.hash = "#/settings/secrets";
+    // A READER THE SOCKET ANSWERS — every signed-in principal is one, holding
+    // nothing at all: what they lack is the section's own (`sectionOpen`).
     const { store, socket } = answering({
-      viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+      viewer: {
+        login: "reader",
+        grants: [],
+        handle: "",
+        owner: "reader",
+        name: "",
+        kind: "",
+      },
     });
     mountShell(store, socket);
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs an operator credential");
+    expect(current?.textContent).toContain("needs Admin");
     const general = Array.from(column.querySelectorAll("a")).find((a) =>
       a.textContent?.startsWith("General"),
     );
-    expect(general?.textContent).not.toContain("operator credential");
+    expect(general?.textContent).not.toContain("needs");
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -862,7 +884,14 @@ describe("the page header", () => {
     // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
     // toggle is not drawn — the fold is the phone block's, held by frame.test.
     const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
-    expect(toggle.textContent).toBe("Settings section: Secrets");
+    // WHAT IT IS CALLED, its decoration left out — what it SHOWS ("Section ·
+    // Secrets") is the picker's own suite's (`PageHeader.test.tsx`).
+    const spoken = (el: HTMLElement) => {
+      const copy = el.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll("[aria-hidden='true']").forEach((n) => n.remove());
+      return copy.textContent;
+    };
+    expect(spoken(toggle)).toBe("Settings Section: Secrets");
     const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -878,7 +907,7 @@ describe("the page header", () => {
     });
     await settle();
     const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
-    expect(moved.textContent).toBe("Settings section: Nodes");
+    expect(spoken(moved)).toBe("Settings Section: Nodes");
     expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
       "false",
     );
@@ -924,11 +953,11 @@ describe("the page header", () => {
     );
   });
 
-  test("a reader without an operator credential is asked nothing, even in Settings", async () => {
+  test("a reader without the grants is asked nothing, even in Settings", async () => {
     location.hash = "#/settings";
     const asked: { what: string }[] = [];
     const { store, socket } = answering(
-      { viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } },
+      { viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" } },
       asked,
     );
     mountShell(store, socket);
@@ -1080,6 +1109,48 @@ test("the engine row reads the push and opens the engine panel", async () => {
   const panel = screen.getByRole("dialog", { name: "Engine" });
   expect(within(panel).getByText("3 live")).toBeDefined();
   expect(within(panel).getByText("Epoch 42")).toBeDefined();
+});
+
+// THE ALARMS' NAMES ARE THE RETENTION REPORT'S, which takes Admin,
+// so the panel asks for them only where Settings › Backups & retention, the
+// section that lists them, opens for the reader: decided by the rule every
+// lock is drawn by, over the frame's one reading of what the reader holds. A
+// reader without it is told the longest-standing alarm off the push, and the
+// engine is never asked a question it would refuse. Mutation: hand the panel
+// `readsReport` unconditionally and the second reader asks.
+test("the engine panel asks the alarms' names only of a reader the report's section opens for", async () => {
+  const report = { domains: [], alarms: [{ kind: "backup_age", detail: "", remedy: "" }] };
+  const holdsNothingButTheCompany = {
+    login: "reader",
+    grants: [],
+    handle: "ada",
+    owner: "ada",
+    name: "Ada Lovelace",
+    kind: "human",
+  };
+  for (const [viewer, asks] of [
+    [undefined, true],
+    [holdsNothingButTheCompany, false],
+  ] as const) {
+    const asked: { what: string }[] = [];
+    const { store, socket } = answering(
+      viewer ? { viewer, retention: report } : { retention: report },
+      asked,
+    );
+    mountShell(store, socket);
+    await settle();
+    act(() => {
+      store.setConnected(true);
+      store.applyHealth(healthFrame({ alarms: { count: 1, worst: "backup_age" } }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Engine serving, 1 alarm" }));
+    await settle();
+    expect(
+      asked.some((a) => a.what === "retention"),
+      viewer ? "a reader without Admin" : "a reader holding Admin",
+    ).toBe(asks);
+    cleanup();
+  }
 });
 
 // A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·

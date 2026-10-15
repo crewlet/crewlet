@@ -2,7 +2,7 @@
 
 Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, seat ownership, and knowledge and memory infrastructure needed to operate a network of AI agents modeled after a real corporate structure. Task state lives in a work-item tracker, the engine's own by default or an external one the engine deliberately mirrors none of (see [The Tracker](task-engine.md)).
 
-Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + a web dashboard (served inside the engine's own process, by every node given an API port) provide configuration, webhooks, and observability. Anything beyond that (custom UIs, metrics exporters, bespoke automations) is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
+Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + a web dashboard (served inside the engine's own process, by every `ingress` node given an API port) provide configuration, webhooks, and observability. Anything beyond that (custom UIs, metrics exporters, bespoke automations) is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
 
 ---
 
@@ -62,13 +62,13 @@ flowchart TB
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
         SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
-        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · skill curator"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · learning passes"]
         CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge"]
     end
 
-    STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.HANDLE.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
-    KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors")]
+    STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
+    KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -110,7 +110,7 @@ appears.
 | Store | Turso | Two local files this process owns exclusively — this node's own estate and the replicated one beside it; pure Go, SQLite file format, and the vector functions the learning subsystem's recall is written against |
 | Vector search | The store's vector distance functions | The per-agent diary and the episodic store, in the same file as everything else. The *arithmetic* is the database's; there is no ANN index reachable from the Go driver yet, so recall is a scan behind the per-agent index |
 | Event store | A table in that file | LLM-invocation observability and the event dashboards, written inline by a publish listener |
-| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV riding the stream's own NATS connection — never the store file, and never a second connection that could fail on its own |
+| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV on the stream's own NATS broker — never the store file. On an external broker it rides the queue's connection; on the embedded one it has a second connection to the same server, and both are watched, so either one closing for good stops the node rather than leaving it half-connected |
 | Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the schema editors read, and the docs |
 | Tracing | OpenTelemetry | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
 | LLM clients | Official vendor SDKs | Anthropic and OpenAI, plus any OpenAI-compatible endpoint |
@@ -141,7 +141,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any O
 
 ### Embedding Provider
 
-`embeddings.Embedder` (`internal/providers/embeddings`) embeds one text (`Embed(ctx, text)`) and reports the space its vectors are in — the configured `Width()` and the `Model()` they come from — and the model's `Limits()`: how many bytes one input may hold, and how many inputs and bytes one request may carry, resolved from what the model's vendor documents (or what the operator states for a model this build does not know). `embeddings.BatchEmbedder` adds `EmbedBatch`, which sends a batch in as many requests as those limits need. An input past the bound is refused before anything is sent, and a caller decides what a longer text becomes: the knowledge corpus embeds its opening, a turn's ask is split into pieces whose vectors are pooled into one (`embeddings.EmbedWhole`). A failure is classified — refused (this request will be refused again unchanged), transient, or a configuration fault — and nothing in the provider retries: for a turn starting it means "no similarity search", never a failed turn, and the corpus duty asks again on its next tick. It is used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin), **and** by the [knowledge system](knowledge-system.md#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) for the semantic half of a native search: the company's own pages and work items are embedded once by a fleet-singleton duty and applied on every node, so the bill is paid once however many nodes run. A Confluence knowledge base is searched live and embeds nothing. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
+`embeddings.Embedder` (`internal/providers/embeddings`) embeds one text (`Embed(ctx, text)`) and reports the space its vectors are in — the configured `Width()` and the `Model()` they come from — and the model's `Limits()`: how many bytes one input may hold, and how many inputs and bytes one request may carry, resolved from what the model's vendor documents (or what the operator states for a model this build does not know). `embeddings.BatchEmbedder` adds `EmbedBatch`, which sends a batch in as many requests as those limits need. An input past the bound is refused before anything is sent, and a caller decides what a longer text becomes: the knowledge corpus embeds its opening, a turn's ask is split into pieces whose vectors are pooled into one (`embeddings.EmbedWhole`). A failure is classified — refused (this request will be refused again unchanged), transient, or a configuration fault — and nothing in the provider retries: for a turn starting it means "no similarity search", never a failed turn, and the corpus duty asks again on its next tick. It is used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin), **and** by the [knowledge system](knowledge-system.md#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) for the semantic half of a native search: the company's own pages and work items are embedded once by a fleet-singleton duty and applied on every data node, so the bill is paid once however many nodes run. A Confluence knowledge base is searched live and embeds nothing. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
 
 ### Database
 
@@ -171,8 +171,8 @@ adr/                      # Architecture decision records — a decision that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, backup, retention, work, objects,
-                          #   fleet, seats, secrets, config, llm, search, and
-                          #   the six integration CLIs — gitlab/github/
+                          #   fleet, seats, secrets, config, iam, llm, search,
+                          #   and the six integration CLIs — gitlab/github/
                           #   jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
@@ -195,6 +195,9 @@ internal/
 │                         #   and the in-memory twin, both certified by one
 │                         #   suite
 ├── coord/                # TTL leases with a fencing epoch + the shared KV
+├── iam/ authz/           # Who is acting (principals, grants, the name
+│                         #   grammars) and the one function that decides
+│                         #   whether they may — values only, no store
 ├── statelog/             # The durable-state framework: one ordered stream per
 │                         #   domain is the write-ahead log, N identical SQL
 │                         #   copies are the state, and the checkpoint commits
@@ -203,7 +206,10 @@ internal/
 │                         #   domain: records, subjects, ranks, custom fields
 ├── pages/                # The engine's own knowledge base — statelog's third
 │                         #   domain: containers, pages, revisions, comments
-├── usage/                # Each node's day, replicated — statelog's fourth
+├── iamdomain/            # The identity estate — statelog's fourth domain:
+│                         #   people, logins, credentials, invitations and
+│                         #   sessions, uniqueness arbitrated on one subject
+├── usage/                # Each node's day, replicated — statelog's fifth
 │                         #   domain: spend, turns and reads that outlive the
 │                         #   node that recorded them
 ├── eventfan/             # The fleet's turn-level history, read from every
@@ -258,7 +264,9 @@ internal/
 │                         #   the engine — the only place either is reachable
 ├── maintenance/          # The retention sweep, behind one singleton duty
 ├── tokens/               # Token accounting shared by the meter and the API
-├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
+├── hostbox/ procgroup/   # Running somebody else's process on the engine host —
+│                         #   the one environment allowlist every child gets —
+│                         #   and process-tree teardown
 ├── whsec/                # Webhook signing secrets: the format, minting and the HMAC key
 ├── jsprovision/          # How long a replicated JetStream create gets, and
 │                         #   what "the cluster is still forming" looks like:
@@ -269,13 +277,18 @@ internal/
 │                         #   embedded fleet's one domain, which a leaf node
 │                         #   reaches across its link, or an external
 │                         #   cluster's account
+├── jsinflight/           # A compare-and-set the leader answers "another write
+│                         #   is still in flight" is waited out until the
+│                         #   leader decides it, never read as a lost race
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/, operator/ (the
-│                         #   operator catalogue over /operator/mcp and the
-│                         #   dashboard's /operator/act), and pagepolicy/:
-│                         #   the security headers every response carries
+│                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE
+│                         #   operator catalogue: MCP at /operator/mcp, the
+│                         #   dashboard's /operator/act, and the audit row
+│                         #   every call that is not a read leaves), and
+│                         #   pagepolicy/: the security headers every
+│                         #   response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields

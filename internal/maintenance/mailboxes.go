@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // THE REMOVED SEAT'S MAILBOX.
@@ -17,11 +21,12 @@ import (
 // A seat's mailbox is a durable subscription, and a durable subscription on
 // the agent stream retains every message addressed to it until a consumer
 // acks it. That is what makes an unowned seat's mail safe, and it is also why
-// a seat REMOVED from the company is a leak: nothing consumes its mailbox
-// again, nothing deletes it, and every event still addressed to the handle is
-// kept for the life of the deployment. Worse, a seat later added under the
-// same handle attaches to that mailbox and works the backlog under a role
-// definition that never wrote it.
+// a seat that LEAVES the company's agent seats — removed from the chart, or
+// made a person's — is a leak: nothing consumes its mailbox again, nothing
+// deletes it, and every event still addressed to the seat is kept for the
+// life of the deployment. The mailbox is named by the agent id derived from
+// the seat's handle (ADR-0013), so a seat created again under the same handle
+// attaches to it, and one under any other handle never does.
 //
 // So a mailbox is retired once its seat has been absent from the active
 // revision for [MailboxRetirementGrace]. The pieces, and why each is shaped
@@ -40,17 +45,22 @@ import (
 //     LISTS the seat mailboxes the broker holds ([queue.EventQueue]'s
 //     ListSubscriptions) and registers each one of a seat outside the roster
 //     that has no record, stamping its absence at once. From then on it is an
-//     ordinary absent record, retired after the same grace period.
+//     ordinary absent record, retired after the same grace period — with NO
+//     HANDLE, because nothing the fleet still holds can say what the seat was
+//     called, which is why everything a retirement acts on is found by the
+//     seat's ID and the handle is only ever a label. A seat that comes back
+//     has its handle written onto the record by the first registration or
+//     sweep that finds it in the roster.
 //   - ABSENCE IS OBSERVED, NOT INFERRED. The sweep stamps a record absent the
 //     first time the active revision lacks its handle, and retires it only
 //     once that stamp is older than the grace period. The stamp is cleared by
 //     whichever writer sees the seat again first: the sweep, or a node
 //     registering the seat on an apply.
-//   - UNKNOWN IS NEVER ABSENT. The sweep reads the roster of the revision the
-//     fleet is pointed at, and a roster it cannot read, or a node that has not
-//     applied that revision yet, stamps nothing and retires nothing. A store
-//     blip or a lagging duty holder must not be able to delete a live seat's
-//     mail.
+//   - UNKNOWN IS NEVER ABSENT. The sweep reads the roster of the company the
+//     fleet is running, and a roster it cannot read, or a node that has not
+//     applied the activation the fleet is pointed at, stamps nothing and
+//     retires nothing. A store blip or a lagging duty holder must not be able
+//     to delete a live seat's mail.
 //   - EVERY WRITE IS A COMPARE-AND-SET. Two sweeps that overlap during a duty
 //     handoff read the same record and exactly one wins the mark that starts a
 //     retirement; a returning seat's registration that lands first makes the
@@ -69,29 +79,34 @@ import (
 //     is gone. A seat whose lease somebody else holds is not retired at all.
 //
 //   - A RETIREMENT ENDS THE SEAT'S CODING RUNS FIRST. A detached run belongs to
-//     its seat, and a removed seat's runs are kept through the grace for the
-//     same reason its mail is: a seat restored within it comes back to its
-//     parked questions and running jobs. Once the grace has passed nothing can
+//     its seat, and a departed seat's runs are kept through the grace for the
+//     same reason its mail is: a seat made an agent's again within it comes
+//     back to its parked questions and running jobs. Once the grace has passed nothing can
 //     reach them (a resume needs the seat, an answer arrives on the inbox about
 //     to go, and a completion is routed to the control topic that goes with
 //     it), so while the lease is held they are ended ([SeatRunRetirer]) before
 //     a single subscription is deleted, and a retirement that cannot end them
-//     is undone and retried like one that cannot delete.
+//     is undone and retried like one that cannot delete. They are found by the
+//     seat's ID, the key their subscriptions are named by, so a mailbox the
+//     broker alone remembered ends its seat's runs like any other.
 //
-// Memory is NOT retired. A seat's diary, episodes, counterparty profiles and
-// onboarding markers are keyed by its handle or by the agent id derived from
-// it, so a seat added again under the same handle reattaches to them. That is a documented
-// property of handle identity rather than a leak, and the learning lifecycle
-// is what bounds it.
+// Memory is NOT retired. A seat's diary and onboarding markers are keyed by
+// its agent id, and its episodes, synthesized skills and counterparty
+// profiles by the handle their rows were written under, so a seat made a
+// person's and an agent's again finds them where it left them. A REMOVED
+// seat's id-keyed rows are reachable by no other seat, because its id is
+// never derived again, and the learning lifecycle is what bounds them.
 
 // MailboxRetirementGrace is how long a seat must have been absent from the
 // active revision before its mailbox is deleted.
 //
 // Twenty-four hours, sized from the two things it trades against. Long enough
-// that a seat deleted by accident and restored within a working day, from the
-// builder's undo, a revert or a corrected import, comes back to its backlog
-// intact rather than to an empty mailbox. Short enough that mail addressed to a
-// seat nobody runs is not retained for longer than one day plus a tick.
+// that a seat made a person's by mistake and made an agent's again within a
+// working day — the one departure from the agent seats that can be undone,
+// since a removal retires the seat's address and identity for good — comes
+// back to its backlog intact rather than to an empty mailbox. Short enough
+// that mail addressed to a seat nobody runs is not retained for longer than
+// one day plus a tick.
 //
 // The clock starts when a sweep FIRST OBSERVES the absence, so the effective
 // delay is this plus up to one [Interval], and longer while no duty holder can
@@ -162,11 +177,11 @@ var ErrNoActiveRevision = errors.New("maintenance: no company revision has been 
 // package calls. Declared here, by the consumer, like every other seam in this
 // tree; [coord.Mailboxes] satisfies it.
 type MailboxRecords interface {
-	Mailbox(ctx context.Context, handle string) (coord.MailboxRecord, bool, error)
+	Mailbox(ctx context.Context, seat uuid.UUID) (coord.MailboxRecord, bool, error)
 	Mailboxes(ctx context.Context) ([]coord.MailboxRecord, error)
 	CreateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error)
 	UpdateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error)
-	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
+	DeleteMailbox(ctx context.Context, seat uuid.UUID, version uint64) (bool, error)
 }
 
 // MailboxQueue is the slice of the event queue a sweep calls: the listing that
@@ -187,20 +202,31 @@ type SeatLeases interface {
 // being retired, while the retirement holds the seat's lease under owner and
 // epoch.
 //
+// THE SEAT'S ID selects the runs, and the handle is only a label: a record the
+// broker's listing alone found has none, and a retirer that selected by it
+// matched no run of that seat, ended nothing, and let the retirement delete
+// the subscriptions every one of them is reached on. The id is the key the run
+// records and the subscriptions share.
+//
 // An error means some run was not ended, including a node that cannot tell
 // whether the seat has runs at all, and the retirement is undone and retried:
 // deleting the subscriptions a run's completion and answer travel on, while
 // the run itself is left behind, would strand it in the fleet's run records
 // for good.
-type SeatRunRetirer func(ctx context.Context, handle, owner string, epoch int64) error
+type SeatRunRetirer func(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error
 
-// SeatRoster reads the agent seat handles of the revision the fleet is pointed
-// at.
+// SeatRoster reads the agent seats of the company the fleet is running: the
+// revision the activation pointer names.
+//
+// THE WHOLE SEAT rather than its handle, because everything this sweep names
+// about a mailbox — the registry key, the subscriptions, the lease it claims
+// to exclude a running node — is built from the seat's ID. The handle rides
+// along as the label every log line and every refusal reads.
 //
 // An error means UNKNOWN, never "no seats": it is returned when the pointer
-// cannot be read, when this node has not applied the revision it names, and
+// cannot be read, when this node has not applied the activation it names, and
 // [ErrNoActiveRevision] when nothing has ever been activated.
-type SeatRoster func(ctx context.Context) ([]string, error)
+type SeatRoster func(ctx context.Context) ([]placement.Seat, error)
 
 // MailboxOptions configures [NewMailboxes].
 type MailboxOptions struct {
@@ -331,8 +357,10 @@ func (m *Mailboxes) Jobs() []Job {
 // no subscription (harmless, a retirement deletes nothing) rather than a
 // subscription nothing remembers.
 //
-// A record the sweep stamped absent is cleared: the seat is back. A record whose
-// retirement is in flight is NOT overwritten at once, because the retiring
+// A record the sweep stamped absent is cleared: the seat is back. A record that
+// carries no handle — one the sweep registered from the broker's listing alone
+// — is given the seat's, so every later log line names whose mailbox it is. A
+// record whose retirement is in flight is NOT overwritten at once, because the retiring
 // sweep may still delete the subscription this node is about to create; the
 // node waits for the retirement to finish, and takes the record over only once
 // it has outlived twice its budget, by which point the retiring sweep can no
@@ -342,18 +370,21 @@ func (m *Mailboxes) Jobs() []Job {
 // An error means the record could not be written. The caller creates the
 // mailbox anyway: losing mail for a seat in the company is worse than a
 // mailbox the sweep has to register on its next tick.
-func (m *Mailboxes) Register(ctx context.Context, handle string) error {
-	if handle == "" {
-		return errors.New("maintenance: a mailbox registration needs a seat handle")
+func (m *Mailboxes) Register(ctx context.Context, seat placement.Seat) error {
+	handle := seat.Handle
+	if seat.ID == uuid.Nil {
+		return fmt.Errorf("maintenance: the mailbox registration of seat %q names no "+
+			"seat id, and a mailbox record is filed under one", handle)
 	}
 	var retiringSeen time.Time
 	for lost := 0; lost < mailboxCASRetries; {
-		rec, found, err := m.records.Mailbox(ctx, handle)
+		rec, found, err := m.records.Mailbox(ctx, seat.ID)
 		if err != nil {
 			return fmt.Errorf("maintenance: read the mailbox record of seat %q: %w", handle, err)
 		}
 		if !found {
-			_, created, createErr := m.records.CreateMailbox(ctx, coord.MailboxRecord{Handle: handle})
+			_, created, createErr := m.records.CreateMailbox(ctx,
+				coord.MailboxRecord{Seat: seat.ID, Handle: handle})
 			if createErr != nil {
 				return fmt.Errorf("maintenance: register the mailbox of seat %q: %w", handle, createErr)
 			}
@@ -363,7 +394,7 @@ func (m *Mailboxes) Register(ctx context.Context, handle string) error {
 			lost++
 			continue
 		}
-		if rec.Present() {
+		if rec.Present() && rec.Handle == handle {
 			return nil
 		}
 		if rec.Retiring() {
@@ -383,13 +414,15 @@ func (m *Mailboxes) Register(ctx context.Context, handle string) error {
 					"budget; the seat is in the active revision again, so its record is reclaimed "+
 					"and the mailbox created afresh")
 		}
-		cleared, ok, err := m.records.UpdateMailbox(ctx, presentRecord(rec))
+		cleared, ok, err := m.records.UpdateMailbox(ctx, presentRecord(rec, seat))
 		if err != nil {
 			return fmt.Errorf("maintenance: register the mailbox of seat %q: %w", handle, err)
 		}
 		if ok {
-			log.InfoContext(ctx, "seat_mailbox_returned", "handle", cleared.Handle,
-				"absent_since", rec.AbsentSince, "by", "registration")
+			if !rec.Present() {
+				log.InfoContext(ctx, "seat_mailbox_returned", "handle", cleared.Handle,
+					"absent_since", rec.AbsentSince, "by", "registration")
+			}
 			return nil
 		}
 		lost++
@@ -436,9 +469,9 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 		return 0, fmt.Errorf("the active revision's seats could not be read, so no mailbox is "+
 			"judged absent this tick: %w", err)
 	}
-	present := make(map[string]bool, len(roster))
-	for _, handle := range roster {
-		present[handle] = true
+	present := make(map[uuid.UUID]placement.Seat, len(roster))
+	for _, s := range roster {
+		present[s.ID] = s
 	}
 	records, err := m.records.Mailboxes(ctx)
 	if err != nil {
@@ -447,11 +480,11 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 
 	var retired int64
 	var errs []error
-	registered := make(map[string]bool, len(records))
+	registered := make(map[uuid.UUID]bool, len(records))
 	for _, rec := range records {
-		registered[rec.Handle] = true
-		if present[rec.Handle] {
-			if err := m.keep(ctx, rec, clock); err != nil {
+		registered[rec.Seat] = true
+		if seat, in := present[rec.Seat]; in {
+			if err := m.keep(ctx, rec, seat, clock); err != nil {
 				errs = append(errs, err)
 			}
 			continue
@@ -468,12 +501,14 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 	// it could register it: a coordination store that refused the write, or
 	// a registration that lost every compare-and-set. Registered here, so
 	// that if the seat is ever removed its mailbox is remembered.
-	for _, handle := range roster {
-		if registered[handle] {
+	for _, s := range roster {
+		if registered[s.ID] {
 			continue
 		}
-		if _, _, err := m.records.CreateMailbox(ctx, coord.MailboxRecord{Handle: handle}); err != nil {
-			errs = append(errs, fmt.Errorf("register the mailbox of seat %q: %w", handle, err))
+		if _, _, err := m.records.CreateMailbox(ctx,
+			coord.MailboxRecord{Seat: s.ID, Handle: s.Handle}); err != nil {
+
+			errs = append(errs, fmt.Errorf("register the mailbox of seat %q: %w", s.Handle, err))
 		}
 	}
 	if err := m.discover(ctx, present, registered, clock, cutoff); err != nil {
@@ -494,8 +529,8 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 // A listing that cannot be read discovers nothing this tick, and says why:
 // the registry's own mailboxes were judged above regardless, and a mailbox
 // that escaped the registry has waited this long already.
-func (m *Mailboxes) discover(
-	ctx context.Context, present, registered map[string]bool, clock sweepClock, cutoff time.Time,
+func (m *Mailboxes) discover(ctx context.Context, present map[uuid.UUID]placement.Seat,
+	registered map[uuid.UUID]bool, clock sweepClock, cutoff time.Time,
 ) error {
 	subs, err := m.queue.ListSubscriptions(ctx, topics.AgentInboxPrefix+">")
 	if errors.Is(err, queue.ErrNotLive) {
@@ -506,19 +541,29 @@ func (m *Mailboxes) discover(
 		return fmt.Errorf("the broker's seat mailboxes could not be listed, so a mailbox with no "+
 			"registry record is not found this tick: %w", err)
 	}
-	var handles []string
+	var seats []uuid.UUID
 	for _, sub := range subs {
-		handle, ok := topics.MailboxHandle(sub.Topic, sub.Group)
-		if !ok || present[handle] || registered[handle] || slices.Contains(handles, handle) {
+		id, ok := topics.MailboxSeat(sub.Topic, sub.Group)
+		if !ok || registered[id] || slices.Contains(seats, id) {
 			continue
 		}
-		handles = append(handles, handle)
+		if _, inRoster := present[id]; inRoster {
+			continue
+		}
+		seats = append(seats, id)
 	}
-	slices.Sort(handles)
+	slices.SortFunc(seats, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 
 	var errs []error
-	for _, handle := range handles {
-		rec, created, err := m.records.CreateMailbox(ctx, coord.MailboxRecord{Handle: handle})
+	for _, id := range seats {
+		// NO HANDLE, and that is the honest record: this mailbox belongs to
+		// a seat that is in neither the roster nor the registry, so nothing
+		// this node holds can say what it was called. The id is what the
+		// retirement needs — its runs, lease and subscriptions are all found
+		// by it — and the label is written by the first registration or
+		// sweep that finds the seat in the roster again ([presentRecord]).
+		handle := id.String()
+		rec, created, err := m.records.CreateMailbox(ctx, coord.MailboxRecord{Seat: id})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("register the unrecorded mailbox of seat %q: %w", handle, err))
 			continue
@@ -539,10 +584,12 @@ func (m *Mailboxes) discover(
 	return errors.Join(errs...)
 }
 
-// keep handles a record whose seat is in the active revision.
-func (m *Mailboxes) keep(ctx context.Context, rec coord.MailboxRecord, clock sweepClock) error {
+// keep handles a record whose seat is in the active revision: it clears an
+// absence, and gives a record the sweep registered with no handle the one the
+// roster names.
+func (m *Mailboxes) keep(ctx context.Context, rec coord.MailboxRecord, seat placement.Seat, clock sweepClock) error {
 	switch {
-	case rec.Present():
+	case rec.Present() && rec.Handle == seat.Handle:
 		return nil
 	case rec.Retiring() && clock.now().Sub(rec.RetiringSince) < mailboxRetireStale:
 		// A PEER'S RETIREMENT IN FLIGHT, started from a roster older than
@@ -551,22 +598,24 @@ func (m *Mailboxes) keep(ctx context.Context, rec coord.MailboxRecord, clock swe
 		// interfering would race its deletes.
 		return nil
 	}
-	cleared, ok, err := m.records.UpdateMailbox(ctx, presentRecord(rec))
+	cleared, ok, err := m.records.UpdateMailbox(ctx, presentRecord(rec, seat))
 	if err != nil {
-		return fmt.Errorf("clear the absence of seat %q: %w", rec.Handle, err)
+		return fmt.Errorf("clear the absence of seat %q: %w", seat.Handle, err)
 	}
 	if !ok {
 		// Somebody else wrote it first, a registering node or a peer
 		// sweep, and either wrote what this would have.
 		return nil
 	}
-	log.InfoContext(ctx, "seat_mailbox_returned", "handle", cleared.Handle,
-		"absent_since", rec.AbsentSince, "by", "sweep")
+	if !rec.Present() {
+		log.InfoContext(ctx, "seat_mailbox_returned", "handle", cleared.Handle,
+			"absent_since", rec.AbsentSince, "by", "sweep")
+	}
 	if rec.Retiring() {
 		// AN ABANDONED RETIREMENT of a seat that is back. It may have
 		// deleted the inbox before it died, and the seat's mail is dropped
 		// until something creates it again.
-		return m.restoreInbox(ctx, rec.Handle)
+		return m.restoreInbox(ctx, seat)
 	}
 	return nil
 }
@@ -581,7 +630,7 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, clock sw
 			// during a duty handoff must retire a mailbox once.
 			return false, nil
 		}
-		log.WarnContext(ctx, "seat_mailbox_retirement_resumed", "handle", rec.Handle,
+		log.WarnContext(ctx, "seat_mailbox_retirement_resumed", "handle", recordLabel(rec),
 			"retiring_since", rec.RetiringSince,
 			"detail", "a previous sweep marked this mailbox for retirement and did not finish")
 		return m.retire(ctx, rec, clock)
@@ -592,9 +641,9 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, clock sw
 		stamped := rec
 		stamped.AbsentSince = clock.at
 		if _, ok, err := m.records.UpdateMailbox(ctx, stamped); err != nil {
-			return false, fmt.Errorf("record the absence of seat %q: %w", rec.Handle, err)
+			return false, fmt.Errorf("record the absence of seat %q: %w", recordLabel(rec), err)
 		} else if ok {
-			log.InfoContext(ctx, "seat_mailbox_absent", "handle", rec.Handle,
+			log.InfoContext(ctx, "seat_mailbox_absent", "handle", recordLabel(rec),
 				"retire_after", clock.at.Add(MailboxRetirementGrace),
 				"detail", "the seat is not in the active revision; its mailbox and the mail it "+
 					"holds are kept until the grace period ends, and a seat restored under the "+
@@ -609,8 +658,12 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, clock sw
 }
 
 // retire deletes a removed seat's subscriptions and then its record.
+//
+// Everything it acts on — the lease, the coding runs, the subscriptions, the
+// record — is found by the seat's ID; the handle names the seat in what it says
+// and nowhere else, since a discovered record has none.
 func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock sweepClock) (bool, error) {
-	handle := rec.Handle
+	handle := recordLabel(rec)
 
 	// THE BUDGET STARTS BEFORE THE CLAIM AND THE MARK, so a registering node
 	// that waits twice the budget from the moment it first sees the mark has
@@ -629,7 +682,7 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// subscriptions this is about to delete. So the retirement CLAIMS the
 	// lease, which is the one thing that node's claim loses to. A claim that
 	// cannot be answered is unknown, and unknown retires nothing.
-	lease, refused, err := m.leases.TryAcquire(work, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, refused, err := m.leases.TryAcquire(work, coord.SeatResource(rec.Seat), coord.AcquireOptions{
 		Owner: m.owner,
 		TTL:   m.leaseTTL,
 		// No Preferred: the hint records the last node that RAN the seat,
@@ -674,22 +727,22 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// THE RUNS BEFORE THE SUBSCRIPTIONS, under the same lease and budget: a
 	// run left behind once its control topic and inbox are gone is one no
 	// completion, answer or resume can ever reach again.
-	if runsErr := m.runs(work, handle, lease.Owner, lease.Epoch); runsErr != nil {
+	if runsErr := m.runs(work, rec.Seat, rec.Handle, lease.Owner, lease.Epoch); runsErr != nil {
 		m.unmark(ctx, marked)
 		return false, fmt.Errorf("end the coding runs of retired seat %q: %w", handle, runsErr)
 	}
-	if deleteErr := m.deleteSubscriptions(work, handle); deleteErr != nil {
+	if deleteErr := m.deleteSubscriptions(work, rec.Seat, handle); deleteErr != nil {
 		m.unmark(ctx, marked)
 		return false, deleteErr
 	}
-	gone, err := m.records.DeleteMailbox(work, handle, marked.Version)
+	gone, err := m.records.DeleteMailbox(work, rec.Seat, marked.Version)
 	if err != nil {
 		// Left marked. A later sweep resumes it once the mark is stale, and
 		// a seat that returns first takes the record over.
 		return false, fmt.Errorf("delete the mailbox record of retired seat %q: %w", handle, err)
 	}
 	if !gone {
-		return false, m.afterLostDelete(ctx, handle)
+		return false, m.afterLostDelete(ctx, rec)
 	}
 	log.InfoContext(ctx, "seat_mailbox_retired", "handle", handle, "absent_since", rec.AbsentSince,
 		"detail", "the seat has been absent from the active revision for longer than the grace "+
@@ -700,12 +753,17 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// may have created the inbox between this sweep's mark and its delete
 	// without being able to register it. Re-read, and restore what the seat
 	// needs; a roster that cannot be read leaves it to that node's next apply.
-	if roster, err := m.roster(ctx); err == nil && slices.Contains(roster, handle) {
-		if err := m.restoreInbox(ctx, handle); err != nil {
-			return true, err
-		}
-		if _, _, err := m.records.CreateMailbox(ctx, coord.MailboxRecord{Handle: handle}); err != nil {
-			return true, fmt.Errorf("register the restored mailbox of seat %q: %w", handle, err)
+	if roster, err := m.roster(ctx); err == nil {
+		if back, in := seatIn(roster, rec.Seat); in {
+			if err := m.restoreInbox(ctx, back); err != nil {
+				return true, err
+			}
+			if _, _, err := m.records.CreateMailbox(ctx,
+				coord.MailboxRecord{Seat: back.ID, Handle: back.Handle}); err != nil {
+
+				return true, fmt.Errorf("register the restored mailbox of seat %q: %w",
+					back.Handle, err)
+			}
 		}
 	}
 	return true, nil
@@ -729,8 +787,8 @@ func (m *Mailboxes) workLimit() time.Duration {
 // releaseSeat gives back the lease a retirement claimed.
 //
 // On a context of its own, as a teardown: the retirement may have ended on its
-// deadline, and a release that inherited it would leave a seat added back
-// unclaimable for a full TTL. A release that fails leaves exactly that, which
+// deadline, and a release that inherited it would leave a seat made an
+// agent's again unclaimable for a full TTL. A release that fails leaves exactly that, which
 // is logged rather than returned because the retirement itself is settled.
 func (m *Mailboxes) releaseSeat(ctx context.Context, lease coord.Lease) {
 	teardown, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.budget)
@@ -744,14 +802,15 @@ func (m *Mailboxes) releaseSeat(ctx context.Context, lease coord.Lease) {
 
 // deleteSubscriptions deletes every durable subscription a seat's mailbox
 // comprises: the inbox every node creates, and the sandbox control and
-// reflection topics the seat's owner subscribes. Each is attempted even when
-// one fails, so a retirement that is retried has less left to do.
-func (m *Mailboxes) deleteSubscriptions(ctx context.Context, handle string) error {
+// reflection topics the seat's owner subscribes — every one named by the
+// seat's ID, as the seat host names them. Each is attempted even when one
+// fails, so a retirement that is retried has less left to do.
+func (m *Mailboxes) deleteSubscriptions(ctx context.Context, seat uuid.UUID, handle string) error {
 	var errs []error
 	for _, sub := range [][2]string{
-		{topics.AgentInbox(handle), topics.AgentInboxGroup(handle)},
-		{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
-		{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)},
+		{topics.AgentInbox(seat), topics.AgentInboxGroup(seat)},
+		{topics.AgentControl(seat), topics.AgentControlGroup(seat)},
+		{topics.AgentReflect(seat), topics.AgentReflectGroup(seat)},
 	} {
 		if _, err := m.queue.DeleteSubscription(ctx, sub[0], sub[1]); err != nil {
 			errs = append(errs, fmt.Errorf("delete subscription %s/%s of retired seat %q: %w",
@@ -768,18 +827,32 @@ func (m *Mailboxes) deleteSubscriptions(ctx context.Context, handle string) erro
 // abandoned-looking retirement over, and a peer sweep that resumed one. The
 // first may have created the inbox before this retirement's delete landed, so
 // the inbox is restored; the second is finishing the same work, so nothing is.
-func (m *Mailboxes) afterLostDelete(ctx context.Context, handle string) error {
-	current, found, err := m.records.Mailbox(ctx, handle)
+func (m *Mailboxes) afterLostDelete(ctx context.Context, rec coord.MailboxRecord) error {
+	handle := recordLabel(rec)
+	current, found, err := m.records.Mailbox(ctx, rec.Seat)
 	if err != nil {
 		return fmt.Errorf("re-read the mailbox record of seat %q after a lost retirement: %w", handle, err)
 	}
 	if !found || current.Retiring() {
 		return nil
 	}
-	log.WarnContext(ctx, "seat_mailbox_retirement_raced", "handle", handle,
+	log.WarnContext(ctx, "seat_mailbox_retirement_raced", "handle", recordLabel(current),
 		"detail", "the seat was registered again while its previous mailbox was being retired; "+
 			"its inbox is restored in case the retirement deleted it after it was created")
-	return m.restoreInbox(ctx, handle)
+	// THE RECORD AS IT IS NOW, not as this retirement read it: the
+	// registration that took the record over may have written the handle a
+	// discovered record lacked, and the id is the same either way.
+	return m.restoreInbox(ctx, placement.Seat{ID: current.Seat, Handle: current.Handle})
+}
+
+// seatIn finds a seat by id in a roster, reporting whether it is there.
+func seatIn(roster []placement.Seat, id uuid.UUID) (placement.Seat, bool) {
+	for _, s := range roster {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return placement.Seat{}, false
 }
 
 // unmark returns a retirement that could not delete its subscriptions to an
@@ -794,15 +867,17 @@ func (m *Mailboxes) unmark(ctx context.Context, marked coord.MailboxRecord) {
 	absent := marked
 	absent.RetiringSince = time.Time{}
 	if _, _, err := m.records.UpdateMailbox(rollback, absent); err != nil {
-		log.WarnContext(ctx, "seat_mailbox_unmark_failed", "handle", marked.Handle, "error", err.Error(),
+		log.WarnContext(ctx, "seat_mailbox_unmark_failed", "handle", recordLabel(marked), "error", err.Error(),
 			"detail", "the retirement mark stays until a later sweep resumes it")
 	}
 }
 
 // restoreInbox creates a seat's inbox, the half of its mailbox every node
 // creates and a retirement may have deleted under it.
-func (m *Mailboxes) restoreInbox(ctx context.Context, handle string) error {
-	made, err := m.queue.EnsureSubscription(ctx, topics.AgentInbox(handle), topics.AgentInboxGroup(handle))
+func (m *Mailboxes) restoreInbox(ctx context.Context, seat placement.Seat) error {
+	handle := seat.Handle
+	made, err := m.queue.EnsureSubscription(ctx,
+		topics.AgentInbox(seat.ID), topics.AgentInboxGroup(seat.ID))
 	if errors.Is(err, queue.ErrNotLive) {
 		// A node that is shutting down. Its peers' next apply or this
 		// duty's next holder creates it; nothing here can.
@@ -818,11 +893,29 @@ func (m *Mailboxes) restoreInbox(ctx context.Context, handle string) error {
 	return nil
 }
 
-// presentRecord is rec with its absence and any retirement cleared, at the
-// version it was read at.
-func presentRecord(rec coord.MailboxRecord) coord.MailboxRecord {
+// presentRecord is rec as the seat it belongs to, back in the roster, makes it:
+// its absence and any retirement cleared, and its label the seat's handle, at
+// the version it was read at.
+//
+// THE LABEL TOO, because a record the sweep registered from the broker's
+// listing alone carries none, and this is the one moment anything that knows
+// the seat's handle writes the record. The handle is the seat's for good (its
+// id is derived from it), so writing it over a label that is already there
+// writes the same value.
+func presentRecord(rec coord.MailboxRecord, seat placement.Seat) coord.MailboxRecord {
 	rec.AbsentSince, rec.RetiringSince = time.Time{}, time.Time{}
+	rec.Handle = seat.Handle
 	return rec
+}
+
+// recordLabel is what a log line or an error calls a record's seat: its handle,
+// or its id for a record the broker's listing alone found, which nothing the
+// fleet holds can name.
+func recordLabel(rec coord.MailboxRecord) string {
+	if rec.Handle != "" {
+		return rec.Handle
+	}
+	return rec.Seat.String()
 }
 
 // sleep waits d or until ctx ends.

@@ -24,6 +24,7 @@ import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -69,8 +70,11 @@ export function Kpis({
     <section className="home-kpis" aria-label="The company at a glance">
       <AgentsTile crew={crew} />
       <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />
-      <InProgressTile flow={flow} />
-      <CompletedTile flow={flow} range={range} />
+      <InProgressTile flow={flow} locked={trackerLocked(viewer)} />
+      <CompletedTile flow={flow} range={range} locked={trackerLocked(viewer)} />
+      {/* WHO MAY SET A BUDGET is whoever may write the company's configuration
+          — Admin, the access a ceiling is written under, and on a
+          managed document one of its writers — never a kind of credential. */}
       <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />
     </section>
   );
@@ -114,7 +118,10 @@ function WaitingTile({
   error: QueryErrorCode | null;
   now: number;
 }) {
-  const review = (
+  // THE INBOX IS THE TRACKER'S, so the way there is offered only to a reader
+  // who can open it; an asked person without Tracker answers on Home and on
+  // the task itself.
+  const review = viewer.tracker ? (
     <ButtonLink
       size="small"
       variant="secondary"
@@ -123,16 +130,18 @@ function WaitingTile({
     >
       Review
     </ButtonLink>
-  );
-  // NOBODY TO WAIT ON: an anonymous reader or a token bound to no seat has no
-  // decisions, and saying 0 would be a claim about a person nobody named.
-  if (!viewer.handle) {
+  ) : undefined;
+  // NOBODY TO WAIT ON: an anonymous reader has no record and no decisions,
+  // and saying 0 would be a claim about a person nobody named. An UNBOUND
+  // reader is somebody — their record is their login, and what they asked or
+  // were asked reaches it — so they are counted like anybody.
+  if (!viewer.owner) {
     return (
       <StatCard
         label="Waiting on your decision"
         value={EMPTY_VALUE}
         loading={viewer.loading}
-        sub={viewer.loading ? undefined : "Not bound to a person"}
+        sub={viewer.loading ? undefined : "Nobody is signed in"}
       />
     );
   }
@@ -164,9 +173,18 @@ function WaitingTile({
   );
 }
 
+/**
+ * Whether the tracker's tiles are closed to this reader: once the viewer has
+ * said they hold no Tracker, never on a guess while it has not.
+ */
+function trackerLocked(viewer: ViewerState): boolean {
+  return !viewer.loading && !viewer.tracker;
+}
+
 /** Open work somebody has started, its change over a week, and what is stuck. */
-function InProgressTile({ flow }: { flow: QueryResult<WorkFlowAnswer> }) {
+function InProgressTile({ flow, locked }: { flow: QueryResult<WorkFlowAnswer>; locked: boolean }) {
   const data = flow.data;
+  if (locked) return <LockedTile label="Tasks in progress" />;
   if (flow.error) return <RefusedTile label="Tasks in progress" />;
   if (!data?.now) return <StatCard label="Tasks in progress" value={EMPTY_VALUE} loading />;
   const points = data.points ?? [];
@@ -186,9 +204,18 @@ function InProgressTile({ flow }: { flow: QueryResult<WorkFlowAnswer> }) {
 }
 
 /** Work delivered in the window, against the window before it. */
-function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; range: HomeRange }) {
+function CompletedTile({
+  flow,
+  range,
+  locked,
+}: {
+  flow: QueryResult<WorkFlowAnswer>;
+  range: HomeRange;
+  locked: boolean;
+}) {
   const label = `Completed · ${range.words}`;
   const data = flow.data;
+  if (locked) return <LockedTile label={label} />;
   if (flow.error) return <RefusedTile label={label} />;
   if (!data?.points) return <StatCard label={label} value={EMPTY_VALUE} loading />;
   const { current, previous } = completedIn(data.points, range.days);
@@ -221,10 +248,11 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
  * budget. The window-on-window change is Spend's, where it has its own axis.
  *
  * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
- * change the company's configuration (`mayChangeConfig` — an operator, and on
- * a managed document one of its writers) gets "No weekly budget" as the link
- * into Spend › Budgets; anybody else gets the fact, since the screen behind
- * the link would only refuse them.
+ * change the company's configuration (`mayChangeConfig` — an admin, and on a
+ * managed document one of its writers) gets "No
+ * weekly budget" as the link into Spend › Budgets; anybody else gets the fact,
+ * since the screen behind the link would only refuse them. The weekly budget
+ * is the COMPANY's ceiling, so no lead path reaches it.
  *
  * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
  * slice is `null` — nobody has read the counter — and the line says that
@@ -238,7 +266,10 @@ function TokensTile({
 }: {
   spend: QueryResult<TokenSeries>;
   range: HomeRange;
-  /** Whether the reader may set a ceiling: `mayChangeConfig`. */
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * Admin and, on a managed document, are one of its writers.
+   */
   mayConfigure: boolean;
 }) {
   const label = `Tokens · ${range.words}`;
@@ -307,4 +338,15 @@ function Parts({ parts }: { parts: readonly string[] }) {
 /** A tile whose answer the engine refused: it says so rather than a number. */
 function RefusedTile({ label }: { label: string }) {
   return <StatCard label={label} value={EMPTY_VALUE} sub="Could not be read" subTone="danger" />;
+}
+
+/**
+ * A tile whose figure is the tracker's, for a reader without Tracker: the
+ * question is never asked, and the tile says what would open it rather than
+ * waiting for an answer that will never come.
+ */
+function LockedTile({ label }: { label: string }) {
+  return (
+    <StatCard label={label} value={EMPTY_VALUE} sub={`Needs ${accessNames([TRACKER])} access`} />
+  );
 }

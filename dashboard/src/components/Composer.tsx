@@ -1,5 +1,5 @@
 /**
- * Writing on a task as the person the token is bound to (ADR-0024): from the
+ * Writing on a task as the person signed in (ADR-0024): from the
  * Inbox's pane, and from the task's own page.
  *
  * TWO MODES, and neither closes an ask (an answer is `AnswerAsk`'s, the one
@@ -52,10 +52,14 @@ import { QueryState } from "~/components/common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { KNOWLEDGE, needsWords } from "~/lib/access.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
 import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import { itemAddress } from "~/lib/work.ts";
+import type { WorkRanked } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 
 /** How the composer posts. */
@@ -71,8 +75,16 @@ const MENTION_CHOICES = 6;
 export const Composer = forwardRef<
   ComposerHandle,
   {
-    /** The task's key or id. */
+    /**
+     * The task's address ([itemAddress]) — what every write here names it
+     * by: its key, or its id where another task claimed that key first.
+     */
     item: string;
+    /**
+     * What the composer's own words call the task — its key — where `item`
+     * is its id. Defaults to `item`.
+     */
+    label?: string;
     mode: ComposeMode;
     /** Whose words the reader is replying to, for the placeholder. */
     to: string;
@@ -82,7 +94,8 @@ export const Composer = forwardRef<
     /** Told once what was written has been posted, so a reply target can close. */
     onSent?: () => void;
   }
->(function Composer({ item, mode, to, index, placeholder: said, onSent }, ref) {
+>(function Composer({ item, label, mode, to, index, placeholder: said, onSent }, ref) {
+  const named = label || item;
   const write = useAct("comment_on_work_item");
   const [text, setText] = useState("");
   const [picker, setPicker] = useState<"link" | "page" | "ask" | null>(null);
@@ -127,7 +140,7 @@ export const Composer = forwardRef<
         ? { item, body, ...(mode.replyTo ? { reply_to: mode.replyTo } : {}) }
         : { item, body };
     const result = await write.run(args, {
-      done: mode.kind === "reply" ? `Replied on ${item}` : `Commented on ${item}`,
+      done: mode.kind === "reply" ? `Replied on ${named}` : `Commented on ${named}`,
     });
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       setText("");
@@ -140,7 +153,7 @@ export const Composer = forwardRef<
     (mode.kind === "reply"
       ? `Reply to ${to}… @mention to bring someone in`
       : `Leave a comment… @mention to bring someone in`);
-  const fieldLabel = mode.kind === "reply" ? `Reply to ${to}` : `Comment on ${item}`;
+  const fieldLabel = mode.kind === "reply" ? `Reply to ${to}` : `Comment on ${named}`;
 
   return (
     <div className="composer" data-mode={mode.kind}>
@@ -263,13 +276,16 @@ export const Composer = forwardRef<
         </WriteButton>
       </div>
       <RefusalNote write={write} />
-      {picker === "link" && <LinkTaskDialog item={item} onClose={() => setPicker(null)} />}
+      {picker === "link" && (
+        <LinkTaskDialog item={item} named={named} onClose={() => setPicker(null)} />
+      )}
       {picker === "page" && (
-        <AttachPageDialog item={item} draft={text} onClose={() => setPicker(null)} />
+        <AttachPageDialog item={item} named={named} draft={text} onClose={() => setPicker(null)} />
       )}
       {picker === "ask" && (
         <AskDialog
           item={item}
+          named={named}
           body={text}
           index={index}
           write={write}
@@ -321,12 +337,16 @@ export function optionIds(labels: readonly string[]): string[] {
  */
 function AskDialog({
   item,
+  named,
   body,
   index,
   write,
   onClose,
 }: {
+  /** The task's address, which the ask is posted on. */
   item: string;
+  /** What the dialog's words call the task. */
+  named: string;
   body: string;
   index: OrgIndex;
   write: ReturnType<typeof useAct<"comment_on_work_item">>;
@@ -381,7 +401,7 @@ function AskDialog({
       : undefined;
     const result = await write.run(
       { item, body: body.trim(), ask: who, ...(decision ? { decision } : {}) },
-      { done: `Asked ${name} on ${item}` },
+      { done: `Asked ${name} on ${named}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose(true);
   };
@@ -389,7 +409,7 @@ function AskDialog({
     <Modal
       open
       size="md"
-      title={`Ask on ${item}`}
+      title={`Ask on ${named}`}
       icon={<CircleQuestionMarkGlyph />}
       onClose={() => onClose(false)}
       onSubmit={() => void submit()}
@@ -519,11 +539,29 @@ function AskDialog({
   );
 }
 
-/** Link another task to this one — a `linked` relation on the item. */
-function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }) {
+/**
+ * Link another task to this one — a `linked` relation on the item.
+ *
+ * A HIT IS CHOSEN BY ITS ID AND LINKED BY ITS ADDRESS ([itemAddress]): two
+ * tasks a search finds under one key are two hits, and linking the one the
+ * engine flags `key_collision` by that key would link the task that claimed
+ * it instead. Keyed on the key, the pair were one radio and choosing either
+ * chose the first.
+ */
+function LinkTaskDialog({
+  item,
+  named,
+  onClose,
+}: {
+  /** The task's address, which the link is written on. */
+  item: string;
+  /** What the dialog's words call the task. */
+  named: string;
+  onClose: () => void;
+}) {
   const write = useAct("update_work_item");
   const [q, setQ] = useState("");
-  const [chosen, setChosen] = useState<{ key: string; title: string } | null>(null);
+  const [chosen, setChosen] = useState<WorkRanked | null>(null);
   // THE BOUND IS THE HOOK'S: a phrase past it is not sent, and the list's
   // place says why (`useSearchQuery`).
   const search = useSearchQuery(
@@ -533,15 +571,17 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
   );
   // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across a
   // failure, which here is the hits of a term the box no longer holds.
-  const hits = search.error ? [] : (search.data?.hits ?? []).filter((h) => h.key !== item);
+  // NOT THIS TASK, matched by address: by key, a duplicate's dialog left out
+  // the claimant too, and the claimant's left out the duplicate.
+  const hits = search.error ? [] : (search.data?.hits ?? []).filter((h) => itemAddress(h) !== item);
   const blocked = chosen ? undefined : "Choose a task first.";
   const submit = async () => {
     // THE BUTTON'S OWN GATE: the dialog is a form its search field submits
     // on Enter.
     if (!chosen || !pressable(write, blocked)) return;
     const result = await write.run(
-      { item, linked: { add: [chosen.key] } },
-      { done: `Linked ${chosen.key} to ${item}` },
+      { item, linked: { add: [itemAddress(chosen)] } },
+      { done: `Linked ${chosen.key} to ${named}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -549,7 +589,7 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
     <Modal
       open
       size="sm"
-      title={`Link a task to ${item}`}
+      title={`Link a task to ${named}`}
       icon={<HashGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
@@ -581,16 +621,23 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
         </FormField>
         {search.tooLong ? (
           <Callout variant="warning">{search.tooLong}</Callout>
+        ) : search.withheld ? (
+          <Callout variant="info">{search.withheld}</Callout>
         ) : search.error ? (
-          <QueryState error={search.error} detail={search.detail} loading={false} />
+          <QueryState
+            error={search.error}
+            refusal={search.refusal}
+            detail={search.detail}
+            loading={false}
+          />
         ) : (
           <PickList
             label="Tasks"
-            items={hits.map((h) => ({ id: h.key, title: h.title, meta: h.key }))}
-            chosen={chosen?.key ?? ""}
+            items={hits.map((h) => ({ id: h.id, title: h.title, meta: h.key }))}
+            chosen={chosen?.id ?? ""}
             onChoose={(id) => {
-              const hit = hits.find((h) => h.key === id);
-              if (hit) setChosen({ key: hit.key, title: hit.title });
+              const hit = hits.find((h) => h.id === id);
+              if (hit) setChosen(hit);
             }}
             empty={
               q.trim().length < 2
@@ -614,10 +661,14 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
  */
 function AttachPageDialog({
   item,
+  named,
   draft,
   onClose,
 }: {
+  /** The task's address, which the page is attached to. */
   item: string;
+  /** What the dialog's words call the task. */
+  named: string;
   draft: string;
   onClose: () => void;
 }) {
@@ -630,13 +681,22 @@ function AttachPageDialog({
   // field instead.
   const [title, setTitle] = useState(firstLine(draft));
   const titleBudget = textBudget(title, PAGE_TITLE_MAX_BYTES, "a page's title");
-  const found = useQuery("pages", { title: q.trim(), limit: 8 }, { enabled: q.trim().length >= 2 });
+  // THE KNOWLEDGE BASE'S LISTING, asked only of a reader holding Knowledge:
+  // anybody else is told what would let them find a page, rather than "no
+  // page has that in its title" about a question never answered.
+  const { knowledge, loading: asking } = useViewer();
+  const pagesLocked = !asking && !knowledge;
+  const found = useQuery(
+    "pages",
+    { title: q.trim(), limit: 8 },
+    { enabled: q.trim().length >= 2 && knowledge },
+  );
   const busy = link.busy || save.busy;
 
   const attach = async (page: { id: string; title: string }) => {
     const result = await link.run(
       { item, linked_pages: { add: [page.id] } },
-      { done: `Attached “${page.title}” to ${item}` },
+      { done: `Attached “${page.title}” to ${named}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -654,7 +714,7 @@ function AttachPageDialog({
     <Modal
       open
       size="md"
-      title={`Attach a page to ${item}`}
+      title={`Attach a page to ${named}`}
       icon={<PaperclipGlyph />}
       onClose={onClose}
       closeDisabledReason={busy ? "Waiting for the engine to answer" : undefined}
@@ -696,11 +756,13 @@ function AttachPageDialog({
             if (page) setChosen({ id: page.id, title: page.title });
           }}
           empty={
-            q.trim().length < 2
-              ? "Type two characters to search."
-              : found.loading
-                ? "Searching…"
-                : "No page has that in its title."
+            pagesLocked
+              ? needsWords("Finding a page", [KNOWLEDGE])
+              : q.trim().length < 2
+                ? "Type two characters to search."
+                : found.loading
+                  ? "Searching…"
+                  : "No page has that in its title."
           }
         />
         <RefusalNote write={link} />

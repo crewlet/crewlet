@@ -58,8 +58,7 @@ func TestTheWorkItemFilterNarrowsEventsAndTurnsAndRefusesAKey(t *testing.T) {
 		for _, bad := range []string{"ENG-4", "jira:", ":10042"} {
 			// A VALID BUCKET, so the only thing wrong is the item.
 			params := map[string]any{"work_item": bad, "bucket": "hour"}
-			if _, err := r.Answer(t.Context(), what,
-				params, ""); !errors.Is(err, queries.ErrBadParams) {
+			if _, err := r.Answer(everyGrant(t), what, params); !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("%s work_item=%q: err = %v, want ErrBadParams", what, bad, err)
 			}
 		}

@@ -14,26 +14,29 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// AN OPERATOR WRITING SOMEBODY'S PRIORITIES CARRIES THE AUTHORITY TO DO IT.
+// A SEAT NEVER RE-ORDERS SOMEBODY ELSE'S QUEUE, and a person does.
 //
-// This is the wiring that decided whether the `prioritised` wake could fire at
-// all. `set_priorities` is registered on the operator MCP alone, and an
-// operator's actor is an API TOKEN's name — never a handle in the org chart —
-// so the lead lookup can never match it. With the tool sending only `Lead`,
-// the writer refused every cross-person write through the only surface that
-// exists, and omitting the handle silently wrote a person record for the
-// token instead of for a person.
-func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
+// The bar is the tracker's own and it is the one thing the authority table
+// does NOT decide: [authz.ClassOwnOrLead] admits a lead, and a seat that leads
+// somebody is still not allowed this — an agent re-ordering a colleague's list
+// is a hand-off in disguise, bypassing the guarded take and the reassignment
+// budget.
+//
+// It used to be carried as `PersonAuthority.Person`, filled from "the actor is
+// not a seat", which was ALSO how an operator satisfied the cross-person gate
+// at all: the lead lookup resolved an org-chart handle and an operator token
+// carries its own name, so `Lead` was false for every operator by construction
+// and the only shipped surface for the verb refused the founder every time.
+// The relation half is the table's now; this is the half that is left.
+func TestASeatNeverReordersSomebodyElsesQueue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		kind       tracker.AuthorKind
-		wantPerson bool
+		kind      tracker.AuthorKind
+		wantAgent bool
 	}{
-		"an operator token": {tracker.AuthorOperator, true},
-		"a human":           {tracker.AuthorHuman, true},
-		// A SEAT CARRIES NEITHER unless it genuinely leads the handle,
-		// which the lead seam answers separately.
-		"a seat": {tracker.AuthorAgent, false},
+		"an operator token": {tracker.AuthorOperator, false},
+		"a human":           {tracker.AuthorHuman, false},
+		"a seat":            {tracker.AuthorAgent, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			person := &personSpy{}
@@ -47,6 +50,7 @@ func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
 						return builtin.Actor{Handle: "ops", Kind: tc.kind}, nil
 					},
 				},
+				Authorize: builtin.Decide(chartLeads),
 			}) {
 				if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 					t.Fatalf("register %s: %v", tool.Name(), err)
@@ -58,11 +62,15 @@ func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
 			if got.Failed {
 				t.Fatalf("set_priorities failed: %q", got.Output)
 			}
-			if person.authority.Person != tc.wantPerson {
-				t.Errorf("authority.Person = %v, want %v — %s writing "+
+			if person.authority.Agent != tc.wantAgent {
+				t.Errorf("authority.Agent = %v, want %v — %s writing "+
 					"somebody else's queue reaches the writer's gate with "+
-					"this and nothing else",
-					person.authority.Person, tc.wantPerson, name)
+					"this and the table's answer, and nothing else",
+					person.authority.Agent, tc.wantAgent, name)
+			}
+			if !person.authority.Authorized {
+				t.Error("the table's answer did not reach the writer, so " +
+					"every cross-person write is refused at the record")
 			}
 		})
 	}
@@ -128,6 +136,7 @@ func operatorRegistry(t *testing.T, trk *fakeTracker, person builtin.PersonWrite
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
@@ -169,16 +178,18 @@ func (p *personSpy) WritePriorities(_ context.Context, opID, handle string,
 }
 
 func (p *personSpy) WritePins(_ context.Context, opID, handle string,
-	gesture tracker.PinGesture) (tracker.WriteResult, error) {
+	gesture tracker.PinGesture, authority tracker.PersonAuthority) (
+	tracker.WriteResult, error) {
 
-	p.handle, p.opID, p.pins = handle, opID, gesture
+	p.handle, p.opID, p.pins, p.authority = handle, opID, gesture, authority
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 func (p *personSpy) MarkInbox(_ context.Context, opID, handle string,
-	gesture tracker.InboxGesture) (tracker.WriteResult, error) {
+	gesture tracker.InboxGesture, authority tracker.PersonAuthority) (
+	tracker.WriteResult, error) {
 
-	p.handle, p.opID, p.inbox = handle, opID, gesture
+	p.handle, p.opID, p.inbox, p.authority = handle, opID, gesture, authority
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
@@ -262,7 +273,7 @@ func callPlain(t *testing.T, reg *tools.Registry, name string,
 	if !held {
 		t.Fatalf("%s is not registered", name)
 	}
-	got, err := entry.Tool.Call(t.Context(), args)
+	got, err := entry.Tool.Call(everyGrant(), args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -277,15 +288,14 @@ func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
 		context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
 		return builtin.Actor{Handle: "alice", Kind: tracker.AuthorHuman}, nil
-	}, nil)
+	})
 }
 
-// personSurface is that surface over one fake tracker, one actor and one party
-// lookup — so a case can vary the CALLER, which is the only thing the subject
-// of these writes depends on.
+// personSurface is that surface over one fake tracker and one actor — so a case
+// can vary the CALLER, which is the only thing the subject of these writes
+// depends on. A nil actor takes the turn's seat, as a seat's registry does.
 func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
-	actor func(context.Context, *turnctx.Turn) (builtin.Actor, error),
-	party func(string) tracker.Party) *tools.Registry {
+	actor func(context.Context, *turnctx.Turn) (builtin.Actor, error)) *tools.Registry {
 
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -294,7 +304,6 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 			Reader: trk,
 			Writer: trk.as,
 			Inbox:  trk,
-			Party:  party,
 			PersonWriter: func(a builtin.Actor) builtin.PersonWriter {
 				// THE ACTOR THE WRITER WAS RESOLVED FOR, which is
 				// what carries the attribution: the record's
@@ -307,6 +316,7 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 			},
 			Actor: actor,
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		// WITH THE HINTS, which is what the operator surface itself
 		// serves now — registering without them would make the
@@ -318,241 +328,6 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 		}
 	}
 	return reg
-}
-
-// boundOperator is what `operator.WorkActor` builds for a token a company bound
-// to a human seat with `contact.crewlet_operator_id`: the credential in the
-// author field, the kind saying it is not a seat, and the PERSON it names in
-// [builtin.Actor.Seat].
-func boundOperator(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-	return builtin.Actor{
-		Handle: "founder", Kind: tracker.AuthorOperator,
-		OperatorID: "founder", Seat: "jane-founder",
-	}, nil
-}
-
-// unboundOperator is a token nobody is bound to — a pipeline, an operator
-// outside the org chart. An ordinary state, and not an error.
-func unboundOperator(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-	return builtin.Actor{
-		Handle: "ci", Kind: tracker.AuthorOperator, OperatorID: "ci",
-	}, nil
-}
-
-// boundParties is the chart lookup the operator surface wires: this company
-// bound `founder` to `jane-founder` and nobody else.
-func boundParties(handle string) tracker.Party {
-	if handle == "jane-founder" {
-		return tracker.Party{Handle: handle, OperatorID: "founder"}
-	}
-	return tracker.PartyOf(handle)
-}
-
-// A BOUND OPERATOR'S OWN MARKS AND PINS ARE THE PERSON'S, AND THE RECORD
-// STILL NAMES THE TOKEN.
-//
-// These two verbs passed `actor.Handle` as the record's SUBJECT, and through
-// `/operator/mcp` that is the TOKEN's id. So a founder whose assistant marked
-// their inbox read wrote a whole second person record called `founder`, while
-// their own screen — which asks under the seat their colleagues assign to —
-// showed an inbox where nothing had ever been read, a strip with none of their
-// pins, and a queue nobody had ever ordered.
-//
-// It is not attribution: the author field is a separate, correct concern, and
-// a tracker whose author is chosen by the writer is not an audit trail. It is
-// WHOSE STATE the document holds, and that is the person.
-//
-// BOTH VERBS IN ONE CASE, because they are the two that carry a subject with
-// no handle argument to correct it — one of them fixed and the other left
-// would look exactly like this from the screen that is still half empty.
-func TestABoundOperatorsOwnStateIsWrittenUnderTheirSeat(t *testing.T) {
-	t.Parallel()
-	for name, call := range map[string]struct {
-		tool string
-		args map[string]any
-		want string
-	}{
-		"pins":  {tracker.SetPinsTool, map[string]any{"views": map[string]any{"add": []any{"v-1"}}}, "pins-jane-founder"},
-		"inbox": {tracker.MarkInboxTool, map[string]any{"read": []any{"r-1"}}, "inbox-jane-founder"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			person := &personSpy{}
-			reg := personSurface(t, newFakeTracker(), person,
-				boundOperator, boundParties)
-
-			if got := callNoTurn(t, reg, call.tool, call.args); got.Failed {
-				t.Fatalf("%s failed: %q", call.tool, got.Output)
-			}
-			if person.handle != "jane-founder" {
-				t.Errorf("%s wrote %q's record, want the person the token is "+
-					"bound to — written under the credential it is a second "+
-					"record nothing this person opens will ever read",
-					call.tool, person.handle)
-			}
-			// AND THE OPERATION ID FOLLOWS THE SUBJECT, because it is
-			// what the ledger collapses a redelivery against: keyed on
-			// one name while the record is keyed on another, two people's
-			// writes share a scope.
-			if opName(person.opID) != call.want {
-				t.Errorf("%s wrote under operation %q, want one scoped to %q",
-					call.tool, person.opID, call.want)
-			}
-			// AND THE AUDIT TRAIL IS UNTOUCHED.
-			if person.actor.Handle != "founder" ||
-				person.actor.Kind != tracker.AuthorOperator ||
-				person.actor.OperatorID != "founder" {
-
-				t.Errorf("%s is authored by %+v — the author is the credential "+
-					"and the kind says it is not a seat", call.tool, person.actor)
-			}
-		})
-	}
-}
-
-// AND AN UNBOUND TOKEN WRITES UNDER ITS OWN ID, EXACTLY AS BEFORE.
-//
-// Leaving a token unbound is ordinary — an operator outside the org chart, a
-// pipeline — and it acts as itself rather than being refused. This is the half
-// a careless fix breaks: a lookup that answered the first seat, or refused,
-// would take a working surface away from every company that never wrote the
-// binding.
-func TestAnUnboundOperatorStillWritesItsOwnRecord(t *testing.T) {
-	t.Parallel()
-	person := &personSpy{}
-	reg := personSurface(t, newFakeTracker(), person, unboundOperator, boundParties)
-
-	if got := callNoTurn(t, reg, tracker.SetPinsTool, map[string]any{
-		"views": map[string]any{"add": []any{"v-1"}},
-	}); got.Failed {
-		t.Fatalf("set_pins failed: %q", got.Output)
-	}
-	if person.handle != "ci" {
-		t.Errorf("an unbound token wrote %q's record, want its own", person.handle)
-	}
-	// AND SO DOES ITS PRIORITY LIST, which is the verb that resolves an
-	// omitted handle: the caller's own identity is not a typo, and running
-	// it through the roster refused an operator their own list by name.
-	if got := callNoTurn(t, reg, tracker.SetPrioritiesTool, map[string]any{
-		"items": []any{"ENG-1"},
-	}); got.Failed {
-		t.Fatalf("set_priorities for an unbound token failed: %q", got.Output)
-	}
-	if person.handle != "ci" {
-		t.Errorf("set_priorities wrote %q's list, want the caller's own",
-			person.handle)
-	}
-}
-
-// A BOUND OPERATOR OMITTING THE HANDLE ORDERS THE PERSON'S QUEUE.
-//
-// `set_priorities` defaulted to `actor.Handle` too, so a founder saying "these
-// three first" put them on a list belonging to their credential — invisible in
-// `my_work`, invisible under `preset=priorities`, and with the `prioritised`
-// wake routed to a handle nobody holds.
-func TestABoundOperatorsOwnQueueIsTheirSeats(t *testing.T) {
-	t.Parallel()
-	person := &personSpy{}
-	trk := newFakeTracker()
-	reg := personSurface(t, trk, person, boundOperator, boundParties)
-
-	if got := callNoTurn(t, reg, tracker.SetPrioritiesTool, map[string]any{
-		"items": []any{"ENG-1"},
-	}); got.Failed {
-		t.Fatalf("set_priorities failed: %q", got.Output)
-	}
-	if person.handle != "jane-founder" {
-		t.Errorf("the list was written for %q, want the person the token names",
-			person.handle)
-	}
-}
-
-// AND MY WORK ANSWERS FOR BOTH OF THAT PERSON'S NAMES.
-//
-// The read side is the mirror of the same defect: asked about the bare handle,
-// a founder's assistant got the TOKEN's day — seven blocks over rows their
-// colleagues had filed against the seat, and not one of them matched. The
-// alias behind it is what still reaches the rows their own earlier writes left
-// under the credential.
-func TestMyWorkThroughAnOperatorAnswersForTheirSeat(t *testing.T) {
-	t.Parallel()
-	person := &personSpy{}
-	trk := newFakeTracker()
-	reg := personSurface(t, trk, person, boundOperator, boundParties)
-
-	if got := callNoTurn(t, reg, tracker.MyWorkTool, nil); got.Failed {
-		t.Fatalf("my_work failed: %q", got.Output)
-	}
-	if got := trk.myWorkQuery.Who.Handles(); !slices.Equal(got,
-		[]string{"jane-founder", "founder"}) {
-
-		t.Errorf("my_work asked about %v, want the seat first and the "+
-			"credential behind it", got)
-	}
-	// AND A SEAT IS STILL A PARTY OF ONE, which is every in-engine caller.
-	seat := newFakeTracker()
-	own := personSurface(t, seat, &personSpy{}, func(
-		context.Context, *turnctx.Turn) (builtin.Actor, error) {
-
-		return builtin.Actor{Handle: "ana", Kind: tracker.AuthorAgent}, nil
-	}, boundParties)
-	if got := callNoTurn(t, own, tracker.MyWorkTool, nil); got.Failed {
-		t.Fatalf("my_work for a seat failed: %q", got.Output)
-	}
-	if got := seat.myWorkQuery.Who.Handles(); !slices.Equal(got, []string{"ana"}) {
-		t.Errorf("a seat's my_work asked about %v, want its one handle", got)
-	}
-}
-
-// AND A PERSONAL READ ABOUT SOMEBODY ELSE CARRIES *THEIR* TWO NAMES.
-//
-// Whose two names these are is a fact about the SEAT, resolved from the chart,
-// never the credential in the caller's own hand: an operator reading a
-// report's inbox is answered about that report. Both verbs take the handle as
-// an argument, so neither could get it from the actor.
-func TestTheHandleArgumentIsResolvedToThatPersonsParty(t *testing.T) {
-	t.Parallel()
-	trk := newFakeTracker()
-	reg := personSurface(t, trk, &personSpy{}, unboundOperator, boundParties)
-
-	if got := callPlain(t, reg, tracker.GetPersonTool, map[string]any{
-		"handle": "jane-founder",
-	}); got.Failed {
-		t.Fatalf("get_person failed: %q", got.Output)
-	}
-	if got := trk.personQuery.Who.Handles(); !slices.Equal(got,
-		[]string{"jane-founder", "founder"}) {
-
-		t.Errorf("get_person asked about %v, want the seat and the credential "+
-			"bound to it — the record may be filed under either", got)
-	}
-	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
-		"handle": "jane-founder",
-	}); got.Failed {
-		t.Fatalf("work_inbox failed: %q", got.Output)
-	}
-	if got := trk.inboxQuery.Who.Handles(); !slices.Equal(got,
-		[]string{"jane-founder", "founder"}) {
-
-		t.Errorf("work_inbox asked about %v — the applier writes one row per "+
-			"recipient the record named, so a change that reached this person "+
-			"under their credential is a row the seat alone never sees", got)
-	}
-	// AND A SURFACE WITH NO CHART ANSWERS THE HANDLE ALONE, which is the
-	// honest state for a build that has not loaded one and the whole truth
-	// for every agent seat.
-	bare := newFakeTracker()
-	none := personSurface(t, bare, &personSpy{}, unboundOperator, nil)
-	if got := callPlain(t, none, tracker.GetPersonTool, map[string]any{
-		"handle": "jane-founder",
-	}); got.Failed {
-		t.Fatalf("get_person with no chart failed: %q", got.Output)
-	}
-	if got := bare.personQuery.Who.Handles(); !slices.Equal(got,
-		[]string{"jane-founder"}) {
-
-		t.Errorf("with no chart get_person asked about %v", got)
-	}
 }
 
 // TestEveryOperatorToolIsAnnotatedDeliberately closes the hole that classified
@@ -772,7 +547,11 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := personSurface(t, trk, &personSpy{}, unboundOperator, nil)
+	reg := personSurface(t, trk, &personSpy{}, func(
+		context.Context, *turnctx.Turn) (builtin.Actor, error) {
+
+		return builtin.Actor{Handle: "alice", Kind: tracker.AuthorHuman}, nil
+	})
 
 	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
 		"handle": "alice",

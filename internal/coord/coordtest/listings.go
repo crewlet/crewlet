@@ -67,7 +67,7 @@ var listingCases = []fleetCase{{
 		type held struct{ rec coord.MailboxRecord }
 		records := map[string]*held{}
 		for _, handle := range handles {
-			rec, created := h.createMailbox(coord.MailboxRecord{Handle: handle})
+			rec, created := h.createMailbox(seat(handle))
 			if !created {
 				h.t.Fatalf("CreateMailbox(%s) found a record in an empty store", handle)
 			}
@@ -87,6 +87,12 @@ var listingCases = []fleetCase{{
 			cell.rec = stored
 			return nil
 		})
+		// The registry lists in SEAT-ID order, so that is the order
+		// every listing must come back in.
+		want := slices.Clone(handles)
+		slices.SortFunc(want, func(a, b string) int {
+			return strings.Compare(seatID(a).String(), seatID(b).String())
+		})
 		raced, wrong := c.readThrough(h.ctx, func() (string, bool) {
 			recs, err := h.f.Mailboxes(h.ctx)
 			if err != nil {
@@ -96,7 +102,7 @@ var listingCases = []fleetCase{{
 			for _, r := range recs {
 				got = append(got, r.Handle)
 			}
-			if !slices.Equal(got, handles) {
+			if !slices.Equal(got, want) {
 				return strings.Join(got, ","), false
 			}
 			return "", false

@@ -322,7 +322,7 @@ function missingChannel(truncated: boolean | undefined): string {
 export function ChannelPeek({ id }: { id: string }) {
   const now = useNow();
   const seatName = useSeatName();
-  const { data, loading, error } = useQuery("a2a_channels", WHOLE_RECORD, {
+  const { data, loading, error, refusal } = useQuery("a2a_channels", WHOLE_RECORD, {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -331,7 +331,7 @@ export function ChannelPeek({ id }: { id: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={5} label="Loading the channel" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data?.available === false && (
           <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
             Can’t read channels from this node right now.
@@ -440,6 +440,7 @@ export function Conversations() {
       ) : (
         <QueryState
           error={channels.error}
+          refusal={channels.refusal}
           loading={channels.loading}
           empty={
             rows.length > 0
@@ -576,7 +577,7 @@ export function ChannelScreen({ id }: { id: string }) {
       {channels.loading && !channels.data && (
         <Skeleton variant="text" rows={5} label="Loading the channel" />
       )}
-      <QueryState error={channels.error} loading={channels.loading}>
+      <QueryState error={channels.error} refusal={channels.refusal} loading={channels.loading}>
         {/* THREE ANSWERS, NOT TWO: "this node cannot reach the coordination
             store", "the record holds no such channel" and "here it is" — and
             the second is guarded on a record that was actually read. */}
@@ -628,6 +629,7 @@ export function ChannelScreen({ id }: { id: string }) {
           )}
           <QueryState
             error={events.error}
+            refusal={events.refusal}
             loading={events.loading}
             empty={
               events.data && rows.length === 0

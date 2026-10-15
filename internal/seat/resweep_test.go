@@ -25,7 +25,7 @@ func (c *changingSeats) seats() []placement.Seat {
 	defer c.mu.Unlock()
 	out := make([]placement.Seat, 0, len(c.handles))
 	for _, h := range c.handles {
-		out = append(out, placement.Seat{Handle: h})
+		out = append(out, testSeat(h))
 	}
 	return out
 }

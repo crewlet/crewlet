@@ -1,0 +1,59 @@
+// @vitest-environment node
+/**
+ * What a screen says when the engine refused it.
+ *
+ * The sentence a refusal ON AUTHORITY is drawn with — the access it names —
+ * is `lib/access.ts`'s (`needsWords`, held by `access.test.ts`); what is held
+ * here is the rest: the engine's own words for a code, and the grants read
+ * off the envelope.
+ */
+
+import { expect, test } from "vitest";
+
+import { refusalText } from "./refusal.ts";
+import { RestError, refusedGrants } from "~/protocol/rest.ts";
+
+// THE SIGN-IN SURFACE'S WORDS ARE THE ENGINE'S. A failed sign-in is one
+// refusal on purpose, so the only sentence a person may be shown for it is
+// the one the engine wrote for its code.
+test("a refusal with no detail is the engine's own sentence, and nothing else", () => {
+  const err = new RestError(401, {
+    error: "sign_in_refused",
+    message: "Those sign-in details were not accepted. Check them and try again.",
+  });
+  expect(refusalText(err)).toBe(
+    "Those sign-in details were not accepted. Check them and try again.",
+  );
+});
+
+test("a refusal that names what to change says it, with its hint, as sentences", () => {
+  const err = new RestError(400, {
+    error: "invalid_body",
+    message:
+      "The request body is not one this endpoint accepts — its shape, or a value in it — and nothing was changed.",
+    detail: "that code does not match the secret",
+    hint: "check the authenticator app has the right account",
+  });
+  expect(refusalText(err)).toBe(
+    "That code does not match the secret. Check the authenticator app has the right account.",
+  );
+});
+
+test("a throttled attempt says how long, from its Retry-After", () => {
+  const err = new RestError(429, { error: "throttled", message: "Too many failed attempts." }, 1);
+  expect(refusalText(err)).toBe("Too many failed attempts. Try again in 1 second.");
+});
+
+// NOBODY ANSWERED, so nothing here may say anything was refused.
+test("a request the engine never answered is not called a refusal", () => {
+  const err = new RestError(0, { error: "unreachable", detail: "Failed to fetch" });
+  expect(refusalText(err)).toBe("No answer came back from the engine. Failed to fetch.");
+  expect(refusalText(err)).not.toMatch(/refused|not accepted/);
+});
+
+test("the grants are read off the envelope, and nothing else is taken for one", () => {
+  expect(refusedGrants({ error: "unauthorized", grants: ["admin", 3, null] })).toEqual(["admin"]);
+  expect(refusedGrants({ error: "unauthorized" })).toEqual([]);
+  expect(refusedGrants(null)).toEqual([]);
+  expect(refusedGrants("not a body")).toEqual([]);
+});

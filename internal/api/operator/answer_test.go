@@ -3,6 +3,7 @@ package operator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -10,10 +11,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -83,57 +84,70 @@ func (b *companyWindows) Refusing(context.Context) (builtin.BudgetRefusal, bool,
 	return builtin.BudgetRefusal{Period: "day", Window: "2026-09-25", Used: 10, Limit: 10}, b.spent, nil
 }
 
-// answerSurface is an operator surface serving answer_knowledge, bound by
-// [boundChart].
+// answerSurface is an operator surface serving answer_knowledge, in
+// [company].
 func answerSurface(t *testing.T, model *countedModel, budget *companyWindows) *operator.Server {
 	t.Helper()
 	return newSurface(t, operator.Options{
-		Knowledge: oneRunbook{},
-		Org:       boundChart,
-		Answer: builtin.AnswerDeps{
-			Models: model, Budget: budget,
-			Actor: operator.WorkActor(boundChart, nil),
-		},
+		Halves: fixed(operator.Halves{Knowledge: oneRunbook{}}),
+		Org:    company,
+		Answer: builtin.AnswerDeps{Models: model, Budget: budget},
 	})
 }
 
-func askBody(requestID string) string {
+func askBody() string {
 	raw, _ := json.Marshal(map[string]any{
-		"request_id": requestID, "args": map[string]any{"q": "How do we deploy?"},
+		"args": map[string]any{"q": "How do we deploy?"},
 	})
 	return string(raw)
 }
 
-// AN UNBOUND TOKEN CANNOT ASK, ON EITHER TRANSPORT. The act transport refuses
-// it `unbound` as it refuses every write by somebody who is not a person, and
-// the MCP transport — which admits an unbound credential for every other verb
-// — reaches the tool, which refuses it `forbidden`: an answer spends the
-// company's tokens on a person's behalf. Neither asks the model. The bound
-// person beside them is answered, so a surface that refused everybody fails
-// here too.
-func TestAnUnboundTokenCannotAsk(t *testing.T) {
+// ONLY A PERSON BOUND TO A SEAT MAY ASK, ON EVERY TRANSPORT: the answer runs on
+// the auxiliary model of the asker's own seat and spends the company's tokens
+// on their behalf, so a credential no seat binds has no model to answer on and
+// nobody the spend is charged for. It needs an app too — the knowledge base or
+// the tracker, each corpus searched only for whoever holds its app — since what
+// an answer discloses is what those already show their users. Neither refusal
+// asks the model; the bound person beside them is answered, so a surface that
+// refused everybody fails here too.
+func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
 	t.Parallel()
 	model, budget := &countedModel{}, &companyWindows{}
 	s := answerSurface(t, model, budget)
-	h := guarded(s, false)
+	h := guarded(s)
 
-	status, answer := act(t, h, "ci-secret", builtin.AnswerKnowledgeTool,
-		"application/json", askBody(requestA))
-	if status != http.StatusForbidden || answer["error"] != string(operator.CodeUnbound) {
-		t.Fatalf("an unbound token over act answered %d %v, want 403 unbound", status, answer)
+	status, answer := act(t, h, "ci", builtin.AnswerKnowledgeTool,
+		"application/json", askBody(), newKey())
+	if status != http.StatusForbidden || answer["error"] != string(crewletmcp.RefusalForbidden) {
+		t.Fatalf("an unbound token over act answered %d %v, want 403 forbidden", status, answer)
 	}
-	res, served, err := s.Dispatch(auth.WithOperator(t.Context(), "ci"),
-		builtin.AnswerKnowledgeTool, map[string]any{"q": "How do we deploy?"})
-	if err != nil || !served || !res.Failed || res.Refusal != crewletmcp.RefusalForbidden {
-		t.Fatalf("an unbound token over MCP was answered: (%+v, %v, %v)", res, served, err)
+	res, err := s.Dispatch(iam.WithPrincipal(t.Context(), pipeline), operator.Call{
+		Transport: types.TransportMCP, Tool: builtin.AnswerKnowledgeTool,
+		Args: map[string]any{"q": "How do we deploy?"},
+	})
+	if err != nil || !res.Failed || crewletmcp.RefusalOf(res) != crewletmcp.RefusalForbidden {
+		t.Fatalf("an unbound token over MCP was answered: (%+v, %v)", res, err)
 	}
 	if model.asked() != 0 || len(model.resolved()) != 0 {
 		t.Fatalf("an unbound caller spent tokens: %d model calls, %d resolutions",
 			model.asked(), len(model.resolved()))
 	}
+	// A BOUND PERSON HOLDING NEITHER APP is refused by the table, before
+	// the tool runs, naming both.
+	unread := person("lee.nobody", "jane-founder")
+	res, err = s.Dispatch(iam.WithPrincipal(t.Context(), unread), operator.Call{
+		Transport: types.TransportMCP, Tool: builtin.AnswerKnowledgeTool,
+		Args: map[string]any{"q": "How do we deploy?"},
+	})
+	var refused *builtin.DecisionRefused
+	if err != nil || !res.Failed || model.asked() != 0 || !errors.As(res.Cause, &refused) ||
+		!slices.Equal(refused.Decision.Grants, iam.Apps) {
+		t.Fatalf("a bound person holding neither app was answered, or refused "+
+			"other than by the table naming both apps: (%+v, %v)", res, err)
+	}
 
-	status, answer = act(t, h, "founder-secret", builtin.AnswerKnowledgeTool,
-		"application/json", askBody(requestB))
+	status, answer = act(t, h, "founder", builtin.AnswerKnowledgeTool,
+		"application/json", askBody(), newKey())
 	if status != http.StatusOK {
 		t.Fatalf("the bound person was refused an answer: %d %v", status, answer)
 	}
@@ -157,8 +171,12 @@ func TestAnUnboundTokenCannotAsk(t *testing.T) {
 func TestAnAnswerIsAnActNotARead(t *testing.T) {
 	t.Parallel()
 	s := answerSurface(t, &countedModel{}, &companyWindows{})
-	if !slices.Contains(s.Acts(), builtin.AnswerKnowledgeTool) {
-		t.Fatalf("the act transport serves %v and not answer_knowledge", s.Acts())
+	acts, err := s.Acts(t.Context(), founder)
+	if err != nil {
+		t.Fatalf("Acts: %v", err)
+	}
+	if !slices.Contains(acts, builtin.AnswerKnowledgeTool) {
+		t.Fatalf("the act transport serves %v and not answer_knowledge", acts)
 	}
 	if crewletmcp.ReadOnlyProven(s.Annotations(builtin.AnswerKnowledgeTool)) {
 		t.Error("answer_knowledge is advertised as a proven read")
@@ -171,10 +189,11 @@ func TestAnAnswerIsAnActNotARead(t *testing.T) {
 func TestASpentBudgetAnswersBudgetExhausted(t *testing.T) {
 	t.Parallel()
 	model, budget := &countedModel{}, &companyWindows{spent: true}
-	status, answer := act(t, guarded(answerSurface(t, model, budget), false), "founder-secret",
-		builtin.AnswerKnowledgeTool, "application/json", askBody(requestA))
+	status, answer := act(t, guarded(answerSurface(t, model, budget)), "founder",
+		builtin.AnswerKnowledgeTool, "application/json", askBody(), newKey())
+	detail, _ := answer["detail"].(string)
 	if status != http.StatusConflict || answer["error"] != string(crewletmcp.RefusalBudgetExhausted) ||
-		!strings.Contains(answer["detail"].(string), "2026-09-25") {
+		!strings.Contains(detail, "2026-09-25") {
 		t.Fatalf("a spent budget answered %d %v, want 409 budget_exhausted naming the day",
 			status, answer)
 	}

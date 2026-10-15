@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -224,7 +223,7 @@ func wakeWithPointer(t *testing.T, n *node, handle string) {
 		ContextRequiresRecon: true,
 	}, events.TraceContext{})
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
-		topics.AgentInbox(handle), ev); err != nil {
+		seatInbox(t, n, handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
 	}
 }

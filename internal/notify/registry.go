@@ -3,12 +3,14 @@ package notify
 import (
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -30,6 +32,17 @@ import (
 // and on every org swap. It is small, written rarely and read on the inbound
 // hot path, so a RWMutex is the right trade.
 //
+// # The human half answers for a DIRECTORY READING too
+//
+// Which human seats' contact identities are registered is decided by the org
+// AND by one reading of the identity directory ([Standing]): a seat whose
+// holder is suspended or removed registers none. That reading is fixed for the
+// registry's life on the org's terms — a directory that moved is a NEW registry
+// built whole and swapped in, never this one patched. A diff applied to a
+// fresh registry would drop every identity it did not touch, and a registry
+// that re-read the directory itself would answer "whose standing is this?"
+// with "one of two".
+//
 // # Resolution is ORG-derived, never node-derived
 //
 // Routing an event to a seat needs its handle and its agent id, both of
@@ -47,7 +60,7 @@ type Registry struct {
 	byHandle map[string]Party
 	byRole   map[string]string    // role name  -> handle
 	byID     map[uuid.UUID]string // derived id -> handle
-	byEmail  map[string]string    // lowercased -> handle
+	byEmail  map[string]string    // matched form (iam.NormalizeEmail) -> handle
 	parties  []Party              // org order, stable
 
 	// external and reverse are exact INVERSES of each other within each
@@ -65,6 +78,12 @@ type Registry struct {
 	// reconcile registered, so the next one can withdraw exactly its own
 	// stale pairs without ever touching an agent identity.
 	owned map[identityKey]string
+
+	// standing is the reading of the identity directory the last human
+	// reconcile applied, and withheld the seats it left out because of it.
+	// See [Standing].
+	standing Standing
+	withheld map[string]Withholding
 }
 
 // identityKey is one external identity: a namespace and an id within it.
@@ -81,7 +100,14 @@ type identityKey struct{ namespace, externalID string }
 // A nil org yields an empty registry rather than a nil one. `crewlet
 // validate` and a node that has not yet applied a revision both run without
 // a company, and they should get "nobody matches" rather than a panic.
-func NewRegistry(o *org.Organization) *Registry {
+//
+// LOOKUP RESOLVES EACH SEAT'S DECLARED ADDRESS ([org.Role.ResolvedEmail]) —
+// the lookup [Registry.ReconcileHumanContacts] resolves contact ids through,
+// and nil reads the process environment as it does there. It is not optional
+// in practice: a company document may declare a seat's address as a `${VAR}`
+// reference, and an index built from those as written matched no payload at
+// all.
+func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
 	r := &Registry{
 		byHandle: make(map[string]Party),
 		byRole:   make(map[string]string),
@@ -114,7 +140,7 @@ func NewRegistry(o *org.Organization) *Registry {
 		}
 		p := Party{Handle: handle, Name: role.Name, Human: role.IsHuman()}
 		if !p.Human {
-			if id, ok := org.DeriveAgentID(o.Name, handle); ok {
+			if id, ok := o.AgentIDFor(role); ok {
 				p.AgentID = id
 			}
 		}
@@ -128,7 +154,7 @@ func NewRegistry(o *org.Organization) *Registry {
 				r.byID[p.AgentID] = handle
 			}
 		}
-		if email := strings.ToLower(strings.TrimSpace(role.Email)); email != "" {
+		if email := iam.NormalizeEmail(role.ResolvedEmail(lookup)); email != "" {
 			if _, dup := r.byEmail[email]; !dup {
 				r.byEmail[email] = handle
 			}
@@ -139,6 +165,42 @@ func NewRegistry(o *org.Organization) *Registry {
 
 // OrgName is the company the registry answers for. Empty without an org.
 func (r *Registry) OrgName() string { return r.orgName }
+
+// Standing is the reading of the identity directory this registry's human
+// contacts were reconciled against — the zero, chart-only value until a
+// reconcile applies one.
+//
+// It is what lets the engine tell a directory that moved from one that did not
+// WITHOUT rebuilding: a fresh reading equal to this one is a registry that
+// would come out identical.
+func (r *Registry) Standing() Standing {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.standing
+}
+
+// Withholding reports whether a human seat's contact identities were left out
+// of this registry because of its holder's standing, and why.
+//
+// The seat itself is still a party — it resolves by handle, a mention of it
+// still names it and a prompt still renders it as a colleague. What is gone is
+// every external identity it declared, which is what stops a suspended
+// person's message on a vendor surface being attributed to the seat.
+func (r *Registry) Withholding(handle string) (Withholding, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	why, ok := r.withheld[handle]
+	return why, ok
+}
+
+// Withheld is every seat [Registry.Withholding] answers for, by its handle,
+// sorted — the count a log line reports, which is the number of SEATS
+// this registry withdrew rather than the number of bindings the reading named.
+func (r *Registry) Withheld() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Sorted(maps.Keys(r.withheld))
+}
 
 // ByHandle resolves a handle to a party.
 func (r *Registry) ByHandle(handle string) (Party, bool) {
@@ -180,21 +242,34 @@ func (r *Registry) ByAgentID(id uuid.UUID) (Party, bool) {
 	return r.ByHandle(handle)
 }
 
-// ByEmail resolves an address to a party.
+// ByEmail resolves an address to a party. TWO ARMS, in this order:
 //
-// A plus-address names a seat DIRECTLY — notif+engineer@example.com is the
-// engineer, whatever that seat's own configured address happens to be — so
-// it is tried first. A seat's declared address is the fallback, matched
-// case-insensitively because no mail system treats the local part's case as
-// significant in practice and a third-party app hands back whatever the
-// sender typed.
+//   - A PLUS TAG THAT SPELLS A SEAT'S HANDLE names that seat:
+//     notif+engineer@example.com is the engineer, whatever address that seat
+//     declares and whichever seat declares the rest of the address. This is
+//     how a seat is
+//     reached through a shared mailbox, so a tag that is somebody's handle is
+//     never read as anything else — which is why a person's own sub-address
+//     tag should not be a seat's handle.
+//   - Otherwise THE SEAT WHOSE DECLARED ADDRESS HAS THE SAME MATCHED FORM:
+//     both sides folded by [iam.NormalizeEmail], lower-cased with the plus tag
+//     dropped. A third-party app hands back whatever the sender typed, no mail
+//     system treats the local part's case as significant in practice, and a
+//     person who signed a vendor up as sarah.chen+jira@example.com is the seat
+//     declaring sarah.chen@example.com. It is the fold the identity estate
+//     blinds a person's address under, so an address reaches a seat and a
+//     person through one normalisation rather than two.
 func (r *Registry) ByEmail(email string) (Party, bool) {
 	if handle := PlusAddress(email); handle != "" {
 		if p, ok := r.ByHandle(handle); ok {
 			return p, true
 		}
 	}
-	handle, ok := r.byEmail[strings.ToLower(strings.TrimSpace(email))]
+	folded := iam.NormalizeEmail(email)
+	if folded == "" {
+		return Party{}, false
+	}
+	handle, ok := r.byEmail[folded]
 	if !ok {
 		return Party{}, false
 	}

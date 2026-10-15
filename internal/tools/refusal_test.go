@@ -26,7 +26,8 @@ var unclassifiedByDesign = map[string]string{
 }
 
 // TestEveryFirstPartyRefusalIsClassified walks every non-test file under
-// internal/ and refuses a failed tool Result that carries no class.
+// internal/ and refuses a failed tool Result that carries no cause — the one
+// value its class is read out of ([tools.RefusalOf]).
 //
 // A WALK OVER THE SOURCE rather than a list of tools, because the failure it
 // guards against is a NEW refusal: a tool added next month that builds
@@ -38,10 +39,16 @@ var unclassifiedByDesign = map[string]string{
 //
 // Two shapes are checked: a literal of any type that carries a refusal out of
 // a tool call — the tool Result, the surface's recorded Call and the
-// toolloop's ToolResult — that sets Failed must set Refusal, to something other
-// than the empty string; and every call of a package's `refused(code, msg)`
-// helper must name a class rather than "". A package's bare `failed(msg)` is
-// the argument refusal by definition and passes.
+// toolloop's ToolResult — that sets Failed must set Cause, to something other
+// than nil; and every call of a package's `refused(code, msg)` helper must
+// name a class rather than "". A package's bare `failed(msg)` is the argument
+// refusal by definition and passes.
+//
+// WHAT A WALK CAN SEE IS THAT A CAUSE IS THERE, not that it carries a class:
+// a cause is an expression, and whether `err` wraps a [tools.Refusal] is a
+// fact about the value at run time. Each tool's own suite holds that half —
+// a cause a tool hands on unclassified reads as "" and a person's surface
+// renders it as a failure nobody named.
 //
 // THE SURFACE'S OWN TYPES ARE IN THE WALK because the surface refuses calls
 // no tool ever sees — an unknown name, one not offered here, a guard's
@@ -66,12 +73,12 @@ func TestEveryFirstPartyRefusalIsClassified(t *testing.T) {
 	}
 }
 
-// failedField, refusalField and refusedHelper are the names the gate judges
-// a refusal by: a carrier literal's two keys, and a package's
+// failedField, causeField and refusedHelper are the names the gate judges a
+// refusal by: a carrier literal's two keys, and a package's
 // `refused(code, msg)` helper.
 const (
 	failedField   = "Failed"
-	refusalField  = "Refusal"
+	causeField    = "Cause"
 	refusedHelper = "refused"
 )
 
@@ -124,7 +131,7 @@ func refusals(t *testing.T, root string) refusalScan {
 				if !isRefusalCarrier(node.Type, pkg) {
 					return true
 				}
-				failed, refusal := fieldOf(node, failedField), fieldOf(node, refusalField)
+				failed, cause := fieldOf(node, failedField), fieldOf(node, causeField)
 				if failed == nil {
 					return true
 				}
@@ -132,13 +139,14 @@ func refusals(t *testing.T, root string) refusalScan {
 					return true
 				}
 				switch {
-				case refusal == nil:
+				case cause == nil:
 					scan.offences = append(scan.offences, fmt.Sprintf("%s: a failed tool "+
-						"Result with no Refusal — name its class (tools.Refusal*) so a "+
-						"surface that is not a model can act on it", fset.Position(node.Pos())))
-				case isEmptyString(refusal):
+						"Result with no Cause — state its class (tools.Refusal*, or "+
+						"tools.Classify over the error that decided it) so a surface "+
+						"that is not a model can act on it", fset.Position(node.Pos())))
+				case isNil(cause):
 					scan.offences = append(scan.offences, fmt.Sprintf("%s: a failed tool "+
-						"Result whose Refusal is \"\", which reads as unclassified",
+						"Result whose Cause is nil, which reads as unclassified",
 						fset.Position(node.Pos())))
 				default:
 					scan.classified++
@@ -161,7 +169,7 @@ func refusals(t *testing.T, root string) refusalScan {
 }
 
 // THE WALK AND THE MATCHER, ON A TREE WHOSE VERDICT IS KNOWN: a failed result
-// with no class, one with an empty class, one classified, the helper handed no
+// with no cause, one whose cause is nil, one classified, the helper handed no
 // class in a file that names no Failed field — so each identifier is shown to
 // admit a file on its own — the third-party bridge that is exempt by design,
 // and a file naming neither that is not even Go, which must never be parsed.
@@ -171,8 +179,8 @@ func TestTheRefusalWalkFindsAnUnclassifiedFailure(t *testing.T) {
 	for path, body := range map[string]string{
 		"builtin/tool.go": "package builtin\n\nfunc f() {\n" +
 			"\t_ = tools.Result{Output: \"no\", Failed: true}\n" +
-			"\t_ = tools.Result{Failed: true, Refusal: \"\"}\n" +
-			"\t_ = tools.Result{Failed: true, Refusal: tools.RefusalDenied}\n}\n",
+			"\t_ = tools.Result{Failed: true, Cause: nil}\n" +
+			"\t_ = tools.Result{Failed: true, Cause: tools.RefusalInvalid}\n}\n",
 		"builtin/helper.go": "package builtin\n\nfunc g() { _ = refused(\"\", \"no class\") }\n",
 		"mcp/tool.go":       "package mcp\n\nvar _ = Result{Failed: true}\n",
 		"other/x.go":        "package other\n\nthis is not Go and names nothing judged\n",
@@ -237,6 +245,12 @@ func fieldOf(lit *ast.CompositeLit, name string) ast.Expr {
 		}
 	}
 	return nil
+}
+
+// isNil reports whether an expression is the bare identifier nil.
+func isNil(expr ast.Expr) bool {
+	id, ok := expr.(*ast.Ident)
+	return ok && id.Name == "nil"
 }
 
 func isEmptyString(expr ast.Expr) bool {

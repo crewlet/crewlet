@@ -10,7 +10,7 @@
 import { fmtDateCompact, tsKey } from "~/lib/format.ts";
 import { companyMidnight, dayLabelIn } from "~/lib/range.ts";
 import type { PageChange, PageRevision } from "~/protocol/index.ts";
-import { changeWords, drawnBy } from "./parts.tsx";
+import { changeWords, changedBy } from "./parts.tsx";
 
 /**
  * One row of the landing: one change, or BACK-TO-BACK SAVES of one page by one
@@ -36,7 +36,7 @@ function continues(head: PageChange, next: PageChange, zone: string | undefined)
     head.kind === "saved" &&
     next.kind === "saved" &&
     head.page_id === next.page_id &&
-    drawnBy(head.actor, head.actor_seat) === drawnBy(next.actor, next.actor_seat) &&
+    changedBy(head) === changedBy(next) &&
     dayLabelIn(tsKey(head.at), zone) === dayLabelIn(tsKey(next.at), zone)
   );
 }

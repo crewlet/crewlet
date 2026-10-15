@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // runBackup is `crewlet backup`.
@@ -35,10 +37,10 @@ import (
 // So the copy is taken by the one process that can reach both, and this
 // command asks it to. The destination is a path on the ENGINE'S host, which
 // is the surprise worth stating plainly: this does not download anything.
-func runBackup(args []string, stdout, stderr io.Writer) error {
+func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var dir *string
 	var wait *time.Duration
-	client, err := nodeClientFor(args, "backup", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "backup", stderr, func(fs *flag.FlagSet) {
 		dir = fs.String("dir", "",
 			"absolute directory ON THE ENGINE'S HOST to write the backup into; required")
 		wait = fs.Duration("wait", backupWait,

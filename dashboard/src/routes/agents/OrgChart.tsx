@@ -29,10 +29,33 @@
  * # A node opens its peek
  *
  * A seat opens the seat beside the chart (`peek=seat:{handle}`) and a unit
- * opens the unit (`peek=unit:{name}`), which keeps the chart on screen. Enter
+ * opens the unit (`peek=unit:{key}`), which keeps the chart on screen — each
+ * by what identifies it, never by its name, which two may share. Enter
  * does the same, the arrows walk the tree (the kit's tree pattern), and while
  * the peek is open it follows the node that has focus. The chart stays fitted
  * and centred as the peek takes and gives back its width ([useChartView]).
+ *
+ * # A human seat says who holds it
+ *
+ * A human seat is held by whoever the identity directory binds to it, which
+ * the company document cannot say — and every person comes from one, since a
+ * person holds exactly one human seat for as long as they exist. So for every
+ * signed-in reader — who holds each seat is part of the overview, and the
+ * engine masks the listing per reader — a person's card says what holds it
+ * instead of when they are around: "Held by Jane Doe", "Invited ·
+ * sam@example.com" (an admin's to see), or "Vacant" — in the card's NEUTRAL
+ * ink, because who holds a seat is not something the seat is doing. An admin
+ * gets the card's menu besides
+ * ([SeatCardActions]): Invite and Create on a vacant seat, Cancel invitation
+ * on an invited one — through the tree's own pattern, a pointer strip beside
+ * the card and the same items under the ContextMenu key, because a tree's
+ * items hold nothing focusable. A phone's rows say the same line, and the
+ * gestures are the peek's there.
+ *
+ * A DIRECTORY READ THAT FAILED IS SAID, above the canvas or the outline
+ * ([DirectoryUnanswered]): drawn as nothing, an administrator saw a chart
+ * whose human cards read "Human · availability" and carried no menu, with no
+ * word why.
  *
  * # On a phone it is rows
  *
@@ -52,7 +75,10 @@ import {
   type RefObject,
 } from "react";
 import {
+  Callout,
   EmptyState,
+  IconButton,
+  Menu,
   OrgNodeLabel,
   OrgNodeLead,
   StatusDot,
@@ -79,6 +105,19 @@ import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { QueryState } from "~/components/common.tsx";
+import {
+  canManagePeople,
+  holdingLine,
+  SEAT_GESTURE_WORDS,
+  SeatGestureDialog,
+  seatGestures,
+  useHumanSeats,
+  type SeatGesture,
+} from "~/components/people.tsx";
+import type { HumanSeat } from "~/contract/identity.ts";
+import type { RestResult } from "~/lib/useRest.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { CANVAS_PEEK_WIDTH, PHONE_BREAKPOINT } from "~/app/layout.ts";
 import {
@@ -90,6 +129,7 @@ import {
   stateLine,
   stateWord,
   toneOf,
+  unitByKey,
   type NameOf,
   type OrgIndex,
   type Seat,
@@ -162,8 +202,14 @@ export function OrgChart() {
 
   // THE KEY ON A UNIT'S NODE is the project its work is filed under, which
   // only the tracker knows. A company on another tracker answers nothing and
-  // a unit's node carries its type alone.
-  const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
+  // a unit's node carries its type alone — as it does for a reader without
+  // Tracker, who is not asked a question the engine would refuse them.
+  const viewer = useViewer();
+  const projects = useQuery(
+    "work_projects",
+    { limit: PROJECT_PAGE },
+    { pollMs: 120_000, enabled: viewer.tracker },
+  );
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const keysOf = useMemo(() => projectsByUnit(projectRows ?? []), [projectRows]);
   const company = org?.name ?? "";
@@ -171,15 +217,37 @@ export function OrgChart() {
   const reporting = useMemo(() => buildReportingChart(index), [index]);
   const chart = kind === "reporting" ? reporting : structure;
   const counts = useMemo(() => stateCounts(index, agents), [index, agents]);
-  const byRole = useMemo(() => new Map(agents.map((a) => [a.role, a])), [agents]);
+  // EACH SEAT'S ROW BY ITS HANDLE — the roster row's `id` — never by its name,
+  // which two seats may share.
+  const byHandle = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
+
+  // WHAT HOLDS EACH HUMAN SEAT, for every signed-in reader — see the file's
+  // doc — by the seat's handle. Asked once the viewer has said who this is,
+  // so nobody is asked a question they would be refused.
+  const manages = canManagePeople(viewer.grants);
+  const directory = useHumanSeats(!viewer.asking && !viewer.anonymous);
+  const holdings = useMemo(
+    () => new Map((directory.data ?? []).map((row) => [row.handle, row])),
+    [directory.data],
+  );
+  const holdingOf = useCallback(
+    (seat: Seat | undefined) =>
+      seat?.kind === "human" && seat.handle ? holdings.get(seat.handle) : undefined,
+    [holdings],
+  );
+  // A GESTURE IS ABOUT THE SEAT AS IT WAS WHEN IT STARTED (`SeatGestureDialog`).
+  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  const gesturesOf = useCallback(
+    (seat: Seat | undefined) => (manages ? seatGestures(holdingOf(seat)) : []),
+    [manages, holdingOf],
+  );
 
   const view = useRef<TreeCanvasHandle>(null);
   const peek = usePeek();
   const { open, move } = usePeekControls();
   const peeked =
     peek?.kind === "seat" ? (index.byHandle.get(peek.id) ?? index.byName.get(peek.id)) : undefined;
-  const peekedUnit =
-    peek?.kind === "unit" ? index.units.find((u) => u.name === peek.id) : undefined;
+  const peekedUnit = peek?.kind === "unit" ? unitByKey(index, peek.id) : null;
   // THE NODE THE PEEK IS ABOUT, where the chart on screen draws one: a unit
   // is a node of the structure only.
   const peekedUnitNode = peekedUnit ? unitNodeId(peekedUnit) : null;
@@ -236,7 +304,7 @@ export function OrgChart() {
       const seat = chart.seats.get(id);
       if (seat) return { kind: "seat", id: seat.handle };
       const unit = chart.units.get(id);
-      return unit ? { kind: "unit", id: unit.name } : null;
+      return unit ? { kind: "unit", id: unit.id } : null;
     },
     [chart],
   );
@@ -275,15 +343,29 @@ export function OrgChart() {
   const renderCard = (id: string, card: TreeCardContext) => {
     const seat = chart.seats.get(id);
     if (seat) {
+      const holding = holdingOf(seat);
+      const gestures = gesturesOf(seat);
       return (
-        <SeatNode
-          seat={seat}
-          agent={byRole.get(seat.name)}
-          card={card}
-          now={now}
-          nameOf={nameOf}
-          onOpen={() => peekTo({ kind: "seat", id: seat.handle })}
-        />
+        <>
+          <SeatNode
+            seat={seat}
+            agent={byHandle.get(seat.handle)}
+            holding={holding}
+            card={card}
+            now={now}
+            nameOf={nameOf}
+            onOpen={() => peekTo({ kind: "seat", id: seat.handle })}
+          />
+          {holding && gestures.length > 0 && (
+            <SeatCardActions
+              card={card}
+              id={id}
+              name={seat.name}
+              gestures={gestures}
+              onGesture={(gesture) => setOpening({ gesture, row: holding })}
+            />
+          )}
+        </>
       );
     }
     const unit = chart.units.get(id);
@@ -292,9 +374,9 @@ export function OrgChart() {
         <UnitNode
           id={id}
           unit={unit}
-          keys={keysOf.get(unit.name) ?? []}
+          keys={keysOf.get(unit.id) ?? []}
           card={card}
-          onOpen={() => peekTo({ kind: "unit", id: unit.name })}
+          onOpen={() => peekTo({ kind: "unit", id: unit.id })}
         />
       );
     }
@@ -326,10 +408,14 @@ export function OrgChart() {
       {/* A SAVE IS NOT AN APPLY: until this node applies the revision the
           builder saved, the projection the chart draws is the previous one. */}
       <PreviousRevisionNote />
+      {directory.code && !directory.data && index.seats.some((seat) => seat.kind === "human") && (
+        <DirectoryUnanswered directory={directory} manages={manages} />
+      )}
       {phone ? (
         <OrgOutline
           chart={reporting}
-          byRole={byRole}
+          byHandle={byHandle}
+          holdingOf={holdingOf}
           counts={counts}
           now={now}
           nameOf={nameOf}
@@ -373,6 +459,9 @@ export function OrgChart() {
           }}
           onNodeKey={onNodeKey}
           onNodeKeyDown={onNodeKeyDown}
+          // A HUMAN SEAT'S MENU, for an admin alone ([SeatCardActions]):
+          // the ContextMenu key opens it on the node only where there is one.
+          hasNodeMenu={(id) => gesturesOf(chart.seats.get(id)).length > 0}
           // THE SWITCH UNDER THE ZOOM BAR, in the chart's own corner, where
           // the builder keeps it.
           controlsBelow={<ChartSwitch value={kind} onValueChange={setChart} panelId={panelId} />}
@@ -380,6 +469,119 @@ export function OrgChart() {
           renderCard={renderCard}
         />
       )}
+      {opening && (
+        <SeatGestureDialog
+          gesture={opening.gesture}
+          seat={opening.row}
+          held={viewer.grants}
+          onClose={() => setOpening(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The identity directory did not answer a reader it would have: so who holds
+ * each human seat is not drawn, and — for an admin — no vacant seat
+ * offers Invite or Create, until it does. The refusal beneath says why, in
+ * the words every screen uses for it.
+ *
+ * ONLY WHERE THE CHART HAS A HUMAN SEAT: a company of agents loses nothing by
+ * the read failing, and a banner over it would be about nothing on screen.
+ */
+function DirectoryUnanswered({
+  directory,
+  manages,
+}: {
+  directory: RestResult<HumanSeat[]>;
+  manages: boolean;
+}) {
+  return (
+    <section className="col gap-2" aria-label="The identity directory">
+      <Callout variant="warning" title="The identity directory did not answer">
+        So the chart cannot say who holds each human seat
+        {manages ? ", and no vacant seat offers Invite or Create," : ""} until it does — its human
+        cards say only that each is a person.
+      </Callout>
+      <QueryState
+        error={directory.code}
+        refusal={directory.refusal}
+        detail={directory.error?.detail || undefined}
+        loading={false}
+      />
+    </section>
+  );
+}
+
+/** A gesture's name on a card, which says which seat it is about. */
+function gestureLabel(gesture: SeatGesture, name: string): string {
+  switch (gesture) {
+    case "invite":
+      return `Invite a person to ${name}`;
+    case "create":
+      return `Create a person on ${name}`;
+    case "cancel":
+      return `Cancel the invitation to ${name}`;
+  }
+}
+
+/**
+ * What an admin may do about a human seat, on its card.
+ *
+ * THE TREE'S OWN PATTERN, as the builder's node actions are drawn: a tree's
+ * items hold nothing focusable, so the buttons a pointer uses sit in the
+ * strip the canvas places BESIDE the card (`card.actions`, the treeitem's
+ * immediate sibling), out of the tab order and hidden from assistive
+ * technology — and the same gestures are the card's menu, which the
+ * ContextMenu key and Shift+F10 open on the card itself. The menu is mounted
+ * in the strip, drawn nowhere and taking no cell (`data-keyboard-only`),
+ * because a menu the key opens has to be anchored to something on the node.
+ */
+function SeatCardActions({
+  card,
+  id,
+  name,
+  gestures,
+  onGesture,
+}: {
+  card: TreeCardContext;
+  id: string;
+  name: string;
+  gestures: readonly SeatGesture[];
+  onGesture: (gesture: SeatGesture) => void;
+}) {
+  return (
+    <div {...card.actions(id)}>
+      {gestures.map((gesture) => (
+        <IconButton
+          key={gesture}
+          label={gestureLabel(gesture, name)}
+          icon={SEAT_GESTURE_WORDS[gesture].icon}
+          size="sm"
+          variant={gesture === "cancel" ? "ghost-danger" : "ghost"}
+          tabIndex={-1}
+          onClick={(event) => {
+            event.stopPropagation();
+            onGesture(gesture);
+          }}
+        />
+      ))}
+      <span data-keyboard-only="true">
+        <Menu
+          label={`Actions for ${name}`}
+          items={gestures.map((gesture) => ({
+            key: gesture,
+            label: SEAT_GESTURE_WORDS[gesture].menu,
+            icon: SEAT_GESTURE_WORDS[gesture].icon,
+            danger: gesture === "cancel",
+            onSelect: () => onGesture(gesture),
+          }))}
+          triggerTabIndex={-1}
+          open={card.menuOpen(id)}
+          onOpenChange={(opened) => card.setMenuOpen(id, opened)}
+        />
+      </span>
     </div>
   );
 }
@@ -436,7 +638,8 @@ function ChartCanvas({
  */
 function OrgOutline({
   chart,
-  byRole,
+  byHandle,
+  holdingOf,
   counts,
   now,
   nameOf,
@@ -445,7 +648,9 @@ function OrgOutline({
   onOpen,
 }: {
   chart: OrgChartModel;
-  byRole: ReadonlyMap<string, AgentRow>;
+  byHandle: ReadonlyMap<string, AgentRow>;
+  /** What holds a human seat, where the directory answered. */
+  holdingOf: (seat: Seat) => HumanSeat | undefined;
   counts: StateCounts;
   now: number;
   nameOf: NameOf;
@@ -480,7 +685,8 @@ function OrgOutline({
           return seat ? (
             <SeatRowCell
               seat={seat}
-              agent={byRole.get(seat.name)}
+              agent={byHandle.get(seat.handle)}
+              holding={holdingOf(seat)}
               now={now}
               nameOf={nameOf}
               tabIndex={grid.tabStop(id, column) ? 0 : -1}
@@ -501,6 +707,7 @@ function OrgOutline({
 function SeatRowCell({
   seat,
   agent,
+  holding,
   now,
   nameOf,
   tabIndex,
@@ -508,6 +715,7 @@ function SeatRowCell({
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
+  holding: HumanSeat | undefined;
   now: number;
   nameOf: NameOf;
   tabIndex: number;
@@ -547,7 +755,7 @@ function SeatRowCell({
         </span>
         <span className="oc-state">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
-          <span className="oc-line">{cardLine(seat, agent, now, nameOf)}</span>
+          <span className="oc-line">{cardLine(seat, agent, now, nameOf, holding)}</span>
         </span>
       </span>
     </span>
@@ -751,11 +959,13 @@ function useChartView(
 
 /**
  * One seat's node: its mark and its name, then what it is doing. A person's
- * node says it is a person, as the builder's does.
+ * node says what holds the seat, where the directory answered the reader
+ * ([holdingLine]), and otherwise that it is a person, as the builder's does.
  */
 function SeatNode({
   seat,
   agent,
+  holding,
   card,
   now,
   nameOf,
@@ -763,6 +973,8 @@ function SeatNode({
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
+  /** What holds a human seat, where the directory answered. */
+  holding: HumanSeat | undefined;
   card: TreeCardContext;
   now: number;
   nameOf: NameOf;
@@ -770,9 +982,13 @@ function SeatNode({
 }) {
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const line = cardLine(seat, agent, now, nameOf);
+  const line = cardLine(seat, agent, now, nameOf, holding);
   const handle = handleLabel(seat.handle);
   const item = card.item(seat.key);
+  // WHO HOLDS A HUMAN SEAT IS ITS CAPTION, in the node's neutral ink: it is
+  // not something the seat is doing, so it never takes the state's dot. Read
+  // once — as the caption — rather than again in the line beneath the name.
+  const held = holding ? holdingLine(holding) : null;
   return (
     <>
       <div
@@ -789,7 +1005,7 @@ function SeatNode({
           name={seat.name}
           caption={
             state === undefined ? (
-              seatKindLabel(seat)
+              (held ?? seatKindLabel(seat))
             ) : (
               <StatusDot tone={toneOf(state)} pulse={state === "working"}>
                 {stateWord(state)}
@@ -797,7 +1013,9 @@ function SeatNode({
             )
           }
         />
-        <VisuallyHidden>{[handle, line].filter(Boolean).join(". ")}</VisuallyHidden>
+        <VisuallyHidden>
+          {[handle, line === held ? "" : line].filter(Boolean).join(". ")}
+        </VisuallyHidden>
       </div>
       <NodeToggle card={card} id={seat.key} name={seat.name} />
     </>
@@ -882,16 +1100,21 @@ function CompanyNode({
 
 /**
  * The state line a card carries: the engine's, or for a person the one thing
- * a card has room to say — that it is a person, and when they are around.
- * The peek and the profile say the rest.
+ * a card has room to say — what holds the seat, where the directory answered
+ * the reader ([holdingLine]), and otherwise that it is a person and when they
+ * are around. The peek and the profile say the rest.
  */
 export function cardLine(
   seat: Seat,
   agent: AgentRow | undefined,
   now: number,
   nameOf: NameOf,
+  holding?: HumanSeat,
 ): string {
-  if (seat.kind === "human") return seat.availability ? `Human · ${seat.availability}` : "Human";
+  if (seat.kind === "human") {
+    if (holding) return holdingLine(holding);
+    return seat.availability ? `Human · ${seat.availability}` : "Human";
+  }
   return stateLine(agent, { now, seat, nameOf });
 }
 

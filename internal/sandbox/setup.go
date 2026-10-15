@@ -46,7 +46,10 @@ type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
 
-	// Files are written into the box (path → content) before Commands run.
+	// Files are written into the box (path → content) before Commands run,
+	// byte for byte: each body arrives as the content it is, a whole
+	// `${VAR}` already read by the engine at launch and any other `${…}`
+	// left for whatever reads the file inside the box.
 	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails the
@@ -136,10 +139,11 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error()}
 			}
 			if result.ExitCode != 0 {
-				// NOT the command text. ${VAR} references in commands are
-				// resolved before they get here, so a recipe that pipes a
-				// token into a login carries that token verbatim in cmd —
-				// and this message is logged AND handed back to the LLM.
+				// NOT the command text. The engine resolves nothing in a
+				// command — the box's shell expands its `$VAR`s from the
+				// run env — but a recipe may still spell a credential out
+				// literally, and this message is logged AND handed back to
+				// the LLM.
 				// The step name plus the command's position identifies it
 				// precisely, and the operator has the config; stderr is
 				// redacted for the same reason a transcript is.

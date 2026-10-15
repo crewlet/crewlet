@@ -11,10 +11,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
@@ -79,7 +82,7 @@ func TestTheBrokerListingIsTheEnginesViewOrAFailure(t *testing.T) {
 	a := newApp(t, api.Options{Bootstrap: &b, FleetBroker: seam})
 	if status, _ := get(t, a, "/fleet/broker"); status != http.StatusUnauthorized {
 		t.Fatalf("an anonymous read of the broker's membership answered %d: it is the "+
-			"deployment's shape, operator-only like the fleet view", status)
+			"deployment's shape, admin's like the fleet view", status)
 	}
 	status, body := getAs(t, a, "/fleet/broker")
 	if status != http.StatusOK || body["node"] != "node-a" {
@@ -96,8 +99,13 @@ func TestTheBrokerListingIsTheEnginesViewOrAFailure(t *testing.T) {
 			"503 to ask again about", status, body)
 	}
 
-	// AND IT IS THE SOCKET'S QUESTION TOO: one implementation behind both.
-	if _, err := a.Queries().AnswerWith(t.Context(), "fleet_broker", queries.Params{}, "operator"); err == nil ||
+	// AND IT IS THE SOCKET'S QUESTION TOO: one implementation behind both,
+	// asked as the deployment's own credential, which holds admin.
+	operator := iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
+	})
+	if _, err := a.Queries().AnswerWith(operator, "fleet_broker", queries.Params{}); err == nil ||
 		!errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("the query channel answered %v", err)
 	}

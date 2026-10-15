@@ -12,10 +12,10 @@
  *
  * # Drawn as Knowledge draws them
  *
- * A space is a Space here as on its own page, a page's author is the person
- * behind an operator's token where the engine names one ([drawnBy]), and a
- * page's kind wears a neutral word while only its state wears a tone
- * ([PageTags]).
+ * A space is a Space here as on its own page, a page's author is whoever the
+ * record names (a seat's handle, or the login of a credential bound to no
+ * seat; see `parts.tsx`), and a page's kind wears a neutral word while only
+ * its state wears a tone ([PageTags]).
  */
 
 import { useMemo } from "react";
@@ -37,8 +37,14 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, relTime, tsKey } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import type { PageContainer, PageDetail, PageSummary } from "~/protocol/index.ts";
-import { PageTags, drawnBy, usePeople, type Who } from "./parts.tsx";
+import type {
+  LogRefusal,
+  PageContainer,
+  PageDetail,
+  PageSummary,
+  QueryRefusal,
+} from "~/protocol/index.ts";
+import { PageTags, usePeople, type Who } from "./parts.tsx";
 import { firstLines } from "./page/body.ts";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
@@ -135,7 +141,9 @@ function spaceFacts({
         <EmptyValue label="No team owns this space" />
       ),
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO: two units may share a space.
-      path: units?.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
+      // BY ITS ID, which a rename does not move: a unit's name is prose two
+      // units may share, and a link by it opened whichever came first.
+      path: units?.length === 1 && lead?.id ? ["agents", "teams", lead.id] : undefined,
     },
     { label: "Created", value: <DateCell at={space.created_at} now={now} /> },
   ];
@@ -177,7 +185,11 @@ export function ContainerPeek({ id }: { id: string }) {
       {containers.loading && !containers.data && (
         <Skeleton variant="text" rows={6} label="Loading the space" />
       )}
-      <QueryState error={containers.error} loading={containers.loading}>
+      <QueryState
+        error={containers.error}
+        refusal={containers.refusal}
+        loading={containers.loading}
+      >
         {containers.data &&
           (found ? (
             <>
@@ -249,7 +261,7 @@ function SpacePages({
   recent: PageSummary[];
   total: number | null;
   capped: boolean;
-  list: { error: string | null; loading: boolean };
+  list: { error: string | null; refusal: QueryRefusal | LogRefusal | null; loading: boolean };
   now: number;
 }) {
   const shown = Math.min(recent.length, PEEK_ROWS);
@@ -268,6 +280,7 @@ function SpacePages({
       </Card.Header>
       <QueryState
         error={list.error}
+        refusal={list.refusal}
         loading={list.loading}
         empty={
           recent.length
@@ -316,7 +329,7 @@ function SpaceWriters({
   const writers = useMemo(() => {
     const seen: string[] = [];
     for (const page of recent) {
-      const by = drawnBy(page.author, page.author_seat);
+      const by = page.author ?? "";
       if (by && !seen.includes(by)) seen.push(by);
     }
     return seen;
@@ -366,8 +379,8 @@ function SpaceWriters({
 function pageFacts(detail: PageDetail, who: Who, now: number): Fact[] {
   const page = detail.page;
   const last = detail.history?.[0];
-  const author = drawnBy(page.author, detail.author_seat);
-  const saver = last ? drawnBy(last.author, last.author_seat) : "";
+  const author = page.author ?? "";
+  const saver = last?.author ?? "";
   return [
     { label: "Space", value: page.container, path: ["knowledge", page.container] },
     // AN AUTHOR OF NOBODY IS THE ENGINE (a sync, the tool-skill catalogue),
@@ -393,7 +406,11 @@ function pageFacts(detail: PageDetail, who: Who, now: number): Fact[] {
 export function PagePeek({ id }: { id: string }) {
   const who = usePeople();
   const now = useNow();
-  const { data, loading, error } = useQuery("page", { id }, { enabled: id !== "", pollMs: 20_000 });
+  const { data, loading, error, refusal } = useQuery(
+    "page",
+    { id },
+    { enabled: id !== "", pollMs: 20_000 },
+  );
   const page = data?.page;
   const excerpt = useMemo(() => firstLines(page?.body ?? "", PEEK_LINES), [page?.body]);
   const ancestors = data?.ancestors ?? [];
@@ -416,7 +433,7 @@ export function PagePeek({ id }: { id: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the page" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data && page && (
           <>
             <ObjectHeader
@@ -492,7 +509,7 @@ export function PagePeek({ id }: { id: string }) {
                 {history.length > 0 ? (
                   <div className="col gap-2">
                     {history.slice(0, PEEK_SAVES).map((rev) => {
-                      const by = drawnBy(rev.author, rev.author_seat);
+                      const by = rev.author ?? "";
                       return (
                         <span key={rev.version} className="row gap-2">
                           <span className="mono">v{rev.version}</span>

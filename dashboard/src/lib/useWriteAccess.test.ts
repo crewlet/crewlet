@@ -8,17 +8,29 @@ import { describe, expect, test } from "vitest";
 import {
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
+  configGuardedReason,
   configWriteAccess,
+  linkOf,
   mayChangeConfig,
+  messageSeatAccess,
+  orgWriteAccess,
+  OWN_SEAT_MESSAGE,
   writeAccess,
 } from "./useWriteAccess.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
+import { leadScope, NO_SCOPE } from "./leadScope.ts";
 import type { ViewerState } from "./viewer.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 
 const BOUND: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  login: "jane.founder",
+  grants: ["tracker", "knowledge"],
+  admin: false,
+  tracker: true,
+  knowledge: true,
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   acts: ["set_pins"],
   project: "",
@@ -31,32 +43,106 @@ const BOUND: ViewerState = {
   configManagedBy: [],
 };
 
+/** Signed in, and the directory binds them to no seat. */
+const UNBOUND: ViewerState = {
+  ...BOUND,
+  handle: "",
+  owner: "jane.founder",
+  name: "",
+  kind: "",
+  unbound: true,
+};
+
 test.each([
-  ["offline, whoever is reading", BOUND, false, "offline"],
-  ["nobody has said who this is", { ...BOUND, loading: true }, true, "loading"],
+  ["refused by an engine that knows them, whoever is reading", BOUND, "refused", "refused"],
+  ["offline, whoever is reading", BOUND, "offline", "offline"],
+  ["nobody has said who this is", { ...BOUND, loading: true }, "open", "loading"],
   [
-    "no token",
-    { ...BOUND, handle: "", operatorID: "", anonymous: true, acts: [] },
-    true,
+    "nobody is signed in",
+    { ...BOUND, login: "", handle: "", owner: "", anonymous: true, acts: [] },
+    "open",
     "anonymous",
   ],
-  ["a token no seat binds", { ...BOUND, handle: "", unbound: true, acts: [] }, true, "unbound"],
-  ["a change the engine does not make for this person", { ...BOUND, acts: [] }, true, "not_served"],
-] as const)("%s", (_name, viewer, connected, block) => {
-  const access = writeAccess("set_pins", viewer, connected);
+  [
+    "a change the engine does not make for this person",
+    { ...BOUND, acts: [] },
+    "open",
+    "not_served",
+  ],
+] as const)("%s", (_name, viewer, link, block) => {
+  const access = writeAccess("set_pins", viewer, link);
   expect(access).toEqual({ can: false, block, reason: WRITE_REASONS[block] });
+});
+
+// THE APP FIRST, WHERE THE READER LACKS IT: a change the engine does not offer
+// a reader who holds no Tracker is said as the access to ask an admin for —
+// while one it does offer them without it (answering an ask they were asked)
+// is never held for it, and a change that is no app's still says it is not
+// served. Mutation: drop the app's arm and the first reads `not_served`.
+test("a change in an app the reader lacks names that app", () => {
+  const noTracker: ViewerState = { ...BOUND, grants: ["knowledge"], tracker: false, acts: [] };
+  expect(writeAccess("update_work_item", noTracker, "open")).toEqual({
+    can: false,
+    block: "no_access",
+    reason: "This change needs Tracker access. An admin can give it to you.",
+  });
+  expect(
+    writeAccess("comment_on_work_item", { ...noTracker, acts: ["comment_on_work_item"] }, "open"),
+  ).toMatchObject({ can: true });
+  expect(writeAccess("pause_seat", noTracker, "open")).toMatchObject({ block: "not_served" });
+  expect(
+    writeAccess(
+      "write_page",
+      { ...BOUND, grants: ["tracker"], knowledge: false, acts: [] },
+      "open",
+    ),
+  ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Knowledge access") });
 });
 
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
 // offline outranks every other reason, including a reader who could act.
 test("offline outranks everything, a bound person included", () => {
-  expect(writeAccess("set_pins", BOUND, false)).toMatchObject({ can: false, block: "offline" });
+  expect(writeAccess("set_pins", BOUND, "offline")).toMatchObject({ can: false, block: "offline" });
+});
+
+// A BROWSER THE ENGINE REFUSES IS NOT OFFLINE. A refused socket stops
+// dialling, so it is down — and "reconnect to make changes" sent a person
+// online and refused looking for a network fault. The refusal outranks
+// offline, and the viewer that never answers such a session. Mutation: rank
+// offline first and the first two go red.
+test("a browser the engine refuses is told so, never that it is offline", () => {
+  const refused = linkOf({
+    connected: false,
+    accessRefused: "your seat is no longer in the chart",
+  });
+  expect(refused).toBe("refused");
+  expect(writeAccess("set_pins", { ...BOUND, loading: true }, refused)).toEqual({
+    can: false,
+    block: "refused",
+    reason: WRITE_REASONS.refused,
+  });
+  expect(configWriteAccess(BOUND, refused)).toMatchObject({ block: "refused" });
+  // THE CONTROL: the same socket down with no refusal is the outage it is.
+  expect(linkOf({ connected: false, accessRefused: null })).toBe("offline");
+  expect(linkOf({ connected: true, accessRefused: null })).toBe("open");
 });
 
 test("a bound person the engine serves acts as their own seat", () => {
-  expect(writeAccess("set_pins", BOUND, true)).toEqual({
+  expect(writeAccess("set_pins", BOUND, "open")).toEqual({
     can: true,
     as: "jane",
+    acts: ["set_pins"],
+  });
+});
+
+// AN UNBOUND PRINCIPAL ACTS TOO, under its own login (ADR-0024): what a
+// binding adds is the seat a person acts as, never the right to act. Blocked
+// here, a person the directory had not bound yet could change nothing the
+// engine would have taken from them.
+test("a person bound to no seat acts under their own login", () => {
+  expect(writeAccess("set_pins", UNBOUND, "open")).toEqual({
+    can: true,
+    as: "jane.founder",
     acts: ["set_pins"],
   });
 });
@@ -65,106 +151,220 @@ test("a bound person the engine serves acts as their own seat", () => {
 // may not act, so a viewer answer that somehow carried a handle and no acts
 // still acts for nobody.
 test("a handle with an empty acts list acts for nobody", () => {
-  expect(writeAccess("set_pins", { ...BOUND, acts: [] }, true).can).toBe(false);
+  expect(writeAccess("set_pins", { ...BOUND, acts: [] }, "open").can).toBe(false);
+});
+
+// MESSAGING YOUR OWN SEAT IS HELD, by the control's own rule and in one
+// sentence wherever it is drawn — but LAST, like every hold: a reader who is
+// offline is told that first, and a colleague's seat is free. An unbound
+// reader has no seat of their own, so no seat is theirs. Mutation: compare
+// against anything but the reader's bound seat and a row goes red.
+test("messaging your own seat is held after everything a person can clear", () => {
+  const can = writeAccess("create_work_item", { ...BOUND, acts: ["create_work_item"] }, "open");
+  expect(messageSeatAccess(can, BOUND, "jane")).toEqual({
+    can: false,
+    block: "held",
+    reason: OWN_SEAT_MESSAGE,
+  });
+  expect(messageSeatAccess(can, BOUND, "swe")).toBe(can);
+  expect(messageSeatAccess(can, UNBOUND, "")).toBe(can);
+  const offline = writeAccess("create_work_item", BOUND, "offline");
+  expect(messageSeatAccess(offline, BOUND, "jane")).toBe(offline);
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
-// own sentence — but LAST: a reader who is offline, anonymous or unbound is
-// told the thing they can clear first, and a hold is a fact about the screen.
+// own sentence — but LAST: a reader who is offline or signed out is told the
+// thing they can clear first, and a hold is a fact about the screen.
 test("a hold is the screen's sentence, and it ranks after everything a person can clear", () => {
   const hold = "This is Rui Santos’s day.";
-  expect(writeAccess("set_pins", BOUND, true, hold)).toEqual({
+  expect(writeAccess("set_pins", BOUND, "open", hold)).toEqual({
     can: false,
     block: "held",
     reason: hold,
   });
-  expect(writeAccess("set_pins", BOUND, false, hold)).toMatchObject({ block: "offline" });
+  expect(writeAccess("set_pins", BOUND, "offline", hold)).toMatchObject({ block: "offline" });
   expect(
-    writeAccess("set_pins", { ...BOUND, handle: "", unbound: true, acts: [] }, true, hold),
-  ).toMatchObject({ block: "unbound" });
+    writeAccess(
+      "set_pins",
+      { ...BOUND, login: "", handle: "", owner: "", anonymous: true, acts: [] },
+      "open",
+      hold,
+    ),
+  ).toMatchObject({ block: "anonymous" });
   // AND NO HOLD IS NO HOLD: the empty value of the context is `null`.
-  expect(writeAccess("set_pins", BOUND, true, null).can).toBe(true);
+  expect(writeAccess("set_pins", BOUND, "open", null).can).toBe(true);
 });
 
 describe("changing the company's configuration", () => {
   const viewer = (over: Partial<ViewerState>): ViewerState => ({
-    operatorID: "U0",
-    operator: true,
-    handle: "",
-    name: "",
-    acts: [],
-    kind: "",
-    project: "",
-    unbound: true,
-    anonymous: false,
-    loading: false,
-    asking: false,
-    configWriter: true,
-    configManagedBy: [],
+    ...UNBOUND,
+    login: "ops.lead",
+    owner: "ops.lead",
+    grants: ["admin"],
     ...over,
   });
 
-  // THE OPERATOR CREDENTIAL, NOT A BINDING: `/config` is guarded by the token
-  // alone, so an unbound operator token may change a ceiling it could never
-  // answer an ask with — and a bound person the engine does not take as an
-  // operator may not.
-  test("is the engine's operator answer, not the seat binding", () => {
-    expect(configWriteAccess(viewer({ unbound: true }), true)).toEqual({ can: true });
+  // ADMIN, NOT A BINDING: `/config` is decided by Admin, so a principal bound
+  // to no seat who holds it may change a ceiling, and a bound person holding
+  // every app but Admin may not.
+  test("is Admin, not the seat binding", () => {
+    expect(configWriteAccess(viewer({ unbound: true }), "open")).toEqual({ can: true });
     expect(
-      configWriteAccess(viewer({ operator: false, handle: "jane", unbound: false }), true),
+      configWriteAccess(
+        viewer({ grants: ["tracker", "knowledge"], handle: "jane", owner: "jane", unbound: false }),
+        "open",
+      ),
     ).toEqual({
       can: false,
-      block: "not_operator",
-      reason: CONFIG_WRITE_REASONS.not_operator,
+      block: "no_grant",
+      reason: CONFIG_WRITE_REASONS.no_grant,
     });
   });
 
   test("in the order a person clears them", () => {
-    expect(configWriteAccess(viewer({}), false)).toMatchObject({ block: "offline" });
-    expect(configWriteAccess(viewer({ loading: true }), true)).toMatchObject({ block: "loading" });
-    expect(configWriteAccess(viewer({ anonymous: true, operator: false }), true)).toMatchObject({
-      block: "anonymous",
+    expect(configWriteAccess(viewer({}), "offline")).toMatchObject({ block: "offline" });
+    expect(configWriteAccess(viewer({ loading: true }), "open")).toMatchObject({
+      block: "loading",
     });
-    expect(configWriteAccess(viewer({}), true, "these are Rui's")).toEqual({
+    expect(
+      configWriteAccess(viewer({ anonymous: true, login: "", owner: "", grants: [] }), "open"),
+    ).toMatchObject({ block: "anonymous" });
+    expect(configWriteAccess(viewer({}), "open", "these are Rui's")).toEqual({
       can: false,
       block: "held",
       reason: "these are Rui's",
     });
   });
 
-  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every operator but
-  // its writers is held, with the sentence naming who manages it — after the
-  // reasons a person can clear here, and before a hold no screen releases.
-  test("a managed document holds every operator but its writers", () => {
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every credential
+  // but its writers is held, with the sentence naming who manages it — after
+  // the reasons a person can clear here, and before a hold no screen releases.
+  test("a managed document holds every credential but its writers", () => {
     const managed = viewer({ configWriter: false, configManagedBy: ["gitops"] });
-    expect(configWriteAccess(managed, true)).toEqual({
+    expect(configWriteAccess(managed, "open")).toEqual({
       can: false,
       block: "managed",
       reason: managedSentence(["gitops"]),
     });
     expect(managedSentence(["gitops"])).toBe("Managed by gitops. Change it there.");
-    expect(configWriteAccess(managed, true, "these are Rui's")).toMatchObject({
+    expect(configWriteAccess(managed, "open", "these are Rui's")).toMatchObject({
       block: "managed",
     });
-    expect(configWriteAccess({ ...managed, operator: false }, true)).toMatchObject({
-      block: "not_operator",
+    // The grant ranks first: a reader who could not write anyway is told
+    // what they lack, which is the thing they can clear.
+    expect(configWriteAccess({ ...managed, grants: ["tracker"] }, "open")).toMatchObject({
+      block: "no_grant",
     });
     expect(
-      configWriteAccess(viewer({ configWriter: true, configManagedBy: ["gitops"] }), true),
+      configWriteAccess(viewer({ configWriter: true, configManagedBy: ["gitops"] }), "open"),
     ).toEqual({ can: true });
-    expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), true)).toEqual({
+    expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), "open")).toEqual({
       can: true,
     });
   });
 
   // THE STANDING ANSWER agrees with the press-time one about WHO may write,
   // and ignores what only this moment decides — the socket, a screen's hold.
-  test("whether the reader may change the configuration at all is the operator and the writers", () => {
+  test("whether the reader may change the configuration at all is the grant and the writers", () => {
     expect(mayChangeConfig(viewer({}))).toBe(true);
-    expect(mayChangeConfig(viewer({ operator: false }))).toBe(false);
+    expect(mayChangeConfig(viewer({ grants: ["tracker", "knowledge"] }))).toBe(false);
     expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
       false,
     );
     expect(mayChangeConfig(viewer({ configWriter: true, configManagedBy: ["gitops"] }))).toBe(true);
+  });
+});
+
+// ADMIN, OR A LEAD INSIDE THEIR SUBTREE: the engine admits a write by a
+// person without Admin when everything it changes is inside a unit they lead,
+// so a control about one of their seats or units is open to them, and one
+// outside says which units they do lead rather than that access is missing.
+describe("changing one part of the org chart", () => {
+  const lead: ViewerState = {
+    ...BOUND,
+    login: "cto.person",
+    handle: "cto",
+    owner: "cto",
+    grants: ["tracker"],
+  };
+  const scope = leadScope(CHART_ORG, "cto");
+
+  test("a lead may change a seat or unit they lead, and nothing else", () => {
+    expect(orgWriteAccess(lead, "open", scope, { seat: "swe" })).toEqual({ can: true });
+    expect(orgWriteAccess(lead, "open", scope, { unit: "core" })).toEqual({ can: true });
+    expect(orgWriteAccess(lead, "open", scope, "anywhere")).toEqual({ can: true });
+    expect(orgWriteAccess(lead, "open", scope, { seat: "pm" })).toEqual({
+      can: false,
+      block: "outside_scope",
+      reason: "You lead Core, and this is outside it: changing it takes Admin access.",
+    });
+    expect(
+      orgWriteAccess(lead, "open", leadScope(CHART_ORG, "pm"), { unit: "core" }),
+    ).toMatchObject({
+      reason: expect.stringContaining("You lead Management and Developer Relations"),
+    });
+  });
+
+  test("a person who leads nothing is told about Admin, and every earlier reason still ranks first", () => {
+    expect(orgWriteAccess(lead, "open", NO_SCOPE, { seat: "swe" })).toMatchObject({
+      block: "no_grant",
+    });
+    expect(orgWriteAccess(lead, "offline", scope, { seat: "swe" })).toMatchObject({
+      block: "offline",
+    });
+    expect(orgWriteAccess(lead, "open", scope, { seat: "swe" }, "these are Rui's")).toMatchObject({
+      block: "held",
+    });
+    // Admin reaches everything, a lead's scope or not.
+    const admin = { ...lead, grants: ["admin"] };
+    expect(orgWriteAccess(admin, "open", scope, { seat: "pm" })).toEqual({ can: true });
+  });
+
+  // A LEAD IS NO WRITER OF A MANAGED DOCUMENT: the engine refuses a subtree
+  // write from every credential the writers list does not name (ADR-0030), so
+  // a control inside what they lead is held with the managed sentence — while
+  // one outside still says it is outside, which is the nearer reason.
+  //
+  // Mutation: drop the managed check on the lead path, and the first goes green
+  // as `{ can: true }` for a write the engine would refuse.
+  test("a lead's subtree write is held on a managed document", () => {
+    const managed = { ...lead, configWriter: false, configManagedBy: ["gitops"] };
+    expect(orgWriteAccess(managed, "open", scope, { seat: "swe" })).toEqual({
+      can: false,
+      block: "managed",
+      reason: managedSentence(["gitops"]),
+    });
+    expect(orgWriteAccess(managed, "open", scope, { seat: "pm" })).toMatchObject({
+      block: "outside_scope",
+    });
+    expect(
+      orgWriteAccess(managed, "open", scope, { seat: "swe" }, "these are Rui's"),
+    ).toMatchObject({ block: "managed" });
+  });
+});
+
+// A REFUSED /config WRITE IS SAID BY ITS CODE. The browser holds no token, so
+// "the engine did not take this token" sent a person looking for one; and a
+// 403 is not always the grant — a step-up they declined, or a write from
+// another site, sent to an administrator for a grant would never be cured.
+describe("a configuration write refused on authority", () => {
+  test("is the grant the gate names when the engine refused on the grant", () => {
+    expect(configGuardedReason("unauthorized")).toBe(CONFIG_WRITE_REASONS.no_grant);
+    // AN ANSWER WITH NO CODE is a refusal on authority all the same.
+    expect(configGuardedReason("")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  });
+
+  test("is the guard's own refusal when the engine named another", () => {
+    expect(configGuardedReason("step_up_required")).toBe(ACT_ERRORS.step_up_required);
+    expect(configGuardedReason("csrf_origin")).toBe(ACT_ERRORS.csrf_origin);
+    expect(configGuardedReason("invalid_token")).toBe(ACT_ERRORS.invalid_token);
+  });
+
+  test("never speaks of a token", () => {
+    for (const code of ["unauthorized", "", "step_up_required", "csrf_origin", "invalid_token"]) {
+      expect(configGuardedReason(code)).not.toMatch(/token/i);
+    }
+    // Nor does the managed sentence: it names who manages the document.
+    expect(managedSentence(["gitops"])).not.toMatch(/token/i);
   });
 });

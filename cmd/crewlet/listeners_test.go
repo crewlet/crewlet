@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // answer is one request's status and its JSON error code, retried while the
@@ -168,8 +169,9 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	publicPort := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(publicPort),
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"),
+		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
 	})
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, freePort(t))
@@ -215,15 +217,16 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	t.Parallel()
 	publicPort := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(publicPort),
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"),
+		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
 	})
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, 0)
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"data", "seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}

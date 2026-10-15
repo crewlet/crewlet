@@ -32,11 +32,38 @@ _secrets (a coordination KV bucket, no TTL)
   value       "enc:v1:<key_id>:<base64>"
   key_id      which keyring entry sealed it
   updated_at
-  updated_by
-  source      which path last wrote it — "api" | "cli" | "setup" | "provision" | "rekey" | "migrated"
+  updated_by       the author: the seat's handle for a person (every person
+                   holds one) or a credential bound to a seat, the login of
+                   a credential bound to none — `token:<id>` for a Tier A
+                   token — or the engine's own name for a key or a pass it
+                   wrote itself
+  updated_by_kind  agent | human | operator | system
+  operator_id      the credential it was stored through — `pat:<id>`,
+                   `session:<lineage>`, a Tier A token's login — and empty
+                   for a write no credential made
+  source      "cli" (or `-source`'s value) | "api" (or `?source=`'s) |
+              "provision" | "setup" | "llm-login" | "migrated",
+              and "iam" on the engine's own keys
 ```
 
-**`source` is provenance, never location**: every record is sealed in this bucket whichever path wrote it. `PUT /secrets/{name}` stamps `api` unless its `?source=` names another word, `crewlet secrets set` stamps `cli` unless its `--source` does, an integration's setup stamps `setup`, a vendor's `provision` command `provision`, a rekey `rekey` and the boot-time move off a node's own table `migrated`. Each write replaces the word, so it names the LAST writer.
+**Who stored a value is three facts, and a rekey keeps all of them.** The author
+is whose authority the write exercised and the credential is what it was
+exercised through; a row that kept only one used to keep the credential, so a
+value stored through a person's machine token named `pat:<id>` — and that
+token's own row, the only thing saying whose it was, is swept a week after it
+lapses. A **rekey** re-seals a value it did not choose, so it leaves every
+provenance field as it found it: it used to stamp its own caller and `rekey`
+over each row, and after a rotation every credential in the company read as
+set by whoever rotated the keyring.
+
+**`source` is provenance, never location**: every record is sealed in this
+bucket whichever path wrote it. `PUT /secrets/{name}` stamps `api` unless its
+`?source=` names another word, `crewlet secrets set` stamps `cli` unless its
+`-source` does, an integration's setup stamps `setup`, a vendor's `provision`
+command `provision`, `crewlet llm login` `llm-login`, the engine's mint of one of its own
+keys `iam`, and the boot-time move off a node's own table `migrated`. Each write
+replaces the word, so it names the LAST writer — and a rekey, which writes no
+value of its own, leaves it as it found it, like the three facts above.
 
 **The name is the reference grammar's, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through, so the two rules are one rule: letters, digits and underscores, starting with a letter or an underscore. A store that accepted `gitlab-token` would seal the value, list it, report the write as done, and resolve it from nowhere: the operator's only evidence a provider failing to authenticate hours later, far from the name they chose. Every write path checks: `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running node and a stopped one alike. Reading and removing take the name as given, so nothing becomes unremovable.
 
@@ -70,7 +97,7 @@ When a name exists in both with **different** values, boot logs `secret_shadowed
 
 ### A keyring is required
 
-Unlike `company_config` — which is stored in the clear when Tier A configures no keyring, and whose document written before a keyring was configured still opens until `crewlet config seal` seals it — the secret store has **no plaintext mode**: a store whose whole purpose is holding secrets should not be able to hold them in the clear. A node with no keyring is still a supported deployment; it simply does not use the store, and resolves from the environment.
+The secret store has **no plaintext mode**, and neither does anything else any more: every node's Tier A carries a keyring (`crewlet validate` refuses a file without one, and a node refuses to start), and a company document stored unsealed is refused by every reader. A store whose whole purpose is holding secrets should not be able to hold them in the clear. The one place a command runs with no keyring is a provisioning run given no Tier A file at all, which opens no store and resolves from the environment alone — and says so.
 
 Each value is sealed with AES-256-GCM and the record's own `name` bound in as associated data, so a ciphertext moved to another name fails to decrypt rather than silently impersonating a different secret. That is also what makes a **read fail closed**: a snapshot that skipped a record it could not open would let the environment answer for it, which is exactly the stale-`.env` shadowing the store exists to prevent — so an unopenable record refuses the whole snapshot, loudly, and the previous one keeps serving.
 
@@ -89,6 +116,44 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
+### The engine's own keys share the bucket, and never the namespace
+
+The same bucket holds key material the **engine** keeps for itself: the
+identity directory's blind-index key, which every stored address is matched
+under. It lives here because every node must derive under the same key and this
+is the one store every node reads — and it is **not your secret**:
+
+| Name | What it is |
+|---|---|
+| `iam/blind-index-key` | The key an address is blinded under in the identity directory |
+
+A person's own values — their name, their address, a second factor's seed —
+are not keyed here at all: they are sealed under the keyring itself, in the
+identity estate's rows (see [Identity and
+Access](identity-and-access.md#what-is-in-the-clear-and-what-is-not)).
+
+The namespace has one owner, the identity directory (`iam/`); an owner is
+reserved before it writes its first key, so no engine key is ever briefly an
+ordinary operator row. A name with a `/` in it is one no `${VAR}` can spell, so
+none of them can be resolved into a provider, an `mcp_env` or a child process
+by any document.
+And every operator surface refuses them by name, whatever the caller holds:
+`GET`, `PUT` and `DELETE /secrets/{name}` — a reveal included — answer
+`403 reserved_name`, and `crewlet secrets get`, `set` and `unset` refuse before
+they open anything. The listing does not name them; it **counts** them, per
+keyring key, as `engine_keys`, because a rotation has to move them too — and a
+**rekey** does, reporting them as a count (`engine_keys_moved`) beside the
+names of yours. The listing counts the identity estate's sealed values per key
+the same way (`identity_values`), and the rekey moves those too (see
+[Rotating the keyring](#rotating-the-keyring-with-nothing-in-flight-lost)). A
+dry run counts both still under an old key, so an operator is never told
+"nothing to move" while the address index's key or every person's name is
+still sealed under the key they are about to retire.
+
+The blind-index key is never minted over one that was deleted — it comes back
+with the coordination store it lived in, from the backup that holds it
+([Backups § Restoring](../guides/backup.md#restoring)).
+
 ---
 
 ## Using it
@@ -102,8 +167,99 @@ crewlet secrets set SLACK_BOT_TOKEN_CEO          # reads stdin
 crewlet secrets list                             # names + metadata, never values
 crewlet secrets unset STALE_TOKEN
 crewlet secrets get TOKEN -reveal                # break-glass; logged
-crewlet secrets rekey                            # after a keyring rotation
+crewlet secrets rekey                            # after a keyring rotation: every row, every person's values
 ```
+
+### The keyring is not optional, and it does three jobs
+
+A deployment has one keyring, and everything that has to be authenticated
+across a fleet derives from it. It **seals** the company config and the secret
+store's rows — and a sealed company document is an authenticated one, so a
+node refuses one its peers published unsealed. It **signs** the two per-run tokens a sandbox carries. And it
+**signs every record on every state log** — the tracker's, the knowledge
+base's, and any domain a later build registers.
+
+That third job is why a node with no keyring now refuses to start. The
+embedded broker has no auth of its own; on a fleet it clusters its members over
+a port, and a record on a domain's log is not a message but an *instruction* —
+the next node applies it and derives rows from it. Unsigned, such a record is
+whatever anyone who can reach that port writes. Each of the three derives a
+different key from the same material, each binding its own label in, so a
+record signature and a token signature over one key are never the same bytes.
+
+A record's frame **names the key that signed it**, and a verifier looks that id
+up. A key it does not hold means "not yet" — the record is retained and applied
+once the key arrives. A key it *does* hold whose signature fails means "not
+this fleet" — the applier stops, because continuing past it would be applying
+whatever it was written to precede.
+
+### Rotating the keyring, with nothing in flight lost
+
+The keyring seals the company's secrets and also signs the two **per-run
+tokens** a sandbox carries — the OTLP receiver's and the MCP bridge's — and
+every **session cookie** a signed-in browser holds. The tokens travel in a URL
+path, are minted on the node that starts a run and verified on whichever node
+the box can reach, and a detached coding run holds one for as long as the run
+lasts, which outlives a rollout. A cookie is the same shape of problem with a
+longer life and a person on the other end of it.
+
+So a token **names the key that signed it**, the same way a sealed value's
+envelope carries the id of the key that sealed it, and a verifier looks that id
+up. A key it does not hold is refused rather than retried against the active
+key, which is what makes dropping a key mean something.
+
+That makes the rotation a runbook with no window in it:
+
+1. **Add** the new key to `secrets.keys`, leaving `active_key_id` where it is.
+2. **Restart** every node. Nothing has changed about what is minted; every node
+   now holds both keys.
+3. **Flip** `active_key_id` to the new key and restart every node again. New
+   tokens name the new key; outstanding ones still name the old one, which is
+   still on the ring.
+4. **Re-seal both halves** under the new active key. The keyring seals two
+   stores, and a key dropped while either still holds something under it
+   leaves that thing unreadable on every node:
+   - **The secret store and the identity estate** — run `crewlet secrets
+     rekey`, once for the fleet, through a running node, because it moves the
+     identity estate's values too: every person's name, address and second
+     factor is sealed under the keyring in rows derived from the identity log,
+     which only a record can change, so the node publishes one per person
+     still under an old key and reports how many (`identity` in the answer —
+     every data node holds the identity estate from boot, company or none). An
+     **outstanding invitation's** address is counted and left — only a re-issue
+     could carry it again — so the rekey says how many are still under an old
+     key.
+   - **The company document** — `POST /config/reload` to a node that is up
+     stores the active document again, sealed under that node's active key, and
+     activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)
+     does the same offline, and the node publishes the result at its next
+     start. Without this half the document stays sealed under the old key, and
+     dropping that key makes the company configuration unreadable at the next
+     apply.
+5. **Drop** the old key once both halves of step 4 have run, the longest token
+   lifetime has passed, every state log has trimmed past the records signed
+   under it, the absolute session lifetime (`api.auth.session.absolute`) has
+   elapsed since step 3, *and* `crewlet secrets rekey -dry-run` reports no
+   outstanding invitation under it — each is redeemed or lapses within a week
+   of being issued.
+   From that moment a token, a record or a cookie signed under it is refused,
+   which is the point. Dropping it while a log still holds such records leaves
+   those records unappliable on a node replaying from the floor, which reports
+   itself as retained records rather than as data loss — add the key back and
+   they apply. The same holds for a person's value a rekey did not move: it
+   renders as *sealed* until the key is back on the ring.
+
+   **Dropping it early is what signs people out.** A session cookie names the
+   key it was signed under, so every browser still holding one minted before
+   step 3 is refused the moment that key leaves the ring, and its owner sees a
+   sign-in screen. Sessions move onto the new key by themselves — a cookie is
+   re-issued under the *active* key the first time it is used after step 3 —
+   so waiting out the absolute lifetime is waiting for the sessions nobody has
+   touched since the flip.
+
+Nodes may restart in any order at every step, because a key is either on a
+node's ring or it is not, and tokens name which one they need. There is no
+state in which two nodes disagree about a token they both hold the key for.
 
 The value is read from **stdin** by default rather than from `-value`, because an argv value is visible in `ps` output and lands in shell history. Exactly one trailing newline is stripped, so `echo "$TOKEN" | ...` does the right thing — and no more than one, because a secret may legitimately end in whitespace and altering it silently is a failure nobody can see.
 
@@ -120,7 +276,7 @@ Reading a value back is **break-glass on both sides**. `crewlet secrets get` ref
 
 A write made while the node was stopped is not stranded: at its next start the engine **migrates** those rows onto the fleet and removes them locally, preserving the original author and the instant it was written, and stamping `source=migrated`. That is the bootstrap path — the equivalent of `crewlet config import` against a stopped node — and the CLI says which of the two it used after every write.
 
-`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN` when set, and otherwise with the first entry in the Tier A `api.auth.tokens` list; the token's id is recorded as the author of the write.
+`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN`, and with nothing else: `api.auth.tokens` is what a node **accepts**, not a wallet the CLI helps itself from, and a write whose author was whichever credential happened to be listed first landed under a name the operator had not chosen. Export the variable — one of the Tier A values, or a machine token minted with `crewlet iam token`. The credential's own identity is recorded as the author of the write.
 
 `crewlet secrets keygen` needs no config and no store: it is what an operator runs *before* either exists, and it prints the base64 form the keyring's `material` field takes.
 
@@ -128,15 +284,18 @@ Every other command reads the **Tier A** config for its keyring, never the compa
 
 ### From the dashboard
 
-Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same guarded routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding the operator token can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
+Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same routes the CLI uses — the listing and every write on `admin`. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone who may list the credentials can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
 
 Before a removal the screen says **which config fields point at the row**, read from [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-auth-gated) and listed by path. That is the failure this confirmation exists to prevent: the config keeps `${VAR}` pointers, so removing a row a seat's `bot_token` still names leaves that pointer resolving to `""` at the next activation, and the webhook route or transport holding it starts refusing deliveries with nothing naming the row that went away. Removing a referenced row takes an explicit acknowledgement, and so does removing one when the check itself did not answer, **"the configuration could not be read" is never rendered as "nothing points at this"**, because the second is a reassurance the screen has not earned. A rotation is safe by construction, since the pointer keeps naming a row that still exists.
 
 The API's own bearer tokens are NOT in this store: they are Tier A
 (`api.auth.tokens`), the root of trust the store's keyring comes from. Settings
-› **People & access** (`#/settings/people`) lists their labels — never a value
-— beside the person each one acts as, read from
-[`GET /access`](../reference/api-endpoints.md#get-access).
+› **People & access** (`#/settings/people`) lists the answering node's labels —
+never a value — each beside the directory row holding its `token:<id>` login,
+that row's stage and the seat it binds the token to, read from
+[`GET /iam/node-tokens`](../reference/api-endpoints.md#get-iamnode-tokens-joins-this-nodes-tier-a-labels-to-the-directory)
+on `admin`. A label nobody's row holds is a token acting
+as itself, under its own login, which is what that listing exists to show.
 
 A model's keys are `${VAR}` pointers into this store too. Settings › **Models &
 keys** (`#/settings/models`) lists each model's keys by the variable they name
@@ -204,7 +363,7 @@ The re-activations are **coalesced**: the first in a quiet period runs at once, 
 > a crash, a `kill -9` and an OOM all free it, and there is no stale lock to
 > clear by hand.
 
-So `crewlet secrets set` against a running node takes effect fleet-wide at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the apply re-reads the store before it builds anything precisely so that gesture works, and the pointer's own KV sequence is the epoch — the store assigns a new one on every write — precisely so a re-activation still moves what every node is watching (see [Control Plane](control-plane.md)).
+So `crewlet secrets set` against a running node takes effect fleet-wide at the next config activation or restart — the CLI says so after each write, naming `POST /config/reload`. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential, and on a running fleet the reload is that gesture; the apply re-reads the store before it builds anything precisely so that gesture works, and the pointer's own KV sequence is the epoch — the store assigns a new one on every write — precisely so a re-activation still moves what every node is watching (see [Control Plane](control-plane.md)).
 
 **What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. So re-activating an unchanged revision has to rebuild them, even though its payload is byte-identical.
 
@@ -255,12 +414,12 @@ Resolution order on any node, for any `${VAR}`:
 3. **Tier B** (the company document) resolves **store first, environment
    second**.
 
-So a node with an empty store — or no keyring at all — resolves everything
-from the environment and runs normally. That is not a degraded mode: *"no
-keyring is a supported deployment; secrets come from the environment and the
-store is simply not in use"* is the engine's own comment at the point it
-decides. **A brand-new node always starts from the environment.** Nothing has
-to be copied to it, and there is no first-boot step that reads a peer.
+So a node with an empty store resolves everything from the environment and
+runs normally. That is not a degraded mode. **A brand-new node always starts
+from the environment.** Nothing has to be copied to it, and there is no
+first-boot step that reads a peer. (What a node cannot do is start with no
+keyring at all: every node needs one — see [the three jobs
+above](#the-keyring-is-not-optional-and-it-does-three-jobs).)
 
 ### Which one to use
 
@@ -271,7 +430,7 @@ to be copied to it, and there is no first-boot step that reads a peer.
 
 **The two columns are the same, and that is the point.** A credential is company-wide state, so it lives where the company config lives: one sealed copy on the coordination KV, written through any node's authenticated API, read by all of them.
 
-The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node with no keyring, or an empty store, resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
+The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node whose store is empty resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
 > **Provisioner-minted credentials work fleet-wide too.** `crewlet gitlab
 > provision`, `crewlet slack provision` and the rest MINT credentials, and
@@ -296,7 +455,7 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is read by every node holding the keyring. Reading one from it would imply it may be kept there |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
 | `CREWLET_TOOL_SKILLS_SPACE` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
-| MCP stdio subprocess environment | **Env only, plus declared creds** | Servers read undeclared conventional variables (`PATH`, proxy vars, vendor SDK keys), so the host env is inherited. Store values are **not** poured in — each server gets exactly the credentials its `mcp_env` declares, already resolved. Injecting the whole store would hand every seat's token to every subprocess |
+| MCP stdio subprocess environment | **Declared only, over an allowlist** | A child is handed the host allowlist (`PATH`, locale, TLS trust, proxy), the engine user's `HOME`, `TMPDIR` and XDG directories, and exactly what its `env:` and the seat's `mcp_env` declare, already resolved — **never** the engine's own environment, which is where Tier A's keyring, token values and client secret resolve from. A server that reads an undeclared variable names it in `env:` with a `${VAR}` reference, which resolves through the store and then the environment like any other. Store values are **not** poured in either: injecting the whole store would hand every seat's token to every subprocess. See [What a stdio server's environment is](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is) |
 
 Nothing writes a minted value back into the process environment. **The sink is the only durability path**, and a value minted this run is read back through the sink, which is why a run must name one before it touches the third-party app, and why `-print` reports itself as holding nothing rather than pretending otherwise.
 
@@ -318,8 +477,8 @@ activate`](../reference/cli.md#crewlet-config-activate).
 ## Operational notes
 
 - **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. `sandbox_env_unresolved` warns (names only) when a sandbox launch references something nothing answers, and the sandbox credential check refuses to launch a coding agent on an empty credential.
-- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point.
-- **Key rotation.** Add the new key to `secrets.keys` **on every node**, set `active_key_id`, then run **both** `crewlet config rekey` and `crewlet secrets rekey` before dropping the old key. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand.
+- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a backup opens everything it held when it was taken — the bucket's values, and the identity estate's sealed names and addresses in its rows and its log, those of every person removed since included. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before the identity log's trim passed their records is gone ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
+- **Key rotation.** Follow [the rotation runbook](#rotating-the-keyring-with-nothing-in-flight-lost): add the new key on every node and restart, flip `active_key_id` and restart again, re-seal both halves (`crewlet secrets rekey`, and the company document with `POST /config/reload` or, on a stopped node, `crewlet config rekey`), and only then drop the old key. Flipping `active_key_id` in the same restart that adds the key is safe on a single node and not on a fleet: a node that flips first signs records, cookies and requests under a key its peers do not hold yet. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. The same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again.
 - **The `_secrets` bucket is created on demand** by the first node to open coordination, and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.
 - **Rows left in a node's own `secret_values` table** — written by `crewlet secrets set` while its engine was stopped — are migrated onto the fleet at that node's next start and removed locally. The pass copies before it deletes, and the **later write wins**: a name the fleet already holds is replaced when the local row was written after the fleet's value (an offline rotation, logged in `secrets_migrated_onto_the_fleet`'s `replaced`), and kept when the fleet's value is the later one — somebody rotated it through a running node after this one stopped — which logs `secrets_offline_writes_superseded` naming it. A migrated record keeps the instant its operator wrote it, never the instant the node booted, so two stopped nodes holding writes to one name are ordered by when the writes were made whichever node starts first. The two instants are the writing nodes' own clocks, so writes closer together than those clocks agree are ordered by the skew. A failure leaves the local rows in place and logs `secret_migration_incomplete`; the node keeps serving from them and retries at the next start.
 

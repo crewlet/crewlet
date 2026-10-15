@@ -11,7 +11,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
@@ -57,12 +57,10 @@ function engine(...replies: { status: number; body: unknown }[]): Sent[] {
   return sent;
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
-  localStorage.clear();
 });
 
 /** Types the node id and presses the gesture's own button. */
@@ -336,8 +334,14 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   });
   expect(screen.queryByText(/No answer/)).toBeNull();
 
+  // AND NOT BEFORE THE ENGINE'S OWN WAIT, which is past the node's bound.
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 + 1_000);
+    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 - 1);
+  });
+  expect(screen.queryByText(/No answer/)).toBeNull();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.getByText(/No answer/)).toBeTruthy();
   const opId = sent[0]!.query.get("op_id")!;

@@ -47,11 +47,12 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { targetLabel } from "~/lib/work.ts";
+import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
@@ -71,11 +72,18 @@ import { textBudget } from "~/lib/format.ts";
  */
 export function AssignButton({
   item,
+  label,
   version,
   assignee,
 }: {
-  /** The task's key (ENG-42) or id. */
+  /**
+   * The task's address ([itemAddress]): its key (ENG-42), or its id where
+   * another task claimed that key first and the key would hand off the
+   * claimant.
+   */
   item: string;
+  /** What the dialog's words call the task — its key — where `item` is its id. */
+  label?: string;
   /** The `task.version` the page is drawn from. */
   version: number;
   /** Who holds it now, or "". */
@@ -98,6 +106,7 @@ export function AssignButton({
       {open && (
         <AssignDialog
           item={item}
+          named={label || item}
           version={version}
           assignee={assignee}
           write={write}
@@ -116,12 +125,15 @@ const NOBODY = "";
 
 function AssignDialog({
   item,
+  named,
   version,
   assignee,
   write,
   onClose,
 }: {
   item: string;
+  /** What the dialog's words call the task. */
+  named: string;
   version: number;
   assignee: string;
   write: ReturnType<typeof useAct<"update_work_item">>;
@@ -159,7 +171,7 @@ function AssignDialog({
         // unassignment.
         ...(who !== NOBODY && reason.trim() ? { reason: reason.trim() } : {}),
       },
-      { done: who === NOBODY ? `Unassigned ${item}` : `Assigned ${item} to ${name}` },
+      { done: who === NOBODY ? `Unassigned ${named}` : `Assigned ${named} to ${name}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -167,7 +179,7 @@ function AssignDialog({
     <Modal
       open
       size="sm"
-      title={`Assign ${item}`}
+      title={`Assign ${named}`}
       icon={<UserPlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
@@ -230,16 +242,29 @@ function AssignDialog({
  * which task each brings back. The visible word leads the name, so a person
  * speaking "Restore" to voice control still reaches it.
  */
-export function RestoreButton({ item }: { item: string }) {
+export function RestoreButton({
+  item,
+  label,
+}: {
+  /**
+   * The task's address ([itemAddress]): restored by its key, a duplicate in
+   * the trash beside the task that claimed its key would bring back the
+   * claimant — or be refused because the claimant was never removed.
+   */
+  item: string;
+  /** What the control and its toast call the task — its key — where `item` is its id. */
+  label?: string;
+}) {
   const write = useAct("restore_work_item");
+  const named = label || item;
   return (
     <WriteButton
       write={write}
       size="small"
       variant="ghost"
       leadingIcon={<UndoGlyph />}
-      aria-label={`Restore ${item}`}
-      onPress={() => void write.run({ item }, { done: `Restored ${item}` })}
+      aria-label={`Restore ${named}`}
+      onPress={() => void write.run({ item }, { done: `Restored ${named}` })}
     >
       Restore
     </WriteButton>
@@ -447,8 +472,11 @@ function EditProjectDialog({
  * calendar's month would open on that month for ever.
  *
  * SHARED unless the person keeps it to themselves, which makes it theirs alone
- * (`owner`): a shared view is in everybody's strip, and saving somebody's
- * private query into it is a change to their screen too.
+ * (`personal`): a shared view is in everybody's strip, and saving somebody's
+ * private query into it is a change to their screen too. WHOSE it is then is
+ * the engine's answer and never an argument — the caller's own record, the
+ * one their pins are kept under — so the dialog sends a flag rather than a
+ * name somebody could fill with another person's.
  *
  * On `applied` it hands the new view's id back, so the screen opens it.
  */
@@ -513,7 +541,6 @@ function SaveViewDialog({
 }) {
   const [name, setName] = useState("");
   const [mine, setMine] = useState(false);
-  const as = write.access.can ? write.access.as : "";
   const budget = textBudget(name, VIEW_NAME_MAX_BYTES, "a view's name");
   const blocked = !name.trim()
     ? "Give the view a name first."
@@ -526,7 +553,7 @@ function SaveViewDialog({
     if (!pressable(write, blocked)) return;
     const title = name.trim();
     const result = await write.run(
-      { container, name: title, type, params, ...(mine && as ? { owner: as } : {}) },
+      { container, name: title, type, params, ...(mine ? { personal: true } : {}) },
       { done: `Saved the view ${title}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
@@ -651,9 +678,15 @@ export function AnswerAsk({
   onOpenChange,
   onAnswered,
   layout = "line",
+  label,
 }: {
-  /** The task's key or id. */
+  /**
+   * The task's address ([itemAddress]): its key, or its id where another
+   * task claimed that key first and the key would answer on the claimant.
+   */
   item: string;
+  /** What the answer's toast calls the task — its key — where `item` is its id. */
+  label?: string;
   /** The ask's comment id, which the answer names. */
   comment: string;
   /** Who asked, by name, for the reply field's placeholder. */
@@ -670,6 +703,7 @@ export function AnswerAsk({
   layout?: "line" | "buttons";
 }) {
   const write = useAct("comment_on_work_item");
+  const named = label || item;
   const rec = options.find((o) => o.id === recommended);
   const words = options.length === 0;
   const [chosen, setChosen] = useState<string>(rec?.id ?? (words ? OTHER : ""));
@@ -687,11 +721,11 @@ export function AnswerAsk({
     const result = option
       ? await write.run(
           { item, answers: comment, choice: option.id },
-          { done: `Answered ${item}: ${option.label}` },
+          { done: `Answered ${named}: ${option.label}` },
         )
       : await write.run(
           { item, answers: comment, body },
-          { done: `Replied to ${asker} on ${item}` },
+          { done: `Replied to ${asker} on ${named}` },
         );
     if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
     onAnswered(
@@ -1028,6 +1062,11 @@ function AnswerRunDialog({
  * held with the reason where the reader could not file one — a door that
  * opened onto a sheet that then refused would teach the reason one press too
  * late.
+ *
+ * AND HELD ON THE READER'S OWN SEAT, by itself (`useMessageSeatAccess`): an
+ * ask of your own seat is a question only you could answer. Decided here
+ * rather than by each screen that draws the button, because the page held it
+ * while the peek drew it bare.
  */
 export function MessageSeatButton({
   handle,
@@ -1037,6 +1076,7 @@ export function MessageSeatButton({
   variant?: "primary" | "secondary";
 }) {
   const write = useAct("create_work_item");
+  const access = useMessageSeatAccess(handle);
   const openNewTask = useOpenNewTask();
   return (
     <WriteButton
@@ -1045,6 +1085,10 @@ export function MessageSeatButton({
       variant={variant}
       leadingIcon={<MessageSquareGlyph size="sm" />}
       showRefusal={false}
+      // THE ACT'S OWN REASON IS THE BUTTON'S where it cannot act at all, and
+      // the access above is that same reason then — so this is only ever the
+      // own-seat hold, which ranks after everything else.
+      blocked={access.can ? undefined : access.reason}
       onPress={() => openNewTask({ assignee: handle, ask: handle })}
     >
       Message
@@ -1078,7 +1122,13 @@ const ASSIGN_SEARCH = 25;
  * the list was drawn becomes choosable when the term is next searched.
  */
 function assignOptions(
-  hits: readonly { key: string; title: string; assignee?: string }[],
+  hits: readonly {
+    id: string;
+    key: string;
+    key_collision?: boolean;
+    title: string;
+    assignee?: string;
+  }[],
   handle: string,
   nameOf: (handle: string) => string,
 ): ComboboxOption[] {
@@ -1087,7 +1137,10 @@ function assignOptions(
   return [...movable, ...theirs].slice(0, ASSIGN_MATCHES).map((hit) => {
     const own = (hit.assignee ?? "") === handle;
     return {
-      value: hit.key,
+      // THE ID IS THE VALUE, the key the label: a key two tasks hold is one
+      // value for two options, and the one that did not claim it is reached
+      // by its id alone (`itemAddress`).
+      value: hit.id,
       label: `${hit.key} · ${hit.title}`,
       hint: own ? "already theirs" : hit.assignee ? `with ${nameOf(hit.assignee)}` : "unassigned",
       ...(own ? { disabled: true } : {}),
@@ -1177,9 +1230,14 @@ function AssignToSeatDialog({
   const openNewTask = useOpenNewTask();
   const [term, setTerm] = useState("");
   const [listOpen, setListOpen] = useState(false);
-  const [chosen, setChosen] = useState<{ key: string; title: string; assignee: string } | null>(
-    null,
-  );
+  const [chosen, setChosen] = useState<{
+    id: string;
+    /** What the engine opens this task by ([itemAddress]). */
+    address: string;
+    key: string;
+    title: string;
+    assignee: string;
+  } | null>(null);
   const [reason, setReason] = useState("");
   const q = term.trim();
   // THE BOUND IS THE HOOK'S: a pasted description past it is not sent, and
@@ -1190,14 +1248,14 @@ function AssignToSeatDialog({
     { enabled: q.length >= ASSIGN_MIN_TERM },
   );
   // THE VERSION THE HAND-OFF IS CONDITIONAL ON, read for the task chosen.
-  const read = useQuery("work_item", chosen ? { id: chosen.key } : undefined, {
+  const read = useQuery("work_item", chosen ? { id: chosen.address } : undefined, {
     enabled: chosen !== null,
   });
   // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across
   // a failure, which here is the hits of a term the box no longer holds.
   const hits = q.length >= ASSIGN_MIN_TERM && !search.error ? (search.data?.hits ?? []) : [];
   const options = useMemo(() => assignOptions(hits, handle, nameOf), [hits, handle, nameOf]);
-  const task = read.data && read.data.task.key === chosen?.key ? read.data.task : null;
+  const task = read.data && read.data.task.id === chosen?.id ? read.data.task : null;
   const version = task ? task.version : null;
   // WHOSE IT IS NOW is the READ's, once it lands — the same answer the
   // hand-off's `if_match` is taken from. The search hit's assignee is the
@@ -1219,7 +1277,7 @@ function AssignToSeatDialog({
     if (!pressable(write, blocked) || !chosen || version === null) return;
     const result = await write.run(
       {
-        item: chosen.key,
+        item: chosen.address,
         assignee: handle,
         if_match: version,
         ...(reason.trim() ? { reason: reason.trim() } : {}),
@@ -1294,8 +1352,14 @@ function AssignToSeatDialog({
                 options={options}
                 emptyMessage={
                   search.tooLong ??
+                  search.withheld ??
                   (search.error ? (
-                    <QueryState error={search.error} detail={search.detail} loading={false} />
+                    <QueryState
+                      error={search.error}
+                      refusal={search.refusal}
+                      detail={search.detail}
+                      loading={false}
+                    />
                   ) : search.loading ? (
                     "Searching…"
                   ) : search.data && !search.data.available ? (
@@ -1305,9 +1369,15 @@ function AssignToSeatDialog({
                   ))
                 }
                 onCommit={(option) => {
-                  const hit = hits.find((h) => h.key === option.value);
+                  const hit = hits.find((h) => h.id === option.value);
                   if (!hit) return;
-                  setChosen({ key: hit.key, title: hit.title, assignee: hit.assignee ?? "" });
+                  setChosen({
+                    id: hit.id,
+                    address: itemAddress(hit),
+                    key: hit.key,
+                    title: hit.title,
+                    assignee: hit.assignee ?? "",
+                  });
                   setTerm(`${hit.key} · ${hit.title}`);
                   setListOpen(false);
                 }}

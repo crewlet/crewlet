@@ -138,8 +138,10 @@
 //
 // The pass is an R1 ordered consumer, which the broker places on a random
 // member of the stream's group (jetstream_cluster.go createGroupForConsumer),
-// so it reads that member's copy rather than the leader's. For a key it
-// delivered as a Put that is only lag — a stale revision, never a missing key.
+// so it reads that member's copy rather than the leader's — measured, a pass
+// hosted on a follower missed the newest write in up to 3 of every 100
+// listings, and one hosted on the leader never did. For a key it delivered as a
+// Put that is only lag — a stale revision, never a missing key.
 // A MARKER is different: a key DELETED AND RE-CREATED before the listing
 // began, read by a pass on a member that had applied the delete and not yet
 // the re-creation, comes back as a tombstone although the key was live

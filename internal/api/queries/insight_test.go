@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
@@ -324,7 +325,7 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: string(rune('a' + i)), Type: "agent_phase_completed",
 			Time: base.Add(time.Duration(i) * time.Second), Category: "lifecycle",
-			Actor: role, Tags: map[string]string{"agent_role": role},
+			Actor: role, Tags: map[string]string{"agent_role": role, "agent_id": "id-" + role},
 			Payload: payload,
 		}); err != nil {
 			t.Fatal(err)
@@ -391,7 +392,7 @@ func TestAHalfCursorIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
-	if _, err := r.Answer(t.Context(), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
+	if _, err := r.Answer(everyGrant(t), "phases", map[string]any{"before_id": "x"}); err == nil {
 		t.Fatal("a before_id with no before_time was accepted")
 	}
 }
@@ -411,7 +412,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// configured, so "none is" is a fact the company establishes on its own —
 	// and it is a far more useful answer than an unknown query.
 	none := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company: companySource(t, &config.Company{Name: "Acme"}),
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if none["available"] != false {
 		t.Errorf("no backend, yet the search reports itself available: %v", none)
@@ -428,7 +429,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// rather than answering an empty search as though it had run.
 	gated := asMap(t, answer(t, queries.Sources{
 		Knowledge: func() knowledge.Searcher { return stubSearcher{} },
-		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if gated["available"] != false || gated["note"] == "" {
 		t.Errorf("a gated search does not explain itself: %v", gated)
@@ -447,7 +448,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// And with no company at all, the answer names THAT rather than blaming
 	// the backend.
 	unconfigured := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return nil },
+		Company: companySource(t, nil),
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if unconfigured["available"] != false {
 		t.Errorf("no company, yet the search reports itself available: %v", unconfigured)
@@ -668,7 +669,7 @@ func TestTheEventListTakesATurnAndAWindow(t *testing.T) {
 func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 	t.Parallel()
 	src := queries.Sources{Events: fleetOf(openStore(t).Events())}
-	_, err := askNative(t, src, "events", map[string]any{
+	_, err := askTranscripts(t, src, "events", map[string]any{
 		"since": "2026-04-16T12:00:00Z",
 		"until": "2026-04-16T11:00:00Z",
 	})
@@ -678,7 +679,7 @@ func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 	// AND AN UNPARSEABLE BOUND NAMES THE PARAMETER, because a silently
 	// dropped one is a read that answers a different question than the one
 	// asked.
-	if _, err := askNative(t, src, "events", map[string]any{
+	if _, err := askTranscripts(t, src, "events", map[string]any{
 		"since": "last tuesday",
 	}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("an unparseable since answered %v, want bad params", err)
@@ -736,7 +737,7 @@ func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
 		t.Errorf("failed=false gave %v", got)
 	}
 	// A VALUE THAT IS NEITHER is refused rather than read as one of them.
-	if _, err := askNative(t, src, "turns", map[string]any{"failed": "maybe"}); !errors.Is(
+	if _, err := askTranscripts(t, src, "turns", map[string]any{"failed": "maybe"}); !errors.Is(
 		err, queries.ErrBadParams) {
 
 		t.Errorf("failed=maybe answered %v, want bad params", err)
@@ -843,8 +844,8 @@ func TestTwoTurnsAtOneMicrosecondAreBothOnTheWalk(t *testing.T) {
 			"first — and then t-c, each once", walked)
 	}
 	for _, before := range []string{at.Format(time.RFC3339Nano), "not-a-cursor", "dC1h"} {
-		if _, err := registryOver(t, src).Answer(t.Context(), "turns",
-			map[string]any{"before": before}, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := registryOver(t, src).Answer(everyGrant(t), "turns",
+			map[string]any{"before": before}); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("before=%q answered %v, want bad params — a cursor no page handed out", before, err)
 		}
 	}
@@ -1119,7 +1120,7 @@ func TestAnEmptyKnowledgeSearchCarriesTheModes(t *testing.T) {
 	}}
 	sources := queries.Sources{
 		Knowledge: func() knowledge.Searcher { return searcher },
-		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
 	}
 	got := asMap(t, answer(t, sources, "knowledge", map[string]any{"q": "", "mode": "semantic"}))
 	if asked != knowledge.ModeSemantic {
@@ -1155,7 +1156,7 @@ func TestKnowledgeHonoursTheModeAndCarriesItsOutcome(t *testing.T) {
 	}}
 	sources := queries.Sources{
 		Knowledge: func() knowledge.Searcher { return searcher },
-		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
 	}
 	got := asMap(t, answer(t, sources, "knowledge",
 		map[string]any{"q": "deploy", "mode": "semantic"}))
@@ -1182,8 +1183,8 @@ func TestKnowledgeHonoursTheModeAndCarriesItsOutcome(t *testing.T) {
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, sources)
-	if _, err := r.Answer(t.Context(), "knowledge",
-		map[string]any{"q": "deploy", "mode": "meaning"}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(everyGrant(t), "knowledge",
+		map[string]any{"q": "deploy", "mode": "meaning"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("an unknown mode answered %v, want bad params", err)
 	}
 }
@@ -1220,11 +1221,11 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 	var asked knowledge.Mode
 	sources := queries.Sources{
 		Knowledge: func() knowledge.Searcher { return modalSearcher{asked: &asked} },
-		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, sources)
-	_, err = r.Answer(t.Context(), "knowledge", map[string]any{"q": long}, "operator")
+	_, err = r.Answer(everyGrant(t), "knowledge", map[string]any{"q": long})
 	refused("knowledge", err)
 	if asked != "" {
 		t.Error("knowledge: a refused phrase still reached the searcher")
@@ -1235,7 +1236,88 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 		"work_search", map[string]any{"q": at}); err != nil {
 		t.Errorf("work_search at the bound: %v", err)
 	}
-	if _, err := r.Answer(t.Context(), "knowledge", map[string]any{"q": at}, "operator"); err != nil {
+	if _, err := r.Answer(everyGrant(t), "knowledge", map[string]any{"q": at}); err != nil {
 		t.Errorf("knowledge at the bound: %v", err)
+	}
+}
+
+// countingSearcher is a wired, searchable backend that counts what it is
+// asked, so a case can prove a caller was answered without a search.
+type countingSearcher struct{ calls *atomic.Int32 }
+
+func (countingSearcher) Backend() string                             { return "native" }
+func (countingSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (s countingSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	s.calls.Add(1)
+	return knowledge.Result{Hits: []knowledge.Hit{{PageID: "p1", Title: "Deploy runbook"}}}
+}
+
+// THE KNOWLEDGE QUESTION SEARCHES PAGES, AND ONLY FOR SOMEBODY WHO HOLDS THE
+// KNOWLEDGE BASE (ADR-0033). Everybody may ask it; a hit is a page, so a caller
+// holding the tracker alone is answered `available: false` with the reason
+// `no_access` and never searched for — a screen says their access leaves the
+// pages out, not that the company wrote nothing down — and a caller holding
+// neither app is refused naming both, since nothing it searches is theirs.
+//
+// Mutation: drop the knowledge check and the tracker-only caller is handed a
+// page; drop the refusal and the caller holding nothing is answered.
+func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		holding  []iam.Grant
+		searched bool
+		refused  bool
+	}{
+		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"an admin", []iam.Grant{iam.GrantAdmin}, true, false},
+		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, false},
+		{"neither app", nil, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var calls atomic.Int32
+			sources := queries.Sources{
+				Knowledge: func() knowledge.Searcher { return countingSearcher{calls: &calls} },
+				Company:   companySource(t, &config.Company{Name: "Acme"}),
+			}
+			r := queries.NewRegistry()
+			queries.Register(r, sources)
+			got, err := r.Answer(asking(t, c.holding...), "knowledge",
+				map[string]any{"q": "deploy"})
+			if c.refused {
+				var refusal *queries.Refusal
+				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, iam.Apps) {
+					t.Fatalf("answered %v, want a refusal naming every app %v", err, iam.Apps)
+				}
+				if calls.Load() != 0 {
+					t.Error("a refused caller was searched for")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("knowledge: %v", err)
+			}
+			answer := asMap(t, got)
+			hits, _ := answer["hits"].([]any)
+			if searched := calls.Load() > 0; searched != c.searched {
+				t.Errorf("searched: %v, want %v", searched, c.searched)
+			}
+			if c.searched {
+				if len(hits) != 1 || answer["available"] != true {
+					t.Errorf("a knowledge holder was answered %v", answer)
+				}
+				return
+			}
+			reason := queries.KnowledgeReason(fmt.Sprint(answer["reason"]))
+			if len(hits) != 0 || answer["available"] != false ||
+				reason != queries.KnowledgeNoAccess || !reason.Valid() {
+				t.Errorf("a tracker-only caller was answered %v, want no hits, "+
+					"available false and the no_access reason", answer)
+			}
+			if !strings.Contains(fmt.Sprint(answer["note"]), "Knowledge") {
+				t.Errorf("the note %q does not say which access is missing", answer["note"])
+			}
+		})
 	}
 }

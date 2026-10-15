@@ -8,8 +8,8 @@ import (
 
 // NO /config RESPONSE MAY BE STORED, whatever it answered.
 //
-// A /config body is the company document: the org chart, contact identities
-// and the ${VAR} name behind every credential. With an ETag and no
+// A /config body is the company's settings: which integrations are wired and
+// where, and the ${VAR} name behind every credential. With an ETag and no
 // Cache-Control a browser writes it to its disk cache, where it outlives the
 // session and the token that read it. So every answer carries no-store: a
 // read, a 304, a write, every kind of refusal, and the 404 and 405 the surface
@@ -18,8 +18,8 @@ import (
 // one wrapper.
 func TestNoConfigResponseIsCacheable(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	revision := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	revision := s.seed(t, companyDoc)
 	tag := s.do(t, http.MethodGet, "/config", "", nil).Header().Get("ETag")
 	if tag == "" {
 		t.Fatal("GET /config carries no ETag, so the 304 case cannot be exercised")
@@ -38,7 +38,7 @@ func TestNoConfigResponseIsCacheable(t *testing.T) {
 		{"one revision", http.MethodGet, "/config/revisions/" + revision, "", nil, http.StatusOK},
 		{"a diff", http.MethodGet, "/config/revisions/" + revision + "/diff?against=active", "", nil, http.StatusOK},
 		{"an unknown revision", http.MethodGet, "/config/revisions/00000000-0000-0000-0000-000000000000", "", nil, http.StatusNotFound},
-		{"one entity", http.MethodGet, "/config/roles/ceo", "", nil, http.StatusOK},
+		{"one entity", http.MethodGet, "/config/llm-providers/zulu", "", nil, http.StatusOK},
 		{"the accepted patch formats", http.MethodOptions, "/config", "", nil, http.StatusNoContent},
 		{"a write refused for its summary", http.MethodPut, "/config", companyDoc, nil, http.StatusBadRequest},
 		{"a write refused for its document", http.MethodPut, "/config", "name: [", map[string]string{"X-Summary": "broken"}, http.StatusBadRequest},
@@ -65,7 +65,7 @@ func TestNoConfigResponseIsCacheable(t *testing.T) {
 // nothing about what the node did — rather than as the node's own refusal.
 func TestTheConfigSurfacesOwnRefusalsCarryACode(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	for _, tc := range []struct {
 		method, path string
 		code         string

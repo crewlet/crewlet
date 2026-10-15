@@ -23,9 +23,11 @@ import (
 // All four read or write THIS seat's own memory, and none of them takes a
 // handle. That is the point: an agent recalling another's episodes or writing
 // into another's diary would make the per-seat memory a shared one, and the
-// whole design of the learning subsystem — a diary keyed on the DERIVED agent
-// id so a renamed handle orphans its rows rather than inheriting somebody
-// else's — rests on the boundary holding.
+// whole design of the learning subsystem rests on the boundary holding.
+//
+// The seat is named by its IDENTITY: the diary and the onboarding marker by the
+// agent id derived from its handle (ADR-0013), and the episodes and skills by
+// the handle itself ([turnctx.Turn.Handle]).
 
 // The tool wire names.
 const (
@@ -129,8 +131,8 @@ func (t *useSkill) Call(ctx context.Context, args map[string]any) (tools.Result,
 }
 
 func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	handle := turn.Handle()
-	if handle == "" {
+	seat := turn.Handle()
+	if seat == "" {
 		return refused(tools.RefusalForbidden, "use_skill can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
@@ -141,14 +143,14 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return failed("use_skill needs a `skill_name`."), nil
 	}
 
-	// Keyed on THIS seat's handle, so a model naming another agent's skill
-	// gets "you have no skill called that" rather than that agent's skill.
-	sk, found, err := t.skills.Get(ctx, handle, name)
+	// Keyed on THIS seat, so a model naming another agent's skill gets
+	// "you have no skill called that" rather than that agent's skill.
+	sk, found, err := t.skills.Get(ctx, seat, name)
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
+		return nodeFailure(ctx, UseSkillTool, err, fmt.Sprintf("Could not load %q", clip(name)), ""), nil
 	}
 	if !found {
-		return refused(tools.RefusalNotFound, t.suggest(ctx, handle, name)), nil
+		return refused(tools.RefusalNotFound, t.suggest(ctx, seat, name)), nil
 	}
 
 	// Recorded BEFORE the content goes out, and its failure ignored: the
@@ -175,8 +177,8 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 }
 
 // suggest turns "not found" into something the model can act on.
-func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
-	have, err := t.skills.List(ctx, handle, learning.ListOptions{ExcludeStale: true})
+func (t *useSkill) suggest(ctx context.Context, seat, name string) string {
+	have, err := t.skills.List(ctx, seat, learning.ListOptions{ExcludeStale: true})
 	if err != nil || len(have) == 0 {
 		return fmt.Sprintf("You have no synthesized skill called %q, and none at all yet. "+
 			"Skills are distilled from your own completed turns.", clip(name))
@@ -273,7 +275,8 @@ func (t *queryEpisodes) defaultLimit() int {
 // this" and "this deployment cannot search by meaning" send a model to
 // opposite places, and the second one has a fallback it can still use. And
 // beside what it found, it reports how many of the seat's turns it could not
-// search ([learning.EpisodeSearch.Unsearched]), which is a third place.
+// search ([learning.EpisodeSearch.Unsearched]), which is a third place. Why it
+// could not search is [similarityFailure]'s to say.
 func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, int, error) {
 	if t.recall == nil {
 		return nil, 0, errNoRecall
@@ -294,8 +297,8 @@ func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Re
 }
 
 func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	handle := turn.Handle()
-	if handle == "" {
+	seat := turn.Handle()
+	if seat == "" {
 		return refused(tools.RefusalForbidden, "query_episodes can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
@@ -329,18 +332,18 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		}
 		found, unsearched, err = t.similar(ctx, turn, query, want)
 		if err != nil {
-			return refused(tools.RefusalUnavailable, similarityRefusal(err)), nil
+			return similarityFailure(ctx, err), nil
 		}
 		scope, ranked = fmt.Sprintf(" like %s", clip(query)), "most similar"
 	case argString(args, "conversation") != "":
 		conversation := strings.TrimSpace(argString(args, "conversation"))
-		found, err = t.episodes.ForConversation(ctx, handle, conversation, limit)
+		found, err = t.episodes.ForConversation(ctx, seat, conversation, limit)
 		scope = fmt.Sprintf(" in %s", clip(conversation))
 	default:
-		found, err = t.episodes.Recent(ctx, handle, limit)
+		found, err = t.episodes.Recent(ctx, seat, limit)
 	}
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not recall your turns: %v", err)), nil
+		return nodeFailure(ctx, QueryEpisodesTool, err, "Could not recall your turns", ""), nil
 	}
 	if outcome != "" {
 		found = keepOutcome(found, outcome, limit)
@@ -518,7 +521,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), limit)
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not read your notes: %v", err)), nil
+		return nodeFailure(ctx, RefreshMemoryTool, err, "Could not read your notes", ""), nil
 	}
 	if len(entries) == 0 {
 		return tools.Result{Output: "You have no durable notes yet."}, nil
@@ -575,7 +578,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	// call is part of the turn's cost and its work item's.
 	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint, senders, turn.Aux())
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
+		return nodeFailure(ctx, RefreshMemoryTool, err, "Could not re-filter your notes", ""), nil
 	}
 	// Kept even when the filter found nothing: "nothing bears on this" is
 	// an answer, and a repeat of the hint would otherwise cost another
@@ -691,7 +694,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		TurnID: turn.RunID, CreatedAt: time.Now().UTC(),
 	}
 	if err := t.diary.Write(ctx, entry); err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not keep that note: %v", err)), nil
+		return nodeFailure(ctx, ReflectAndPersistTool, err, "Could not keep that note", ""), nil
 	}
 	return tools.Result{Output: "Kept. You will see it in later turns."}, nil
 }
@@ -759,16 +762,14 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		Summary:   notes,
 	}, time.Now().UTC())
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not record that: %v", err)), nil
+		return nodeFailure(ctx, MarkOnboardedTool, err, "Could not record that", ""), nil
 	}
 	return tools.Result{Output: "Recorded. The onboarding block will not appear again."}, nil
 }
 
 // seatAgentID resolves the DERIVED agent id for the acting seat.
 //
-// The derived id, never the handle: the diary keys on it so that renaming a
-// handle cleanly ORPHANS the old rows rather than handing one seat's memory to
-// whoever takes the name next.
+// The derived id, never the handle: the diary keys on it (ADR-0013).
 func seatAgentID(turn *turnctx.Turn) (string, string) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
@@ -808,7 +809,8 @@ const outcomeOverfetch = 4
 // wires the prefetch's.
 var errNoRecall = errors.New("no similarity search is wired into this registry")
 
-// similarityRefusal says what stopped a `query`, because each cause sends a
+// similarityFailure is the failed result of a `query` the similarity search
+// could not answer, and it says what stopped it, because each cause sends a
 // model somewhere different and only ONE of them is worth asking again:
 //
 //   - a company with no embeddings will never search by meaning, so the model
@@ -819,38 +821,52 @@ var errNoRecall = errors.New("no similarity search is wired into this registry")
 //     providers.embeddings, so the model should stop asking too — and the
 //     operator's fix is named, so a seat that reports it reports the right one;
 //   - an embedder that refuses THIS QUERY ([embeddings.ErrRefused]) refuses it
-//     again unchanged, so only a different query may answer;
+//     again unchanged, so only a different query may answer — the one cause
+//     that is the argument's, and classed [tools.RefusalInvalid] for it;
 //   - an embedder that could not answer NOW ([embeddings.ErrTransient] — a
 //     429, a 5xx, a network failure — or a deadline) may answer if asked again;
-//   - anything else — an episode store that could not be read, an answer the
-//     engine could not use, a cancelled turn — is said as what it was, with no
-//     promise either way, because nothing classified it;
-//   - and a registry with no search wired is none of these.
+//   - a registry with no search wired is none of these;
+//   - and anything else — an episode store that could not be read, an answer
+//     the engine could not use, a cancelled turn — is this node's own, and
+//     goes through [nodeFailure]: a condition in its own words, and a FAULT
+//     with its error in the node's log and never in the sentence, because a
+//     store's error is a driver's message or a database path that no model,
+//     assistant or person reading the answer can act on.
 //
 // The embeddings package classifies its failures precisely so a caller can
 // tell these apart, and the class survives every wrap on the way here. Told
 // "calling again may answer" about a revoked key, an executor asked again,
 // was refused identically, and spent rounds of every turn on it until an
-// operator noticed.
-func similarityRefusal(err error) string {
-	const fallback = " Pass `conversation` to read one thread's turns, or neither argument for your most recent ones — neither needs it."
+// operator noticed. Every arm carries the error beneath its class, so a
+// caller branching on the cause reads what the sentence says.
+//
+// EVERY ARM NAMES THE PATHS THAT STILL WORK: neither `conversation` nor the
+// recency read needs a search by meaning.
+func similarityFailure(ctx context.Context, err error) tools.Result {
+	const fallback = "Pass `conversation` to read one thread's turns, or neither " +
+		"argument for your most recent ones — neither needs it."
 	switch {
 	case errors.Is(err, learning.ErrNoEmbeddings):
-		return "This company configures no embeddings, so your turns cannot be searched by meaning." + fallback
+		return refusedBy(tools.RefusalUnavailable, err, "This company configures no "+
+			"embeddings, so your turns cannot be searched by meaning. "+fallback)
 	case errors.Is(err, errNoRecall):
-		return "Searching your turns by meaning is not available here." + fallback
+		return refusedBy(tools.RefusalUnavailable, err,
+			"Searching your turns by meaning is not available here. "+fallback)
 	case errors.Is(err, embeddings.ErrConfiguration):
-		return fmt.Sprintf("Searching your turns by meaning is misconfigured on this deployment (%v): "+
-			"no query will answer until an operator fixes providers.embeddings, so do not search "+
-			"by meaning again until then.", err) + fallback
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("Searching your "+
+			"turns by meaning is misconfigured on this deployment (%v): no query will "+
+			"answer until an operator fixes providers.embeddings, so do not search by "+
+			"meaning again until then. %s", err, fallback))
 	case errors.Is(err, embeddings.ErrRefused):
-		return fmt.Sprintf("The embedder refuses this query (%v) and will refuse it again unchanged; "+
-			"a shorter or differently worded `query` may answer.", err) + fallback
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("The embedder refuses "+
+			"this query (%v) and will refuse it again unchanged; a shorter or "+
+			"differently worded `query` may answer. %s", err, fallback))
 	case errors.Is(err, embeddings.ErrTransient), errors.Is(err, context.DeadlineExceeded):
-		return fmt.Sprintf("Searching your turns by meaning failed this time (%v); calling again may answer.", err) + fallback
-	default:
-		return fmt.Sprintf("Searching your turns by meaning could not run (%v).", err) + fallback
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("Searching your "+
+			"turns by meaning failed this time (%v); calling again may answer. %s",
+			err, fallback))
 	}
+	return nodeFailure(ctx, QueryEpisodesTool, err, "Could not search your turns by meaning", fallback)
 }
 
 // keepOutcome filters recalled turns by how they ended, preserving order.

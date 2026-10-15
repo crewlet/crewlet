@@ -16,7 +16,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
-import { QueryError, queryErrorCode, type QueryMap, type QueryName } from "~/protocol/index.ts";
+import {
+  QueryError,
+  queryErrorCode,
+  unavailableRetryMs,
+  type LogRefusal,
+  type QueryMap,
+  type QueryName,
+  type QueryRefusal,
+} from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { session, SessionFloors } from "~/protocol/session.ts";
 
@@ -24,13 +32,23 @@ export interface QueryResult<T> {
   data: T | null;
   /** True only before the FIRST answer. A poll keeps the last answer on
    *  screen — replacing a rendered table with a skeleton every 30 seconds is
-   *  how a polled screen becomes unreadable. */
+   *  how a polled screen becomes unreadable. True too for a question that has
+   *  just been ENABLED and not yet sent: see the hook's return. */
   loading: boolean;
   /** The engine's machine-readable code (`unauthorized`, `unavailable`,
    *  `timeout`, …), or null. Typed as the contract's own union, so a screen
    *  comparing it against a code the engine does not send fails the
    *  typecheck. */
   error: QueryErrorCode | null;
+  /**
+   * What the engine said beyond the code, or null: on a refusal on AUTHORITY,
+   * the rule and the access any one of which would have admitted the reader;
+   * on `unavailable`, the state log's refusal behind it and whether asking
+   * this node again can change the answer. What `QueryState` renders a
+   * refusal FROM, so a screen says "this needs Admin access" rather than "not
+   * allowed".
+   */
+  refusal: QueryRefusal | LogRefusal | null;
   /**
    * The engine's own sentence on a `bad_params` refusal — which parameter to
    * change, and what it accepts — and absent on every other answer. The one
@@ -78,34 +96,30 @@ export interface QueryOptions {
    * screen and a tab switch is not a reason to re-ask them.
    */
   refetchOnFocus?: boolean;
+  /**
+   * Ask again whenever the engine pushes `inbox_changed` for this seat — the
+   * seat this tab WATCHES (`app/Shell.tsx`), so a person's inbox and queue
+   * move the moment a commit moves them rather than at the next poll. The
+   * poll stays: the push is only sent to a socket whose watch the engine
+   * allowed, and a refused or dropped one must not leave a screen frozen.
+   */
+  refetchOnInboxOf?: string;
 }
 
 /**
- * How soon a refused question is asked again, in ms — or 0 for "not on its
- * own".
+ * How soon a refused question is asked again, in ms — or null for "not on
+ * its own".
  *
- * ONLY WHEN THE ENGINE SAID WHEN. `unavailable` is the engine saying "ask me
- * in a moment" — its projection is catching up, or its coordination store did
- * not answer — and its error frame carries `retry_after_seconds`, computed by
- * the same engine helper as the REST 503's `Retry-After`: this node's own lag
- * over how fast it is draining, and the shared health tick where there is no
- * drain to derive from. This hook used to wait a five-second constant of its
- * own instead, which was that helper's fallback copied by hand — too early for
- * a node grinding through a bulk apply, too late for one that caught up in
- * milliseconds, and a second opinion about one refusal that the two
- * transports disagreed on.
- *
- * Every other refusal is a fact about the request or the node that waiting
- * does not change, so nothing re-asks it; and an `unavailable` that named no
- * wait is not one this build's engine sends (it always names one), so it gets
- * no invented wait either — the poll, a reconnect or the reader asks again.
+ * ONLY `unavailable` IS ASKED AGAIN, AND WHEN THE ENGINE SAID: its error
+ * frame carries `retry_after`, read through `unavailableRetryMs` — exactly,
+ * bounded, and ZERO meaning waiting will not change the answer (a full log, a
+ * record this node cannot decode), so nothing re-asks on a timer. Every other
+ * refusal is a fact about the request or the reader that waiting does not
+ * change; the poll, a reconnect or the reader asks again.
  */
-export function retryDelayMs(code: QueryErrorCode, err: unknown): number {
-  if (code !== "unavailable" || !(err instanceof QueryError)) return 0;
-  const seconds = err.retryAfterSeconds;
-  // A wait of zero is "now", which is a tight loop against a node that just
-  // said it cannot answer; the engine never sends one below a second.
-  return seconds === null ? 0 : Math.max(seconds, 1) * 1000;
+export function retryDelayMs(code: QueryErrorCode, err: unknown): number | null {
+  if (code !== "unavailable") return null;
+  return unavailableRetryMs(err instanceof QueryError ? err.refusal : null);
 }
 
 export function useQuery<K extends QueryName>(
@@ -113,16 +127,30 @@ export function useQuery<K extends QueryName>(
   params?: Record<string, unknown>,
   options: QueryOptions = {},
 ): QueryResult<QueryMap[K]> {
-  const { socket } = useClient();
+  const { socket, store } = useClient();
   const { connected } = useConnection();
-  const { enabled = true, pollMs, refetchOnReconnect = true, refetchOnFocus = false } = options;
+  const {
+    enabled = true,
+    pollMs,
+    refetchOnReconnect = true,
+    refetchOnFocus = false,
+    refetchOnInboxOf = "",
+  } = options;
 
   const [state, setState] = useState<{
     data: QueryMap[K] | null;
     loading: boolean;
     error: QueryErrorCode | null;
+    refusal: QueryRefusal | LogRefusal | null;
     detail?: string;
-  }>({ data: null, loading: enabled, error: null });
+    /**
+     * Whether this state was written for the question ENABLED — by the first
+     * render, or by an effect that sent it. Never "data is null": an engine
+     * may answer null (the company document, where none is active), and that
+     * answer is not a question still to be sent.
+     */
+    sent: boolean;
+  }>({ data: null, loading: enabled, error: null, refusal: null, sent: enabled });
 
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
@@ -141,18 +169,18 @@ export function useQuery<K extends QueryName>(
 
   useEffect(() => {
     if (!enabled) {
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, refusal: null, sent: false });
       return;
     }
     const mine = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
 
     const run = async (): Promise<void> => {
-      let retryMs = 0;
+      let retryMs: number | null = null;
       try {
         const data = await socket.query(what, withFloor(what, key));
         if (generation.current !== mine) return;
-        setState({ data, loading: false, error: null });
+        setState({ data, loading: false, error: null, refusal: null, sent: true });
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
@@ -160,6 +188,7 @@ export function useQuery<K extends QueryName>(
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
         retryMs = retryDelayMs(code, err);
         const detail = err instanceof QueryError && err.detail ? err.detail : undefined;
+        const refusal = err instanceof QueryError ? err.refusal : null;
         setState((prev) => ({
           // KEEP the last good answer. A screen that blanks on one failed poll
           // tells the reader less than one that shows the last reading and
@@ -167,21 +196,23 @@ export function useQuery<K extends QueryName>(
           data: prev.data,
           loading: false,
           error: code,
+          refusal,
           ...(detail ? { detail } : {}),
+          sent: true,
         }));
       } finally {
         // THE SOONER OF THE TWO. A poll keeps its own cadence; a refusal
         // the engine named a wait for comes back after that wait whether or
         // not anything polls, because a minute-long poll would leave a
         // recovered node looking broken for most of that minute.
-        const next = retryMs ? Math.min(pollMs ?? retryMs, retryMs) : pollMs;
+        const next = retryMs !== null ? Math.min(pollMs ?? retryMs, retryMs) : pollMs;
         if (generation.current === mine && next) {
           timer = setTimeout(() => void run(), next);
         }
       }
     };
 
-    setState((prev) => ({ ...prev, loading: prev.data === null }));
+    setState((prev) => ({ ...prev, loading: prev.data === null, sent: true }));
     void run();
 
     return () => {
@@ -224,7 +255,30 @@ export function useQuery<K extends QueryName>(
     return () => document.removeEventListener("visibilitychange", wake);
   }, [enabled, refetchOnFocus, refetch]);
 
-  return { ...state, refetch };
+  // A SEAT'S INBOX MOVING ASKS AGAIN. Subscribed to the store directly rather
+  // than through `useSlice`, because nothing here renders the counter; it is
+  // compared against the count this effect started from, so a frame for
+  // ANOTHER seat — which moves the same slice — asks nothing.
+  useEffect(() => {
+    if (!enabled || refetchOnInboxOf === "") return;
+    let seen = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
+    return store.subscribe(["inboxMoves"], () => {
+      const now = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
+      if (now === seen) return;
+      seen = now;
+      refetch();
+    });
+  }, [store, enabled, refetchOnInboxOf, refetch]);
+
+  // A QUESTION ENABLED AND NOT YET SENT IS LOADING, whatever the effect has
+  // had the chance to write: a read gated on the viewer's answer turns
+  // `enabled` on in a render whose state was written while it was off
+  // (loading false, no data), and for that one render the screen drew the
+  // question as answered with nothing — a run's page mounted its live output
+  // and asked for it, then went back to its skeleton when the effect caught
+  // up, and asked again. `sent` and not "no data", because null is an answer.
+  const { sent, ...result } = state;
+  return { ...result, loading: state.loading || (enabled && !sent), refetch };
 }
 
 /** The keys that already say how fresh an answer must be. */

@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -42,6 +45,13 @@ import (
 //     round boundary, and the dispatcher spends the trigger rather than
 //     retrying it. A DETACHED coding run is not fenced — it outlives its turn
 //     by design — but the turn that resumes it is, and ends there.
+//
+// # Keyed on the seat's ID
+//
+// Every pause, every hold and every question here is about a seat's derived
+// agent id (ADR-0013): the record is keyed on it, the mailbox a hold sits on is
+// named by it, and the scheduler and the dispatcher ask by it. The handle
+// appears only in log lines, resolved from the running company.
 //
 // # Who has to agree on it
 //
@@ -92,14 +102,14 @@ type seatPauses struct {
 	// known is whether a complete answer has ever arrived.
 	known bool
 
-	// pauses is that answer, kept current by the watch.
-	pauses map[string]coord.SeatPause
+	// pauses is that answer, kept current by the watch, keyed by seat id.
+	pauses map[uuid.UUID]coord.SeatPause
 
-	// held is every seat inbox this client holds under [seatPauseHold].
-	// RECORDED for the reason [modelHolds] is: which holds this client
-	// took is a fact only this process knows, and the queue contract lists
-	// none.
-	held map[string]struct{}
+	// held is every seat inbox this client holds under [seatPauseHold],
+	// by the seat id its mailbox is named after. RECORDED for the reason
+	// [modelHolds] is: which holds this client took is a fact only this
+	// process knows, and the queue contract lists none.
+	held map[uuid.UUID]struct{}
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -107,17 +117,34 @@ type seatPauses struct {
 
 // pauseOf reads one seat's pause off this node's copy, reporting whether the
 // copy has ever been complete.
-func (e *Engine) pauseOf(handle string) (p coord.SeatPause, paused, known bool) {
+func (e *Engine) pauseOf(seat uuid.UUID) (p coord.SeatPause, paused, known bool) {
 	e.pauses.mu.Lock()
 	defer e.pauses.mu.Unlock()
-	p, paused = e.pauses.pauses[handle]
+	p, paused = e.pauses.pauses[seat]
 	return p, paused, e.pauses.known
 }
 
-// seatPaused is the scheduler's question, three-valued: an error is a node
-// that has not read the pauses yet.
-func (e *Engine) seatPaused(handle string) (bool, error) {
-	_, paused, known := e.pauseOf(handle)
+// pauseOfHandle is [Engine.pauseOf] for a caller that holds the seat by its
+// handle — the dispatcher's screening, which is keyed the way a mailbox
+// handler is. A handle the running company resolves to no agent seat is a seat
+// nobody can have paused here: answered as not paused, with the copy's own
+// knownness, so a delivery for a seat outside the company is decided by the
+// ownership check rather than deferred for ever.
+func (e *Engine) pauseOfHandle(handle string) (paused, known bool) {
+	seat, err := e.seatID(handle)
+	if err != nil {
+		e.pauses.mu.Lock()
+		defer e.pauses.mu.Unlock()
+		return false, e.pauses.known
+	}
+	_, paused, known = e.pauseOf(seat)
+	return paused, known
+}
+
+// seatPaused is the scheduler's question, by the seat's id and three-valued:
+// an error is a node that has not read the pauses yet.
+func (e *Engine) seatPaused(seat uuid.UUID) (bool, error) {
+	_, paused, known := e.pauseOf(seat)
 	if !known {
 		return false, errPausesUnread
 	}
@@ -127,15 +154,15 @@ func (e *Engine) seatPaused(handle string) (bool, error) {
 // attachHolds names the holds a seat's mailbox is attached under — see
 // [node.Config.AttachHolds]. A seat whose pause state is not yet known is
 // attached with none: the screening defers its deliveries until it is.
-func (e *Engine) attachHolds(handle string) []string {
+func (e *Engine) attachHolds(seat uuid.UUID) []string {
 	e.pauses.mu.Lock()
 	defer e.pauses.mu.Unlock()
-	if _, paused := e.pauses.pauses[handle]; !paused {
+	if _, paused := e.pauses.pauses[seat]; !paused {
 		return nil
 	}
 	// Recorded as HELD because the node is about to take it: the lift that
 	// arrives after the attach must know there is something to release.
-	e.recordHeldLocked(handle)
+	e.recordHeldLocked(seat)
 	return []string{seatPauseHold}
 }
 
@@ -149,33 +176,35 @@ func (e *Engine) attachHolds(handle string) []string {
 // lifts it. The queue call does not drain, so taking it under the lock cannot
 // call back into here.
 func (e *Engine) holdPausedInbox(ctx context.Context, handle string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	seat, err := e.seatID(handle)
+	if err != nil {
+		return err
 	}
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	e.pauses.mu.Lock()
-	err := e.backends.Queue.PauseTopic(ctx, subject, group, seatPauseHold)
+	err = e.backends.Queue.PauseTopic(ctx, subject, group, seatPauseHold)
 	if err == nil {
-		e.recordHeldLocked(handle)
+		e.recordHeldLocked(seat)
 	}
-	_, still := e.pauses.pauses[handle]
+	_, still := e.pauses.pauses[seat]
 	e.pauses.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if !still {
-		e.liftPauseHold(ctx, handle, "the seat was resumed while its delivery was being held")
+		e.liftPauseHold(ctx, seat, "the seat was resumed while its delivery was being held")
 	}
 	return nil
 }
 
-// stopFor is the stop a pause asks of handle's running turn, or nil.
-func (e *Engine) stopFor(handle string) error {
-	p, paused, _ := e.pauseOf(handle)
+// stopFor is the stop a pause asks of a seat's running turn, or nil. The
+// handle is what the stop's sentence names the seat by.
+func (e *Engine) stopFor(seat uuid.UUID, handle string) error {
+	p, paused, _ := e.pauseOf(seat)
 	if !paused || !p.StopRunning {
 		return nil
 	}
-	return &stopError{pause: p}
+	return &stopError{pause: p, handle: handle}
 }
 
 // stopError is a running turn a person's pause ended.
@@ -185,15 +214,14 @@ func (e *Engine) stopFor(handle string) error {
 // the fence closed on — not whatever the cache holds by the time the turn has
 // unwound. It unwraps to [turn.ErrStoppedByPerson], which is what every frame
 // between the loop and the dispatcher recognises.
-type stopError struct{ pause coord.SeatPause }
+type stopError struct {
+	pause  coord.SeatPause
+	handle string
+}
 
 func (e *stopError) Error() string {
-	who := e.pause.Seat
-	if who == "" {
-		who = e.pause.By
-	}
 	return fmt.Sprintf("%s paused %s and asked for its running turn to stop: %v",
-		who, e.pause.Handle, turn.ErrStoppedByPerson)
+		e.pause.By, e.handle, turn.ErrStoppedByPerson)
 }
 
 func (e *stopError) Unwrap() error { return turn.ErrStoppedByPerson }
@@ -208,11 +236,20 @@ func stopOf(err error) (coord.SeatPause, bool) {
 }
 
 // recordHeldLocked notes a hold this client took. The caller holds the lock.
-func (e *Engine) recordHeldLocked(handle string) {
+func (e *Engine) recordHeldLocked(seat uuid.UUID) {
 	if e.pauses.held == nil {
-		e.pauses.held = map[string]struct{}{}
+		e.pauses.held = map[uuid.UUID]struct{}{}
 	}
-	e.pauses.held[handle] = struct{}{}
+	e.pauses.held[seat] = struct{}{}
+}
+
+// seatLabel is how a log line names a seat: its handle in the running company,
+// or its id where the company no longer holds it.
+func (e *Engine) seatLabel(seat uuid.UUID) string {
+	if handle, ok := e.seatHandle(seat.String()); ok {
+		return handle
+	}
+	return seat.String()
 }
 
 // startSeatPauses opens the pause watch and waits, bounded, for its first
@@ -284,7 +321,7 @@ func (e *Engine) watchOnce(ctx context.Context, primed func()) bool {
 		return false
 	}
 	current := false
-	snapshot := map[string]coord.SeatPause{}
+	snapshot := map[uuid.UUID]coord.SeatPause{}
 	for u := range updates {
 		switch {
 		case u.Current:
@@ -296,7 +333,7 @@ func (e *Engine) watchOnce(ctx context.Context, primed func()) bool {
 			primed()
 		case !current:
 			if u.Pause != nil {
-				snapshot[u.Handle] = *u.Pause
+				snapshot[u.Seat] = *u.Pause
 			}
 		default:
 			e.applySeatPause(ctx, u)
@@ -312,24 +349,23 @@ func (e *Engine) watchOnce(ctx context.Context, primed func()) bool {
 
 // adoptSeatPauses replaces this node's copy with a complete answer, taking the
 // hold for every paused seat and lifting it from every seat no longer paused.
-func (e *Engine) adoptSeatPauses(ctx context.Context, next map[string]coord.SeatPause) {
+func (e *Engine) adoptSeatPauses(ctx context.Context, next map[uuid.UUID]coord.SeatPause) {
 	e.pauses.mu.Lock()
 	previous := e.pauses.pauses
 	e.pauses.pauses = next
 	e.pauses.known = true
-	var lifted []string
-	for handle := range previous {
-		if _, still := next[handle]; !still {
-			lifted = append(lifted, handle)
+	var lifted []uuid.UUID
+	for seat := range previous {
+		if _, still := next[seat]; !still {
+			lifted = append(lifted, seat)
 		}
 	}
-	for _, handle := range slices.Sorted(maps.Keys(next)) {
-		e.takePauseHoldLocked(ctx, handle)
+	for _, seat := range sortedSeats(maps.Keys(next)) {
+		e.takePauseHoldLocked(ctx, seat)
 	}
 	e.pauses.mu.Unlock()
-	slices.Sort(lifted)
-	for _, handle := range lifted {
-		e.liftPauseHold(ctx, handle, "the seat was resumed while this node was not listening")
+	for _, seat := range sortedSeats(slices.Values(lifted)) {
+		e.liftPauseHold(ctx, seat, "the seat was resumed while this node was not listening")
 	}
 	// A COMPLETE ANSWER is the signal for every seat a retried resume was
 	// waiting on the pauses for: one this node had not read at all, and one
@@ -339,46 +375,60 @@ func (e *Engine) adoptSeatPauses(ctx context.Context, next map[string]coord.Seat
 	log.InfoContext(ctx, "seat_pauses_read", "paused", len(next))
 }
 
+// sortedSeats is a set of seat ids in a stable order, so a test and a log read
+// the same way.
+func sortedSeats(seats iter.Seq[uuid.UUID]) []uuid.UUID {
+	return slices.SortedFunc(seats, func(a, b uuid.UUID) int {
+		return cmp.Compare(a.String(), b.String())
+	})
+}
+
 // applySeatPause folds one change into this node's copy.
 func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 	if u.Pause == nil {
 		e.pauses.mu.Lock()
-		delete(e.pauses.pauses, u.Handle)
+		delete(e.pauses.pauses, u.Seat)
 		e.pauses.mu.Unlock()
-		e.liftPauseHold(ctx, u.Handle, "a person resumed the seat")
+		e.liftPauseHold(ctx, u.Seat, "a person resumed the seat")
 		// AND AN ANSWER THE PAUSE KEPT WAITING resumes now rather than at
 		// its next re-check: the resume is the event it was waiting for.
-		e.readmitAnswers(waitPause, u.Handle)
+		// The coordinator keeps its waits by handle, which the running
+		// company names; a seat it does not name — a revision this node
+		// has not applied yet — re-checks every seat waiting on a pause,
+		// which costs one look each, since a seat still paused waits again.
+		if handle, ok := e.seatHandle(u.Seat.String()); ok {
+			e.readmitAnswers(waitPause, handle)
+		} else {
+			e.readmitAnswers(waitPause)
+		}
 		return
 	}
 	e.pauses.mu.Lock()
 	if e.pauses.pauses == nil {
-		e.pauses.pauses = map[string]coord.SeatPause{}
+		e.pauses.pauses = map[uuid.UUID]coord.SeatPause{}
 	}
-	e.pauses.pauses[u.Handle] = *u.Pause
-	e.takePauseHoldLocked(ctx, u.Handle)
+	e.pauses.pauses[u.Seat] = *u.Pause
+	e.takePauseHoldLocked(ctx, u.Seat)
 	e.pauses.mu.Unlock()
-	log.InfoContext(ctx, "seat_paused", "seat", u.Handle, "by", u.Pause.By,
-		"person", u.Pause.Seat, "stop_running", u.Pause.StopRunning,
+	log.InfoContext(ctx, "seat_paused", "seat", e.seatLabel(u.Seat), "agent_id", u.Seat.String(),
+		"by", u.Pause.By, "by_kind", string(u.Pause.ByKind), "operator_id", u.Pause.OperatorID,
+		"stop_running", u.Pause.StopRunning,
 		"detail", "this seat takes no new work; its mail waits on its inbox until "+
 			"somebody resumes it")
 }
 
 // takePauseHoldLocked takes the hold on one paused seat's inbox. The caller
 // holds the lock; the queue call does not drain, so that is safe.
-func (e *Engine) takePauseHoldLocked(ctx context.Context, handle string) {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return
-	}
+func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	if err := e.backends.Queue.PauseTopic(ctx, subject, group, seatPauseHold); err != nil {
 		// A pause fails only on a client that has stopped, which is a
 		// process on its way out. The screening is the backstop: it reads
 		// the same copy and holds whatever reaches it.
-		log.WarnContext(ctx, "seat_pause_hold_not_taken", "seat", handle, "error", err)
+		log.WarnContext(ctx, "seat_pause_hold_not_taken", "agent_id", seat.String(), "error", err)
 		return
 	}
-	e.recordHeldLocked(handle)
+	e.recordHeldLocked(seat)
 }
 
 // liftPauseHold releases the hold this client took on one seat, if it took
@@ -387,61 +437,82 @@ func (e *Engine) takePauseHoldLocked(ctx context.Context, handle string) {
 // OUTSIDE THE LOCK for the queue call, because the in-memory twin's resume
 // drains synchronously into the seat's handler, and the first thing that
 // handler does is read this copy.
-func (e *Engine) liftPauseHold(ctx context.Context, handle, why string) {
+func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) {
 	e.pauses.mu.Lock()
-	_, held := e.pauses.held[handle]
-	delete(e.pauses.held, handle)
+	_, held := e.pauses.held[seat]
+	delete(e.pauses.held, seat)
 	e.pauses.mu.Unlock()
 	if !held {
 		return
 	}
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, seatPauseHold); err != nil {
 		// Kept on the record, as the no-model release keeps its own, so a
 		// later lift tries again: a resume fails only on a client that has
 		// stopped.
 		e.pauses.mu.Lock()
-		e.recordHeldLocked(handle)
+		e.recordHeldLocked(seat)
 		e.pauses.mu.Unlock()
-		log.WarnContext(ctx, "seat_pause_not_lifted", "seat", handle, "error", err,
+		log.WarnContext(ctx, "seat_pause_not_lifted", "seat", e.seatLabel(seat),
+			"agent_id", seat.String(), "error", err,
 			"detail", "this seat's held mail stays on its inbox until the queue client "+
 				"is replaced")
 		return
 	}
-	log.InfoContext(ctx, "seat_pause_lifted", "seat", handle, "reason", why)
+	log.InfoContext(ctx, "seat_pause_lifted", "seat", e.seatLabel(seat),
+		"agent_id", seat.String(), "reason", why)
 }
 
 // clearRemovedSeatPauses lifts the pause of every seat the company no longer
 // has.
 //
-// A pause belongs to a seat, and a seat a revision removed takes no work to
+// A pause belongs to a seat, and a seat the chart removed takes no work to
 // hold. Left, the record would outlive the seat for ever — the bucket has no
-// age — and a seat later added under the same handle would arrive paused by
-// somebody who paused a different role. Every node applying the revision
-// tries; the delete is conditioned on the version this node read, so one wins
-// and the rest find it gone, which the watch then tells every copy.
+// age. Every node composing the company tries; the delete is conditioned on
+// the version this node read, so one wins and the rest find it gone, which the
+// watch then tells every copy.
+//
+// ASKED BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013).
+//
+// CALLED WHEREVER THE ROSTER CAN CHANGE, which is every published company
+// ([Engine.followCompany]) — and ONLY ON THE FLEET'S CURRENT ONE
+// ([Engine.fleetCompany]), the rule the mailbox sweep judges a seat absent by.
+// A node applying a revision the fleet has since replaced does not have a seat
+// the newer one added, and a pause somebody put on that new seat would read
+// here as a pause on a seat the company does not have: the node would delete a
+// pause a person had just placed. A company that is not the fleet's clears
+// nothing; the apply that catches this node up does.
 func (e *Engine) clearRemovedSeatPauses(ctx context.Context, next *Company) {
 	if next == nil || next.Org == nil || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
+	if _, err := e.fleetCompany(ctx, next); err != nil {
+		log.DebugContext(ctx, "seat_pauses_not_swept", "reason", err.Error(),
+			"detail", "a removed seat's pause is cleared by the company the fleet "+
+				"is pointed at; this one is not it yet")
+		return
+	}
 	e.pauses.mu.Lock()
 	var gone []coord.SeatPause
-	for handle, p := range e.pauses.pauses {
-		if next.Org.AgentSeatByHandle(handle) == nil {
+	for seat, p := range e.pauses.pauses {
+		if next.Org.AgentSeatByID(seat) == nil {
 			gone = append(gone, p)
 		}
 	}
 	e.pauses.mu.Unlock()
-	slices.SortFunc(gone, func(a, b coord.SeatPause) int { return cmp.Compare(a.Handle, b.Handle) })
+	slices.SortFunc(gone, func(a, b coord.SeatPause) int {
+		return cmp.Compare(a.Seat.String(), b.Seat.String())
+	})
 	for _, p := range gone {
-		lifted, err := e.backends.Fleet.DeleteSeatPause(ctx, p.Handle, p.Version)
+		lifted, err := e.backends.Fleet.DeleteSeatPause(ctx, p.Seat, p.Version)
 		switch {
 		case err != nil:
-			log.WarnContext(ctx, "seat_pause_not_cleared", "seat", p.Handle, "error", err,
+			log.WarnContext(ctx, "seat_pause_not_cleared", "agent_id", p.Seat.String(),
+				"error", err,
 				"detail", "the seat left the company and its pause record stays until the "+
-					"next apply clears it")
+					"next chart or settings change clears it")
 		case lifted:
-			log.InfoContext(ctx, "seat_pause_cleared", "seat", p.Handle,
+			log.InfoContext(ctx, "seat_pause_cleared", "agent_id", p.Seat.String(),
 				"detail", "the seat left the company, so its pause went with it")
 		}
 	}

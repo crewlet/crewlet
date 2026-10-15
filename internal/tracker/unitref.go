@@ -4,13 +4,14 @@ import "strings"
 
 // ---- the unit seam ------------------------------------------------------ //
 //
-// A unit reference stored here is a STRING, and the same unit answers to two
-// of them: its id where the chart gave it one, and its name where it did not.
-// Which one a row holds depends on when it was written, because a task's
-// `filed_unit` is a record of what was true and nothing rewrites it. So every
-// question about a unit — what to store, what to display, which rows to
-// match, whose lead to wake — goes through one resolution, and the chart is
-// the only thing that can perform it.
+// A unit reference stored here is a STRING, and it is the unit's KEY — the
+// unit's `id` in the company document, which a write mints into the stored
+// document and nothing changes in place, so a team keeps one key for its whole
+// life. A caller may NAME a unit either way — a board's own column hands back
+// the key, a person or a model types the name — so every question about a
+// unit — what to store, what to display, which rows to match, whose lead to
+// wake — goes through one resolution, and the running organisation is the only
+// thing that can perform it.
 
 // Units is what a CHART can answer about a unit.
 //
@@ -26,39 +27,21 @@ import "strings"
 // and a filter matches the reference literally rather than widening.
 type Units interface {
 	// ResolveUnit answers the unit a reference names — either of its
-	// spellings, however it is cased — and false where the chart has no
-	// such unit.
+	// spellings (its key or its name), however it is cased — and false
+	// where the chart has no such unit.
 	ResolveUnit(ref string) (ChartUnit, bool)
-
-	// AllUnits is every unit the chart holds, for the one question
-	// resolution cannot answer: the BOARD groups rows it has not read yet,
-	// so it has to fold the spellings onto their keys inside the statement
-	// — see [unitAxis] — and that needs the whole set up front.
-	//
-	// ON THE INTERFACE rather than a second one the grouping asserts for,
-	// which is the choice that fails LOUDLY: a chart that could not
-	// enumerate would silently group on the stored string, which is
-	// exactly the split-column defect this removes and is invisible in the
-	// answer. One method on one seam is a compile error instead.
-	//
-	// The order is the chart's own walk, which is the order resolution
-	// answers two units of one name in: a submitted document is refused for
-	// the pair, but a revision applied under the runnable rules can carry
-	// one, and the first arm of a CASE that matches is the one it takes.
-	AllUnits() []ChartUnit
 }
 
 // ChartUnit is one unit as the chart answers it.
 //
-// THREE ANSWERS FROM ONE RESOLUTION, because the callers ask in three
+// FOUR ANSWERS FROM ONE RESOLUTION, because the callers ask in four
 // directions and a seam that answered one of them would be resolved twice:
-// a write stores the Key, a screen renders the Name, and a wake reaches the
-// Lead.
+// a write stores the Key, a screen renders the Name, a wake reaches the Lead,
+// and a filter or a board resolves whatever a caller typed to the Key.
 type ChartUnit struct {
-	// Key is the unit's durable identity — `org.Unit.Key`: its id where
-	// the chart gave it one, its name where it did not. IT IS WHAT EVERY
-	// WRITE HERE STORES, so that what a row holds survives the rename the
-	// id exists for.
+	// Key is the unit's key — `org.Unit.Key`: its id where the document
+	// gave it one, its name where it did not. IT IS WHAT EVERY WRITE HERE
+	// STORES, and what a board column is keyed on.
 	Key string
 
 	// Name is what a person reads: the unit's name as the chart spells it,
@@ -87,8 +70,7 @@ type LeadRef struct {
 // KEY IS WHAT THE ROW HOLDS, not what the chart would write today: these rows
 // are records, and a reader showing a spelling the row does not carry cannot
 // be used to find it again. Name is the chart's, which is what makes the pair
-// useful — a row filed under a name before an id was added still renders the
-// team's current name.
+// useful — a row keyed on a team renders the team's current name.
 type UnitRef struct {
 	Key      string `json:"key,omitempty"`
 	Name     string `json:"name,omitempty"`
@@ -139,14 +121,14 @@ func taskUnits(units Units, task Task) *TaskUnits {
 // A CONTAINER IS AN ADDRESS, and every kind but one is already canonical by
 // construction: a project key is upper-cased wherever it is minted — which is
 // exactly this rule, spelled at each parser — and a person is a handle. A UNIT
-// is the one with two spellings, so the same team addressed by its id and by
-// its name was TWO strips: a view saved from one was invisible from the other,
+// is the one with two spellings, so the same team addressed by its key and by
+// its name was two strips: a view saved from one was invisible from the other,
 // and neither surface could tell that from a container nobody has saved a view
 // in.
 //
 // A REFERENCE THE CHART CANNOT RESOLVE IS LEFT ALONE, for the reason
-// [unitSpellings] leaves one alone: a strip saved against a team since
-// dissolved is still that strip, and the read matches both spellings anyway.
+// [unitKeys] leaves one alone: a strip saved against a team since dissolved
+// is still that strip.
 func CanonicalContainer(units Units, container Container) Container {
 	if units == nil || container.Kind != ContainerUnit {
 		return container
@@ -157,21 +139,17 @@ func CanonicalContainer(units Units, container Container) Container {
 	return container
 }
 
-// unitSpellings is every spelling a row may hold for the units these
-// references name.
+// unitKeys is the key a row holds for each unit these references name.
 //
-// THE READ HALF OF THE TWO SPELLINGS. A write stores a unit's key, and rows
-// written before the chart gave that unit an id hold its name for ever — so a
-// filter that compared against the one string somebody typed would answer
-// with half the team's work, silently, exactly when an id is added. Each
-// reference is resolved through the chart and contributes the SET its unit
-// answers to.
+// A WRITE STORES A UNIT'S KEY — the tools resolve whatever was typed through
+// the chart, and a project's unit is the chart's own — so a filter resolves
+// each reference the same way and compares the key: a team's id, its name
+// and either in any case all narrow to its work.
 //
 // EXACT VALUES RATHER THAN A FOLDED COMPARISON. Both columns this filters
 // have an index over their stored text (`tracker_tasks_filed_unit_idx`,
 // `tracker_projects_unit_idx`), and a `COLLATE NOCASE` comparison stops a
-// planner seeking one — so the CHART absorbs the case, resolving whatever was
-// typed, and what comes back out is the unit's own two spellings.
+// planner seeking one — so the CHART absorbs the case.
 //
 // A REFERENCE THE CHART CANNOT RESOLVE KEEPS ITS LITERAL, which is the honest
 // answer rather than an error or a widening: a stored unit may legitimately
@@ -182,31 +160,23 @@ func CanonicalContainer(units Units, container Container) Container {
 // A BLANK REFERENCE CONTRIBUTES NOTHING — it cannot arrive from the query
 // grammar, where an empty value carries no filter at all, and an empty set
 // here is what the callers check before building a clause.
-func unitSpellings(units Units, refs []string) []string {
-	out := make([]string, 0, len(refs)*2)
-	seen := make(map[string]bool, len(refs)*2)
-	add := func(value string) {
-		if value == "" || seen[value] {
-			return
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
+func unitKeys(units Units, refs []string) []string {
+	out := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
 	for _, ref := range refs {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
 			continue
 		}
-		unit, found := ChartUnit{}, false
 		if units != nil {
-			unit, found = units.ResolveUnit(ref)
+			if unit, found := units.ResolveUnit(ref); found {
+				ref = strings.TrimSpace(unit.Key)
+			}
 		}
-		if !found {
-			add(ref)
-			continue
+		if ref != "" && !seen[ref] {
+			seen[ref] = true
+			out = append(out, ref)
 		}
-		add(unit.Key)
-		add(unit.Name)
 	}
 	return out
 }

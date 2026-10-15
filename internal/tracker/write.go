@@ -50,8 +50,8 @@ var ErrReassignmentBudget = errors.New("tracker: this task has been handed on to
 
 // ErrForbidden reports a write this ACTOR may not make, whatever it carries:
 // somebody else's inbox, pins or priority list, a view protected for its owner,
-// a project's policy or tag vocabulary without the lead's or a person's own
-// authority.
+// a project's policy or tag vocabulary without the lead's authority or an
+// admin's, which overrides it.
 //
 // ITS OWN SENTINEL, and not the [statelog.ErrConflict] several of these used
 // to wrap, because the two ask for opposite things of the caller. A conflict
@@ -106,11 +106,19 @@ var ErrAlreadyAnswered = errors.New("tracker: that question is already answered"
 // — after a sentence that had already said whose it was.
 type refusal struct {
 	mark error
+	// also is a sentinel of the refusal's own beside its class, or nil —
+	// see [forbiddenAs].
+	also error
 	err  error
 }
 
-func (e *refusal) Error() string    { return "tracker: " + e.err.Error() }
-func (e *refusal) Unwrap() []error  { return []error{e.mark, e.err} }
+func (e *refusal) Error() string { return "tracker: " + e.err.Error() }
+func (e *refusal) Unwrap() []error {
+	if e.also != nil {
+		return []error{e.mark, e.also, e.err}
+	}
+	return []error{e.mark, e.err}
+}
 func (e *refusal) sentence() string { return e.err.Error() }
 
 // sentenced is a refusal this package wrote, whatever its type: [refusal]
@@ -133,6 +141,16 @@ func invalid(format string, args ...any) error {
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
 	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+}
+
+// forbiddenAs is [forbidden] carrying a sentinel of its own BESIDE the class:
+// a caller that has to act on this refusal in particular tests for the
+// sentinel, and every other caller reads the class it shares with every
+// refusal of its kind. Wrapped into the sentence with %w instead, the
+// sentinel's own words — "tracker: …" — would be read to a person after a
+// sentence that had already said them.
+func forbiddenAs(sentinel error, format string, args ...any) error {
+	return &refusal{mark: ErrForbidden, also: sentinel, err: fmt.Errorf(format, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
@@ -214,11 +232,6 @@ type Writer struct {
 	OperatorID string
 	TurnID     string
 	Chain      []string
-
-	// Seat is the chart seat this writer's credential is bound to, empty
-	// for every writer that is already a seat and for a token nobody
-	// bound. See [Provenance.Seat] and [Writer.Record].
-	Seat string
 
 	// Origin is where the turn behind this writer was woken — see
 	// [Provenance.Origin] — and what every task it creates states.
@@ -354,7 +367,6 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
-	clone.Seat = provenance.Seat
 	clone.written = provenance.Written
 	clone.Origin = provenance.Origin
 	return &clone
@@ -369,46 +381,6 @@ func (w *Writer) origin() *Origin {
 	}
 	origin := *w.Origin
 	return &origin
-}
-
-// Record is whose OWN STATE this writer's person writes belong to: the seat
-// the credential is bound to, or the actor itself where nothing is bound.
-//
-// # It is deliberately not the author
-//
-// [Writer.Actor] is who WROTE the record and it stays the token, because a
-// tracker whose author field is chosen by the writer is not an audit trail
-// (see internal/api/operator). This answers the other question — whose inbox,
-// whose pins, whose queue — and the answer there is the PERSON. A founder
-// whose assistant marks their inbox read is marking `jane-founder`'s inbox and
-// signing it `founder`: one gesture with two different correct answers, rather
-// than one answer used for both.
-//
-// An UNBOUND token's writes key on the credential, since there is no seat to
-// key them on — and binding the token later leaves that record under the
-// credential's name, reachable only through [readPartyRecord]'s fallback.
-func (w *Writer) Record() string {
-	if w == nil {
-		return ""
-	}
-	if seat := strings.TrimSpace(w.Seat); seat != "" {
-		return seat
-	}
-	return w.Actor
-}
-
-// Party is every identity a record this writer OWNS may be filed under — the
-// person first, the credential behind them.
-//
-// FOR AN OWNERSHIP TEST AND NEVER FOR AN AUTHOR FIELD. A row written before a
-// company bound the token carries the credential's name and the same person is
-// behind both, so a check that admitted only [Writer.Record] would lock a
-// founder out of what their own assistant saved.
-func (w *Writer) Party() Party {
-	if w == nil {
-		return Party{}
-	}
-	return Party{Handle: w.Record(), OperatorID: w.OperatorID}
 }
 
 // After is this writer carrying one of its own earlier writes, and it is how a
@@ -490,23 +462,6 @@ type Provenance struct {
 	// recorded beside the actor rather than instead of it.
 	OperatorID string
 
-	// Seat is the chart seat that credential is BOUND to with
-	// `contact.crewlet_operator_id`, resolved by the surface because this
-	// package holds no org. Empty for a token nobody bound, and for every
-	// writer that is already a seat.
-	//
-	// IT NAMES NO AUTHOR, on a record or anywhere else, which is why it
-	// sits here with the rest of the provenance: the author stays the
-	// token and the kind stays `operator`, because that is the audit
-	// trail. What it decides is WHOSE STATE a person write lands on (see
-	// [Writer.Record]) — and, on the record itself, WHO NOT TO WAKE.
-	//
-	// It travels as [MutationRecord.ActorSeat] for that second reader
-	// alone: a bound operator's own gestures land on their seat, so
-	// without it the wake's actor exclusion compared a candidate's handle
-	// against a credential and woke the person for their own write.
-	Seat string
-
 	// TurnID is the turn that produced this write, and Chain the
 	// delegation path that reached it.
 	TurnID string
@@ -557,9 +512,9 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
-		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
-		Zone: d.Zone,
+		metrics: d.Metrics, Actor: d.Actor,
+		ActorKind: d.ActorKind, Drain: d.Drain, Leads: d.Leads, World: d.World,
+		Now: now, Zone: d.Zone,
 	}, nil
 }
 
@@ -604,6 +559,91 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
+	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
+}
+
+// amendment settles a patch against the task as the decide snapshot holds it,
+// or refuses the write.
+//
+// THE ONE SEAM INTO [Writer.updateTask]'s decide, for a gesture whose patch
+// cannot be formed until the CURRENT row is in hand — a comment edit is the
+// stored comment with one field changed, and who wrote it is a fact about that
+// row. Formed from a read outside the snapshot, it would be decided against
+// a comment that may since have been edited or removed.
+type amendment func(ctx context.Context, tx *sql.Tx, current Task,
+	patch TaskPatch) (TaskPatch, error)
+
+// ErrNotAuthor reports an edit to a remark by somebody who did not write it.
+var ErrNotAuthor = errors.New("tracker: only its author may edit a comment")
+
+// EditComment rewrites one comment's body, AS ITS AUTHOR.
+//
+// # Only the author, whatever else the caller holds
+//
+// The authority table admits an admin beside the author on this
+// verb, because it answers "may you act on this remark" for removal and edit
+// alike. The WRITE answers the narrower question, and answers it the way
+// internal/pages does: a remark somebody else can rewrite is a remark
+// attributed to a person who did not make it, on a record that outlives the
+// thread and is quoted in the wake it sends. Taking a remark down is visible;
+// rewriting it is not.
+//
+// # Decided inside the snapshot
+//
+// Who wrote the comment, and whether it is still there, are read in the same
+// transaction the expectation is formed in — so an edit racing a removal, or a
+// second edit, contends at the broker on the task's subject rather than
+// landing against a remark that has moved.
+func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
+	commentID, body string, notify *Notify) (WriteResult, error) {
+
+	body = strings.TrimSpace(body)
+	switch {
+	case strings.TrimSpace(commentID) == "":
+		return WriteResult{}, invalid("an edit names no comment")
+	case body == "":
+		return WriteResult{}, invalid("an edit leaves comment %s "+
+			"with no body — remove it instead", commentID)
+	}
+	at := w.Now()
+	return w.updateTask(ctx, opID, taskID, project, NoIfMatch,
+		TaskPatch{Comment: &Comment{ID: commentID, Body: body}},
+		ChangeCommentEdited, notify,
+		func(ctx context.Context, tx *sql.Tx, _ Task,
+			patch TaskPatch) (TaskPatch, error) {
+
+			held, err := readComment(ctx, tx, taskID, commentID)
+			if err != nil {
+				return TaskPatch{}, err
+			}
+			stored := held[0]
+			switch {
+			case stored.Removed:
+				return TaskPatch{}, fmt.Errorf("%w: comment %s was removed, "+
+					"and a removed remark has no text left to edit",
+					ErrNoComment, commentID)
+			case stored.Author != w.Actor:
+				return TaskPatch{}, fmt.Errorf("%w: comment %s was written by "+
+					"%s — reply to it instead of rewriting it", ErrNotAuthor,
+					commentID, stored.Author)
+			}
+			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
+			// the apply is an upsert of the row the record carries: a
+			// patch holding only the id and the body would clear the
+			// question it asked, the answer it closed and the mentions it
+			// woke.
+			edited := stored
+			edited.Body, edited.UpdatedAt = patch.Comment.Body, at
+			patch.Comment = &edited
+			return patch, nil
+		})
+}
+
+// updateTask is [Writer.UpdateTask] with an optional [amendment].
+func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
+	ifMatch uint64, patch TaskPatch, kind ChangeKind,
+	notify *Notify, amend amendment) (WriteResult, error) {
+
 	switch {
 	case id == "":
 		return WriteResult{}, invalid("an update names no task")
@@ -626,6 +666,15 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		if err := checkCommentShape(id, patch.Comment); err != nil {
 			return WriteResult{}, err
 		}
+	}
+	if patch.FormerKeys != nil {
+		// THE DECIDE FORMS THEM, from the task in its own snapshot, when a
+		// mint re-keys it ([formerKeysAfterRekey]): the list is carried
+		// whole, and one a caller formed from its own read would replace
+		// whatever former keys the task gained since.
+		return WriteResult{}, invalid("a patch on task %s names its former "+
+			"keys, and nothing writes those but the move that re-keys it — "+
+			"the key a task leaves is read where the move decides", id)
 	}
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
@@ -666,12 +715,24 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	if scope, err = w.scopeForDependents(ctx, id, scope); err != nil {
 		return WriteResult{}, err
 	}
+	// A WRITE THAT RE-KEYS THE TASK — one carrying a mint — names every key
+	// it held and the key it takes: its apply claims the new one and turns
+	// the old current key into a former one, which changes who a purge
+	// hands that key to — see [keyTerm]. Every other patch leaves the key
+	// directory alone, so it names none.
+	if patch.Mint != nil {
+		if scope, err = w.scopeForRekey(ctx, id, project, patch, scope); err != nil {
+			return WriteResult{}, err
+		}
+	}
+	// AND THE SUM STAYS UNDER THE CAP, for [ScopeSet.capped]'s reason.
+	scope = scope.capped()
 	at := w.Now()
 
 	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
 	// every round: the LAST run is the one whose record was published, so
 	// the slice is replaced rather than appended to.
-	var fieldWarnings, promoteWarnings []string
+	var fieldWarnings []string
 	result, err := w.published(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -684,28 +745,50 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
+				// TWO ABSENCES, and only one is worth coming back for —
+				// see [missingTask].
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"no change can be made to it")
+			}
+			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
+			// see [stillIn]. A re-route is the project's own decision and
+			// the tag set, the scope and every lead check upstream were
+			// formed against it, so a task that moved in between is
+			// another project's write. A bulk edit names one project for
+			// every task in it, which is where a task from elsewhere
+			// arrives.
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
 			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
 				// or relation of it can change — which is what makes a
 				// removal an entirely local decision with no walk
-				// behind it.
+				// behind it. Asked before anything about a new parent,
+				// because it is the answer whatever the parent is.
 				return statelog.Decision{}, invalid("task %s was "+
 					"removed by %s at %s; restore it first",
-					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
+					id, current.Removed.By,
+					current.Removed.At.Format(time.RFC3339))
 			}
-			if current.Project != project {
-				// THE SCOPE NAMES THE PROJECT THE CALLER SAID, and the
-				// record is filed and probed under it. A task in
-				// another one would be written under a container it is
-				// not in — so a deferral on its real project would not
-				// hold this write back, and one on the named project
-				// would hold back a write that never touches it. A bulk
-				// edit names one project for every task in it, which is
-				// where a task from elsewhere arrives.
-				return statelog.Decision{}, notInProject(id, current.Project, project)
+			if patch.Parent != nil {
+				// A TASK A MOVE HAS NOT CARRIED KEEPS ITS PLACE until it
+				// has, whether this files it under another task or makes
+				// it a root: the walk carries every task it read, so one
+				// moved out from under the subtree would still be carried
+				// into the move's project — see [refuseMidMove].
+				if err = refuseMidMove(ctx, tx, current, "task",
+					"filed elsewhere now it would still be carried"); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
+			if patch.Parent != nil && *patch.Parent != "" {
+				// A RE-PARENT IS HELD TO THE CREATE'S RULE — see
+				// [refuseParent] — decided here, in the snapshot the
+				// record's expectation is formed in.
+				if err = refuseParent(ctx, tx, current, *patch.Parent); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			if ifMatch != 0 && current.Version != ifMatch {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
@@ -717,8 +800,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// THE MARK ALREADY SAYS IT: a walk's last append whose
 				// mark somebody else took down — the holder, racing the
 				// duty that finished its walk — or a re-run of one that
-				// landed. An empty decision is a success, as it is for
-				// a promotion with nothing left to mark, rather than a
+				// landed. An empty decision is a success rather than a
 				// history row recording that nothing moved.
 				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
@@ -733,6 +815,25 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// safely: the caller sends the lane it dropped into
 				// rather than a guess about the card ([Writer.PlaceTask]).
 				return statelog.Decision{Version: int64(current.Version)}, nil
+			}
+			// A COPY, for [settleWatch]'s reason: Decide runs again on a
+			// retry, and an amendment folded into the captured patch would
+			// compound across attempts.
+			patch := patch
+			if amend != nil {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				amended, err := amend(ctx, tx, current, patch)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				patch = amended
+			}
+			if patch.Mint != nil {
+				// THE KEY IT LEAVES BECOMES A FORMER ONE, read here
+				// rather than where the caller read the task — see
+				// [formerKeysAfterRekey].
+				former := formerKeysAfterRekey(current)
+				patch.FormerKeys = &former
 			}
 			if patch.Tags != nil {
 				// AGAINST THE TASK'S OWN PROJECT rather than the
@@ -778,28 +879,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			// A PROMOTION'S MARK AND A CHECKLIST GESTURE are each one
-			// change to the checklists, which are carried whole — so each
-			// is resolved against this snapshot, and a patch naming both
-			// is refused inside [settlePromote] rather than resolved in
-			// some order.
-			var note string
-			charged, note, err = settlePromote(current, charged)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			promoteWarnings = nil
-			if note != "" {
-				promoteWarnings = []string{note}
-			}
-			if patch.Promote != nil && charged.Empty() {
-				// NOTHING LEFT TO MARK: the item already points at
-				// this subtask, or is no longer on the parent. An
-				// empty decision is a success rather than a record
-				// saying nothing — which is what makes the parent
-				// step of a promotion re-runnable.
-				return statelog.Decision{Version: int64(current.Version)}, nil
-			}
+			// A CHECKLIST GESTURE is one change to the checklists, which
+			// are carried whole — so it is resolved against this snapshot,
+			// and refused beside a whole set inside [settleChecklist].
 			charged, err = settleChecklist(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -849,7 +931,20 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err := scope.covers(current.Dependents, filed); err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(stamp, subject, OpPatch, kind, scope, opID,
+			// AND EVERY KEY THIS WRITE MOVES, on the same honest pairing:
+			// the keys were read before the request, and a task re-keyed
+			// in between holds one the request never probed. Asked with
+			// the applier's own question ([keysMoved]), of the stored task
+			// and the task this record leaves, so the write whose apply
+			// will touch the directory is exactly the one checked here.
+			if next := applyPatch(current, charged); keysMoved(current, next) {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := scope.coversKeys(append(keysOf(current),
+					keysOf(next)...)); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
 				charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -862,7 +957,6 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		result.Warnings = bodyWarnings(*patch.Body)
 	}
 	result.Warnings = append(result.Warnings, fieldWarnings...)
-	result.Warnings = append(result.Warnings, promoteWarnings...)
 	return result, err
 }
 
@@ -883,7 +977,8 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 // question asks somebody only when it is written: an edit re-sends the whole
 // comment, `ask` included, and must not put the person asked back on a
 // watcher list they have since left.
-func settleComment(ctx context.Context, tx *sql.Tx, task string, comment *Comment) (bool, error) {
+func settleComment(ctx context.Context, tx *sql.Tx, task string,
+	comment *Comment) (bool, error) {
 	var document []byte
 	fresh := false
 	err := tx.QueryRowContext(ctx, `
@@ -984,59 +1079,6 @@ func laneOnly(patch TaskPatch) bool {
 	}
 	patch.Status = nil
 	return patch.Empty()
-}
-
-// settlePromote resolves a promotion's mark into the parent's whole checklist
-// set, against the parent this decide read.
-//
-// INSIDE THE DECIDE SNAPSHOT for the reason [settleWatch] gives: the mark is a
-// change to ONE item of a collection carried whole, and composing the whole
-// from any other read loses whatever landed in between.
-//
-// Three outcomes besides the mark. The item ALREADY POINTS AT THIS SUBTASK —
-// an earlier run marked it — and there is nothing to write. The item is NO
-// LONGER THERE — somebody deleted the line after the subtask was minted — and
-// there is nothing to mark either: the subtask stands on its own, and the
-// caller is told rather than refused, because a refusal would make the
-// promotion unfinishable for a reason nothing can undo. And the item already
-// became ANOTHER task, which is refused: one line is one piece of work.
-//
-// It returns a COPY, like every settle here.
-func settlePromote(current Task, patch TaskPatch) (TaskPatch, string, error) {
-	if patch.Promote == nil {
-		return patch, "", nil
-	}
-	intent := *patch.Promote
-	switch {
-	case patch.Checklists != nil || patch.Checklist != nil:
-		// A WHOLE SET OR ANOTHER GESTURE ([TaskPatch.Checklist]) beside the
-		// mark is refused rather than resolved in some order: each is a
-		// complete statement of what the checklists become.
-		return patch, "", invalid("this patch carries both a "+
-			"promotion of item %s and another change to the checklists — a "+
-			"caller states one or the other", intent.Item)
-	case intent.Item == "" || intent.Subtask == "":
-		return patch, "", invalid("a promotion mark names item %q "+
-			"and subtask %q, and needs both", intent.Item, intent.Subtask)
-	}
-	patch.Promote = nil
-	l, i, found := findItem(current, intent.Item)
-	if !found {
-		return patch, fmt.Sprintf("checklist item %s is no longer on task %s, so "+
-			"nothing marks it as having become task %s; the subtask stands on "+
-			"its own", intent.Item, current.ID, intent.Subtask), nil
-	}
-	if to := current.Checklists[l].Items[i].PromotedTo; to != nil {
-		if *to == intent.Subtask {
-			return patch, "", nil
-		}
-		return patch, "", invalid("checklist item %s of task %s "+
-			"already became task %s, so it cannot also become %s",
-			intent.Item, current.ID, *to, intent.Subtask)
-	}
-	lists := markPromoted(current, intent.Item, intent.Subtask)
-	patch.Checklists = &lists
-	return patch, "", nil
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.
@@ -1164,20 +1206,6 @@ func (w *Writer) chargeHandOff(current Task, patch TaskPatch) (TaskPatch, error)
 	}
 }
 
-// notInProject refuses a write to a task that named a project the task is not
-// in — an edit, a removal, a restore or a purge.
-//
-// THE SCOPE NAMES THE PROJECT THE CALLER SAID: the record is filed and probed
-// under it, so a deferral on the task's real project would not hold it back,
-// and one on the named project would hold back a record that never touches
-// it. A subtree's descendants are named by a read outside the snapshot, so a
-// removal or a restore of one moved since is refused here, and the walk stops
-// where a re-run resolves it again.
-func notInProject(id, filed, named string) error {
-	return invalid("task %s is in project %s, not %s — resolve it again and "+
-		"name the project it is in", id, filed, named)
-}
-
 // MoveTasks repositions tasks in a project's manual order.
 //
 // # Why the subject is the ORDER and not any of the tasks
@@ -1252,7 +1280,7 @@ func (w *Writer) publishOrder(ctx context.Context, opID, project string,
 			// history: it changes where a card sits and nothing about
 			// what the work is, so waking anybody for it would make a
 			// board's own drag a source of inbox traffic.
-			return w.decide(stamp, subject, OpPatch, "", scope, opID, RankOrder{
+			return w.decide(ctx, tx, stamp, subject, OpPatch, "", scope, opID, RankOrder{
 				V: DocumentVersion, Project: project, Placements: placements,
 			}, nil, at)
 		},
@@ -1289,8 +1317,8 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
 		Pattern: statelog.PatternArbitrated,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return w.decide(stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
 	})
 }
@@ -1306,7 +1334,7 @@ type TurnRecord struct {
 	// Task is the task id the turn is charged to, never its key: a key
 	// moves with the task and an id does not.
 	Task string `json:"task"`
-	// Seat is the handle of the seat whose turn it was.
+	// Seat is the seat whose turn it was, by its handle.
 	Seat string `json:"seat"`
 	// TurnID is the run the segment belongs to (ADR-0017), which a task's
 	// turn list groups segments by. REQUIRED: [Writer.RecordTurn] refuses a
@@ -1512,7 +1540,7 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 			if err := chargeable(ctx, tx, turn.Task, project); err != nil {
 				return statelog.Decision{}, err
 			}
-			return w.decide(stamp, subject, OpTurn, "", scope, opID, turn, nil, at)
+			return w.decide(ctx, tx, stamp, subject, OpTurn, "", scope, opID, turn, nil, at)
 		},
 	})
 }
@@ -1536,11 +1564,17 @@ func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 	return nil
 }
 
-// missingTask is the refusal of a task this node holds no row for: [ErrNoTask]
-// when a purge destroyed it, which is final — so the refusal says what the
-// gesture cannot do (refused, completing "task X was purged, and …") — and
-// [statelog.ErrUnavailable] otherwise: this node may not have applied its
-// create, which a node that has will not refuse.
+// missingTask is the refusal of a task this node holds no row for —
+// THREE-VALUED, because the absence is two different facts and the third value
+// is the read failing.
+//
+// A PURGE LEAVES A MARKER that outlives the row (see [taskGuards]), so a task
+// carrying one is gone on every node and for good: [ErrNoTask], which is final
+// — so the refusal names the key the task held and says what the gesture cannot
+// do (refused, completing "task KEY (id) was purged, and …"). Only a task with
+// no row AND no marker is one this node may simply not have applied yet —
+// [statelog.ErrUnavailable], which a node that has applied its create will not
+// refuse, and the one absence worth coming back for.
 //
 // EVERY WRITE THAT MEETS A MISSING TASK ANSWERS THROUGH HERE. "Not on this
 // node" is a refusal the CALLER retries — the estate's router hands it back as
@@ -1548,16 +1582,17 @@ func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 // has not applied the create yet is one that will, and what a seat must see of
 // its OWN writes is what its floors already hold every holder to — and every
 // node holding the task's deletion marker says it again. So a seat editing,
-// moving, merging, removing, restoring, charging or promoting out of a task
-// somebody purged was told to try again for ever about a task no node will
-// hold again.
+// moving, merging, removing, restoring or charging a task somebody purged —
+// and a merge walk or a duty retrying one on every tick — was told to try again
+// for ever about a task no node will hold again.
 func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
-	var purged int
+	var key string
 	err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM tracker_deletions WHERE task_id = ?`, id).Scan(&purged)
+		`SELECT task_key FROM tracker_deletions WHERE task_id = ?`, id).Scan(&key)
 	switch {
 	case err == nil:
-		return fmt.Errorf("%w: task %s was purged, and %s", ErrNoTask, id, refused)
+		return fmt.Errorf("%w: task %s (%s) was purged, and %s", ErrNoTask,
+			key, id, refused)
 	case !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("tracker: read the deletion marker of %s: %w", id, err)
 	}
@@ -1627,17 +1662,27 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 // every record this domain ever published named nobody and the gate had no
 // node to drop. Both now arrive as the framework's [statelog.Stamp], which the
 // publisher checks on the encoded record before it appends anything.
-func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
-	kind ChangeKind, scope ScopeSet, opID string, payload any, notify *Notify,
-	at time.Time) (statelog.Decision, error) {
+func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
+	subject Subject, op OpKind, kind ChangeKind, scope ScopeSet, opID string,
+	payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
 		return statelog.Decision{}, err
 	}
-	if err := notify.Validate(); err != nil {
+	// EVERY WAKE SAYS WHETHER ITS KEY OPENS ITS TASK, here for the same
+	// reason: a caller builds the wake from a task it read OUTSIDE this
+	// snapshot, or — on a create or a move — before the key it carries
+	// existed at all, and a wake that left it to each path would be one path
+	// forgetting it from naming the claimant to the seat woken about the
+	// duplicate. See [Snapshot.KeyCollision].
+	notify, err := collided(ctx, tx, subject, notify)
+	if err != nil {
 		return statelog.Decision{}, err
 	}
-	if err := scope.Validate(); err != nil {
+	if err = notify.Validate(); err != nil {
+		return statelog.Decision{}, err
+	}
+	if err = scope.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
 	if scope.Subject && scope.Container == "" && subject.Kind.RequiresAProject() {
@@ -1663,13 +1708,9 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 		Actor:      w.Actor,
 		ActorKind:  w.ActorKind,
 		OperatorID: w.OperatorID,
-		// THE SEAT BESIDE THE AUTHOR, never instead of it — see
-		// [Provenance.Seat]. Empty for every writer that is already a
-		// seat, which is every in-engine caller.
-		ActorSeat: w.Seat,
-		TurnID:    w.TurnID,
-		Chain:     w.Chain,
-		Notify:    notify,
+		TurnID:     w.TurnID,
+		Chain:      w.Chain,
+		Notify:     notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {
@@ -1685,6 +1726,28 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 			op, subject, len(encoded), MaxCommitBytes)
 	}
 	return statelog.Decision{Payload: encoded}, nil
+}
+
+// collided is a wake with [Snapshot.KeyCollision] derived from the key
+// directory in the decide's own snapshot ([keyHeldByAnother]), or nil for a
+// record that wakes nobody.
+//
+// A COPY, because a decide runs again on every rejected round and the caller's
+// wake is the value each round starts from: written in place, a round's
+// answer would be read as the caller's statement by the next one.
+func collided(ctx context.Context, tx *sql.Tx, subject Subject, notify *Notify) (*Notify, error) {
+	if notify == nil {
+		return nil, nil
+	}
+	task := notify.Snapshot.TaskID(subject)
+	held, err := keyHeldByAnother(ctx, tx, notify.Snapshot.Key, task)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read whether key %s opens task %s "+
+			"for the wake on %s: %w", notify.Snapshot.Key, task, subject, err)
+	}
+	out := *notify
+	out.Snapshot.KeyCollision = held
+	return &out, nil
 }
 
 // wire is the framework's subject for one of this domain's.

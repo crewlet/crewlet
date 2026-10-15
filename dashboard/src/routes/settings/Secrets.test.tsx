@@ -20,7 +20,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CredentialPeek, provenance, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
-import { storeToken } from "~/protocol/index.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 /**
  * A screen renders inside the Router.
@@ -102,17 +103,16 @@ function ok(payload: unknown): Response {
   });
 }
 
-beforeEach(() => {
-  localStorage.setItem("crewlet_api_token", "operator-token");
-});
-
 afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
 });
 
-test("the list comes from GET /secrets, carrying the operator token", async () => {
+// THE BROWSER'S OWN SESSION and nothing else: the cookie rides a same-origin
+// request, and no bearer is ever set by a page — a credential a page held
+// was one any script on it could read.
+test("the list comes from GET /secrets, on the browser's own session", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
   render(<Secrets />);
 
@@ -121,7 +121,8 @@ test("the list comes from GET /secrets, carrying the operator token", async () =
 
   const init = spy.mock.calls[0]?.[1];
   const headers = (init?.headers ?? {}) as Record<string, string>;
-  expect(headers.Authorization).toBe("Bearer operator-token");
+  expect(init?.credentials).toBe("same-origin");
+  expect(headers.Authorization).toBeUndefined();
 });
 
 // NO VALUE, EVER. The one route that returns one needs an explicit flag and
@@ -147,15 +148,24 @@ test("the screen never asks for a value", async () => {
 //
 // AND IT REPORTS THE CODE, NOT A SENTENCE. `QueryState` is a table over
 // `QueryErrorCode`; handing it prose missed the table on every refusal and
-// rendered the "code this build does not know" banner — with no way to set
-// the token the same banner exists to offer. This screen is guarded reads
-// included, so a 401 is the refusal an operator actually arrives at.
-test("a 401 renders the auth-gated banner, with the button that fixes it", async () => {
-  stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
+// rendered the "code this build does not know" banner — with no way to sign
+// in that the same banner exists to offer. This screen is guarded reads
+// included, so a refusal on authority is what a reader actually arrives at,
+// and it names the grant that would have admitted them.
+test("a refusal on authority names the grant, with the button that fixes it", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["admin"] }),
+        { status: 403 },
+      ),
+  );
   render(<Secrets />);
 
-  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
-  expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+  expect(
+    await screen.findByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
@@ -344,9 +354,9 @@ test("editing a secret asks for a new value and never receives the old one", asy
 /**
  * AN ANSWER NOBODY IS WAITING FOR ANY MORE WRITES NOTHING.
  *
- * Three things start a read here — mount, a token arriving, and a store or a
- * removal finishing — and nothing polls, so two are routinely in flight at
- * once. Every answer was written into state unconditionally, which makes the
+ * Three things start a read here — mount, the socket coming back, and a store
+ * or a removal finishing — and nothing polls, so two are routinely in flight
+ * at once. Every answer was written into state unconditionally, which makes the
  * screen hold whichever LANDED last rather than whichever was ASKED last: a
  * refresh started after a slow read finishes second and is overwritten by the
  * list it was meant to replace.
@@ -387,10 +397,17 @@ test("a read that answers after a newer one began does not overwrite it", async 
     }),
   });
 
-  render(<Secrets />);
-  // A TOKEN ARRIVING starts the second read, which is one of the three real
-  // triggers rather than a lever invented for this case.
-  storeToken("operator-token-2");
+  const store = new Store();
+  store.setConnected(true);
+  render(
+    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+      <Secrets />
+    </ClientContext.Provider>,
+  );
+  // THE SOCKET COMING BACK starts the second read, which is one of the three
+  // real triggers rather than a lever invented for this case.
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
   expect(await screen.findByText("GITHUB_TOKEN")).toBeTruthy();
 
   // NOW the first read answers, and the screen must ignore it.

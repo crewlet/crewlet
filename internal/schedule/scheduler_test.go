@@ -20,9 +20,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // --- fakes ----------------------------------------------------------------
@@ -147,7 +150,7 @@ func unitOrg(target org.ScheduleTarget) *org.Organization {
 		Units: []*org.Unit{{
 			Name: "Quality",
 			Type: org.UnitTypeTeam,
-			Lead: "QA Lead",
+			Lead: "qa-lead",
 			Roles: []*org.Role{
 				{Name: "QA Lead", DeclaredHandle: "qa-lead"},
 				{Name: "QA Dev", DeclaredHandle: "qa-dev"},
@@ -297,7 +300,7 @@ func TestARoleScheduleFiresToItsOwnInbox(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("inbox tasks = %d, want 1", len(tasks))
 	}
-	if tasks[0].topic != "crewlet.agent.qa.inbox" {
+	if tasks[0].topic != seatInbox("qa") {
 		t.Fatalf("topic = %q, want the seat's inbox", tasks[0].topic)
 	}
 	// THE TYPED PAYLOAD, not the envelope's free-form bag. The fire's task
@@ -416,7 +419,7 @@ func TestUnitEachFansOutToEveryDirectMember(t *testing.T) {
 	if got := h.tick(tickAt(9, 0, 30)); got != 2 {
 		t.Fatalf("Tick = %d fires, want 2", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox", "crewlet.agent.qa-dev.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"), seatInbox("qa-dev"))
 }
 
 func TestUnitTargetLeadFiresOnlyToTheLead(t *testing.T) {
@@ -426,7 +429,7 @@ func TestUnitTargetLeadFiresOnlyToTheLead(t *testing.T) {
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("Tick = %d fires, want 1", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"))
 }
 
 func TestAnEmptyTargetMeansEach(t *testing.T) {
@@ -444,12 +447,12 @@ func TestAnEmptyTargetMeansEach(t *testing.T) {
 func TestOneMembersPublishFailureDoesNotBlockItsSiblings(t *testing.T) {
 	t.Parallel()
 	h := build(t, unitOrg(org.TargetEach))
-	h.q.refuse["crewlet.agent.qa-dev.inbox"] = errors.New("broker refused the publish")
+	h.q.refuse[seatInbox("qa-dev")] = errors.New("broker refused the publish")
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("Tick = %d fires, want 1 — the healthy member still runs", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"))
 }
 
 func TestAFailedPublishKeepsItsClaim(t *testing.T) {
@@ -459,7 +462,7 @@ func TestAFailedPublishKeepsItsClaim(t *testing.T) {
 	// and lost the acknowledgement — so releasing the claim to retry would
 	// risk waking the seat twice. The fire is dropped and the row stands.
 	h := build(t, roleOrg())
-	h.q.refuse["crewlet.agent.qa.inbox"] = errors.New("broker refused the publish")
+	h.q.refuse[seatInbox("qa")] = errors.New("broker refused the publish")
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 0 {
 		t.Fatalf("Tick = %d, want 0", got)
@@ -506,7 +509,7 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 		Contact: &org.HumanContact{SlackUserID: "U0HUMAN"},
 	}
 	each := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "qa-lead",
 		Roles: []*org.Role{{Name: "QA Lead", DeclaredHandle: "qa-lead"}, human},
 		Schedules: []org.Schedule{{
 			Name: "standup", Cron: "0 9 * * *", Task: "standup", Target: org.TargetEach,
@@ -517,10 +520,10 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("Tick = %d fires, want 1 (the agent only)", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"))
 
 	lead := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "Sarah Chen",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "sarah-chen",
 		Roles: []*org.Role{human, {Name: "QA Dev", DeclaredHandle: "qa-dev"}},
 		Schedules: []org.Schedule{{
 			Name: "report", Cron: "0 9 * * *", Task: "report", Target: org.TargetLead,
@@ -705,7 +708,7 @@ func TestCatchupFiresARecentlyMissedTick(t *testing.T) {
 	if got := h.tick(tickAt(9, 2, 0)); got != 1 {
 		t.Fatalf("Tick = %d, want 1", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa"))
 }
 
 func TestCatchupRecordsASkipOutsideTheWindow(t *testing.T) {
@@ -904,7 +907,9 @@ func TestATickAgainstNoCompanyFiresNothing(t *testing.T) {
 func TestJitterDelaysFiringDeterministically(t *testing.T) {
 	t.Parallel()
 	h := build(t, roleOrg(), func(o *Options) { o.Jitter = 45 * time.Second })
-	offset := h.s.jitterFor("qa", "smoke")
+	// ON THE SCOPE'S IDENTITY, which for a role is the seat's agent id: the
+	// offset has to be the same on every node and every tick.
+	offset := h.s.jitterFor(seatScopeID("qa"), "smoke")
 	if offset <= 0 || offset > 45*time.Second {
 		t.Fatalf("jitter offset = %v, want it inside (0, 45s] for this fixture", offset)
 	}
@@ -1202,7 +1207,25 @@ func requireTopics(t *testing.T, got []string, want ...string) {
 	}
 }
 
-// A FIRE FOR A PAUSED SEAT IS SKIPPED, RECORDED AND CLAIMED.
+// seatScopeID is the identity a fixture seat's schedules are keyed under.
+func seatScopeID(handle string) string {
+	id, _ := org.DeriveAgentID("Acme", handle)
+	return id.String()
+}
+
+// seatInbox is a fixture seat's mailbox subject.
+//
+// THROUGH THE ORG, because the scheduler publishes to the subject a seat's ID
+// names rather than to one built from its handle. Every fixture here runs in
+// the company "Acme", so the id is the one that company derives for that
+// handle.
+func seatInbox(handle string) string {
+	id, _ := org.DeriveAgentID("Acme", handle)
+	return topics.AgentInbox(id)
+}
+
+// A FIRE FOR A PAUSED SEAT IS SKIPPED, RECORDED AND CLAIMED — the seat asked
+// about by its derived ID, which is what a pause is kept on.
 //
 // Skipped rather than dispatched into the held inbox, because a fire parked
 // behind a pause runs whenever somebody resumes the seat — a standup days late,
@@ -1214,7 +1237,9 @@ func TestAFireForAPausedSeatIsSkippedPaused(t *testing.T) {
 	t.Parallel()
 	paused := true
 	h := build(t, roleOrg(), func(o *Options) {
-		o.Paused = func(handle string) (bool, error) { return paused && handle == "qa", nil }
+		o.Paused = func(seat uuid.UUID) (bool, error) {
+			return paused && seat.String() == seatScopeID("qa"), nil
+		}
 	})
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 0 {
@@ -1244,7 +1269,7 @@ func TestAFireForAPausedSeatIsSkippedPaused(t *testing.T) {
 func TestAFireOnAnUnreadablePauseIsDispatched(t *testing.T) {
 	t.Parallel()
 	h := build(t, roleOrg(), func(o *Options) {
-		o.Paused = func(string) (bool, error) { return false, errors.New("not read yet") }
+		o.Paused = func(uuid.UUID) (bool, error) { return false, errors.New("not read yet") }
 	})
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {

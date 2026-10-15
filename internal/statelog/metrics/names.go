@@ -16,6 +16,7 @@ package metrics
 // the declaration; these are its identifiers.
 const (
 	AlarmActive                      = "crewlet.alarm.active"
+	AuthAttemptsFailed               = "crewlet.auth.attempts.failed"
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
@@ -39,6 +40,7 @@ const (
 	StatelogDrainRowsPerSecond       = "crewlet.statelog.drain.rows_per_second"
 	StatelogLingerYields             = "crewlet.statelog.linger.yields"
 	StatelogLogBytes                 = "crewlet.statelog.log.bytes"
+	StatelogLogBytesPerDay           = "crewlet.statelog.log.bytes_per_day"
 	StatelogLogHeadroomFraction      = "crewlet.statelog.log.headroom_fraction"
 	StatelogLogMaxBytes              = "crewlet.statelog.log.max_bytes"
 	StatelogPublishConflicts         = "crewlet.statelog.publish.conflicts"
@@ -51,6 +53,8 @@ const (
 	StatelogReadServed               = "crewlet.statelog.read.served"
 	StatelogReadWait                 = "crewlet.statelog.read.wait"
 	StatelogRecordsGated             = "crewlet.statelog.records_gated"
+	StatelogRecordsTampered          = "crewlet.statelog.records_tampered"
+	StatelogRecordsUnverifiable      = "crewlet.statelog.records_unverifiable"
 	StatelogTrimBlockedSeconds       = "crewlet.statelog.trim.blocked_seconds"
 	StatelogWaiters                  = "crewlet.statelog.waiters"
 	StatelogWriteSessionWait         = "crewlet.statelog.write.session_wait"

@@ -21,6 +21,7 @@ import { crumbsFor, pageSpaceKey, pageUpKey } from "~/app/crumbs.ts";
 import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
+import { noteReader } from "~/lib/reader.ts";
 import { resetForTest as resetStars, useStarred } from "~/lib/starred.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -43,9 +44,10 @@ const NOW = Date.parse("2026-09-25T00:00:00Z");
 const ID = "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a";
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["save_page", "comment_on_page", "write_page"],
@@ -72,7 +74,7 @@ const detail = (
     title: "Provisioner runbook",
     status: "published",
     version: 14,
-    author: "founder",
+    author: "jane",
     updated_at: "2026-09-24T22:00:00Z",
     revision: 40,
     watchers: ["jane", "swe"],
@@ -82,7 +84,6 @@ const detail = (
   revision: 40,
   skill: false,
   onboarding: false,
-  author_seat: "jane",
   history: [
     {
       version: 14,
@@ -158,6 +159,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
   resetStars();
   reloadForTest();
   location.hash = "#/";
@@ -219,7 +221,7 @@ test("the page is read by its id, and its readers by the same id", async () => {
 
 // THE PROPERTIES ARE MINIMAL: where, who wrote it, who last saved it and when,
 // with the revision and its note on the save's own line.
-test("the properties name the person behind the token, and the last save with its revision", async () => {
+test("the properties name the seat the author wrote as, and the last save with its revision", async () => {
   mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
   await settle();
   const props = document.querySelector(".knowledge-props")!;
@@ -233,9 +235,10 @@ test("the properties name the person behind the token, and the last save with it
       .getByRole("link", { name: "Runbooks" })
       .getAttribute("href"),
   ).toBe("#/knowledge/pages/p-0");
-  // THE PERSON, never the token the write was recorded under.
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person writes AS their seat,
+  // drawn by the chart's name for it rather than the handle.
   expect(props.textContent).toContain("Jane Founder");
-  expect(props.textContent).not.toContain("founder ");
+  expect(props.textContent).not.toMatch(/\bjane\b/);
   const saved = within(props as HTMLElement).getByTitle("Revision 14: “Name the switch”");
   expect(saved.textContent).toMatch(/^2h ago by SWE/);
   expect(props.textContent).not.toContain("Kind");
@@ -443,10 +446,28 @@ test("History reads the newest revision, lists the others, and shows the page's 
           page_id: ID,
           title: "Provisioner runbook",
           kind: "saved",
-          actor: "founder",
-          actor_seat: "jane",
+          actor: "jane",
+          actor_kind: "human",
           excerpt: "Adds the drain step",
           at: "2026-09-24T22:00:00Z",
+        },
+        // A CREDENTIAL BOUND TO NO SEAT writes under its login, a name.
+        {
+          id: "c-2",
+          page_id: ID,
+          kind: "renamed",
+          actor: "ci.docs",
+          actor_kind: "operator",
+          at: "2026-09-24T21:00:00Z",
+        },
+        // THE ENGINE'S OWN CHANGE names nobody.
+        {
+          id: "c-3",
+          page_id: ID,
+          kind: "saved",
+          actor: "crewlet",
+          actor_kind: "system",
+          at: "2026-09-24T20:00:00Z",
         },
         // A NEW PAGE'S EXCERPT IS ITS FIRST LINE, here the title's heading.
         {
@@ -474,6 +495,9 @@ test("History reads the newest revision, lists the others, and shows the page's 
   expect(screen.queryByRole("region", { name: /^Comments/ })).toBeNull();
   const changes = region(/^Changes/);
   expect(within(changes).getByText("Jane Founder")).toBeTruthy();
+  expect(within(changes).getByText("ci.docs")).toBeTruthy();
+  expect(within(changes).getByText("The engine")).toBeTruthy();
+  expect(changes.textContent).not.toContain("crewlet");
   expect(changes.textContent).toContain("saved it");
   // A SAVE'S NOTE IS DRAWN; a new page's first line that only repeats the
   // title is not, since the title heads the page this list is on.
@@ -508,6 +532,33 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
   expect(followersOf({ watchers: ["jane", "swe"], muted: ["jane"] })).toEqual(["swe"]);
 });
 
+// A WATCH IS FILED UNDER A SEAT, and a credential bound to none subscribes
+// nobody (`internal/pages` `Actor.subscriber`): the eye says so rather than
+// offering a press the engine answers by moving nothing.
+test("the eye is held, with its reason, for a credential bound to no seat", async () => {
+  const unbound = {
+    login: "svc:docs",
+    grants: ["knowledge"],
+    handle: "",
+    owner: "svc:docs",
+    name: "",
+    kind: "",
+    acts: ["save_page"],
+  };
+  mount(<PageView id={ID} />, {
+    viewer: unbound,
+    page: detail({}, { watchers: ["svc:docs", "swe"] }),
+    page_reads: reads(),
+  });
+  await settle();
+  const eye = screen.getByRole("button", { name: "Watch this page" });
+  expect(eye.getAttribute("aria-pressed")).toBe("false");
+  expect(eye.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(eye);
+  await settle();
+  expect(posted).toEqual([]);
+});
+
 function Stars() {
   const stars = useStarred();
   return <output aria-label="stars">{stars.map((s) => s.path.join("/")).join(",")}</output>;
@@ -515,6 +566,7 @@ function Stars() {
 
 // THE STAR IS IN THE PAGE'S MORE MENU, beside its other page actions.
 test("More stars the page, and offers the sub-page, History and the address", async () => {
+  noteReader("p-1");
   mount(
     <>
       <PageView id={ID} />
@@ -538,6 +590,18 @@ test("More stars the page, and offers the sub-page, History and the address", as
   fireEvent.click(within(menu).getByRole("menuitem", { name: /Star this page/ }));
   await settle();
   expect(screen.getByRole("status", { name: "stars" }).textContent).toBe(`knowledge/pages/${ID}`);
+});
+
+// NOR BY NOBODY: stars are kept per reader, so a tab that has not learned who
+// reads it offers no star (a star kept in a list nobody owns would be offered
+// to whoever signs in next), and the rest of More is unchanged.
+test("More offers no star on a tab no reader has claimed", async () => {
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "More for “Provisioner runbook”" }));
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).queryByRole("menuitem", { name: /Star this page/ })).toBeNull();
+  expect(within(menu).getByRole("menuitem", { name: "New sub-page" })).toBeTruthy();
 });
 
 // THE CONFLICT FLOW. The page is polled while it is edited; a save that lands
@@ -647,18 +711,18 @@ test("an overlapping change is settled by the person before the base moves", asy
   vi.useRealTimers();
 });
 
-test("a comment is written as the signed-in person, and drawn as the person behind a token", async () => {
+test("a comment is written as the signed-in person, and drawn as the seat they wrote as", async () => {
   mount(<PageView id={ID} />, {
     page: detail({
       comments: [
         {
           id: "c-1",
-          author: "founder",
+          author: "jane",
+          author_kind: "human",
           body: "Is step 2 still right?",
           created_at: "2026-09-24T20:00:00Z",
         } as never,
       ],
-      comment_seats: { "c-1": "jane" },
     }),
     page_reads: reads(),
   });
@@ -712,13 +776,8 @@ test("only an exact repeat of the title on the first line is dropped", () => {
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
-  ],
-  [
-    "an unbound token",
-    { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] },
-    WRITE_REASONS.unbound,
   ],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
 ])("every page write is drawn for %s, disabled with the reason", async (_who, viewer, reason) => {

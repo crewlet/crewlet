@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -19,11 +21,14 @@ import (
 // # Why there is exactly one of them
 //
 // Everything a company does to its tasks is done by seats, through their own
-// tools, and that is the design: an engine whose operator edits work by hand is
-// one whose org chart is decoration. The exception is the operation no seat may
-// ever perform — a purge, which destroys a task and every row it produced on
-// every node, and which the write path restricts to a person or an operator
-// token precisely because nothing else can be asked to confirm it.
+// tools, and a person does the rest through the HTTP write surface the
+// dashboard is built on — the same tools again, under a person's own name. The
+// one gesture that belongs on a SHELL is the operation no seat may ever
+// perform: a purge, which destroys a task and every row it produced on every
+// node, which the write path restricts to a person or an operator token
+// precisely because nothing else can be asked to confirm it, and which an
+// operator acting on an erasure request runs from a terminal and a runbook
+// rather than from a screen. It goes through that same surface's own route.
 //
 // That operation had no caller anywhere. `tracker.Writer.PurgeTask` existed,
 // the applier handled its record, the deletion marker stopped a redelivery
@@ -35,63 +40,89 @@ import (
 // single database.
 
 // runWork dispatches `crewlet work`.
-func runWork(args []string, stdout, stderr io.Writer) error {
+func runWork(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "purge":
-		return workPurge(rest, stdout, stderr)
+		return workPurge(environ, rest, stdout, stderr)
 	case "", "help":
-		fmt.Fprintln(stderr, "usage: crewlet work purge <task-id> "+
-			"-project KEY -reason TEXT -confirm <task-key> "+
-			"[<config.yaml>] [-url] [-token]")
+		fmt.Fprintln(stderr, workPurgeUsage)
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown work command %q", sub)
 	}
 }
 
+// workPurgeUsage is the one usage line, printed wherever the command is
+// refused for want of an argument.
+const workPurgeUsage = "usage: crewlet work purge <item> -reason TEXT " +
+	"-confirm <item-key> [-op-id ID] [<config.yaml>] [-url]"
+
 // workPurge is `crewlet work purge`.
 //
-// # The confirmation is the task's KEY, and the reason is required
+// # The confirmation is the item's KEY, and the node checks it
 //
-// An id is a uuid nobody reads and which the command line already carries;
-// repeating it confirms nothing. The KEY is what a person sees on the board and
-// in the ticket they were asked to act on, so it has to be looked up — which is
-// the whole point of asking.
+// The item may be named by its id, a uuid nobody reads; the KEY is what a
+// person sees on the board and in the ticket they were asked to act on, so it
+// has to be looked up — which is the whole point of asking. The node compares
+// it against the item the first argument resolves to and destroys nothing if
+// they differ.
 //
-// The reason is required because it is the only thing that survives. The rows
-// are destroyed; what remains is the deletion marker, and its reason is the
-// entire account of what used to be at that key for whoever reads it a year
-// later.
-func workPurge(args []string, stdout, stderr io.Writer) error {
-	id, rest := splitSubject(args)
-	var project, reason, confirm, opID *string
-	client, err := nodeClientFor(rest, "work purge", stderr, func(fs *flag.FlagSet) {
-		project = fs.String("project", "", "the task's project key; required")
+// # The project is the node's to know
+//
+// The record is filed under the item's own project, and the stored row is the
+// one place that says which that is, so the command no longer asks for it: a
+// flag the caller could set wrong was a flag that could file a purge under a
+// project it was not about.
+//
+// # The reason is required
+//
+// It is the only thing that survives. The rows are destroyed; what remains is
+// the deletion marker, and its reason is the entire account of what used to be
+// at that key for whoever reads it a year later.
+func workPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	item, rest := splitSubject(args)
+	var reason, confirm, opID *string
+	client, err := nodeClientFor(environ, rest, "work purge", stderr, func(fs *flag.FlagSet) {
 		reason = fs.String("reason", "", "why; recorded on the deletion marker")
 		confirm = fs.String("confirm", "",
-			"the task's KEY — this destroys the task and every row it produced")
+			"the item's KEY — this destroys the item and every row it produced")
 		opID = fs.String("op-id", "",
-			"retry an `unknown` outcome with the id it printed, so the retry "+
-				"cannot append a second purge")
+			"retry a purge whose outcome is unknown with the id it printed, so "+
+				"the retry cannot append a second purge; empty starts a new one")
 	})
 	if err != nil {
 		return err
 	}
 	switch {
-	case id == "" || strings.TrimSpace(*confirm) == "":
-		fmt.Fprintln(stderr, "usage: crewlet work purge <task-id> "+
-			"-project KEY -reason TEXT -confirm <task-key>")
-		return fmt.Errorf("a purge destroys the task and every row it produced " +
-			"on every node, and nothing undoes it — name the task's KEY in " +
+	case item == "" || strings.TrimSpace(*confirm) == "":
+		fmt.Fprintln(stderr, workPurgeUsage)
+		return fmt.Errorf("a purge destroys the item and every row it produced " +
+			"on every node, and nothing undoes it — name the item's KEY in " +
 			"-confirm to run it")
-	case strings.TrimSpace(*project) == "":
-		return fmt.Errorf("name the task's project in -project: it is the " +
-			"container the record arbitrates under, and a purge filed under " +
-			"the wrong one blocks writes to a project it is not about")
 	case strings.TrimSpace(*reason) == "":
 		return fmt.Errorf("state why in -reason: the rows are destroyed and " +
 			"the marker's reason is the only account of them that survives")
+	}
+
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
+	// brought none — the gate verbs' rule, for their reason. A purge whose
+	// request timed out or dropped may well have landed, and the key it was
+	// sent under is the only handle on it: minted by the node, it was lost
+	// with the answer, and the only way on was a second purge under a fresh
+	// one. It is minted as the node would mint it ([statelog.NewOpID]),
+	// carrying the instant a node judges the retry by.
+	//
+	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
+	// IT TO ([statelog.CheckCallerOpID]) before anything is sent, and sent
+	// as given: the node refuses an id it did not mint or one altered on the
+	// way back `400 op_id_invalid`, and refused here the error names the
+	// flag rather than a header this command composed.
+	operation := *opID
+	if operation == "" {
+		operation = statelog.NewOpID(time.Now(), "purge")
+	} else if err = statelog.CheckCallerOpID(operation); err != nil {
+		return fmt.Errorf("-op-id: %w", err)
 	}
 
 	var answer struct {
@@ -99,67 +130,71 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		Key      string `json:"key"`
 		Project  string `json:"project"`
 		Outcome  string `json:"outcome"`
-		Position struct {
-			Stream     string `json:"stream"`
-			Generation uint32 `json:"generation"`
-			Seq        uint64 `json:"seq"`
-		} `json:"position"`
-		OpID string `json:"op_id"`
+		Position string `json:"position"`
+		OpID     string `json:"op_id"`
 	}
-	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
-	// brought none — the gate verbs' rule, for their reason. A purge whose
-	// request timed out or dropped may well have landed, and the id the node
-	// would have answered with is the only handle on it: minted by the node,
-	// it was lost with the answer, and the only way on was a second purge
-	// under a fresh id. It is minted as the node would mint it
-	// ([statelog.NewOpID]), carrying the instant a node judges the retry by,
-	// and one the operator brought is sent as given: the node refuses an id it
-	// did not mint or one altered on the way back, and trimming it here would
-	// be a second copy of that rule.
-	operation := *opID
-	if operation == "" {
-		operation = statelog.NewOpID(time.Now(), "purge-"+id)
-	}
-	path := fmt.Sprintf("/work/%s/purge?confirm=%s&project=%s&reason=%s&op_id=%s",
-		url.PathEscape(id), url.QueryEscape(strings.TrimSpace(*confirm)),
-		url.QueryEscape(strings.TrimSpace(*project)),
-		url.QueryEscape(strings.TrimSpace(*reason)), url.QueryEscape(operation))
+	path := fmt.Sprintf("/work/items/%s/purge?confirm=%s&reason=%s",
+		url.PathEscape(item), url.QueryEscape(strings.TrimSpace(*confirm)),
+		url.QueryEscape(strings.TrimSpace(*reason)))
 	// PATIENTLY, for the reason [nodeClient.patiently] names: a purge waits on
 	// the write path's own waits, not on the network.
-	if err := client.patiently(purgeRequestTimeout).post(context.Background(), path,
-		&answer); err != nil {
-		var lost noAnswer
-		if errors.As(err, &lost) {
-			fmt.Fprintf(stderr, "The node did not answer, so whether the purge "+
-				"landed is unknown. Run the same command again with -op-id %s — "+
-				"if the record landed, the retry answers from it rather than "+
-				"appending a second purge.\n", operation)
+	err = client.patiently(purgeRequestTimeout).postKeyed(context.Background(), path,
+		operation, nil, &answer)
+	var lost noAnswer
+	if errors.As(err, &lost) {
+		fmt.Fprintf(stderr, "The node did not answer, so whether the purge "+
+			"landed is unknown. Run the same command again with -op-id %s — "+
+			"if the record landed, the retry answers from it rather than "+
+			"appending a second purge.\n", operation)
+		return err
+	}
+	var refused *nodeRefusal
+	if errors.As(err, &refused) && refused.OpID != "" &&
+		refused.Status == http.StatusServiceUnavailable {
+		// EVERY RETRY IS UNDER THE SAME ID, and the answer says which
+		// one: a fresh one would append a second purge of an item an
+		// earlier attempt may already have destroyed. The id is the
+		// node's answer, which is the one this command sent.
+		switch {
+		case refused.Unvouched:
+			// NOT THROUGH THIS NODE: its operation ledger cannot
+			// vouch for the operation, so it answers the same way
+			// until the record reaches it.
+			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed "+
+				"and will answer the same way until it can: check whether %s "+
+				"is gone, or run it through another node with -url <that node> "+
+				"-op-id %s — never a fresh id", err, item, refused.OpID)
+		case refused.Unsettled:
+			return fmt.Errorf("%w\n\nNo acknowledgement — this is the one "+
+				"outcome to retry, and retrying with the same operation id is "+
+				"what stops a second record: -op-id %s", err, refused.OpID)
+		default:
+			// A REFUSAL, which wrote nothing: what the node names above
+			// is what clears it, and waiting may.
+			return fmt.Errorf("%w\n\nThis attempt wrote nothing. Once the "+
+				"node can take it, run it again with -op-id %s, so every "+
+				"attempt stays the one operation", err, refused.OpID)
 		}
+	}
+	if err != nil {
 		return err
 	}
 
-	if answer.Outcome == string(statelog.OutcomeUnknown) {
-		// NO POSITION, which is the whole content of unknown: printed as
-		// "at 0" it read as a record landed at the log's origin.
-		fmt.Fprintf(stdout, "purge %s (%s): unknown — the record may or may not "+
-			"be on the log\n", answer.Key, id)
-	} else {
-		fmt.Fprintf(stdout, "purge %s (%s): %s at %s %d\n", answer.Key, id,
-			answer.Outcome, answer.Position.Stream, answer.Position.Seq)
+	position := ""
+	if answer.Position != "" {
+		position = " at " + answer.Position
 	}
-	switch answer.Outcome {
-	case "pending":
+	fmt.Fprintf(stdout, "purge %s in %s (%s): %s%s (operation %s)\n", answer.Key,
+		answer.Project, answer.Task, answer.Outcome, position,
+		firstNonEmpty(answer.OpID, operation))
+	if answer.Outcome == string(statelog.OutcomePending) {
 		// THE THREE-VALUED OUTCOME, said plainly and NOT as a failure.
 		// The record is on the log and every node applies it as it
 		// reaches it; running the gesture again would append a second
-		// purge of a task the first one already destroyed.
+		// purge of an item the first one already destroyed.
 		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
 			"applied it yet: the rows go as each node reaches it. Do not "+
 			"run this again.")
-	case "unknown":
-		fmt.Fprintf(stdout, "  No acknowledgement — this is the one outcome to "+
-			"retry, and retrying with the same operation id is what stops a "+
-			"second record: -op-id %s\n", answer.OpID)
 	}
 	// WHAT A PURGE DOES NOT REACH, every time rather than in the docs
 	// alone. An offline or evicted disk keeps its copy until replay,

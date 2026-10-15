@@ -13,6 +13,13 @@
  * identity the ledger keys on — (scope_type, scope_id, name) — because that is
  * where the fact actually lives.
  *
+ * THE ID IS NOT THE NAME. `scope_id` is the scope's IDENTITY — a seat's agent
+ * id, a unit's key — which a rename does not move, so every key, join and
+ * address here is built from it. `scope_name` is what a person reads (the
+ * seat's handle, the unit's key) and draws and links the scope and nothing
+ * else ([scopeName]): drawn from the id, a role schedule's scope read as a
+ * uuid and linked to a page nobody has.
+ *
  * AND THE LEDGER HAS THREE OUTCOMES. `schedule.Outcome` is `fired`,
  * `skipped_catchup` or `skipped_paused`: it is a DISPATCH ledger, not a
  * turn-outcome one, so "recent failures" counted a value the engine cannot
@@ -49,7 +56,7 @@ import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup, type SeatBadge, type SeatKind } from "~/lib/seats.ts";
+import { indexOrg, seatLookup, seatPath, unitRoute, type SeatBadge } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import {
   fmtDateTime,
@@ -61,7 +68,7 @@ import {
   plural,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
+import type { LogRefusal, QueryRefusal, ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -191,9 +198,18 @@ function scheduleRef(scopeType: string, scopeId: string, name: string): ObjectRe
   return { kind: "schedule", id: [scopeType, scopeId, name].join("/") };
 }
 
-/** Where a scope points: a seat for a role schedule, a unit for a unit one. */
-function scopePath(scopeType: string, scopeId: string): string[] {
-  return scopeType === "role" ? ["agents", "seats", scopeId] : ["agents", "teams", scopeId];
+/**
+ * Where a scope's own page lives: a seat for a role schedule, a unit for a
+ * unit one — FROM THE NAME AND NOT THE ID ([scopeName]): a link built from the
+ * id would reach a uuid nobody has a page for.
+ */
+function scopePath(scopeType: string, name: string): string[] {
+  return scopeType === "role" ? seatPath({ handle: name, name }) : unitRoute({ id: name });
+}
+
+/** What a person calls a scope: the seat's handle, the unit's key. */
+function scopeName(row: { scope_name: string }): string {
+  return row.scope_name;
 }
 
 /**
@@ -288,8 +304,8 @@ export function CronReading({ cron, timezone }: { cron: string; timezone?: strin
  * (`role:agent-pm`) in the mono face, a line above a definition that said the
  * same scope by name — a seat is named, never shown by its handle.
  */
-export function scopeLabel(scopeType: string, scopeId: string, who: Who): string {
-  return scopeType === "role" ? `Seat · ${who(scopeId).name}` : `Unit · ${scopeId}`;
+export function scopeLabel(scopeType: string, name: string, who: Who): string {
+  return scopeType === "role" ? `Seat · ${who(name).name}` : `Unit · ${name}`;
 }
 
 /**
@@ -304,17 +320,18 @@ export function scopeLabel(scopeType: string, scopeId: string, who: Who): string
  */
 export function ScopeCell({
   scopeType,
-  scopeId,
+  name,
   who,
 }: {
   scopeType: string;
-  scopeId: string;
+  /** The scope as a person reads it ([scopeName]), never the ledger's id. */
+  name: string;
   who: Who;
 }) {
   return scopeType === "role" ? (
-    <SeatCell handle={scopeId} {...who(scopeId)} />
+    <SeatCell handle={name} {...who(name)} />
   ) : (
-    <Tag appearance="outline">{scopeId}</Tag>
+    <Tag appearance="outline">{name}</Tag>
   );
 }
 
@@ -377,8 +394,8 @@ export function ScheduleDefinition({ row, who }: { row: ScheduleRow; who: Who })
                 // A ROLE'S SEAT BY ITS NAME, a unit by its own: `role ·
                 // agent-pm` was the one place on the page a seat was still
                 // its handle. Linked, which the eyebrow's phrase is not.
-                value: scopeLabel(row.scope_type, row.scope_id, who),
-                path: scopePath(row.scope_type, row.scope_id),
+                value: scopeLabel(row.scope_type, scopeName(row), who),
+                path: scopePath(row.scope_type, scopeName(row)),
               },
               {
                 label: "Target",
@@ -543,7 +560,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   );
   // Schedules are pushed on a config apply, and the RUNS are not pushed at
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
-  const { data, loading, error } = useQuery("schedules", undefined, { pollMs: 30_000 });
+  const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
 
   const schedules = data?.schedules ?? [];
   const runs = data?.recent_runs ?? [];
@@ -619,6 +636,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         truncated={Boolean(one.data?.truncated)}
         loading={one.loading}
         error={one.error}
+        refusal={one.refusal}
         now={now}
       />
     );
@@ -672,6 +690,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
       )}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           schedules.length
@@ -723,8 +742,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Scope",
                 shrink: true,
                 drop: 3,
-                sortValue: (s) => `${s.scope_type}:${s.scope_id}`,
-                cell: (s) => <ScopeCell scopeType={s.scope_type} scopeId={s.scope_id} who={who} />,
+                sortValue: (s) => `${s.scope_type}:${scopeName(s)}`,
+                cell: (s) => <ScopeCell scopeType={s.scope_type} name={scopeName(s)} who={who} />,
               },
               {
                 key: "cron",
@@ -851,8 +870,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Scope",
                 shrink: true,
                 drop: 1,
-                sortValue: (r) => `${r.scope_type}:${r.scope_id}`,
-                cell: (r) => <ScopeCell scopeType={r.scope_type} scopeId={r.scope_id} who={who} />,
+                sortValue: (r) => `${r.scope_type}:${scopeName(r)}`,
+                cell: (r) => <ScopeCell scopeType={r.scope_type} name={scopeName(r)} who={who} />,
               },
               {
                 // WHICH SEAT this fire woke. A unit schedule targeting `each`
@@ -948,6 +967,7 @@ function OneSchedule({
   truncated,
   loading,
   error,
+  refusal,
   now,
 }: {
   scopeType: string;
@@ -960,6 +980,7 @@ function OneSchedule({
   truncated: boolean;
   loading: boolean;
   error: string | null;
+  refusal: QueryRefusal | LogRefusal | null;
   now: number;
 }) {
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
@@ -987,7 +1008,7 @@ function OneSchedule({
       <ObjectHeader
         kind="Schedule"
         icon="calendar"
-        within={scopeLabel(scopeType, scopeId, who)}
+        within={scopeLabel(scopeType, row?.scope_name || scopeId, who)}
         title={name}
         // NEITHER THE BADGE NOR THE NOTE MAKES THE CLAIM BEFORE THE ANSWER
         // DOES. "No longer declared" is a statement about the company
@@ -1002,6 +1023,7 @@ function OneSchedule({
 
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           runs.length
@@ -1130,6 +1152,8 @@ export function SchedulePeek({ scope }: { scope: string }) {
   const runs = history.data?.runs ?? [];
   const loading = defined.loading || history.loading;
   const answered = Boolean(defined.data) && Boolean(history.data);
+  // The read whose failure the banner shows, its code and refusal together.
+  const failed = defined.error ? defined : history;
 
   return (
     <>
@@ -1137,7 +1161,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
         size="peek"
         kind="Schedule"
         icon="calendar"
-        within={scopeLabel(scopeType, scopeId, who)}
+        within={scopeLabel(scopeType, row?.scope_name || history.data?.scope_name || scopeId, who)}
         // THE NAME OUT OF THE ADDRESS, not out of the row: a schedule the
         // configuration has dropped still has a name, and a rail that waited
         // for a row to title itself would draw an empty header over a list of
@@ -1149,7 +1173,8 @@ export function SchedulePeek({ scope }: { scope: string }) {
       <div className="col gap-3">
         {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}
         <QueryState
-          error={defined.error || history.error}
+          error={failed.error}
+          refusal={failed.refusal}
           loading={loading}
           empty={
             answered && !row && runs.length === 0

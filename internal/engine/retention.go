@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -57,35 +59,10 @@ import (
 // them: [Engine.startRetention] is reached only where a state log runs, so a
 // node without `data` never competes for the lease it could not use.
 
-// RetentionInterval is how often the trim evaluates.
-//
-// FIFTEEN MINUTES, and the number comes from what the tick costs against what
-// it can save. The cost is one stream info, one register listing and — at most
-// — a binary search over the log for the age floor, per domain: a handful of
-// round trips. What it buys is that a term clearing (a backup landing, a
-// lagging node catching up) becomes disk within a quarter of an hour rather
-// than within whatever the next restart happened to be.
-//
-// It is also the resolution `blocked_since` has, which is what the
-// twenty-four-hour backup condition is measured in — so a longer interval
-// would make the alarm coarser for no saving that matters at this cost.
-const RetentionInterval = 15 * time.Minute
-
-// AlarmInterval is how often this node evaluates its alarm table.
-//
-// THE POSITION HEARTBEAT, and deliberately not [RetentionInterval]. The table
-// used to be evaluated only on the trim's tick, so `apply_lag` — which fires at
-// a one-minute [statelog.StallGrace] and whose own remedy promises a stopped
-// node is "named within a minute" — was named up to sixteen minutes after it
-// stopped, and every surface fed by the evaluation (the gauge, the log line,
-// the health envelope's count) lagged the condition by the same quarter hour
-// while `work_retention`, assembled per request, already showed it. Faster than
-// the heartbeat buys nothing: the fastest input, this node's lag behind the
-// log, is measured against positions the heartbeat publishes, so a tighter
-// loop would re-evaluate the same facts. What an evaluation costs is one
-// report's reads, a handful of round trips per domain, on a node that already
-// writes its position at this cadence.
-const AlarmInterval = PositionHeartbeat
+// The trim ticks every [statelog.TrimInterval]. The number lives beside the
+// arithmetic rather than here because it is also the resolution of
+// `blocked_since`, which the `trim_blocked` alarm reads — see its definition
+// for why fifteen minutes.
 
 // retentionDutyName is the fleet singleton the trim claims.
 const retentionDutyName = "retention"
@@ -95,7 +72,7 @@ const retentionDutyName = "retention"
 // Three ticks, the ratio every other duty here uses: one missed tick must not
 // hand the trim to a peer, because two nodes purging and publishing at once is
 // exactly what the singleton avoids.
-const retentionDutyTTL = 3 * RetentionInterval
+const retentionDutyTTL = 3 * statelog.TrimInterval
 
 // retention is the trim loop.
 type retention struct {
@@ -175,22 +152,26 @@ type retention struct {
 	// leave. Nil puts none.
 	background func(domain string) int
 
-	// mu guards the coverage cache below. The tick and every API request
-	// assemble a report, on different goroutines.
+	// mu guards the coverage cache and the log rates below. The tick and
+	// every API request assemble a report, on different goroutines.
 	mu sync.Mutex
 
-	// coverAt, coverFraction and coverKnown are the last coverage
-	// measurement and when it was taken.
+	// coverFraction and coverKnown are the last tick's coverage
+	// measurement.
 	//
-	// CACHED FOR ONE TRIM TICK, because the measurement is a scan of the
-	// whole source corpus and a report is assembled on every alarm
-	// evaluation ([AlarmInterval]), every operator request and every
-	// dashboard poll. One [RetentionInterval] is the resolution the
-	// condition it feeds is about — a corpus's vector coverage moves as
-	// the embedding duty works through it, over minutes and hours — so a
-	// scan every ten seconds would be paid for a number that has not
-	// moved.
-	coverAt       time.Time
+	// TAKEN ON THE TICK AND READ BY THE REPORT, because the measurement is
+	// a scan of the whole source corpus and a report is assembled on every
+	// operator request, every dashboard poll and every alarm beat. It, each
+	// log's daily intake and the store's connection-pool waits are the ONLY
+	// alarm inputs measured at the trim's [statelog.TrimInterval] — two
+	// scans and a delta of cumulative counters, each honest at a
+	// quarter-hour because none summarises anything that moves faster than
+	// a corpus, a day or a tick. Every other input the reading carries —
+	// apply lag, the backup register, the maintenance window, free space,
+	// the other windowed metrics, each log's held record and whether each
+	// log's floor can be read — is re-read on
+	// every [statelog.AlarmInterval] beat. See [retention.measureCoverage]
+	// and [retention.heartbeat].
 	coverFraction float64
 	coverKnown    bool
 
@@ -199,8 +180,31 @@ type retention struct {
 	// cumulative total. Keyed on the file, which is the attribute.
 	pooled map[string]poolCounters
 
+	// rates is each strict log's intake over the trailing day, as the last
+	// tick measured it — what `log_ceiling_short` holds a ceiling against.
+	// Guarded by mu, for the coverage cache's reason. See lograte.go.
+	rates map[string]*uint64
+
+	// floors follows how long this node has been unable to read the trim
+	// floor, for `floor_unknown`. See floorwatch.go.
+	floors *floorWatch
+
+	// now is the clock every evaluation and every report reads. Nil reads
+	// the wall clock; a case sets it to put a log's first days behind it.
+	now func() time.Time
+
+	// beating serialises one alarm evaluation against another: the
+	// heartbeat and the trim tick both evaluate, and two interleaved would
+	// fold an earlier beat's look at the floors over a later one's and hand
+	// the tracker an older reading after a newer one.
+	beating sync.Mutex
+
+	// logger is where a block's transitions are said; nil is the package's
+	// own logger. See [retention.sayBlock].
+	logger *slog.Logger
+
 	stop context.CancelFunc
-	done chan struct{}
+	done sync.WaitGroup
 }
 
 // poolCounters is one store file's cumulative connection-wait counters.
@@ -236,7 +240,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
-		done:        make(chan struct{}),
+		floors:      newFloorWatch(e.backends.Fleet.Floors),
 	}
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
@@ -245,23 +249,43 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
 	e.retention.Store(r)
+	// PUBLISHED FOR THE HEALTH ENVELOPE before either loop starts, so the
+	// first probe after a boot reads the tracker the first beat will feed.
 	e.alarms.Store(r.alarms)
-	go r.run(loop)
+	r.done.Add(2)
+	go func() {
+		defer r.done.Done()
+		r.run(loop)
+	}()
+	go func() {
+		defer r.done.Done()
+		r.heartbeat(loop)
+	}()
 }
 
-// stopRetention ends the trim, waiting for an in-flight tick.
+// stopRetention ends the trim and the alarm heartbeat, waiting for an
+// in-flight tick of either.
 func (e *Engine) stopRetention() {
 	r := e.retention.Swap(nil)
 	if r == nil {
 		return
 	}
 	r.stop()
-	<-r.done
+	r.done.Wait()
+}
+
+// clock is [retention.now], or the wall clock.
+func (r *retention) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now().UTC()
 }
 
 // RetentionReport answers "is the log being trimmed, and what is stopping it"
 // from outside the package — the question `crewlet retention status` exists
-// for. The bool is false on a node running no state log, which is a real
+// for. The bool is false on a node that armed no trim — a maintenance-mode
+// node, which publishes nothing, its trim included — and that is a real
 // deployment and NOT a report of zeros: a document full of zeros would claim a
 // fleet whose log is perfectly trimmed.
 func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
@@ -272,10 +296,10 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 	return r.Report(ctx), true
 }
 
-// Alarms is this node's standing alarms as its latest evaluation found them,
-// the longest-standing first ([statelog.Tracker.Standing]), and false where no
-// evaluation has run: a node mid-boot, or one running no state log, which has
-// no alarm table to evaluate.
+// Alarms is the kinds this node's latest evaluation found standing, one per
+// kind however many logs it stands on and the longest-standing first
+// ([statelog.Tracker.Standing]), and false where no evaluation has run: a node
+// mid-boot, or one running no state log, which has no alarm table to evaluate.
 //
 // THE EVALUATION THE GAUGE AND THE LOG WERE FED, never a fresh report. The
 // health envelope reads this on every probe and every push tick, and a report
@@ -297,33 +321,25 @@ func (e *Engine) Alarms() ([]statelog.Kind, bool) {
 // fleet that had just started would otherwise answer "no floor published" for
 // fifteen minutes — indistinguishable from a fleet whose duty is not running.
 //
-// AND THE ALARM TABLE ON ITS OWN, FASTER CADENCE ([AlarmInterval]) between
-// trims. ONE GOROUTINE for both, so an evaluation and a trim never run at
-// once. Only the evaluation takes the faster ticker: [retention.capacity]
-// stays on the trim's, the cadence its pool-wait delta and backup walk are
-// defined at.
+// ONLY THE TRIM. The alarm table is evaluated on its own faster beat as well
+// ([retention.heartbeat]), on a goroutine of its own; [retention.beating]
+// keeps the two evaluations from interleaving.
 func (r *retention) run(ctx context.Context) {
-	defer close(r.done)
-	trim := time.NewTicker(RetentionInterval)
-	defer trim.Stop()
-	alarms := time.NewTicker(AlarmInterval)
-	defer alarms.Stop()
-	if ctx.Err() != nil {
-		// CHECKED BEFORE THE FIRST TICK: a loop started under a context
-		// that is already done would otherwise take one tick on the way
-		// out and log a duty claim failing during a shutdown that is
-		// going fine.
-		return
-	}
-	r.tick(ctx)
+	ticker := time.NewTicker(statelog.TrimInterval)
+	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			// CHECKED BEFORE THE TICK, not only after: a loop started
+			// under a context that is already done would otherwise
+			// take one tick on the way out and log a duty claim
+			// failing during a shutdown that is going fine.
+			return
+		}
+		r.tick(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case <-trim.C:
-			r.tick(ctx)
-		case <-alarms.C:
-			r.evaluate(ctx)
+		case <-ticker.C:
 		}
 	}
 }
@@ -339,23 +355,6 @@ func (r *retention) tick(ctx context.Context) {
 	// duty holder's health as the fleet's, and the wedged node would be the
 	// one nobody hears from. It is also what makes this loop useful on a
 	// node that never wins the lease at all.
-	//
-	// THE HARDWARE MEASUREMENT RIDES THIS TICK AND NOT THE ALARM TICKER
-	// ([AlarmInterval]). The pool-wait delta is one observation per
-	// interval, and the `pool_wait` alarm's day-long p95 is a statement
-	// about intervals of THIS length — the fifth-worst quarter hour — so
-	// measuring it ninety times as often would change what the alarm
-	// means without anybody deciding it should. The backup gauges walk
-	// the coordination register and every manifest this node announced,
-	// and log an unreadable directory at WARN each time they do: at the
-	// alarm's cadence that is a line every ten seconds for as long as the
-	// fault the `backup_age` alarm already names persists. Neither input
-	// moves faster than this tick, and the reading the alarms are
-	// evaluated against measures the storage it needs directly
-	// ([retention.space]), so nothing on the faster cadence is stale for
-	// want of it. Measured BEFORE the evaluation beside it, because the
-	// reading reads the pool-wait window back.
-	r.capacity(ctx)
 	r.evaluate(ctx)
 	if r.claim != nil {
 		mine, err := r.claim(ctx)
@@ -387,16 +386,77 @@ func (r *retention) tick(ctx context.Context) {
 	}
 }
 
-// evaluate observes this node's alarms against a fresh reading.
+// evaluate records what one trim tick can measure about this node's own
+// hardware, its vector coverage and its logs, then evaluates the alarm table
+// against it at once.
 //
-// IT MEASURES NOTHING OF ITS OWN: it runs every [AlarmInterval] and on every
-// trim tick, and the hardware measurement that feeds the gauges belongs to the
-// trim tick alone — see [retention.tick] for why.
+// THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
+// against reads these back: a tick that observed before it measured would
+// evaluate the previous tick's disk against this tick's log. The vector
+// coverage and the logs' intake are measured HERE and nowhere else — each is
+// a scan a report assembled per dashboard poll must not repeat, and a
+// quarter-hour is the resolution every one of them is honest at (see
+// [statelog.TrimInterval]). What the table is evaluated on between these ticks is
+// [retention.heartbeat].
 func (r *retention) evaluate(ctx context.Context) {
+	r.capacity(ctx)
+	r.measureCoverage(ctx)
+	r.measureRates(ctx, r.clock())
+	r.beat(ctx)
+}
+
+// heartbeat evaluates the alarm table every [statelog.AlarmInterval], on every
+// node, until the context ends.
+//
+// ITS OWN LOOP, beside the trim's rather than inside it, and it is what makes
+// the table's thresholds true: every alarm there fires at a threshold of a
+// minute or more that ANOTHER decision already made, and an evaluation paced
+// by the trim's quarter-hour silently raised each of them to fifteen minutes.
+// The expensive measurements stay on the trim's tick and are read back here;
+// what a beat reads is what the report reads — one listing of each fleet
+// fact and one state read per log — plus one observation of the trim floor,
+// which is a single listing (see floorwatch.go).
+func (r *retention) heartbeat(ctx context.Context) {
+	ticker := time.NewTicker(statelog.AlarmInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		r.beat(ctx)
+	}
+}
+
+// beat is one alarm evaluation: the trim floor observed, and the table
+// evaluated against everything the report reads.
+func (r *retention) beat(ctx context.Context) {
+	r.beating.Lock()
+	defer r.beating.Unlock()
+	r.floors.observe(ctx, r.clock(), r.floorSubjects())
 	if r.alarms == nil {
 		return
 	}
 	r.alarms.Observe(ctx, r.Report(ctx).Alarms)
+}
+
+// floorSubjects is every log this node runs, at the generation its applier is
+// on — the generation a floor has to be published at for this node to use it.
+func (r *retention) floorSubjects() []floorSubject {
+	if r.state == nil {
+		return nil
+	}
+	running := r.state.running()
+	out := make([]floorSubject, 0, len(running))
+	for _, l := range running {
+		if l.runner == nil {
+			continue
+		}
+		out = append(out, floorSubject{domain: l.domain.Name(),
+			generation: l.runner.Committed().Generation})
+	}
+	return out
 }
 
 // fleetInputs is what one tick reads once and every log shares.
@@ -447,7 +507,9 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// THE LIVE DATA NODES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
 	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
 	// position zero and blocks, which is correct: trimming past a node that
-	// is joining is deleting what it is about to replay.
+	// is joining is deleting what it is about to replay. The listing is the
+	// gate's own ([livePresences]), so an eviction and the trim judge
+	// presence from one answer.
 	//
 	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: the logs are
 	// still evaluated, each reading its counted set as UNKNOWN, so every
@@ -509,7 +571,7 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 	}
 
 	decision := statelog.Trim(in.Terms())
-	r.gauges(name, statelog.KeepsGateReserve(running.domain), stats, decision, shared)
+	r.gauges(name, statelog.ReservationOf(running.domain), stats, decision, shared)
 	return r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
 }
 
@@ -602,9 +664,10 @@ func nextFloor(previous coord.TrimFloor, had bool, generation uint32, to, first 
 // THE ONE PIECE OF STATE THAT SURVIVES A LEASE HANDOVER is `blocked_since`,
 // and it is carried through the register rather than in memory for exactly
 // that reason: the duty moves, and a value held by the holder would reset on
-// every flap — so the twenty-four-hour backup condition would never be
-// reached, which is the bug the field exists to close. The floor is the other,
-// and it is carried for the reason [nextFloor] gives.
+// every flap — so `trim_blocked`, which fires only once a block has outlived
+// the `min_age` window, would never be reached on a fleet whose lease moved
+// even once a week, which is the bug the field exists to close. The floor is
+// the other, and it is carried for the reason [nextFloor] gives.
 func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
 
@@ -655,16 +718,72 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	if err := r.fleet.PutFloor(ctx, row); err != nil {
 		return fmt.Errorf("publish the trim floor: %w", err)
 	}
-	if decision.Blocked() {
-		// ONE LINE PER TICK PER DOMAIN, at WARN, naming the term, what
-		// it has and what it wants — because the published field is
-		// invisible to anyone watching logs and the log line is
-		// invisible to anyone watching a dashboard.
-		log.WarnContext(ctx, "retention_trim_blocked", "domain", name,
-			"term", decision.BlockedBy, "detail", decision.Detail,
-			"blocked_since", row.BlockedSince, "trim_to", decision.To)
-	}
+	r.sayBlock(ctx, name, previous, had, decision, row)
 	return nil
+}
+
+// sayBlock logs a domain's block when it starts, when the term holding it
+// changes, and when it ends — and never on a tick that changed none of those.
+//
+// # Why transitions and not a line per tick
+//
+// It was a WARN on every tick of every blocked domain, and a blocked trim is a
+// state a healthy fleet lives in for weeks: every fresh deployment waits on its
+// first backup and its first donors, and a log nobody writes to is blocked for
+// the life of the deployment, since every node sits at position zero on it.
+// That was four WARN lines an hour for each such log, for ever, on a fleet with
+// nothing wrong — the log-line half of the `trim_blocked` alarm that fired on
+// every young fleet. Whether a block has come to COST something is the alarm's
+// question, at a threshold the configuration already made; a line's job is to
+// say, for whoever reads logs rather than screens, when a block began, what
+// holds it, and how long it lasted — which is the alarm tracker's own rate, for
+// the tracker's reason: a level repeated every tick buries when it started.
+//
+// FROM THE PUBLISHED ROW rather than from memory, because the duty moves on a
+// lease: a holder that took over mid-block reads the block its predecessor
+// published, and says nothing about a block that did not start on its watch —
+// which is the reason `blocked_since` is published at all.
+//
+// BOTH AT WARN, the tracker's pair's level, so a filter that shows a block's
+// start shows its end. Splitting them by the term — a term nobody could read at
+// WARN, one that permits nothing yet at INFO — reads well until a block changes
+// term: one that started on a missing backup and ended on a joining node was a
+// WARN start with an INFO end, and a reader filtering on WARN saw a block that
+// never ended. What it costs is one WARN, once, for each ordinary block a fresh
+// deployment starts with.
+func (r *retention) sayBlock(ctx context.Context, name string,
+	previous coord.TrimFloor, had bool, decision statelog.TrimDecision,
+	row coord.TrimFloor) {
+
+	wasBlocked := had && previous.Blocked()
+	switch {
+	case decision.Blocked() &&
+		(!wasBlocked || previous.BlockedBy != string(decision.BlockedBy)):
+		attrs := []any{"domain", name, "term", decision.BlockedBy,
+			"detail", decision.Detail, "blocked_since", row.BlockedSince}
+		if wasBlocked {
+			// THE CLOCK DID NOT RESTART — see [retention.publish] —
+			// so the line says which term held the block before.
+			attrs = append(attrs, "was", previous.BlockedBy)
+		}
+		r.logs().WarnContext(ctx, "retention_trim_blocked", attrs...)
+	case !decision.Blocked() && wasBlocked:
+		attrs := []any{"domain", name, "was", previous.BlockedBy,
+			"trim_to", decision.To}
+		if !previous.BlockedSince.IsZero() {
+			attrs = append(attrs, "for",
+				row.At.Sub(previous.BlockedSince).Round(time.Second).String())
+		}
+		r.logs().WarnContext(ctx, "retention_trim_unblocked", attrs...)
+	}
+}
+
+// logs is where the trim speaks: the package's own logger, or a case's.
+func (r *retention) logs() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return log
 }
 
 // reportedPositions is every node's committed position on one log, keyed as
@@ -804,25 +923,29 @@ func (r *retention) feedTerm(ctx context.Context, running *runningLog) (
 // domain for itself. The trim used to call the tracker's reader for every
 // identity-claiming domain with that domain's stream name — so on the pages
 // log it asked the tracker's table for rows filed under the pages stream,
-// found none, and counted an evicted node there for ever. `startStateLog`
-// refuses a registered identity-claiming domain that does not answer this,
-// and the statelogtest suite certifies that every one answers it correctly.
+// found none, and counted an evicted node there for ever. [checkRegister]
+// refuses a registered identity-claiming domain that does not answer this
+// ([checkIdentityEntry]), and the statelogtest suite certifies that every one
+// answers it correctly.
 type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
-// The two identity-claiming domains this build registers, held to the
-// interface at compile time so a reshaped method is a build failure rather
-// than a boot refusal.
+// The three identity-claiming domains this build registers, held to the
+// interface — and to the log probe a stranded node asks
+// ([statelog.EvictionProbe]) — at compile time, so a reshaped method is a
+// build failure rather than a boot refusal.
 var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
+	_ evictionLister = iamdomain.Domain{}
 
-	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction and the
-	// readmission that lifts it — which [stateLog.startLog] refuses a
-	// registered identity-claiming domain for lacking.
+	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
+	// readmission that lifts it — which [checkRegister] refuses a registered
+	// identity-claiming domain for lacking.
 	_ statelog.EvictionProbe = tracker.Domain{}
 	_ statelog.EvictionProbe = pages.Domain{}
+	_ statelog.EvictionProbe = iamdomain.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.
@@ -865,9 +988,10 @@ func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 	}
 	lister, ok := domain.(evictionLister)
 	if !ok {
-		// UNREACHABLE ON A NODE THAT BOOTED — [Engine.startStateLog]
-		// refuses such a domain — and logged rather than assumed, on the
-		// conservative side: nobody is uncounted.
+		// UNREACHABLE ON A NODE THAT BOOTED — [checkRegister] refuses
+		// such a domain before anything is provisioned — and logged
+		// rather than assumed, on the conservative side: nobody is
+		// uncounted.
 		log.ErrorContext(ctx, "retention_evictions_unlisted",
 			"domain", domain.Name())
 		return nil, false
@@ -984,11 +1108,11 @@ func ageFloorOf(first, last, messages uint64, cutoff time.Time,
 // on the report either way, and a collector is what this adds.
 //
 // THE HEADROOM IS OF THE CEILING ORDINARY WRITES ARE HELD TO, which on a log
-// that keeps a gate reserve is [statelog.GateReserve] below the broker's —
+// that keeps a gate reserve is [statelog.Reservation.Bytes] below the broker's —
 // the figure the report prints and the alarm fires on, from the one function
 // all three read, so a collector's graph reaches zero exactly where writes
 // start being refused.
-func (r *retention) gauges(domain string, reserved bool, stats jetstream.LogStats,
+func (r *retention) gauges(domain string, reservation statelog.Reservation, stats jetstream.LogStats,
 	decision statelog.TrimDecision, shared fleetInputs) {
 
 	if r.metrics == nil {
@@ -1001,7 +1125,7 @@ func (r *retention) gauges(domain string, reserved bool, stats jetstream.LogStat
 		// unbounded log is not zero headroom, and zero is the value the
 		// one alarm an operator cannot ignore fires on.
 		r.metrics.Set(metrics.StatelogLogMaxBytes, float64(stats.MaxBytes), at)
-		if free := statelog.Headroom(stats.Bytes, stats.MaxBytes, reserved); free != nil {
+		if free := reservation.Headroom(stats.Bytes, stats.MaxBytes); free != nil {
 			r.metrics.Set(metrics.StatelogLogHeadroomFraction, *free, at)
 		}
 	}

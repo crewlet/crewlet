@@ -8,7 +8,12 @@ import type { OrgProjection } from "~/protocol/types.ts";
 /** A founder above everything; a CEO and CTO in Leadership · Executives; two
  *  engineers in Engineering · Core, which the CTO leads from outside it; a PM
  *  in Product · Management, and DevRel in Product · Developer Relations whose
- *  lead the PM is by inheritance. */
+ *  lead the PM is by inheritance.
+ *
+ *  AS THE ENGINE SENDS IT: every seat carries the handle the engine minted for
+ *  it and every unit its key, a lead is named by handle, and the derived block
+ *  carries each unit's key beside its name — those, never a name, are what the
+ *  chart is addressed by. */
 export const CHART_ORG = {
   name: "Acme",
   roles: [
@@ -16,15 +21,44 @@ export const CHART_ORG = {
   ],
   units: [
     {
+      id: "leadership",
       name: "Leadership",
-      children: [{ name: "Executives", lead: "CEO", roles: [{ name: "CEO" }, { name: "CTO" }] }],
+      children: [
+        {
+          id: "executives",
+          name: "Executives",
+          lead: "ceo",
+          roles: [
+            { name: "CEO", handle: "ceo" },
+            { name: "CTO", handle: "cto" },
+          ],
+        },
+      ],
     },
-    { name: "Engineering", children: [{ name: "Core", roles: [{ name: "SWE" }, { name: "FE" }] }] },
     {
+      id: "engineering",
+      name: "Engineering",
+      children: [
+        {
+          id: "core",
+          name: "Core",
+          roles: [
+            { name: "SWE", handle: "swe" },
+            { name: "FE", handle: "fe" },
+          ],
+        },
+      ],
+    },
+    {
+      id: "product",
       name: "Product",
       children: [
-        { name: "Management", lead: "PM", roles: [{ name: "PM" }] },
-        { name: "Developer Relations", roles: [{ name: "DevRel" }] },
+        { id: "management", name: "Management", lead: "pm", roles: [{ name: "PM", handle: "pm" }] },
+        {
+          id: "developer-relations",
+          name: "Developer Relations",
+          roles: [{ name: "DevRel", handle: "devrel" }],
+        },
       ],
     },
   ],
@@ -39,13 +73,19 @@ export const CHART_ORG = {
       seat("devrel", "DevRel", "pm"),
     ],
     units: [
-      { name: "Leadership", seats: [], lead: "" },
-      { name: "Executives", seats: ["ceo", "cto"], lead: "ceo" },
-      { name: "Engineering", seats: [], lead: "" },
-      { name: "Core", seats: ["swe", "fe"], lead: "cto" },
-      { name: "Product", seats: [], lead: "" },
-      { name: "Management", seats: ["pm"], lead: "pm" },
-      { name: "Developer Relations", seats: ["devrel"], lead: "pm", lead_inherited: true },
+      { id: "leadership", name: "Leadership", seats: [], lead: "" },
+      { id: "executives", name: "Executives", seats: ["ceo", "cto"], lead: "ceo" },
+      { id: "engineering", name: "Engineering", seats: [], lead: "" },
+      { id: "core", name: "Core", seats: ["swe", "fe"], lead: "cto" },
+      { id: "product", name: "Product", seats: [], lead: "" },
+      { id: "management", name: "Management", seats: ["pm"], lead: "pm" },
+      {
+        id: "developer-relations",
+        name: "Developer Relations",
+        seats: ["devrel"],
+        lead: "pm",
+        lead_inherited: true,
+      },
     ],
   },
 } as unknown as OrgProjection;

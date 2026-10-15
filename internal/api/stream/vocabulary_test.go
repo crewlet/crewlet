@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
@@ -32,7 +33,7 @@ func TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends(t *testing.T) 
 	t.Parallel()
 	want := append(engineCodes(t), clientOnlyCodes...)
 	slices.Sort(want)
-	got := dashboardCodes(t)
+	got := dashboardUnion(t, "QueryErrorCode")
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's QueryErrorCode union is %v; the engine sends %v and "+
@@ -41,6 +42,48 @@ func TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends(t *testing.T) 
 			"sends is a failure every screen renders as unknown",
 			got, engineCodes(t), clientOnlyCodes)
 	}
+}
+
+// THE SOCKET AND REST SHARE ONE REFUSAL TABLE.
+//
+// The socket answers a query with a code, and the query surface's REST twin
+// answers the same question with a code, and the dashboard asks over both —
+// the socket while it is open, plain HTTP when it is deciding whether its
+// token is the reason it is not. Two vocabularies there means one failure with
+// two names, which is how the dashboard came to handle `no_event_store`: a
+// code that existed on one side of the protocol and nowhere else, branched on
+// by a screen, sent by nothing.
+//
+// So every code this package declares must be an entry on [httpjson.Code]'s
+// table — the one the REST routes answer from, and the one that carries the
+// sentence a person reads for each code. Read from this package's own source,
+// so a code added here without an entry there fails without being listed.
+func TestTheSocketAndRestShareOneTable(t *testing.T) {
+	t.Parallel()
+	if unknown := notOnTheRESTTable(engineCodes(t)); len(unknown) > 0 {
+		t.Errorf("the socket answers with %v, which the REST refusal table does "+
+			"not carry: add each to internal/api/httpjson with the sentence a "+
+			"person is shown for it, or the same failure has two names and no copy",
+			unknown)
+	}
+	// The control: the walk is worth having only if a code with no entry
+	// fails it. `no_event_store` is the one that actually happened.
+	if got := notOnTheRESTTable([]string{"no_event_store"}); len(got) != 1 {
+		t.Errorf("a code with no entry on the REST table passed the walk (%v), "+
+			"so this test is asserting nothing", got)
+	}
+}
+
+// notOnTheRESTTable is the codes with no entry in the engine's one refusal
+// vocabulary.
+func notOnTheRESTTable(codes []string) []string {
+	var out []string
+	for _, code := range codes {
+		if !httpjson.Code(code).Valid() {
+			out = append(out, code)
+		}
+	}
+	return out
 }
 
 // engineCodes is every string constant named Code… in this package's source.
@@ -94,7 +137,8 @@ func engineCodes(t *testing.T) []string {
 	return codes
 }
 
-// dashboardCodes is the members of the dashboard's QueryErrorCode union.
+// dashboardUnion is the members of the string-literal union type the
+// dashboard declares under name.
 //
 // FOUND BY ITS NAME AND READ BY ITS SYNTAX, through [clientsource.Union]. This
 // read `protocol/types.ts` by path and cut the union at the first `;` once its
@@ -102,17 +146,17 @@ func engineCodes(t *testing.T) []string {
 // file failed the gate for a drift that had not happened, and a comment
 // quoting a code, or holding a semicolon, was one regex away from becoming a
 // member or ending the union early.
-func dashboardCodes(t *testing.T) []string {
+func dashboardUnion(t *testing.T, name string) []string {
 	t.Helper()
-	codes, err := clientsource.Union(clientsource.Tree(t), "QueryErrorCode")
+	members, err := clientsource.Union(clientsource.Tree(t), name)
 	if err != nil {
 		// FAILS rather than skips: the dashboard source is committed, so a
 		// missing declaration is a renamed one, and a skip would certify
 		// nothing.
 		t.Fatal(err)
 	}
-	if len(codes) == 0 {
-		t.Fatal("the QueryErrorCode union has no members, so this test could not fail")
+	if len(members) == 0 {
+		t.Fatalf("the %s union has no members, so this test could not fail", name)
 	}
-	return codes
+	return members
 }

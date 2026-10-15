@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -254,7 +255,7 @@ func TestAMoveWaitsForADescendantRemovedWhileItRan(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "m-kid-b", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()
@@ -288,7 +289,7 @@ func TestARemovedRootMidMoveWaitsForItsRestore(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "m-root", "OPS",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()
@@ -421,14 +422,67 @@ func stopMoveOf(t *testing.T, r *roundTrip, root, descendant string) string {
 	return op
 }
 
-// recordAt decodes one record on the harness's log.
+// A TASK A MOVE HAS NOT CARRIED YET TAKES NO NEW SUBTASK UNTIL IT HAS.
+//
+// A move reads its subtree ONCE, before its first append, and its last append
+// takes the root's mark down behind the walk — so a subtask filed under a
+// descendant the walk has not reached is one no pass carries: it passes the
+// project check, since its parent is still in the old project, and stays there
+// for good under a root in the new one. The parent is refused as UNAVAILABLE
+// rather than for good, because the walk or the duty moves it without anybody
+// acting, and a task the walk has already carried takes a subtask as ever.
+func TestATaskAMoveHasNotCarriedYetTakesNoNewSubtask(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t, "m-kid-a", "m-kid-b")
+	stopMoveAt(t, r, "m-kid-b")
+
+	behind := newTask("m-late")
+	behind.Key = ""
+	under := "m-kid-b"
+	behind.Parent, behind.Depth = &under, 2
+	_, err := r.writer.CreateTask(t.Context(), "op-late", behind, nil)
+	if !errors.Is(err, statelog.ErrUnavailable) {
+		t.Fatalf("a subtask under a task the move has not carried = %v, want "+
+			"statelog.ErrUnavailable — filed now it is left behind in ENG", err)
+	}
+	r.drain()
+	if held := r.strings(`SELECT id FROM tracker_tasks WHERE id = ?`,
+		"m-late"); len(held) != 0 {
+		t.Fatal("the refused subtask was filed anyway")
+	}
+
+	// A TASK THE WALK ALREADY CARRIED is in the root's project and takes
+	// one there, as any subtask is.
+	carried := newTask("m-ok")
+	carried.Key, carried.Project = "", "OPS"
+	over := "m-kid-a"
+	carried.Parent, carried.Depth = &over, 2
+	if _, err := r.writer.CreateTask(t.Context(), "op-ok", carried, nil); err != nil {
+		t.Fatalf("a subtask under a task the move already carried: %v", err)
+	}
+	r.drain()
+
+	// AND ONCE THE DUTY HAS FINISHED THE WALK, the task that was behind is
+	// in OPS and takes one too.
+	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+	behind.Project = "OPS"
+	if _, err := r.writer.CreateTask(t.Context(), "op-late-after", behind, nil); err != nil {
+		t.Fatalf("a subtask under the task once the move carried it: %v", err)
+	}
+}
+
+// recordAt decodes one record on the harness's log, opened out of its signed
+// frame as the applier opens it.
 func (r *roundTrip) recordAt(t *testing.T, seq uint64) tracker.MutationRecord {
 	t.Helper()
 	_, payload, _, ok, err := r.log.At(t.Context(), seq)
 	if err != nil || !ok {
 		t.Fatalf("read record %d: (%v, %v)", seq, ok, err)
 	}
-	rec, err := tracker.Decode(payload)
+	rec, err := tracker.Decode(r.open(seq, payload))
 	if err != nil {
 		t.Fatalf("decode record %d: %v", seq, err)
 	}

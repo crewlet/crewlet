@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -17,7 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -53,8 +52,9 @@ type Bootstrap struct {
 	// API is the HTTP surface: the dashboard, the REST API, the webhooks.
 	API API `yaml:"api,omitempty" json:"api"`
 
-	// Secrets is the encryption keyring for company secrets at rest. It is
-	// the root of trust and lives ONLY here — never in the store it opens.
+	// Secrets is the fleet's keyring. It is the root of trust and lives
+	// ONLY here — never in the store it opens — and every node requires
+	// one: see [Secrets].
 	Secrets Secrets `yaml:"secrets,omitempty" json:"secrets"`
 
 	// Logging is how loud this node is, and in what shape.
@@ -369,7 +369,7 @@ func DefaultBootstrap() Bootstrap {
 		Store:        Store{Path: DefaultStorePath},
 		Stream:       Stream{Type: StreamEmbedded, Replicas: 1},
 		Coordination: Coordination{Type: CoordinationLocal},
-		API:          API{Host: DefaultAPIHost, Auth: APIAuth{AllowAnonymousRead: true}},
+		API:          API{Host: DefaultAPIHost},
 	}
 }
 
@@ -389,7 +389,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.Store.validate(field("store")))
 	p.wrap(b.Stream.validate(field("stream")))
 	p.wrap(b.Coordination.validate(field("coordination")))
-	p.wrap(b.API.validate(field("api")))
+	p.wrap(b.API.validate(field("api"), b.ServesAPI(), b.Profile("").RunsIngress()))
 	p.wrap(b.Secrets.validate(field("secrets")))
 	p.wrap(b.Logging.validate(field("logging")))
 	p.wrap(b.validateTopology())
@@ -645,6 +645,45 @@ var needsData = map[placement.NodeRole]string{
 func (b *Bootstrap) validateTopology() error {
 	var p problems
 
+	// THE KEYRING IS REQUIRED ON EVERY NODE, whatever its roles, whatever
+	// its broker and whether or not it serves the API.
+	//
+	// It used to be required only once `api.port` was set, which is where
+	// it signs every session cookie and derives the key each per-run token
+	// is verified with. That left a node serving no API free to leave it
+	// out — and every data node runs every state-log domain, whatever its
+	// other roles (the identity directory included), and every record on
+	// every one of those logs is signed and verified under this keyring
+	// because the broker authenticates nothing. A node WITHOUT data needs it
+	// just as much: the company document it fetches from the coordination
+	// store is authenticated by its seal, a seats node mints and verifies
+	// the per-run tokens its sandbox runs carry, and every request it sends
+	// a data node's estate service, and every answer, is signed under it
+	// for the reason the records are — as is every request ANY node asks a
+	// peer to carry out, a broker member's removal of a voter and a note to
+	// the node running a turn among them (internal/signedask). So a keyless
+	// satellite validated here
+	// and was then refused by the engine at its door, which is a
+	// configuration this command called sound and the node could not run.
+	//
+	// A CROSS-BLOCK RULE ONLY IN WHERE IT USED TO BE: the refusal no longer
+	// reads `api:`, and it sits here beside the other deployment-shape
+	// rules rather than inside `secrets:`'s own validator so that the
+	// message can name the whole deployment rather than the block.
+	if len(b.Secrets.Keys) == 0 {
+		p.add(field("secrets.keys"), ErrMissing,
+			"required on every node: every record on every state log is "+
+				"signed and verified under the keyring, because the broker "+
+				"authenticates nothing, and a node without the data role signs "+
+				"what it asks of the estate and verifies what it is answered. It "+
+				"also authenticates the company document a node fetches from its "+
+				"peers, seals the company's own credentials at rest, signs every "+
+				"per-run token and — on a node serving the API — every session "+
+				"cookie. Generate a key with `crewlet secrets keygen` and point "+
+				"`material:` at a ${VAR} holding it; every node of a fleet holds "+
+				"the same keys")
+	}
+
 	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
 	// this file names. An external cluster's membership is not here and
 	// cannot be — `stream.url` is an address, and how many servers answer
@@ -677,30 +716,11 @@ func (b *Bootstrap) validateTopology() error {
 	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded ||
 		leaf || servesLeaves
 
-	// A MEMBER OF A FLEET PERSISTS, whatever its roles. Its broker holds the
-	// fleet's streams — the seats' mailboxes, every record a state log
-	// writes, every coordination bucket — for every node that reaches it, a
-	// leaf that keeps nothing of its own included, and one kept in memory
-	// comes back from its next restart holding none of them: a peer with
-	// its copies has to replace every one, and a member that was the last
-	// copy of anything has lost it. A solo member is not in a fleet and is
-	// the operator's own business (see [Bootstrap.Warnings]); a member with
-	// a named cluster, peers or a leaf listener is.
-	//
-	// THE BROKER'S RULE, NOT THE ROLES': a member without `data` keeps a
-	// scratch node store and a durable stream store, and it is the stream
-	// store that makes it a member.
-	inFleet := len(b.Stream.Cluster.Peers) > 0 || b.Stream.Cluster.Name != "" || servesLeaves
-	if b.BrokerKind() == placement.BrokerMember && inFleet &&
-		strings.TrimSpace(b.Stream.StoreDir) == "" {
-		p.add(field("stream.store_dir"), ErrMissing,
-			"this node's broker is a MEMBER of a fleet's (it names a cluster, "+
-				"peers or a leaf listener), so it holds the fleet's streams — the "+
-				"seats' mailboxes, every record a state log writes and every "+
-				"coordination bucket — for every node that reaches it, and a "+
-				"stream kept in memory loses its copy of all of them at this "+
-				"member's next restart. Name a directory")
-	}
+	// NOT HERE: a broker MEMBER with no store directory. Every member is
+	// refused one — a member of a fleet and a solo member alike — by
+	// [Stream.Durable], which [Stream.validate] asks, because a member keeps
+	// the estate's state logs on its stream from boot whether or not it is
+	// in a fleet. Asked here as well it would say one mistake twice.
 
 	if b.Coordination.Type == CoordinationLocal && clustered {
 		p.add(field("coordination.type"), ErrConflict,
@@ -716,7 +736,7 @@ func (b *Bootstrap) validateTopology() error {
 	// unlucky.
 	//
 	// Counted over the STREAM's members, because that is where the leases
-	// live: the coordination store rides the stream's own connection on
+	// live: the coordination store lives on the stream's own broker on
 	// every topology, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
 		if nodes := peers + 1; nodes == 2 {
@@ -1258,15 +1278,17 @@ type Store struct {
 	// still this node's alone, and neither is shared with a peer.
 	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Where the replicated estate's database file lives; empty puts it beside path."`
 
-	// MaxOpenConns bounds the node's own database's pool, and is the
-	// readers of the replicated estate's: that pool keeps at least two of
-	// them, and its one pinned writer per state log is ADDED on top rather
-	// than taken out of them, because a bound the pins came out of would
-	// leave a read burst queueing behind them — or, at or below the pin
-	// count, the last apply loop waiting for a connection none of the
-	// others gives back. 0 takes the store's own default of four, which is
-	// sized to the dashboard's query concurrency.
-	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound for the node's database, and the readers of the replicated estate's (at least two, with one pinned writer per log added on top); 0 takes the store default of 4."`
+	// MaxOpenConns is the ORDINARY READERS of the node's own database's
+	// pool, and of the replicated estate's, which keeps at least two of
+	// them. What ordinary work may not take is ADDED on top rather than
+	// taken out of them — the connection each file holds back for identity
+	// work, and the replicated estate's one pinned writer per state log —
+	// because a bound those came out of would leave a read burst queueing
+	// behind them, or, at or below the pin count, the last apply loop
+	// waiting for a connection none of the others gives back. 0 takes the
+	// store's own default, max(8, GOMAXPROCS): two dashboards' query
+	// concurrency on a small host, a reader per core on a large one.
+	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Ordinary readers of the node's database pool, and of the replicated estate's (at least two there); the identity reserve and one pinned writer per log are added on top. 0 takes the store default, max(8, GOMAXPROCS)."`
 
 	// BusyTimeoutSeconds is how long a statement waits for the file lock
 	// before giving up; 0 takes the store's own default.
@@ -1361,21 +1383,20 @@ type Stream struct {
 	// is the classic "I configured it and nothing happened".
 	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External NATS URL. Required for nats, refused for embedded."`
 
-	// StoreDir is where an EMBEDDED server persists its streams. Empty
-	// selects an in-memory server, which only a company whose tracker and
-	// knowledge base are BOTH a vendor's may run — on either native backend
-	// the company's own records live on that stream, so [CheckTiers]
-	// refuses the pairing rather than recreating those logs empty at the
-	// first restart. It is a cross-tier rule because neither document can
-	// see the other. No node is an exception for its roles: every node runs
-	// the engine, and an in-memory server creates every stream it
-	// provisions in memory.
+	// StoreDir is where an EMBEDDED broker MEMBER persists its streams, and
+	// it is REQUIRED on one, solo included ([Stream.Durable]): empty selects
+	// an in-memory server, and a member keeps the estate's state logs on its
+	// stream from boot — every domain's, the identity estate's included,
+	// company or none — so a restart would recreate every log empty and the
+	// node would refuse to serve for good. In a fleet a member also holds
+	// the fleet's streams for every node that reaches it, a leaf that keeps
+	// nothing included. No member is an exception for its roles or for
+	// having no company yet.
 	//
-	// REQUIRED ON A MEMBER OF A FLEET, whatever its roles and whatever the
-	// company: its broker holds the fleet's streams for every node that
-	// reaches it, a leaf that keeps nothing included — see
-	// [Bootstrap.validateTopology]. A leaf has no stream store at all.
-	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart). Required on a member of a fleet (a named cluster, peers or a leaf listener); refused on a leaf."`
+	// REFUSED ON A LEAF, which runs no JetStream and so has no stream store
+	// at all ([StreamLeaf.validate]); an external client's streams are its
+	// cluster's.
+	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Required on an embedded broker member, solo included: it keeps every state log from boot. Refused on a leaf."`
 
 	// StoreMaxBytes is how much of that directory's volume this node's
 	// EMBEDDED broker may hold — the ONE number every stream ceiling on it
@@ -1412,7 +1433,7 @@ type Stream struct {
 	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
 	// handed to the server this process STARTS. An external cluster's
 	// account limits are its own operator's to set.
-	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=5368709120;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=6442450944;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server a MEMBER of a cluster with its
 	// peers: the fleet's broker is those members, and every other node
@@ -1582,6 +1603,42 @@ type Stream struct {
 	// append rather than shedding history.
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
+	// IamLogMaxBytes is the byte ceiling on the identity estate's log —
+	// the ordered stream every person, credential, invitation and session
+	// goes through.
+	//
+	// UNSET TAKES A FLAT 512 MiB, and like the usage log's it is NOT
+	// derived from the disk: what this log grows with is the company's
+	// HEADCOUNT and how often people sign in, neither of which the
+	// operator's volume has anything to say about.
+	//
+	// SESSIONS ARE WHAT SIZE IT. People, credentials and invitations are
+	// hundreds of records a year at any company that fits on one broker. A
+	// session is one record when it opens and one when it closes and
+	// nothing in between — a re-issue moves a deadline inside the signed
+	// bearer and records nothing — so the rate is roughly (people ×
+	// sign-ins a day × 2). At the reference company a pessimistic three
+	// sign-ins per person per day is about 285 MB a year with everything
+	// else folded in, so this default is around eighteen months of a
+	// COMPLETELY BLOCKED trim at that rate and about five years at a
+	// realistic one.
+	//
+	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
+	// take, because the broker grants a stream its whole ceiling
+	// when it creates it: this number is free space a node must have before
+	// it can boot at all, and a ten-person company writing a fiftieth of
+	// the reference rate should not have to reserve half a gibibyte to
+	// start. The ceiling is a TYPO GUARD rather than a policy, like the
+	// store limit's.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history — which here would be shedding
+	// the authentication trail.
+	IamLogMaxBytes int64 `yaml:"iam_log_max_bytes,omitempty" json:"iam_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."`
+
 	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
 	// stream every node publishes its own company days to, so that spend,
 	// turn and read history is answered fleet-wide and outlives the node
@@ -1592,15 +1649,21 @@ type Stream struct {
 	// number of those objects rather than how busy they were. A three-node
 	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
 	// default is four times that. Unset takes the default rather than a
-	// share of the disk, because a gibibyte is already the floor every
-	// state log shares.
+	// share of the disk, because a census is a property of the fleet's
+	// seats and schedules and a larger volume buys no more of them.
+	//
+	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
+	// take, because the broker grants a stream its whole
+	// ceiling when it creates it: this number is free space a node must
+	// have before it can boot at all, and a ten-seat node's 181-day census
+	// is about 12 MB. See [UsageLogMaxBytesFloor].
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here: the value is the one the stream is
 	// CREATED with, and crossing it refuses the append — the day's figures
 	// stop replicating and the log's headroom alarm names this domain —
 	// rather than dropping the oldest day.
-	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=1073741824;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."`
+	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -1795,8 +1858,8 @@ type StreamLeaf struct {
 // validate refuses a leaf block that is neither side of a link, or both.
 //
 // This is what either side needs on its own terms, whatever the roles; which
-// roles may take which side is [Bootstrap.ValidateRoles]', and what a member
-// with a listener has to persist is [Bootstrap.validateTopology]'s.
+// roles may take which side is [Bootstrap.ValidateRoles]', and what every
+// member has to persist is [Stream.Durable]'s.
 func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 	var p problems
 	if l.IsZero() {
@@ -1871,6 +1934,63 @@ func (c StreamCluster) IsZero() bool {
 		c.Host == "" && c.Advertise == ""
 }
 
+// Durable refuses an embedded broker MEMBER with nowhere to persist, naming
+// `stream.store_dir`, and passes every other stream.
+//
+// # A Tier A rule, because the core runtime runs from boot
+//
+// A state log's records live on the stream, and an embedded server with no
+// store directory keeps its streams in MEMORY — so a restart recreates every
+// log empty, and a node whose durable tables are ahead of a stream that
+// restarted from nothing cannot tell "the log was trimmed" from "the log is a
+// different log", refuses to serve, and stays refused: every snapshot it could
+// adopt is above the recreated stream too.
+//
+// This was a CROSS-TIER rule (`config.CheckTiers`, now gone) while a node's
+// state log waited for its first company: only a company started one, so
+// only the pair could say whether one would run. Every data node runs the core
+// runtime from boot now — every domain's log and the identity estate on it,
+// company or none — and every member is a data node
+// ([Bootstrap.ValidateRoles]), so the answer is Tier A's alone, and the pair's
+// check let exactly the node it should refuse through: one started with no
+// company, which put its first person's invitation on a stream its first
+// restart emptied.
+//
+// A SOLO MEMBER AS MUCH AS A FLEET'S. A member of a fleet holds the fleet's
+// streams besides — the seats' mailboxes and every coordination bucket, for
+// every node that reaches it, a leaf that keeps nothing included — so one kept
+// in memory comes back from its next restart holding none of them; but the
+// state logs alone already decide it, and a solo member keeps those too.
+//
+// THE BROKER'S RULE, NOT THE ROLES'. Only a MEMBER runs JetStream in this
+// process: a LEAF runs none — every stream its clients use is a member's, kept
+// in that member's store directory — and is refused a store directory outright
+// ([StreamLeaf.validate]), and a CLIENT's streams are its external cluster's.
+// So both pass here, and a correct stateless node is never told to set the one
+// field it may not.
+//
+// ASKED TWICE, from ONE implementation: by [Bootstrap.Validate], and by the
+// engine at its own door for a Bootstrap that did not come through that one —
+// before anything opens, as the keyring is.
+func (s *Stream) Durable() error { return s.durable(field("stream")) }
+
+// durable is [Stream.Durable] at a caller's path.
+func (s *Stream) durable(path Path) error {
+	if s.Type == StreamNATS || s.Leaf.Joins() || strings.TrimSpace(s.StoreDir) != "" {
+		return nil
+	}
+	var p problems
+	p.add(at(path, "store_dir"), ErrMissing,
+		"this node's broker is a MEMBER, and a member keeps the estate's state "+
+			"logs on this stream from boot — the identity estate among them, "+
+			"whatever company it runs, or none — and in a fleet the seats' "+
+			"mailboxes and every coordination bucket too. An embedded stream with "+
+			"no store directory keeps its streams in memory: a restart recreates "+
+			"every log empty and this node refuses to serve them permanently. "+
+			"Name a directory")
+	return p.err()
+}
+
 func (s *Stream) validate(path Path) error {
 	var p problems
 	if s.Type != "" && !slices.Contains(StreamTypes, s.Type) {
@@ -1891,6 +2011,7 @@ func (s *Stream) validate(path Path) error {
 			"store_dir is where an EMBEDDED server persists; an external "+
 				"cluster keeps its own storage")
 	}
+	p.wrap(s.durable(path))
 	// THE SAME RULE, and the same reason: this is the limit handed to the
 	// server this process starts. An external cluster's account limits
 	// belong to whoever runs it, and the engine reads them back from the
@@ -2008,6 +2129,8 @@ func (s *Stream) validate(path Path) error {
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
 	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
+	bytesInRange(&p, path, "iam_log_max_bytes", s.IamLogMaxBytes,
+		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
 	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
 		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
@@ -2033,20 +2156,21 @@ func (s *Stream) validate(path Path) error {
 	// these ceilings exactly fill still fails at boot; what covers that is
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
-	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
-		s.UsageLogMaxBytes
+	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes +
+		s.PagesLogMaxBytes + s.IamLogMaxBytes + s.UsageLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
-				"pages_log_max_bytes %d + usage_log_max_bytes %d = %d): the broker "+
+				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
+				"usage_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.UsageLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
@@ -2204,375 +2328,26 @@ func (c *Coordination) LeaseTTL() time.Duration {
 	return time.Duration(c.LeaseTTLSeconds * float64(time.Second))
 }
 
-// ---- api ------------------------------------------------------------- //
-
-// DefaultAPIHost binds every interface, which is what a container needs.
-const DefaultAPIHost = "0.0.0.0"
-
-// API is the Tier A HTTP surface: host, port, auth posture.
-type API struct {
-	// Host is the bind address.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the HTTP surface."`
-
-	// Port is the bind port of this node's ONE listener, and node.roles
-	// decides what it carries. With the ingress role it is the whole HTTP
-	// surface: the dashboard, the REST API, the webhooks and the probes,
-	// less the routes [API.Public] moves to a listener of their own.
-	// Without it, the probes alone (/health and /ready) — plus a seats
-	// node's agent-mode tool bridge where api.public is unset — because an
-	// orchestrator runs every node and must be able to probe each, while
-	// the API is placed only where traffic is meant to arrive. ONE PORT rather than a second
-	// setting for the probes: the probes are already on this listener on
-	// an ingress node, so a probe port beside it would be a second address
-	// for the same two routes there, and one Tier A file keeps working for
-	// both shapes. 0 binds nothing at all, on any node.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's agent-mode tool bridge, where api.public is unset). 0 binds nothing."`
-
-	// Public is the optional dedicated listener for the routes outside
-	// parties call. See [APIPublic].
-	Public APIPublic `yaml:"public,omitempty" json:"public,omitzero"`
-
-	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
-}
-
-// APIPublic is a second listener that serves the routes outside parties call
-// without an operator credential, and nothing else: the vendor webhooks and the
-// vendor app landings under /webhooks/, and the per-run sandbox endpoints
-// /otlp/{token} and /mcp/{token}. Once it is set those routes are served ONLY
-// here, and api.port answers 404 for them, so the address an integration or a
-// remote sandbox must reach is a different socket from the one that serves the
-// admin API, the dashboard and the probes.
-//
-// # Why a listener rather than a path filter in a proxy
-//
-// Without it, a deployment that must accept vendor webhooks from the internet
-// but keep /config, /secrets and the read surface private has one socket to
-// expose and must filter it by path in front. That filter is an allow-list
-// somebody else maintains: one route it forgets, or one prefix it matches too
-// widely, puts the admin API on the internet, and nothing here can see it.
-// Two sockets make the split a fact about the network — the public one is
-// published, the other is not — and the engine itself decides which routes
-// each answers, from one predicate in the API's auth package.
-//
-// # Why the sandbox endpoints are public and the probes are not
-//
-// The sandbox endpoints are reached from INSIDE a box, which on E2B's cloud
-// is somebody else's network: a box can reach only what the deployment
-// publishes. They hold no operator credential by design — the signed per-run
-// token in the path is theirs — so they are exactly the routes this listener
-// is for, and leaving them on api.port would force that port public for any
-// company running remote sandboxes.
-//
-// The probes stay on api.port. /health describes the node — its seats, its
-// version, its posture — for whoever operates it, and an orchestrator or a
-// load balancer can probe a port other than the one it routes traffic to.
-//
-// # On a node without the ingress role
-//
-// Such a node serves its probes on api.port and one route beside them, its
-// seats' tool bridge, and that is a public route: with this block set it binds
-// HERE for it rather than on api.port, so one file still works for every role
-// and the bridge address follows one rule across the fleet. The probes stay on
-// api.port, for the reason above.
-type APIPublic struct {
-	// Host is the bind address. Empty binds every interface, which is the
-	// point of a listener meant to be reached from outside.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the public listener. Empty binds every interface."`
-
-	// Port is the bind port. 0 (the default) opens no public listener, and
-	// every route stays on api.port.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."`
-}
-
-// IsZero lets an unset public block drop out of a JSON round trip.
-func (p APIPublic) IsZero() bool { return p.Host == "" && p.Port == 0 }
-
-// Enabled reports whether the public routes have a listener of their own.
-func (p APIPublic) Enabled() bool { return p.Port != 0 }
-
-// Addr is the listener's bind address, host and port.
-func (p APIPublic) Addr() string { return net.JoinHostPort(p.Host, strconv.Itoa(p.Port)) }
-
-// Addr is the API listener's bind address, host and port.
-func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Port)) }
-
-func (a *API) validate(path Path) error {
-	var p problems
-	// Unbounded, a port of 70000 passes validation and fails at bind,
-	// long after `crewlet validate` said the config was good.
-	if a.Port < 0 || a.Port > 65535 {
-		p.add(at(path, "port"), ErrOutOfRange,
-			"must be 0 (no HTTP surface) or a port 1..65535, got %d", a.Port)
-	}
-	p.wrap(a.Public.validate(at(path, "public")))
-	p.wrap(a.Auth.validate(at(path, "auth")))
-	return p.err()
-}
-
-func (p *APIPublic) validate(path Path) error {
-	var probs problems
-	if p.Port < 0 || p.Port > 65535 {
-		probs.add(at(path, "port"), ErrOutOfRange,
-			"must be 0 (no public listener) or a port 1..65535, got %d", p.Port)
-	}
-	if p.Port == 0 && p.Host != "" {
-		probs.add(at(path, "port"), ErrMissing,
-			"is required once host is set: host describes the public LISTENER, "+
-				"and without a port this node opens none")
-	}
-	return probs.err()
-}
-
-// APIAuth is the bearer-token policy for the HTTP surface.
-//
-// Writes and the whole /config surface always require a token. Reads are
-// governed by AllowAnonymousRead, which defaults OPEN — reading is what a
-// dashboard does, and the page that would prompt for a token is itself
-// served unauthenticated, so requiring one by default puts a modal in front
-// of every first load.
-//
-// Exempt from auth entirely, because they authenticate by other means or
-// must be reachable to obtain a token at all: /health, /ready, the
-// dashboard shell and its assets, /webhooks/* (HMAC-verified per source)
-// and /otlp/* (signed per-run token).
-type APIAuth struct {
-	// Tokens are the accepted bearer tokens. An empty list is a real
-	// posture, not an oversight: no token can match, so reads serve and
-	// every write and all of /config is refused.
-	Tokens []APIToken `yaml:"tokens,omitempty" json:"tokens,omitempty" desc:"Accepted bearer tokens. Empty refuses every write."`
-
-	// Disabled serves every route without auth and logs a loud startup
-	// warning. A local-development escape hatch, never a production one.
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty" desc:"Local-dev only: serve every route unauthenticated."`
-
-	// AllowAnonymousRead governs GET/HEAD outside /config. Default true.
-	// It is a real exposure — the read surface carries LLM transcripts,
-	// diary entries and the whole event stream — so the API states which
-	// posture it took at startup, at WARNING when the bind host is not
-	// loopback.
-	AllowAnonymousRead bool `yaml:"allow_anonymous_read,omitempty" json:"allow_anonymous_read" desc:"Serve reads without a token (default true)."`
-
-	// AllowedOrigins are the browser origins CORS permits. Empty means
-	// SAME-ORIGIN ONLY: the dashboard is served by this process, so it
-	// needs no entry. The previous default was "*", which let any site a
-	// logged-in operator visited read every unauthenticated endpoint.
-	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"CORS origins. Empty = same-origin only."`
-
-	// CompanyWriters, when set, are the token ids that may CHANGE the
-	// company document, and no other credential may. Empty (the default)
-	// is every token, which is the posture of a company edited by people.
-	//
-	// It exists for a document something ELSE is the source of: a GitOps
-	// pipeline, or a Kubernetes operator rendering it from custom
-	// resources. Such a system overwrites the active revision with its own
-	// at every reconcile, so an edit a person made here survives only until
-	// then — and nothing told them. Listing the system's token turns that
-	// silent loss into a refusal at the moment of the edit, naming who
-	// manages the document. Reads are untouched.
-	//
-	// A TOKEN ID LIST, NOT A ROLE OR A FLAG: the token id is already what
-	// every revision records as its author, so "who may write" and "who
-	// wrote" are the same vocabulary. [APIAuth.MayWriteCompany] is the one
-	// reading of it; see ADR-0030 for what counts as changing the document.
-	CompanyWriters []string `yaml:"company_writers,omitempty" json:"company_writers,omitempty" desc:"Token ids that alone may change the company document. Empty = every token."`
-}
-
-// CompanyManaged reports whether the company document is managed: some
-// token ids are named as its only writers.
-func (a *APIAuth) CompanyManaged() bool { return len(a.CompanyWriters) > 0 }
-
-// MayWriteCompany reports whether the credential with this id may change the
-// company document.
-//
-// THE ONE READING of [APIAuth.CompanyWriters], for every surface that asks:
-// the config write path that enforces it and the viewer answer that tells the
-// dashboard whether to offer an edit. Exact comparison, because a token id is
-// lowercase by validation and recorded exactly as written on every revision.
-// The disabled guard's caller, [org.ReservedOperatorID], is never listed —
-// validation refuses it — so with the guard off a managed document is written
-// by nobody through the API, which is the managed posture rather than an
-// exception to it.
-func (a *APIAuth) MayWriteCompany(operatorID string) bool {
-	return !a.CompanyManaged() || slices.Contains(a.CompanyWriters, operatorID)
-}
-
-// APIToken is one bearer token gating writes and /config.
-type APIToken struct {
-	// ID is a short label stamped into revision audit rows (created_by):
-	// "founder", "ops", "ci-pipeline".
-	//
-	// LOWERCASE, and validation refuses anything else: a seat binds it
-	// with `contact.crewlet_operator_id`, which is matched case-insensitively,
-	// so the id has exactly one spelling that both directions agree on.
-	ID string `yaml:"id" json:"id" js:"required" desc:"Short lowercase label recorded as the author of writes made with this token."`
-
-	// Token is the value, or a ${VAR} reference to it. Resolved once at
-	// startup and never stored.
-	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
-}
-
-func (a *APIAuth) validate(path Path) error {
-	var p problems
-	seen := make(map[string]struct{}, len(a.Tokens))
-	for i, t := range a.Tokens {
-		tp := idx(at(path, "tokens"), i)
-		if t.ID == "" {
-			p.add(at(tp, "id"), ErrMissing,
-				"every token needs a label: it is what a revision's audit row records")
-		}
-		if t.Token == "" {
-			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
-		}
-		if lower := strings.ToLower(t.ID); lower != t.ID {
-			// A TOKEN ID IS LOWERCASE, because the binding that names it
-			// is: `contact.crewlet_operator_id` is lowercased and matched
-			// against the lowercased id (org.SeatByOperatorID), while
-			// every write made under the token records the id EXACTLY.
-			// A mixed-case id is therefore bound for writes and never
-			// matched by its own person's reads, and two ids that differ
-			// only in case — which the duplicate check below cannot see —
-			// are two credentials one seat's binding admits as the same
-			// person. Refused in the one shape that rules out both.
-			p.add(at(tp, "id"), ErrShape,
-				"token id %q must be lowercase: contact.crewlet_operator_id "+
-					"binds a token by its lowercased id while every write "+
-					"made with it records the id as written, so a mixed-case "+
-					"id is a person bound for writes and missing from their "+
-					"own reads, and ids differing only in case are two "+
-					"credentials bound to one seat. Write %q", t.ID, lower)
-		}
-		if _, dup := seen[t.ID]; dup && t.ID != "" {
-			// Two tokens sharing a label make the audit trail unreadable:
-			// every write says "founder" and no one can tell which
-			// credential made it, which is the whole reason the label
-			// exists.
-			p.add(at(tp, "id"), ErrConflict, "duplicate token id %q", t.ID)
-		}
-		seen[t.ID] = struct{}{}
-	}
-
-	// "anonymous" is the attribution recorded when auth.disabled is true.
-	// A real token carrying it would collide in an audit row with the
-	// writes made while the guard was off — the one distinction those
-	// rows exist to keep. The id is org's, because the chart refuses it
-	// as a seat binding too and config is the package that imports org.
-	if _, reserved := seen[org.ReservedOperatorID]; reserved {
-		p.add(at(path, "tokens"), ErrConflict,
-			"token id %q is reserved: it is the attribution recorded when "+
-				"api.auth.disabled is true. Pick a different id",
-			org.ReservedOperatorID)
-	}
-
-	for i, origin := range a.AllowedOrigins {
-		p.wrap(checkOrigin(idx(at(path, "allowed_origins"), i), origin))
-	}
-
-	// A WRITER IS A TOKEN ID, and held to the rules a token id is: an entry
-	// no id could ever equal is not a stricter list, it is a typo that
-	// locks out the system it was meant to name. Whether it names a token
-	// THIS file configures is a warning instead (see [Bootstrap.Warnings]):
-	// a list naming none is a frozen document, which is a posture.
-	writers := make(map[string]struct{}, len(a.CompanyWriters))
-	for i, id := range a.CompanyWriters {
-		wp := idx(at(path, "company_writers"), i)
-		switch lower := strings.ToLower(id); {
-		case strings.TrimSpace(id) == "":
-			p.add(wp, ErrMissing, "an empty writer names no token: remove the "+
-				"entry, or write the id of the token the managing system holds")
-		case lower != id:
-			p.add(wp, ErrShape, "writer %q must be lowercase, as every token id "+
-				"is, or it can never equal one. Write %q", id, lower)
-		case id == org.ReservedOperatorID:
-			p.add(wp, ErrConflict, "writer %q is reserved: it is the caller "+
-				"recorded when api.auth.disabled is true, a caller nobody "+
-				"authenticated. Name the managing system's own token", id)
-		}
-		if _, dup := writers[id]; dup && id != "" {
-			p.add(wp, ErrConflict, "writer %q is listed twice", id)
-		}
-		writers[id] = struct{}{}
-	}
-
-	// The pairing that leaves nothing reachable. No tokens means no
-	// candidate can ever match, and with reads closed too every route is
-	// guarded by a credential that does not exist — a process that starts
-	// cleanly, binds its port, and answers 401 to everything including
-	// its own dashboard.
-	//
-	// Checked HERE rather than at API startup, so `crewlet validate`
-	// catches it on a laptop rather than a deployment catching it at
-	// bind time.
-	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
-		p.add(at(path, "tokens"), ErrMissing,
-			"allow_anonymous_read is false and no tokens are configured, so "+
-				"every route is guarded by a token that does not exist and "+
-				"nothing is reachable. Configure at least one token, or leave "+
-				"allow_anonymous_read at its default to serve reads without one")
-	}
-	return p.err()
-}
-
-// checkOrigin refuses an origin a browser will never match.
-//
-// # Why each of these is refused rather than accepted and ignored
-//
-// A CORS allow-list is compared against the browser's `Origin` header
-// EXACTLY, and the header is always `scheme://host[:port]` with no path and
-// no trailing slash. Every shape below is a value an operator plausibly
-// writes and no browser can ever equal — so accepting it produces an
-// allow-list that looks configured, a fetch that fails in a console the
-// engine never sees, and nothing anywhere saying why.
-//
-// `*` is the sharpest of them, and it is refused rather than honoured: it was
-// this field's own previous default, and what it does is let any site a
-// logged-in operator visits read every unauthenticated endpoint — which on
-// this API means LLM transcripts, diary entries and the whole event stream.
-func checkOrigin(path Path, origin string) error {
-	var p problems
-	switch {
-	case origin == "":
-		p.add(path, ErrMissing, "an empty origin matches nothing: remove the "+
-			"entry, or name a site as scheme://host[:port]")
-	case origin == "*":
-		p.add(path, ErrShape, "%q is not an origin and is refused rather "+
-			"than honoured: it would let any site a logged-in operator "+
-			"visits read this API — which carries LLM transcripts, diary "+
-			"entries and the whole event stream. Name each site, as "+
-			"https://ops.example.com", origin)
-	case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
-		p.add(path, ErrShape, "%q has no scheme: a browser's Origin header "+
-			"is always scheme://host[:port], so this matches nothing. Write "+
-			"https://%s", origin, origin)
-	case strings.HasSuffix(origin, "/"):
-		p.add(path, ErrShape, "%q ends in a slash: a browser's Origin "+
-			"header carries no path, so this matches nothing. Write %q",
-			origin, strings.TrimRight(origin, "/"))
-	default:
-		if rest := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://"); strings.Contains(rest, "/") {
-			p.add(path, ErrShape, "%q carries a path: a browser's Origin "+
-				"header is the scheme, host and port alone, so this matches "+
-				"nothing", origin)
-		}
-	}
-	return p.err()
-}
-
 // ---- secrets --------------------------------------------------------- //
 
 // secretKeyIDPattern keeps a key id colon-free so the envelope
 // (enc:v1:<id>:...) parses.
 var secretKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// Secrets is the Tier A encryption keyring for company secrets at rest.
+// Secrets is the Tier A keyring every node of a fleet holds.
 //
 // The keyring is the SOLE ROOT OF TRUST: the store holds only ciphertext,
 // and the key material lives here — on disk or in the environment, never in
-// the database it opens. Empty (the default) means secret encryption is
-// disabled; the engine then fails closed only if the active revision
-// actually contains sealed values.
+// the database it opens. It is REQUIRED ON EVERY NODE ([Bootstrap.Validate]
+// refuses a file without one), because far more than the company's
+// credentials rest on it: every state-log record is signed and verified
+// under it, the company document a node fetches from its peers is
+// authenticated by its seal, and a node serving the API signs every session
+// cookie and per-run token with it. There is no default: a key the engine
+// invented would be one no other node holds.
 type Secrets struct {
-	// ActiveKeyID names the key that seals new writes. Required once keys
-	// is non-empty.
+	// ActiveKeyID names the key that seals new writes. Required, and it
+	// must name one of Keys.
 	ActiveKeyID string `yaml:"active_key_id,omitempty" json:"active_key_id,omitempty" desc:"Which key seals new writes."`
 
 	// Keys is the keyring. More than one entry supports online rotation:
@@ -2607,6 +2382,12 @@ func (s *Secrets) validate(path Path) error {
 		if k.Material == "" {
 			p.add(at(kp, "material"), ErrMissing,
 				"key material must not be empty (generate one with `crewlet secrets keygen`)")
+		} else if _, err := secrets.DecodeKey(k.Material); err != nil {
+			// THE CIPHER'S OWN CHECK, through the one decoder and in the
+			// one sentence [Secrets.Cipher] refuses with — so validation
+			// refuses exactly what the boot would, where it used to pass
+			// a key the boot then refused.
+			p.add(at(kp, "material"), ErrShape, keyMaterialProblem, k.ID, err)
 		}
 		if _, dup := ids[k.ID]; dup {
 			p.add(at(kp, "id"), ErrConflict, "duplicate key id %q", k.ID)
@@ -2626,44 +2407,87 @@ func (s *Secrets) validate(path Path) error {
 	return p.err()
 }
 
-// Enabled reports whether secret encryption is configured at all.
+// Enabled reports whether this value carries a keyring at all.
+//
+// Every Tier A that validated does; false answers only a Secrets value built
+// in code, which [Secrets.Cipher] refuses.
 func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
 
-// Cipher builds the sealing cipher this Tier A configures, or nil when secret
-// encryption is disabled.
+// TokenMaterial is this keyring as a per-run token issuer reads it.
 //
-// NIL IS A POSTURE, not a failure: a deployment with no keyring stores its
-// company config in plaintext, which is the documented opt-out and the state
-// every deployment starts in. What must fail is a keyring that is configured
-// and unusable — key material that is not 32 bytes of base64 is an operator
-// error, and booting past it would seal the next revision under a key nobody
-// can reproduce.
+// ONE BUILDER FOR EVERY ISSUER, because it was three: the engine built this
+// list for the OTLP receiver, the engine built it again for the MCP bridge,
+// and the CLI built it a third time for a GitHub App state signer the setup
+// surface has since replaced with the keyring's own cipher. Copies of one rule
+// about which keys a fleet agrees on, in files that nothing compares.
+//
+// THE MATERIAL IS ALREADY RESOLVED, as [Secrets.Cipher]'s is: Tier A expands
+// its whole document from the environment before decoding, so two nodes that
+// spell one key differently — a `${K}` on one, the literal on the other —
+// derive the same signing key, because both read the same bytes. (This said
+// the opposite, which would have split every per-run token across such a
+// fleet.)
+func (s *Secrets) TokenMaterial() runtoken.Material {
+	if s == nil {
+		return runtoken.Material{}
+	}
+	out := runtoken.Material{
+		ActiveID: s.ActiveKeyID,
+		Keys:     make([]runtoken.KeyMaterial, 0, len(s.Keys)),
+	}
+	for _, key := range s.Keys {
+		out.Keys = append(out.Keys, runtoken.KeyMaterial{ID: key.ID, Material: key.Material})
+	}
+	return out
+}
+
+// Cipher builds the sealing cipher this Tier A configures.
+//
+// AN EMPTY KEYRING IS REFUSED, and it used to be a posture: a deployment with
+// no keyring stored its company document in plaintext and read peers'
+// documents in plaintext, which was the documented opt-out. The keyring is
+// required on every node now ([Bootstrap.Validate]), and a nil cipher handed
+// back here was the one way a caller could still reach that posture — a
+// document read unauthenticated off the coordination store, or a revision
+// written in the clear — so the value that would have produced it is
+// refused where it is built rather than at every caller. What also fails
+// here is a keyring that is configured and unusable: key material that is not
+// 32 bytes of base64 is an operator error, and booting past it would seal the
+// next revision under a key nobody can reproduce.
 //
 // ${VAR} references in the material are already resolved: Tier A expands its
 // document before decoding, because the values it carries are needed the
 // instant the process starts.
 func (s *Secrets) Cipher() (secrets.Cipher, error) {
 	if !s.Enabled() {
-		return nil, nil
+		return nil, fault(field("secrets.keys"), ErrMissing,
+			"there is no keyring to seal or open with, and every node needs one: "+
+				"generate a key with `crewlet secrets keygen` and add it")
 	}
 	ring := secrets.Keyring{
 		ActiveID: s.ActiveKeyID,
 		Keys:     make(map[string][]byte, len(s.Keys)),
 	}
 	for i, key := range s.Keys {
-		material, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key.Material))
+		material, err := secrets.DecodeKey(key.Material)
 		if err != nil {
 			// The ID reaches the message and the material never does. The
 			// path is the element's own material field: `keys` is a list, so
 			// a path naming the id as if it were a map key pointed at nothing
 			// in the file.
 			return nil, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
-				"key %q: key material must be base64 (generate one with `crewlet secrets keygen`)", key.ID)
+				keyMaterialProblem, key.ID, err)
 		}
 		ring.Keys[key.ID] = material
 	}
 	return secrets.NewCipher(ring)
 }
+
+// keyMaterialProblem is the ONE sentence unusable key material is refused
+// with, by [Secrets.validate] and [Secrets.Cipher] alike, so `crewlet validate`
+// says exactly what a boot would. Its arguments are the key's id and
+// [secrets.DecodeKey]'s error, neither of which carries the material.
+const keyMaterialProblem = "key %q: %v (generate one with `crewlet secrets keygen`)"
 
 // validateSync checks stream.sync, and its four refusals are the cases where
 // the value is a claim the deployment cannot make.

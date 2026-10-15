@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -156,6 +157,15 @@ func (t *Tool) Parameters() map[string]any {
 							"description": "A configured providers.llm key to run this task " +
 								"on. Omit to take the seat's own worker model.",
 						},
+						"output": map[string]any{
+							"type": "object",
+							"description": "The JSON Schema this worker's answer must " +
+								"fill, so it comes back as fields you can use directly " +
+								"rather than prose. Replaces the template's; omit to " +
+								"take the template's, or {result, notes}. An object " +
+								"schema with 1 to 12 named properties, at most 3 levels " +
+								"deep, whose `required` entries are properties it has.",
+						},
 					},
 					"required": []any{"id", "prompt"},
 				},
@@ -181,6 +191,10 @@ type taskArgs struct {
 	After        []string  `json:"after"`
 	MaxTurns     turnCount `json:"max_turns"`
 	Model        string    `json:"model"`
+	// Output is a JSON Schema, which is why it stays a map: the worker's
+	// provider receives it verbatim, and the engine reads only the part a
+	// template's is held to — see [config.ValidateWorkerOutput].
+	Output map[string]any `json:"output"`
 }
 
 // turnCount accepts a round cap sent as a number OR as a string.
@@ -217,8 +231,12 @@ func (t *turnCount) UnmarshalJSON(b []byte) error {
 // Call plans and runs the delegate call.
 func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	var parsed callArgs
-	if err := remarshal(args, &parsed); err != nil {
-		return failed(err.Error()), nil
+	// structured's rule and not a copy of it: a field the arguments do not
+	// declare — a task's `afer` — is refused by name rather than dropped,
+	// because dropped it ran the task at once on input it was told to wait
+	// for. The copy that lived here dropped it.
+	if err := structured.Remarshal(args, &parsed); err != nil {
+		return failed(err, fmt.Sprintf("%s: %v", ToolName, err)), nil
 	}
 
 	req := Request{Tasks: make([]Task, 0, len(parsed.Tasks))}
@@ -226,7 +244,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 		req.Tasks = append(req.Tasks, Task{
 			ID: a.ID, Worker: a.Worker, SystemPrompt: a.SystemPrompt,
 			Prompt: a.Prompt, Tools: a.Tools, After: a.After,
-			MaxTurns: int(a.MaxTurns), Model: a.Model,
+			MaxTurns: int(a.MaxTurns), Model: a.Model, Output: a.Output,
 		})
 	}
 
@@ -245,9 +263,9 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 		// (it is still the only reader that can route around it) but as
 		// this deployment's condition, which no rewrite of the plan clears.
 		if _, planned := AsPlanError(err); !planned {
-			return refused(tools.RefusalUnavailable, err.Error()), nil
+			return refused(tools.RefusalUnavailable, err, err.Error()), nil
 		}
-		return failed(err.Error()), nil
+		return failed(err, err.Error()), nil
 	}
 	if cancelled(results) {
 		// The turn is being torn down. Reporting this to the model is
@@ -329,29 +347,19 @@ func renderResults(results []Result) string {
 	return string(blob)
 }
 
-// remarshal moves a decoded argument map into a typed struct, via JSON
-// because the arguments already came off the wire as JSON and the struct tags
-// are the schema.
-func remarshal(args map[string]any, into any) error {
-	blob, err := json.Marshal(args)
-	if err != nil {
-		return fmt.Errorf("%s: arguments could not be re-encoded: %w", ToolName, err)
-	}
-	if err := json.Unmarshal(blob, into); err != nil {
-		return fmt.Errorf("%s: arguments do not match the schema: %w", ToolName, err)
-	}
-	return nil
-}
-
-// refused is a tool refusal the model reads and can act on, with the class a
-// reader that is not a model acts on — see [tools.Refusal].
-func refused(code tools.Refusal, msg string) tools.Result {
-	return tools.Result{Output: msg, Failed: true, Refusal: code}
+// refused is a tool refusal the model reads and can act on, its class stated
+// as the result's cause beneath the error that decided it ([tools.Classify]),
+// so a reader that is not a model reads the class and the error out of one
+// value rather than a class field beside it. A nil err states the class alone.
+func refused(code tools.Refusal, err error, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(code, err)}
 }
 
 // failed is the argument refusal, [tools.RefusalInvalid]: the plan or its
 // arguments are what the model has to change.
-func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
+func failed(err error, msg string) tools.Result {
+	return refused(tools.RefusalInvalid, err, msg)
+}
 
 // AsPlanError reports whether an error from [Run] is a refusal the model can
 // fix, rather than a wiring failure.

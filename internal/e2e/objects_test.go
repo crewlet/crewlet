@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -24,13 +25,6 @@ import (
 // object bucket, replicated across the members — so a file uploaded on one
 // node is served, whole and verified, by another.
 
-// e2eOperatorID and e2eOperatorToken are the credential a cluster member's
-// API accepts writes under.
-const (
-	e2eOperatorID    = "e2e-ops"
-	e2eOperatorToken = "e2e-operator-token-0123456789"
-)
-
 // upload PUTs a file through a node's byte route.
 func upload(t *testing.T, n *node, project, path string, content []byte) (int, map[string]any) {
 	t.Helper()
@@ -39,9 +33,8 @@ func upload(t *testing.T, n *node, project, path string, content []byte) (int, m
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
 	req.Header.Set("Content-Type", "text/csv")
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -59,7 +52,7 @@ func download(t *testing.T, n *node, project, path string) (int, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -102,7 +95,9 @@ func claimAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T, c *cluster) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.File.UpdatedBy != e2eOperatorID || detail.File.Size != int64(len(content)) ||
+	// THE FIXTURE'S TIER A TOKEN, which writes under its own login, bound to
+	// no seat ([iam.TokenLogin]).
+	if detail.File.UpdatedBy != iam.TokenLogin(e2eTokenID) || detail.File.Size != int64(len(content)) ||
 		detail.File.Hash != objstore.HashOf(content) || detail.File.Object.IsZero() {
 		t.Errorf("the other member's row: by %q, %d bytes, digest %s, object %s",
 			detail.File.UpdatedBy, detail.File.Size, detail.File.Hash, detail.File.Object)
@@ -172,8 +167,7 @@ func operatorCall(t *testing.T, n *node, method, path string) (int, map[string]a
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}

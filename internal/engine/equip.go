@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"github.com/google/uuid"
+
 	"context"
 	"fmt"
 
@@ -86,12 +88,14 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if e.skills != nil {
 		deps.ToolSkills = e.skills
 	}
+	// THE AUTHORITY DECISION, over the chart READ PER CALL for the reason
+	// the lead seam below is: a seat's tools are cloned into its lease and
+	// an apply does not rebuild the clone, so a decision holding this
+	// epoch's chart would refuse a seat its own work the moment somebody
+	// reorganised. [ChartAuthorityOf] holds the engine and asks it each
+	// time, three-valued.
+	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
 	deps.Work = e.workDeps(c)
-	// THE PROJECT-LEAD SEAM, read PER CALL against the epoch current when
-	// the tool runs rather than against this one: a seat's tools are
-	// cloned into its lease, an apply does not rebuild the clone, and a
-	// captured chart would grant or refuse against an org that has moved.
-	deps.LeadsProject = LeadsProjectOf(e)
 	deps.Pages = e.pageDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
@@ -204,11 +208,15 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 //
 // AGENT seats only, which is the whole question it exists to answer: a human
 // seat is addressable and never spawned, so a channel opened to one is a
-// channel no turn will ever answer.
+// channel no turn will ever answer. The id it returns is the one derived from
+// the seat's handle (ADR-0013), resolved through the org's own lookup.
 type agentSeats struct{ org *org.Organization }
 
-func (d agentSeats) IsAgentSeat(handle string) bool {
-	return d.org != nil && d.org.AgentSeatByHandle(handle) != nil
+func (d agentSeats) SeatInbox(handle string) (uuid.UUID, bool) {
+	if d.org == nil {
+		return uuid.Nil, false
+	}
+	return d.org.AgentIDFor(d.org.AgentSeatByHandle(handle))
 }
 
 // markers is the onboarding marker store, or nil on a node with none.

@@ -1,0 +1,903 @@
+package types
+
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+)
+
+// Authentication: who signed in and how, what ended a session, what somebody
+// was refused, what changed about what a person may do, and whether a record
+// on a fleet log was written by the fleet at all.
+//
+// # The live half of a trail that has a durable half elsewhere
+//
+// Every one of these is published on the ordinary event path, so it reaches
+// the PUBLISHING node's store row, the activity feed and any OTLP sink the way
+// every other event does. That row is written inline on the node that
+// published it, with no consumer group — so a sign-in served by one ingress
+// node is a row on that node alone, and a per-node trail is not an audit
+// trail. The fleet-wide answer is `iam_history`, which the identity applier
+// writes identically on every node from the records themselves; these are the
+// LIVE FEED beside it and the export an operator's collector reads.
+//
+// # Nothing here carries what somebody presented
+//
+// Not a password, not a login somebody typed and got wrong, not a token value,
+// and not an unsalted hash of any of them — a hash of a typed login is
+// reversible against the company's own roster in one pass, and a password
+// typed into the login box is exactly what a failed sign-in would otherwise
+// carry into every backup. A failure is COUNTED per source (see
+// [IAMLoginFailures]), and an identity appears only on a fact a verified
+// credential or the engine itself authored.
+//
+// # Who authors the rate, type by type
+//
+// internal/events files each of these with its [events.RateAuthor], and the
+// split is the design: a failed attempt is authored by whoever can reach the
+// listener, so it is never a type at all — it is a metrics counter plus the
+// one row per node per minute, counted per source, the engine's own loop
+// publishes.
+// Everything else here follows a credential this engine verified, or the
+// engine's own loop deciding once per key, and says so in its category entry.
+//
+// # What is deliberately NOT here
+//
+// `iam_token_rejected` is absent for the admission rule's own reason: a
+// rejected bearer is authored by whoever holds the wrong value, so it is a
+// failed attempt of method `bearer` inside [IAMLoginFailures] and never a row
+// of its own.
+
+func init() {
+	events.Register[IAMSessionStarted]()
+	events.Register[IAMSessionEnded]()
+	events.Register[IAMLoginFailures]()
+	events.Register[IAMStepUpCompleted]()
+	events.Register[IAMCredentialMinted]()
+	events.Register[IAMCredentialRevoked]()
+	events.Register[IAMGrantsChanged]()
+	events.Register[IAMRecoveryCodeUsed]()
+	events.Register[IAMSecondFactorThrottled]()
+	events.Register[IAMMFAReset]()
+	events.Register[IAMInvitationCancelled]()
+	events.Register[IAMPasswordChanged]()
+	events.Register[IAMPasswordResetIssued]()
+	events.Register[IAMPasswordReset]()
+	events.Register[IAMSessionGenerationBumped]()
+	events.Register[RecordUnverifiable]()
+	events.Register[RecordTampered]()
+}
+
+// SignInMethod is how a session was opened.
+type SignInMethod string
+
+const (
+	// SignInPassword is a password, and a second factor when the person
+	// holds one.
+	SignInPassword SignInMethod = "password"
+
+	// SignInInvite is the session an invitation's redemption opens, for
+	// the person it just enrolled.
+	SignInInvite SignInMethod = "invite"
+
+	// SignInToken is a Tier A token exchanged for a session. The principal
+	// is the TOKEN, acting as itself — never a person.
+	SignInToken SignInMethod = "token"
+)
+
+// Valid reports whether m is a method this build names.
+func (m SignInMethod) Valid() bool {
+	switch m {
+	case SignInPassword, SignInInvite, SignInToken:
+		return true
+	}
+	return false
+}
+
+// SecondFactor is which second factor a sign-in or a step-up presented.
+//
+// THE ZERO VALUE IS "NONE", and it is a real answer rather than an absence: a
+// person who holds no second factor signs in with one proof, and a row that
+// says so is the row an auditor asking "who never enrolled one" reads.
+type SecondFactor string
+
+const (
+	// FactorTOTP is a code from an authenticator app.
+	FactorTOTP SecondFactor = "totp"
+
+	// FactorRecovery is one of the single-use codes that stand in for the
+	// app when it is lost — which is why using one is also its own event,
+	// [IAMRecoveryCodeUsed].
+	FactorRecovery SecondFactor = "recovery"
+)
+
+// Valid reports whether f is none or a factor this build names.
+func (f SecondFactor) Valid() bool {
+	return f == "" || f == FactorTOTP || f == FactorRecovery
+}
+
+// SessionEndReason is why a session ended.
+type SessionEndReason string
+
+const (
+	// EndLogout is the holder signing out of this session, or of one
+	// named session of their own.
+	EndLogout SessionEndReason = "logout"
+
+	// EndLogoutAll is the holder signing out everywhere: their revocation
+	// epoch moved, which ends every session they hold at once.
+	EndLogoutAll SessionEndReason = "logout_all"
+
+	// EndRevoked is somebody ELSE ending it: an administrator ending one
+	// session or every session a person holds.
+	EndRevoked SessionEndReason = "revoked"
+
+	// EndPersonRemoved is the person being removed, which ends every
+	// session they hold along with everything else about them.
+	EndPersonRemoved SessionEndReason = "person_removed"
+)
+
+// Valid reports whether r is a reason this build names.
+func (r SessionEndReason) Valid() bool {
+	switch r {
+	case EndLogout, EndLogoutAll, EndRevoked, EndPersonRemoved:
+		return true
+	}
+	return false
+}
+
+// FailureMethod is what a failed attempt was trying to prove itself with.
+type FailureMethod string
+
+const (
+	// FailPassword is a sign-in or a step-up whose first proof failed —
+	// no such login, a wrong password, a person who may not act. One
+	// method for all of them on purpose: the arms are distinguishable in
+	// the node's own log line, and a count keyed on which arm fired is a
+	// roster read back out of the metrics.
+	FailPassword FailureMethod = "password"
+
+	// FailSecondFactor is a correct password with a wrong code.
+	FailSecondFactor FailureMethod = "second_factor"
+
+	// FailInvite is an invitation link that did not prove itself: an id
+	// nobody issued, or a secret that is not the id's link's — each a
+	// 410. THE LINK IS THE CREDENTIAL, so a source presenting ids or
+	// secrets that open nothing is guessing at one, and its failure count
+	// climbing is what shows the walk. A link that DID prove
+	// itself and is spent — redeemed, aged out, its address enrolled — is
+	// the same 410 and NOT a failure: it is the link's holder, or a mail
+	// scanner re-reading it, and counting it named a scanner's address as
+	// a guesser.
+	FailInvite FailureMethod = "invite"
+
+	// FailReset is a password reset link that did not prove itself — an id
+	// that is no reset link, or a secret that is not the id's link's — for
+	// [FailInvite]'s reason: the link is the credential, and a link that
+	// proved itself and no longer works is not a guess.
+	FailReset FailureMethod = "reset"
+
+	// FailBearer is a credential presented on a request and refused: an
+	// `Authorization` value matching no Tier A token, or a session cookie
+	// whose signature does not verify under this deployment's keyring. A
+	// cookie that verified and whose session had simply ENDED is not a
+	// failure — it is a browser holding yesterday's session, and counting
+	// it would page somebody for every tab left open over a weekend.
+	FailBearer FailureMethod = "bearer"
+)
+
+// Valid reports whether m is a method this build names.
+func (m FailureMethod) Valid() bool {
+	switch m {
+	case FailPassword, FailSecondFactor, FailInvite, FailReset,
+		FailBearer:
+		return true
+	}
+	return false
+}
+
+// FailureMethods is every method, for a metrics dimension and a test that
+// walks the set.
+var FailureMethods = []FailureMethod{
+	FailPassword, FailSecondFactor, FailInvite, FailReset, FailBearer,
+}
+
+// CredentialKind is what sort of credential a mint or a revocation was about.
+//
+// The same spellings internal/iamdomain stores a credential's method under,
+// declared again here rather than imported because this package is the wire
+// catalogue and depends on nothing but the envelope.
+type CredentialKind string
+
+const (
+	// CredentialToken is a machine token a person minted.
+	CredentialToken CredentialKind = "token"
+
+	// CredentialTOTP is an authenticator app's seed.
+	CredentialTOTP CredentialKind = "totp"
+
+	// CredentialRecovery is a set of single-use recovery codes.
+	CredentialRecovery CredentialKind = "recovery"
+
+	// CredentialPassword is a password.
+	CredentialPassword CredentialKind = "password"
+
+	// CredentialReset is a one-time password reset link an administrator
+	// issued.
+	CredentialReset CredentialKind = "reset"
+)
+
+// IAMSessionStarted is a session opened: somebody proved who they are and now
+// holds a cookie.
+//
+// THE REMOTE ADDRESS IS THE CLIENT, resolved through `api.trusted_proxies`,
+// which is the same value the sign-in throttle keys on — behind a proxy the
+// peer is the proxy, and a row naming it says nothing about who signed in.
+type IAMSessionStarted struct {
+	Person string       `json:"person"`
+	Login  string       `json:"login"`
+	Method SignInMethod `json:"method"`
+
+	// Lineage is the session's own id. It is in every row about this
+	// session and is not a secret: a bearer is, and nothing here carries
+	// one.
+	Lineage string `json:"lineage"`
+
+	Remote       string       `json:"remote"`
+	SecondFactor SecondFactor `json:"second_factor"`
+
+	// ExpiresAt is the absolute deadline the session was minted with.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// EventType is the "iam_session_started" wire type.
+func (IAMSessionStarted) EventType() string { return "iam_session_started" }
+
+// Actor is the login that signed in: a person acts as themselves, and a
+// token's exchange as the token.
+func (e IAMSessionStarted) Actor() string { return e.Login }
+
+// Summary names the method and the second factor, which are the two things an
+// auditor scanning a feed of sign-ins is looking for.
+func (e IAMSessionStarted) Summary() string {
+	how := string(e.Method)
+	if how == "" {
+		how = "an unnamed method"
+	}
+	if e.SecondFactor != "" {
+		how += " + " + string(e.SecondFactor)
+	}
+	return lead(orSomebody(e.Login, e.Person), "signed in ("+how+")")
+}
+
+// IAMSessionEnded is a session that stopped being one.
+//
+// LINEAGE IS EMPTY WHEN THE GESTURE ENDED EVERY SESSION A PERSON HELD — a
+// sign-out everywhere, an administrator's revocation, a removal — because
+// those move the person's revocation epoch rather than closing rows one at a
+// time, and the event says what was done rather than inventing a list of the
+// sessions it happened to reach.
+type IAMSessionEnded struct {
+	Person  string           `json:"person"`
+	Lineage string           `json:"lineage"`
+	Reason  SessionEndReason `json:"reason"`
+
+	// By is who ended it: the holder for a logout, an administrator for a
+	// revocation or a removal — EMPTY only for a sign-out this node could
+	// not say the caller of, which ends the session its cookie names all
+	// the same. A session past its own idle or absolute deadline is no row
+	// at all: an expiry nobody authored.
+	By string `json:"by"`
+
+	// OperatorID is the CREDENTIAL By acted through: a machine token's
+	// `pat:<id>` when it was one — which acts as its owner, so By alone
+	// cannot tell a token's gesture from its owner's — a browser session's
+	// `session:<lineage>` when it was one, and By's own login where By is
+	// its own credential (a Tier A token). Empty wherever By is. The same
+	// value, under the same name, as the `operator_id` column every work
+	// and page record carries.
+	OperatorID string `json:"operator_id,omitempty"`
+}
+
+// EventType is the "iam_session_ended" wire type.
+func (IAMSessionEnded) EventType() string { return "iam_session_ended" }
+
+// Actor is whoever ended it, when this node could say; the chain then falls
+// back to the node that recorded it.
+func (e IAMSessionEnded) Actor() string { return e.By }
+
+// Summary says whose, which one and why.
+func (e IAMSessionEnded) Summary() string {
+	which := "every session"
+	if e.Lineage != "" {
+		which = "session " + shortLineage(e.Lineage)
+	}
+	why := string(e.Reason)
+	if why == "" {
+		why = "no reason recorded"
+	}
+	return fmt.Sprintf("%s of %s ended (%s)", upperFirst(which),
+		orSomebody(e.Person, ""), why)
+}
+
+// IAMLoginFailures is every failed attempt one node refused inside one minute,
+// counted per source.
+//
+// # ONE ROW PER NODE PER MINUTE, published by the engine's own loop
+//
+// A failed sign-in is authored by whoever can reach the listener. A row per
+// attempt hands the size of the node estate — and of every backup, snapshot
+// and integrity check taken from it — to them: the design this replaced wrote
+// one synchronous row per attempt, which was 6.9 million rows a day from one
+// host. So each attempt is a counter on the metrics recorder, and what becomes
+// a row is this, paced by a ticker rather than by the caller, and only for a
+// minute that had a failure in it.
+//
+// # What it carries, and what it never carries
+//
+// A count per source, and the count from sources past the cap. Never what was
+// presented — not a login somebody mistyped, not a password typed into the
+// login box, not a bearer — and not a hash of any of them, which would reverse
+// against the company's own roster in one pass; and not who the engine
+// resolved a failure to, which would make a row a list of who was being
+// guessed at.
+type IAMLoginFailures struct {
+	// Minute is the start of the minute these attempts fell in, UTC.
+	Minute time.Time `json:"minute"`
+
+	// Sources are the sources that failed in this minute, most failures
+	// first, at most the per-minute cap stated in internal/iam/authevents.
+	Sources []SourceFailures `json:"sources"`
+
+	// Overflow is how many failed attempts came from sources past that
+	// cap — the size of a distributed attack rather than a name per
+	// address in its pool.
+	Overflow int `json:"overflow,omitempty"`
+}
+
+// SourceFailures is one source's failed attempts in a minute.
+type SourceFailures struct {
+	// Source is the caller in the unit the sign-in throttle keys on: the
+	// client address resolved through `api.trusted_proxies`, and for an
+	// IPv6 client its /64 (`2001:db8:1:2::/64`), since every address in
+	// it is one customer's. Empty for a request with no resolvable
+	// address.
+	Source string `json:"source"`
+
+	// Failures is how many of its attempts were refused, the ones the
+	// throttle turned away before verifying anything included.
+	Failures int `json:"failures"`
+}
+
+// EventType is the "iam_login_failures" wire type.
+func (IAMLoginFailures) EventType() string { return "iam_login_failures" }
+
+// Total is every failed attempt the row counts, named sources and overflow
+// alike.
+func (e IAMLoginFailures) Total() int {
+	total := e.Overflow
+	for _, s := range e.Sources {
+		total += s.Failures
+	}
+	return total
+}
+
+// Summary leads with the count and the source that sent most of it, which is
+// what somebody reading a feed of these is sorting by.
+func (e IAMLoginFailures) Summary() string {
+	line := fmt.Sprintf("%d failed attempt(s) in one minute from %d source(s)",
+		e.Total(), len(e.Sources))
+	if len(e.Sources) > 0 {
+		top := e.Sources[0]
+		line += fmt.Sprintf("; most from %s (%d)",
+			orSomebody(top.Source, "an unidentified client"), top.Failures)
+	}
+	if e.Overflow > 0 {
+		line += fmt.Sprintf("; %d from sources past the per-minute cap", e.Overflow)
+	}
+	return line
+}
+
+// IAMStepUpCompleted is a signed-in person confirming who they are again, which
+// is what the surfaces that change what a company IS ask for.
+//
+// It opens a FRESH session carrying the new proof, keeping the absolute
+// deadline of the one it replaces; Replaces is
+// that one, ENDED before the new one opened, so a reader can join the two. No
+// separate session-ended row is written for it: this row is the record of
+// why it ended.
+//
+// # No surface, because nothing a node can check says which one
+//
+// The identity design names a `surface` here — which privileged surface the
+// confirmation was for — and this build carries none, deliberately. A step-up
+// proves the SESSION, not a gesture: the replacement's proof instant makes
+// every route fresh until its `reauth_at`, so there is no one surface it is
+// for. And the request that asked for it is a different request, refused
+// before the person confirmed, which `POST /auth/step-up` never sees; the only
+// place a surface could come from is the client's own word. A field in this
+// trail that no node checked would read exactly like the ones it did check,
+// and the one an investigation leaned on would be the one a client wrote.
+// What a confirmation was used for is the row that gesture writes, under the
+// same person, after this one.
+type IAMStepUpCompleted struct {
+	Person       string       `json:"person"`
+	Login        string       `json:"login"`
+	Lineage      string       `json:"lineage"`
+	Replaces     string       `json:"replaces"`
+	SecondFactor SecondFactor `json:"second_factor"`
+	Remote       string       `json:"remote"`
+}
+
+// EventType is the "iam_stepup_completed" wire type.
+func (IAMStepUpCompleted) EventType() string { return "iam_stepup_completed" }
+
+// Actor is the person who confirmed.
+func (e IAMStepUpCompleted) Actor() string { return e.Login }
+
+// Summary says what was presented.
+func (e IAMStepUpCompleted) Summary() string {
+	how := "password"
+	if e.SecondFactor != "" {
+		how += " + " + string(e.SecondFactor)
+	}
+	return lead(orSomebody(e.Login, e.Person), "confirmed their identity ("+how+")")
+}
+
+// IAMCredentialMinted is a credential added to somebody: a machine token, an
+// authenticator app, a fresh set of recovery codes.
+//
+// NEVER THE VALUE. A token is shown once to whoever minted it and stored as a
+// hash; this says that one exists, whose it is and what it may do.
+type IAMCredentialMinted struct {
+	Credential string         `json:"credential"`
+	Kind       CredentialKind `json:"kind"`
+	Owner      string         `json:"owner"`
+
+	// Grants are what a TOKEN was minted to carry — a subset of its
+	// owner's, which is what an investigation asks first. Empty on a
+	// second factor, which carries no authority of its own.
+	Grants []string `json:"grants,omitempty"`
+
+	// ExpiresAt is when it stops working, zero for a credential with no
+	// deadline of its own.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	By string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_credential_minted" wire type.
+func (IAMCredentialMinted) EventType() string { return "iam_credential_minted" }
+
+// Actor is who minted it.
+func (e IAMCredentialMinted) Actor() string { return e.By }
+
+// Summary names the kind and the owner.
+func (e IAMCredentialMinted) Summary() string {
+	return fmt.Sprintf("%s credential minted for %s", credentialWord(e.Kind),
+		orSomebody(e.Owner, ""))
+}
+
+// IAMCredentialRevoked is a credential withdrawn. The row stays, carrying when
+// and by whom — "this token was withdrawn on the 3rd by Ana" is the sentence an
+// investigation is looking for.
+type IAMCredentialRevoked struct {
+	Credential string         `json:"credential"`
+	Kind       CredentialKind `json:"kind"`
+	Owner      string         `json:"owner"`
+	By         string         `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID]. A token revoking its owner's other
+	// tokens is the case it exists for.
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_credential_revoked" wire type.
+func (IAMCredentialRevoked) EventType() string { return "iam_credential_revoked" }
+
+// Actor is who revoked it.
+func (e IAMCredentialRevoked) Actor() string { return e.By }
+
+// Summary names the kind and the owner.
+func (e IAMCredentialRevoked) Summary() string {
+	return fmt.Sprintf("%s credential revoked for %s", credentialWord(e.Kind),
+		orSomebody(e.Owner, ""))
+}
+
+// IAMGrantsChanged is one write that changed what a person may do to the
+// deployment — including the enrolment that first gave them anything.
+//
+// ONE PER PERSON WRITE, published by the writer that decided it: the before
+// and the after are read inside the snapshot the record was formed in, so the
+// difference is exactly what the record changed rather than what a caller
+// believed was there.
+type IAMGrantsChanged struct {
+	Person  string   `json:"person"`
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+	By      string   `json:"by"`
+
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID]. EMPTY ON A REDEMPTION'S: By there is
+	// the invitation's issuer, who decided what it confers, and the
+	// redemption acted through no credential of theirs — the record that
+	// issued the invitation names the one they issued it through.
+	OperatorID string `json:"operator_id,omitempty"`
+
+	// Version is the record's position, packed — the same number the
+	// person's row carries afterwards, so a reader can find the write in
+	// `iam_history`.
+	Version int64 `json:"version"`
+}
+
+// EventType is the "iam_grants_changed" wire type.
+func (IAMGrantsChanged) EventType() string { return "iam_grants_changed" }
+
+// Actor is who changed them: whoever decided the grants, which for a
+// redemption is the invitation's issuer and never the person redeeming it.
+func (e IAMGrantsChanged) Actor() string { return e.By }
+
+// Summary lists both directions, because a grant added and a grant taken away
+// are the two halves of the same review.
+func (e IAMGrantsChanged) Summary() string {
+	var parts []string
+	if len(e.Added) > 0 {
+		parts = append(parts, "+"+strings.Join(e.Added, ", +"))
+	}
+	if len(e.Removed) > 0 {
+		parts = append(parts, "-"+strings.Join(e.Removed, ", -"))
+	}
+	change := strings.Join(parts, "; ")
+	if change == "" {
+		change = "no net change"
+	}
+	return fmt.Sprintf("Grants of %s changed: %s", orSomebody(e.Person, ""), change)
+}
+
+// IAMRecoveryCodeUsed is a recovery code spent to sign in or to confirm an
+// identity. Spent means gone: it will never work again, and Remaining is how
+// many the person has left.
+type IAMRecoveryCodeUsed struct {
+	Person    string `json:"person"`
+	Login     string `json:"login"`
+	Remaining int    `json:"remaining"`
+	Remote    string `json:"remote"`
+}
+
+// EventType is the "iam_recovery_code_used" wire type.
+func (IAMRecoveryCodeUsed) EventType() string { return "iam_recovery_code_used" }
+
+// Actor is the person who spent it.
+func (e IAMRecoveryCodeUsed) Actor() string { return e.Login }
+
+// Summary says how many are left, because none left is somebody one lost phone
+// away from an administrator.
+func (e IAMRecoveryCodeUsed) Summary() string {
+	return lead(orSomebody(e.Login, e.Person),
+		fmt.Sprintf("used a recovery code (%d left)", e.Remaining))
+}
+
+// IAMSecondFactorThrottled is a person's second-factor curve reaching its
+// ceiling: the most wrong codes the sign-in throttle counts inside its window,
+// from wherever they came. A code is asked for only once the password has
+// proved itself, so this is SOMEBODY HOLDING THAT PERSON'S PASSWORD GUESSING
+// AT THEIR SECOND FACTOR — the password is the thing to rotate.
+//
+// Written by the wrong code that takes the curve TO its ceiling, on the node
+// that saw it — a run held at the ceiling writes no more, and one that has
+// aged back down writes its next climb; Remote is the address that code came
+// from, and one of possibly many.
+type IAMSecondFactorThrottled struct {
+	Person string `json:"person"`
+	Login  string `json:"login"`
+	Remote string `json:"remote"`
+}
+
+// EventType is the "iam_second_factor_throttled" wire type.
+func (IAMSecondFactorThrottled) EventType() string { return "iam_second_factor_throttled" }
+
+// Summary says what it means, because the row's reader has to act on the
+// password rather than on the code.
+func (e IAMSecondFactorThrottled) Summary() string {
+	return fmt.Sprintf("Second factor of %s reached the throttle's ceiling, the "+
+		"last wrong code from %s: somebody holding the password is guessing "+
+		"at the code", orSomebody(e.Login, e.Person),
+		orSomebody(e.Remote, "an unknown address"))
+}
+
+// IAMMFAReset is an administrator clearing a person's second factor, which also
+// ends every session they hold.
+type IAMMFAReset struct {
+	Person string `json:"person"`
+	By     string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_mfa_reset" wire type.
+func (IAMMFAReset) EventType() string { return "iam_mfa_reset" }
+
+// Actor is the administrator.
+func (e IAMMFAReset) Actor() string { return e.By }
+
+// Summary names whose.
+func (e IAMMFAReset) Summary() string {
+	return "Second factor of " + orSomebody(e.Person, "") + " reset"
+}
+
+// IAMInvitationCancelled is an administrator withdrawing an invitation nobody
+// had redeemed: its link opens nothing from now on, and the address and the
+// human seat it held are free — for a new invitation, or a person created or
+// moved onto the seat.
+//
+// THE INVITATION BY ITS ID AND NEVER THE ADDRESS, which the trail row the
+// cancellation's record writes files under its blind — the address itself is
+// in no event here, as it is in none about the invitation's issue.
+type IAMInvitationCancelled struct {
+	Invitation string `json:"invitation"`
+	By         string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_invitation_cancelled" wire type.
+func (IAMInvitationCancelled) EventType() string { return "iam_invitation_cancelled" }
+
+// Actor is the administrator.
+func (e IAMInvitationCancelled) Actor() string { return e.By }
+
+// Summary names which invitation.
+func (e IAMInvitationCancelled) Summary() string {
+	return "Invitation " + shortLineage(orSomebody(e.Invitation, "?")) + " cancelled"
+}
+
+// IAMPasswordChanged is a person changing their own password, having presented
+// the current one — which also ended every session and machine token they
+// held, the browser they did it from excepted, which was handed a new one.
+type IAMPasswordChanged struct {
+	Person string `json:"person"`
+	Login  string `json:"login"`
+	Remote string `json:"remote"`
+}
+
+// EventType is the "iam_password_changed" wire type.
+func (IAMPasswordChanged) EventType() string { return "iam_password_changed" }
+
+// Actor is the person, who changed their own.
+func (e IAMPasswordChanged) Actor() string { return e.Login }
+
+// Summary says what it ended, which is the half a reader of the feed acts on.
+func (e IAMPasswordChanged) Summary() string {
+	return lead(orSomebody(e.Login, e.Person),
+		"changed their password, ending every other session and token they held")
+}
+
+// IAMPasswordResetIssued is an administrator issuing somebody a one-time link
+// that sets a new password — or, with First, the FIRST PASSWORD LINK an
+// administrator's create issued the person it created on a human seat, which
+// sets the password they never had.
+//
+// NEVER THE LINK. It is shown once, to whoever issued it, and the estate keeps
+// a verifier of its secret; this says that one exists, whose it is and until
+// when.
+type IAMPasswordResetIssued struct {
+	Person     string    `json:"person"`
+	Credential string    `json:"credential"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	By         string    `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+
+	// First marks a created person's first password link rather than a
+	// reset. ONE TYPE WITH A FIELD rather than a type of its own, because
+	// it is the same credential spent through the same path, and a reader
+	// filtering the feed for links in circulation wants both. Additive
+	// (ADR-0006): a build that does not know it reads a reset, which the
+	// link also is.
+	First bool `json:"first,omitempty"`
+}
+
+// EventType is the "iam_password_reset_issued" wire type.
+func (IAMPasswordResetIssued) EventType() string { return "iam_password_reset_issued" }
+
+// Actor is the administrator.
+func (e IAMPasswordResetIssued) Actor() string { return e.By }
+
+// Summary names for whom, and which link.
+func (e IAMPasswordResetIssued) Summary() string {
+	if e.First {
+		return "First password link issued for " + orSomebody(e.Person, "")
+	}
+	return "Password reset link issued for " + orSomebody(e.Person, "")
+}
+
+// IAMPasswordReset is a reset link spent: a new password set from it, the link
+// with it, and every session and machine token the person held ended — or,
+// with First, a created person setting the first password they ever held,
+// through their first password link, when there was nothing of theirs to end.
+//
+// NOBODY WAS SIGNED IN BY IT — the person signs in afterwards, where a second
+// factor they hold still applies — so there is no session on this row.
+type IAMPasswordReset struct {
+	Person     string `json:"person"`
+	Login      string `json:"login"`
+	Credential string `json:"credential"`
+	Remote     string `json:"remote"`
+
+	// First marks the person's first password, set from a link while they
+	// held none — see [IAMPasswordResetIssued.First].
+	First bool `json:"first,omitempty"`
+}
+
+// EventType is the "iam_password_reset" wire type.
+func (IAMPasswordReset) EventType() string { return "iam_password_reset" }
+
+// Actor is the person whose password the link set.
+func (e IAMPasswordReset) Actor() string { return e.Login }
+
+// Summary says it was a link, which is what tells it from a change — and a
+// first password ends nothing, since there was nothing it could have ended,
+// so it does not say it did.
+func (e IAMPasswordReset) Summary() string {
+	if e.First {
+		return lead(orSomebody(e.Login, e.Person), "set their first password")
+	}
+	return lead(orSomebody(e.Login, e.Person),
+		"set a new password from a reset link, ending every session and token they held")
+}
+
+// IAMSessionGenerationBumped is the fleet-wide session generation moving, which
+// ends every session in the company at once — the restore runbook's last step.
+type IAMSessionGenerationBumped struct {
+	// Generation is the new value; every bearer minted below it is over.
+	Generation uint64 `json:"generation"`
+	By         string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_session_generation_bumped" wire type.
+func (IAMSessionGenerationBumped) EventType() string { return "iam_session_generation_bumped" }
+
+// Actor is who bumped it.
+func (e IAMSessionGenerationBumped) Actor() string { return e.By }
+
+// Summary states the consequence rather than the number.
+func (e IAMSessionGenerationBumped) Summary() string {
+	return fmt.Sprintf("Every session in the company was ended (generation %d)",
+		e.Generation)
+}
+
+// RecordUnverifiable is a record on a state log signed under a key this node's
+// keyring does not hold. It is RETAINED and reprocessed once the key arrives —
+// expected briefly during a keyring rotation, and an operator error if it
+// persists. (A record that installs an apply gate is the exception: that one
+// stops the domain's applier, because a gate this node cannot authenticate
+// would license every record above it.)
+//
+// # Named for the framework, not for identity
+//
+// The design called this `iam_record_gated`. The verdict is the state-log
+// framework's and every domain's log is signed and verified by the same code,
+// so a record the tracker's applier cannot authenticate is the same fact as
+// one on the identity log — and a name scoped to one domain would either be
+// published for the other four under a wrong name or leave them unrecorded.
+// "Gated" is also already taken: the framework counts records an APPLY GATE
+// dropped (a removal, an eviction) as `records_gated`, and "unverifiable" is
+// what the same framework calls a record retained for its key. The domain is a
+// field.
+//
+// ONCE PER DOMAIN AND KEY ID PER NODE PROCESS, and at most
+// statelog.MaxWitnessedKeys distinct ids per domain: a key id is whatever the
+// frame says, and whoever can reach a cluster port can write frames. The cap
+// is what keeps this type's rate the engine's rather than that writer's.
+type RecordUnverifiable struct {
+	Domain string `json:"domain"`
+	KeyID  string `json:"key_id"`
+
+	// Held are the key ids this node's keyring does hold, which is the
+	// half of the comparison an operator needs to fix it.
+	Held []string `json:"held,omitempty"`
+
+	// Position is where the first such record sat, as `stream@generation:seq`.
+	Position string `json:"position"`
+}
+
+// EventType is the "statelog_record_unverifiable" wire type.
+func (RecordUnverifiable) EventType() string { return "statelog_record_unverifiable" }
+
+// Summary names the key and what this node holds instead.
+func (e RecordUnverifiable) Summary() string {
+	return fmt.Sprintf("%s record signed under key %q, which this node does not "+
+		"hold (it holds %s); nothing under it is applied until it does",
+		orSomebody(e.Domain, "A"), e.KeyID, heldKeys(e.Held))
+}
+
+// RecordTampered is a record on a state log whose signature fails under a key
+// this node DOES hold, or that is not a signed frame at all. Something that
+// is not the fleet wrote it, and the domain's applier has stopped rather than
+// apply it or anything after it.
+//
+// Named for the framework for [RecordUnverifiable]'s reason. Once per domain
+// and key id per node process: the applier stops at the first one, so what
+// repeats it is a restart.
+type RecordTampered struct {
+	Domain string   `json:"domain"`
+	KeyID  string   `json:"key_id"`
+	Held   []string `json:"held,omitempty"`
+
+	// Position is where the record sat, as `stream@generation:seq`: the
+	// log's own coordinates, since a record this node refused was never
+	// applied at a position of its own.
+	Position string `json:"position"`
+}
+
+// EventType is the "statelog_record_tampered" wire type.
+func (RecordTampered) EventType() string { return "statelog_record_tampered" }
+
+// Summary says what the node did about it.
+func (e RecordTampered) Summary() string {
+	key := strconv.Quote(e.KeyID)
+	if e.KeyID == "" {
+		key = "no key (not a signed frame)"
+	}
+	return fmt.Sprintf("%s record at %s fails its signature under %s; the "+
+		"applier stopped", orSomebody(e.Domain, "A"), orSomebody(e.Position, "?"), key)
+}
+
+// orSomebody is a value for a sentence, or a fallback when it is empty — so a
+// line built from a row missing a field reads as a sentence rather than as two
+// spaces.
+func orSomebody(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "somebody"
+}
+
+// shortLineage is the first eight characters of a lineage, which is how a
+// person reading a feed tells two sessions apart without reading a uuid.
+func shortLineage(lineage string) string {
+	if len(lineage) <= 8 {
+		return lineage
+	}
+	return lineage[:8]
+}
+
+// credentialWord is a kind as the first word of a sentence.
+func credentialWord(kind CredentialKind) string {
+	if kind == "" {
+		return "A"
+	}
+	return upperFirst(string(kind))
+}
+
+// heldKeys renders the key ids a node holds, sorted, or says it holds none.
+func heldKeys(held []string) string {
+	if len(held) == 0 {
+		return "none"
+	}
+	sorted := slices.Clone(held)
+	slices.Sort(sorted)
+	return strings.Join(sorted, ", ")
+}

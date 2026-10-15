@@ -3,7 +3,6 @@ package pages_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -38,15 +37,15 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration
 			// did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE, and a record carrying each
-			// field, built through the writer's own encoder with the
-			// version left for it to stamp, which is what certifies the
-			// table's path is the one the encoder writes.
-			Fields:   pages.VersionedFields(),
-			Carrying: carryingSuiteRecord,
-			Kinds:    suiteKinds(),
-			Rows:     pages.NewRows,
-			Write:    suiteWrite,
+			// THE VERSIONED-FIELD TABLE. It is empty — every field the
+			// knowledge base writes is in the base format — so there is
+			// no record to carry; the field this build's successor adds
+			// brings a Carrying case, which the suite refuses to run
+			// without.
+			Fields: pages.VersionedFields(),
+			Kinds:  suiteKinds(),
+			Rows:   pages.NewRows,
+			Write:  suiteWrite,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -77,29 +76,6 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 			Writer: "suite-peer",
 		},
 		Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
-	})
-}
-
-// carryingSuiteRecord is a record carrying one versioned field and nothing
-// newer: a save written through an operator's token bound to a seat, which is
-// the one write that carries the seat behind it.
-func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
-	if field.Name != "MutationRecord.ActorSeat" {
-		return nil, fmt.Errorf("the pages suite has no record carrying %s", field.Name)
-	}
-	op, payload, scope := suitePayload(pages.KindPage, "carrying")
-	body, err := marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return pages.Encode(pages.MutationRecord{
-		RecordEnvelope: pages.RecordEnvelope{
-			OpID: "suite-carrying", Subject: pages.Subject{Kind: pages.KindPage, ID: "carrying"},
-			Op: op, Scope: scope, CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
-			Gen: 1, Writer: "suite-peer",
-		},
-		Mutation: body, Actor: "founder", ActorKind: pages.AuthorOperator,
-		OperatorID: "founder", ActorSeat: "jane",
 	})
 }
 

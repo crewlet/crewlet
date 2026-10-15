@@ -15,11 +15,10 @@
  * for somebody else.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { History, HistoryView } from "./History.tsx";
-import { pick } from "~/testing.tsx";
 import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -56,7 +55,7 @@ function servingWith(answer: (what: string, params?: Record<string, unknown>) =>
     answer(what, params),
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -154,9 +153,10 @@ test("a write an operator made is marked as one", async () => {
       records: [
         record({ id: "r1", actor: "founder", actor_kind: "operator" }),
         record({ id: "r2", actor: "ada", actor_kind: "agent" }),
-        // A TOKEN BOUND TO A SEAT: the row names the PERSON, as every other
-        // screen does, and keeps the token on the title.
-        record({ id: "r3", actor: "founder", actor_kind: "operator", actor_seat: "ada" }),
+        // A PERSON THE DIRECTORY BINDS TO A SEAT writes AS the seat
+        // (`iam.ActorFor`), and the credential they wrote through rides on
+        // the title.
+        record({ id: "r3", actor: "ada", actor_kind: "human", operator_id: "pat:t-1" }),
       ],
       complete: true,
     },
@@ -172,10 +172,8 @@ test("a write an operator made is marked as one", async () => {
   // AN AGENT'S WRITE IS THE ORDINARY CASE, so only the others are marked.
   expect(who[1]).not.toContain("agent");
   expect(who[2]).toContain("Ada Okonkwo");
-  expect(who[2]).not.toContain("founder");
-  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe(
-    "Through the token founder",
-  );
+  expect(who[2]).not.toContain("pat:t-1");
+  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe("Written through pat:t-1");
 });
 
 // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, resolved through the chart
@@ -391,7 +389,13 @@ const prioritised = () =>
 test("a queue somebody else's is named as theirs", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-1", operator: true, handle: "ada", name: "Ada Okonkwo" },
+    viewer: {
+      login: "op-1",
+      grants: ["admin", "tracker", "knowledge"],
+      handle: "ada",
+      owner: "ada",
+      name: "Ada Okonkwo",
+    },
   });
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
@@ -404,7 +408,13 @@ test("a queue somebody else's is named as theirs", async () => {
 test("a reader looking at their own queue is still addressed as themselves", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-2", operator: true, handle: "agent-swe", name: "SWE" },
+    viewer: {
+      login: "op-2",
+      grants: ["admin", "tracker", "knowledge"],
+      handle: "agent-swe",
+      owner: "agent-swe",
+      name: "SWE",
+    },
   });
   const { container } = mount();
   await waitFor(() =>

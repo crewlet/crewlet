@@ -56,8 +56,14 @@ export interface ItemEdits {
    */
   edit: (patch: ItemPatch, done: string, conditional?: boolean) => Promise<ActResult | null>;
   write: Act<"update_work_item">;
-  /** The task's key. */
+  /**
+   * The task's ADDRESS ([itemAddress]) — what every change names it by: its
+   * key, or its id where another task claimed that key first and the key
+   * would change the claimant.
+   */
   item: string;
+  /** What a sentence calls the task: its key, whichever address it is changed by. */
+  label: string;
   /** Whether the last press lost a race, which [ItemEditNote] names. */
   lost: boolean;
   forget: () => void;
@@ -73,12 +79,19 @@ export function useItemEdits(): ItemEdits | null {
 
 export function ItemEditsProvider({
   item,
+  label,
   version,
   seatName,
   children,
 }: {
-  /** The task's key. */
+  /**
+   * The task's address ([itemAddress]), never its bare key: on a task whose
+   * key another task claimed first, the key would send every field, tick and
+   * watch on this page to the claimant.
+   */
   item: string;
+  /** The task's key, for the sentences that name it. */
+  label: string;
   /** The `task.version` the page is drawn from. */
   version: number;
   seatName?: (handle: string) => string;
@@ -118,11 +131,12 @@ export function ItemEditsProvider({
       edit,
       write,
       item,
+      label,
       lost,
       forget,
       seatName,
     }),
-    [write, edit, item, lost, forget, seatName],
+    [write, edit, item, label, lost, forget, seatName],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -138,6 +152,7 @@ export function ItemEditNote({ readOnly }: { readOnly?: string }) {
     return (
       <ConflictNote
         item={edits.item}
+        label={edits.label}
         seatName={edits.seatName}
         fallback={edits.write.refusal.sentence}
         onDismiss={edits.forget}

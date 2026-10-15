@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Findings reads this run as the integration-neutral vocabulary.
@@ -34,21 +35,6 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	// THE PASS COULD NOT RUN AT ALL, and this says so as the operator's
-	// work rather than as a fault the engine is retrying. Provisioning
-	// here creates an ACCOUNT and then a token on it, so a node with
-	// nowhere to seal the token must not create the account either — see
-	// [provision.CanMint].
-	if r.NoKeyring {
-		return append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
-			Subject: "secrets.keys",
-			Detail: "this node has no keyring, so a token minted for a seat " +
-				"could not be sealed and no account was created — set " +
-				"secrets.keys in the bootstrap configuration",
-		})
-	}
-
 	// A RUN THAT LEFT THE INSTANCE WITH NOWHERE TO DELIVER TO.
 	//
 	// This used to read `r.Hooked != "" && len(r.HookedOn) == 0`, described
@@ -62,14 +48,14 @@ func (r *Result) Findings() []integration.Finding {
 	// The refusal that branch was written for is still a fault rather than
 	// a finding: a credential that may not administer the group's or a
 	// project's hooks fails the whole pass. That is the wrong verdict for
-	// the same reason [Result.NoKeyring] is reported rather than raised —
+	// the same reason [Result.NoIngress] is reported rather than raised —
 	// no retry fixes it — but changing it also changes what
 	// `crewlet gitlab provision` prints and the status it exits with, so it
 	// is a coordinated change rather than a line here.
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "integrations.public_base_url",
+			Subject: setup.BaseKey(r.NoIngressKey),
 			Detail:  r.NoIngress,
 		})
 	}

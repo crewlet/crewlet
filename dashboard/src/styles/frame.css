@@ -559,9 +559,31 @@ a.user-block-who:hover {
   background: var(--color-surface-hover);
 }
 
+/* WHERE THE READER IS, the sidebar's own mark: the user block is the
+   Account's row (the Account has none of its own), so on `#/account` it is
+   raised with the hairline the kit's current row wears — no hue, an outline
+   rather than a shadow so forced-colours mode keeps it — and "where am I"
+   reads one way down the whole rail. After `:hover`, so a current block shows
+   the lift rather than the hover overlay. */
+a.user-block-who[aria-current="page"] {
+  background: var(--color-surface-elevated);
+  outline: 1px solid var(--color-border-default);
+  outline-offset: -1px;
+}
+
 a.user-block-who:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* THE RAIL'S PRESSABLE MARK, AT REST: the chevron a rail row that opens
+   something wears, in quiet ink, at the block's end. A name says nothing
+   about being a way to the reader's password and second factor, and the block
+   drew no mark at all until it was hovered. */
+.user-block-go {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-text-tertiary);
 }
 
 .user-block-text {
@@ -581,13 +603,16 @@ a.user-block-who:focus-visible {
   color: var(--color-text-tertiary);
 }
 
-/* AS WIDE AS ITS ROWS, the label column and the one control column, so the
-   token's button under them is no wider than the three controls it ends. */
+/* AS WIDE AS ITS ROWS, the label column and the one control column: they are
+   the widest thing the popover holds, so they set its width (over the kit's
+   own floor), and the block FILLS that width rather than declaring one, so
+   the rule the account block draws above it runs from edge to edge. A
+   `max-content` width here sized the block to the rows alone, and beside a
+   wider block the rule stopped short of the panel's edge. */
 .preferences {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-  width: max-content;
   max-width: calc(100vw - 2 * var(--spacing-4));
   padding: var(--spacing-3);
 }
@@ -619,6 +644,37 @@ a.user-block-who:focus-visible {
 .preferences-theme-menu {
   --crewlet-select-menu-max-height: 42rem;
   min-width: 17.25rem;
+}
+
+/* THE SESSION'S OWN GESTURES, above the preferences in the same popover: who
+   this browser is signed in as, its grants, and the ways to change how it
+   proves it or to end it. Ruled off from the preferences under it, because
+   the two are different kinds of thing — a session's and a browser's.
+
+   IT FILLS THE POPOVER'S WIDTH AND NEVER SETS IT: inline-size containment
+   keeps a long grants line or login from widening the panel past the rows
+   below, so the two blocks are one column and the rule between them spans
+   it. A width of its own (it was 18rem) made the popover that wide for every
+   viewer — a signed-out one is offered Sign in here too — and left the rows
+   under it in a narrower column with the rule stopping short. */
+.preferences-account {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  contain: inline-size;
+  padding: var(--spacing-3) var(--spacing-3) 0;
+}
+/* THE LOGIN IS CUT AT THE COLUMN'S EDGE. A start-aligned item in a column is
+   as wide as its content, and an unwrapped line's content is all of it, so
+   `.truncate` never had an edge to cut at and a long login ran out of the
+   panel. */
+.preferences-account > .truncate {
+  max-width: 100%;
+}
+.preferences-account + .preferences {
+  border-top: 1px solid var(--color-border-default);
+  margin-top: var(--spacing-3);
 }
 
 /* ---- The page header -----------------------------------------------------
@@ -2141,6 +2197,13 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* "Section ·" BEFORE THE NAME, in the quiet ink: the row read "General"
+     alone, which a reader takes for the page's title rather than for a
+     control holding the other sections. */
+  .section-picker-prefix {
+    color: var(--color-text-tertiary);
+    font-weight: var(--font-weight-regular);
   }
   .section-picker-chevron {
     flex: none;

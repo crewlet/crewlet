@@ -17,7 +17,7 @@ import (
 // frame of that round does.
 func round(at string, roundNum int, fields map[string]any) *livestate.Envelope {
 	payload := map[string]any{
-		"role": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0),
+		"agent_id": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0),
 		"round_num": float64(roundNum),
 	}
 	maps.Copy(payload, fields)
@@ -155,7 +155,7 @@ func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 				}))
 			}
 			suspended := s.AgentOverlay("Lead").LiveCall.Versions
-			key := map[string]any{"role": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0)}
+			key := map[string]any{"agent_id": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0)}
 			s.Apply(&livestate.Envelope{
 				ID: "checkpoint", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:06Z",
 				Category: "task", Payload: maps.Clone(key),
@@ -204,7 +204,7 @@ func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 	s.Apply(&livestate.Envelope{
 		ID: "c1", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:05Z", Category: "task",
 		Payload: map[string]any{
-			"role": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0), "failed": true,
+			"agent_id": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0), "failed": true,
 			"error": "the provider died", "round_narration": narrated(2),
 			"tool_executions": []any{map[string]any{"name": "read_file", "round": float64(2)}},
 		},
@@ -244,7 +244,7 @@ func TestTheCallSequenceMovesWithEveryChangeToTheCall(t *testing.T) {
 		}
 	}
 	call := func(turn string, more map[string]any) map[string]any {
-		payload := map[string]any{"role": "Lead", "turn_id": turn, "phase": "execute", "iteration": float64(0)}
+		payload := map[string]any{"agent_id": "Lead", "turn_id": turn, "phase": "execute", "iteration": float64(0)}
 		maps.Copy(payload, more)
 		return payload
 	}
@@ -272,7 +272,7 @@ func TestTheCallSequenceMovesWithEveryChangeToTheCall(t *testing.T) {
 		"round_num": float64(0), "response": "looking"})), true)
 	step("the phase completing", next("agent_phase_completed", call("t1", nil)), false)
 
-	s.Apply(next("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "t1"}))
+	s.Apply(next("agent_turn_completed", map[string]any{"agent_id": "Lead", "turn_id": "t1"}))
 	if o := s.AgentOverlay("Lead"); o.LiveCallSeq != last {
 		t.Errorf("a turn ending with no call held moved the sequence from %d to %d", last, o.LiveCallSeq)
 	}
@@ -280,16 +280,16 @@ func TestTheCallSequenceMovesWithEveryChangeToTheCall(t *testing.T) {
 	step("the next turn's phase starting", next("agent_phase_started", call("t2", nil)), true)
 	step("the phase failing, its call frozen", next("agent_phase_completed", call("t2", map[string]any{
 		"failed": true, "error": "the provider died"})), true)
-	step("a spawn ending the instance the call froze on", next("agent_spawned", map[string]any{"role": "Lead"}), false)
+	step("a spawn ending the instance the call froze on", next("agent_spawned", map[string]any{"agent_id": "Lead"}), false)
 
 	step("a phase starting", next("agent_phase_started", call("t3", nil)), true)
-	step("the instance terminating", next("agent_terminated", map[string]any{"role": "Lead"}), false)
+	step("the instance terminating", next("agent_terminated", map[string]any{"agent_id": "Lead"}), false)
 
 	step("a phase starting", next("agent_phase_started", call("t4", nil)), true)
-	step("its turn completing", next("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "t4"}), false)
+	step("its turn completing", next("agent_turn_completed", map[string]any{"agent_id": "Lead", "turn_id": "t4"}), false)
 
 	step("a phase starting", next("agent_phase_started", call("t5", nil)), true)
-	step("the provider becoming unreachable", next("llm_unavailable", map[string]any{"role": "Lead", "turn_id": "t5"}), false)
+	step("the provider becoming unreachable", next("llm_unavailable", map[string]any{"agent_id": "Lead", "turn_id": "t5"}), false)
 }
 
 // A PUSH LEAVES OUT EXACTLY THE FIELDS WHOSE VERSION IS HELD, and carries the

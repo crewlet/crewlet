@@ -35,10 +35,11 @@ func TestASeatThatStartsAdmittingTurnsSaysSo(t *testing.T) {
 	n, err := node.New(node.Config{
 		Queue: q, Coord: &coordmem.Backend{},
 		NodeID: "node-a", Owner: "node-a:1",
-		Seats:    func() []placement.Seat { return []placement.Seat{{Handle: "ceo"}} },
+		Seats:    func() []placement.Seat { return seats("ceo") },
 		LeaseTTL: fleetTTL, HeartbeatInterval: fleetTTL / 4, SweepInterval: fleetTTL / 8,
 		Turn: func(context.Context, string, []*events.Event) queue.Result { return queue.Ack() },
-		SeatAdmitted: func(_ context.Context, handle string) {
+		SeatAdmitted: func(_ context.Context, s placement.Seat) {
+			handle := s.Handle
 			_, admits := n.Host().MayStart(handle)
 			mu.Lock()
 			defer mu.Unlock()
@@ -68,10 +69,10 @@ func TestASeatThatStartsAdmittingTurnsSaysSo(t *testing.T) {
 	}
 
 	// OWNERSHIP PROVEN AGAIN after a blip is the same edge.
-	if err := n.OnAdmission(t.Context(), "ceo", false); err != nil {
+	if err := n.OnAdmission(t.Context(), seat("ceo"), false); err != nil {
 		t.Fatalf("OnAdmission(false): %v", err)
 	}
-	if err := n.OnAdmission(t.Context(), "ceo", true); err != nil {
+	if err := n.OnAdmission(t.Context(), seat("ceo"), true); err != nil {
 		t.Fatalf("OnAdmission(true): %v", err)
 	}
 	if want := []string{"ceo:admitting", "ceo:admitting"}; !slices.Equal(got(), want) {

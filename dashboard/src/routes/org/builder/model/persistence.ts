@@ -2,11 +2,12 @@
  * Keeping the operator's work across a reload of the tab.
  *
  * ONLY THE LOG IS KEPT. One key, `crewlet_org_draft`, holds
- * `{ v, mode, baseRevision, ops, undone, savedAt }`, and `write` while a save
- * of that log is out, and nothing else: never the base document, the draft
+ * `{ v, mode, baseRevision, ops, undone, savedAt }`, `write` while a save
+ * of that log is out, and `scope` for a lead's draft of one unit (`scope.ts`),
+ * and nothing else: never the base document, the draft
  * or the problems. The document holds contact
  * identities, emails, policies and `${VAR}` names; kept in storage it would
- * outlive the operator's token and be offered to whoever uses the tab next.
+ * outlive the operator's session and be offered to whoever uses the tab next.
  * The log refers to the company only by keys and the values its own edits
  * wrote, and on restore the base is fetched again, so what is replayed is
  * always replayed onto what the engine holds now.
@@ -27,9 +28,11 @@
  * which the builder shows as a caution: the work continues, it just will not
  * survive a reload.
  *
- * WHAT CLEARS IT: a save, a discard, a change of operator token, and a check
+ * WHAT CLEARS IT: a save, a discard, a change of who is signed in, and a check
  * the engine refused with 401 or 403. The last two are the tab changing hands,
- * and a colleague's draft is not something to offer the next operator.
+ * and a colleague's draft is not something to offer the next reader. A 403
+ * for a step-up the person declined is not: it is the same person choosing
+ * not to confirm who they are yet, and their draft stays kept.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
  *
@@ -100,6 +103,12 @@ export interface KeptDraft {
    * otherwise. See the module doc.
    */
   readonly write?: string;
+  /**
+   * The unit a lead's draft was about, by key; absent for the whole company.
+   * A log replays onto the document it was recorded against, and a unit's
+   * draft is not the company's, nor another unit's.
+   */
+  readonly scope?: string;
 }
 
 export type KeepResult = "kept" | "cleared" | "too_large" | "refused" | "unavailable";
@@ -181,6 +190,22 @@ export function restoreDraft(storage: DraftStorage | null): Restored {
   return { kind: "discarded" };
 }
 
+/**
+ * The unit a kept draft was made of, or `null` for none and for a whole
+ * company's. A READ AND NOTHING MORE: the builder asks it before it knows which
+ * unit to open, and what a kept draft is offered as is decided once that unit
+ * has loaded ([restoreDraft], [restoreOffer]) — so an unreadable draft answers
+ * `null` here and is left to that decision, which discards it and says so.
+ */
+export function keptScope(storage: DraftStorage | null): string | null {
+  try {
+    const raw = storage?.getItem(DRAFT_STORAGE_KEY);
+    return raw ? (parseKeptDraft(JSON.parse(raw))?.scope ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** What to offer when a kept draft meets the company that was just loaded. */
 export type RestoreOffer =
   /** Same mode and revision: offer Keep or Discard. */
@@ -192,15 +217,18 @@ export type RestoreOffer =
       readonly kind: "discard_mode_changed";
       readonly kept: BuilderMode;
       readonly loaded: BuilderMode;
-    };
+    }
+  /** The draft was made of another part of the organization: discard it and say so. */
+  | { readonly kind: "discard_scope_changed" };
 
 /** Decides what a restored draft offers against the company as loaded. */
 export function restoreOffer(
   kept: KeptDraft,
-  loaded: { mode: BuilderMode; revision: string | null },
+  loaded: { mode: BuilderMode; revision: string | null; scope: string | null },
 ): RestoreOffer {
   if (kept.mode !== loaded.mode)
     return { kind: "discard_mode_changed", kept: kept.mode, loaded: loaded.mode };
+  if ((kept.scope ?? null) !== loaded.scope) return { kind: "discard_scope_changed" };
   if (
     kept.mode === "edit" &&
     kept.baseRevision !== loaded.revision &&
@@ -220,10 +248,12 @@ export function restoreOffer(
 export function parseKeptDraft(value: unknown): KeptDraft | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"], ["write"])
+    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"], ["write", "scope"])
   )
     return undefined;
   if (value.write !== undefined && !isWriteId(value.write)) return undefined;
+  if (value.scope !== undefined && (value.mode !== "edit" || !isNonEmptyString(value.scope)))
+    return undefined;
   if (value.v !== OPERATIONS_VERSION) return undefined;
   if (value.mode !== "edit" && value.mode !== "create") return undefined;
   if (value.mode === "edit" ? !isNonEmptyString(value.baseRevision) : value.baseRevision !== null)
@@ -354,15 +384,16 @@ export function isOperation(v: unknown): v is Operation {
         list(v.accessLevels, isAccessLevelChange) &&
         (v.routeTo === undefined || isRouteToChange(v.routeTo))
       );
-    case "renameSeat":
+    case "replaceSeat":
       return (
-        exactKeys(v, ["type", "target", "before", "after", "accessLevels"], ["pin"]) &&
+        exactKeys(v, ["type", "target", "snapshot", "key", "handle", "accessLevels"]) &&
         isNodeKey(v.target) &&
-        typeof v.before === "string" &&
-        typeof v.after === "string" &&
-        (v.pin === undefined || isNonEmptyString(v.pin)) &&
+        isSnapshot(v.snapshot) &&
+        isMintedKey(v.key) &&
+        typeof v.handle === "string" &&
         list(v.accessLevels, isAccessLevelChange)
       );
+    case "renameSeat":
     case "renameUnit":
       return (
         exactKeys(v, ["type", "target", "before", "after"]) &&
@@ -465,9 +496,10 @@ export function isOperation(v: unknown): v is Operation {
 /** The builder state persistence reads. */
 export interface PersistableState {
   readonly mode: BuilderMode;
+  readonly scope: string | null;
   readonly baseRevision: string | null;
   readonly log: Log;
-  /** False from a token change or a refused check until the next operation. */
+  /** False from a change of reader or a refused check until the next operation. */
   readonly keep: boolean;
   /** The write id of a save of this log whose outcome is not known yet, or `null`. */
   readonly write: string | null;
@@ -495,6 +527,7 @@ export function persistencePlan(state: PersistableState, now: number): Persisten
       undone: state.log.undone,
       savedAt: now,
       ...(state.write !== null ? { write: state.write } : {}),
+      ...(state.scope !== null ? { scope: state.scope } : {}),
     },
   };
 }

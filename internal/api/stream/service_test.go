@@ -13,25 +13,29 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Client) {
 	t.Helper()
 	s := buildService(t, opts)
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	s.Hub().Register(c)
 	return s, c
 }
 
 // health stands in for `api.Health`, which this package carries to the wire
-// without reading into — so any value the function returns is what reaches the
-// tab, and a case can assert it came through untouched.
+// without reading into but its status — so any value the function returns is
+// what reaches the tab, and a case can assert it came through untouched.
 type health struct {
 	Status       string
 	InFlight     int
 	ShuttingDown bool
 }
+
+// NodeStatus is the one fact a socket's posture is decided from.
+func (h health) NodeStatus() string { return h.Status }
 
 // buildService fills every required function a case leaves unset with the
 // answer a node with no company gives, so a case names only what it is about.
@@ -41,10 +45,13 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Now = func() time.Time { return clock }
 	}
 	if opts.Health == nil {
-		opts.Health = func() any { return health{Status: "ok"} }
+		opts.Health = func() stream.Health { return health{Status: "ok"} }
 	}
-	if opts.Handles == nil {
-		opts.Handles = func() map[string]string { return map[string]string{} }
+	if opts.Posture == nil {
+		opts.Posture = func(stream.Health) stream.FramePosture { return stream.FrameLive }
+	}
+	if opts.Seats == nil {
+		opts.Seats = func() tokens.Seats { return tokens.Seats{} }
 	}
 	if opts.Roster == nil {
 		opts.Roster = func() []map[string]any { return nil }
@@ -58,7 +65,25 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 	if opts.Schedules == nil {
 		opts.Schedules = func() any { return []any{} }
 	}
+	if opts.Chart == nil {
+		// NO CHART, which every lead relation reads as UNKNOWN: a case
+		// about who may watch whom names the chart it means.
+		opts.Chart = authz.NoChart{}
+	}
+	if opts.Holders == nil {
+		// NO DIRECTORY, which every login reads as UNKNOWN, for the
+		// chart's reason: a case about whose record a login names states
+		// the directory it means.
+		opts.Holders = blindDirectory{}
+	}
+	if opts.SeatOf == nil {
+		// A PUBLISHED COMPANY HOLDING EVERY SEAT as a human seat.
+		opts.SeatOf = func(string) (stream.SeatState, bool) {
+			return stream.SeatState{Human: true}, true
+		}
+	}
 	if opts.Placement == nil {
+		// NO LEASE READ YET, which claims no seat is unplaced.
 		opts.Placement = func() (map[string]bool, error) { return map[string]bool{}, nil }
 	}
 	// The projection on the SAME clock, as in production where both read
@@ -84,11 +109,22 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("a service with no surface functions was built")
 	}
-	for _, field := range []string{"Health", "Handles", "Roster", "Org", "Tools", "Schedules", "Placement"} {
+	for _, field := range []string{
+		"Health", "Posture", "Seats", "Roster", "Org", "Tools", "Schedules", "Placement",
+		"Chart", "Holders", "SeatOf",
+	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
 	}
+}
+
+// blindDirectory is an identity directory that can say nothing — see
+// [buildService].
+type blindDirectory struct{}
+
+func (blindDirectory) HolderRecord(context.Context, string) (string, error) {
+	return "", errors.New("this fixture holds no identity directory")
 }
 
 func envelope(etype string, payload map[string]any) livestate.Envelope {
@@ -101,8 +137,8 @@ func envelope(etype string, payload map[string]any) livestate.Envelope {
 // kindsOf lists the push kinds a client received, in order.
 func kindsOf(c *stream.Client) []stream.Kind {
 	var out []stream.Kind
-	for _, env := range drain(c) {
-		out = append(out, env.Kind)
+	for _, frame := range drain(c) {
+		out = append(out, frame.Kind())
 	}
 	return out
 }
@@ -113,38 +149,39 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// the raw event stream. Every tab used to keep its own copy of the
 	// projection, and each drifted its own way.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{
+		"agent_id": "a-lead", "role": "Lead", "turn_id": "tn-1",
+	}))
 
 	got := drain(c)
-	var agents *stream.Envelope
+	var agents *stream.Frame
 	for i := range got {
-		if got[i].Kind == stream.KindAgents {
-			agents = &got[i]
+		if got[i].Kind() == stream.KindAgents {
+			agents = got[i]
 		}
 	}
 	if agents == nil {
 		t.Fatalf("no agents push: %v", kindsOf(c))
 	}
-	// A LIST of rows, each carrying its own role. This test asserted a
+	// A LIST of rows, each carrying its own agent id. This test asserted a
 	// map keyed by role and passed for it — while store.js guards
 	// applyAgents with Array.isArray and DISCARDED every push, so a full
 	// turn ran with the seat rendered idle from start to finish. The
 	// client is the compatibility reference, so
 	// the assertion is written the way the client reads the frame.
-	rows, ok := agents.Data.([]map[string]any)
-	if !ok {
-		t.Fatalf("agents data is %T, not the row list the client requires; "+
-			"anything else fails its Array.isArray guard and is dropped",
-			agents.Data)
-	}
+	// DECODED FROM THE BYTES, which is what the guard actually sees: the
+	// frame is encoded once for a whole posture now, so there is no Go
+	// value left on the way to a client to assert about instead.
+	var rows []map[string]any
+	decodeData(t, agents, &rows)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want the one seat that moved", len(rows))
 	}
-	if got := rows[0]["role"]; got != "Lead" {
-		t.Errorf("row role = %v; the client keys on this field and drops a "+
+	if got := rows[0]["agent_id"]; got != "a-lead" {
+		t.Errorf("row agent_id = %v; the client keys on this field and drops a "+
 			"row without it", got)
 	}
-	if got := rows[0]["activity"]; got != livestate.ActivityWorking {
+	if got := rows[0]["activity"]; got != string(livestate.ActivityWorking) {
 		t.Errorf("row activity = %v, want working", got)
 	}
 }
@@ -157,7 +194,7 @@ func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
 	t.Parallel()
 	var (
 		mu     sync.Mutex
-		placed = map[string]bool{"Lead": true}
+		placed = map[string]bool{"a-lead": true}
 		fail   error
 	)
 	s, c := newService(t, stream.Options{
@@ -171,16 +208,16 @@ func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
 	drain(c)
 
 	mu.Lock()
-	placed["Lead"] = false
+	placed["a-lead"] = false
 	mu.Unlock()
 	s.RefreshPlacement()
 	rows := agentRows(t, drain(c))
-	if len(rows) != 1 || rows[0]["activity"] != livestate.ActivityStopped {
-		t.Fatalf("pushed = %v, want the seat no node holds, stopped", rows)
+	if len(rows) != 1 || rows[0]["agent_id"] != "a-lead" ||
+		rows[0]["activity"] != string(livestate.ActivityStopped) {
+		t.Fatalf("pushed = %v, want the seat no node holds, by its agent id, stopped", rows)
 	}
-	if reason, _ := rows[0]["stopped_reason"].(*livestate.StoppedReason); reason == nil ||
-		*reason != livestate.StoppedUnplaced {
-		t.Errorf("stopped_reason = %v, want unplaced", rows[0]["stopped_reason"])
+	if got := rows[0]["stopped_reason"]; got != string(livestate.StoppedUnplaced) {
+		t.Errorf("stopped_reason = %v, want unplaced", got)
 	}
 
 	// Nothing moved, nothing pushed.
@@ -197,7 +234,7 @@ func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
 	if rows := agentRows(t, drain(c)); len(rows) != 0 {
 		t.Errorf("a failed read moved seats: %v", rows)
 	}
-	if snap := s.Snapshot()["agents"].([]map[string]any); len(snap) != 0 {
+	if snap := s.Snapshot(reader)["agents"].([]map[string]any); len(snap) != 0 {
 		t.Errorf("snapshot = %v with an empty roster", snap)
 	}
 }
@@ -208,32 +245,32 @@ func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
 func TestAReconcilePushesTheSeatsItMoved(t *testing.T) {
 	t.Parallel()
 	s, c := newService(t, stream.Options{
-		Placement: func() (map[string]bool, error) { return map[string]bool{"Coder": true}, nil },
+		Placement: func() (map[string]bool, error) { return map[string]bool{"a-coder": true}, nil },
 	})
 	s.RefreshPlacement()
 	drain(c)
 
 	s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
-		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxAwaiting,
+		TurnID: "tn-1", AgentID: "a-coder", Role: "Coder", Status: livestate.SandboxAwaiting,
 	}}}, clock)
 	rows := agentRows(t, drain(c))
-	if len(rows) != 1 || rows[0]["role"] != "Coder" || rows[0]["activity"] != livestate.ActivityNeeds {
+	if len(rows) != 1 || rows[0]["agent_id"] != "a-coder" ||
+		rows[0]["activity"] != string(livestate.ActivityNeeds) {
 		t.Errorf("pushed = %v, want the seat needing somebody", rows)
 	}
 }
 
-// agentRows is every row the `agents` pushes among envelopes carried.
-func agentRows(t *testing.T, got []stream.Envelope) []map[string]any {
+// agentRows is every row the `agents` pushes among the frames carried, decoded
+// from the bytes a client reads.
+func agentRows(t *testing.T, got []*stream.Frame) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, env := range got {
-		if env.Kind != stream.KindAgents {
+	for _, frame := range got {
+		if frame.Kind() != stream.KindAgents {
 			continue
 		}
-		rows, ok := env.Data.([]map[string]any)
-		if !ok {
-			t.Fatalf("agents data is %T", env.Data)
-		}
+		var rows []map[string]any
+		decodeData(t, frame, &rows)
 		out = append(out, rows...)
 	}
 	return out
@@ -244,7 +281,7 @@ func TestTheEventArrivesBeforeItsConsequences(t *testing.T) {
 	// A derived push arriving before the event that caused it would
 	// briefly show a consequence with no cause in the feed beside it.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
 
 	kinds := kindsOf(c)
 	if len(kinds) < 2 {
@@ -264,7 +301,7 @@ func TestAStreamOnlyEventPushesNoFeedRow(t *testing.T) {
 	s.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z",
 		Payload: map[string]any{
-			"role": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0,
+			"agent_id": "a-lead", "role": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0,
 		},
 	})
 	kinds := kindsOf(c)
@@ -284,7 +321,7 @@ func TestAnEventThatMovesNothingPushesNothing(t *testing.T) {
 	s, c := newService(t, stream.Options{})
 	s.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z",
-		// No role: the round is dropped.
+		// No agent id: the round names no seat and is dropped.
 		Payload: map[string]any{"turn_id": "tn-1"},
 	})
 	if kinds := kindsOf(c); len(kinds) != 0 {
@@ -344,7 +381,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	// per phase instead of one every tick.
 	s, c := newService(t, stream.Options{HealthInterval: 10 * time.Millisecond})
 	s.Ingest(envelope("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "plan", "model": "m-1",
+		"agent_id": "a-lead", "role": "Lead", "phase": "plan", "model": "m-1",
 		"input_tokens": 6, "output_tokens": 4, "total_tokens": 10,
 	}))
 	if kinds := kindsOf(c); contains(kinds, stream.KindTokens) {
@@ -355,13 +392,10 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	var rollup *tokens.Rollup
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && rollup == nil {
-		for _, env := range drain(c) {
-			if env.Kind == stream.KindTokens {
-				got, ok := env.Data.(tokens.Rollup)
-				if !ok {
-					t.Fatalf("tokens data is %T, not the rollup the client "+
-						"reads; the client's store takes `.totals` off it", env.Data)
-				}
+		for _, frame := range drain(c) {
+			if frame.Kind() == stream.KindTokens {
+				var got tokens.Rollup
+				decodeData(t, frame, &got)
 				rollup = &got
 			}
 		}
@@ -408,7 +442,8 @@ func TestARecordAgeingOutPushesTheRollupOnTheTick(t *testing.T) {
 		HealthInterval: 10 * time.Millisecond,
 	})
 	s.Ingest(envelope("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "plan", "model": "m-1", "total_tokens": 10,
+		"agent_id": "a-lead", "role": "Lead", "phase": "plan", "model": "m-1",
+		"total_tokens": 10,
 	}))
 	s.StartHealthTicks(t.Context())
 	if rollup := awaitRollup(t, c); rollup.Totals.TotalTokens != 10 {
@@ -427,19 +462,20 @@ func TestARecordAgeingOutPushesTheRollupOnTheTick(t *testing.T) {
 
 // awaitRollup is the next spend rollup pushed to c, failing the test when none
 // arrives within two seconds — two hundred of the cases' ten-millisecond ticks.
+// Decoded off the frame's bytes, as the client reads it: the client's store
+// takes `.totals` off the data, so a frame whose data did not decode as the
+// rollup is a failure here rather than a figure nobody can read.
 func awaitRollup(t *testing.T, c *stream.Client) tokens.Rollup {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
-		case env := <-c.Out():
-			if env.Kind != stream.KindTokens {
+		case frame := <-c.Out():
+			if frame.Kind() != stream.KindTokens {
 				continue
 			}
-			rollup, ok := env.Data.(tokens.Rollup)
-			if !ok {
-				t.Fatalf("tokens data is %T, not the rollup the client reads", env.Data)
-			}
+			var rollup tokens.Rollup
+			decodeData(t, frame, &rollup)
 			return rollup
 		case <-deadline:
 			t.Fatal("no tokens push arrived")
@@ -461,9 +497,9 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	// thirty-day scan per tab, and would lose any call mid-flight while it
 	// did.
 	s, _ := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
 
-	snap := s.Snapshot()
+	snap := s.Snapshot(reader)
 	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q", key)
@@ -488,11 +524,11 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// that the default IS the production value is
 	// TestAnUnsetIntervalTicksAtTheProductionCadence's.
 	s := buildService(t, stream.Options{
-		Health:         func() any { return health{Status: "ok", InFlight: 3} },
+		Health:         func() stream.Health { return health{Status: "ok", InFlight: 3} },
 		HealthInterval: 20 * time.Millisecond,
 	})
 
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	s.Hub().Register(a)
 	s.Hub().Register(b)
 	s.StartHealthTicks(t.Context())
@@ -501,13 +537,14 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 
 	for name, c := range map[string]*stream.Client{"a": a, "b": b} {
 		select {
-		case env := <-c.Out():
-			if env.Kind != stream.KindHealth {
-				t.Errorf("%s received %q, want a health tick", name, env.Kind)
+		case frame := <-c.Out():
+			if frame.Kind() != stream.KindHealth {
+				t.Errorf("%s received %q, want a health tick", name, frame.Kind())
 			}
-			got, ok := env.Data.(health)
-			if !ok || got.InFlight != 3 {
-				t.Errorf("%s health = %#v", name, env.Data)
+			var got health
+			decodeData(t, frame, &got)
+			if got.InFlight != 3 {
+				t.Errorf("%s health = %#v", name, got)
 			}
 		case <-time.After(2 * time.Second): // a hundred ticks
 			t.Fatalf("%s never received a health tick", name)
@@ -521,11 +558,11 @@ func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 	// that connects mid-drain sees the drain at once rather than on the
 	// next tick.
 	s, _ := newService(t, stream.Options{
-		Health: func() any {
+		Health: func() stream.Health {
 			return health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
 		},
 	})
-	got, _ := s.Snapshot()["health"].(health)
+	got, _ := s.Snapshot(reader)["health"].(health)
 	if got.Status != "shutting_down" || got.InFlight != 2 || !got.ShuttingDown {
 		t.Errorf("health = %#v, want the engine's own answer", got)
 	}
@@ -538,7 +575,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 	// only the later one is the one Stop knows about.
 	const interval = 20 * time.Millisecond
 	s := buildService(t, stream.Options{HealthInterval: interval})
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	s.Hub().Register(c)
 
 	s.StartHealthTicks(t.Context())
@@ -563,7 +600,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 func TestStoppingEndsTheTickAndTheClients(t *testing.T) {
 	t.Parallel()
 	s := buildService(t, stream.Options{})
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	s.Hub().Register(c)
 	s.StartHealthTicks(t.Context())
 	s.Stop()
@@ -602,5 +639,35 @@ func TestACancelledContextEndsTheTick(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop hung after the tick's context was cancelled")
+	}
+}
+
+// A PUBLISHED COMPANY RE-SENDS EVERY COMPANY-DERIVED PUSH, by the kinds this
+// package declares.
+//
+// The roster, the org tree, the tool catalogue and the schedules come from the
+// company and no event ever corrects them, so each is sent whole on every
+// publish. The kinds are this package's own constants, named by the one method
+// that sends them: the one caller used to spell all four as literals in another
+// package, which compiled cleanly the day a constant here was renamed and sent
+// a frame the dashboard drops.
+func TestAPublishedCompanyReSendsEveryCompanyDerivedPush(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{})
+	s.CompanyPublished()
+	var got []stream.Kind
+	for range 4 {
+		select {
+		case frame := <-c.Out():
+			got = append(got, frame.Kind())
+		case <-time.After(5 * time.Second):
+			t.Fatalf("a published company re-sent %v, want four pushes", got)
+		}
+	}
+	slices.Sort(got)
+	want := []stream.Kind{stream.KindOrg, stream.KindSchedules, stream.KindSeats, stream.KindTools}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("a published company re-sent %v, want %v", got, want)
 	}
 }

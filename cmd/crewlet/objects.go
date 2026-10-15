@@ -9,6 +9,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // `crewlet objects` — where the company's files are kept, and what the
@@ -22,13 +24,13 @@ import (
 // view (`GET /fleet`), whose objects block every node answers from that record.
 
 // runObjects dispatches `crewlet objects`.
-func runObjects(args []string, stdout, stderr io.Writer) error {
+func runObjects(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "status":
-		return objectsStatus(rest, stdout, stderr)
+		return objectsStatus(environ, rest, stdout, stderr)
 	case "", "help":
-		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-url] [-token] [-json]")
+		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-url] [-json]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown objects command %q", sub)
@@ -80,9 +82,9 @@ type objectsFindingView struct {
 }
 
 // objectsStatus is `crewlet objects status`.
-func objectsStatus(args []string, stdout, stderr io.Writer) error {
+func objectsStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var asJSON *bool
-	client, err := nodeClientFor(args, "objects status", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "objects status", stderr, func(fs *flag.FlagSet) {
 		asJSON = fs.Bool("json", false,
 			"print the fleet view's objects block as the node answered it")
 	})

@@ -40,9 +40,10 @@ const TAKEN = "22222222-2222-4222-8222-222222222222";
 const WRITTEN = "44444444-4444-4444-8444-444444444444";
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["save_page", "comment_on_page", "write_page"],

@@ -17,19 +17,19 @@ import { healthFrame } from "~/test/health.ts";
 const health = healthFrame({ node: "node-a", seats: ["agent-cto"] });
 
 test("a seat this node holds says so, idle or not", () => {
-  expect(heldBy("agent-cto", { id: "a", role: "CTO", activity: "idle" }, health)).toBe(
-    "this node · node-a",
-  );
+  expect(
+    heldBy("agent-cto", { id: "a", agent_id: "a", role: "CTO", activity: "idle" }, health),
+  ).toBe("this node · node-a");
 });
 
 test("a seat held elsewhere is a peer's, and one nobody holds is said", () => {
-  expect(heldBy("agent-pm", { id: "b", role: "PM", activity: "idle" }, health)).toBe(
+  expect(heldBy("agent-pm", { id: "b", agent_id: "b", role: "PM", activity: "idle" }, health)).toBe(
     "another node",
   );
   expect(
     heldBy(
       "agent-pm",
-      { id: "b", role: "PM", activity: "stopped", stopped_reason: "unplaced" },
+      { id: "b", agent_id: "b", role: "PM", activity: "stopped", stopped_reason: "unplaced" },
       health,
     ),
   ).toBe("no node");

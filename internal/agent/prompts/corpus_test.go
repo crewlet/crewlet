@@ -41,6 +41,11 @@ const iterationLedger = "### Round 1 — sent back\n" +
 
 // richSeat is the lead of a mixed company with a sandbox: every identity
 // section the executor renders has something to say.
+//
+// Every seat is named by its HANDLE — the unit's lead, what the lead manages
+// and the seat looked up — because that is a seat's identity (ADR-0013); a
+// display name is prose, and a chart that pointed at one would point at
+// nobody once somebody renamed the seat.
 func richSeat() Seat {
 	o := &org.Organization{
 		Name:     "Acme — Zürich",
@@ -51,7 +56,7 @@ func richSeat() Seat {
 			Name:    "Eng Team",
 			Type:    org.UnitTypeTeam,
 			Purpose: "Build the thing.",
-			Lead:    "Engineering Lead",
+			Lead:    "lead",
 			Goals:   []string{"Ship v1.0.", "Keep p99 < 200 ms."},
 			Channel: "C_ENG",
 			Roles: []*org.Role{
@@ -62,7 +67,7 @@ func richSeat() Seat {
 					Backstory:            "Ran platform at a fintech — twelve years.",
 					Responsibilities:     []string{"Guide the team.", "Own incidents."},
 					BehavioralGuidelines: []string{"Be concise.", "Cite the ticket."},
-					Manages:              []string{"Engineer", "Sarah Chen"},
+					Manages:              []string{"eng", "sarah-chen"},
 					Sandbox:              &org.RoleSandbox{Enabled: true},
 					MCPEnv: org.MCPEnv{
 						"atlassian": {"token": "x"},
@@ -77,8 +82,9 @@ func richSeat() Seat {
 					Responsibilities: []string{"Write tests."},
 				},
 				{
-					Name: "Sarah Chen",
-					Kind: org.KindHuman,
+					Name:           "Sarah Chen",
+					DeclaredHandle: "sarah-chen",
+					Kind:           org.KindHuman,
 					Contact: &org.HumanContact{
 						SlackUserID: "U0HUMAN",
 					},
@@ -88,7 +94,7 @@ func richSeat() Seat {
 		}},
 	}
 	o.Normalize()
-	return seatIn(o, "Engineering Lead")
+	return seatIn(o, "lead")
 }
 
 // richSkills is a catalogue with a required and an advisory skill on every

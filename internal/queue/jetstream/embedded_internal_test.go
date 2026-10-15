@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
@@ -136,6 +138,152 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 	}
 }
 
+// A CONNECTION TO THIS PROCESS'S OWN BROKER HANDSHAKES WITHIN THE ACCEPT
+// BUDGET, never nats's two-second default for a remote dial.
+//
+// The server a connection is opened to has already answered
+// ReadyForConnections, so a slow handshake measures only host load — and on a
+// loaded host the default failed the queue's own connection with `read pipe:
+// i/o timeout` against a broker that was up. The budget has to be the one the
+// server was given to start, solo and clustered alike, or the two drift.
+//
+// HELD ON THE CONNECTION [embeddedServer.connect] OPENS, over both of its
+// dials — the in-memory pipe and the loopback port — rather than on an option
+// list read beside them: a list a test reads certifies nothing about a dial
+// that stopped passing it. The clustered budget is asked of the same two
+// servers, since the member's flag, not its listener, is what picks it.
+//
+// AND ITS RECONNECTS SPAN THAT SAME BUDGET, since running them out is how a
+// node whose own broker has stopped stops itself ([embeddedReconnects]) — and
+// they are made to THIS server alone, ignoring the peers a cluster member
+// advertises, or a reconnect lands on a peer and never runs out. That half is
+// asserted on the option here, on both dials, and as behaviour against a real
+// cluster in jetstreamtest, which is where a cluster may be formed.
+//
+// Mutation: drop the budget from either dial in connect and its rows go red;
+// drop the reconnect options and the solo rows do (nats's own sixty attempts
+// two seconds apart happen to span exactly the clustered budget); drop
+// IgnoreDiscoveredServers and every row does.
+func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) {
+	t.Parallel()
+	inProcess, err := startEmbedded(t.Context(), Config{})
+	if err != nil {
+		t.Fatalf("start an in-process broker: %v", err)
+	}
+	t.Cleanup(inProcess.shutdown)
+	if !inProcess.inProcess {
+		t.Fatal("a solo broker listens on a socket, so the in-memory dial goes unexercised")
+	}
+	loopback := listeningBroker(t)
+
+	for _, c := range []struct {
+		name   string
+		server *embeddedServer
+	}{
+		{"through the in-memory pipe", inProcess},
+		{"over the loopback port", loopback},
+	} {
+		for _, clustered := range []bool{false, true} {
+			e := *c.server
+			e.clustered = clustered
+			nc, err := e.connect(watched{})
+			if err != nil {
+				t.Fatalf("%s: connect: %v", c.name, err)
+			}
+			got := nc.Opts.Timeout
+			reconnects, wait := nc.Opts.MaxReconnect, nc.Opts.ReconnectWait
+			ownOnly := nc.Opts.IgnoreDiscoveredServers
+			nc.Close()
+			if !ownOnly {
+				t.Errorf("%s, clustered=%v: the connection takes the peers a "+
+					"member advertises into its reconnect pool, so a reconnect "+
+					"lands on a peer and a node whose own member stopped runs on "+
+					"without it", c.name, clustered)
+			}
+			if want := acceptBudget(clustered); got != want {
+				t.Errorf("%s, clustered=%v: the handshake budget is %v, want "+
+					"the accept budget %v — nats's own default is %v, a figure "+
+					"for a remote server rather than one in this process",
+					c.name, clustered, got, want, nats.DefaultTimeout)
+			}
+			// AND THE RECONNECTS SPAN THE SAME BUDGET, one wait at a time:
+			// running them out is how a node whose own broker stopped
+			// stops itself, and nats's own sixty attempts two seconds
+			// apart were two minutes dark whatever the topology.
+			if span := time.Duration(reconnects) * wait; reconnects <= 0 ||
+				span != acceptBudget(clustered) {
+				t.Errorf("%s, clustered=%v: %d reconnects %v apart span %v, want "+
+					"the accept budget %v", c.name, clustered, reconnects, wait,
+					span, acceptBudget(clustered))
+			}
+		}
+	}
+}
+
+// listeningBroker is a solo broker that DOES listen, on a loopback client
+// port — the dial a clustered member's connections take — so
+// [embeddedServer.connect]'s socket branch is exercised without forming a
+// cluster in this package.
+func listeningBroker(t *testing.T) *embeddedServer {
+	t.Helper()
+	opts, scratch, err := embeddedOptions(Config{}, systemUser{})
+	if err != nil {
+		t.Fatalf("broker options: %v", err)
+	}
+	opts.DontListen, opts.Host = false, "127.0.0.1"
+	ns, err := server.NewServer(opts)
+	if err != nil {
+		removeScratch(scratch)
+		t.Fatalf("configure a listening broker: %v", err)
+	}
+	started := startJoined(ns)
+	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
+	if !ns.ReadyForConnections(acceptTimeout) {
+		t.Fatalf("a listening broker was not ready within %v", acceptTimeout)
+	}
+	return &embeddedServer{ns: ns, started: started, scratch: scratch}
+}
+
+// startJoined starts ns the way [startEmbedded] does — on a goroutine whose
+// end the returned channel reports — so a cleanup through [shutdownAndClean]
+// waits for the Start it may overlap rather than racing it.
+func startJoined(ns *server.Server) <-chan struct{} {
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		ns.Start()
+	}()
+	return started
+}
+
+// AN EXTERNAL SERVER'S HANDSHAKE IS NOT GIVEN THE EMBEDDED MEMBER'S BUDGET.
+//
+// A connection to this process's own member takes the accept budget because
+// that server has already answered; a remote one has not, and the reconnect
+// loop waits this long on every silent member of its pool before asking the
+// next, which is time a node spends not renewing its seats' leases. The two
+// option lists sit a screen apart, so this holds the one a shared list would
+// break. Mutation: dial with acceptBudget(true) and it goes red.
+func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
+	t.Parallel()
+	opts, err := dialOptions(Config{})
+	if err != nil {
+		t.Fatalf("dialOptions: %v", err)
+	}
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if err := opt(&applied); err != nil {
+			t.Fatalf("applying an option: %v", err)
+		}
+	}
+	if applied.Timeout != externalHandshake {
+		t.Errorf("an external dial's handshake budget is %v, want %v — the "+
+			"embedded member's accept budget (%v solo, %v clustered) would hold "+
+			"a reconnect on a partitioned member for that long",
+			applied.Timeout, externalHandshake, acceptBudget(false), acceptBudget(true))
+	}
+}
+
 // droppingInfoJS drops the account report it is asked for — returning only
 // when the request's own term ends, as a request a metadata group with no
 // leader never replies to does — until it has dropped `drop` of them, and
@@ -183,7 +331,7 @@ func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
 		t.Fatalf("start the member: %v", err)
 	}
 	t.Cleanup(e.shutdown)
-	nc, err := e.connect()
+	nc, err := e.connect(watched{})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

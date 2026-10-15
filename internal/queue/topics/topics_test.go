@@ -19,8 +19,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
+
+// alice and bob are two seats, as ids rather than handles: every per-seat name
+// in this package is built from the seat's id, so a case naming one by handle
+// would be testing a grammar nothing mints.
+//
+// FIXED LITERALS, so the expected subjects below can be written out. A derived
+// value would make every assertion a restatement of the derivation.
+const (
+	aliceID = "0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"
+	bobID   = "3a7b91e2-5c44-4f18-8d60-2e9a0c6fb735"
+)
+
+func seat(id string) uuid.UUID { return uuid.MustParse(id) }
+
+var alice, bob = seat(aliceID), seat(bobID)
 
 // TestAgentSubjectsAreTheDocumentedJoin pins the shape of every per-seat
 // name, and pins it against the exported constants rather than against a
@@ -38,14 +55,17 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"inbox subject", topics.AgentInbox("alice"), "crewlet.agent.alice.inbox"},
-		{"inbox group", topics.AgentInboxGroup("alice"), "agent-alice"},
-		{"control subject", topics.AgentControl("alice"), "crewlet.agent.alice.control"},
-		{"control group", topics.AgentControlGroup("alice"), "agent-alice-control"},
-		{"reflect subject", topics.AgentReflect("alice"), "crewlet.agent.alice.reflect"},
-		{"reflect group", topics.AgentReflectGroup("alice"), "agent-alice-reflect"},
-		{"hyphenated handles pass through unchanged", topics.AgentInbox("qa-lead"), "crewlet.agent.qa-lead.inbox"},
-		{"no case folding", topics.AgentInboxGroup("qa-lead"), "agent-qa-lead"},
+		{"inbox subject", topics.AgentInbox(alice), "crewlet.agent." + aliceID + ".inbox"},
+		{"inbox group", topics.AgentInboxGroup(alice), "agent-" + aliceID},
+		{"control subject", topics.AgentControl(alice), "crewlet.agent." + aliceID + ".control"},
+		{"control group", topics.AgentControlGroup(alice), "agent-" + aliceID + "-control"},
+		{"reflect subject", topics.AgentReflect(alice), "crewlet.agent." + aliceID + ".reflect"},
+		{"reflect group", topics.AgentReflectGroup(alice), "agent-" + aliceID + "-reflect"},
+		// THE CANONICAL SPELLING, and only that one: uuid.Parse accepts
+		// braced and urn-prefixed forms that String() never emits, and each
+		// of them would be a different subject naming one seat.
+		{"the canonical form", topics.AgentInbox(seat("{" + aliceID + "}")),
+			"crewlet.agent." + aliceID + ".inbox"},
 		{"an event subject", topics.Event("agent_phase_started"), "crewlet.events.agent_phase_started"},
 		// A dead letter is not here: its tail is a digest of the pair
 		// rather than a join, so its shape is pinned by
@@ -59,14 +79,17 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 	// ...and the constants callers build wildcards and stream topologies
 	// from must agree with those joins, or a backend provisioning a stream
 	// from the prefix would provision one that does not cover the subject.
-	if !strings.HasPrefix(topics.AgentInbox("alice"), topics.AgentInboxPrefix) {
+	if !strings.HasPrefix(topics.AgentInbox(alice), topics.AgentInboxPrefix) {
 		t.Errorf("AgentInbox does not start with AgentInboxPrefix %q", topics.AgentInboxPrefix)
 	}
-	if !strings.HasSuffix(topics.AgentInbox("alice"), topics.AgentInboxSuffix) {
+	if !strings.HasSuffix(topics.AgentInbox(alice), topics.AgentInboxSuffix) {
 		t.Errorf("AgentInbox does not end with AgentInboxSuffix %q", topics.AgentInboxSuffix)
 	}
-	if !strings.HasSuffix(topics.AgentControl("alice"), topics.AgentControlSuffix) {
+	if !strings.HasSuffix(topics.AgentControl(alice), topics.AgentControlSuffix) {
 		t.Errorf("AgentControl does not end with AgentControlSuffix %q", topics.AgentControlSuffix)
+	}
+	if !strings.HasSuffix(topics.AgentReflect(alice), topics.AgentReflectSuffix) {
+		t.Errorf("AgentReflect does not end with AgentReflectSuffix %q", topics.AgentReflectSuffix)
 	}
 	if !strings.HasPrefix(topics.Event("agent_phase_started"), topics.EventsPrefix) {
 		t.Errorf("Event does not start with EventsPrefix %q", topics.EventsPrefix)
@@ -103,10 +126,11 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 		{topics.EventsWildcard, topics.Event("agent_phase_started"), true},
 		{topics.EventsWildcard, topics.NotificationsInbound, false},
 		{topics.EventsWildcard, topics.ConfigRevisionApplied, false},
-		{topics.EventsWildcard, topics.AgentInbox("alice"), false},
+		{topics.EventsWildcard, topics.AgentInbox(alice), false},
 
-		{topics.AgentInboxPrefix + ">", topics.AgentInbox("alice"), true},
-		{topics.AgentInboxPrefix + ">", topics.AgentControl("alice"), true},
+		{topics.AgentInboxPrefix + ">", topics.AgentInbox(alice), true},
+		{topics.AgentInboxPrefix + ">", topics.AgentControl(alice), true},
+		{topics.AgentInboxPrefix + ">", topics.AgentReflect(alice), true},
 		{topics.AgentInboxPrefix + ">", topics.Event("agent_phase_started"), false},
 
 		{topics.NotificationsPrefix + ">", topics.NotificationsInbound, true},
@@ -116,7 +140,8 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 		{topics.ConfigPrefix + ">", topics.ConfigRevisionApplied, true},
 		{topics.ConfigPrefix + ">", topics.NotificationsInbound, false},
 
-		{topics.DeadLetterPrefix + ">", topics.DeadLetter(topics.AgentInbox("alice"), "agent-alice"), true},
+		{topics.DeadLetterPrefix + ">", topics.DeadLetter(topics.AgentInbox(alice),
+			topics.AgentInboxGroup(alice)), true},
 
 		// The reason dead letters live outside crewlet.*: the dashboard
 		// streams crewlet.events.>, and a dead-lettered subject inside
@@ -129,32 +154,32 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 	}
 }
 
-// TestAnEmptyHandleYieldsNoSubject pins the deliberate empty return, and pins
-// WHY it is not "crewlet.agent..inbox".
+// TestANilSeatYieldsNoSubject pins the deliberate empty return, and pins WHY
+// it is not "crewlet.agent..inbox".
 //
 // That string is a real, publishable subject with no subscriber. A caller
-// that lost the handle would publish into it and the event would be
+// that lost the seat's id would publish into it and the event would be
 // swallowed: no error at the producer, no delivery at the consumer, and a
 // seat that simply never wakes. Returning "" makes the caller's mistake
 // something a caller can test for.
 //
-// The property is asserted for every handle-derived name, not just the
-// inbox, because a caller that guards the subject and not the group would
-// attach a consumer named "agent-" to the right topic — one durable
-// subscription shared by every seat that lost its handle.
-func TestAnEmptyHandleYieldsNoSubject(t *testing.T) {
+// The property is asserted for every id-derived name, not just the inbox,
+// because a caller that guards the subject and not the group would attach a
+// consumer named "agent-" to the right topic — one durable subscription
+// shared by every seat that lost its id.
+func TestANilSeatYieldsNoSubject(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name string
 		got  string
 	}{
-		{"AgentInbox", topics.AgentInbox("")},
-		{"AgentInboxGroup", topics.AgentInboxGroup("")},
-		{"AgentControl", topics.AgentControl("")},
-		{"AgentControlGroup", topics.AgentControlGroup("")},
-		{"AgentReflect", topics.AgentReflect("")},
-		{"AgentReflectGroup", topics.AgentReflectGroup("")},
+		{"AgentInbox", topics.AgentInbox(uuid.Nil)},
+		{"AgentInboxGroup", topics.AgentInboxGroup(uuid.Nil)},
+		{"AgentControl", topics.AgentControl(uuid.Nil)},
+		{"AgentControlGroup", topics.AgentControlGroup(uuid.Nil)},
+		{"AgentReflect", topics.AgentReflect(uuid.Nil)},
+		{"AgentReflectGroup", topics.AgentReflectGroup(uuid.Nil)},
 		{"Event", topics.Event("")},
 	} {
 		if tc.got != "" {
@@ -167,7 +192,7 @@ func TestAnEmptyHandleYieldsNoSubject(t *testing.T) {
 	// DeadLetter is deliberately NOT in that list, and the asymmetry is
 	// worth stating rather than leaving as an oversight to be "fixed".
 	//
-	// The empty guard exists for a name derived from a HANDLE, where the
+	// The empty guard exists for a name derived from a SEAT ID, where the
 	// caller holds a seat and has lost its identity, and where the safe
 	// answer is to publish nothing. A dead letter is the opposite: it is
 	// the last copy of a message that already failed, so returning "" would
@@ -182,128 +207,152 @@ func TestAnEmptyHandleYieldsNoSubject(t *testing.T) {
 	}
 }
 
-// TestHandleFromInboxIsTheInverseOfAgentInbox pins the round trip and, more
+// TestSeatFromInboxIsTheInverseOfAgentInbox pins the round trip and, more
 // importantly, pins what it must REFUSE.
 //
-// The caller is a log line or a diagnostic naming the seat behind some
-// traffic. A false identification there is worse than no identification: it
-// puts an uninvolved seat's handle in front of whoever is debugging.
-func TestHandleFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
+// The caller is a log line, a diagnostic or a sweep naming the seat behind
+// some traffic. A false identification there is worse than no identification:
+// it puts an uninvolved seat in front of whoever is debugging, and the sweep
+// deletes what it names.
+func TestSeatFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 	t.Parallel()
 
-	for _, handle := range []string{"alice", "qa-lead", "a", "0", "agent-7", "inbox", "control"} {
-		got, ok := topics.HandleFromInbox(topics.AgentInbox(handle))
-		if !ok || got != handle {
-			t.Errorf("round trip of %q: HandleFromInbox(%q) = (%q, %v), want (%q, true)",
-				handle, topics.AgentInbox(handle), got, ok, handle)
+	for _, id := range []uuid.UUID{alice, bob, uuid.MustParse(
+		"00000000-0000-4000-8000-000000000001")} {
+
+		got, ok := topics.SeatFromInbox(topics.AgentInbox(id))
+		if !ok || got != id {
+			t.Errorf("round trip of %s: SeatFromInbox(%q) = (%s, %v), want (%s, true)",
+				id, topics.AgentInbox(id), got, ok, id)
 		}
 	}
 
 	for _, tc := range []struct{ name, subject string }{
 		{"the empty string", ""},
-		{"a control subject, not an inbox", topics.AgentControl("alice")},
+		{"a control subject, not an inbox", topics.AgentControl(alice)},
+		{"a reflect subject, not an inbox", topics.AgentReflect(alice)},
 		{"an event subject", topics.Event("agent_phase_started")},
-		{"what an unroutable handle produces", "crewlet.agent..inbox"},
-		{"a handle with a dot would be two segments", "crewlet.agent.a.b.inbox"},
+		{"what an unroutable seat produces", "crewlet.agent..inbox"},
+		{"a token with a dot would be two segments", "crewlet.agent.a.b.inbox"},
 		{"the suffix alone", ".inbox"},
 		{"the prefix alone", "crewlet.agent."},
-		{"a longer subject that merely contains one", "x.crewlet.agent.alice.inbox"},
-		{"a dead letter carrying one", topics.DeadLetter(topics.AgentInbox("alice"), "agent-alice")},
+		{"a longer subject that merely contains one", "x.crewlet.agent." + aliceID + ".inbox"},
+		{"a dead letter carrying one", topics.DeadLetter(topics.AgentInbox(alice),
+			topics.AgentInboxGroup(alice))},
+
+		// THE TOKEN IS PARSED, not merely extracted. A consumer somebody
+		// attached by hand under this prefix is not a mailbox, and the
+		// sweep that reads this deletes what it is told is one.
+		{"a handle where a seat id belongs", "crewlet.agent.alice.inbox"},
+		{"a uuid in a spelling String() never emits", "crewlet.agent.{" + aliceID + "}.inbox"},
+		{"the nil uuid", "crewlet.agent.00000000-0000-0000-0000-000000000000.inbox"},
 
 		// The prefix ends in a dot and the suffix begins with one, so
 		// they OVERLAP on a single character. Matching each against the
 		// whole subject let this one satisfy both at once and report a
-		// handle of "inbox" — for a subject AgentInbox can never
-		// produce, since AgentInbox("inbox") is crewlet.agent.inbox.inbox.
+		// seat token of "inbox".
 		{"prefix and suffix sharing one dot", "crewlet.agent.inbox"},
 	} {
-		if got, ok := topics.HandleFromInbox(tc.subject); ok {
-			t.Errorf("%s: HandleFromInbox(%q) = (%q, true), want (\"\", false)",
+		if got, ok := topics.SeatFromInbox(tc.subject); ok {
+			t.Errorf("%s: SeatFromInbox(%q) = (%s, true), want (nil, false)",
 				tc.name, tc.subject, got)
 		}
 	}
 }
 
-// A retirement sweep deletes what MailboxHandle names, so a false positive is a
+// A retirement sweep deletes what MailboxSeat names, so a false positive is a
 // consumer destroyed that belonged to nobody's mailbox.
-func TestMailboxHandleNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
+func TestMailboxSeatNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
 	t.Parallel()
 
-	for _, handle := range []string{"alice", "qa-lead", "release", "release-control", "inbox",
-		"control", "reflect", "release-reflect"} {
+	for _, id := range []uuid.UUID{alice, bob} {
 		for _, pair := range [][2]string{
-			{topics.AgentInbox(handle), topics.AgentInboxGroup(handle)},
-			{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
-			{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)},
+			{topics.AgentInbox(id), topics.AgentInboxGroup(id)},
+			{topics.AgentControl(id), topics.AgentControlGroup(id)},
+			{topics.AgentReflect(id), topics.AgentReflectGroup(id)},
 		} {
-			got, ok := topics.MailboxHandle(pair[0], pair[1])
-			if !ok || got != handle {
-				t.Errorf("MailboxHandle(%q, %q) = (%q, %v), want (%q, true)", pair[0], pair[1], got, ok, handle)
+			got, ok := topics.MailboxSeat(pair[0], pair[1])
+			if !ok || got != id {
+				t.Errorf("MailboxSeat(%q, %q) = (%s, %v), want (%s, true)",
+					pair[0], pair[1], got, ok, id)
 			}
 		}
 	}
 
 	for _, tc := range []struct{ name, topic, group string }{
-		{"an inbox under another group", topics.AgentInbox("alice"), "agent-bob"},
-		{"an inbox under the control group", topics.AgentInbox("alice"), topics.AgentControlGroup("alice")},
-		{"a control subject under the inbox group", topics.AgentControl("alice"), topics.AgentInboxGroup("alice")},
-		{"a reflect subject under the control group", topics.AgentReflect("alice"), topics.AgentControlGroup("alice")},
-		{"a control subject under the reflect group", topics.AgentControl("alice"), topics.AgentReflectGroup("alice")},
-		// The same collision for the reflect suffix: release's reflect
-		// group is release-reflect's inbox group, and on release's INBOX
-		// it is neither seat's mailbox.
-		{"release-reflect's inbox group on release's inbox", topics.AgentInbox("release"),
-			topics.AgentInboxGroup("release-reflect")},
-		{"a reflect subject with a dotted handle", "crewlet.agent.a.b.reflect", "agent-a.b-reflect"},
-		// The collision TestGroupNamesAreNotUniqueOnTheirOwn describes, from
-		// the side that must NOT match: seat release's control group is seat
-		// release-control's inbox group, so that group on release's INBOX
-		// topic is neither seat's mailbox.
-		{"release-control's inbox group on release's inbox", topics.AgentInbox("release"),
-			topics.AgentInboxGroup("release-control")},
-		{"a control subject with a dotted handle", "crewlet.agent.a.b.control", "agent-a.b-control"},
-		{"an empty control handle", "crewlet.agent..control", "agent--control"},
+		{"an inbox under another seat's group", topics.AgentInbox(alice), topics.AgentInboxGroup(bob)},
+		{"an inbox under the control group", topics.AgentInbox(alice), topics.AgentControlGroup(alice)},
+		{"a control subject under the inbox group", topics.AgentControl(alice), topics.AgentInboxGroup(alice)},
+		{"a reflect subject under the control group", topics.AgentReflect(alice), topics.AgentControlGroup(alice)},
+		{"a control subject under the reflect group", topics.AgentControl(alice), topics.AgentReflectGroup(alice)},
+		{"a reflect subject under another seat's reflect group", topics.AgentReflect(alice),
+			topics.AgentReflectGroup(bob)},
+		// The collision TestGroupNamesAreNotUniqueOnTheirOwn describes,
+		// from the side that must NOT match: `agent-` + X + `-control`
+		// and `agent-` + Y coincide when Y is X + "-control", so that
+		// group on X's INBOX topic is neither seat's mailbox. The reflect
+		// suffix composes the same way.
+		{"a control group spelled onto an inbox topic", topics.AgentInbox(alice),
+			topics.AgentInboxGroup(alice) + "-control"},
+		{"a reflect group spelled onto an inbox topic", topics.AgentInbox(alice),
+			topics.AgentInboxGroup(alice) + "-reflect"},
+		{"a control subject with a dotted token", "crewlet.agent.a.b.control", "agent-a.b-control"},
+		{"a reflect subject with a dotted token", "crewlet.agent.a.b.reflect", "agent-a.b-reflect"},
+		{"an empty control token", "crewlet.agent..control", "agent--control"},
+		{"an empty reflect token", "crewlet.agent..reflect", "agent--reflect"},
+		{"a handle where a seat id belongs", "crewlet.agent.alice.control", "agent-alice-control"},
+		{"a handle where a seat id belongs, on reflection", "crewlet.agent.alice.reflect",
+			"agent-alice-reflect"},
 		{"a service subscription", topics.NotificationsInbound, "notify-inbound"},
-		{"an event subscription", topics.Event("task_created"), "agent-alice"},
+		{"an event subscription", topics.Event("task_created"), topics.AgentInboxGroup(alice)},
 	} {
-		if got, ok := topics.MailboxHandle(tc.topic, tc.group); ok {
-			t.Errorf("%s: MailboxHandle(%q, %q) = (%q, true), want (\"\", false)", tc.name, tc.topic, tc.group, got)
+		if got, ok := topics.MailboxSeat(tc.topic, tc.group); ok {
+			t.Errorf("%s: MailboxSeat(%q, %q) = (%s, true), want (nil, false)",
+				tc.name, tc.topic, tc.group, got)
 		}
 	}
 }
 
-// TestGroupNamesAreNotUniqueOnTheirOwn states an invariant that is currently
-// true by accident and that every backend already depends on.
+// TestGroupNamesAreNotUniqueOnTheirOwn states an invariant of the GRAMMAR
+// that every backend already depends on.
 //
-// A hyphen is legal inside a handle, and the control group appends "-control"
-// to one. So seat "release-control"'s INBOX group and seat "release"'s
-// CONTROL group are the same string. Two seats, one group name.
+// `agent-` + X and `agent-` + Y + `-control` are the same string whenever X is
+// Y + "-control". No pair of seat IDS reaches that — a uuid never ends in
+// "-control" — but the grammar is what a backend keys on, and the property it
+// must not assume is that a group name alone identifies a subscription.
 //
-// That is safe only because a subscription is identified by the (topic,
-// group) PAIR — the two pairs differ in their topic, and the topics cannot
-// collide because "." cannot appear in a handle. JetStream's consumerName
-// hashes the pair for exactly this reason.
+// What makes it harmless is that a subscription is identified by the (topic,
+// group) PAIR, and the two pairs differ in their topic. JetStream's
+// consumerName hashes the pair for exactly this reason. A backend that ever
+// keyed a subscription on the group ALONE would collapse two subscriptions
+// onto one mailbox, which is the failure this note exists to prevent.
 //
-// It is pinned rather than fixed because the fix is a wire-format change: the
-// group name is the durable subscription name a running fleet is already
-// attached to. A backend that ever keys a subscription on the group ALONE
-// would collapse two seats onto one mailbox, which is the failure this note
-// exists to prevent.
+// Asserted over the GRAMMAR rather than over two seats, because the seat ids
+// that used to demonstrate it were handles. Do not read the absence of a
+// colliding pair of ids as the collision being gone: it is a property of the
+// token space, and the token space is not this package's to promise.
 func TestGroupNamesAreNotUniqueOnTheirOwn(t *testing.T) {
 	t.Parallel()
 
-	inbox, control := topics.AgentInboxGroup("release-control"), topics.AgentControlGroup("release")
-	if inbox != control {
-		t.Fatalf("the collision this test documents is gone: AgentInboxGroup(%q) = %q, "+
-			"AgentControlGroup(%q) = %q. If the group grammar was made injective, "+
-			"delete this test and say so — do not leave it asserting the old shape",
-			"release-control", inbox, "release", control)
+	// X is alice's group name; Y is a token that, run through the inbox
+	// grammar, mints the same string alice's CONTROL group does.
+	control := topics.AgentControlGroup(alice)
+	collides := topics.AgentGroupPrefix + aliceID + topics.AgentControlGroupSuffix
+	if control != collides {
+		t.Fatalf("the group grammar no longer composes as this test assumes: "+
+			"AgentControlGroup = %q, prefix+id+suffix = %q", control, collides)
 	}
 
 	// What makes it harmless: the PAIRS are distinct, because the subjects
 	// are. Assert that, since it is the property a backend relies on.
-	if a, b := topics.AgentInbox("release-control"), topics.AgentControl("release"); a == b {
-		t.Errorf("two seats share a subject as well as a group: %q", a)
+	for _, pair := range [][2]string{
+		{topics.AgentInbox(alice), topics.AgentControl(alice)},
+		{topics.AgentInbox(alice), topics.AgentReflect(alice)},
+		{topics.AgentControl(alice), topics.AgentReflect(alice)},
+	} {
+		if pair[0] == pair[1] {
+			t.Errorf("two of a seat's mailbox subjects are one string: %q", pair[0])
+		}
 	}
 }
 
@@ -329,11 +378,13 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	t.Parallel()
 
 	// The names the grammar mints...
-	handles := []string{"alice", "release", "release-control", "qa-lead", "a"}
+	seats := []uuid.UUID{alice, bob,
+		uuid.MustParse("00000000-0000-4000-8000-000000000001")}
 	var subjects, groups []string
-	for _, h := range handles {
-		subjects = append(subjects, topics.AgentInbox(h), topics.AgentControl(h))
-		groups = append(groups, topics.AgentInboxGroup(h), topics.AgentControlGroup(h))
+	for _, id := range seats {
+		subjects = append(subjects, topics.AgentInbox(id), topics.AgentControl(id), topics.AgentReflect(id))
+		groups = append(groups, topics.AgentInboxGroup(id), topics.AgentControlGroup(id),
+			topics.AgentReflectGroup(id))
 	}
 	subjects = append(subjects,
 		topics.Event("agent_phase_started"), topics.Event("agent_turn_completed"),
@@ -430,10 +481,10 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 func TestDeadLetterKeepsTheTopicGreppable(t *testing.T) {
 	t.Parallel()
 
-	inbox := topics.AgentInbox("alice")
-	dlq := topics.DeadLetter(inbox, topics.AgentInboxGroup("alice"))
+	inbox := topics.AgentInbox(alice)
+	dlq := topics.DeadLetter(inbox, topics.AgentInboxGroup(alice))
 
-	head := topics.DeadLetterPrefix + inbox + "." + topics.AgentInboxGroup("alice") + "."
+	head := topics.DeadLetterPrefix + inbox + "." + topics.AgentInboxGroup(alice) + "."
 	if !strings.HasPrefix(dlq, head) {
 		t.Errorf("DeadLetter = %q, want it to start with %q", dlq, head)
 	}

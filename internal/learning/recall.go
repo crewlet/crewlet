@@ -31,6 +31,9 @@ type EpisodeSearch struct {
 
 // RecallQuery bounds a similarity search.
 type RecallQuery struct {
+	// Handle is the seat's handle, which is what episodes.agent_handle
+	// holds. The diary ignores it: its rows are scoped by the agent id the
+	// caller passes.
 	Handle    string
 	Embedding []float32
 

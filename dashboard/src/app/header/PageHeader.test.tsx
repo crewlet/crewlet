@@ -4,28 +4,53 @@
  * page" is the one place a page's address is copied from (`lib/pageLink.ts`).
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AppShell } from "@crewlethq/ui";
 
-import { PageHeader, SectionTabs, StarPage, Trail, WorkingNow, noteFits } from "./PageHeader.tsx";
+import {
+  PageHeader,
+  PageMore,
+  SectionColumn,
+  SectionTabs,
+  StarPage,
+  Trail,
+  WorkingNow,
+  noteFits,
+} from "./PageHeader.tsx";
 import { ProjectSwitcherProvider } from "./ProjectSwitcher.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { foldTabs } from "../frame/tabFit.ts";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
+import { noteReader } from "~/lib/reader.ts";
+import { starsKey } from "~/lib/starred.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { installWindow } from "~/testing.tsx";
 
 afterEach(cleanup);
 
 // A STAR IS A SHORTCUT TO A PAGE, so it is offered on a page and nowhere else.
 describe("the star", () => {
+  // STARS ARE KEPT PER READER, so these cases are read by somebody.
+  beforeEach(() => noteReader("p-1"));
+  afterEach(() => sessionStorage.clear());
+
   test("is offered on an object's page", () => {
     render(<StarPage path={["work", "ENG-42"]} label="ENG-42" workspace="work" />);
     expect(screen.getByRole("button", { name: "Keep in Starred" })).toBeTruthy();
+  });
+
+  // NOR BY NOBODY: a tab that has not learned who reads it has no list to
+  // keep a star in, and one kept in a list nobody owns would be offered to
+  // whoever signs in next.
+  test("is not offered to a tab nobody is reading yet", () => {
+    sessionStorage.clear();
+    render(<StarPage path={["work", "ENG-42"]} label="ENG-42" workspace="work" />);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   // The store drops a kept path that does not resolve, so a star pressed on
@@ -45,7 +70,48 @@ describe("the star", () => {
     expect(star.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("Already in the sidebar")).toBeTruthy();
     fireEvent.click(star);
-    expect(localStorage.getItem("crewlet_starred") ?? "[]").toBe("[]");
+    expect(localStorage.getItem(starsKey("p-1")) ?? "[]").toBe("[]");
+  });
+
+  // "ALREADY IN THE SIDEBAR" IS A FACT ABOUT THE SIDEBAR, never about the
+  // path's length: every row's landing — the empty fragment being Home's — is
+  // one, and the reader's Account, one segment long and with no row at all,
+  // is not. Its star was disabled with that reason on the one page a reader
+  // looking for where Account lives most needs a way to keep.
+  test("is unavailable on exactly the addresses that are sidebar rows", () => {
+    const rows = WORKSPACES.filter((w) => w.place !== "menu");
+    expect(rows.length).toBeGreaterThan(5);
+    for (const path of [[], ...rows.map((w) => w.path)]) {
+      render(<StarPage path={path} label="Row" workspace="home" />);
+      const star = screen.getByRole("button", { name: "Keep in Starred" });
+      expect(star.getAttribute("aria-disabled"), `#/${path.join("/")}`).toBe("true");
+      cleanup();
+    }
+  });
+
+  test("keeps the reader's Account, which has no row, like any other page", () => {
+    render(<StarPage path={["account"]} label="Account" workspace="account" />);
+    const star = screen.getByRole("button", { name: "Keep in Starred" });
+    expect(star.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByText("Already in the sidebar")).toBeNull();
+    fireEvent.click(star);
+    expect(localStorage.getItem(starsKey("p-1"))).toContain('"account"');
+    expect(screen.getByRole("button", { name: "Remove from Starred" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove from Starred" }));
+  });
+
+  // THE PHONE'S MORE ASKS THE SAME QUESTION, so the two can never disagree.
+  test("the phone's More offers the Account's star, and a row's unavailable", () => {
+    const more = (path: string[]) => {
+      render(<PageMore path={path} label="Here" workspace="account" entries={[]} />);
+      fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
+      const item = screen.getByRole("menuitem", { name: /Keep in Starred/ });
+      const disabled = item.getAttribute("aria-disabled") === "true";
+      cleanup();
+      return disabled;
+    };
+    expect(more(["account"])).toBe(false);
+    expect(more(["settings"])).toBe(true);
   });
 
   // A SCREEN WHOSE OWN MENU CARRIES THE STAR (a knowledge page's More) gets
@@ -220,15 +286,16 @@ describe("the trail", () => {
 describe("who is working", () => {
   function mount(working: boolean | undefined) {
     const store = new Store();
-    store.applyAgents([
+    store.applySeats([
       {
+        agent_id: "a1",
         id: "a1",
         role: "Agent SWE",
         activity: "working",
         live_call: { work_item: { key: "ENG-1", project: "ENG" }, versions: ZERO_VERSIONS },
       },
-      { id: "a2", role: "SRE", activity: "working" },
-      { id: "a4", role: "CTO", activity: "idle" },
+      { agent_id: "a2", id: "a2", role: "SRE", activity: "working" },
+      { agent_id: "a4", id: "a4", role: "CTO", activity: "idle" },
     ] as never);
     const socket = new LiveSocket(store);
     return render(
@@ -264,7 +331,7 @@ describe("who is working", () => {
 
   test("nobody working draws nothing, even where it is asked for", () => {
     const store = new Store();
-    store.applyAgents([{ id: "a4", role: "CTO", activity: "idle" }] as never);
+    store.applySeats([{ agent_id: "a4", id: "a4", role: "CTO", activity: "idle" }] as never);
     const { container } = render(
       <Router>
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -452,5 +519,72 @@ describe("the reading note at the strip's end", () => {
   });
   test("a note drawn at no width is not drawn", () => {
     expect(noteFits({ widths, space: 2000, gap: 10, note: 0 })).toBe(false);
+  });
+});
+
+// ON A PHONE SETTINGS' COLUMN IS A PICKER, and whether it is open says whether
+// the reader has chosen a section. Folded on every arrival, Settings' own
+// address showed a phone reader one row reading "General" — and the You group
+// with their Account in it only behind a tap nothing told them to make. A deep
+// link still arrives folded, since the section it names starts right under
+// the picker, and any pick folds it. Mutation: start folded everywhere, or
+// leave the list open after a pick that moves no path, and a case goes red.
+describe("Settings' section picker on a phone", () => {
+  const settings = WORKSPACES.find((w) => w.key === "settings")!;
+  let window: ReturnType<typeof installWindow>;
+  beforeEach(() => {
+    window = installWindow(390);
+  });
+  afterEach(() => window.restore());
+
+  const column = (path: string[]) => (
+    <SectionColumn row={settings} path={path} grants={null} figures={{}} />
+  );
+  const toggle = () => document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+  const list = () => document.getElementById(toggle().getAttribute("aria-controls") ?? "")!;
+  const row = (at: string) => list().querySelector<HTMLAnchorElement>(`a[href="${at}"]`)!;
+  /** What the toggle SHOWS, its screen-reader words left out. */
+  const shown = () => {
+    const copy = toggle().cloneNode(true) as HTMLElement;
+    copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
+    return copy.textContent;
+  };
+
+  test("arriving at Settings' own address opens the list, the reader's Account in it", () => {
+    render(column(["settings"]));
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(toggle().closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
+    expect(row("#/account")).not.toBeNull();
+  });
+
+  test("a link to a section arrives folded, and says it is a picker", () => {
+    render(column(["settings", "people"]));
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(shown()).toBe("Section · People & access");
+  });
+
+  test("a pick folds it, the section the reader is already on included", () => {
+    render(column(["settings"]));
+    fireEvent.click(row("#/settings"));
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("a pick that lands on Settings' own address leaves it folded; an arrival nobody picked opens it", () => {
+    const view = render(column(["settings", "people"]));
+    fireEvent.click(row("#/settings"));
+    view.rerender(column(["settings"]));
+    expect(toggle().getAttribute("aria-expanded"), "a pick of General").toBe("false");
+    view.rerender(column(["settings", "nodes"]));
+    expect(toggle().getAttribute("aria-expanded"), "a link to Nodes").toBe("false");
+    // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it.
+    view.rerender(column(["settings"]));
+    expect(toggle().getAttribute("aria-expanded"), "an arrival at Settings").toBe("true");
+  });
+
+  test("beside a section there is room for the list, and nothing is opened for the reader", () => {
+    window.restore();
+    window = installWindow(1440);
+    render(column(["settings"]));
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 });

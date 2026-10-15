@@ -14,8 +14,8 @@ import (
 // each is load-bearing.
 //
 // A report REPLACES what is held rather than merging with it. Merging, or
-// taking a maximum, would pin a figure no later report could lower: an operator
-// who resets a counter would watch the old number stay on screen.
+// taking a maximum, would pin a figure no later report could lower: a window
+// that turns over would leave its old figure on screen as a high-water mark.
 //
 // A report from the SAME meter with a seq at or below the one held is dropped.
 // Broker ordering holds only within a topic and the API reads a broadcast
@@ -80,26 +80,28 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 	change.Budget = true
 
 	// Only metered seats are reported. A seat that LOST its meter — a cap
-	// removed, a role decommissioned — must lose its bar rather than keep
+	// removed, a seat taken out of the chart — must lose its bar rather than keep
 	// the last figure it had.
 	reported := map[string]struct{}{}
 	for _, seat := range report.Seats {
-		if seat.Role == "" {
+		// BY AGENT ID, the key every other event moves a seat under: a
+		// meter keyed by the role name beside it drew one seat's bar on
+		// every seat sharing its name. The role and handle the frame
+		// carries are what the seat was called when it was read, and the
+		// roster row this is merged onto names it as it is NOW.
+		if seat.AgentID == "" {
 			continue
 		}
-		reported[seat.Role] = struct{}{}
-		agent := s.ensureAgent(seat.Role)
-		if agent.runtimeID == "" {
-			agent.runtimeID = seat.AgentID
-		}
+		reported[seat.AgentID] = struct{}{}
+		agent := s.ensureAgent(seat.AgentID)
 		agent.budget = &BudgetMeter{Windows: seat.Windows}
-		change.agentMoved(seat.Role)
+		change.agentMoved(seat.AgentID)
 	}
 	for _, agent := range s.agents {
 		if agent.budget != nil {
-			if _, ok := reported[agent.role]; !ok {
+			if _, ok := reported[agent.agentID]; !ok {
 				agent.budget = nil
-				change.agentMoved(agent.role)
+				change.agentMoved(agent.agentID)
 			}
 		}
 	}

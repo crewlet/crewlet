@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -31,6 +30,10 @@ type memorySandbox struct{}
 
 func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
+}
+
+func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, nil
 }
 
 // roomQueries is every query kind a room asks for, mapped to the files that
@@ -88,7 +91,7 @@ func everySeam(t *testing.T) queries.Sources {
 		State:    &livestate.LiveState{},
 		Events:   eventfan.Solo("node-a", &store.EventLog{}),
 		Usage:    &store.DB{},
-		Company:  func() *config.Company { return cfg },
+		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
 		Runs:     &fakeRuns{},
@@ -114,9 +117,6 @@ func everySeam(t *testing.T) queries.Sources {
 		Retention: func(context.Context) any { return nil },
 		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
 		FleetBroker: emptyBroker{},
-		// THE GUARD'S POSTURE, which the API always supplies from the
-		// guard it mounts.
-		Access: &queries.AccessPosture{},
 		// EVERY MODEL'S KEY BAG, which the engine always supplies.
 		CredentialPools: func() []engine.CredentialPool { return nil },
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
@@ -241,6 +241,11 @@ func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
 
 func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	return tracker.SearchAnswer{}, nil
+}
+
+func (emptyWork) Thread(context.Context, tracker.ThreadQuery, statelog.Freshness) (
+	tracker.ResolvedThread, error) {
+	return tracker.ResolvedThread{}, nil
 }
 
 type emptyPages struct{}

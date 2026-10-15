@@ -2,7 +2,9 @@
  * The live org chart as a reader meets it: the builder's drawing of the
  * applied company in either arrangement, a node per seat saying what it is
  * doing, a node per unit with its project and its lead, the legend's counts,
- * and a node that opens its seat or unit beside the chart.
+ * and a node that opens its seat or unit beside the chart — and, for a reader
+ * the identity directory answers, what holds each human seat, with the
+ * gestures that fill one for a reader holding Admin.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -12,7 +14,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { OrgChart } from "./OrgChart.tsx";
 import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
-import { ADD_SEAT_REASON, findSeats } from "./header.tsx";
+import { findSeats } from "./header.tsx";
+import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 import { Router } from "~/app/router.tsx";
 import { PeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -44,20 +47,40 @@ class InertWebSocket {
 }
 
 const AGENTS = [
-  { role: "CEO", activity: "idle", last_turn: null },
+  { id: "ceo", agent_id: "ceo", handle: "ceo", role: "CEO", activity: "idle", last_turn: null },
   {
+    id: "cto",
+    agent_id: "cto",
+    handle: "cto",
     role: "CTO",
     activity: "working",
     live_call: { phase: "review", work_item: { key: "ENG-409" }, versions: ZERO_VERSIONS },
   },
   {
+    id: "swe",
+    agent_id: "swe",
+    handle: "swe",
     role: "SWE",
     activity: "working",
     live_call: { phase: "execute", work_item: { key: "ENG-412" }, versions: ZERO_VERSIONS },
   },
-  { role: "FE", activity: "needs", turn: { turn_id: "t", started_at: "", stage: "parked" } },
-  { role: "PM", activity: "stopped", stopped_reason: "budget" },
-  { role: "DevRel", activity: "idle" },
+  {
+    id: "fe",
+    agent_id: "fe",
+    handle: "fe",
+    role: "FE",
+    activity: "needs",
+    turn: { turn_id: "t", started_at: "", stage: "parked" },
+  },
+  {
+    id: "pm",
+    agent_id: "pm",
+    handle: "pm",
+    role: "PM",
+    activity: "stopped",
+    stopped_reason: "budget",
+  },
+  { id: "devrel", agent_id: "devrel", handle: "devrel", role: "DevRel", activity: "idle" },
 ] as unknown as AgentRow[];
 
 let restore: () => void;
@@ -72,13 +95,55 @@ afterEach(() => {
   cleanup();
   restore();
   location.hash = "";
+  vi.unstubAllGlobals();
 });
 
-async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: [] }) {
+/** What `GET /iam/seats` says of jane's seat: vacant unless a case says otherwise. */
+let jane: Record<string, unknown> = {};
+/** Every path the chart sent to the engine's REST surface. */
+let fetched: string[] = [];
+/** What `GET /iam/seats` answers instead of the listing: a refusal. */
+let seatsRefused: Response | null = null;
+
+beforeEach(() => {
+  jane = {};
+  fetched = [];
+  seatsRefused = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      fetched.push(path);
+      if (path === "/iam/seats" && seatsRefused) return seatsRefused.clone();
+      return new Response(
+        JSON.stringify(
+          path === "/iam/seats"
+            ? { seats: [{ handle: "jane", name: "Jane Founder", ...jane }] }
+            : { error: "no_route" },
+        ),
+        {
+          status: path === "/iam/seats" ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }),
+  );
+});
+
+/** Every grant an operator holds. */
+const OPERATOR = {
+  login: "ops",
+  grants: ["admin", "tracker", "knowledge"],
+  handle: "jane",
+  owner: "jane",
+  acts: [],
+};
+
+async function mount(viewer: Record<string, unknown> = { login: "", owner: "", acts: [] }) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(CHART_ORG);
-  store.applyAgents(AGENTS);
+  store.applySeats(AGENTS);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
@@ -86,7 +151,7 @@ async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: 
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "work_projects") {
       return Promise.resolve({
-        projects: [{ key: "ENG", unit: { name: "Core", resolved: true } }],
+        projects: [{ key: "ENG", unit: { key: "core", name: "Core", resolved: true } }],
         total: 1,
         census: { active: 1, archived: 0 },
         complete: true,
@@ -112,6 +177,16 @@ async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: 
   });
   act(() => LayoutObserver.settle());
   return { asked };
+}
+
+/**
+ * Every control the chart draws beside a card, by its accessible name — the
+ * label an icon-only control carries.
+ */
+function controls(name: string): (string | null)[] {
+  return [...chartCard(card(name)).querySelectorAll("button")].map(
+    (b) => b.getAttribute("aria-label") ?? b.textContent,
+  );
 }
 
 function card(name: string): HTMLElement {
@@ -152,16 +227,186 @@ test("every seat of the applied chart is a node with its state word and state li
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
 
+// A HUMAN NODE SAYS WHAT HOLDS ITS SEAT, for every signed-in reader, under its
+// name in the node's neutral ink — who holds a seat is not something it is
+// doing. The CONTROL is the browser nobody signed in on above, who is asked
+// nothing and reads "Human seat". Mutation: drop the holding from the node's caption
+// and the three captions read "Human seat".
+test.each([
+  [
+    "held",
+    { holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "active" } },
+    "Held by jane.doe",
+  ],
+  [
+    "invited",
+    { invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" } },
+    "Invited · jane@example.com",
+  ],
+  ["vacant", {}, "Vacant"],
+])("a %s human seat's card says what holds it", async (_, holding, line) => {
+  jane = holding;
+  await mount({ ...OPERATOR, grants: ["admin"] });
+  await act(async () => {});
+  const founder = card("Jane Founder");
+  expect(caption("Jane Founder")).toBe(line);
+  expect(founder.getAttribute("title")).toBe(`${line} · @jane`);
+  // NO STATE HUE: a human node carries no engine state for its line to paint.
+  expect(founder.hasAttribute("data-state")).toBe(false);
+});
+
+// WHO HOLDS A SEAT IS PART OF THE OVERVIEW: every signed-in reader is asked
+// the directory's listing — the engine masks it per reader — and reads what
+// holds each human seat, while only an admin is offered a gesture on one. The
+// CONTROL is a browser nobody has signed in on, who is asked nothing. Mutation:
+// gate the listing on Admin again and the tracker reader reads "Human seat".
+test("every signed-in reader reads who holds a human seat, and only an admin acts on it", async () => {
+  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await act(async () => {});
+  expect(fetched).toContain("/iam/seats");
+  expect(caption("Jane Founder")).toBe("Vacant");
+  expect(controls("Jane Founder")).toEqual([]);
+  cleanup();
+  fetched = [];
+
+  await mount();
+  expect(fetched).not.toContain("/iam/seats");
+  expect(caption("Jane Founder")).toBe("Human seat");
+  expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
+});
+
+// A DIRECTORY READ THAT FAILED IS SAID over the chart: drawn as nothing, an
+// administrator saw the chart a browser nobody signed in on sees — "Human
+// seat" and no menu — with no word why. The CONTROL is the same
+// administrator with the listing answered, who is shown no such banner.
+// Mutation: drop the banner and the sentence is gone.
+test("a directory that did not answer an administrator is said over the chart", async () => {
+  seatsRefused = new Response(
+    JSON.stringify({ error: "unavailable", message: "This node cannot answer yet." }),
+    { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "2" } },
+  );
+  await mount(OPERATOR);
+  await act(async () => {});
+  expect(screen.getByText("The identity directory did not answer")).toBeTruthy();
+  expect(screen.getByText(/no vacant seat offers Invite or Create/)).toBeTruthy();
+  expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy();
+  expect(caption("Jane Founder")).toBe("Human seat");
+  expect(controls("Jane Founder")).toEqual([]);
+  cleanup();
+
+  seatsRefused = null;
+  await mount(OPERATOR);
+  await act(async () => {});
+  expect(caption("Jane Founder")).toBe("Vacant");
+  expect(screen.queryByText("The identity directory did not answer")).toBeNull();
+});
+
+// THE NODE'S MENU FILLS A VACANT SEAT, for Admin alone, through the
+// tree's own pattern: a pointer strip beside the node and the same items
+// under the ContextMenu key on the node itself, since a tree's items hold
+// nothing focusable. The CONTROLS: a reader without Admin reads "Vacant" with no menu,
+// and an agent's node has none. Mutation: give every human card the menu, or
+// drop the grant check, and a line here goes red.
+test("a vacant human card offers Invite and Create in its menu to an administrator alone", async () => {
+  await mount(OPERATOR);
+  await act(async () => {});
+  // THE POINTER'S STRIP, out of the tab order, says which seat each control
+  // is about; an agent's card draws none.
+  expect(controls("Jane Founder")).toEqual([
+    "Invite a person to Jane Founder",
+    "Create a person on Jane Founder",
+    "Actions for Jane Founder",
+  ]);
+  expect(controls("SWE")).toEqual([]);
+  // AN AGENT'S CARD HAS NO SUCH MENU.
+  const swe = card("SWE");
+  swe.focus();
+  fireEvent.keyDown(swe, { key: "ContextMenu" });
+  expect(screen.queryByRole("menu", { name: "Actions for SWE" })).toBeNull();
+  const founder = card("Jane Founder");
+  founder.focus();
+  fireEvent.keyDown(founder, { key: "ContextMenu" });
+  const menu = screen.getByRole("menu", { name: "Actions for Jane Founder" });
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Invite to this seat…", "Create a person on this seat…"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Create a person on this seat…" }));
+  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  cleanup();
+
+  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await act(async () => {});
+  const read = card("Jane Founder");
+  expect(caption("Jane Founder")).toBe("Vacant");
+  read.focus();
+  fireEvent.keyDown(read, { key: "ContextMenu" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(controls("Jane Founder")).toEqual([]);
+});
+
+// A POINTER PRESS ON THE STRIP opens the same dialog the menu does, for the
+// card's own seat — and never opens the seat's peek, which a press on the
+// card itself does.
+test("the strip's Invite opens the invitation for that card's seat", async () => {
+  await mount(OPERATOR);
+  await act(async () => {});
+  const invite = [...chartCard(card("Jane Founder")).querySelectorAll("button")].find(
+    (b) => b.getAttribute("aria-label") === "Invite a person to Jane Founder",
+  )!;
+  fireEvent.click(invite);
+  expect(screen.getByRole("dialog", { name: "Invite a person to Jane Founder" })).toBeTruthy();
+  expect(location.hash).not.toContain("peek=");
+});
+
+// AN INVITED SEAT'S MENU CANCELS ITS INVITATION, and a held one has none.
+test("an invited human card's menu cancels its invitation, and a held one has no menu", async () => {
+  jane = {
+    invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" },
+  };
+  await mount(OPERATOR);
+  await act(async () => {});
+  const founder = card("Jane Founder");
+  founder.focus();
+  fireEvent.keyDown(founder, { key: "ContextMenu" });
+  const menu = screen.getByRole("menu", { name: "Actions for Jane Founder" });
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Cancel invitation"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Cancel invitation" }));
+  expect(screen.getByRole("dialog", { name: "Cancel this invitation?" })).toBeTruthy();
+  cleanup();
+
+  jane = { holder: { person: "p-jane", kind: "person", login: "jane.doe", stage: "active" } };
+  await mount(OPERATOR);
+  await act(async () => {});
+  const held = card("Jane Founder");
+  held.focus();
+  fireEvent.keyDown(held, { key: "ContextMenu" });
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
 // THE STRUCTURE IS THE BUILDER'S: the company at the root, each unit with its
 // type and the project its work is filed under, and its lead in a pill.
 test("the structure draws the company, and each unit with its project and its lead", async () => {
-  await mount();
+  await mount({ login: "jane.doe", grants: ["tracker"], owner: "jane", acts: [] });
   expect(caption("Acme")).toBe("Company");
   expect(caption("Core")).toBe("Unit · ENG");
   expect(card("Core").getAttribute("title")).toBe("2 seats. Projects: ENG");
   expect(leadOf("Core")).toBe("Lead: CTO");
   expect(leadOf("Developer Relations")).toBe("Lead: PM (inherited)");
   expect(leadOf("Leadership")).toBe("Lead");
+  cleanup();
+
+  // THE PROJECT IS THE TRACKER'S: a reader without Tracker is not asked a
+  // question the engine would refuse, and a unit's node carries its type alone.
+  const { asked } = await mount({ login: "sam", grants: ["knowledge"], owner: "sam", acts: [] });
+  expect(asked).not.toContain("work_projects");
+  expect(caption("Core")).toBe("Unit");
+  expect(leadOf("Core")).toBe("Lead: CTO");
 });
 
 // AN AGENT SEAT IS TONED, as the builder tones one; a person, a unit and the
@@ -209,55 +454,77 @@ test("pressing a seat opens that seat's peek", async () => {
   expect(location.hash).toContain("peek=seat%3Aswe");
 });
 
-// AND A UNIT OPENS THE UNIT, addressed by its name, as Teams opens one.
+// AND A UNIT OPENS THE UNIT, addressed by its KEY, as Teams addresses one —
+// never by its name, which two units may share.
 test("pressing a unit opens that unit's peek", async () => {
   await mount();
   await act(async () => {
     fireEvent.click(card("Core"));
   });
-  expect(location.hash).toContain("peek=unit%3ACore");
+  expect(location.hash).toContain("peek=unit%3Acore");
 });
 
 // ADD SEAT IS NEVER HIDDEN: a reader who may not change the org sees it held,
 // with the reason.
-test("Add seat is held with its reason for a reader who is not an operator", async () => {
+test("Add seat is held with its reason for a reader nobody has signed in", async () => {
   await mount();
   const add = screen.getByRole("button", { name: /Add seat/ });
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
-  expect(add.getAttribute("title")).toBe(ADD_SEAT_REASON);
+  expect(add.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.anonymous);
 });
 
 test("an operator's Add seat goes to the builder, adding an agent", async () => {
-  await mount({ operator_id: "ops", operator: true, handle: "jane", acts: [] });
+  await mount({
+    login: "ops",
+    grants: ["admin", "tracker", "knowledge"],
+    handle: "jane",
+    owner: "jane",
+    acts: [],
+  });
   const add = screen.getByRole("link", { name: /Add seat/ });
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
 });
 
-// A MANAGED DOCUMENT (ADR-0030) holds Add seat for an operator whose token is
-// not one of its writers — the builder it opens would be read-only — with the
-// sentence that names who manages it; a writer still adds.
-test("Add seat is held with the managed sentence for an operator who is not a writer", async () => {
+// A LEAD ADDS TO THE UNIT THEY LEAD: nothing at the company's top level is
+// theirs, so their Add seat opens the builder on their unit.
+test("a lead's Add seat goes to the builder, adding to the unit they lead", async () => {
   await mount({
-    operator_id: "ops",
-    operator: true,
-    handle: "jane",
+    login: "cto.person",
+    grants: ["tracker"],
+    handle: "cto",
+    owner: "cto",
     acts: [],
-    config_writer: false,
-    config_managed_by: ["gitops"],
   });
+  const add = screen.getByRole("link", { name: /Add seat/ });
+  expect(add.getAttribute("href")).toBe("#/agents/edit?unit=core&add=agent");
+});
+
+// A MANAGED DOCUMENT (ADR-0030) holds Add seat for a reader whose credential
+// is not one of its writers — the builder it opens would be read-only — with
+// the sentence that names who manages it, whether the reader holds the grant
+// or leads a unit; a writer still adds. Mutation: drop the managed block from
+// the org write gate and the first two mounts offer the link.
+test("Add seat is held with the managed sentence for a reader who is not a writer", async () => {
+  await mount({ ...OPERATOR, config_writer: false, config_managed_by: ["gitops"] });
   const add = screen.getByRole("button", { name: /Add seat/ });
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
   expect(add.getAttribute("title")).toBe(managedSentence(["gitops"]));
   cleanup();
 
   await mount({
-    operator_id: "gitops",
-    operator: true,
-    handle: "jane",
+    login: "cto.person",
+    grants: ["tracker"],
+    handle: "cto",
+    owner: "cto",
     acts: [],
-    config_writer: true,
+    config_writer: false,
     config_managed_by: ["gitops"],
   });
+  const lead = screen.getByRole("button", { name: /Add seat/ });
+  expect(lead.getAttribute("title")).toBe(managedSentence(["gitops"]));
+  cleanup();
+
+  await mount({ ...OPERATOR, config_writer: true, config_managed_by: ["gitops"] });
   expect(screen.getByRole("link", { name: /Add seat/ }).getAttribute("href")).toBe(
     "#/agents/edit?add=agent",
   );
@@ -597,6 +864,8 @@ test("on a phone the chart is an outline of rows, with the legend at its head", 
     expect(names).toEqual(["Jane Founder", "CEO", "CTO", "SWE", "FE", "PM", "DevRel"]);
     const swe = rows[3]!;
     expect(swe.getAttribute("aria-level")).toBe("4");
+    // A HUMAN ROW SAYS WHAT ITS CARD SAYS, for this reader the availability.
+    expect(rows[0]!.textContent).toContain("Human · reviews releases");
     expect(swe.textContent).toContain("Engineering · Core");
     expect(swe.textContent).toContain("Executing ENG-412");
     // THE LEGEND HEADS IT, as a line of the page.

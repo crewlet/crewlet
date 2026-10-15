@@ -74,6 +74,16 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"api.port on this node and point %s at that listener as a sandbox "+
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
+	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before Open, for the
+	// reason the two refusals above are: Open refuses it too — every bridged
+	// call acts as the surface's seat, so a surface with none could decide
+	// nothing — and its empty answer would otherwise be reported below as a
+	// missing bridge URL, sending an operator to a variable that is set.
+	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
+		return fmt.Errorf("the agent-mode executor's tool surface is bound to no " +
+			"seat, so a bridged call would have nobody to act as; this is an " +
+			"assembly fault in the runner, not a setting")
+	}
 	// The run's calls, and with each what they have cost the engine so far,
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
@@ -96,11 +106,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	}
 
 	company := e.Company()
-	gate := seatSandbox(company, l.seat.Name)
-	setup := manager.DefaultSetup()
+	gate := seatSandbox(company, l.seat.Handle())
+	setup := e.boxSetup(manager.DefaultSetup(), l.seat.Handle(), gate)
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
-		setup = append(setup, setupSteps(gate.Setup)...)
 		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
 	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
@@ -252,7 +261,7 @@ func agentPlacement(c *Company, key string) config.Placement {
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no
 // sandbox block at all — which an agent-mode seat legitimately is: its
 // executor runs in a box whether or not it was ever offered run_sandbox.
-func maxTurnsFor(gate *config.RoleSandbox) *int {
+func maxTurnsFor(gate *org.RoleSandbox) *int {
 	if gate == nil {
 		return nil
 	}

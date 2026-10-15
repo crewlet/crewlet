@@ -3,7 +3,7 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget
- * ceiling, guarded by the operator credential (`useConfigWriteAccess`) rather
+ * ceiling, guarded by Admin (`useConfigWriteAccess`) rather
  * than a seat binding. The button is drawn for every reader and disabled with
  * the reason for one who cannot change the configuration.
  *
@@ -40,7 +40,8 @@ import {
   type ServerForm,
 } from "~/lib/mcpServers.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -67,7 +68,7 @@ type AddState =
 function addRefusalWords(refusal: ConfigRefusal, name: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so the server was not added.";
+      return configGuardedReason(refusal.code);
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":
@@ -111,6 +112,7 @@ export function AddMcpServerDialog({
   onAdded: (name: string) => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useConfigWriteAccess();
   const { names: secrets, refresh } = useSecretNames();
   const [form, setForm] = useState<ServerForm>(emptyServerForm);
@@ -218,11 +220,7 @@ export function AddMcpServerDialog({
   };
 
   const warned = state.kind === "warned";
-  const blocked = !access.can
-    ? access.reason
-    : busy
-      ? "Waiting for the engine to answer."
-      : undefined;
+  const blocked = !access.can ? access.reason : busy ? waiting.reason : undefined;
   const press = () => {
     if (blocked) return;
     if (warned) confirm();

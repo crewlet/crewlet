@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakeProbeRuntime is a node without the ingress role, with its answers fixed.
@@ -141,7 +142,7 @@ func TestAProbeNodesHealthIsTheNodesHalfOfTheEnvelope(t *testing.T) {
 				ShuttingDown: true, Posture: "serve", AppliedEpoch: 41,
 				InFlight: 2, Seats: []string{"eu-support"}, StartedAt: "2026-10-09T08:00:00Z",
 			},
-			fleet: api.FleetState{LiveNodes: &nodes, Alarms: []string{}},
+			fleet: api.FleetState{LiveNodes: &nodes, Alarms: []statelog.Kind{}},
 		},
 		configured: true,
 		work:       api.WorkState{Broker: errors.New("down")},
@@ -156,6 +157,8 @@ func TestAProbeNodesHealthIsTheNodesHalfOfTheEnvelope(t *testing.T) {
 		"shutting_down": true, "posture": "serve", "applied_epoch": float64(41),
 		"seats": []any{"eu-support"}, "started_at": "2026-10-09T08:00:00Z",
 		"nodes": float64(3), "alarms": map[string]any{"count": float64(0)},
+		// AN OBJECT EVEN WHERE NOTHING WAS ARMED, as on the full surface.
+		"identity_duty_seconds": map[string]any{},
 	}
 	for field, value := range want {
 		if !reflect.DeepEqual(body[field], value) {

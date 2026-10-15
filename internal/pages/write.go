@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -43,12 +42,6 @@ type NewPage struct {
 
 	// Quiet suppresses the wake, for an import.
 	Quiet bool
-
-	// CallKey makes the create idempotent across a repetition its caller
-	// can produce — see [CallKey]. It derives the new page's id as well as
-	// the operation's, so a retry that the broker collapses into the first
-	// attempt answers with the page that attempt made.
-	CallKey CallKey
 }
 
 // Written is what a write reports back.
@@ -87,9 +80,19 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	if err := actor.validate(); err != nil {
 		return Written{}, err
 	}
-	container := strings.ToUpper(strings.TrimSpace(in.Container))
+	container := ContainerKey(in.Container)
 	if container == "" {
 		return Written{}, invalid("container", "a page needs a container to live in")
+	}
+	// THE DECLARED SPACES FIRST, and for every actor: a key nothing
+	// declares is no space at all, whoever typed it — and a seat refused
+	// for that is told the true reason rather than one about the reserved
+	// containers.
+	if err := s.refuseUndeclared(container); err != nil {
+		return Written{}, err
+	}
+	if err := s.refuseReserved(actor, container, true); err != nil {
+		return Written{}, err
 	}
 	if err := s.checkTitle(in.Title); err != nil {
 		return Written{}, err
@@ -114,20 +117,23 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 
 	at := s.now()
 	title := strings.Join(strings.Fields(in.Title), " ")
+	opID, opErr := s.operation(actor, "create", container+"/"+NormalizeTitle(title), in)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	page := Page{
-		V: DocumentVersion, ID: s.pageIDFor(in.CallKey, container, title), Container: container,
+		V: DocumentVersion, ID: pageIDOf(opID), Container: container,
 		ParentID: strings.TrimSpace(in.ParentID),
 		Title:    title, Body: in.Body, Status: in.Status, Labels: labels,
 		Version: 1, Author: actor.Name(), CreatedAt: at, UpdatedAt: at,
 	}
-	page.Watchers = watcherSet(actor.Person(), in.Watchers)
+	page.Watchers = watcherSet(actor.subscriber(), in.Watchers)
 	if len(page.Watchers) > MaxWatchers {
 		return Written{}, invalid("watchers", "%d watchers, past the cap of %d",
 			len(page.Watchers), MaxWatchers)
 	}
 
 	subject := TitleSubject(container, title)
-	opID := s.callOpID(in.CallKey, "create", container, NormalizeTitle(title))
 	scope := ScopeSet{Terms: []ScopeTerm{
 		{Kind: TermTitle, Container: container, ID: TitleToken(title)},
 		{Kind: TermObject, Container: container, ID: page.ID},
@@ -158,6 +164,14 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		// THE ADDRESS AND THE ID ARE WHAT THE OPERATION PINS — its id is
+		// derived from the one and the page's from the id — and nothing
+		// else about the page this call formed is what the earlier copy
+		// wrote.
+		return s.landed(ctx, Page{ID: page.ID, Container: container, Title: title},
+			opID, result)
 	}
 	// NO ROW EXISTED TO READ, so there is no prior revision to fall back
 	// on — and a create that changed nothing is not a shape this path has:
@@ -213,10 +227,6 @@ type Save struct {
 	Watch *bool
 
 	Quiet bool
-
-	// CallKey makes the save idempotent across a repetition its caller can
-	// produce — see [CallKey].
-	CallKey CallKey
 }
 
 // SavePage applies an edit to a page, arbitrated on the page's own subject.
@@ -252,7 +262,10 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	}
 
 	at := s.now()
-	opID := s.callOpID(save.CallKey, "save", pageID, strconv.Itoa(save.BaseVersion), saveKey(save))
+	opID, opErr := s.operation(actor, "save", pageID, save)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	var out Page
 	var read uint64
 	subject := PageSubject(pageID)
@@ -270,6 +283,12 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 				}
 				if moved := inContainer(head, container); moved != nil {
 					return statelog.Decision{}, moved
+				}
+				// INSIDE THE DECIDE, because a save names only a page id
+				// and which container it is in comes out of the row. See
+				// [Options.Reserved].
+				if err := s.refuseReserved(actor, head.Container, false); err != nil {
+					return statelog.Decision{}, err
 				}
 				if head.Version != save.BaseVersion {
 					return statelog.Decision{}, fmt.Errorf(
@@ -318,10 +337,20 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	if err != nil {
 		return Written{}, err
 	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
+	}
 	return Written{
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
 		Outcome: result,
 	}, nil
+}
+
+// renameAsk is what a rename SAYS, which its operation is bound to
+// ([Store.operation]): the title asked for, and whether the change is quiet.
+type renameAsk struct {
+	Title string
+	Quiet bool
 }
 
 // Rename puts a page at a title, and there are TWO records behind that one
@@ -339,12 +368,8 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 // smuggled past the rule — it is the rule: the title subject is the same
 // subject this page already holds, so there is nothing there to contend for,
 // and the only row the write touches is the page's own.
-//
-// KEYED LIKE EVERY WRITE A CALLER CAN REPEAT: both records derive their
-// operation from the key, the page and the title asked for
-// ([Store.callOpID]), so a retried rename is one record.
 func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
-	title string, quiet bool, key CallKey) (Written, error) {
+	title string, quiet bool) (Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Written{}, err
@@ -355,15 +380,33 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	title = strings.Join(strings.Fields(title), " ")
 
 	at := s.now()
-	opID := s.callOpID(key, "rename", pageID, title)
 	var out Page
 
 	head, err := s.head(ctx, pageID)
 	if err != nil {
 		return Written{}, err
 	}
+	if err = s.refuseReserved(actor, head.Container, false); err != nil {
+		return Written{}, err
+	}
+	// TWO SHAPES, TWO OPERATIONS. Which one this is is decided from the row
+	// BEFORE anything is published, and a retry of a move that landed finds
+	// the page already at its new address and is routed to a retitle — on
+	// the page's subject, where one id shared with the move would name a
+	// ledger row on the title's subject and be refused as an operation
+	// reused. Under its own verb the retry decides again and finds nothing
+	// left to change, which is the true answer.
+	asked := renameAsk{Title: title, Quiet: quiet}
 	if NormalizeTitle(head.Title) == NormalizeTitle(title) {
-		return s.retitle(ctx, actor, pageID, title, opID, at, quiet)
+		retitleID, opErr := s.operation(actor, "retitle", pageID, asked)
+		if opErr != nil {
+			return Written{}, opErr
+		}
+		return s.retitle(ctx, actor, pageID, title, retitleID, at, quiet)
+	}
+	opID, opErr := s.operation(actor, "rename", pageID, asked)
+	if opErr != nil {
+		return Written{}, opErr
 	}
 
 	subject := TitleSubject(head.Container, title)
@@ -397,6 +440,9 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
 	}
 	// A RENAME THAT MOVES THE ADDRESS ALWAYS LANDS A RECORD, so the read
 	// arm is unreachable — the decision is unconditional and its refusals
@@ -504,6 +550,9 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	if err != nil {
 		return Written{}, err
 	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
+	}
 	return Written{
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
 		Outcome: result,
@@ -530,7 +579,7 @@ func (s *Store) Purge(ctx context.Context, actor Actor, pageID, reason string) (
 	return s.status(ctx, actor, pageID, OpPurge, ChangeRemoved, reason)
 }
 
-// status is the shared shape of a trash, a restore and a purge.
+// status is one move of a page's status: a trash, a restore or a purge.
 func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	op OpKind, kind ChangeKind, reason string) (Written, error) {
 
@@ -538,7 +587,10 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 		return Written{}, err
 	}
 	at := s.now()
-	opID := s.newSeqID()
+	opID, opErr := s.operation(actor, string(op), pageID, reason)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	subject := PageSubject(pageID)
 	var out Page
 	var read uint64
@@ -558,6 +610,18 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 					return statelog.Decision{}, moved
 				}
 				out, read = head, revision
+				// THE ANSWER IS THE PAGE THE APPLY WILL PRODUCE, as a save's
+				// is: a trash reported the page as it stood before, so the
+				// caller that just trashed it was told it was published.
+				// The instants are this call's clock, which the apply
+				// replaces with the broker's, exactly as a save's are.
+				switch op {
+				case OpTombstone:
+					trashed := at
+					out.Status, out.TrashedAt, out.UpdatedAt = StatusTrashed, &trashed, at
+				case OpRestore:
+					out.Status, out.TrashedAt, out.UpdatedAt = StatusPublished, nil, at
+				}
 				notify := s.notifyOf(false, kind, head, "", nil)
 				return s.decide(stamp, actor, subject, op, statusScope(op, head.Container),
 					opID, StatusPayload{V: DocumentVersion, Reason: reason}, notify, at)
@@ -566,6 +630,9 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
 	}
 	return Written{
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
@@ -601,20 +668,21 @@ func statusScope(op OpKind, container string) ScopeSet {
 //
 // # Stamped with the activation, and never walked back
 //
-// A container's name and purpose are the configuration's, and every node
-// applies one configuration separately — at its reconcile tick and again at
-// every boot. So the settings carry the ACTIVATION they came from
-// ([configplane.ActivationStamp] of activatedAt), and a write whose
-// activation is OLDER than the one the row already holds decides nothing: a
-// node that boots on a revision the fleet has since replaced leaves the newer
-// names alone, where it used to rewrite every container back to its own. One
-// at the SAME activation with the same settings decides nothing either, which
-// is what makes the call free after the first node; one at the same
-// activation with DIFFERENT settings is written, because that is a row an
-// equal-epoch race left wrong and the activation that is actually current is
-// what sets it right. A zero instant is refused ([ErrNoActivation]): there is
-// no honest default, and a caller holding no activation has no configuration
-// to apply.
+// A container's name and purpose are the chart's, and every node applies one
+// activation separately — at its reconcile tick and again at every boot. So
+// the settings carry the ACTIVATION they came from
+// ([configplane.ActivationStamp]), and a write whose activation is OLDER than
+// the one the row already holds decides nothing: a node applying a revision
+// the fleet has since replaced leaves the newer names alone, where it used to
+// rewrite every container back to its own. One at the SAME activation with the
+// same settings decides nothing either, which is what makes the call free
+// after the first node; one at the same activation with DIFFERENT settings is
+// written, because that is a row an equal-epoch race left wrong and the
+// activation that is actually current is what sets it right. The ACTIVATION's
+// instant and never the applying node's own clock, for the reason
+// [tracker.Writer.ApplyChart] gives. A zero instant is refused
+// ([ErrNoActivation]): there is no honest default, and a caller holding no
+// activation has no chart to derive from.
 //
 // A LATER ACTIVATION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
 // because a row left at the older stamp is open to any activation between the
@@ -629,7 +697,7 @@ func statusScope(op OpKind, container string) ScopeSet {
 func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	key, name, purpose string) (Container, bool, error) {
 
-	key = strings.ToUpper(strings.TrimSpace(key))
+	key = ContainerKey(key)
 	switch {
 	case key == "":
 		return Container{}, false, invalid("container", "a container needs a key")
@@ -715,8 +783,8 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	return out, changed, nil
 }
 
-// ErrNoActivation refuses a container write that does not name the
-// configuration activation it came from. See [Store.EnsureContainer].
+// ErrNoActivation refuses a container write that does not name the activation
+// its settings came from. See [Store.EnsureContainer].
 var ErrNoActivation = errors.New("pages: a container's settings must name the " +
 	"instant their configuration was activated")
 
@@ -770,14 +838,11 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 	// the mute is added beside it, so the total moves.) The clause that
 	// used to cover the gap ("the mute now disagrees with what was asked")
 	// is false by construction after applyWatch has run, so it covered
-	// nothing and fired only for an operator with no subscription to change:
-	// a `watch: false` from the operator surface published a record and woke
-	// every watcher for a change to nobody's subscription.
-	//
-	// THE SUBSCRIPTION IS THE PERSON'S, never the token's: an operator's
-	// watch follows the page as the seat their token is bound to
-	// ([Actor.Person]), which is who a wake can reach.
-	if save.Watch != nil && applyWatch(head, actor.Person(), *save.Watch) {
+	// nothing and fired only for an operator, who has no seat: a `watch:
+	// false` from the operator surface published a record and woke every
+	// watcher for a change to nobody's subscription — see
+	// [Actor.subscriber].
+	if save.Watch != nil && applyWatch(head, actor.subscriber(), *save.Watch) {
 		patch.Watchers = head.Watchers
 		patch.Muted = head.Muted
 		kinds[ChangeWatchers] = true
@@ -851,9 +916,9 @@ func (s *Store) headAt(ctx context.Context, pageID string) (Page, uint64, error)
 	return page, revision, err
 }
 
-// watcherSet is the author's subscription plus whoever else was named,
-// de-duplicated and sorted so two nodes forming the same set write the same
-// rows. An author with no subscription ([Actor.Person]) adds nobody.
+// watcherSet is the author plus whoever else was named, de-duplicated and
+// sorted so two nodes forming the same set write the same rows. An empty
+// author — an operator's, which subscribes nobody — adds nothing.
 func watcherSet(author string, extra []string) []string {
 	out := cleanList(append([]string{author}, extra...))
 	slicesSort(out)
@@ -872,8 +937,8 @@ func watcherSet(author string, extra []string) []string {
 // cheaply or safely: [slicesSort] runs in place and the append above it may
 // keep the head's backing array, so a slice saved before the call can be
 // reordered underneath whoever held it. An EMPTY HANDLE moves nothing and says
-// so: a token bound to no seat names nobody ([Actor.Person]), and there is
-// no subscription to change on behalf of a credential.
+// so — an operator write names no seat ([Actor.subscriber]), and there is no
+// subscription to change on behalf of a credential.
 func applyWatch(page *Page, handle string, watch bool) bool {
 	if handle == "" {
 		return false

@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,55 +28,55 @@ func TestAConnectingTabLeavesTheTicksPushToTheOpenOnes(t *testing.T) {
 	var now atomic.Int64
 	now.Store(start.UnixNano())
 	clock := func() time.Time { return time.Unix(0, now.Load()).UTC() }
-	s, err := NewService(livestate.New(livestate.WithClock(clock)), Options{
-		Health:    func() any { return nil },
-		Handles:   func() map[string]string { return map[string]string{} },
-		Roster:    func() []map[string]any { return nil },
-		Org:       func() any { return nil },
-		Tools:     func() []map[string]any { return nil },
-		Schedules: func() any { return nil },
-		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
-		Now:       clock,
-	})
+	opts := quietOptions()
+	opts.Now = clock
+	s, err := NewService(livestate.New(livestate.WithClock(clock)), opts)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	t.Cleanup(s.Stop)
-	open := NewClient()
+	open := NewClient(NewAudience(trackerPrincipal, nil))
 	s.Hub().Register(open)
 
 	s.Ingest(livestate.Envelope{
 		ID: "p1", Type: "agent_phase_completed", Timestamp: start.Format(time.RFC3339Nano),
-		Category: "agent", Payload: map[string]any{"role": "Lead", "phase": "plan", "total_tokens": 10},
+		Category: "agent", Payload: map[string]any{
+			"agent_id": "a-lead", "role": "Lead", "phase": "plan", "total_tokens": 10,
+		},
 	})
 	s.flushTokens()
-	if got := pushedRollups(open); len(got) != 1 || got[0].Totals.TotalTokens != 10 {
+	if got := pushedRollups(t, open); len(got) != 1 || got[0].Totals.TotalTokens != 10 {
 		t.Fatalf("pushed %+v, want one rollup of the phase", got)
 	}
 
 	now.Store(start.Add(livestate.LiveSpendWindow + time.Minute).UnixNano())
-	if snap := s.Snapshot()["tokens"].(tokens.Rollup); snap.Totals.TotalTokens != 0 {
+	if snap := s.Snapshot(NewAudience(adminPrincipal, nil))["tokens"].(tokens.Rollup); snap.Totals.TotalTokens != 0 {
 		t.Fatalf("the connecting tab's rollup is %+v, want the emptied window", snap.Totals)
 	}
 	s.flushTokens()
-	got := pushedRollups(open)
+	got := pushedRollups(t, open)
 	if len(got) != 1 || got[0].Totals.TotalTokens != 0 {
 		t.Errorf("the open tab was pushed %+v after its only record aged out, want one "+
 			"empty rollup: the connect took the expiry the tick reports", got)
 	}
 }
 
-// pushedRollups drains c and keeps the spend rollups it was pushed.
-func pushedRollups(c *Client) []tokens.Rollup {
+// pushedRollups drains c and keeps the spend rollups it was pushed, decoded off
+// each frame's bytes as a client reads them.
+func pushedRollups(t *testing.T, c *Client) []tokens.Rollup {
+	t.Helper()
 	var out []tokens.Rollup
-	for {
-		select {
-		case env := <-c.Out():
-			if rollup, ok := env.Data.(tokens.Rollup); ok && env.Kind == KindTokens {
-				out = append(out, rollup)
-			}
-		default:
-			return out
+	for _, frame := range drainClient(c) {
+		if frame.Kind() != KindTokens {
+			continue
 		}
+		var outer struct {
+			Data tokens.Rollup `json:"data"`
+		}
+		if err := json.Unmarshal(frame.Raw(), &outer); err != nil {
+			t.Fatalf("decode the tokens frame %s: %v", frame.Raw(), err)
+		}
+		out = append(out, outer.Data)
 	}
+	return out
 }

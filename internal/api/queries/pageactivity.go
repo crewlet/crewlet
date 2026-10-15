@@ -23,8 +23,10 @@ func (s Sources) pageActivity(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q := pages.PageActivityQuery{
-		Page:      strings.TrimSpace(p.String("page")),
-		Container: strings.TrimSpace(p.String("container")),
+		Page: strings.TrimSpace(p.String("page")),
+		// CANONICAL BEFORE THE READ, for [Sources.pageList]'s reason: the
+		// deferral scope is composed from what this is handed.
+		Container: pages.ContainerKey(p.String("container")),
 		Limit:     p.Int("limit", 0),
 		Freshness: fresh,
 	}

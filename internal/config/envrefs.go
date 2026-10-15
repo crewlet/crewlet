@@ -2,7 +2,6 @@ package config
 
 import (
 	"cmp"
-	"maps"
 	"reflect"
 	"slices"
 
@@ -45,10 +44,9 @@ type Reference struct {
 // and an operator about to delete that row needs to see both.
 //
 // Paths are meaningful for a decoded [Company], which is the shape every
-// caller passes. The walk itself is shape-agnostic and will happily traverse
-// the map a store row decodes to or a raw yaml.Node, but a path derived from
-// those names Go's own field structure rather than the operator's document,
-// so [ReferencedNames] is what those callers want.
+// caller passes: the walk is shape-agnostic, but a path derived from a map or
+// a yaml.Node names Go's own field structure rather than the operator's
+// document.
 func References(payload any) []Reference {
 	var out []Reference
 	walkStrings(reflect.ValueOf(payload), nil, func(path Path, s string) {
@@ -62,36 +60,14 @@ func References(payload any) []Reference {
 	return out
 }
 
-// ReferencedNames is every ${VAR} a payload mentions anywhere, sorted and
-// de-duplicated.
-//
-// It walks the value rather than a serialised form so it works on a decoded
-// [Company], on the map a store row decodes to, and on a raw yaml.Node
-// alike — the three shapes a payload actually arrives in.
-func ReferencedNames(payload any) []string {
-	seen := map[string]struct{}{}
-	walkStrings(reflect.ValueOf(payload), nil, func(_ Path, s string) {
-		for _, name := range envref.Names(s) {
-			seen[name] = struct{}{}
-		}
-	})
-	out := slices.Sorted(maps.Keys(seen))
-	return out
-}
-
 // walkStrings visits every string reachable from v, with the JSON path that
 // reaches it.
 //
-// ONE WALK for both questions above. Two would be two chances to disagree
-// about which fields are reachable, and the fingerprint going blind to a
-// reference the reference index can see is a silent failure on the half that
-// decides whether a config change is a change at all.
-//
-// It is the READ-ONLY half of [mapStrings], which is that one walk — the
-// same argument reaches one field further now, because Tier A's
-// normalization has to agree about reachability too: a string the trim
-// cannot see keeps the drift [Bootstrap.normalize] describes, exactly as a
-// string this cannot see is a ${VAR} nothing reports.
+// It is the READ-ONLY half of [mapStrings], which is the ONE reachability walk,
+// because Tier A's normalization has to agree with the reference index about
+// which strings a payload holds: a string the trim cannot see keeps the drift
+// [Bootstrap.normalize] describes, exactly as a string this cannot see is a
+// ${VAR} nothing reports.
 func walkStrings(v reflect.Value, path Path, visit func(path Path, s string)) {
 	mapStrings(v, path, func(path Path, s string) string {
 		visit(path, s)

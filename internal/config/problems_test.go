@@ -95,37 +95,44 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 		},
 		{
 			// ONE LINE, ONE PROBLEM PER SEAT, each at the name that seat
-			// wrote. Identical names are the case a name-based lookup
-			// cannot tell apart at all.
-			name: "two seats of one name",
-			doc: "name: Acme\nroles:\n  - name: Software Engineer\n    handle: swe-root\n" +
-				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n        handle: swe-eng\n",
-			messageHas: "duplicate seat name",
+			// wrote: two seats of one name that declare no handle derive
+			// one, and it is the HANDLE they collide on — a name alone is
+			// prose and collides with nothing.
+			// AT THE HANDLE, which is the seat's identity and the field
+			// to change — here written in from a name both seats carry,
+			// since neither declares one.
+			name: "two seats of one name deriving one handle",
+			doc: "name: Acme\nroles:\n  - name: Software Engineer\n" +
+				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n",
+			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "swe-root", ""},
-				{"units[0].roles[0].name", "conflict", "swe-eng", ""},
+				{"roles[0].handle", "conflict", "software-engineer", ""},
+				{"units[0].roles[0].handle", "conflict", "software-engineer", ""},
 			},
 		},
 		{
-			// A written handle is the line to change; a derived one is
-			// changed by renaming the seat.
+			// A written handle and one written in from a name collide the
+			// same way, at the handle.
 			name: "two seats on one handle",
 			doc: "name: Acme\nroles:\n  - name: Dev\n" +
 				"units:\n  - name: Eng\n    roles:\n      - name: Developer\n        handle: dev\n",
 			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "dev", ""},
+				{"roles[0].handle", "conflict", "dev", ""},
 				{"units[0].roles[0].handle", "conflict", "dev", ""},
 			},
 		},
 		{
-			name: "two units of one name",
+			// AT THE ID, which is the unit's key and the field to change —
+			// here minted from a name both units carry, since neither
+			// declares one.
+			name: "two units on one key",
 			doc: "name: Acme\nunits:\n  - name: Eng\n    children:\n      - name: Platform\n" +
 				"  - name: Product\n    children:\n      - name: Platform\n",
-			messageHas: "duplicate unit name",
+			messageHas: "duplicate unit key",
 			want: []located{
-				{"units[0].children[0].name", "conflict", "", "Platform"},
-				{"units[1].children[0].name", "conflict", "", "Platform"},
+				{"units[0].children[0].id", "conflict", "", "Platform"},
+				{"units[1].children[0].id", "conflict", "", "Platform"},
 			},
 		},
 		{
@@ -429,8 +436,6 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 		rule, doc, kind string
 	}{
 		{"name must not be empty", "name: Acme\nroles:\n  - goal: ship\n", "missing"},
-		{"human seat needs at least one contact identity",
-			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n", "missing"},
 		{"unknown seat kind", "name: Acme\nroles:\n  - name: Dev\n    kind: robot\n", "unknown_value"},
 		{"handle must match", "name: Acme\nroles:\n  - name: Dev\n    handle: Dev!\n", "unknown_value"},
 		{"value embeds a ${VAR} reference",
@@ -438,19 +443,16 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 			"unknown_value"},
 		{"duplicate handle",
 			"name: Acme\nroles:\n  - name: Dev\n  - name: Developer\n    handle: dev\n", "conflict"},
-		{"duplicate seat name",
-			"name: Acme\nroles:\n  - name: Dev\n    handle: a\n  - name: Dev\n    handle: b\n", "conflict"},
-		{"duplicate unit name", "name: Acme\nunits:\n  - name: Eng\n  - name: Eng\n", "conflict"},
 		// Two seats on one account carries ErrDuplicateIdentity ALONE — no
-		// name or handle collided — so it is the one duplicate a missing
-		// table entry reports as `invalid`.
+		// handle collided — so a missing table entry reports it as
+		// `invalid`.
 		{"duplicate contact identity",
 			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +
 				"    contact: {slack_user_id: U0F}\n  - name: Ada\n    kind: human\n" +
 				"    contact: {slack_user_id: U0F}\n",
 			"conflict"},
-		// A collision an id carried names no duplicate name and so carries
-		// only the key sentinel, which is the entry the table lost.
+		// The id minted from `Platform` and the one `Product` wrote are
+		// one key.
 		{"duplicate unit key", "name: Acme\nunits:\n  - name: Platform\n  - name: Product\n    id: platform\n",
 			"conflict"},
 		{"agent-only field set on a human seat",
@@ -539,9 +541,9 @@ integrations:
         former.engineer: maintainer
 roles:
   - name: CEO
-    manages: [Eng, Ghost]
+    manages: [eng, ghost]
   - name: Dev
-    unit: Nowhere
+    unit: nowhere
 units:
   - name: Eng
     roles:
@@ -549,7 +551,7 @@ units:
       - name: Engineer
     children:
       - name: Platform
-        lead: Phantom
+        lead: phantom
 `)
 	type want struct {
 		ref, path, seat, unit, from, to string
@@ -563,10 +565,10 @@ units:
 		got = append(got, want{w.Ref, w.Path, w.Seat, w.Unit, w.From, w.To, w.Segments})
 	}
 	expected := []want{
-		{"unit", "roles[1].unit", "dev", "", "Dev", "Nowhere", config.Path{"roles", 1, "unit"}},
-		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "Phantom",
+		{"unit", "roles[1].unit", "dev", "", "Dev", "nowhere", config.Path{"roles", 1, "unit"}},
+		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "phantom",
 			config.Path{"units", 0, "children", 0, "lead"}},
-		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "Ghost", config.Path{"roles", 0, "manages", 1}},
+		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "ghost", config.Path{"roles", 0, "manages", 1}},
 		{"gitlab_access_level", "integrations.gitlab.provisioning.access_levels.former.engineer", "", "",
 			"integrations.gitlab.provisioning.access_levels", "former.engineer",
 			config.Path{"integrations", "gitlab", "provisioning", "access_levels", "former.engineer"}},
@@ -620,11 +622,10 @@ units:
 	for _, w := range warnings {
 		paths = append(paths, w.Path)
 	}
-	for _, want := range []string{"units[0].name", "units[1].children[0].name",
-		"units[0].roles[0].name", "units[1].children[0].roles[0].name"} {
-		if !slices.Contains(paths, want) {
-			t.Errorf("no admission warning at %s: %v", want, paths)
-		}
+	// THE TWO UNITS, at the id each one's key is — minted from the shared
+	// name — and NOT the two seats called Engineer: a name is prose.
+	if want := []string{"units[0].id", "units[1].children[0].id"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("admission warnings at %v, want exactly %v", paths, want)
 	}
 
 	// And Warnings is ONE list in a fixed order: the references, then
@@ -643,7 +644,17 @@ units:
 // its references alone.
 func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 	t.Parallel()
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [Ghost]\n")
+	// A WELL-FORMED HANDLE THAT NAMES NOBODY, for the reason
+	// TestDanglingReferencesAreReportedNotRejected states: a display name
+	// in a reference is refused by its own admission rule, so a fixture
+	// written that way would break this one's premise rather than test it.
+	//
+	// AND A REACHABLE PERSON'S SEAT, so the one warning counted is the
+	// reference: a company with no human seat is advised that nobody can
+	// join it.
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n"+
+		"  - name: Founder\n    kind: human\n"+
+		"    contact:\n      slack_user_id: U0FOUNDER\n")
 	if err := cfg.ValidateAdmission(); err != nil {
 		t.Fatalf("the fixture breaks an admission rule: %v", err)
 	}

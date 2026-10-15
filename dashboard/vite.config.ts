@@ -333,6 +333,16 @@ export default defineConfig({
       // Taking a backup (Settings › Backups & retention). The record it
       // lands in is read over the socket.
       "/backup": { target: "http://localhost:8000" },
+      // Signing in, out and up, and an invitation's redemption — how a
+      // browser comes to hold a session cookie (protocol/auth.ts).
+      "/auth": { target: "http://localhost:8000" },
+      // The identity directory People & access reads and writes, and the
+      // identity trail the audit screen reads beside it.
+      "/iam": { target: "http://localhost:8000" },
+      // Whether anybody has been invited yet, which the sign-in page reads
+      // before anybody has signed in (protocol/auth.ts) — the one unguarded
+      // answer that says so.
+      "/health": { target: "http://localhost:8000" },
       // Removing a dead member from the broker's metadata group (Settings ›
       // Nodes, Broker members). The membership is read over the socket.
       "/fleet": { target: "http://localhost:8000" },

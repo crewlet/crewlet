@@ -54,15 +54,15 @@ type PageChange struct {
 	Actor     string     `json:"actor,omitempty"`
 	ActorKind string     `json:"actor_kind,omitempty"`
 
-	// OperatorID names the person when the actor was an operator's own
-	// assistant rather than a seat, which is the one case where the actor
-	// alone does not say who.
+	// OperatorID is the CREDENTIAL the change was made through, recorded
+	// beside the actor rather than instead of it — a machine token
+	// (`pat:<id>`), a browser session, or a credential's own login, as
+	// [iam.ActorFor] records it — so "what did this credential do" is a
+	// question the feed answers without reasoning about kinds. The actor
+	// says WHO: for a person bound to a seat that is the seat, and the
+	// credential is the one thing that tells their own write from their
+	// assistant's.
 	OperatorID string `json:"operator_id,omitempty"`
-
-	// ActorSeat is the person an operator's token was bound to when it wrote
-	// this: who a row DRAWS, while Actor stays the token, which is the audit
-	// trail. Empty for every other actor, and for a token bound to nobody.
-	ActorSeat string `json:"actor_seat,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`
 	Excerpt   string `json:"excerpt,omitempty"`
@@ -88,10 +88,22 @@ type PageActivity struct {
 	Changes    []PageChange `json:"changes"`
 	NextCursor string       `json:"next_cursor,omitempty"`
 
-	Level          statelog.ReadLevel `json:"read_level"`
-	LogSeq         uint64             `json:"log_seq"`
-	AppliedThrough uint64             `json:"applied_through"`
-	Complete       bool               `json:"complete"`
+	Level statelog.ReadLevel `json:"read_level"`
+
+	// LogSeq is this node's checkpoint on the pages log and AppliedThrough
+	// the prefix of it whose records produced their rows here, both
+	// composed positions, read in the transaction that read the changes.
+	//
+	// TWO NUMBERS, for the tracker feed's reason: the checkpoint moves past
+	// a record this node RETAINS — one this build cannot decode — so a node
+	// holding one reads as caught up by its position alone, and only the
+	// applied prefix stopping below it says otherwise. Both were declared
+	// here and never filled, so every answer said zero and zero: a node
+	// behind on the log was indistinguishable from one at its head, and the
+	// audit, which names a source whose answer is behind, could not.
+	LogSeq         uint64 `json:"log_seq"`
+	AppliedThrough uint64 `json:"applied_through"`
+	Complete       bool   `json:"complete"`
 }
 
 // MaxPageChanges is how many changes one page of the feed carries.
@@ -123,8 +135,8 @@ type PageActivityQuery struct {
 	// and one audit surface reads both.
 	ActorKinds []AuthorKind
 
-	// Actor narrows to one writer's changes, by the handle each change was
-	// made under — the company feed's `actor=`.
+	// Actor narrows to one writer's changes — the company feed's `actor=`,
+	// a seat by its handle.
 	Actor string
 
 	// Since is a lower bound as a composed log position.
@@ -171,6 +183,14 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 				return err
 			}
 			out.Changes, out.NextCursor = changes, next
+			// IN THE SAME TRANSACTION as the changes, so the position
+			// describes exactly the rows this page was read from.
+			prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+			if err != nil {
+				return err
+			}
+			out.LogSeq = uint64(prefix.Settled.Packed())
+			out.AppliedThrough = uint64(prefix.Applied().Packed())
 			return nil
 		})
 	if err != nil {
@@ -198,7 +218,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 	}
 	if q.Container != "" {
 		where = append(where, "p.container = ?")
-		args = append(args, strings.ToUpper(q.Container))
+		args = append(args, ContainerKey(q.Container))
 	}
 	if len(q.Kinds) > 0 {
 		marks := make([]string, len(q.Kinds))
@@ -237,7 +257,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
-		       h.actor_seat, h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
+		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
 		       h.version, COALESCE(p.title, ''), COALESCE(p.container, '')
 		  FROM pages_history h
 		  LEFT JOIN pages_heads p ON p.id = h.page_id
@@ -263,7 +283,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 		var quiet int
 		var at, version int64
 		if err := rows.Scan(&change.ID, &change.PageID, &kind, &change.Actor,
-			&change.ActorKind, &change.OperatorID, &change.ActorSeat, &change.CommentID,
+			&change.ActorKind, &change.OperatorID, &change.CommentID,
 			&change.Excerpt, &change.TurnID, &quiet, &at, &version,
 			&change.Title, &change.Container); err != nil {
 

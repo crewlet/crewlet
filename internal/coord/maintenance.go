@@ -237,6 +237,18 @@ type MaintenanceOperation struct {
 	// acknowledgement.
 	Excluded []string `json:"excluded,omitempty"`
 
+	// ExcludedBy is who made each of those assertions, keyed by the node
+	// it names: the author and the credential they made it through, as By
+	// and OperatorID are for whoever opened the window.
+	//
+	// AN EXCLUSION IS THE ONE FACT THE SEAL TAKES ON SOMEBODY'S WORD, so
+	// whose word it was is the first question a post-mortem asks when the
+	// process turns out not to have been stopped — and it was answered only
+	// by the log line of whichever node served the request. The exclusion
+	// writes the entry in the same update that adds the node to Excluded,
+	// so every excluded node has one.
+	ExcludedBy map[string]MaintenanceParty `json:"excluded_by,omitempty"`
+
 	// Journal is every write attempt against this stream's configuration
 	// under this operation.
 	Journal []JournalRecord `json:"journal,omitempty"`
@@ -249,12 +261,33 @@ type MaintenanceOperation struct {
 	// empty while it can.
 	Blocked string `json:"blocked,omitempty"`
 
+	// AbandonedBy is who abandoned the operation, and zero until somebody
+	// does. An abandonment that may have left a request outstanding keeps
+	// the record — and the fleet in its window — until the seal restart,
+	// so the operation says whose decision it is still carrying out. One
+	// abandoned before any request clears the record outright, and only
+	// the serving node's log names who did it.
+	AbandonedBy MaintenanceParty `json:"abandoned_by,omitzero"`
+
 	// EnteredAt is when the exclusion was taken and By which operator ran
-	// the verb. Revision is the store's own, for the compare-and-set every
+	// the verb — the author — with OperatorID the credential they ran it
+	// through: the machine token or browser session they acted through, or
+	// their own login where that is the credential (internal/iam's
+	// ActorFor). Revision is the store's own, for the compare-and-set every
 	// mutation is.
-	EnteredAt time.Time `json:"entered_at"`
-	By        string    `json:"by"`
-	Revision  uint64    `json:"-"`
+	EnteredAt  time.Time `json:"entered_at"`
+	By         string    `json:"by"`
+	OperatorID string    `json:"operator_id,omitempty"`
+	Revision   uint64    `json:"-"`
+}
+
+// MaintenanceParty is who made one gesture on a capacity window: the author,
+// and the credential they made it through — `pat:<id>` for a machine token
+// acting as its owner, `session:<lineage>` for a browser session, a Tier A
+// token's own login.
+type MaintenanceParty struct {
+	By         string `json:"by"`
+	OperatorID string `json:"operator_id,omitempty"`
 }
 
 // MaintenanceAck is one participant's evidence that its process restarted.

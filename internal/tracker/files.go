@@ -307,7 +307,7 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 				// writer re-attribute a file somebody else made.
 				post.CreatedBy, post.CreatedAt = current.CreatedBy, current.CreatedAt
 			}
-			return w.decide(stamp, subject, OpPatch, ChangeFileWritten, scope, opID,
+			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeFileWritten, scope, opID,
 				post, nil, at)
 		},
 	})
@@ -355,7 +355,7 @@ func (w *Writer) RemoveFile(ctx context.Context, opID, project, path string,
 			post.Hash, post.Size, post.Object = "", 0, objstore.Key{}
 			post.UpdatedBy, post.UpdatedAt = w.Actor, at
 			post.RemovedAt, post.RemovedBy = &at, w.Actor
-			return w.decide(stamp, subject, OpPatch, ChangeFileRemoved, scope, opID,
+			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeFileRemoved, scope, opID,
 				post, nil, at)
 		},
 	})

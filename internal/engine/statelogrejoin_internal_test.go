@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -100,19 +102,18 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 
 	// THE HEARTBEAT NOTICES, the node adopts, and its appliers come back
 	// over the artefact — with no restart and no operator.
-	e.native.Load().log.publishPositions(t.Context())
+	e.core.Load().log.publishPositions(t.Context())
 	waitUntil(t, 90*time.Second, "the node to adopt the donor's snapshot", func() bool {
 		return running.runner.Committed().Seq == last
 	})
 	// THE ADOPTION IS RECORDED AS COMPLETE, in this node's own estate and
 	// naming this donor's artefact.
 	var recorded string
-	var startedAt int64
 	var completedAt sql.NullInt64
 	if err := back.Store.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
-			SELECT manifest, started_at, completed_at FROM statelog_adoption
-			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &startedAt, &completedAt)
+			SELECT manifest, completed_at FROM statelog_adoption
+			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &completedAt)
 	}); err != nil {
 		t.Fatalf("read the newest adoption row: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
-	if before, lost, err := rows.LostBefore(t.Context()); err != nil || lost {
+	if before, lost, err := rows.LostBefore(t.Context(), ""); err != nil || lost {
 		t.Fatalf("the adopted ledger may have lost rows before %s (%v, %v) — a "+
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
@@ -149,7 +150,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"want it applied in generation %d", res, err, running.runner.Stopped(), at.Generation)
 	}
 	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
-	if ok, domain := e.SeatsServiceable(); !ok {
+	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
 	// AND THE CONSUMER WAS MOVED: nothing below the artefact's position is
@@ -210,7 +211,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 		t.Fatalf("flush the listener: %v", err)
 	}
 	pushBelowTheFloor(t, e, q)
-	e.native.Load().log.publishPositions(t.Context())
+	e.core.Load().log.publishPositions(t.Context())
 
 	select {
 	case <-asked:
@@ -223,7 +224,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	// flush, and a Stop inside that flush says nothing about the window.
 	// An in-process broker answers a flush in microseconds.
 	time.Sleep(200 * time.Millisecond)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	started := time.Now()
 	s.Stop()
 	took := time.Since(started)
@@ -250,7 +251,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 // with its backends and that broker.
 func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -312,7 +313,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running = s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -361,7 +362,8 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatalf("encode a barrier: %v", err)
 	}
 	for range 2 {
-		if last, _, err = log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body); err != nil {
+		if last, _, err = log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
+			"", nil, running.signer.Seal(body)); err != nil {
 			t.Fatalf("append a barrier: %v", err)
 		}
 	}
@@ -465,6 +467,11 @@ func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool
 // no donor, which is only reachable by a join that ran over an open estate.
 // With nothing missing — the state an earlier rejoin leaves when the artefact
 // it installed is what failed to open — the restore alone is the recovery.
+//
+// AND A REOPENED ESTATE NAMES EVERYONE TO THE LISTENER, because the file it
+// opened may be a donor's whose revocations no committed batch here ever named
+// — while a rejoin that found nobody to ask changed no row and says nothing,
+// which is the control.
 func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -477,7 +484,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			quietHeartbeat(s)
 			if c.below {
 				pushBelowTheFloor(t, e, q)
@@ -487,6 +494,8 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if err := back.Store.CloseReplicated(); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
+			heard := &heardMoves{}
+			e.SetOnIdentityMoved(heard.hear)
 			// WHILE IT IS SHUT THE COPY IS NOT SERVED: every read of it
 			// fails, and with the appliers halted on a log nobody writes
 			// nothing else would ever call it wrong — so this node's own
@@ -504,6 +513,11 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 				t.Fatal("the restore left the replicated estate closed — nothing " +
 					"else in a running node reopens it")
 			}
+			if got := heard.take(); !slices.ContainsFunc(got,
+				func(m iamdomain.Moved) bool { return m.Everyone }) {
+				t.Errorf("a reopened estate told the credential listener %+v, "+
+					"want everyone: its rows may be a donor's", got)
+			}
 			if v := s.judgeCopy(t.Context()); v.fault == shutEstate {
 				t.Fatalf("a copy whose file the restore reopened is still judged shut: %+v", v)
 			}
@@ -515,6 +529,11 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 					"node below the floor has nobody to ask, which only a join "+
 					"that could read its own checkpoints gets as far as learning",
 					err, errNoDonor)
+			}
+			if got := heard.take(); slices.ContainsFunc(got,
+				func(m iamdomain.Moved) bool { return m.Everyone }) {
+				t.Errorf("a rejoin that found no donor told the credential "+
+					"listener %+v: it changed no row", got)
 			}
 		})
 	}
@@ -531,7 +550,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 func TestALoneNodesJoinEndsOnItsOwnDonorsAnswer(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	quietHeartbeat(s)
 	pushBelowTheFloor(t, e, q)
@@ -592,7 +611,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			quietHeartbeat(s)
 			running, at, _, last := appendPastTheNode(t, e, q)
 			artefact := filepath.Join(t.TempDir(), "artefact.db")
@@ -702,9 +721,9 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	}
 	widened := func(t *testing.T, h *harness, why string) {
 		t.Helper()
-		if p, after := pause(h); p != PositionHeartbeat || !after.After(time.Now()) {
+		if p, after := pause(h); p != statelog.PositionHeartbeat || !after.After(time.Now()) {
 			t.Fatalf("%s left a pause of %s until %s, want %s from now — the next "+
-				"heartbeat asks the fleet again", why, p, after, PositionHeartbeat)
+				"heartbeat asks the fleet again", why, p, after, statelog.PositionHeartbeat)
 		}
 	}
 
@@ -816,7 +835,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -867,7 +886,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	t.Parallel()
 	e, back, _ := bootRejoinNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	quietHeartbeat(s)
 	s.haltAppliers()
 	if err := back.Store.CloseReplicated(); err != nil {
@@ -899,9 +918,9 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	}
 }
 
-// hydrated is [Engine.NativeHydrated] as the condition a wait polls, under the
-// test's own context.
+// hydrated is [Engine.StateLogHydrated] as the condition a wait polls, under
+// the test's own context.
 func hydrated(t *testing.T, e *Engine) func() bool {
 	t.Helper()
-	return func() bool { return e.NativeHydrated(t.Context()) }
+	return func() bool { return e.StateLogHydrated(t.Context()) }
 }

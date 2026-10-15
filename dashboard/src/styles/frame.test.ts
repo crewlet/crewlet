@@ -1656,6 +1656,29 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   );
 });
 
+// THE ACCOUNT AND PREFERENCES POPOVER IS ONE COLUMN, AS WIDE AS ITS ROWS. The
+// preferences' label and control columns are what set the panel's width; the
+// account block above them fills it and never sets it. With an 18rem block
+// above `width: max-content` rows, every viewer's popover was 18rem, the rows
+// sat in a narrower column with dead space beside them, and the rule between
+// the two stopped about 44px short of the panel's edge.
+test("the preferences popover is as wide as its rows, and the account block above them never sets it", () => {
+  const css = sheet("frame.css");
+  const sized = (selector: string) =>
+    mentioning(css, selector)
+      .filter(({ body }) => /(?<![-\w])width\s*:/.test(body))
+      .map(({ sel }) => sel);
+  // Neither block declares a width: the rows' own size reaches the shrink-to-
+  // fit panel, and both blocks fill whatever that came to.
+  expect(sized(".preferences")).toEqual([]);
+  expect(sized(".preferences-account")).toEqual([]);
+  // The account block contributes nothing to the panel's width…
+  expect(block(css, ".preferences-account")).toMatch(/contain:\s*inline-size/);
+  // …and its one unwrapped line is cut at the column's edge rather than
+  // running past it.
+  expect(block(css, ".preferences-account > .truncate")).toMatch(/max-width:\s*100%/);
+});
+
 // SPEND READS AS ROWS. Its cards started at their own heights, so a table of
 // two seats ended two hundred pixels above the lists beside it and the row
 // under it began below the lists: a hole the width of the table at every
@@ -1813,4 +1836,33 @@ test("every auto-fit and auto-fill track floor is clamped to its container", () 
   }
   expect(found.length).toBeGreaterThan(0);
   expect(bare).toEqual([]);
+});
+
+/**
+ * THE SIDEBAR'S FOOT WEARS A CONTROL'S MARKS ONLY ON A CONTROL.
+ *
+ * The engine's row is the kit's `AppShell.RailRow`, and its statement form
+ * (a refusal of somebody the engine knows) is a `div` the kit draws with no
+ * pointer, no chevron and no place in the tab order (`EnginePanel.test.tsx`
+ * holds that it is drawn so). A rule of ours giving the kit's row a pointer or a hover of
+ * its own would put a control's marks back on a row that does nothing, which is
+ * what the health card it replaced did until it was fixed. The user block is
+ * the other way round: it IS a control, the way to the reader's Account, and
+ * drew no mark until hovered, so it wears the rail's chevron at rest, and it
+ * is the Account's row, marked current on `#/account` with the kit's own
+ * current-row lift: the raised surface and a hairline OUTLINE (an outline,
+ * since forced-colours mode drops a shadow and a background).
+ */
+test("the engine's row takes its control marks from the kit alone, and the user block always wears one", () => {
+  // THE KIT'S ROW IS THE KIT'S: no sheet of ours styles it, so whether it
+  // wears a pointer is decided by whether the kit drew a control.
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(/\.crewlet-app-shell__rail-row/);
+  }
+
+  const css = sheet("frame.css");
+  expect(block(css, ".user-block-go")).toMatch(/color:\s*var\(--color-text-tertiary\)/);
+  const current = block(css, 'a.user-block-who[aria-current="page"]');
+  expect(current).toMatch(/background:\s*var\(--color-surface-elevated\)/);
+  expect(current).toMatch(/outline:\s*1px solid var\(--color-border-default\)/);
 });

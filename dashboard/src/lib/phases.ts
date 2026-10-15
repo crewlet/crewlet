@@ -339,7 +339,18 @@ export interface PhaseRecord {
    * running right now — a LIVE phase's only, "" / null otherwise.
    */
   roundStartedAt: string;
+  /** The tool call running now; its `arguments` are "" where its body was
+   *  withheld ([bodyWithheld]), its name and timing never. */
   runningCall: { round: number; name: string; arguments: string; startedAt: string } | null;
+  /**
+   * The engine withheld this phase's BODY from this reader — the prompts, the
+   * response, the tool calls, the narration and the trigger's words — and sent
+   * its status alone (`LiveCall.body_withheld`). A renderer says "not shown to
+   * you" in their place, because an empty prompt and a prompt nobody may read
+   * are opposite facts. Always false on a stored record, whose question is the
+   * trail's and answered whole or not at all.
+   */
+  bodyWithheld: boolean;
   /** The notes a person sent the turn that this phase read, and the round
    *  whose provider call first saw each. */
   steers: { round: number; noteId: string }[];
@@ -649,10 +660,11 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
       ? {
           round: call.running_call.round,
           name: call.running_call.name,
-          arguments: call.running_call.arguments,
+          arguments: call.running_call.arguments ?? "",
           startedAt: call.running_call.started_at,
         }
       : null,
+    bodyWithheld: call.body_withheld === true,
     steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
     node: call.node ?? "",
     clockStart: call.started_at ?? "",
@@ -758,6 +770,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     maxRounds: num(p.max_rounds),
     roundStartedAt: "",
     runningCall: null,
+    bodyWithheld: false,
     steers: Array.isArray(p.steers)
       ? (p.steers as Record<string, unknown>[]).map((s) => ({
           round: num(s.round),

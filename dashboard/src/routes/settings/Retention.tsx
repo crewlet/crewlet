@@ -61,7 +61,6 @@ import {
   type DescriptionListEntry,
 } from "@crewlethq/ui";
 import {
-  CopyGlyph,
   DatabaseGlyph,
   ServerGlyph,
   PackageGlyph,
@@ -134,7 +133,7 @@ export function RetentionStatus({
   onTakeBackup,
 }: {
   retention: QueryResult<RetentionReport>;
-  /** Opens this page's backup dialog, where the reader holds an operator token. */
+  /** Opens this page's backup dialog, offered to an admin. */
   onTakeBackup?: () => void;
 }) {
   const now = useNow();
@@ -205,7 +204,10 @@ export function AlarmList({
  * engine's own sentence, so this reads the same as the log line and
  * `crewlet retention status`. A single log whose measurement IS the alarm's is
  * folded into it, as the CLI folds it: drawn as both a headline and a line,
- * the one sentence read as two facts.
+ * the one sentence read as two facts. Every other log the alarm stands on says
+ * its own measurement under it, as the CLI prints one, so a log a backup holds
+ * says how many records it keeps past its window and the second log of a
+ * blocked trim is not read as the first one's.
  */
 export function AlarmItem({
   alarm,
@@ -219,6 +221,10 @@ export function AlarmItem({
   const lines = alarmLogLines(alarm);
   const only = lines.length === 1 ? lines[0] : undefined;
   const folded = only && !only.term && only.detail === alarm.detail ? only : undefined;
+  // ONE HELD LOG WHOSE MEASUREMENT IS THE HEADLINE keeps its term's line and
+  // drops the sentence under it, which would repeat the headline word for word.
+  const headlined =
+    only?.term !== undefined && only.logs?.length === 1 && only.logs[0]?.detail === alarm.detail;
   return (
     <Callout
       variant="warning"
@@ -244,7 +250,7 @@ export function AlarmItem({
           <ul className="alarm-logs">
             {lines.map((line) => (
               <li key={`${line.term ?? ""}:${line.domains.join(",")}`}>
-                <AlarmLogText line={line} now={now} />
+                <AlarmLogText line={line} now={now} measured={!headlined} />
               </li>
             ))}
           </ul>
@@ -255,8 +261,20 @@ export function AlarmItem({
   );
 }
 
-/** One line of the logs an alarm stands on, in words. */
-function AlarmLogText({ line, now }: { line: AlarmLogLine; now: number }) {
+/**
+ * One line of the logs an alarm stands on, in words: a held trim's term with
+ * each log's own measurement under it (unless `measured` is false, where the
+ * one log's sentence is the headline already).
+ */
+function AlarmLogText({
+  line,
+  now,
+  measured,
+}: {
+  line: AlarmLogLine;
+  now: number;
+  measured: boolean;
+}) {
   if (!line.term) {
     return (
       <>
@@ -265,10 +283,20 @@ function AlarmLogText({ line, now }: { line: AlarmLogLine; now: number }) {
     );
   }
   const held = line.since ? fmtDuration(now - Date.parse(line.since)) : undefined;
+  const logs = measured ? (line.logs ?? []).filter((l) => l.detail !== "") : [];
   return (
     <>
       Trim held by {TERM_WORDS[line.term].holds} on <LogNames domains={line.domains} />
       {held ? <>, for {held}</> : null}.
+      {logs.length > 0 && (
+        <ul className="alarm-logs">
+          {logs.map((l) => (
+            <li key={l.domain}>
+              <LogLink domain={l.domain} />: {marked(l.detail, "inherit")}
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }
@@ -450,7 +478,7 @@ export function RetentionPanels({
             {
               key: "gate",
               header: "",
-              label: "Eviction",
+              action: true,
               shrink: true,
               cell: (n) => {
                 const action = gateAction(n, gestures);

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
@@ -32,6 +33,12 @@ import (
 //     loaded or offered to, from the same rows.
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
 //     carry this page's address, from this node's index ([search.Backlinks]).
+//
+// ALL THREE ARE THE KNOWLEDGE BASE'S, and two of them carry the TRACKER'S rows
+// beside its own: the tasks that link a page, and the task each read happened
+// on. Those are shown to whoever holds the tracker and left out for anybody
+// else ([shows], ADR-0033): a person who reads the pages without the tracker
+// is not told what the company is working on through the pages' margins.
 
 // PageReadsMaxDays is how far back a page's readers are read: thirty company
 // days, the event log's own retention and the window a knowledge base is
@@ -104,7 +111,10 @@ type PageReadRow struct {
 
 	// LastWorkItem is the task the newest read's run was charged to and
 	// its "Turn n" there — "turn 2 on ENG-412". Absent for a run charged to
-	// no task, or on a company whose tracker is not the engine's.
+	// no task, or on a company whose tracker is not the engine's. A link to
+	// it is built by [tracker.ItemAddress] — the key, or the id where
+	// `key_collision` says another task claimed the key first and the key
+	// would open that one.
 	LastWorkItem *tracker.TurnPlace `json:"last_work_item,omitempty"`
 }
 
@@ -221,10 +231,23 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 			log.WarnContext(ctx, "page_backlinks_unavailable", "page", detail.Page.ID, "error", err)
 			out.LinkedFromStatus = LinkedFromUnavailable
 		default:
-			out.LinkedFrom = &links
+			out.LinkedFrom = linksFor(ctx, links)
 		}
 	}
 	return out, nil
+}
+
+// linksFor is a page's backlinks as the caller is shown them: the pages that
+// link here always — this question is the knowledge base's — and the TASKS
+// only to whoever holds the tracker, whose rows they are. Left out, the task
+// list is empty and its total zero rather than absent, because the shape a
+// reader parses is the same either way; a reader without the tracker is
+// shown no task anywhere, so an empty list here reads as the rest does.
+func linksFor(ctx context.Context, links search.Backlinks) *search.Backlinks {
+	if !shows(ctx, authz.KindTask) {
+		links.Tasks, links.TasksTotal = []search.TaskLink{}, 0
+	}
+	return &links
 }
 
 // pageReads answers `page_reads{page, days}`.
@@ -263,7 +286,11 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	// to say. Best effort in one direction only — a tracker that cannot be
 	// read leaves the lines naming no task rather than failing the list of
 	// who read the page.
-	if s.Work != nil {
+	//
+	// AND ONLY FOR WHOEVER HOLDS THE TRACKER, whose task and turn they name:
+	// a reader of the pages alone is told who read the page, and how, and
+	// not what the reader was working on.
+	if s.Work != nil && shows(ctx, authz.KindTask) {
 		var runs []string
 		for _, r := range answer.Readers {
 			if r.LastTurnID != "" {
@@ -283,11 +310,15 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
-// chartHandles maps a seat's derived id to its handle in the running chart,
-// for a row whose own day wrote no name.
+// chartHandles maps a seat's agent id to what the running chart calls it now.
+//
+// THE CHART NAMES A SEAT IT HOLDS, and a day's own name is the fallback for a
+// seat it no longer does: a day records what the seat was called when it read,
+// which a retitled role name leaves out of date — the rule [tokens.Seats]
+// states for every spend row, held here for every read row.
 func (s Sources) chartHandles() map[string]chartSeat {
 	out := map[string]chartSeat{}
-	for _, seat := range s.chartSeats() {
+	for _, seat := range chartSeats(s.organization()) {
 		out[seat.agentID] = seat
 	}
 	return out
@@ -333,15 +364,14 @@ func foldPageReads(rows []usage.PageRead, f pageReadsFold) PageReadsAnswer {
 	out := PageReadsAnswer{Readers: make([]PageReadRow, 0, len(order)), DistinctSeatsToday: len(today)}
 	for _, k := range order {
 		r := folded[k]
-		if r.Handle == "" {
-			// A DAY WHOSE HEAD ROW NAMED NOBODY: the chart's name for the
-			// derived id, and the id itself when the chart has none —
-			// never a blank row nobody can attribute.
-			if seat, ok := f.handles[k.agent]; ok {
-				r.Handle, r.Role = seat.handle, seat.role
-			} else {
-				r.Handle = k.agent
-			}
+		switch seat, inChart := f.handles[k.agent]; {
+		case inChart:
+			// THE CHART'S NAME FOR A SEAT IT HOLDS — see [Sources.chartHandles].
+			r.Handle, r.Role = seat.handle, seat.role
+		case r.Handle == "":
+			// A SEAT THE CHART NO LONGER HOLDS, WHOSE DAYS NAMED NOBODY:
+			// the id itself — never a blank row nobody can attribute.
+			r.Handle = k.agent
 		}
 		out.Readers = append(out.Readers, *r)
 	}
@@ -386,8 +416,8 @@ func (s Sources) skillLoads(ctx context.Context, listed []pages.Summary) (map[st
 // namesSeat reports whether row's handle replaces the one a fold already
 // holds for its seat (held, from rows whose newest read was heldAt): THE NAME
 // THE NEWEST DAY GAVE THE SEAT, which is the one a reader knows it by now, and
-// on a tie the row folded later. ONE RULE for both folds, because a seat
-// renamed within the window would otherwise carry one name in a page's
+// on a tie the row folded later. ONE RULE for both folds, because a seat whose
+// rows name it differently would otherwise carry one name in a page's
 // `skill_loaded_by` and another in its `page_reads` whenever two rows share a
 // last read.
 func namesSeat(row usage.PageRead, held string, heldAt time.Time) bool {
@@ -420,12 +450,11 @@ func foldSkillLoads(rows []usage.PageRead, handles map[string]chartSeat) []Skill
 	}
 	out := make([]SkillLoad, 0, len(folded))
 	for agent, s := range folded {
-		if s.Handle == "" {
-			if seat, ok := handles[agent]; ok {
-				s.Handle = seat.handle
-			} else {
-				s.Handle = agent
-			}
+		switch seat, inChart := handles[agent]; {
+		case inChart:
+			s.Handle = seat.handle
+		case s.Handle == "":
+			s.Handle = agent
 		}
 		out = append(out, *s)
 	}

@@ -71,9 +71,9 @@ const ACCENT: Site[] = [
     why: "The same fact, in the retention table's node column.",
   },
   {
-    file: "routes/settings/Access.tsx",
-    line: `{t.yours && <Tag variant="brand">yours</Tag>}`,
-    why: 'The token THIS BROWSER presents, among every token the guard accepts: the same fact as Nodes\' "you are on", in the tokens table.',
+    file: "app/sidebar/UserBlock.tsx",
+    line: `ring={resolved ? "brand" : undefined}`,
+    why: "The badge in the sidebar's account row IS the reader — `ring` is the kit's selected badge, and this is the one badge that means \"you\". Nobody, and an answer still out, are not ringed.",
   },
   {
     file: "routes/work/SavedViews.tsx",

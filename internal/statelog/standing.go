@@ -52,10 +52,35 @@ type EvictionProbe interface {
 }
 
 // StandingLog is a log as a standing read needs it: the per-subject probe and a
-// read of one record back.
+// read of one record's BODY back — a [VerifiedReader], because every read here
+// decodes what it reads and the log holds signed frames.
 type StandingLog interface {
 	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
+	VerifiedReader
+}
+
+// SubjectLog is a domain's raw log as the broker answers it: a record by its
+// sequence (the signed frame) and the last sequence on one subject.
+type SubjectLog interface {
 	LogReader
+	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
+}
+
+// StandingOf is log as a standing read takes it: its own per-subject probe,
+// and every record read back opened under v — the one way to build a
+// [StandingLog] from a domain's log, so no caller writes the pairing for
+// itself.
+func StandingOf(log SubjectLog, v *Verifier) StandingLog {
+	return standing{VerifiedLog: VerifiedLog{Log: log, Verifier: v}, last: log}
+}
+
+type standing struct {
+	VerifiedLog
+	last SubjectLog
+}
+
+func (s standing) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	return s.last.LastSeq(ctx, subject)
 }
 
 // EvictedOnLog reports node's standing on one of domain d's logs — the one

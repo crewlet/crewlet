@@ -145,7 +145,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	q.Level = seatReadLevel
 	listing, err := reader.Projects(ctx, q)
 	if err != nil {
-		return readFailure(tracker.ListProjectsTool, err), nil
+		return readFailure(ctx, tracker.ListProjectsTool, err), nil
 	}
 	return jsonResult(listing)
 }
@@ -224,11 +224,13 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// typed a key wrong that the tracker could not be read and that
 		// it must not conclude the project does not exist — the one
 		// conclusion it needed to draw.
-		return refused(tools.RefusalNotFound, clip(err.Error())), nil
+		return refusedBy(tools.RefusalNotFound, err, clip(err.Error())), nil
 	case errors.Is(err, tracker.ErrNoType):
-		return failed(clip(err.Error())), nil
+		// A `for_type` THE PROJECT DOES NOT FILE is the argument to
+		// change, and the reader's sentence names the types it does.
+		return refusedBy(tools.RefusalInvalid, err, clip(err.Error())), nil
 	case err != nil:
-		return readFailure(tracker.DescribeProjectTool, err), nil
+		return readFailure(ctx, tracker.DescribeProjectTool, err), nil
 	}
 	return jsonResult(detail)
 }

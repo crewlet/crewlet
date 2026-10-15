@@ -24,7 +24,7 @@ import {
 } from "../test/source.ts";
 import { ACTIONS } from "~/contract/actions.ts";
 import { AGENT_TABS } from "~/routes/agents/seat/profile.ts";
-import { WORKSPACES } from "./nav.ts";
+import { FRAMELESS, WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
 /** Every source file of the given extensions, excluding the suites. */
@@ -236,7 +236,9 @@ test("the link pattern reads every spelling a route literal is written in", () =
 
 /** Every link in one module's text that reaches no screen, as `line — #/path`. */
 function deadLinks(text: string): string[] {
-  const owned = new Set(WORKSPACES.map((w) => w.path[0]));
+  // A SIGN-IN SCREEN IS OUTSIDE THE FRAME, so no workspace owns it — and it is
+  // still a screen a link may name.
+  const owned = new Set<string>([...WORKSPACES.map((w) => w.path[0] ?? ""), ...FRAMELESS]);
   const literal = new RegExp(LINK_LITERAL.source, LINK_LITERAL.flags);
   const whole = /^(?:\s*,\s*"[^"]*")*\s*,?\s*$/;
   const dead: string[] = [];
@@ -516,6 +518,39 @@ test("no stat tile builds its caption by joining a list", () => {
  * ever saw single-line props would pass a reverted multi-line ternary — which is
  * three of the four captions above.
  */
+/**
+ * A QUERYSTATE HANDED A FAILURE IS HANDED WHY.
+ *
+ * `QueryState` turns an `unauthorized` into the grant that would admit the
+ * reader, and an `unavailable` the state log will not lift into that fact —
+ * but only from the `refusal` beside the code, which `useQuery`, `useRest` and
+ * `usePaged` answer and a screen has to pass on. Twenty-nine did not, so a
+ * reader refused a seat's turns or the tool servers' status was shown the
+ * generic banner where the engine had named the grant that would admit them.
+ * Nothing else catches it: `refusal` is optional because a surface with no
+ * query behind it has none, so an omission type-checks and renders.
+ *
+ * `error={null}` is exempt, being no failure at all.
+ */
+test("every QueryState handed an error is handed its refusal", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "QueryState")) {
+      const error = /\berror=\{([^}]*)\}/.exec(el.text);
+      if (!error || error[1]!.trim() === "null") continue;
+      seen++;
+      if (/\brefusal=\{/.test(el.text)) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line} — error={${error[1]!.trim()}}`);
+    }
+  }
+  expect(offenders, "pass the read's `refusal` beside its `error`").toEqual([]);
+  // THE OTHER SIDE: a renamed component or a broken scan makes the rule
+  // vacuous and still green.
+  expect(seen, "nothing here reads as a QueryState any more").toBeGreaterThan(40);
+});
+
 test("the element scanner reads a multi-line prop", () => {
   const src =
     '<StatCard\n  label="x"\n  sub={\n    a.length ? a.map((x) => x.n).join(", ") : "none"\n  }\n/>\n<StatCard label="y" sub="fixed" />';
@@ -540,6 +575,11 @@ test("the element scanner reads a multi-line prop", () => {
  * THIS: the field is optional by necessity — a column with a real head must not
  * repeat it — so a new glyph column type-checks, renders, and is wrong only on
  * a phone, which no suite in this tree has a viewport for.
+ *
+ * EXCEPT A COLUMN OF ROW ACTIONS, which says `action: true` instead: its cell
+ * is a button that names itself, so the card draws no name beside it — and a
+ * `label` this rule had demanded there printed the word twice, `SIGN OUT  Sign
+ * out` on every session of the Account page.
  *
  * THE SIBLINGS ARE FOUND BY INDENTATION, which is a real invariant here rather
  * than a guess: prettier is a gate (`make dashboard-lint`), so a literal's own
@@ -577,12 +617,13 @@ test("a column with no word in its head declares one", () => {
         }
       }
       if (siblings.some((line) => /^\s*label:\s*["']\S/.test(line))) continue;
+      if (siblings.some((line) => /^\s*action:\s*true,?$/.test(line))) continue;
       offenders.push(`${path}:${at + 1}`);
     }
   }
   expect(
     offenders,
-    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`",
+    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`, or `action: true` for a column of self-naming buttons",
   ).toEqual([]);
   // THE OTHER SIDE, as above: a renamed field or a broken scan makes the rule
   // vacuous and still green. Well over a hundred columns today.

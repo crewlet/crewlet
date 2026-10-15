@@ -59,7 +59,9 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
+import { QUESTION_WITHHELD, WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts";
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
@@ -131,8 +133,12 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
     status: box.status as SandboxStatus,
     coding_agent: box.coding_agent,
     placement: "",
-    task_description: box.task,
-    question: box.question ?? "",
+    // THE BODY AS THE PROJECTION SENT IT: absent where the engine withheld it
+    // from this reader, who is told so (`body_withheld`) rather than shown a
+    // run with no task.
+    ...(box.task !== undefined ? { task_description: box.task } : {}),
+    ...(box.question !== undefined ? { question: box.question } : {}),
+    ...(box.body_withheld ? { body_withheld: true } : {}),
     audience: box.audience ?? "",
     // THE PROJECTION HOLDS NO RESOLUTION: who the question is put to is on
     // the durable row alone, which replaces this entry once it is read.
@@ -178,13 +184,16 @@ export function mergeRuns(durable: SandboxRun[], live: SandboxEntry[]): SandboxR
 
 /**
  * What to call one coding run in a header, which always needs a word in the
- * slot — the page's and the peek's alike, so the two cannot drift.
+ * slot — the page's, the peek's and Live now's alike, so they cannot drift. A
+ * task the engine withheld from this reader says so: "no task was recorded"
+ * about a run whose task the reader may not read is a claim about the run.
  *
  * The placeholder is deliberately NOT what this screen publishes as the run's
  * label: see the `usePageLabels` call below.
  */
-function runTitle(run: SandboxRun): string {
-  return run.task_description || "No task was recorded";
+export function runTitle(run: SandboxRun): string {
+  if (run.task_description) return run.task_description;
+  return run.body_withheld ? `Task ${WITHHELD_WORDS.toLowerCase()}` : "No task was recorded";
 }
 
 /**
@@ -281,7 +290,12 @@ export function AwaitingBanner({
   return (
     <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
       <span className="col gap-2 run-awaiting">
-        <strong>{run.question || "The run asked a question."}</strong>
+        <strong>
+          {run.question ||
+            (questionWithheld(run)
+              ? `The run asked a question. ${QUESTION_WITHHELD}.`
+              : "The run asked a question.")}
+        </strong>
         <span className="t-caption">
           {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
               — never re-derived here from the coding agent's own label. */}
@@ -301,7 +315,7 @@ export function AwaitingBanner({
             : ""}
         </span>
         <span className="row gap-2">
-          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question} />
+          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question ?? ""} />
         </span>
       </span>
     </Callout>
@@ -382,7 +396,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
   const now = useNow();
   const live = useSandboxes();
   const nameOf = useNameOf();
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, {
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
     enabled: turnId !== "",
     pollMs: RUNS_POLL_MS,
   });
@@ -395,7 +409,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A turn id that matches no run is a hand-edited
             URL or a run swept past the retention horizon, and naming which
             turn resolved to nothing is more use than a header over no run. */}
@@ -474,7 +488,9 @@ export function Runs() {
   const now = useNow();
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+    pollMs: RUNS_POLL_MS,
+  });
 
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
 
@@ -557,6 +573,7 @@ export function Runs() {
       {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           rows.length
@@ -614,7 +631,7 @@ export function Runs() {
                   r.task_description ? (
                     <TextCell>{r.task_description}</TextCell>
                   ) : (
-                    <EmptyValue label="No task recorded" />
+                    <EmptyValue label={r.body_withheld ? WITHHELD_WORDS : "No task recorded"} />
                   ),
               },
               {
@@ -726,8 +743,12 @@ export function RunScreen({ turnId }: { turnId: string }) {
   const now = useNow();
   const live = useSandboxes();
   const nameOf = useNameOf();
+  const viewer = useViewer();
   const board = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
-  const turn = useQuery("turn", { turn_id: turnId });
+  // THE TURN IS THE COMPANY-WIDE TRAIL, an admin's question: everybody else
+  // reads the run's own row, and nothing is asked that would be refused.
+  const asksTurn = viewer.admin;
+  const turn = useQuery("turn", { turn_id: turnId }, { enabled: asksTurn });
 
   const run = useMemo(
     () => mergeRuns(board.data?.runs ?? [], live).find((r) => r.turn_id === turnId) ?? null,
@@ -752,7 +773,12 @@ export function RunScreen({ turnId }: { turnId: string }) {
   const task = run?.task_description || launchedTask(turn.data?.events);
   usePageLabels(task ? { [turnId]: task } : {});
 
-  const loading = (board.loading && !board.data) || (turn.loading && !turn.data);
+  // WHO IS READING IS PART OF WHAT THE PAGE WAITS FOR: drawn before the
+  // viewer answered, the page mounted the run's live output, went back to its
+  // skeleton once an admin's turn read began, and asked the output again for
+  // a job the first read had moved off.
+  const loading =
+    (board.loading && !board.data) || viewer.loading || (asksTurn && turn.loading && !turn.data);
   const settled = !run && collected.length > 0;
   const last = collected[collected.length - 1];
   // TWO READS, AND "NONE" NEEDS BOTH. The page is drawn from the run record
@@ -761,7 +787,8 @@ export function RunScreen({ turnId }: { turnId: string }) {
   // holds a coding run" whenever one of them failed, which is a claim about a
   // record the page never read — "could not read" and "none" are opposite
   // answers, so a single failure is named rather than folded into either.
-  const answered = !board.error && !turn.error && Boolean(board.data) && Boolean(turn.data);
+  const answered =
+    !board.error && Boolean(board.data) && (!asksTurn || (!turn.error && Boolean(turn.data)));
   const absent = !loading && !run && collected.length === 0;
   const unread =
     board.error && turn.error ? null : board.error ? "board" : turn.error ? "turn" : null;
@@ -832,7 +859,11 @@ export function RunScreen({ turnId }: { turnId: string }) {
         }
       />
       {loading && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState error={board.error && turn.error ? board.error : null} loading={loading}>
+      <QueryState
+        error={board.error && turn.error ? board.error : null}
+        refusal={board.refusal}
+        loading={loading}
+      >
         {unread && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {unread === "board"
@@ -857,7 +888,14 @@ export function RunScreen({ turnId }: { turnId: string }) {
             <Card.Header icon={<SquareTerminalGlyph size="sm" />}>
               <Card.Title>Doing now</Card.Title>
             </Card.Header>
-            {RUNNING.includes(run.status) && run.launch_id ? (
+            {run.body_withheld ? (
+              // ITS OUTPUT IS THE SEAT'S TRAIL, asked only by a reader the
+              // engine sends the run's body to (`sandbox_tail` is decided as
+              // the seat's trail is): everybody else is told what it is doing.
+              <p className="t-body">
+                {doingLine(run)} {WITHHELD_WHY}
+              </p>
+            ) : RUNNING.includes(run.status) && run.launch_id ? (
               // KEYED BY THE JOB: the row's launch moves to a later job on the
               // same run, and that job's view starts empty rather than with
               // the last job's output above it. A `replaced` answer reads the

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // colleagueCompany has a handle that is also the start of another seat's
@@ -38,20 +39,24 @@ func colleagueSources(t *testing.T) queries.Sources {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return queries.Sources{Company: func() *config.Company { return cfg }}
+	return queries.Sources{Company: companySource(t, cfg)}
 }
 
-// resolveAs asks `colleague` as a caller holding operatorID ("" is anonymous).
-func resolveAs(t *testing.T, operatorID, q string) map[string]any {
+// resolveAs asks `colleague` as a caller holding exactly these grants.
+func resolveAs(t *testing.T, s queries.Sources, q string, grants ...iam.Grant) map[string]any {
 	t.Helper()
 	r := queries.NewRegistry()
-	queries.Register(r, colleagueSources(t))
-	got, err := r.Answer(t.Context(), "colleague", map[string]any{"q": q}, operatorID)
+	queries.Register(r, s)
+	got, err := r.Answer(asking(t, grants...), "colleague", map[string]any{"q": q})
 	if err != nil {
 		t.Fatalf("colleague %q: %v", q, err)
 	}
 	return asMap(t, got)
 }
+
+// reader holds no permission at all: `colleague` is the overview's, which
+// everybody reads (ADR-0033).
+var reader []iam.Grant
 
 func handlesOf(t *testing.T, answer map[string]any) []string {
 	t.Helper()
@@ -69,7 +74,7 @@ func handlesOf(t *testing.T, answer map[string]any) []string {
 // was exactly somebody's handle.
 func TestColleagueExactHandleShortCircuits(t *testing.T) {
 	t.Parallel()
-	got := resolveAs(t, "ops-1", "swe")
+	got := resolveAs(t, colleagueSources(t), "swe", reader...)
 	match, ok := got["match"].(map[string]any)
 	if !ok {
 		t.Fatalf("match = %v, want the one seat whose handle this is", got["match"])
@@ -90,7 +95,7 @@ func TestColleagueExactHandleShortCircuits(t *testing.T) {
 // whichever of them sorts first.
 func TestColleagueAmbiguousReturnsCandidatesNotAGuess(t *testing.T) {
 	t.Parallel()
-	got := resolveAs(t, "ops-1", "engineer")
+	got := resolveAs(t, colleagueSources(t), "engineer", reader...)
 	if got["match"] != nil {
 		t.Fatalf("match = %v for a name two seats share — that is a guess", got["match"])
 	}
@@ -109,7 +114,7 @@ func TestColleagueAmbiguousReturnsCandidatesNotAGuess(t *testing.T) {
 // answer, which a screen draws differently from "say which of these".
 func TestColleagueNothingMatchedIsAnEmptyListNotNull(t *testing.T) {
 	t.Parallel()
-	got := resolveAs(t, "ops-1", "zzzz")
+	got := resolveAs(t, colleagueSources(t), "zzzz", reader...)
 	if got["match"] != nil {
 		t.Errorf("match = %v for a name nobody has", got["match"])
 	}
@@ -119,19 +124,43 @@ func TestColleagueNothingMatchedIsAnEmptyListNotNull(t *testing.T) {
 	}
 }
 
-// A CHAT ID IS NOT PUBLIC. A seat's contact identities are read only through
-// the operator-gated configuration, so an anonymous caller pasting one must
-// not learn whose it is — while a caller holding a token resolves it exactly
-// as the agent's own lookup does.
-func TestColleagueNeverMatchesAChatIdForAnAnonymousCaller(t *testing.T) {
+// A CHAT ID IS RESOLVED FOR AN ADMIN ALONE. A seat's contact identities are
+// read only by whoever reads the company document, so a caller pasting one —
+// holding nothing, or every app — must not learn whose it is; an admin resolves
+// it exactly as the agent's own lookup does.
+//
+// Mutation: drop the admin check in [queries.Sources.colleague] and every app
+// holder resolves ana by her chat id.
+func TestTheColleagueQuestionMasksContactsExceptToAdmin(t *testing.T) {
 	t.Parallel()
-	if got := resolveAs(t, "", "U07XK2PQ"); got["match"] != nil || len(handlesOf(t, got)) != 0 {
-		t.Errorf("an anonymous caller resolved a chat id: %v", got)
+	for _, holding := range [][]iam.Grant{reader, iam.Apps} {
+		if got := resolveAs(t, colleagueSources(t), "U07XK2PQ", holding...); got["match"] != nil ||
+			len(handlesOf(t, got)) != 0 {
+			t.Errorf("a caller holding %v resolved a chat id: %v", holding, got)
+		}
 	}
-	got := resolveAs(t, "ops-1", "U07XK2PQ")
+	got := resolveAs(t, colleagueSources(t), "U07XK2PQ", iam.GrantAdmin)
 	match, _ := got["match"].(map[string]any)
 	if match["handle"] != "ana" || match["why"] != "chat id matches exactly" {
-		t.Errorf("a credentialed caller got %v, want ana by her chat id", got)
+		t.Errorf("an admin got %v, want ana by her chat id", got)
+	}
+}
+
+// A WITHHELD PERSON'S CHAT ID NAMES NOBODY, exactly as an inbound message from
+// them resolves to nobody: the identity directory has suspended whoever holds
+// the seat, so the screen must not offer them as somebody to hand work to by
+// an id copied from one of their accounts.
+//
+// Mutation: build the corpus with no withholding, and ana is matched.
+func TestColleagueWithholdsWhatTheDirectoryWithholds(t *testing.T) {
+	t.Parallel()
+	s := colleagueSources(t)
+	s.WithheldContacts = func() func(string) bool {
+		return func(handle string) bool { return handle == "ana" }
+	}
+	got := resolveAs(t, s, "U07XK2PQ", iam.GrantAdmin)
+	if got["match"] != nil || len(handlesOf(t, got)) != 0 {
+		t.Errorf("a withheld person was matched by her chat id: %v", got)
 	}
 }
 
@@ -143,7 +172,7 @@ func TestColleagueRefusesAnEmptyOrParagraphQuery(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, colleagueSources(t))
 	for _, q := range []string{"", "   ", strings.Repeat("a", queries.ColleagueQueryMax+1)} {
-		_, err := r.Answer(t.Context(), "colleague", map[string]any{"q": q}, "ops-1")
+		_, err := r.Answer(asking(t, reader...), "colleague", map[string]any{"q": q})
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("q of %d bytes answered %v, want bad params", len(q), err)
 		}

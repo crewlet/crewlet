@@ -162,6 +162,13 @@ func TestEverySlackRequirementNamesAFieldTheSeatHas(t *testing.T) {
 			t.Errorf("%s: %v", r.Field, err)
 		}
 	}
+	// THE CONTROL: the runtime seat's shape, where the identity sits at the
+	// top level, is not the document's, so a path written against it would
+	// be caught rather than written into a seat nobody reads.
+	if err := resolvePath(reflect.TypeFor[config.Role](), "slack.bot_token"); err == nil {
+		t.Error("a path the document does not have resolved, so this walk " +
+			"would not notice one")
+	}
 }
 
 // resolvePath walks a dotted config path through a struct's json tags, the

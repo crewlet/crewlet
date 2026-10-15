@@ -9,8 +9,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
+
+// mailboxSeat is the id the registry files the seat a case calls name under:
+// a stable v5, because the registry keys on a seat's id and a case needs one
+// it can derive twice and read back the same.
+func mailboxSeat(name string) uuid.UUID {
+	return uuid.NewSHA1(uuid.MustParse("5d2e7c1b-3a49-4f86-8b0e-9c1d2e3f4a5b"), []byte(name))
+}
 
 // THE MAILBOX REGISTRY IS LISTED IN ONE CERTIFIED WALK, NOT A GET PER RECORD.
 //
@@ -34,10 +43,17 @@ func TestTheMailboxRegistryIsListedInOneCertifiedWalk(t *testing.T) {
 	wire := countWireReads(t, nc, reader.mailboxes)
 
 	handles := []string{"ceo", "cto", "eng", "ops", "pm"}
+	// The registry lists by SEAT ID, the key it files each record under, so
+	// that is the order every listing must come back in.
+	slices.SortFunc(handles, func(a, b string) int {
+		return strings.Compare(mailboxSeat(a).String(), mailboxSeat(b).String())
+	})
 	type held struct{ rec coord.MailboxRecord }
 	records := map[string]*held{}
 	for _, handle := range handles {
-		rec, created, err := writer.CreateMailbox(ctx, coord.MailboxRecord{Handle: handle})
+		rec, created, err := writer.CreateMailbox(ctx, coord.MailboxRecord{
+			Seat: mailboxSeat(handle), Handle: handle,
+		})
 		if err != nil || !created {
 			t.Fatalf("CreateMailbox(%s): (%v, %v)", handle, created, err)
 		}

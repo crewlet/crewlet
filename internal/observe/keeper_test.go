@@ -257,7 +257,7 @@ func TestAStatelessNodesEventsReachExactlyOneDataNode(t *testing.T) {
 		if err := n.keeper.Start(t.Context(), start(name)); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(n.keeper.Stop)
+		t.Cleanup(func() { n.keeper.Stop(context.Background()) })
 		nodes = append(nodes, n)
 	}
 	seats := start("seats-1")
@@ -295,6 +295,65 @@ func TestAStatelessNodesEventsReachExactlyOneDataNode(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	exactlyOne(t, ids, nodes...)
+}
+
+// A KEEPER THAT STOPS HAS LEFT THE GROUP: what is published afterwards is kept
+// by the data nodes still in it, and the stopped node writes none of it.
+//
+// The engine stops the keeper before its usage publisher's last flush, because
+// a batch settled as kept makes rows count on its day: a keeper whose
+// attachment outlived its stop went on writing and settling batches until the
+// queue closed — after that flush, into a day a node that never starts again
+// never publishes.
+//
+// Mutation: end only the settling pass in Stop, and the stopped node goes on
+// taking batches.
+func TestAStoppedKeeperHasLeftTheGroup(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	start := func(node string) *memory.Queue {
+		q := broker.Client(memory.Contract(queue.WithNode(node)))
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		return q
+	}
+	c := &claims{inner: coordmem.NewFleet()}
+	stopped, staying := newDataNode(t, "data-a", c), newDataNode(t, "data-b", c)
+	for _, n := range []*dataNode{stopped, staying} {
+		if err := n.keeper.Start(t.Context(), start(n.name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { staying.keeper.Stop(context.Background()) })
+	stopped.keeper.Stop(t.Context())
+
+	seats := start("seats-1")
+	custody := observe.NewCustody(seats)
+	seats.AddPublishListener(custody.Listen())
+	custody.Start(t.Context())
+	var ids []string
+	for range 50 {
+		ev := events.New(types.AgentPhaseStarted{RoleName: "Engineer"}, events.TraceContext{})
+		if err := seats.Publish(t.Context(), "crewlet.events.agent_phase_started", ev); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, ev.ID.String())
+	}
+	custody.Stop(context.Background())
+	deadline := time.Now().Add(10 * time.Second)
+	for _, id := range ids {
+		for !staying.holds(t, id) {
+			if time.Now().After(deadline) {
+				t.Fatalf("event %s never reached the data node still in the group", id)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if stopped.holds(t, id) {
+			t.Errorf("event %s was written by a keeper that had stopped", id)
+		}
+	}
 }
 
 // writeOnly is a keeper's write without its claim: the state a crash between
@@ -347,7 +406,7 @@ func TestAStatelessNodesDeliveryIsKeptAsADelivery(t *testing.T) {
 	if err := data.keeper.Start(t.Context(), start("data-a")); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(data.keeper.Stop)
+	t.Cleanup(func() { data.keeper.Stop(context.Background()) })
 	seats := start("seats-1")
 	custody := observe.NewCustody(seats)
 	seats.AddPublishListener(custody.Listen())

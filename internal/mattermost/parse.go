@@ -143,7 +143,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// running has joined a conversation.
 	if seat.UserID != "" && sender == seat.UserID {
 		if root != "" && p.threads != nil {
-			if err := p.threads.Participated(ctx, handle, channel, root, p.now()); err != nil {
+			if err := p.threads.Participated(ctx, seat.Handle, channel, root, p.now()); err != nil {
 				log.WarnContext(ctx, "mattermost_participation_not_recorded",
 					"handle", handle, "thread", root, "error", err.Error())
 			}
@@ -161,7 +161,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	reach := notify.Delivery{Deliver: true}
 	if p.threads != nil {
 		var err error
-		reach, err = p.threads.Reaches(ctx, handle, seat.Username, msg, p.now())
+		reach, err = p.threads.Reaches(ctx, seat.Handle, seat.Username, msg, p.now())
 		if err != nil {
 			log.WarnContext(ctx, "mattermost_thread_follow_unreadable",
 				"handle", handle, "thread", root, "error", err.Error())
@@ -175,7 +175,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// thread every reply carries — so a seat named in a channel hears the
 	// answers to what it was asked, without being named again.
 	if p.threads != nil && root == "" && reach.Reason != "" {
-		if err := p.threads.Follow(ctx, handle, channel, postID, p.now()); err != nil {
+		if err := p.threads.Follow(ctx, seat.Handle, channel, postID, p.now()); err != nil {
 			log.WarnContext(ctx, "mattermost_follow_not_recorded",
 				"handle", handle, "thread", postID, "error", err.Error())
 		}

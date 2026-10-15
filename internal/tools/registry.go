@@ -53,6 +53,32 @@ const (
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable
+	RefusalInternalError      = mcp.RefusalInternalError
+)
+
+// The class is READ, never stored: a failed [Result] carries one value, its
+// [Result.Cause], and these are the only way anything above this package
+// learns its class or whether its write may have landed. Re-exported for the
+// reason the classes are — a builtin, the delegate tool and a reader of a
+// recorded [Call] name them without knowing MCP exists — and as the very
+// functions, so there is one definition to drift from rather than two.
+var (
+	// Classify states a refusal's class beneath the error that decided it.
+	// See [mcp.Classify].
+	Classify = mcp.Classify
+
+	// RefusalOf is a failed result's class, read out of its cause. See
+	// [mcp.RefusalOf].
+	RefusalOf = mcp.RefusalOf
+
+	// UnknownOf reports whether a failed result's write may have landed.
+	// See [mcp.UnknownOf].
+	UnknownOf = mcp.UnknownOf
+
+	// ErrOutcomeUnknown is the cause of a write nobody can vouch for, and
+	// a tool's own unknown-outcome error wraps it. See
+	// [mcp.ErrOutcomeUnknown].
+	ErrOutcomeUnknown = mcp.ErrOutcomeUnknown
 )
 
 // The tool-origin grammar: who put a tool in front of the agents.

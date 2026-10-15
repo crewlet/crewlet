@@ -142,7 +142,7 @@ func (h *harness) settledN(t *testing.T, topic string, n int) []*events.Event {
 
 func (h *harness) inbox(t *testing.T, handle string) []*events.Event {
 	t.Helper()
-	return h.settled(t, topics.AgentInbox(handle))
+	return h.settled(t, inbox(handle))
 }
 
 // quiet asserts a topic carried nothing, read the moment Handle has returned.
@@ -204,7 +204,7 @@ func newService(t *testing.T, mutate func(*notify.Options, *harness)) *harness {
 		seen:   map[string][]*events.Event{},
 	}
 	for _, handle := range collected {
-		h.collect(t, topics.AgentInbox(handle))
+		h.collect(t, inbox(handle))
 	}
 	h.collect(t, skipTopic)
 
@@ -361,7 +361,7 @@ func TestAWakeCarriesItsChangesPositionOnTheEnvelope(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	vendor := h.settledN(t, topics.AgentInbox("engineering-lead"), 2)[1]
+	vendor := h.settledN(t, inbox("engineering-lead"), 2)[1]
 	if got := notify.TriggerOf(vendor); got != "" {
 		t.Errorf("a delivery carrying no trigger woke a seat with %q", got)
 	}
@@ -621,7 +621,7 @@ func TestTheServiceRefusesToWakeASeatForItsOwnAction(t *testing.T) {
 	h.parser.out = []notify.Routed{r}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 	skips := h.skips(t)
 	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonSelfAction {
 		t.Fatalf("skips = %+v", skips)
@@ -635,9 +635,32 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "dana-founder"}, "for you")}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
-	h.quiet(t, topics.AgentInbox("dana-founder"))
+	h.quiet(t, inbox("dana-founder"))
 	if skips := h.skips(t); len(skips) != 1 ||
 		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
+		t.Fatalf("skips = %+v", skips)
+	}
+}
+
+// A SEAT WITH NO ID IS SKIPPED, NOT RETRIED. Its mailbox is named by the agent
+// id derived from the org's name and its handle, so a company whose name
+// derives nothing has a seat nothing can publish to — a permanent fact a nak
+// would retry for ever. Mutation: drop the guard and the wake is published to
+// the empty id's subject instead of being recorded as a skip.
+func TestASeatWithNoIDIsSkippedAsUnaddressable(t *testing.T) {
+	nameless := company()
+	nameless.Name = ""
+	nameless.Normalize()
+	h := newService(t, func(_ *notify.Options, h *harness) {
+		h.reg = notify.NewRegistry(nameless, nil)
+	})
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "hi")}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack: an unaddressable seat is skipped, not retried", got)
+	}
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonUnaddressable {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -668,7 +691,7 @@ func TestARateLimitedSeatIsNotWoken(t *testing.T) {
 	if h.valve.seen() != 1 {
 		t.Fatalf("the valve was consulted %d times", h.valve.seen())
 	}
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 	if skips := h.skips(t); len(skips) != 1 ||
 		notify.SkipReason(skips[0].Reason) != notify.ReasonRateLimited {
 		t.Fatalf("skips = %+v", skips)
@@ -712,7 +735,7 @@ func TestAsheddingNodeDefersRatherThanNaks(t *testing.T) {
 	if got.Reason == "" {
 		t.Fatal("the deferral carries no reason, which is its only record")
 	}
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 }
 
 // A payload this node cannot read will not become readable on a redelivery,
@@ -761,13 +784,13 @@ func TestTheServiceResolvesAgainstTheLiveRegistry(t *testing.T) {
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "new-seat"}, "hi")}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
-	h.quiet(t, topics.AgentInbox("new-seat"))
+	h.quiet(t, inbox("new-seat"))
 
 	// The apply lands: a new org, a new registry.
 	o := company()
 	o.Roles = append(o.Roles, &org.Role{Name: "New Seat"})
 	o.Normalize()
-	h.reg = notify.NewRegistry(o)
+	h.reg = notify.NewRegistry(o, nil)
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	if woken := h.inbox(t, "new-seat"); len(woken) != 1 {
@@ -808,7 +831,7 @@ func TestAFailedWakeIsRetried(t *testing.T) {
 	if !errors.Is(got.Err, boom) {
 		t.Fatalf("the NAK carries %v, want the publish failure", got.Err)
 	}
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 }
 
 // One recipient failing must not silently swallow the others: the retry
@@ -963,7 +986,7 @@ func TestADerivedWakeCarriesItsRecordsInstant(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	woken := h.settledN(t, topics.AgentInbox("engineering-lead"), 2)
+	woken := h.settledN(t, inbox("engineering-lead"), 2)
 	for i, ev := range woken {
 		if !ev.Timestamp.Equal(written) {
 			t.Errorf("copy %d of one wake is stamped %s, want the record's %s — a "+

@@ -27,6 +27,7 @@ import {
   secondAxisOptions,
   filterChips,
   bucketByDay,
+  askedByParams,
   buildItemsParams,
   calendarWeeks,
   dayKey,
@@ -68,6 +69,9 @@ import {
   pageNote,
   targetLabel,
   unfinished,
+  answersAddress,
+  itemAddress,
+  turnItem,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -554,9 +558,8 @@ test("an engine-written sentence names its author by name, and a comment is left
     kind: "prioritised",
     subject_kind: "person",
     subject_id: "agent-swe",
-    actor: "U0MAYA",
-    actor_kind: "operator",
-    actor_seat: "maya",
+    actor: "maya",
+    actor_kind: "human",
     excerpt: "maya put ENG-1 at position 1 of your priorities",
   });
   expect(describeChange(reordered, { viewer: "ada", seatName })).toBe(
@@ -564,8 +567,9 @@ test("an engine-written sentence names its author by name, and a comment is left
   );
   // A WHOLE HANDLE, never a part of a longer one.
   expect(nameAuthor("maya-ops-2 and maya", "maya", seatName)).toBe("maya-ops-2 and Maya Ops");
-  // A CREDENTIAL IS NOBODY: an operator with no bound seat is not renamed.
-  expect(authorOf({ actor: "U0ANON", actor_kind: "operator" })).toBe("");
+  // A LOGIN NO CHART HOLDS IS NOT RENAMED: a principal bound to no seat
+  // writes as an `operator`, under its own login.
+  expect(authorOf({ actor: "ci.bot", actor_kind: "operator" })).toBe("");
   // AND A COMMENT IS WHAT SOMEBODY TYPED.
   expect(
     describeChange(
@@ -1625,28 +1629,30 @@ test("the host's lock outranks every other source of the key it names", () => {
   }
 });
 
-// AND AN ASKER'S LOCK IS THE PERSON, ON EVERY SHAPE. Asked by me is held to the
-// questions somebody is waiting on — and `viewer` IS that person, because the
-// engine gives an `asked_by` its second name (the token their assistant writes
-// under) only for the viewer. A branch that dropped the viewer answered a
-// founder's asked-by-me with half their questions; one that dropped the asker
-// answered with the whole company's work.
-test("an asker's lock carries the asker and the same person as the viewer, on every shape", () => {
+// AND AN ASKER'S LOCK IS THE PERSON, ON EVERY SHAPE — under that one name.
+// Asked by me is held to the questions somebody is waiting on, recorded under
+// the asker's own record name; a branch that dropped the asker answered with
+// the whole company's work. And NO `viewer` rides with it: the engine refuses
+// that key on every question (whose record a read is about is never a typed
+// name), so a lock that still sent one turned the whole section into a
+// refusal.
+test("an asker's lock carries the asker and nothing naming a viewer, on every shape", () => {
   const shapes: Shape[] = ["list", "table", "board", "calendar", "timeline"];
   for (const shape of shapes) {
     const params = buildItemsParams({
       container: "workspace",
       shape,
-      view: { asked_by: "rui", viewer: "rui" },
+      view: { asked_by: "rui" },
       filters: { ...NO_FILTERS, assignee: "cto" },
       range: shape === "calendar" ? { from: "2026-03-01", to: "2026-04-05" } : undefined,
       lock: { asked_by: "ada" },
     });
     expect(params.asked_by, shape).toBe("ada");
-    expect(params.viewer, shape).toBe("ada");
+    expect("viewer" in params, shape).toBe(false);
     // THE ASSIGNEE STAYS THE READER'S OWN FILTER under an asker's lock.
     expect(params.assignee, shape).toBe("cto");
   }
+  expect(askedByParams("ada")).toEqual({ asked_by: "ada" });
 });
 
 // AND NO LOCK LEAVES THE KEY ALONE, which is what keeps `#/work` the screen it
@@ -1819,4 +1825,20 @@ test("a saved view's change is named by the view, not by its storage", () => {
   expect(describeChange(renamed, {})).toBe("Renamed the view “A” to “B”");
   const changed = record({ kind: "view_saved", fields: { params: { from: "a", to: "b" } } });
   expect(describeChange(changed, {})).toBe("Changed a saved view");
+});
+
+// A TURN'S TASK CARRIES NO COLLISION FLAG: it is the turn's record, not a
+// tracker row, so its key may be one another task claimed first. A native
+// task is therefore addressed by its id, which every question about a task
+// takes, and a vendor item — whose id is the vendor's — by its key.
+test("a turn's task is addressed by its id where it is native, and by its key elsewhere", () => {
+  const native = { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" };
+  expect(itemAddress(turnItem(native))).toBe("t-dup");
+  const jira = { backend: "jira", id: "10042", key: "OPS-3", project: "OPS" };
+  expect(itemAddress(turnItem(jira))).toBe("OPS-3");
+  // An answer about the task is the answer to the question either way.
+  expect(answersAddress("t-dup", "t-dup", "ENG-7")).toBe(true);
+  expect(answersAddress("OPS-3", "", "OPS-3")).toBe(true);
+  expect(answersAddress("t-dup", "t-claimant", "ENG-7")).toBe(false);
+  expect(answersAddress("", "", "")).toBe(false);
 });

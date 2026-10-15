@@ -26,7 +26,7 @@ import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-librar
 // context is no longer supplied anywhere, so a dialog tested under it would
 // pass while writing its confirmation into a hook nothing is listening to.
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   HELD,
   SetupDialog,
@@ -125,7 +125,6 @@ function sent(spy: ReturnType<typeof stubFetch>): RequestInit | undefined {
   return undefined;
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -1839,7 +1838,8 @@ test("an agent with no manifest is told why not", () => {
     seats: [
       {
         ...perSeatTool.seats![0]!,
-        manifest_note: "no manifest yet: set integrations.public_base_url",
+        manifest_note:
+          "no manifest yet: set `api.external_url` in this node's Tier A file to the address this agent's app delivers to, and restart the node",
       },
     ],
   };
@@ -1852,7 +1852,7 @@ test("an agent with no manifest is told why not", () => {
     />,
   );
   expect(screen.getByText(/No app manifest for SRE Lead yet/)).toBeDefined();
-  expect(screen.getByText(/integrations.public_base_url/)).toBeDefined();
+  expect(screen.getByText(/api.external_url/)).toBeDefined();
   // AND NO EMPTY BOX to copy nothing out of.
   expect(baseElement.querySelector(".int-manifest")).toBeNull();
 });

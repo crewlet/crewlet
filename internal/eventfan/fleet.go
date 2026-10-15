@@ -603,24 +603,25 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
 
-// SeatPhases answers one seat's phase records, newest first, payload included.
+// SeatPhases answers one seat's phase records, newest first, payload included —
+// the seat named by its agent id, never a role name two seats may share.
 //
 // A SEAT MOVES — placement hands it to another node when its owner leaves or
 // the fleet rebalances — so its history is on every node that ever held it,
 // and the seat page read from one node showed only the turns since the last
 // move.
-func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *store.Cursor) (Listing, Coverage, error) {
+func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
-	if agentID == "" && role == "" {
+	if agentID == "" {
 		// A SEAT NOBODY CAN NAME is a question with no answer, not one
 		// with an empty one — the store says so the same way.
 		return Listing{}, solo(f.Self), nil
 	}
 	at := f.now()
-	p := phasesParams{AgentID: agentID, Role: role, Before: cursorOf(before), At: at}
+	p := phasesParams{AgentID: agentID, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionSeatPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.AgentPhases(ctx, agentID, role, before, at)
+			rows, more, err := f.Local.AgentPhases(ctx, agentID, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -664,6 +665,11 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 // sat below a position no page reached: a full node's page or the page's size
 // cut it, and the cursor moved on past the half that did list it, so no page
 // of the walk held it.
+//
+// `q.At` IS THE CALLER'S INSTANT, the one its answer is labelled with, read
+// here once only when it pinned none: the window is cut from it and every node
+// — this one included — floors that window against it, so the page and its
+// label are one evaluation of the clock.
 func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
@@ -676,8 +682,8 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	}
 	q.Limit = turnPage(q.Limit)
 	q.IDs = nil
-	// THE WINDOW IS PINNED to this node's clock before anybody is asked, for
-	// [Fleet.PhaseTokens]' reason — and because the whole turn has to be
+	// THE WINDOW IS PINNED to the caller's instant before anybody is asked,
+	// for [Fleet.PhaseTokens]' reason — and because the whole turn has to be
 	// held against it: a node's half of a resumed turn can start inside the
 	// window while the turn began outside it on another node. The INSTANT
 	// travels with it, so every node floors the window and its shares at the
@@ -860,10 +866,13 @@ const PhaseTokenPage = 4096
 // newest first, cut to the query's limit — what the live projection's spend
 // rollup is seeded from.
 //
-// THE WINDOW IS PINNED to this node's clock before anybody is asked, for
-// [Fleet.Histogram]'s reason: a peer counting "a day back" from its own clock
-// would answer a window its neighbours did not. And so is the instant it was
-// cut against, which every node floors it at — see [store.PhaseTokenQuery.At].
+// THE WINDOW IS PINNED to the caller's instant ([store.PhaseTokenQuery.At],
+// read here once only when it pinned none) before anybody is asked, for
+// [Fleet.Histogram]'s reason — a peer counting "a day back" from its own clock
+// would answer a window its neighbours did not — and for the store's: it is the
+// instant the caller labels its answer with and every node floors the window
+// at, so a second reading of the clock would make the rows and the label two
+// windows.
 //
 // # In pages
 //

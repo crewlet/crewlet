@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -650,14 +651,16 @@ type fakeDisconnector struct {
 	mu          sync.Mutex
 	calls       int
 	removeSeats bool
+	by          iam.Actor
 }
 
 func (f *fakeDisconnector) Disconnect(
-	_ context.Context, removeSeats bool,
+	_ context.Context, req TeardownRequest,
 ) (provision.Removed, error) {
 	f.mu.Lock()
 	f.calls++
-	f.removeSeats = removeSeats
+	f.removeSeats = req.RemoveSeats
+	f.by = req.By
 	f.mu.Unlock()
 	return f.removed, f.err
 }
@@ -666,6 +669,31 @@ func (f *fakeDisconnector) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+// A TEARDOWN IS CARRIED OUT FOR WHOEVER ASKED FOR IT.
+//
+// The loop runs it minutes later, on whichever node holds the duty, long after
+// the request that asked has answered — so the row is the only thing that can
+// say whose gesture the teardown's writes finish. Mutation: hand the
+// disconnector the removal flag alone and the requester is lost.
+func TestATeardownIsCarriedOutForWhoeverAsked(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	asker := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator,
+		OperatorID: "session:0192f00d-0000-7000-8000-0000000000cc"}
+	d := &fakeDisconnector{}
+	store := newStore(AskTeardown(State{}, KindJira, true, asker))
+
+	w := at(t, now, store, nil, Registration{
+		Reconciler: &fakeReconciler{kind: KindJira}, Disconnector: d})
+	w.Tick(context.Background())
+
+	if d.count() != 1 {
+		t.Fatalf("the teardown ran %d times, want 1", d.count())
+	}
+	if d.by != asker {
+		t.Errorf("the teardown was carried out for %+v, want %+v", d.by, asker)
+	}
 }
 
 // A SURFACE BEING TAKEN AWAY IS NOT RECONCILED.
@@ -680,7 +708,8 @@ func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	r := &fakeReconciler{kind: KindJira}
 	d := &fakeDisconnector{}
-	store := newStore(State{Kind: KindJira, Disconnecting: true, RemoveSeats: true})
+	asker := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator, OperatorID: "session:ana"}
+	store := newStore(AskTeardown(State{}, KindJira, true, asker))
 
 	w := at(t, now, store, nil, Registration{Reconciler: r, Disconnector: d})
 	w.Tick(context.Background())
@@ -697,6 +726,11 @@ func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
 	// It finished, so the row is gone: nothing is left to reconcile.
 	if store.has(KindJira) {
 		t.Error("a finished teardown left its status row behind")
+	}
+	// WHOEVER ASKED is who the teardown is handed, so every write it makes
+	// is recorded under them rather than the loop that carried it out.
+	if d.by != asker {
+		t.Errorf("the teardown was handed %+v, want whoever asked: %+v", d.by, asker)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -62,6 +63,9 @@ func placeTool(t *testing.T, spy *placeSpy,
 			Placer: func(builtin.Actor) builtin.WorkPlacer { return spy },
 			Actor:  actor,
 		},
+		// AN AUTHORIZER THAT DECIDES, because a nil one refuses every call
+		// before the tool runs and these cases are about the drop.
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if tool.Name() == tracker.PlaceWorkItemTool {
 			return tool
@@ -69,6 +73,13 @@ func placeTool(t *testing.T, spy *placeSpy,
 	}
 	t.Fatal("the operator surface does not serve place_work_item with a placer wired")
 	return nil
+}
+
+// dropper is who makes a board drag: a PERSON, because the verb is no seat's
+// ([authz.ActionWorkPlace] is human-only) — a case calling it as a seat would
+// be refused at the gate and reach no drop at all.
+func dropper() context.Context {
+	return personHolding(iam.GrantTracker)
 }
 
 // A DROP NAMES ITS NEIGHBOUR BY ID, AND ITS LANE AS DROPPED.
@@ -123,7 +134,7 @@ func TestADropNamesItsNeighbourByIDAndItsLaneAsDropped(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			spy := &placeSpy{}
-			got, err := placeTool(t, spy, nil).Call(t.Context(), c.args)
+			got, err := placeTool(t, spy, nil).Call(dropper(), c.args)
 			if err != nil || got.Failed {
 				t.Fatalf("place_work_item failed: %v %s", err, got.Output)
 			}
@@ -166,11 +177,11 @@ func TestADropThatMeansNothingIsRefused(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			spy := &placeSpy{}
-			got, err := placeTool(t, spy, nil).Call(t.Context(), c.args)
+			got, err := placeTool(t, spy, nil).Call(dropper(), c.args)
 			if err != nil {
 				t.Fatalf("Call: %v", err)
 			}
-			if !got.Failed || got.Refusal != tools.RefusalInvalid {
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
 				t.Fatalf("answered %+v, want an invalid refusal", got)
 			}
 			if place := spy.last(); place != nil {
@@ -194,7 +205,7 @@ func TestAnUnplacedLaneChangeIsReportedNotFailed(t *testing.T) {
 		Version:  8,
 		Unplaced: fmt.Errorf("%w: task i1 moved", tracker.ErrStaleVersion),
 	}}
-	got, err := placeTool(t, spy, nil).Call(t.Context(), map[string]any{
+	got, err := placeTool(t, spy, nil).Call(dropper(), map[string]any{
 		"item": "ENG-1", "before": "ENG-2", "status": "in_progress", "if_match": 7,
 	})
 	if err != nil || got.Failed {
@@ -235,13 +246,14 @@ func TestAnUnknownDropStepIsAnsweredUnknown(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			spy := &placeSpy{result: result}
-			got, err := placeTool(t, spy, nil).Call(t.Context(), map[string]any{
+			got, err := placeTool(t, spy, nil).Call(dropper(), map[string]any{
 				"item": "ENG-1", "before": "ENG-2", "status": "in_progress", "if_match": 7,
 			})
 			if err != nil {
 				t.Fatalf("Call: %v", err)
 			}
-			if !got.Failed || got.Refusal != tools.RefusalUnavailable {
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
+				!tools.UnknownOf(got) {
 				t.Fatalf("an unknown %s step answered %+v, want the failed unknown", name, got)
 			}
 			spy.mu.Lock()
@@ -266,8 +278,8 @@ func TestAnUnknownDropStepIsAnsweredUnknown(t *testing.T) {
 // THE SAME DROP MADE AGAIN IS THE SAME DROP — the same place handed to the
 // tracker, status included, and the same operation — whichever way the call
 // is made again: an operator's assistant bringing back its `op_id`, or a
-// person's retry of one request at the dashboard. A different drop under the
-// request is another operation.
+// person's retry of one request at the dashboard, whose transport carries the
+// request's operation key as [builtin.Actor.WorkKey] (internal/api/opkey).
 func TestTheSameDropMadeAgainIsTheSameOperation(t *testing.T) {
 	t.Parallel()
 	args := func() map[string]any {
@@ -278,13 +290,13 @@ func TestTheSameDropMadeAgainIsTheSameOperation(t *testing.T) {
 		t.Parallel()
 		spy := &placeSpy{}
 		tool := placeTool(t, spy, nil)
-		first, err := tool.Call(t.Context(), args())
+		first, err := tool.Call(dropper(), args())
 		if err != nil || first.Failed {
 			t.Fatalf("the first drop failed: %v %s", err, first.Output)
 		}
 		again := args()
 		again["op_id"] = decodeAnswer(t, first)["op_id"]
-		second, err := tool.Call(t.Context(), again)
+		second, err := tool.Call(dropper(), again)
 		if err != nil || second.Failed {
 			t.Fatalf("the drop brought back failed: %v %s", err, second.Output)
 		}
@@ -293,15 +305,15 @@ func TestTheSameDropMadeAgainIsTheSameOperation(t *testing.T) {
 
 	t.Run("a request sent again", func(t *testing.T) {
 		t.Parallel()
-		request := statelog.NewOpID(time.Now(), "")
+		key := statelog.NewOpID(time.Now(), "")
+		since, _ := statelog.OpMintedAt(key)
 		spy := &placeSpy{}
 		tool := placeTool(t, spy, func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-			op, err := builtin.RequestOperation("ops", request, tracker.PlaceWorkItemTool, args())
 			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
-				Operation: op}, err
+				WorkKey: key, WorkSince: since}, nil
 		})
 		for range 2 {
-			if got, err := tool.Call(t.Context(), args()); err != nil || got.Failed {
+			if got, err := tool.Call(dropper(), args()); err != nil || got.Failed {
 				t.Fatalf("the drop failed: %v %s", err, got.Output)
 			}
 		}

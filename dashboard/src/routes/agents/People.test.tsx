@@ -55,7 +55,7 @@ function mount(org?: OrgProjection, agents?: unknown[]) {
   const store = new Store();
   store.applyHealth(healthFrame());
   if (org) store.applyOrg(org);
-  if (agents) store.applyAgents(agents);
+  if (agents) store.applySeats(agents);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -133,13 +133,21 @@ test("a digit past the end of the views changes nothing", async () => {
 // What a group head's number counts
 // ---------------------------------------------------------------------------
 
-/** Two units, one with two seats and one with one. */
+/** Two units, one with two seats and one with one — as the engine sends them:
+ *  every seat with its handle and every unit with its key. */
 const ORG = {
   name: "Acme",
   roles: [],
   units: [
-    { name: "Engineering", roles: [{ name: "Dev A" }, { name: "Dev B" }] },
-    { name: "Design", roles: [{ name: "Dee" }] },
+    {
+      id: "engineering",
+      name: "Engineering",
+      roles: [
+        { name: "Dev A", handle: "dev-a" },
+        { name: "Dev B", handle: "dev-b" },
+      ],
+    },
+    { id: "design", name: "Design", roles: [{ name: "Dee", handle: "dee" }] },
   ],
   derived: {
     seats: [
@@ -148,8 +156,8 @@ const ORG = {
       { handle: "dee", name: "Dee", kind: "agent" },
     ],
     units: [
-      { name: "Engineering", seats: ["dev-a", "dev-b"] },
-      { name: "Design", seats: ["dee"] },
+      { id: "engineering", name: "Engineering", seats: ["dev-a", "dev-b"] },
+      { id: "design", name: "Design", seats: ["dee"] },
     ],
   },
 } as unknown as OrgProjection;
@@ -223,16 +231,22 @@ function drawnNames(): string[] {
 test("the roster is ordered by name, whatever the live rows say", async () => {
   mount(ORG, [
     {
+      id: "dev-b",
+      agent_id: "dev-b",
+      handle: "dev-b",
       role: "Dev B",
       activity: "working",
       live_call: { updated_at: "2031-01-01T00:00:09Z", versions: ZERO_VERSIONS },
     },
     {
+      id: "dev-a",
+      agent_id: "dev-a",
+      handle: "dev-a",
       role: "Dev A",
       activity: "idle",
       live_call: { updated_at: "2031-01-01T00:00:01Z", versions: ZERO_VERSIONS },
     },
-    { role: "Dee", activity: "idle" },
+    { id: "dee", agent_id: "dee", handle: "dee", role: "Dee", activity: "idle" },
   ]);
   await settle();
   await act(async () => {
@@ -247,7 +261,15 @@ test("the roster is ordered by name, whatever the live rows say", async () => {
 // group rather than vanishing: a revision that removes a seat does not stop
 // the turn it was on.
 test("a seat the chart no longer holds is listed as removed from the company", async () => {
-  mount(ORG, [{ role: "Old Seat", handle: "old-seat", activity: "working" }]);
+  mount(ORG, [
+    {
+      id: "old-seat",
+      agent_id: "old-seat",
+      role: "Old Seat",
+      handle: "old-seat",
+      activity: "working",
+    },
+  ]);
   await settle();
   expect(screen.getByText("Removed from the company")).toBeTruthy();
   expect(screen.getByText("Old Seat")).toBeTruthy();

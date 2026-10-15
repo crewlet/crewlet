@@ -347,12 +347,12 @@ type Health struct {
 	//
 	// The only thing that separates the two streams is the broker's own creation
 	// instant. The boot compares it once, and a running node sees the live one
-	// wherever it reads the stream's state — the position heartbeat every ten
-	// seconds, and the write fence on every expectation of zero. Every one of
-	// those lands in [Runner.StreamIdentity], and this is that answer's
-	// RECREATION half — errors.Is against [ErrStreamRecreated] — the SAME one
-	// the write path refuses on, so a node can never refuse its reads over a
-	// rebuilt log while its writes go on landing there. The identity's other
+	// wherever it reads the stream's state — the position heartbeat every
+	// [PositionHeartbeat], and the write fence on every expectation of zero.
+	// Every one of those lands in [Runner.StreamIdentity], and this is that
+	// answer's RECREATION half — errors.Is against [ErrStreamRecreated] — the
+	// SAME one the write path refuses on, so a node can never refuse its reads
+	// over a rebuilt log while its writes go on landing there. The identity's other
 	// half, a checkpoint past the end, is [Health.AheadOfLog] here, read live
 	// from this health's own end rather than from the runner's last reading.
 	// The remedy is the same either way, an operator's re-anchor.
@@ -395,6 +395,23 @@ type Health struct {
 type DeferredSince struct {
 	Since time.Time
 	Held  bool
+}
+
+// Age is how long the oldest undecodable record has been held as of now, and
+// zero when none is — or when nothing has dated one yet.
+//
+// ONE ARITHMETIC FOR THREE READERS: [Health.Healthy], which takes the copy out
+// of service past the grace, the `deferred_old` alarm that tells an operator
+// when it will happen, and the gauge a collector scrapes. Each used to derive
+// the age for itself, and the alarm's copy was not a derivation at all — it
+// stood the grace itself in for the age whenever a record was held, so a
+// condition written as "older than the grace" compared the grace with itself
+// and could never fire.
+func (d DeferredSince) Age(now time.Time) time.Duration {
+	if !d.Held || d.Since.IsZero() {
+		return 0
+	}
+	return now.Sub(d.Since)
 }
 
 // Refusal is why this domain is not serving as of now, or empty when it is.
@@ -497,7 +514,7 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 	if h.Stalled {
 		return false
 	}
-	if h.Deferred > 0 && deferredSince.Held && now.Sub(deferredSince.Since) > DeferralGrace {
+	if h.Deferred > 0 && deferredSince.Age(now) > DeferralGrace {
 		return false
 	}
 	return true

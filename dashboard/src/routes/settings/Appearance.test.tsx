@@ -4,8 +4,8 @@
  *
  * What it has to get right is that pointing at a theme shows it in the pane
  * and nowhere else, that choosing one applies it everywhere and keeps it, and
- * that the page is the reader's own: an address under Personal that no
- * credential guards.
+ * that the page is the reader's own: an address in the You group beside
+ * Account that no grant guards.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -50,14 +50,14 @@ function mount() {
 const pane = () => screen.getByRole("complementary", { name: "Theme preview" });
 
 describe("the address", () => {
-  test("is a section of Settings under Personal, guarded by nothing", () => {
+  test("is a section of Settings in the You group, guarded by no grant", () => {
     const where = resolve(["settings", "appearance"]);
     expect(where.resolved && where.screen).toBe("appearance");
     expect(resolve(["settings", "appearance", "more"]).resolved).toBe(false);
     const section = sectionOf(["settings", "appearance"]);
     expect(section?.key).toBe("appearance");
-    expect(section?.group).toBe("Personal");
-    expect(section?.guarded).toBeUndefined();
+    expect(section?.group).toBe("You");
+    expect(section?.grants).toBeUndefined();
     expect(crumbsFor(["settings", "appearance"]).map((crumb) => crumb.label)).toEqual([
       "Settings",
       "Appearance",

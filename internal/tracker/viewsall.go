@@ -39,10 +39,10 @@ import (
 // read makes no freshness decision of its own.
 type EveryViewQuery struct {
 	// Viewer is whose personal views join the shared ones and whose pins
-	// come first. An unnamed party reads the shared views alone.
-	Viewer Party
-	// Units resolves a unit's two spellings when a pinned unit view is
-	// counted — see [ViewQuery.Units].
+	// come first. Empty reads the shared views alone.
+	Viewer string
+	// Units resolves a unit's name or key to the key a save stores when a
+	// pinned unit view is counted — see [ViewQuery.Units].
 	Units Units `json:"-"`
 
 	Level       statelog.ReadLevel
@@ -74,7 +74,7 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 	}
 	if q.Counts {
 		switch {
-		case len(q.Viewer.Handles()) == 0:
+		case q.Viewer == "":
 			return ViewListing{}, fmt.Errorf("tracker: a view read asks for " +
 				"its pinned views' counts and names no viewer — pins are a " +
 				"person's, so a read nobody is looking at has none to count")
@@ -139,14 +139,16 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 // projects, units and people, each by its id, and inside one container by
 // rank — so a container's views read in the order its own strip draws them.
 // TWO ORDERS CONCATENATED, as [savedViews] does, so a pin re-ranks nothing.
-func everySavedView(ctx context.Context, tx *sql.Tx, viewer Party,
+func everySavedView(ctx context.Context, tx *sql.Tx, viewer string,
 	pinned map[string]bool) ([]ViewRow, error) {
 
+	// THE SHARED HALF IS `owner = ''`, and the personal half the viewer's
+	// own name — [savedViews]' rule, over every container.
 	own := ""
 	var args []any
-	if owners := viewer.args(); len(owners) > 0 {
-		own = " OR owner IN (" + placeholders(len(owners)) + ")"
-		args = append(args, owners...)
+	if viewer != "" {
+		own = " OR owner = ?"
+		args = append(args, viewer)
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,

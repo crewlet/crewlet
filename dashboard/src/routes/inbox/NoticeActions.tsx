@@ -155,8 +155,9 @@ export function NoticeActions({
 
 /**
  * A snooze to any moment inside the engine's bound, in the READER's own clock,
- * the one their preference names, which is what a date typed into a field
- * means to them.
+ * the browser's zone (`lib/prefs.ts` `zone`), which is what a date typed into
+ * a field means to them. There is no zone preference to name any more, so the
+ * helper names the browser's.
  */
 function PickDialog({
   now,
@@ -210,7 +211,7 @@ function PickDialog({
       <FormField
         label="Comes back at"
         htmlFor="inbox-snooze-at"
-        helper="In your time zone."
+        helper="In this browser's time zone."
         error={problem && at !== null ? problem : undefined}
       >
         <Input

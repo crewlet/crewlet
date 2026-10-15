@@ -39,7 +39,7 @@ import { Assignee, PriorityMark, StatusBadge, type RowChrome } from "~/component
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { humanize } from "~/lib/format.ts";
-import { PRIORITIES, STATUSES, statusLabel } from "~/lib/work.ts";
+import { PRIORITIES, STATUSES, statusLabel, itemAddress } from "~/lib/work.ts";
 import type { WorkStatusDef, WorkSummary } from "~/protocol/index.ts";
 
 /** One inline change: the field and its new value. */
@@ -67,14 +67,18 @@ export function InlineEdits({
   seatName?: (handle: string) => string;
 }) {
   const write = useAct("update_work_item");
-  const [lost, setLost] = useState("");
+  // THE ROW WHOSE RACE WAS LOST, by its address and its key: the history that
+  // names who won is asked by the address the write went to — the key would
+  // read the claimant's on a duplicate — and the sentence names the key.
+  const [lost, setLost] = useState<{ item: string; label: string } | null>(null);
   const edit = useCallback(
     (row: WorkSummary, patch: Patch, done: string) => {
-      setLost("");
+      setLost(null);
       void write
-        .run({ item: row.key, if_match: row.version, ...patch }, { done })
+        .run({ item: itemAddress(row), if_match: row.version, ...patch }, { done })
         .then((result) => {
-          if (result?.kind === "refused" && result.code === "stale_version") setLost(row.key);
+          if (result?.kind === "refused" && result.code === "stale_version")
+            setLost({ item: itemAddress(row), label: row.key });
         });
     },
     [write],
@@ -87,11 +91,12 @@ export function InlineEdits({
     <EditsContext.Provider value={value}>
       {lost && write.refusal ? (
         <ConflictNote
-          item={lost}
+          item={lost.item}
+          label={lost.label}
           seatName={seatName}
           fallback={write.refusal.sentence}
           onDismiss={() => {
-            setLost("");
+            setLost(null);
             write.dismiss();
           }}
         />
@@ -116,11 +121,15 @@ export function InlineEdits({
  */
 export function ConflictNote({
   item,
+  label,
   seatName,
   fallback,
   onDismiss,
 }: {
+  /** The task's address ([itemAddress]), which its history is asked by. */
   item: string;
+  /** What the sentence calls the task: its key. */
+  label: string;
   seatName?: (handle: string) => string;
   /** The engine's own sentence, drawn until the history answers. */
   fallback: string;
@@ -128,14 +137,16 @@ export function ConflictNote({
 }) {
   const newest = useQuery("work_activity", { task: item, limit: 1 });
   const record = newest.data?.records?.[0];
-  const who = record?.actor_seat
-    ? (seatName?.(record.actor_seat) ?? record.actor_seat)
-    : (record?.actor ?? "");
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds to
+  // a seat writes AS that seat, and anybody bound to none under their login,
+  // which is a name and drawn as one.
+  const actor = record?.actor ?? "";
+  const who = actor ? (seatName?.(actor) ?? actor) : "";
   return (
     <span className="write-refusal" role="alert">
       <span>
         {who
-          ? `${item} was changed by ${who} since you opened it. Look again, then retry.`
+          ? `${label} was changed by ${who} since you opened it. Look again, then retry.`
           : fallback}
       </span>
       <Button size="small" variant="ghost" onClick={onDismiss}>

@@ -35,7 +35,7 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 		t.Fatal("the external broker never became ready")
 	}
 
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.Type = config.StreamNATS
 	b.Stream.URL = broker.ClientURL()

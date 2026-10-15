@@ -27,9 +27,10 @@
  *
  * # What it does, as you
  *
- * Three rows change the company, each through `useAct` as the person the
- * token is bound to (ADR-0024), each drawn for every reader and saying why
- * where it cannot act:
+ * Three rows change the company, each through `useAct` AS THE SIGNED-IN
+ * PRINCIPAL (ADR-0024) — the seat the directory binds them to where it binds
+ * one, their own login where it does not — each drawn for every reader and
+ * saying why where it cannot act:
  *
  *  - "Assign {KEY} to an agent…" opens a picker over the agents — the one the
  *    term NAMES first, when the engine's name tiers find exactly one — and
@@ -84,30 +85,33 @@ import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
+import { useKeyHints } from "~/lib/media.ts";
 import { themeEntry, useApplyTheme } from "../appearance.tsx";
-import { useViewer } from "~/lib/viewer.ts";
-import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
+import { useViewer, type ViewerState } from "~/lib/viewer.ts";
+import { useAgents, useConnection, useOrg, useTools } from "~/lib/store-hooks.ts";
 import {
   activityOf,
   handleLabel,
   indexOrg,
   labelOf,
+  liveRowFor,
   nameOfIn,
   statusOf,
   stateLine,
+  unitRoute,
   workingLongestFirst,
   type Seat,
 } from "~/lib/seats.ts";
 import { turnIdOf, watchLink } from "~/lib/turns.ts";
-import { statusLabel, unfinished } from "~/lib/work.ts";
+import { itemPath, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import { useOpenProjectSwitcher } from "../header/ProjectSwitcher.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import { copyPageLink } from "~/lib/pageLink.ts";
 import type { ActResult } from "~/protocol/act.ts";
-import type { SearchOutcome, WorkProjectRow } from "~/protocol/index.ts";
+import type { LogRefusal, QueryRefusal, SearchOutcome, WorkProjectRow } from "~/protocol/index.ts";
 import { SEARCH_MODES, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
 import { PriorityMark, StatusMark } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -138,6 +142,7 @@ import {
   toolHits,
   type Hit,
   type ScopeId,
+  type Standing,
 } from "./hits.ts";
 import { useKnowledgeAnswer, type AnswerState, type KnowledgeAnswerReceipt } from "./answer.ts";
 
@@ -183,13 +188,28 @@ export function CommandPalette({
   const nav = useNavigator();
   const route = useRoute();
   const viewer = useViewer();
+  // WHO THE LOCKS ARE READ FOR, or null while nobody has said — a lock
+  // claimed on a guess is a refusal nobody made.
+  const standing: Standing = viewer.loading
+    ? null
+    : viewer.anonymous
+      ? { anonymous: true }
+      : { anonymous: false, grants: viewer.grants };
   const prefs = useViewerPrefs();
+  // THE KEYCAPS ARE FOR A READER WITH KEYS (`useKeyHints`): on a phone the
+  // rows' chords and the footer's legend named keys nobody there has.
+  const keyHints = useKeyHints();
   const recents = useRecents();
   const agents = useAgents();
   const org = useOrg();
   const tools = useTools();
   const toast = useToast();
   const index = useMemo(() => indexOrg(org), [org]);
+  // A BROWSER THE ENGINE REFUSED ASKS IT NOTHING. Its questions would wait on a socket nobody dials, drawn as
+  // searches that never finish; the seats and tools a refusal dropped are not
+  // here to list (`Store.setAccessRefused`); and the writes say why they are
+  // held, through the gate every write reads.
+  const served = useConnection().accessRefused === null;
 
   // THE RUNNING SET IS READ ONCE, AS THE PALETTE OPENS — which turns Running
   // now offers and in what order. The kit's listbox holds the highlight by
@@ -253,6 +273,7 @@ export function CommandPalette({
   const searchable = (scope === "all" || scope === "tasks" || scope === "pages") && !picking;
   const tooLong = searchable ? searchTooLong(term) : null;
   const wantsTasks =
+    served &&
     !picking &&
     (scope === "all" || scope === "tasks") &&
     term.length >= SEARCH_MIN &&
@@ -263,6 +284,7 @@ export function CommandPalette({
     { enabled: wantsTasks },
   );
   const wantsPages =
+    served &&
     !picking &&
     (scope === "all" || scope === "pages") &&
     term.length >= SEARCH_MIN &&
@@ -271,18 +293,28 @@ export function CommandPalette({
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = picking ? pickTerm : term;
   const wantsNames =
+    served &&
     (pickingAgent || (!picking && (scope === "all" || scope === "agents"))) &&
     colleagueSendable(nameTerm);
   const names = useQuery("colleague", { q: nameTerm }, { enabled: wantsNames });
   // THE COMPANY'S PROJECTS, once: to name the project a create lands in, and
   // to offer them when nothing on screen or in the chart says which.
-  const projectsRead = useQuery("work_projects", { limit: PROJECT_PAGE });
+  // A TRACKER QUESTION, asked only of a reader holding Tracker: without it the
+  // engine refuses the list, and nothing a reader without it can do here
+  // files a task anyway.
+  const projectsRead = useQuery(
+    "work_projects",
+    { limit: PROJECT_PAGE },
+    { enabled: served && viewer.tracker },
+  );
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
   // THE SWITCHER, which "Switch project…" opens over whatever the palette
   // leaves behind it as it closes.
   const openSwitcher = useOpenProjectSwitcher();
-  const switchHit = switchProjectHit(openSwitcher);
+  // NOT OFFERED WHERE THE ENGINE SERVES NO COMPANY, NOR TO A READER WITHOUT
+  // TRACKER: the switcher lists projects, which is the tracker's question.
+  const switchHits = served && viewer.tracker ? [switchProjectHit(openSwitcher)] : [];
 
   // WHICH TERM EACH ANSWER ON HAND IS FOR. `useQuery` keeps the previous
   // answer across a change of parameters — right for a polled table, wrong
@@ -306,7 +338,11 @@ export function CommandPalette({
   const assign = useAct("update_work_item");
   const create = useAct("create_work_item");
   const pickItem = pick?.kind === "assign" ? pick.item : "";
-  const itemRead = useQuery("work_item", { id: pickItem }, { enabled: pickItem !== "" });
+  const itemRead = useQuery(
+    "work_item",
+    { id: pickItem },
+    { enabled: pickItem !== "" && viewer.tracker },
+  );
 
   // The task at hand: the one on screen, else the best task hit for this term.
   const onScreen = routeTask(route.path);
@@ -360,7 +396,9 @@ export function CommandPalette({
   // A fresh keystroke clears what the last press said.
   useEffect(() => setNotice(null), [query, pickQuery, scope]);
 
-  const liveOf = (seat: Seat) => agents.find((a) => a.role === seat.name);
+  // PAIRED BY THE SEAT'S OWN ROW, never by its name: two seats may share a
+  // name, and a seat's ring read off its namesake's row is a state it is not in.
+  const liveOf = (seat: Seat) => liveRowFor(agents, seat);
 
   const seatItem = (seat: Seat, hint: string, onSelect: () => void): CommandPaletteItem => {
     const state = activityOf(liveOf(seat));
@@ -436,11 +474,13 @@ export function CommandPalette({
     const result = await create.run({ title, project: where }, { done: `Created “${title}”` });
     if (!settle(result)) return;
     // THE NEW TASK IS WHERE THE PERSON GOES NEXT: they named it to work on
-    // it. The route change closes the palette. An unknown outcome has no key
-    // to go to, and its toast is what says so.
-    const key =
-      result.kind === "unknown" ? undefined : (result.receipt as { key?: string } | null)?.key;
-    if (key) nav.to(["work", key]);
+    // it. The route change closes the palette. An unknown outcome has no task
+    // to go to, and its toast is what says so. AT THE ADDRESS THE RECEIPT
+    // NAMES (`item`), never its key: a key a restored counter handed out again
+    // is one another task already claimed, and it opens that task.
+    const address =
+      result.kind === "unknown" ? undefined : (result.receipt as { item?: string } | null)?.item;
+    if (address) nav.to(["work", address]);
     else onClose();
   };
 
@@ -483,7 +523,9 @@ export function CommandPalette({
           : suggested
             ? `suggested: ${suggested.seat.name}, ${suggested.why}`
             : "choose who",
-        meta: <Kbd subtle keys={capsOf(keyRow("search.assign").presses[0]!)} />,
+        meta: keyHints ? (
+          <Kbd subtle keys={capsOf(keyRow("search.assign").presses[0]!)} />
+        ) : undefined,
         onSelect: why
           ? blockedRow(why)
           : () => {
@@ -513,7 +555,7 @@ export function CommandPalette({
           ? `Ask ${suggested.seat.name} about “${term}”`
           : `Ask an agent about “${term}”…`,
         hint: why || "opens an ask, answer lands in your inbox",
-        meta: <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} />,
+        meta: keyHints ? <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} /> : undefined,
         onSelect: why
           ? blockedRow(why)
           : () => {
@@ -533,7 +575,9 @@ export function CommandPalette({
         icon: <PlusGlyph size="sm" />,
         label: `Create task “${term}”`,
         hint: why || (project ? whereHint(project, projectWhy) : choose),
-        meta: <Kbd subtle keys={capsOf(keyRow("search.create").presses[0]!)} />,
+        meta: keyHints ? (
+          <Kbd subtle keys={capsOf(keyRow("search.create").presses[0]!)} />
+        ) : undefined,
         onSelect: why
           ? blockedRow(why)
           : () => {
@@ -602,7 +646,10 @@ export function CommandPalette({
   const taskRows = (cap: number): CommandPaletteItem[] => {
     const hits = taskAnswer.data?.hits ?? [];
     return hits.slice(0, cap).map((item) => ({
-      id: `task-${item.key}`,
+      // THE ITEM'S ID, which is what the list keys an option on: a key is an
+      // ADDRESS two items can hold at once (`key_collision`), and a search that
+      // finds both would draw two options under one key.
+      id: `task-${item.id}`,
       icon: <StatusMark status={item.status} />,
       label: (
         <>
@@ -614,7 +661,9 @@ export function CommandPalette({
         item.assignee ? (index.byHandle.get(item.assignee)?.name ?? item.assignee) : "unassigned",
       ].join(" · "),
       meta: <PriorityMark priority={item.priority} />,
-      onSelect: () => nav.to(["work", item.key]),
+      // AND IT GOES TO THE ITEM'S ADDRESS for the same reason: the key opens
+      // whichever of the two claimed it first.
+      onSelect: () => nav.to(itemPath(item)),
     }));
   };
 
@@ -632,7 +681,7 @@ export function CommandPalette({
           </>
         ),
         hint: p.task_counts ? `${unfinished(p.task_counts)} open` : undefined,
-        onSelect: () => nav.to(["work", p.key]),
+        onSelect: () => nav.to(projectPath(p.key)),
       }));
 
   const pageRows = (cap: number): CommandPaletteItem[] =>
@@ -714,13 +763,15 @@ export function CommandPalette({
         id: "teams",
         label: "Teams",
         items: matchingUnits(index, lower, cap).map((unit) => ({
-          id: `unit-${unit.name}`,
+          // BY KEY, which is what tells two units sharing a name apart — as a
+          // row id, in the hint a reader picks between them by, and in the
+          // route. Keyed on the name, the second such unit was a duplicate row
+          // id and both rows opened the first one's page.
+          id: `unit-${unit.id}`,
           icon: <UsersGlyph size="sm" />,
           label: unit.name,
-          hint: `${unit.type || "team"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          // BY NAME: a unit's `id:` is part of the guarded configuration,
-          // not the public projection, so no link built here carries one.
-          onSelect: () => nav.to(["agents", "teams", unit.name]),
+          hint: `${unit.type || "team"} · ${unit.id}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
+          onSelect: () => nav.to(unitRoute(unit)),
         })),
       });
     }
@@ -875,15 +926,19 @@ export function CommandPalette({
     if (!term) {
       push("recent", "Recent", asItems(recentHits(recents, nav)));
       push("running", "Running now", runningRows());
-      push("go", "Go to", asItems([...destinationHits("", nav, Infinity), switchHit]));
+      push(
+        "go",
+        "Go to",
+        asItems([...destinationHits("", nav, Infinity, standing), ...switchHits]),
+      );
     } else {
       push("ids", "Open by id", asItems(idHits(term, nav)));
       push(
         "go",
         "Go to",
         asItems([
-          ...destinationHits(lower, nav, GO_TO_ROWS),
-          ...(score(switchHit.label, lower) >= 0 ? [switchHit] : []),
+          ...destinationHits(lower, nav, GO_TO_ROWS, standing),
+          ...switchHits.filter((hit) => score(hit.label, lower) >= 0),
         ]),
       );
       push("projects", "Projects", projectRows(allRows));
@@ -938,12 +993,12 @@ export function CommandPalette({
                     message: "Copy the address from the address bar instead.",
                   }),
             ),
-          setToken: requestToken,
+          signIn: goSignIn,
           clearRecents: forgetAll,
           showKeys: onShowKeys,
           changeTheme: openThemeStep,
           themeName: themeEntry(prefs.palette).name,
-          switchProject: openSwitcher,
+          switchProject: served ? openSwitcher : null,
           hash: route.hash || "#/",
         }),
       ),
@@ -965,6 +1020,8 @@ export function CommandPalette({
     if (picking)
       return pickTerm ? `No agent matches “${pickTerm}”.` : "This company has no agents.";
     if (scope === "tasks") {
+      // WITHHELD FIRST: no term a reader without Tracker types finds a task.
+      if (tasks.withheld) return tasks.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
       if (taskAnswer.error) return "Task search did not run.";
@@ -975,6 +1032,7 @@ export function CommandPalette({
       return `No task matches “${term}”.`;
     }
     if (scope === "pages") {
+      if (pages.withheld) return pages.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
       if (pageAnswer.error) return "Knowledge search did not run.";
@@ -988,8 +1046,8 @@ export function CommandPalette({
   };
 
   // ---- the lead --------------------------------------------------------------
-  const scopeRefusal =
-    scope === "tasks" ? taskAnswer.error : scope === "pages" ? pageAnswer.error : null;
+  const scopeRead = scope === "tasks" ? taskAnswer : scope === "pages" ? pageAnswer : null;
+  const scopeRefusal = scopeRead?.error ?? null;
   const lead = themeStep ? null : picking ? (
     <PickLead
       pick={pick}
@@ -1011,7 +1069,12 @@ export function CommandPalette({
         // table of what each refusal means says which (`components/common.tsx`)
         // — "the engine does not serve this here" and "the socket went away"
         // both read as "nothing matched" otherwise.
-        <QueryState error={scopeRefusal} loading={false} />
+        <QueryState
+          error={scopeRefusal}
+          refusal={scopeRead?.refusal ?? null}
+          detail={scopeRead?.detail ?? undefined}
+          loading={false}
+        />
       ) : tooLong ? (
         // NOT SENT, and said where an answer would be: All still lists the
         // screens and actions the term matches, and nothing else on the
@@ -1141,30 +1204,32 @@ export function CommandPalette({
       {...scoped}
       footer={
         <>
-          <span className="palette-keys">
-            <span>
-              <Kbd subtle>↑</Kbd>
-              <Kbd subtle>↓</Kbd> {themeStep ? "preview" : "move"}
-            </span>
-            <span>
-              <Kbd subtle keys={["Enter"]} /> {themeStep ? "apply" : picking ? "choose" : "open"}
-            </span>
-            {themeStep ? (
+          {keyHints && (
+            <span className="palette-keys">
               <span>
-                <Kbd subtle keys={["Escape"]} /> back to Actions
+                <Kbd subtle>↑</Kbd>
+                <Kbd subtle>↓</Kbd> {themeStep ? "preview" : "move"}
               </span>
-            ) : picking ? (
               <span>
-                <Kbd subtle keys={capsOf(keyRow("search.back").presses[0]!)} /> back
+                <Kbd subtle keys={["Enter"]} /> {themeStep ? "apply" : picking ? "choose" : "open"}
               </span>
-            ) : (
-              // A PHONE DROPS THIS ONE (frame.css): it has no chord keys, and
-              // three keys with their words wrapped its band onto two lines.
-              <span className="palette-keys-chord">
-                <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} /> ask an agent
-              </span>
-            )}
-          </span>
+              {themeStep ? (
+                <span>
+                  <Kbd subtle keys={["Escape"]} /> back to Actions
+                </span>
+              ) : picking ? (
+                <span>
+                  <Kbd subtle keys={capsOf(keyRow("search.back").presses[0]!)} /> back
+                </span>
+              ) : (
+                // A PHONE DROPS THIS ONE (frame.css): it has no chord keys, and
+                // three keys with their words wrapped its band onto two lines.
+                <span className="palette-keys-chord">
+                  <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} /> ask an agent
+                </span>
+              )}
+            </span>
+          )}
           {/* THE MODE, where a ranked search is what the scope runs — drawn
               at the END OF THE SCOPE ROW, as the approved palette places it
               (frame.css), since the kit's scope row takes no trailing slot. */}
@@ -1185,15 +1250,25 @@ export function CommandPalette({
                 : picking
                   ? "The company’s agents"
                   : scope === "actions"
-                    ? viewer.name
-                      ? `Changes are made as ${viewer.name}`
-                      : "Changes need a token bound to your seat"
+                    ? actingAs(viewer)
                     : SCOPE_NOTES[scope]}
           </span>
         </>
       }
     />
   );
+}
+
+/**
+ * Who the Actions scope's changes are made as: the signed-in principal — the
+ * seat's name where the directory binds them to one, their login where it
+ * binds none, since an unbound principal acts under their own login — or the
+ * sign-in a reader nobody resolved needs first.
+ */
+function actingAs(viewer: ViewerState): string {
+  if (viewer.loading) return "Checking who you are";
+  if (viewer.anonymous) return "Changes need you signed in";
+  return `Changes are made as ${viewer.name || viewer.login}`;
 }
 
 /** The prefix of a theme row's id in the theme step: the rest is the theme's id. */
@@ -1421,18 +1496,45 @@ function PickLead({
  * is used. `enabled` false is no answer at all.
  */
 function useSettled<T>(
-  state: { data: T | null; error: string | null },
+  state: {
+    data: T | null;
+    error: string | null;
+    refusal?: QueryRefusal | LogRefusal | null;
+    detail?: string | null;
+  },
   term: string,
   enabled: boolean,
-): { data: T | null; error: string | null } {
-  const settled = useRef<{ data: T | null; error: string | null; term: string }>({
+): Settled<T> {
+  const settled = useRef<Settled<T> & { term: string }>({
     data: null,
     error: null,
+    refusal: null,
+    detail: null,
     term: "",
   });
   if (settled.current.data !== state.data || settled.current.error !== state.error) {
-    settled.current = { data: state.data, error: state.error, term };
+    // THE REFUSAL WITH ITS ERROR, from the same answer: the banner names the
+    // grant that would have admitted the reader, and a refusal kept from an
+    // older answer would name the wrong one.
+    settled.current = {
+      data: state.data,
+      error: state.error,
+      refusal: state.refusal ?? null,
+      detail: state.detail ?? null,
+      term,
+    };
   }
-  if (!enabled || settled.current.term !== term) return { data: null, error: null };
-  return { data: settled.current.data, error: settled.current.error };
+  if (!enabled || settled.current.term !== term) {
+    return { data: null, error: null, refusal: null, detail: null };
+  }
+  const { data, error, refusal, detail } = settled.current;
+  return { data, error, refusal, detail };
+}
+
+/** What a settled search answered, refusal and all. */
+interface Settled<T> {
+  data: T | null;
+  error: string | null;
+  refusal: QueryRefusal | LogRefusal | null;
+  detail: string | null;
 }

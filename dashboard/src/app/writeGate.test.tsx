@@ -10,11 +10,11 @@
  *    fixture — so a new write surface cannot land without being rendered
  *    below, and a screen cannot reach `act` around the gating;
  *  - THE RENDER: every control of every such module, for an anonymous
- *    reader, an unbound token, a bound person the engine makes the change
- *    for, and one it does not. The control is PRESENT in all four — a write
- *    control is never hidden — enabled only for the bound person the engine
- *    serves, and otherwise disabled with the sentence that says what would
- *    change that.
+ *    reader, a person bound to no seat, a bound person the engine makes the
+ *    change for, and one it does not. The control is PRESENT in all four — a
+ *    write control is never hidden — enabled for whoever the engine serves,
+ *    bound to a seat or not, and otherwise disabled with the sentence that
+ *    says what would change that.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -202,9 +202,13 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
 const EVERY_TOOL = Object.values(TOOLS);
 
 const NOBODY: ViewerState = {
-  operatorID: "",
-  operator: false,
+  login: "",
+  grants: [],
+  admin: false,
+  tracker: false,
+  knowledge: false,
   handle: "",
+  owner: "",
   name: "",
   acts: [],
   project: "",
@@ -224,24 +228,32 @@ const READERS: readonly {
 }[] = [
   { who: "an anonymous reader", viewer: () => NOBODY, reason: WRITE_REASONS.anonymous },
   {
-    who: "an unbound token",
+    // AN UNBOUND PRINCIPAL ACTS, under its own login (ADR-0024): a binding
+    // adds the seat a person acts as, never the right to act.
+    who: "a person bound to no seat the engine makes it for",
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "ci",
-      operator: true,
+      login: "ops.lead",
+      owner: "ops.lead",
+      grants: ["tracker", "knowledge"],
       unbound: true,
+      acts: EVERY_TOOL,
     }),
-    reason: WRITE_REASONS.unbound,
+    reason: null,
   },
   {
     who: "a bound person the engine makes it for",
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "founder",
-      operator: true,
+      login: "founder",
+      grants: ["admin", "tracker", "knowledge"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
       handle: "jane",
+      owner: "jane",
       name: "Jane Founder",
       kind: "human",
       acts: EVERY_TOOL,
@@ -253,9 +265,13 @@ const READERS: readonly {
     viewer: (tool) => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "founder",
-      operator: true,
+      login: "founder",
+      grants: ["admin", "tracker", "knowledge"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
       handle: "jane",
+      owner: "jane",
       name: "Jane Founder",
       kind: "human",
       acts: EVERY_TOOL.filter((t) => t !== tool),
@@ -265,7 +281,7 @@ const READERS: readonly {
 ];
 
 beforeEach(() => {
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(null as never);
 });
 
@@ -327,7 +343,7 @@ describe("the source", () => {
       const file = join(SRC, suite);
       expect(existsSync(file), `${path} names ${suite}, which does not exist`).toBe(true);
       const text = readFileSync(file, "utf8");
-      for (const block of ["anonymous", "unbound", "not_served"]) {
+      for (const block of ["anonymous", "not_served"]) {
         expect(text, `${suite} never draws ${path} for a reader who is ${block}`).toContain(
           `WRITE_REASONS.${block}`,
         );

@@ -9,7 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE FLEET'S BROKER MEMBERSHIP, over HTTP for the retention gestures' reason:
@@ -42,19 +44,38 @@ type FleetBrokerControl interface {
 	Remove(ctx context.Context, req engine.BrokerRemoval) (engine.BrokerRemoved, error)
 }
 
-// BrokerRefusal is a removal refused with nothing changed: the status and the
-// body the route answers with.
+// BrokerRefusal is a removal refused with nothing changed: the status, the
+// code and the facts the route answers with.
+//
+// IN THE ENGINE'S ENVELOPE, as [GateRefusal] is and for its reason: the code
+// is on httpjson's table and carries its sentence as `message`, `detail` says
+// what is wrong and `hint` what to do, and a 503 carries the Retry-After its
+// cause implies. It was a body of its own — `{error, detail, hint}` with no
+// sentence — on the one surface that changes the quorum every node runs on.
 type BrokerRefusal struct {
 	Status int
-	Body   BrokerRefusalBody
+	Code   httpjson.Code
+	Fields httpjson.Detail
+
+	// RetryAfter is the Retry-After in whole seconds, on a 503 whose cause
+	// waiting can clear; zero writes none.
+	RetryAfter int
 }
 
-// BrokerRefusalBody is every refusal's body: the code a caller branches on,
-// the sentence saying what is wrong, and the one saying what to do.
-type BrokerRefusalBody struct {
-	Error  string `json:"error"`
-	Detail string `json:"detail"`
-	Hint   string `json:"hint"`
+// Envelope is the refusal's body as the route sends it — [httpjson.Envelope]'s.
+// A server standing in for a node answers with [BrokerRefusal.Write] rather
+// than encoding this itself, or its 503 goes out with no Retry-After.
+func (b BrokerRefusal) Envelope() map[string]any { return httpjson.Envelope(b.Code, b.Fields) }
+
+// Write answers the refusal: a 503 through [httpjson.UnavailableWith], which
+// sets the header and the envelope together, and anything else through
+// [httpjson.FailWithFields].
+func (b BrokerRefusal) Write(w http.ResponseWriter) {
+	if b.Status == http.StatusServiceUnavailable {
+		httpjson.UnavailableWith(w, b.Code, b.RetryAfter, b.Fields)
+		return
+	}
+	httpjson.FailWithFields(w, b.Status, b.Code, b.Fields)
 }
 
 // RenderBrokerRefusal renders err if it is one of the removal's refusals,
@@ -67,58 +88,68 @@ type BrokerRefusalBody struct {
 // a group with no leader is brought back to a quorum, a carrier that went
 // silent is read about before asking again, and an external cluster is its
 // own operator's.
+//
+// THE TWO 503s WAIT AN ELECTION ([statelog.ElectionRetryHint]): a group with
+// no leader answers again no sooner than it elects one, and a removal with no
+// member to carry it waits on a member's broker coming back into that group.
 func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
-	refuse := func(status int, code, hint string) (BrokerRefusal, bool) {
-		return BrokerRefusal{Status: status, Body: BrokerRefusalBody{
-			Error: code, Detail: err.Error(), Hint: hint,
-		}}, true
+	refuse := func(status int, code httpjson.Code, hint string) (BrokerRefusal, bool) {
+		out := BrokerRefusal{Status: status, Code: code,
+			Fields: httpjson.Detail{"detail": err.Error(), "hint": hint}}
+		if status == http.StatusServiceUnavailable {
+			out.RetryAfter = httpjson.RetrySeconds(statelog.ElectionRetryHint)
+		}
+		return out, true
 	}
 	var live *engine.BrokerMemberLive
 	switch {
 	case err == nil:
 		return BrokerRefusal{}, false
 	case errors.As(err, &live):
-		return refuse(http.StatusConflict, "member_live",
+		return refuse(http.StatusConflict, httpjson.CodeMemberLive,
 			"stop the node first and remove it once its presence lease has lapsed; "+
 				"force it only for a member that is wedged but still renewing")
 	case errors.Is(err, engine.ErrRemovalOutcomeUnknown):
-		return refuse(http.StatusGatewayTimeout, "outcome_unknown",
+		return refuse(http.StatusGatewayTimeout, httpjson.CodeRemovalOutcomeUnknown,
 			"read GET /fleet/broker before asking again: the member carrying it may "+
 				"have committed the removal before it went silent")
 	case errors.Is(err, engine.ErrExternalBroker):
-		return refuse(http.StatusConflict, "external_broker",
+		return refuse(http.StatusConflict, httpjson.CodeExternalBroker,
 			"change the membership with the external cluster's own tools")
 	case errors.Is(err, jetstream.ErrNotAMetaPeer):
-		return refuse(http.StatusNotFound, "not_a_member",
+		return refuse(http.StatusNotFound, httpjson.CodeNotAMember,
 			"the metadata group counts no voter by that peer id, so there is nothing "+
 				"to remove: it was never a member, or a removal already made it so — "+
 				"GET /fleet/broker lists every voter it counts")
 	case errors.Is(err, jetstream.ErrMembershipChanging):
-		return refuse(http.StatusConflict, "membership_changing",
+		return refuse(http.StatusConflict, httpjson.CodeMembershipChanging,
 			"ask again once the change in flight has been committed")
 	case errors.Is(err, jetstream.ErrNoMetaLeader):
-		return refuse(http.StatusServiceUnavailable, "no_leader",
+		return refuse(http.StatusServiceUnavailable, httpjson.CodeNoLeader,
 			"a group without a leader can change nothing about itself: bring enough "+
 				"members back for a quorum, then ask again — and read the group first, "+
 				"since a removal whose answer was lost may already have been committed")
 	case errors.Is(err, engine.ErrNoBrokerMember):
-		return refuse(http.StatusServiceUnavailable, "no_member",
+		return refuse(http.StatusServiceUnavailable, httpjson.CodeNoBrokerMember,
 			"a removal is carried by a live member's system account: start one, or "+
 				"ask again once one answers")
 	}
 	return BrokerRefusal{}, false
 }
 
-// mountFleetBroker registers the two removals. The listing is a named read
-// route over the `fleet_broker` question, so the socket's query channel and
-// REST answer it from one implementation — see rest.go.
-func (a *App) mountFleetBroker(mux httpjson.Router) {
-	mux.Handle("POST /fleet/broker/remove/{node}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// mountFleetBroker registers the two removals, through the mount
+// [App.mountDeployment] hands it — which is what decides the grant: a removal
+// changes the quorum every election runs on, so it is `admin`'s and asks for a
+// recent proof. The listing is a named read route over the `fleet_broker`
+// question, so the socket's query channel and REST answer it from one
+// implementation — see rest.go.
+func (a *App) mountFleetBroker(mount func(string, http.HandlerFunc)) {
+	mount("POST /fleet/broker/remove/{node}", func(w http.ResponseWriter, r *http.Request) {
 		a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))
-	}))
-	mux.Handle("POST /fleet/broker/remove-peer/{peer}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})
+	mount("POST /fleet/broker/remove-peer/{peer}", func(w http.ResponseWriter, r *http.Request) {
 		a.serveBrokerRemove(w, r, voterByPeer, r.PathValue("peer"))
-	}))
+	})
 }
 
 // voterName is how a removal route names the voter: the rule its path
@@ -147,44 +178,55 @@ func (a *App) serveBrokerRemove(w http.ResponseWriter, r *http.Request, by voter
 	// here takes: a removed member is no longer counted in any election,
 	// which is a change to the quorum every node runs on.
 	if id == "" || r.URL.Query().Get("confirm") != id {
-		writeJSON(w, http.StatusBadRequest, BrokerRefusalBody{
-			Error: "confirm_required",
-			Detail: "the " + by.what + " was not repeated: removing a member changes " +
-				"the quorum every election and every create of the fleet's broker runs on",
-			Hint: "repeat the " + by.what + " in ?confirm=",
-		})
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeConfirmRequired,
+			httpjson.Detail{
+				"detail": "the " + by.what + " was not repeated: removing a member " +
+					"changes the quorum every election and every create of the " +
+					"fleet's broker runs on",
+				"hint": "repeat the " + by.what + " in ?confirm=",
+			})
 		return
 	}
 	if !by.valid(id) {
-		writeJSON(w, http.StatusBadRequest, BrokerRefusalBody{
-			Error: "voter_invalid", Detail: id + " is not a " + by.what,
-			Hint: "name the voter by the node id GET /fleet/broker lists it under, or " +
-				"by its peer id through /fleet/broker/remove-peer where no member " +
-				"knows its name",
-		})
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeVoterInvalid,
+			httpjson.Detail{
+				"detail": id + " is not a " + by.what,
+				"hint": "name the voter by the node id GET /fleet/broker lists it " +
+					"under, or by its peer id through /fleet/broker/remove-peer " +
+					"where no member knows its name",
+			})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	// WHO ASKED, as every record on this surface names a caller: the author
+	// and the credential they pressed it through.
+	actor := iam.ActorFor(caller)
 	force := r.URL.Query().Get("force") == "true"
 	removal := by.removal(id)
-	removal.Force, removal.By = force, operator
+	removal.Force, removal.By = force, actor
 	done, err := a.fleetBroker.Remove(r.Context(), removal)
 	if refusal, ok := RenderBrokerRefusal(err); ok {
-		log.Warn("api_broker_remove_refused", "operator", operator, by.key, id,
-			"force", force, "code", refusal.Body.Error, "error", err)
-		writeJSON(w, refusal.Status, refusal.Body)
+		log.Warn("api_broker_remove_refused", "by", actor.Name, "operator", actor.OperatorID,
+			by.key, id, "force", force, "code", refusal.Code, "error", err)
+		refusal.Write(w)
 		return
 	}
 	if err != nil {
-		log.Warn("api_broker_remove_failed", "operator", operator, by.key, id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, BrokerRefusalBody{
-			Error: "broker_remove_failed", Detail: err.Error(),
-			Hint: "read GET /fleet/broker before asking again: the removal may have " +
-				"been committed although its answer was lost",
-		})
+		log.Warn("api_broker_remove_failed", "by", actor.Name, "operator", actor.OperatorID,
+			by.key, id, "error", err)
+		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeBrokerRemoveFailed,
+			httpjson.Detail{
+				"detail": err.Error(),
+				"hint": "read GET /fleet/broker before asking again: the removal may " +
+					"have been committed although its answer was lost",
+			})
 		return
 	}
-	log.Warn("fleet_broker_member_removed_by_operator", "operator", operator,
-		"node", done.Node, "peer", done.Peer, "force", force, "by", done.By)
+	log.Warn("fleet_broker_member_removed_by_operator", "by", actor.Name,
+		"operator", actor.OperatorID, "node", done.Node, "peer", done.Peer,
+		"force", force, "carried_by", done.By)
 	writeJSON(w, http.StatusOK, done)
 }

@@ -4,237 +4,315 @@ package queries
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The two refusals a personal question makes, told apart because the remedies
-// are different: one is a line of company configuration, the other a
-// credential.
-var (
-	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — give a human "+
-		"seat contact.crewlet_operator_id matching the api.auth token id, or name a handle",
-		ErrBadParams)
-	errNotYours = fmt.Errorf("%w: reading another seat's record needs an operator credential",
-		ErrUnauthorized)
-)
+// errNoSeat is the refusal a question about a SEAT's trail makes of a caller
+// bound to no seat who named none — a Tier A token's credential, or a service
+// account bound to none.
+// It is NOT an authorization failure — nobody was refused anything — and its
+// remedy is a row in the identity directory rather than a different
+// credential, which is why it is [ErrBadParams] and the authority refusal
+// beside it is a [Refusal] carrying the rule's own reason.
+//
+// THE BINDING IS NAMED WHERE IT LIVES. It used to say "in the org chart", which
+// was true while a seat's contact block carried the credential it was held by;
+// the directory holds that now, and a remedy pointing at the chart sends
+// somebody to edit a document that has no field for it. And it names a HUMAN
+// seat, because that is the only kind the directory binds anybody to: a bind
+// naming an agent's seat is refused, so "bind it to one" sent a caller to try
+// the seat whose trail they were reading.
+var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
+	"its row in the identity directory to a human seat (`crewlet iam bind`), "+
+	"or name a handle", ErrBadParams)
 
-// viewer answers who this socket's credential belongs to.
+// errNoRecord is the refusal a question about a PERSONAL RECORD makes of a
+// caller who has none and named nobody.
 //
-// THE FRAME HAS NEVER HAD A VIEWER, and everything personal in the dashboard
-// is fiction without one: "my work" picked the alphabetically first seat,
-// `work_views` was asked without a viewer so no pinned or personal view could
-// exist, the five `preset=` values that resolve against the caller's identity
-// were never sent, and an inbox could not be anyone's.
+// RARER THAN [errNoSeat] and a different fact: every person — bound to their
+// seat — every service account and every token has a record of their own — see [iam.RecordOwner] —
+// so what reaches this is a principal the engine can name nothing for, and the
+// remedy is to name whose record to read.
+var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
+	"record there is — name a handle", ErrBadParams)
+
+// viewer answers who this caller is.
 //
-// The resolution is a chain of two, and NEITHER STEP IS NEW: Tier A's
-// `api.auth.tokens` maps a presented credential to an operator id, and a seat
-// binds one of those ids with `contact.crewlet_operator_id`. What was missing
-// is a question that walks it.
+// THE PRINCIPAL AND NOTHING ELSE. It used to walk a chain of two — Tier A's
+// `api.auth.tokens` mapped a credential to an operator id, and a field on a
+// seat's contact block named one of those ids — which was the only binding
+// this engine had between a credential and a seat. The identity estate
+// replaced it: a person is a ROW, a session resolves to that row, and the seat
+// they hold is on the chart. Nothing here derives anything any more.
 //
-// AN UNBOUND TOKEN IS AN ORDINARY STATE. `org.HumanContact` says so in as many
-// words, so this answers the operator id with no seat rather than an error —
-// the screen then says what to bind, which is a different thing from a screen
-// that looks broken.
+// A CREDENTIAL BOUND TO NO SEAT IS AN ORDINARY STATE — a Tier A token's
+// session, or a service account bound to none — so this answers the login with
+// no seat rather than an error: the screen then says what to bind, which is a
+// different thing from a screen that looks broken. It is never a PERSON's: a
+// person holds a human seat for as long as they exist (ADR-0032).
 func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
-	operatorID := operatorFrom(ctx)
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "viewer")
+	}
 	out := map[string]any{
-		"operator_id": operatorID,
-		// WHETHER THIS CALLER MAY ASK THE GUARDED QUESTIONS, which is the
-		// same test the registry makes, answered once so a screen can draw
-		// a locked row rather than discovering the refusal per question.
-		"operator": operatorID != "",
-		"handle":   "",
-		"name":     "",
-		"kind":     "",
-		// WHAT THIS CALLER MAY DO on the act transport, which admits a
-		// person and nobody else (ADR-0024): empty for an anonymous
-		// reader and for a token no seat binds, so a screen disables its
-		// write controls with the reason rather than offering a press
-		// the engine refuses. ALWAYS AN ARRAY, never null, so "may do
-		// nothing" is a value a reader can test rather than an absence.
+		"login": principal.Login,
+		// WHAT THIS CALLER MAY ASK, answered once so a screen can draw a
+		// locked row rather than discovering the refusal per question —
+		// the EFFECTIVE set the guard composed on this node (ADR-0033):
+		// every app an admin holds is listed beside `admin`, and admin is
+		// left out where this node's `api.auth.admin` refuses it, so a
+		// screen reads what it may do here without expanding anything.
+		"grants": grantNames(principal),
+		// THE SEAT'S OWN FIELDS, empty for a credential that holds none.
+		// `kind` is the SEAT's — human or agent — and never the
+		// principal's: the two are different vocabularies, and a screen
+		// reading "person" where the chart says "human" would be reading
+		// a word this company never wrote.
+		"handle": "",
+		"name":   "",
+		"kind":   "",
+		// THE NAME THE CALLER'S OWN RECORD IS KEPT UNDER — their inbox,
+		// pins, priorities and personal views. The seat for a bound
+		// person, and the login for everybody the directory binds to
+		// none, who has a record all the same: a screen that asked for
+		// "my" record by `handle` asked an unbound caller for nothing,
+		// while their assistant wrote it under this. See
+		// [iam.RecordOwner].
+		"owner": iam.RecordOwner(principal),
+		// WHAT THIS CALLER MAY DO on the act transport: the tools that
+		// write which the authority table can admit them to before any
+		// object is named — see [Sources.Acts]. A screen disables a
+		// control nothing here names, with the reason, rather than
+		// offering a press the engine refuses. ALWAYS AN ARRAY, never
+		// null, so "may do nothing" is a value a reader can test rather
+		// than an absence.
 		"acts": []string{},
-		// WHERE THIS PERSON'S CREATE LANDS when it names no project — the
-		// project `create_work_item` defaults a person's create to, from
-		// the same derivation. "" is a real answer: a seat whose team, and
-		// every team above it, owns no project, whose create is refused
-		// until one is named.
+		// WHERE THIS CALLER'S CREATE LANDS when it names no project — the
+		// project `create_work_item` defaults a bound person's create to,
+		// from the same derivation. "" is a real answer: a caller bound to
+		// no seat, and a seat whose team, and every team above it, owns no
+		// project, whose create is refused until one is named.
 		"project": "",
-		// WHETHER THIS CALLER MAY CHANGE THE COMPANY DOCUMENT, and who may
-		// when it is managed (ADR-0030), so a screen draws every editing
+		// WHETHER THIS CALLER'S CREDENTIAL MAY CHANGE THE COMPANY DOCUMENT,
+		// and who manages it (ADR-0030), so a screen draws every editing
 		// control disabled with the reason rather than offering a save the
-		// config surface refuses. The writers are named to an operator
-		// only: which credential can rewrite the company is the most
-		// valuable line of the `access` answer, which is operator-only for
-		// the same reason. ALWAYS AN ARRAY; empty is not managed.
-		"config_writer":     false,
-		"config_managed_by": []string{},
+		// config surface refuses. Judged on the CREDENTIAL the request came
+		// through ([iam.ActorFor]'s operator id), by
+		// [config.APIAuth.MayWriteCompany] — the one reading the config
+		// surface refuses a write with — so this answer and that refusal
+		// cannot disagree. It says nothing about AUTHORITY: admin, or a
+		// lead's subtree, still decides whether this caller may write at
+		// all.
+		//
+		// THE WRITERS ARE NAMED TO EVERY CALLER, which is what the config
+		// surface already does: its refusal names them to anybody whose
+		// write it turns away, and a write anybody bound to a seat may
+		// attempt reaches that refusal. Withheld here, they would hide only
+		// the reason a screen locks an edit, from exactly the lead who
+		// would otherwise press it. They are token LABELS, never values.
+		// ALWAYS AN ARRAY; empty is not managed.
+		"config_writer":     s.companyWriters().MayWriteCompany(iam.ActorFor(principal)),
+		"config_managed_by": slices.Clone(s.companyWriters().CompanyWriters),
 	}
-	if operatorID != "" {
-		writers := s.companyWriters()
-		out["config_managed_by"] = writers
-		out["config_writer"] = s.Access == nil || s.Access.MayWriteCompany(operatorID)
+	if out["config_managed_by"] == nil {
+		out["config_managed_by"] = []string{}
 	}
-	seat := s.seatForOperator(operatorID)
-	if seat == nil {
-		return out, nil
-	}
-	if s.OperatorActs != nil {
-		if acts := s.OperatorActs(); acts != nil {
+	if s.Acts != nil {
+		acts, err := s.Acts(ctx, principal)
+		if err != nil {
+			// THE TABLE COULD NOT DECIDE, which is not "may do nothing":
+			// answered as an empty list, a screen would lock every
+			// control a person holds the authority for while this node
+			// cannot read the organisation it decides on.
+			return nil, fmt.Errorf("%w: this node cannot yet say what this "+
+				"credential may do: %w", ErrUnavailable, err)
+		}
+		if acts != nil {
 			out["acts"] = acts
 		}
+	}
+	// ONE CHART READING for the seat and the project it defaults to, so the
+	// two cannot describe two charts a revision landed between.
+	organization := s.organization()
+	seat := seatOf(organization, principal)
+	if seat == nil {
+		return out, nil
 	}
 	out["handle"] = seat.Handle()
 	out["name"] = seat.Name
 	// The zero value is an agent, which is what config.Role's own `kind`
 	// defaults to — reporting "" would make the common case look unset.
-	kind := seat.Kind
-	if kind == "" {
-		kind = org.KindAgent
+	if kind := seat.Kind; kind != "" {
+		out["kind"] = string(kind)
+	} else {
+		out["kind"] = string(org.KindAgent)
 	}
-	out["kind"] = string(kind)
-	// THE CHART THIS ANSWER WAS READ FROM, through the one derivation the
-	// operator surface's create applies (`engine.ProjectOfSeat`), so the
-	// project promised here is the project the create files into.
-	out["project"] = s.projectOf(seat.Handle())
+	// THROUGH THE ONE DERIVATION the operator surface's create applies
+	// (`engine.ProjectOfSeat`), so the project promised here is the project
+	// the create files into.
+	out["project"] = engine.ProjectOfSeat(organization, seat.Handle())
 	return out, nil
 }
 
-// companyWriters is the managed document's writers, or empty — never nil.
-func (s Sources) companyWriters() []string {
-	if s.Access == nil {
-		return []string{}
+// grantNames renders a principal's permissions for the screen.
+func grantNames(p iam.Principal) []string {
+	out := make([]string, 0, len(p.Grants))
+	for _, g := range p.Grants {
+		out = append(out, string(g))
 	}
-	return append([]string{}, s.Access.CompanyWriters...)
+	return out
 }
 
-// seatForOperator resolves the caller's operator id to a seat, or nil.
-func (s Sources) seatForOperator(operatorID string) *org.Role {
-	organization := s.organization()
-	if operatorID == "" || organization == nil {
+// companyWriters is the managed-document rule as the config surface reads it:
+// Tier A's `api.auth.company_writers` ([Sources.CompanyWriters]), read through
+// [config.APIAuth] so the viewer and the write path share one reading.
+func (s Sources) companyWriters() *config.APIAuth {
+	return &config.APIAuth{CompanyWriters: s.CompanyWriters}
+}
+
+// seatOf resolves the caller's own seat on one chart reading, or nil.
+func seatOf(organization *org.Organization, p iam.Principal) *org.Role {
+	if p.Seat == "" || organization == nil {
 		return nil
 	}
-	// THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), which is where every
-	// other consumer of `contact` resolves a `${VAR}` binding.
-	return organization.SeatByOperatorID(operatorID, s.Env)
+	// EVERY SEAT AND NOT ONLY THE AGENTS: a person holds a HUMAN seat,
+	// which is the whole case this resolves.
+	return organization.SeatByHandle(p.Seat)
 }
 
-// viewerParty is who a personal question answers about when the caller named
-// nobody, the authority check when they named somebody, and BOTH IDENTITIES
-// that person's rows may carry.
+// recordHandle is the handle a question about somebody's PERSONAL RECORD —
+// their inbox, their day, their person record — answers for, and the
+// authority check when it is somebody else's.
 //
-// # The scope rule, in one place because four questions share it
+// THE NAME IS RESOLVED BY [iam.OwnerOf], the one function every tool reads and
+// writes a person's record through, so a record an assistant wrote is the
+// record a screen reads. The caller's own — no name, or either of their own
+// ([iam.NamesSelf]) — is [iam.RecordOwner]'s; somebody else's LOGIN is their
+// holder's record, looked up in the identity directory ([Sources.Holders]); and
+// anything else is read as named. It used to be the principal's SEAT for the
+// caller, which was nothing at all for an unbound person, and the literal
+// login for somebody else, which for a person the directory binds to a seat
+// is an empty record under a name nothing of theirs is kept under.
 //
-// A caller reads the seat their own token is bound to, and naming anybody
-// else's handle requires an operator credential. Registering these
-// operator-only instead — which is what `work_my_work` did — makes the landing
-// screen the most-gated screen in the product and the human teammate, who is
-// one of the two readers this dashboard is for, fictional.
+// DECIDED ON WHAT THE NAME RESOLVED TO, because the lead relation is a fact
+// about a seat: asked about a login, a lead was refused the report they lead.
 //
-// # And the party, which is what the reader needs rather than a handle
+// BUT THE DIRECTORY IS ASKED ONLY ONCE THE AUTHORITY IS DECIDED AS FAR AS IT
+// CAN BE WITHOUT THE RECORD ([Sources.mayLook]): an admin passes, a
+// caller who could be admitted only as the lead of whoever holds the login
+// passes, and everybody else is refused exactly as they would be on a seat
+// they do not lead, before anything is looked up. The directory's answers
+// differ by login — nobody holds this one, this node cannot place that one —
+// and answered after the lookup, a login nobody holds was refused while a held
+// one this node could not resolve answered 503, so a caller with no authority
+// over anybody read which logins exist off the difference. A login that names
+// nobody is then decided on the name as typed — which nobody leads, so only
+// an admin passes — and only then answered as naming no record: "not
+// found" before "you may not" would make it a roster.
 //
-// A write made through somebody's own credential is attributed to the TOKEN,
-// not to their seat, and deliberately so: a tracker whose author field is
-// chosen by the writer is not an audit trail (see internal/api/operator). The
-// consequence is that one person's rows carry two names — `jane-founder` on
-// what a colleague assigned them, `founder` on everything their own assistant
-// filed — so a personal read asked about one of them answered nothing. A
-// founder who was reporter and watcher on eleven items opened My work and
-// found seven empty tabs.
+// THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
+// `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
+// [authz.ActionMyWork], `work_person` and `decisions` [authz.ActionPersonRead]
+// — somebody's queue, which is theirs, their lead's, or an admin's, each with
+// the tracker — and a seat's trail ([Sources.trailSeat]) asks
+// [authz.ActionSeatTrailRead] — the seat's, its lead's or an admin's, with no
+// app, since a seat's trail belongs to none. It used to decide every one of
+// them as a person's record, so a reader of the whole audit trail was refused
+// one seat's threads while reading every phase record it had ever written; and
+// before that it was "any operator credential for anybody else's", which made
+// every token in Tier A a reader of every seat's inbox.
 //
-// # The party belongs to the person ASKED ABOUT, not to the caller
-//
-// An operator reading a report's day gets that report's own alias, resolved
-// from the chart, rather than the credential in their own hand: whose two
-// names these are is a fact about the seat, and the caller's token has nothing
-// to do with it. That it is the caller's own id in the ordinary case falls out
-// of the same lookup rather than being a second rule.
-//
-// Returns the party to read and an error to refuse with.
-func (s Sources) viewerParty(ctx context.Context, asked string) (tracker.Party, error) {
-	operatorID := operatorFrom(ctx)
-	own := ""
-	if seat := s.seatForOperator(operatorID); seat != nil {
-		own = seat.Handle()
+// Returns the handle to read and an error to refuse with.
+func (s Sources) recordHandle(ctx context.Context, action authz.Action,
+	asked string) (string, error) {
+
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return "", unresolved(ctx, "viewer")
 	}
+	owner, _, err := iam.OwnerOf(ctx, principal, asked, s.Holders,
+		s.mayLook(principal, action))
+	var looked *iam.LookRefused
 	switch {
-	case asked == "":
-		if own == "" {
-			// NOT AN AUTHORIZATION FAILURE. Nobody was refused: there
-			// is no person to answer about, and the remedy is a line
-			// of company configuration rather than a different
-			// credential.
-			return tracker.Party{}, errNoSeat
+	case errors.As(err, &looked):
+		return "", looked.Err
+	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
+		if refusal := s.mayRead(ctx, principal, action, asked); refusal != nil {
+			return "", refusal
 		}
-		return s.partyOf(own), nil
-	case asked == own:
-		return s.partyOf(asked), nil
-	case operatorID == "":
-		return tracker.Party{}, errNotYours
+		return "", fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		// THE DIRECTORY'S OWN WORDS GO TO THE LOG: they name the seat a
+		// login is bound to, and this error is what a caller is answered.
+		log.WarnContext(ctx, "queries_record_undecidable", "question",
+			string(action), "name", asked, "error", err.Error())
+		return "", fmt.Errorf("%w: this node cannot say whose record %q is yet",
+			ErrUnavailable, asked)
+	case owner == "":
+		return "", errNoRecord
+	case asked == "", iam.NamesSelf(principal, asked):
+		return owner, nil
 	}
-	// An operator reads anybody's: they hold the credential that writes
-	// these records through the operator tool server in the first place.
-	return s.partyOf(asked), nil
-}
-
-// partyOf is one seat and the credential bound to it.
-//
-// THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), as [Sources.seatForOperator]
-// resolves the way in. The two directions go through the same resolution in
-// `org` with the same lookup, so a company cannot be bound for one and unbound
-// for the other.
-//
-// A SEAT THAT IS NOT IN THE CHART IS STILL A PARTY. An operator naming a
-// handle that no seat holds — a person who has left, a handle on old rows —
-// gets that handle alone rather than a refusal: the rows are what the question
-// is about, and this lookup only ever ADDS an alias.
-func (s Sources) partyOf(handle string) tracker.Party {
-	party := tracker.Party{Handle: handle}
-	organization := s.organization()
-	if organization == nil {
-		return party
-	}
-	party.OperatorID = organization.SeatByHandle(handle).ResolvedOperatorID(s.Env)
-	return party
-}
-
-// viewerHandle is [Sources.viewerParty] for a question that answers about a
-// seat and reads no tracker row — the conversation ledger, whose rows are
-// written by the SEAT's own turns and carry no credential's name.
-func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error) {
-	party, err := s.viewerParty(ctx, asked)
-	if err != nil {
+	if err := s.mayRead(ctx, principal, action, owner); err != nil {
 		return "", err
 	}
-	return party.Handle, nil
+	return owner, nil
 }
 
-// viewerPins is the authority rule over the party a view STRIP is
-// personalised by.
-//
-// The same check as [Sources.viewerParty] over a different ABSENCE, which is
-// why the named case delegates rather than restating it. A personal question
-// is ABOUT somebody, so naming nobody with no seat to fall back on has no
-// answer and [errNoSeat] says so. A view strip is about a CONTAINER and the
-// viewer only decides whose pins order it, so naming nobody is the SHARED
-// strip — a real answer, the documented meaning of an unnamed
-// [tracker.ViewQuery.Viewer], and the one an anonymous or unbound caller must
-// keep getting, because the sidebar and the board ask for exactly that.
-//
-// What is identical is the half that matters. `viewer` selected whose record
-// was read and nothing checked it, so a reader could walk the org chart and
-// page through every seat's pinned views by handle — the personal record
-// `work_person` is scoped for, on a surface `api.allow_anonymous_read` opens.
-// A scope rule three of the four personal questions follow is not a rule.
-//
-// AND IT CARRIES BOTH NAMES, because a saved view and a pin are both written
-// through the person's own credential: owned by the token's id, asked for
-// under the seat's, so a founder's own strip came back with neither.
-func (s Sources) viewerPins(ctx context.Context, asked string) (tracker.Party, error) {
-	if asked == "" {
-		return tracker.Party{}, nil
+// mayLook is the authority a personal question decides BEFORE the identity
+// directory is asked whose record somebody else's login is — see
+// [iam.MayLook] and [authz.Object.Unresolved]: the question's own verb, asked
+// of a record nobody has resolved yet, answered exactly as [Sources.mayRead]
+// answers it. [authz.ErrUnresolved] lets the lookup happen and nothing more:
+// it is a caller who could be admitted only as the lead of whoever holds the
+// login, and [Sources.recordHandle] decides again on the record it resolves to.
+func (s Sources) mayLook(principal iam.Principal, action authz.Action) iam.MayLook {
+	return func(ctx context.Context, login string) error {
+		d := authz.Decide(ctx, principal, action, authz.Object{
+			Kind: authz.KindPerson, ID: login, Owner: login, Unresolved: true,
+		}, s.Chart, s.clock())
+		switch {
+		case d.Allowed, errors.Is(d.Err, authz.ErrUnresolved):
+			return nil
+		case d.Unknown():
+			return fmt.Errorf("%w: this node cannot decide %s on somebody "+
+				"else's record yet: %w", ErrUnavailable, action, d.Err)
+		}
+		return refused(string(action)+" of somebody else's record", d)
 	}
-	return s.viewerParty(ctx, asked)
+}
+
+// mayRead decides whether principal may take action on the record one seat
+// holds, and renders the answer as the error this surface refuses with.
+//
+// THE REFUSAL IS THE DECISION'S OWN — its reason and the grants that would
+// have admitted the caller — and never a sentence written here, which is how
+// the one this replaced came to name an admin grant for a rule that did not
+// govern the question asking it.
+func (s Sources) mayRead(ctx context.Context, principal iam.Principal,
+	action authz.Action, handle string) error {
+
+	d := authz.Decide(ctx, principal, action,
+		authz.Object{Kind: authz.KindPerson, ID: handle, Owner: handle}, s.Chart,
+		s.clock())
+	switch {
+	case d.Unknown():
+		// THIS NODE COULD NOT TELL, which a surface renders as 503 and
+		// never as a refusal: a node running no company yet telling a lead
+		// they lead nobody sends them to ask for authority they hold.
+		return fmt.Errorf("%w: this node cannot decide %s on %s's record "+
+			"yet: %w", ErrUnavailable, action, handle, d.Err)
+	case !d.Allowed:
+		return refused(string(action)+" of "+handle, d)
+	}
+	return nil
 }

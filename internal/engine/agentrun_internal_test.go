@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -301,7 +302,7 @@ func TestAnAgentModeSeatNeedsNoSandboxBlock(t *testing.T) {
 func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	t.Parallel()
 	never := 0.0
-	c := &Company{Config: &config.Company{
+	c := composed(t, &config.Company{
 		Roles: []config.Role{{Name: "CEO"}},
 		Units: []config.Unit{{
 			Name:  "Platform",
@@ -313,40 +314,87 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 				}}},
 			}},
 		}},
-	}}
-	for _, name := range []string{"Nested", "Deep"} {
-		gate := seatSandbox(c, name)
+	})
+	// ADDRESSED BY HANDLE, derived from the name where the seat declares
+	// none — the same value every other surface addresses a seat by.
+	for _, handle := range []string{"nested", "deep"} {
+		gate := seatSandbox(c, handle)
 		if gate == nil {
-			t.Fatalf("seat %q inside a unit found no sandbox block", name)
+			t.Fatalf("seat %q inside a unit found no sandbox block", handle)
 		}
 		if !gate.Enabled {
-			t.Errorf("seat %q found a block that is not the one it wrote", name)
+			t.Errorf("seat %q found a block that is not the one it wrote", handle)
 		}
 	}
 	// The seat at depth keeps its own settings, not the shallower one's.
-	if deep := seatSandbox(c, "Deep"); deep.PauseTTLSeconds == nil || *deep.PauseTTLSeconds != 0 {
+	if deep := seatSandbox(c, "deep"); deep.PauseTTLSeconds == nil || *deep.PauseTTLSeconds != 0 {
 		t.Errorf("the nested seat's own settings were lost: %+v", deep)
 	}
-	// A seat with no block still answers nil, and a name nobody holds too.
-	if seatSandbox(c, "CEO") != nil || seatSandbox(c, "Nobody") != nil {
+	// A seat with no block still answers nil, and a handle nobody holds too.
+	if seatSandbox(c, "ceo") != nil || seatSandbox(c, "nobody") != nil {
 		t.Error("a seat with no block, or no such seat, answered a block")
 	}
 
-	// THE FIRST MATCH IS THE ANSWER, even when it wrote no block. Using the
-	// nil block as the "still looking" sentinel cannot tell a seat that
-	// declared none from a name nobody holds, so the walk ran on past its
-	// own answer and handed back a LATER seat's block for this one — a
-	// seat that turned code work off getting somebody else's.
-	shadowed := &Company{Config: &config.Company{
+	// TWO SEATS OF ONE NAME GET THEIR OWN BLOCKS. A display name is an
+	// admission rule rather than a runnable one, so a revision stored
+	// before it runs with duplicates — and a walk matching on the name
+	// handed whichever came first. A seat that turned code work off would
+	// be given its namesake's setup steps, credentials and box.
+	namesakes := composed(t, &config.Company{
+		Roles: []config.Role{{Name: "Engineer", Handle: "plat-eng"}},
+		Units: []config.Unit{{
+			Name: "Product",
+			Roles: []config.Role{{Name: "Engineer", Handle: "prod-eng",
+				Sandbox: &config.RoleSandbox{Enabled: true}}},
+		}},
+	})
+	if got := seatSandbox(namesakes, "plat-eng"); got != nil {
+		t.Errorf("the seat that wrote no block was handed %+v — its namesake's", got)
+	}
+	if got := seatSandbox(namesakes, "prod-eng"); got == nil || !got.Enabled {
+		t.Errorf("the seat that wrote a block found %+v", got)
+	}
+
+	// AND A COMPANY THAT COULD BE AMBIGUOUS IS REFUSED BEFORE IT RUNS.
+	//
+	// Two seats named Twin derive one handle, and the walk this lookup
+	// replaced had to reason about which of them it had found: using the
+	// nil block as its "still looking" sentinel, it could not tell a seat
+	// that declared no block from a name nobody holds, so it ran past its
+	// own answer and handed back a LATER seat's block — a seat that turned
+	// code work off getting somebody else's.
+	//
+	// An INDEX cannot be ambiguous, because a handle is the seat's identity
+	// in it. What makes that safe rather than merely convenient is the
+	// refusal here: a company carrying two seats of one handle never
+	// becomes an organization at all, so no lookup is ever handed one.
+	ambiguous := &config.Company{
 		Roles: []config.Role{{Name: "Twin"}},
 		Units: []config.Unit{{
 			Name:  "Platform",
 			Roles: []config.Role{{Name: "Twin", Sandbox: &config.RoleSandbox{Enabled: true}}},
 		}},
-	}}
-	if got := seatSandbox(shadowed, "Twin"); got != nil {
-		t.Errorf("the first seat named Twin wrote no block and was handed %+v", got)
 	}
+	if _, err := ambiguous.Organization(); err == nil {
+		t.Error("a company with two seats of one handle built an organization, " +
+			"so a per-handle lookup could be handed either of them")
+	}
+}
+
+// composed is the runtime company a document describes: its settings and the
+// org derived from them.
+//
+// A RUNNING NODE builds its org from the document it applied, and so does
+// this: it is what a fixture's seats are. A document that will not build is
+// a fixture with no seats, and a case about a seat would then pass over an
+// empty company — so it fails loudly here instead.
+func composed(t *testing.T, cfg *config.Company) *Company {
+	t.Helper()
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("this fixture's company does not build an org: %v", err)
+	}
+	return &Company{Config: cfg, Org: o}
 }
 
 // launchReadyEngine is an engine that can take an agent-mode launch all the
@@ -354,8 +402,8 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 // store, a queue for the start event and a bridge with somewhere to dial.
 func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	t.Helper()
-	e, _ := launchRig(t, c, mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	return e
 }
@@ -407,8 +455,8 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e := launchReadyEngine(t, c)
-	e.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+	e.bridge = bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	launcher := &agentLauncher{
 		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
@@ -416,7 +464,8 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	}
 	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(launcher.turn),
 	})
 	if err == nil {
 		t.Fatal("an agent-mode run launched on a node whose bridge no listener serves")
@@ -429,6 +478,37 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	}
 	if _, found, getErr := e.sandbox.Load().pending.Get(t.Context(), "t1"); getErr != nil || found {
 		t.Errorf("a run row exists for a launch that was refused (found %v, err %v)", found, getErr)
+	}
+}
+
+// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, and not as a missing bridge.
+//
+// Every bridged call acts as the surface's seat, so the bridge refuses to open
+// a session for a surface with none — and the launcher used to read that empty
+// answer as "no bridge URL", sending an operator to a variable that was set on
+// a node whose bridge was mounted and serving. The runner always binds its
+// phase surface, so this is an assembly fault, and the refusal says so.
+func TestAnAgentModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) {
+	t.Parallel()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	e := launchReadyEngine(t, c)
+	launcher := &agentLauncher{
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
+		codingAgent: "claude-code", placement: sandbox.E2B,
+	}
+	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+		Brief: "fix the failing test", Round: 1,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+	})
+	if err == nil {
+		t.Fatal("an agent-mode run launched over a surface bound to no seat")
+	}
+	if strings.Contains(err.Error(), mcpbridge.BaseURLVar) ||
+		!strings.Contains(err.Error(), "bound to no seat") {
+		t.Errorf("the refusal does not say what is wrong: %v", err)
+	}
+	if e.bridge.Live() != 0 {
+		t.Errorf("%d bridge sessions live for a run that was refused", e.bridge.Live())
 	}
 }
 
@@ -482,10 +562,14 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 // launcher hands it.
 func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	t.Parallel()
-	request := func() runner.AgentRunRequest {
+	// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every phase
+	// surface: the bridge acts as that turn's seat on every call and
+	// refuses a surface that names none.
+	request := func(l *agentLauncher) runner.AgentRunRequest {
 		return runner.AgentRunRequest{
 			Brief: "fix the failing test", Round: 1,
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+				ForTurn(l.turn),
 		}
 	}
 	// The runner the turn resolved from the executor's own entry, as
@@ -501,7 +585,8 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// session opened for the run is closed with the refusal.
 	c, seat := splitLoginCompany(t, "codex", "api")
 	e := launchReadyEngine(t, c)
-	err := launcherFor(e, seat, "codex").LaunchExecutor(t.Context(), request())
+	launcher := launcherFor(e, seat, "codex")
+	err := launcher.LaunchExecutor(t.Context(), request(launcher))
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
 		t.Fatalf("an agent-mode run on a login that cannot follow it was launched "+
@@ -514,7 +599,8 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// And the mirror image, or a launcher that always refused would pass.
 	c, seat = splitLoginCompany(t, "api", "codex")
 	e = launchReadyEngine(t, c)
-	if err := launcherFor(e, seat, "claude-code").LaunchExecutor(t.Context(), request()); err != nil {
+	launcher = launcherFor(e, seat, "claude-code")
+	if err := launcher.LaunchExecutor(t.Context(), request(launcher)); err != nil {
 		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
 	}
 }
@@ -549,4 +635,14 @@ func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 	if got := launcher.runTurnRef(t.Context()).AgentID; got != want.String() {
 		t.Errorf("the run records agent id %q, want %q: the id of the turn's own organization", got, want)
 	}
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
 }

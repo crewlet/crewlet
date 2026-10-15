@@ -14,7 +14,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -222,13 +221,16 @@ func TestANewerBuildsKindStillNamesItsNodeAndDay(t *testing.T) {
 // measures it at its worst: every read entry present, every id a UUID, every
 // entry carrying the longest query a search accepts — once as typed and once
 // spelled in the bytes JSON escapes to six — beside a generous set of spend
-// cells and a full duration histogram. The record has to fit
-// [queue.MaxPayloadBytes], and it is held under the 1 MiB that ADR-0020 and
-// the cap's own comment state, so a record that outgrows the figure goes red
-// here rather than leaving the prose to go stale.
+// cells and a full duration histogram. The record has to fit the largest
+// record this log declares ([usage.LogMaxRecordBytes]) — the transport's
+// ceiling less what a signed append carries beside its body, which the
+// publisher refuses a record past before it is sent — and it is held under
+// the 1 MiB that ADR-0020 and the cap's own comment state, so a record that
+// outgrows the figure goes red here rather than leaving the prose to go
+// stale.
 //
 // Mutation: raise ReadsPerSeatDay to 4096, and the escaped case outgrows the
-// transport while the typed one outgrows the documented figure.
+// log's largest record while the typed one outgrows the documented figure.
 func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
 	t.Parallel()
 	const documented = 1 << 20
@@ -273,10 +275,10 @@ func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
 			}
 			t.Logf("a seat-day at the cap encodes to %d bytes (%.0f KiB)",
 				len(encoded), float64(len(encoded))/1024)
-			if len(encoded) >= queue.MaxPayloadBytes {
-				t.Fatalf("a seat-day at the cap is %d bytes and the transport carries "+
-					"at most %d: the record could never be published", len(encoded),
-					queue.MaxPayloadBytes)
+			if int64(len(encoded)) > usage.LogMaxRecordBytes {
+				t.Fatalf("a seat-day at the cap is %d bytes and the log takes a "+
+					"record of at most %d: it could never be published", len(encoded),
+					usage.LogMaxRecordBytes)
 			}
 			if len(encoded) >= documented {
 				t.Errorf("a seat-day at the cap is %d bytes, past the %d ADR-0020 and "+

@@ -247,17 +247,20 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names, duplicate unit names and a
-// unit reference on a seat declared inside another unit (see
-// [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
+// Today they are the org's duplicate unit keys, a unit reference on a seat
+// declared inside a unit of a different key and a schedule's cron the grammar
+// refuses (see [org.Organization.ValidateAdmission], which also says why no
+// NAME is held unique), a unit with no id, duplicate sandbox setup step names
 // within one list, a GitHub App on a human seat, an avatar the dashboard
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
 // cli-agent entry's credential configured where its CLI never reads it
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
-// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), and a
-// seat whose code work hands a
-// cli-agent entry to another CLI's coding agent
-// ([Company.validateSandboxCodingAgents]).
+// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
+// whose code work hands a cli-agent entry to another CLI's coding agent
+// ([Company.validateSandboxCodingAgents]), and the four WHOLE-DOCUMENT rules
+// in [Company.validateFileRules] — an `mcp_env` key naming no server, two
+// seats declaring one email, a reference that is shaped like neither a handle
+// nor a key, and a unit key or a seat handle the org chart reserves.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -266,9 +269,21 @@ func (c *Company) ValidateAdmission() error {
 // validateAdmission is [Company.ValidateAdmission] over an organization the
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
-	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
-		c.validateHumanSeatApps(), c.validateAvatars(), c.validateCLIAgentCredentials(),
-		c.validateCLIAgentModels(), c.validateSandboxCodingAgents())
+	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
+		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
+		c.validateCLIAgentCredentials(), c.validateCLIAgentModels(),
+		c.validateSandboxCodingAgents(), c.validateFileRules())
+}
+
+// validateUnitIDs requires an id on every authored unit, at any depth. See
+// [Unit.requireIDs] for why this is an admission rule rather than a runnable
+// one.
+func (c *Company) validateUnitIDs() error {
+	var p problems
+	for i := range c.Units {
+		p.wrap(c.Units[i].requireIDs(idx(field("units"), i)))
+	}
+	return p.err()
 }
 
 // validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
@@ -280,11 +295,11 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 // working setting and does nothing, which is the silence the org model's
 // human-seat rule exists to end for every other agent-only field.
 //
-// CHECKED HERE rather than beside that rule in [org.Role.Validate], because
-// the org model carries no code-host identity for a seat and so cannot see
-// the block. And an ADMISSION rule rather than a runnable one, because
-// nothing about running depends on it: every path that would act on the
-// block skips a human seat.
+// CHECKED HERE rather than beside that rule in [org.Role.Validate], although
+// the runtime seat carries the app too ([org.Role.GitHub]): that rule is a
+// RUNNABLE one, and this is an ADMISSION rule, because nothing about running
+// depends on it — every path that would act on the block skips a human seat,
+// so a stored revision carrying one runs as it did.
 func (c *Company) validateHumanSeatApps() error {
 	var p problems
 	for role, path := range c.EachRole() {
@@ -389,12 +404,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.add(path, ErrUnknownValue,
 			"still holds the redaction marker %q: a masked credential could "+
 				"not be matched to the value it hid. A seat is matched by its "+
-				"handle, and a unit, an MCP server and a sandbox setup step by "+
-				"its name, so this happens when the member is new or was "+
-				"renamed, when the stored revision gives that handle or name "+
-				"to more than one member or the member has none, or when a "+
-				"list of bare credentials changed length. Write the real value "+
-				"or a ${VAR} reference here",
+				"handle, a unit by its key, and an MCP server and a sandbox "+
+				"setup step by its name, so this happens when the member is "+
+				"new or was renamed, when the stored revision gives that "+
+				"identity to more than one member or the member has none, or "+
+				"when a list of bare credentials changed length. Write the real "+
+				"value or a ${VAR} reference here",
 			Redacted)
 	}
 
@@ -483,11 +498,11 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		if key == ReservedBaseURLVariable {
 			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
-					"integrations.dashboard_base_url, which is where this "+
-					"deployment's dashboard address belongs — write a whole ${VAR} "+
-					"there and staging and production answer at their own "+
-					"addresses off one revision. Set it there and delete "+
-					"this line",
+					"`api.external_url` in the OPERATOR's own Tier A file, "+
+					"which is where this deployment's address belongs — one "+
+					"company document then runs at staging's address and at "+
+					"production's without carrying either. Set it there and "+
+					"delete this line",
 				ReservedBaseURLVariable)
 		}
 	}
@@ -579,13 +594,11 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 }
 
 // ReservedBaseURLVariable is the skill variable carrying this deployment's
-// dashboard base URL, so a skill can compose a link a person can click.
+// external address, so a skill can compose a link a person can click.
 //
-// The engine sets it from integrations.dashboard_base_url — never from
-// public_base_url, which is where vendors reach the deployment and may be a
-// listener that serves no dashboard — and this package
-// refuses a company that declares it: two sources for one address is how a
-// skill comes to link at the deployment the company used to run on.
+// The engine sets it from `api.external_url` and this package refuses a
+// company that declares it: two sources for one address is how a skill comes
+// to link at the deployment the company used to run on.
 const ReservedBaseURLVariable = "crewlet_base_url"
 
 // validateKnowledgeBackend holds the rule that a read scope needs the
@@ -954,17 +967,6 @@ func (c *Company) TrackerBackendFor() TrackerBackend {
 	return TrackerNative
 }
 
-// RunsStateLog reports whether this company keeps any of its own records on
-// the stream: the engine's own tracker or its own knowledge base.
-//
-// EITHER ONE, because either starts a node's state log and the log runs every
-// registered domain or none. So the question is not which native backend a
-// company chose but whether it chose one at all, and the node that starts the
-// log and the rule that refuses an in-memory stream for it both ask it here.
-func (c *Company) RunsStateLog() bool {
-	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
-}
-
 // VectorsEnabled reports whether the corpus is embedded and searched by
 // meaning. The engine's embedding model is the one reader, and the duty, the
 // coverage gauge and a search's query vector all read that.
@@ -1117,27 +1119,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		// same rule integration.Kind.Valid states for the loop itself.
 		return true
 	}
-}
-
-// AgentRoles is the name of every seat the engine runs a turn for — every role
-// in the company, in a unit or at the root, bar the human ones, which have no
-// turn. Nil on a nil company (no active revision).
-//
-// HERE rather than beside its first caller, because the live projection's boot
-// seed is keyed by it and two wirings build that seed — `crewlet run` and the
-// end-to-end harness that has to wire a node the way it does. Two copies of
-// "which seats have turns" are two answers to which seats a screen seeds.
-func (c *Company) AgentRoles() []string {
-	if c == nil {
-		return nil
-	}
-	var out []string
-	for role := range c.EachRole() {
-		if role.Name != "" && role.Kind != org.KindHuman {
-			out = append(out, role.Name)
-		}
-	}
-	return out
 }
 
 // EachRole yields EVERY seat in the company, with the path an operator typed:

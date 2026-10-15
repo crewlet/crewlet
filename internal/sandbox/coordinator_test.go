@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -1078,7 +1080,7 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 // A row with nothing to re-enter cannot continue its turn, and the seat must
 // not stay parked on it.
 //
-// No LIVE path produces one any more — a run holds [StatusLaunching] until its
+// No LIVE path produces one — a run holds [StatusLaunching] until its
 // conversation is written and a launching run is not claimable — so this
 // reaches the state by writing the row directly, bypassing the launch path:
 // the guard is the assertion that the launching state does its job.
@@ -1240,7 +1242,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 			topicsSeen := rig.queue.topics()
 			for _, want := range []string{
 				topics.Event(types.SandboxRunFailed{}.EventType()),
-				topics.AgentControl("swe"),
+				sweControl(),
 			} {
 				if !slices.Contains(topicsSeen, want) {
 					t.Fatalf("the failure did not reach %q; published to %v", want, topicsSeen)
@@ -1373,7 +1375,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// reclaim — so it is the ending most likely to be forgotten,
 			// and it was: the contract's own doc named two reporting
 			// sites and this was the third.
-			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 		}, []string{"swe/t1"}},
@@ -1387,7 +1389,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// can tell. The retirement retries on its next tick, where a
 			// second report finds nothing left to drop — while staying
 			// quiet is the indicator standing over an agent that stopped.
-			_ = rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12)
+			_ = rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12)
 		}, []string{"swe/t1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1834,7 +1836,7 @@ func TestTheWaitersCompletionIsClaimed(t *testing.T) {
 	rig.queue.mu.Lock()
 	var control *events.Event
 	for _, p := range rig.queue.published {
-		if p.topic == topics.AgentControl("swe") {
+		if p.topic == sweControl() {
 			control = p.event
 		}
 	}
@@ -2305,7 +2307,7 @@ func (r *coordRig) deliverControl(t *testing.T) {
 	r.queue.mu.Lock()
 	var completions []*events.Event
 	for _, p := range r.queue.published {
-		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == topics.AgentControl("swe") {
+		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == sweControl() {
 			completions = append(completions, p.event)
 		}
 	}
@@ -3416,7 +3418,7 @@ func TestAHeldSeatsHandBackIsCountedLikeAnyOther(t *testing.T) {
 	// person: the one shape where both counts are non-zero at once.
 	rig.launch("t2")
 	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
-		Agent: "a-1", AgentHandle: "swe", TurnID: "t2",
+		Agent: sweID, AgentHandle: "swe", TurnID: "t2",
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
 	}
@@ -3459,7 +3461,7 @@ func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
 		// with it.
 		"a run whose record is deleted": func(t *testing.T, rig *coordRig) {
 			t.Helper()
-			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "node-a:1", 3); err != nil {
+			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 		},
@@ -4047,7 +4049,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 	rig.coordinator.countRun("swe", StatusRunning)
 
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("RetireSeat: %v", err)
 	}
 	for _, id := range []string{"running", "launching", "parked", "claimed", "reseed"} {
@@ -4079,6 +4081,57 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 }
 
+// A RETIREMENT ENDS THE RUNS OF THE SEAT IT NAMES BY ID, AND NO OTHER'S. The
+// mailbox it retires may have been found on the broker alone, with no handle
+// recorded, and a retirement that selected by the handle it held found none of
+// the seat's runs and let their subscriptions go from under them. Nor is a
+// handle what a seat is: the same one under a renamed organisation is another
+// seat, whose runs are not this retirement's to end. The handle the runs carry
+// is what the announcement and this node's own bookkeeping name.
+func TestRetiringASeatByItsIDEndsItsRunsAndNoNamesakes(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	running := rig.launch("running")
+	namesakeBox, err := rig.provider.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+		TurnID: "namesake", AgentHandle: "swe", AgentID: uuid.NewString(), CreatedAt: rig.now,
+	}, Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := rig.pending.AttachSandbox(t.Context(), "namesake",
+		BoxRef{SandboxID: namesakeBox.ID()}, Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	rig.coordinator.countRun("swe", StatusRunning)
+
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "", "retirement:1", 12); err != nil {
+		t.Fatalf("RetireSeat: %v", err)
+	}
+	rig.finished("running")
+	killed := rig.provider.KilledIDs()
+	if !slices.Contains(killed, running.SandboxID) {
+		t.Fatalf("killed %v: the retired seat's box %q is still billed", killed, running.SandboxID)
+	}
+	if slices.Contains(killed, namesakeBox.ID()) {
+		t.Fatalf("retiring a seat by its id killed box %q of another seat with the same handle",
+			namesakeBox.ID())
+	}
+	if got := rig.get("namesake"); got.Status != StatusLaunching {
+		t.Fatalf("another seat with the same handle had its run disturbed: %+v", got)
+	}
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureSeatRemoved || failed[0].AgentHandle != "swe" {
+		t.Fatalf("announced %+v, want the one run lost as %q under the handle it ran as",
+			failed, types.SandboxFailureSeatRemoved)
+	}
+	if rig.coordinator.SeatHeldBySandbox("swe") {
+		t.Fatal("the retired seat is still tracked as busy under the handle its runs carried")
+	}
+}
+
 // The retirement holds the seat's lease for a budget, and the lease is the
 // only thing keeping a returning seat's owner off these records. Work its
 // context no longer covers is reported rather than done, so the retirement is
@@ -4090,7 +4143,7 @@ func TestRetiringASeatStopsWhenItsBudgetEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if err := rig.coordinator.RetireSeat(ctx, "swe", "retirement:1", 12); err == nil {
+	if err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement past its budget reported every run ended")
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning {
@@ -4114,7 +4167,7 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement under an older lease reported the newer lease's run ended")
 	}
 	if killed := rig.provider.KilledIDs(); slices.Contains(killed, run.SandboxID) {
@@ -4141,7 +4194,7 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.KillErr = errors.New("the provider is unreachable")
 
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement that could not reclaim a box reported the run ended")
 	}
 	if got := rig.get("t1"); got.SandboxID != run.SandboxID {
@@ -4152,7 +4205,7 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 	}
 
 	rig.provider.KillErr = nil
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
 	rig.finished("t1")

@@ -65,6 +65,9 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 
 // BotUsername is a seat's bot username.
 //
+// FROM THE HANDLE, which is immutable (ADR-0013): this is the name the next
+// pass looks the account up by.
+//
 // LOWERCASED, because Mattermost usernames are and a mixed-case handle would
 // be created as one thing and looked up as another on the next run — which
 // reads as "the bot is missing" and creates a second.
@@ -235,11 +238,11 @@ func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
 // an administrator's own token or leave a live one behind, silently either
 // way.
 //
-// FOLDED, because the description is built from a seat handle a person wrote
-// (see [TokenDescription]) and a decommission recovers that handle from the
-// LOWERCASED username Mattermost stores. Comparing exactly there would leave
-// a mixed-case seat's credential live on an account this engine had just
-// disabled.
+// FOLDED, because the description is built from a handle a person wrote (see
+// [TokenDescription]) and a decommission recovers that handle from the
+// LOWERCASED username Mattermost stores. Comparing exactly there would
+// leave a mixed-case seat's credential live on an account this engine had
+// just disabled.
 func (c *Client) RevokeMinted(ctx context.Context, userID, description, keep string) (int, error) {
 	tokens, err := c.Tokens(ctx, userID)
 	if err != nil {

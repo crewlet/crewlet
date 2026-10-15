@@ -72,7 +72,7 @@
  *
  * The questions put to a person are answered on their row (`DecisionRow`), and
  * their priorities are reordered by dragging a row (`Priorities.tsx`), each as
- * the person the token is bound to (ADR-0024). On SOMEBODY ELSE's day every
+ * the person signed in (ADR-0024). On SOMEBODY ELSE's day every
  * control here is HELD, disabled with the sentence that says whose day it is
  * (`HoldWrites`): what is asked of Rui is Rui's to answer — the engine refuses
  * anybody else — and the work on Rui's queue is changed from the work screens,
@@ -91,6 +91,7 @@ import { useMemo } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
@@ -101,10 +102,10 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { plural, relTime } from "~/lib/format.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
-import { askedByParams, pageCount, type Scope } from "~/lib/work.ts";
+import { askedByParams, pageCount, type Scope, itemPath } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
   WorkClaimTotal,
@@ -186,15 +187,26 @@ export function MyWork({ section }: { section: MeSection }) {
   // WHOSE DAY THIS IS, resolved rather than guessed.
   //
   // This fell back to the ALPHABETICALLY FIRST SEAT, so a screen titled "My
-  // work" rendered a stranger's day to everybody. The `viewer` question walks
-  // the binding that has always existed: a presented token resolves to an
-  // operator id, and a seat names that id in `contact.crewlet_operator_id`.
+  // work" rendered a stranger's day to everybody. The `viewer` question
+  // answers it: the engine resolves this browser to a principal, and the
+  // identity directory binds that principal to a seat.
   //
-  // An explicit choice still wins — an operator reading a report's day is a
-  // real thing to do, and the header says whose day it is either way.
+  // An explicit choice still wins — a lead reading a report's day is a real
+  // thing to do, and the header says whose day it is either way.
+  //
+  // YOURS IS `owner`, NOT `handle`: the record their priorities, their asks
+  // and their assistant's marks are kept under is their seat when the
+  // directory binds them to one and their login when it does not. Read by
+  // `handle`, an unbound reader had no day here at all while their assistant
+  // wrote their priorities under their login. And the record that hands
+  // somebody work, asks them something or reorders their queue is the record
+  // that writes them a notice, so the frame that moves the reader's inbox
+  // (`inbox_changed`) asks their day again (`refetchOnInboxOf`); on a
+  // report's day no frame arrives — the frame watches the viewer's own record
+  // — and the poll keeps it current.
   const viewer = useViewer();
-  const whose = handle || viewer.handle;
-  const ownDay = whose !== "" && whose === viewer.handle;
+  const whose = handle || viewer.owner;
+  const ownDay = whose !== "" && whose === viewer.owner;
   const they = ownDay ? "you" : "them";
   const whoseName = index.byHandle.get(whose)?.name ?? whose;
 
@@ -222,11 +234,12 @@ export function MyWork({ section }: { section: MeSection }) {
     pollMs: 60_000,
   });
 
-  // NOT UNTIL SOMEBODY IS CHOSEN — `whose` is empty until the chart has
-  // loaded, and the engine refuses this question without a handle.
+  // NOT UNTIL SOMEBODY IS CHOSEN — `whose` is empty until the viewer has
+  // answered, and the engine refuses this question without a handle.
   const state = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
     enabled: whose !== "",
     pollMs: 30_000,
+    refetchOnInboxOf: whose,
   });
   const mine = state.data;
 
@@ -259,7 +272,9 @@ export function MyWork({ section }: { section: MeSection }) {
           limit: COUNT_ONLY,
         }
       : undefined,
-    { enabled: whose !== "", pollMs: 30_000 },
+    // AN ANSWER TO ONE OF THEIR QUESTIONS IS A NOTICE TO THEM, so the frame
+    // that moves their inbox moves this count too.
+    { enabled: whose !== "", pollMs: 30_000, refetchOnInboxOf: whose },
   );
 
   // AND THIS PERSON'S OWN RECORD, read ONCE for the page: the stamp it carries
@@ -269,6 +284,7 @@ export function MyWork({ section }: { section: MeSection }) {
   const person = useQuery("work_person", whose ? { handle: whose } : undefined, {
     enabled: whose !== "",
     pollMs: 60_000,
+    refetchOnInboxOf: whose,
   });
 
   // AND THE FRAME GETS THE COVERAGE OF THE READ THAT IDENTIFIES THIS OBJECT.
@@ -333,7 +349,7 @@ export function MyWork({ section }: { section: MeSection }) {
   ]);
   const setBy = person.data?.priorities_set_by;
   const setByName = setBy ? (chrome.seatName?.(setBy) ?? setBy) : "";
-  const workHref = (row: WorkSummary) => href(["work", row.key]);
+  const workHref = (row: WorkSummary) => href(itemPath(row));
 
   return (
     <>
@@ -361,8 +377,8 @@ export function MyWork({ section }: { section: MeSection }) {
             // THE ACCENT SAYS A FILTER IS ON, and reading your own day is the
             // page's default rather than a filter: it was violet at rest, so
             // the page always looked narrowed. Somebody else's day is.
-            active={handle !== "" && handle !== viewer.handle}
-            options={whoseDayOptions(index, viewer.handle, workload.data)}
+            active={handle !== "" && handle !== viewer.owner}
+            options={whoseDayOptions(index, viewer, workload.data)}
             // TWO LINES AN OPTION — the name, then the handle and the open
             // count — where the kit's panel is sized for six ONE-line rows.
             menuClassName="whose-day-menu"
@@ -402,22 +418,27 @@ export function MyWork({ section }: { section: MeSection }) {
           </a>
         </span>
       </PageActions>
-      {/* THREE STATES, and they are not one empty state. A reader with no
-          token, a reader whose token names no seat, and a reader who simply has
-          not chosen somebody need three different sentences — and only the last
-          of them is a choice anybody can make on this screen. */}
+      {/* THREE STATES, and they are not one empty state. A reader nobody has
+          signed in, a reader the directory binds to no seat, and a reader who
+          simply has not chosen somebody need three different sentences. The
+          unbound reader — a service account or a Tier A token's session,
+          never a person — is not an EMPTY state: it has a day of its own, kept under their login, and
+          what they lack is the work the chart addresses to a seat — which is
+          what the note says (`UnboundRemedy`), above the day rather than
+          instead of it. */}
+      {ownDay && viewer.unbound && (
+        <Callout variant="info">
+          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so this is
+          the day kept under that login: what you follow, what names you, and your own priorities.{" "}
+          <UnboundRemedy login={viewer.login} />
+        </Callout>
+      )}
       {!whose &&
         (viewer.anonymous ? (
           <EmptyState
             icon={<KeyGlyph size={32} />}
-            title="No credential is presented"
-            description="Set an API token to see your work."
-          />
-        ) : viewer.unbound ? (
-          <EmptyState
-            icon={<UserGlyph size={32} />}
-            title="This token is not bound to a person"
-            description="Bind it to a seat in Edit org, or pick someone above."
+            title="Nobody is signed in"
+            description="Sign in to see your work."
           />
         ) : (
           <EmptyState
@@ -432,6 +453,7 @@ export function MyWork({ section }: { section: MeSection }) {
           handle={whose}
           seat={index.byHandle.get(whose)}
           ownDay={ownDay}
+          login={ownDay && viewer.unbound}
           stamp={person.data ?? undefined}
           setByName={setByName}
           onPriorities={tab === "priorities" ? undefined : () => showPriorities()}
@@ -440,7 +462,7 @@ export function MyWork({ section }: { section: MeSection }) {
       )}
 
       {whose && (
-        <QueryState error={state.error} loading={state.loading}>
+        <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
           {state.loading && !mine && <Skeleton variant="text" rows={6} label="Loading the day" />}
           {mine && (
             // EVERY CHANGE ON SOMEBODY ELSE'S DAY IS HELD, with the sentence
@@ -532,7 +554,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   <>
                     <ChecklistClaims
                       rows={mine.checklist_items}
-                      hrefOf={(key) => href(["work", key])}
+                      hrefOf={(address) => href(["work", address])}
                     />
                     <PageFoot
                       shown={mine.checklist_items.length}
@@ -604,6 +626,7 @@ function WhoseDay({
   handle,
   seat,
   ownDay,
+  login = false,
   stamp,
   setByName,
   onPriorities,
@@ -613,6 +636,12 @@ function WhoseDay({
   /** The chart's own row, absent for a handle it does not name. */
   seat?: Seat;
   ownDay: boolean;
+  /**
+   * The day is kept under a LOGIN rather than a seat — an unbound reader's
+   * own. A login has no seat page, so it is named rather than drawn as a chip
+   * linking to one that would answer "no such seat".
+   */
+  login?: boolean;
   /** This person's own record, where it has answered. */
   stamp?: WorkPersonState;
   /** Who set the order, by name, or "" where nobody else did. */
@@ -628,13 +657,15 @@ function WhoseDay({
             person appears in a list. A handle the chart does not name still
             gets one: the name falls back to the handle, which is what the
             seat page resolves on too. */}
-        <SeatChip
-          name={seat?.name ?? handle}
-          handle={handle}
-          kind={seat?.kind}
-          avatar={seat?.avatar}
-          size="md"
-        />
+        {!login && (
+          <SeatChip
+            name={seat?.name ?? handle}
+            handle={handle}
+            kind={seat?.kind}
+            avatar={seat?.avatar}
+            size="md"
+          />
+        )}
         <span className="mono t-caption">{handle}</span>
         <Tag>{ownDay ? "yours" : "their day"}</Tag>
       </div>
@@ -684,16 +715,17 @@ function WhoseDay({
  * # And the empty row is only for a reader with no day of their own
  *
  * `setHandle("")` writes the parameter's own fallback, which the router
- * deletes, so for a BOUND reader "Pick somebody" resolved straight back to
- * their own seat and the control re-labelled itself with their name — a row
- * that silently refuses. Their way back is the "Yours" row above. For a reader
- * whose credential names no seat it is the state they are in, and a real row
- * rather than the control's `placeholder`, because a placeholder is a label
- * over an unset value with nothing to select.
+ * deletes, so for a reader WITH a day "Pick somebody" resolved straight back
+ * to it and the control re-labelled itself — a row that silently refuses.
+ * Their way back is the "Yours" row above, and an UNBOUND reader has one too:
+ * their day is kept under their login (`owner`), which no seat in the chart
+ * names, so it is offered as itself. Only a reader with no record at all gets
+ * the empty row, and as a real row rather than the control's `placeholder`,
+ * because a placeholder is a label over an unset value with nothing to select.
  */
 export function whoseDayOptions(
   index: OrgIndex,
-  viewerHandle: string,
+  viewer: Pick<ViewerState, "handle" | "owner">,
   load: WorkloadAnswer | null | undefined,
 ): SelectOption[] {
   // THE COUNTS ARE A FACT OR THEY ARE NOTHING — see the head.
@@ -716,14 +748,22 @@ export function whoseDayOptions(
     text: `${seat.name} ${seat.handle}`,
   });
 
-  const mine = viewerHandle ? index.byHandle.get(viewerHandle) : undefined;
+  const mine = viewer.handle ? index.byHandle.get(viewer.handle) : undefined;
   const line = mine ? mine.reports.filter((s) => s.handle !== mine.handle).sort(byName) : [];
   const inLine = new Set(line.map((s) => s.handle));
 
   const out: SelectOption[] = [];
   // NO EMPTY ROW FOR A READER WITH A DAY OF THEIR OWN — see the head.
-  if (!mine) out.push({ value: "", label: "Pick somebody" });
   if (mine) out.push(row(mine, "Yours"));
+  else if (viewer.owner) {
+    out.push({
+      value: viewer.owner,
+      label: viewer.owner,
+      description: describe(viewer.owner),
+      group: "Yours",
+      text: viewer.owner,
+    });
+  } else out.push({ value: "", label: "Pick somebody" });
   for (const seat of line) out.push(row(seat, "Your line"));
   for (const seat of [...index.seats].sort(byName)) {
     if (seat.handle === mine?.handle || inLine.has(seat.handle)) continue;
@@ -944,7 +984,7 @@ function Block({
     <>
       <p className="t-caption">{hint}</p>
       <div className="work-list">
-        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
       </div>
       <PageFoot shown={rows.length} claim={total} order="recent" />
     </>

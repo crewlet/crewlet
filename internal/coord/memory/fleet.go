@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -20,7 +23,10 @@ import (
 // has to model the things a naive map would not:
 //
 //   - Expiry against a stored deadline, so a claim that has lapsed is gone
-//     whether or not anything has swept.
+//     whether or not anything has swept — judged against the clock the
+//     caller passes in, as the KV judges a claim's own deadline, and refused
+//     beyond [coord.MaxClaimTTL] as the KV's bucket refuses it, so the twin
+//     certifies no horizon the backend a fleet runs on cannot keep.
 //   - A monotonic activation epoch that survives every write, because the
 //     epoch is a fencing token: a counter that restarted would hand a node a
 //     number an older revision already used.
@@ -44,14 +50,14 @@ type Fleet struct {
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
-	mailboxes    map[string]coord.MailboxRecord
+	mailboxes    map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
 	objectBackend    string
 	objectCollection []byte
 
-	pauses      map[string]coord.SeatPause
+	pauses      map[uuid.UUID]coord.SeatPause
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold
 	floors      map[string]coord.TrimFloor
@@ -76,7 +82,7 @@ type Fleet struct {
 	epoch   int64
 	target  coord.Activation
 	set     bool
-	payload []byte
+	payload json.RawMessage
 }
 
 type windowKey struct {
@@ -114,8 +120,8 @@ func NewFleet() *Fleet {
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
-		mailboxes:    map[string]coord.MailboxRecord{},
-		pauses:       map[string]coord.SeatPause{},
+		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
+		pauses:       map[uuid.UUID]coord.SeatPause{},
 	}
 }
 
@@ -150,6 +156,9 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 }
 
 // Claim records a key, reporting whether this caller was first.
+//
+// An empty key is an ERROR rather than (false, nil), as [coord.Claims] states:
+// a caller that named nothing has not lost a race to anybody.
 func (f *Fleet) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
 	if key == "" {
 		return false, errors.New("coord/memory: a claim needs a key")
@@ -260,12 +269,17 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	if err := req.Origin.Check(); err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/memory: activate %s: %w", req.RevisionID, err)
 	}
+	// THE KV's OWN FORM, so a body reads back here as the broker would
+	// hand it back — see [coord.CanonicalPayload].
+	payload, err := coord.CanonicalPayload(req.Payload)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// THE EXPECTATION FIRST, and before the payload write, so a caller
-	// that has already lost the race leaves nothing behind — the same
-	// ordering the KV holds, for the same reason.
+	// THE EXPECTATION FIRST, so a caller that has already lost the race
+	// changes nothing.
 	//
 	// The mutex makes the compare and the set one step here, which is
 	// exactly what the KV buys with a sequence: the twin has to REFUSE the
@@ -290,17 +304,15 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 			coord.ErrActivationRaced, f.target.RevisionID)
 	}
 
-	// The payload lands before the pointer, matching the KV's two writes.
-	// The twin gets both under one mutex, so the window cannot open here —
-	// which is the point of holding it to the same order anyway: a reader
-	// of this file should find the same invariant stated in both places.
-	// THE INSTANT IS DECIDED UNDER THE SAME MUTEX as the compare, against
-	// the pointer being replaced — see [coord.ActivationAt].
+	// The payload and the pointer in one step, as the KV writes them in
+	// one record (see [coord.Plane.Activate]). THE INSTANT IS DECIDED UNDER
+	// THE SAME MUTEX as the compare, against the pointer being replaced —
+	// see [coord.ActivationAt].
 	var previous time.Time
 	if f.set {
 		previous = f.target.At
 	}
-	f.payload = slices.Clone(req.Payload)
+	f.payload = payload
 	f.epoch++
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
@@ -315,7 +327,7 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 }
 
 // Payload returns the current revision's sealed payload.
-func (f *Fleet) Payload(_ context.Context, revisionID string) ([]byte, bool, error) {
+func (f *Fleet) Payload(_ context.Context, revisionID string) (json.RawMessage, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.set || f.target.RevisionID != revisionID || f.payload == nil {
@@ -854,17 +866,67 @@ func (f *Fleet) SecretValues(_ context.Context) ([]coord.SecretRecord, error) {
 
 // PutSecret writes a sealed value, replacing any prior one.
 func (f *Fleet) PutSecret(_ context.Context, rec coord.SecretRecord) error {
+	if err := checkSecret(rec); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.storeSecret(rec)
+	return nil
+}
+
+// checkSecret refuses a row no store should hold, for every write alike.
+func checkSecret(rec coord.SecretRecord) error {
 	switch {
 	case rec.Name == "":
 		return errors.New("coord/memory: a secret needs a name")
 	case rec.Value == "":
 		return fmt.Errorf("coord/memory: secret %q has no sealed value", rec.Name)
 	}
+	return nil
+}
+
+// storeSecret writes one row at the next store-wide version. The caller holds
+// the lock.
+//
+// THE VERSION IS THE STORE'S, never the caller's: a write ignores whatever
+// version the record it was handed carries, exactly as the KV assigns its own
+// revision, so a caller replaying a record it read cannot hand an old version
+// back to the store.
+func (f *Fleet) storeSecret(rec coord.SecretRecord) {
+	f.version++
+	rec.UpdatedAt = rec.UpdatedAt.UTC()
+	rec.Version = f.version
+	f.secrets[rec.Name] = rec
+}
+
+// CreateSecret writes a sealed value only where none is stored.
+func (f *Fleet) CreateSecret(_ context.Context, rec coord.SecretRecord) (bool, error) {
+	if err := checkSecret(rec); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	rec.UpdatedAt = rec.UpdatedAt.UTC()
-	f.secrets[rec.Name] = rec
-	return nil
+	if _, exists := f.secrets[rec.Name]; exists {
+		return false, nil
+	}
+	f.storeSecret(rec)
+	return true, nil
+}
+
+// UpdateSecret replaces a sealed value only while it is still at version.
+func (f *Fleet) UpdateSecret(_ context.Context, rec coord.SecretRecord, version uint64) (bool, error) {
+	if err := checkSecret(rec); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held, ok := f.secrets[rec.Name]
+	if !ok || version == 0 || held.Version != version {
+		return false, nil
+	}
+	f.storeSecret(rec)
+	return true, nil
 }
 
 // DeleteSecret removes a value, reporting whether it was there.

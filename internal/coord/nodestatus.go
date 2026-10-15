@@ -3,6 +3,9 @@ package coord
 import (
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -88,6 +91,36 @@ type NodeStatus struct {
 	ProjectionsReady int
 	ProjectionsTotal int
 
+	// AdminPosture is this node's own `api.auth.admin`: whether it grants
+	// admin to those who hold it (`serve`) or clamps admin away and keeps
+	// every app (`refuse`).
+	//
+	// # Why a fleet publishes this at all
+	//
+	// Because the posture is applied at DECISION time, per node, per
+	// request, and nothing is written when it changes. That is what makes
+	// a fleet whose nodes disagree a LEGAL state rather than a broken one —
+	// one node published to colleagues refusing admin, another an
+	// administrator signs in on serving it, or a rolling restart halfway
+	// through a change.
+	//
+	// Legal and invisible is the problem. Without this, whether an
+	// administrator can run the company depends on which node a load
+	// balancer sent them to, and the symptom is a person who can revoke a
+	// credential on one request and cannot on the next, with nothing
+	// anywhere saying why. One word per node turns that into a row on the
+	// fleet view.
+	//
+	// THE VALUE ITSELF AND NOT A DIGEST, which is what the list of grants it
+	// replaced had to publish: two values are one short word, so there is
+	// nothing to compress.
+	//
+	// EMPTY IS A NODE THAT IS NOT SAYING, never a node that refuses admin:
+	// a node that serves no API has no posture to state and publishes
+	// nothing here, and reading that as "refuses" would draw every such node
+	// as locked down.
+	AdminPosture iam.AdminPosture
+
 	// MCP is what this node's MCP servers did when it last started them,
 	// one row per configured server. Nil is "this node started none": a
 	// node that did not say is one whose heartbeat carried no status at
@@ -132,11 +165,17 @@ type MCPServerStatus struct {
 	Tools int
 
 	// Error is ONE failed instance's reason, and ErrorSeat the seat it
-	// belonged to (empty for a shared server). One rather than all, for
-	// the size argument above; the first by seat handle, so two beats
-	// with the same failures publish the same row.
+	// belonged to, by its AGENT ID (uuid.Nil for a shared server). One
+	// rather than all, for the size argument above; the first by agent id,
+	// so two beats with the same failures publish the same row.
+	//
+	// THE ID RATHER THAN THE HANDLE, because this row is published on a
+	// lease every peer reads, and a peer reads it against its OWN org: the
+	// id names the seat the instance was launched for — the agent id
+	// derived from its handle (ADR-0013) — and the reader resolves it to
+	// that handle.
 	Error     string
-	ErrorSeat string
+	ErrorSeat uuid.UUID
 }
 
 // MaxMCPErrorBytes bounds [MCPServerStatus.Error] on the wire.
@@ -161,6 +200,13 @@ func (s NodeStatus) Meta() map[string]any {
 	if !s.StartedAt.IsZero() {
 		out["started_at"] = s.StartedAt.UTC().Format(time.RFC3339)
 	}
+	if s.AdminPosture != "" {
+		// OMITTED WHEN UNSET, for [StatusFromMeta]'s reason: a node
+		// that serves no API has no posture to state, and an empty
+		// string on the wire would make it look like a peer whose
+		// posture differs from everybody's.
+		out["admin"] = string(s.AdminPosture)
+	}
 	if s.ProjectionsTotal > 0 {
 		// OMITTED where the node runs none, so a peer on the vendor
 		// backends reads absent rather than "0 of 0" — which a reader
@@ -181,8 +227,8 @@ func (s NodeStatus) Meta() map[string]any {
 			if m.Error != "" {
 				row["error"] = textcut.Within(m.Error, MaxMCPErrorBytes)
 			}
-			if m.ErrorSeat != "" {
-				row["error_seat"] = m.ErrorSeat
+			if m.ErrorSeat != uuid.Nil {
+				row["error_seat"] = m.ErrorSeat.String()
 			}
 			rows[i] = row
 		}
@@ -216,6 +262,7 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		Posture:          stringFromMeta(raw["posture"]),
 		ProjectionsReady: intFromMeta(raw["projections_ready"]),
 		ProjectionsTotal: intFromMeta(raw["projections_total"]),
+		AdminPosture:     iam.AdminPosture(stringFromMeta(raw["admin"])),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {
@@ -238,7 +285,7 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			Failed:    intFromMeta(row["failed"]),
 			Tools:     intFromMeta(row["tools"]),
 			Error:     stringFromMeta(row["error"]),
-			ErrorSeat: stringFromMeta(row["error_seat"]),
+			ErrorSeat: seatFromMeta(row["error_seat"]),
 		}
 		m.Shared, _ = row["shared"].(bool)
 		status.MCP = append(status.MCP, m)
@@ -285,4 +332,16 @@ func intFromMeta(v any) int {
 func stringFromMeta(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// seatFromMeta reads a seat's agent id, and uuid.Nil for anything that is not
+// one in canonical form — a value no build of this one wrote is a seat the
+// row does not name, never a seat named wrongly.
+func seatFromMeta(v any) uuid.UUID {
+	s := stringFromMeta(v)
+	id, err := uuid.Parse(s)
+	if err != nil || id.String() != s {
+		return uuid.Nil
+	}
+	return id
 }

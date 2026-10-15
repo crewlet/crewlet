@@ -12,8 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/seat"
+
+	// Aliased: this package's cases name a seat with seat() (seatid_test.go).
+	seathost "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -51,7 +52,7 @@ func TestADrainsGiveBacksSpendOneAllowance(t *testing.T) {
 		allowance time.Duration
 	}{
 		{name: "begun_from_its_own_lease", ttl: 3 * time.Second,
-			allowance: 3 * time.Second / seat.HeartbeatRatio},
+			allowance: 3 * time.Second / seathost.HeartbeatRatio},
 		{name: "the_callers_stop", ttl: 30 * time.Second, carried: 300 * time.Millisecond,
 			allowance: 300 * time.Millisecond},
 	} {
@@ -63,7 +64,7 @@ func TestADrainsGiveBacksSpendOneAllowance(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 			if tc.carried > 0 {
-				ctx = seat.WithStopBudget(ctx, seat.NewStopBudget(tc.carried))
+				ctx = seathost.WithStopBudget(ctx, seathost.NewStopBudget(tc.carried))
 			}
 			store.block()
 			started := time.Now()
@@ -101,7 +102,7 @@ func TestADrainsGiveBacksSpendOneAllowance(t *testing.T) {
 
 // drainingNode starts a node over the in-memory twins and store, holding
 // seats, with the lease TTL a case is measuring against.
-func drainingNode(t *testing.T, store coord.Backend, ttl time.Duration, seats ...string) *node.Node {
+func drainingNode(t *testing.T, store coord.Backend, ttl time.Duration, handles ...string) *node.Node {
 	t.Helper()
 	broker := qmem.NewBroker()
 	client := func() queue.EventQueue {
@@ -113,22 +114,15 @@ func drainingNode(t *testing.T, store coord.Backend, ttl time.Duration, seats ..
 		return q
 	}
 	nodeQueue, publisher := client(), client()
-	for _, h := range seats {
-		if _, err := publisher.EnsureSubscription(t.Context(),
-			topics.AgentInbox(h), topics.AgentInboxGroup(h)); err != nil {
+	for _, h := range handles {
+		if _, err := publisher.EnsureSubscription(t.Context(), inbox(h), inboxGroup(h)); err != nil {
 			t.Fatalf("EnsureSubscription(%s): %v", h, err)
 		}
 	}
 	n, err := node.New(node.Config{
 		Queue: nodeQueue, Coord: store,
 		NodeID: "node-a", Owner: "node-a:1",
-		Seats: func() []placement.Seat {
-			out := make([]placement.Seat, len(seats))
-			for i, h := range seats {
-				out[i] = placement.Seat{Handle: h}
-			}
-			return out
-		},
+		Seats:    func() []placement.Seat { return seats(handles...) },
 		LeaseTTL: ttl, HeartbeatInterval: ttl / 4, SweepInterval: ttl / 8,
 		Turn: func(context.Context, string, []*events.Event) queue.Result {
 			return queue.Ack()
@@ -142,7 +136,7 @@ func drainingNode(t *testing.T, store coord.Backend, ttl time.Duration, seats ..
 	}
 	t.Cleanup(func() { n.Stop(context.WithoutCancel(t.Context())) })
 	within(t, "the node to hold every seat", func() bool {
-		return len(n.Host().Held()) == len(seats)
+		return len(n.Host().Held()) == len(handles)
 	})
 	return n
 }

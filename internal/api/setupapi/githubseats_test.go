@@ -6,6 +6,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A company whose agents are at every stage of getting their own GitHub App:
@@ -33,14 +38,10 @@ const githubAppsDoc = `{
 // seedGitHubApps imports that company and seals the one key that resolves.
 func (s *surface) seedGitHubApps(t *testing.T) {
 	t.Helper()
-	res := s.do(t, http.MethodPut, "/config", githubAppsDoc,
-		map[string]string{"X-Summary": "a company mid-rollout"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, githubAppsDoc)
 	if err := s.vault.Set(t.Context(), "REVIEWER_GITHUB_APP_KEY",
 		"-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----",
-		"test", "test", pinned); err != nil {
+		testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -328,7 +329,7 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 	// THE CONVERSION GOES WHERE THE COMPANY SAYS GITHUB IS, which is what
 	// makes an Enterprise Server work and what lets this test answer.
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",
+		`{"integrations":{
 		  "github":{"enabled":true,"url":"`+server.URL+`","webhook_secret":"org",
 		  "provisioning":{"org":"acme"}}}}`,
 		map[string]string{
@@ -412,6 +413,42 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	}
 }
 
+// AN APP IS ITS BEGINNER'S: the key's row, the webhook secret's and the
+// revision that records the app on the seat name the person who began the
+// creation, with the credential they began it through beside them.
+//
+// The callback carries no credential of ours, so its writes recorded `setup` —
+// a name that is nobody — and "who gave this agent its GitHub identity" had no
+// answer anywhere. The state carries the beginner now. Mutation: record the
+// completion under anything but the state's party and every check fails.
+func TestAnAppIsRecordedAsWhoBeganIt(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.caller = &iam.Principal{
+		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	s.convertOneApp(t, "sre-lead", map[string]any{
+		"id": 91, "slug": "acme-sre-lead", "name": "Acme sre-lead",
+		"pem":            "-----BEGIN RSA PRIVATE KEY-----\nk\n-----END RSA PRIVATE KEY-----",
+		"webhook_secret": "the-apps-own-secret",
+	})
+	want := iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat}
+	for _, name := range []string{"GITHUB_APP_KEY_SRE_LEAD",
+		"GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD"} {
+		if got := s.vault.author(name); got != authorOf(want) {
+			t.Errorf("%s records %+v, want who began the creation, %+v",
+				name, got, authorOf(want))
+		}
+	}
+	if got := s.activeAuthor(t); got != want {
+		t.Errorf("the seat's revision is written as %+v, want %+v", got, want)
+	}
+}
+
 // A GITHUB THAT RETURNS NO SECRET LEAVES NO POINTER.
 //
 // A `${VAR}` naming a secret nothing sealed resolves to nothing, and the
@@ -449,20 +486,17 @@ func TestASeatWithNoWebhookSecretHoldsNoPointerToOne(t *testing.T) {
 func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-	  "integrations": {"public_base_url": "https://engine.example.com",
+	  "integrations": {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
 	     "integrations": {"github": {"tier": "review"}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
-	}`, map[string]string{"X-Summary": "one agent on GitHub, one not"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
 	if state["satisfied"] != false {
@@ -528,7 +562,6 @@ func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
 	s.seedGitHubApps(t)
 	// Enabled, with the webhook secret left as a reference nothing resolves.
 	res := s.do(t, http.MethodPatch, "/config", `{"integrations":{
-		"public_base_url":"https://engine.example.com",
 		"github":{"enabled":true,"webhook_secret":"${GH_NOT_SET}",
 		"provisioning":{"org":"acme"}}}}`,
 		map[string]string{
@@ -557,17 +590,14 @@ func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
 func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`, map[string]string{"X-Summary": "datadog on a standard role"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
 	rows, _ := state["seats"].([]any)
@@ -599,17 +629,14 @@ func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`, map[string]string{"X-Summary": "datadog on a role of our own"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
 	rows, _ := state["seats"].([]any)
@@ -670,20 +697,16 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	s := newSurface(t)
 	// A COMPANY WHERE NOBODY HAS STARTED: the org block is complete and no
 	// seat has an app.
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {
-	    "public_base_url": "https://engine.example.com",
-	    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
+		    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
 	               "provisioning": {"org": "crewbed"}}
 	  },
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`, map[string]string{"X-Summary": "github connected for nobody"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
-	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
+	}`)
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -707,13 +730,13 @@ func TestAGitHubToolWithOneWorkingAgentIsSatisfied(t *testing.T) {
 	s := newSurface(t)
 	s.seedGitHubApps(t)
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",
+		`{"integrations":{
 		  "github":{"enabled":true,"webhook_secret":"${GH_SIGN}"}}}`,
 		map[string]string{"X-Summary": "connect github"})
 	if res.Code != http.StatusCreated {
 		t.Fatalf("connect = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 

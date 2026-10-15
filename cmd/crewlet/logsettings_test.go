@@ -107,7 +107,7 @@ func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot, err := config.ParseBootstrap([]byte(tc.yaml), config.EnvOnly())
+			boot, err := parseTierA([]byte(tc.yaml), config.EnvOnly())
 			if err != nil {
 				t.Fatalf("expected a valid Tier A document, got: %v", err)
 			}

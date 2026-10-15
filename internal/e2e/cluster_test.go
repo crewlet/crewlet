@@ -188,6 +188,11 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
+	// ONE KEYRING FOR THE MESH, minted once and handed to every member.
+	// Every record on every state log is signed under it, so members that
+	// did not share one would refuse each other's records — which is a
+	// property these cases exist to exercise rather than to trip over.
+	ringID, ringMaterial := fleetKeyring(t)
 
 	// EVERY MEMBER'S BOOTSTRAP IS ASSEMBLED, AND ITS STORE SEEDED, HERE, on
 	// the test's own goroutine before any member starts: a seed that cannot
@@ -196,7 +201,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	// for the moment a member starts.
 	boots := make([]config.Bootstrap, n)
 	for i := range n {
-		boot, err := memberBootstrap(t, relays, i, n)
+		boot, err := memberBootstrap(t, relays, i, n, ringID, ringMaterial)
 		if err != nil {
 			return nil, fmt.Errorf("member %d: %w", i, err)
 		}
@@ -333,13 +338,16 @@ const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 const clusterHost = "127.0.0.1"
 
 // memberBootstrap is member i's half of Tier A: where it keeps its data, the
-// mesh it routes through, and the fleet-wide settings every member shares.
+// mesh it routes through, and the fleet-wide settings every member shares —
+// the keyring among them, which is the mesh's one ring.
 //
 // EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
 // what a fleet is: n machines, each with its own disk. Sharing either would
 // make this one node wearing three hats, and every fleet mechanism under it
 // would pass for the wrong reason.
-func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (config.Bootstrap, error) {
+func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
+	ringID, ringMaterial string) (config.Bootstrap, error) {
+
 	port, routes, advertise := relays.Member(i)
 	peers, err := otherMembers(routes, port)
 	if err != nil {
@@ -348,6 +356,17 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
+	// ONE RING FOR THE WHOLE MESH. A member keyed differently would
+	// refuse every peer's records, which is exactly what these cases
+	// exist to prove cannot happen by accident.
+	boot.Secrets.ActiveKeyID, boot.Secrets.Keys = ringID, []config.SecretKey{
+		{ID: ringID, Material: ringMaterial},
+	}
+	withCredential(t, &boot)
+	// ONE ADDRESS AND ONE SIGN-IN FOR THE WHOLE FLEET, as behind a load
+	// balancer: a browser signs in on whichever member it reaches and
+	// presents that cookie to every other. See [withSignIn].
+	withSignIn(&boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	boot.Stream.Cluster.Name = relays.ClusterName()
@@ -381,10 +400,6 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 	// harness can only stand up a fleet an operator could run — which is
 	// also why [fleetSize] is three.
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
-	// A TOKEN, because a write over HTTP is attributed to the operator it
-	// names and a member with none refuses every one — the file uploads
-	// cross the fleet through the API.
-	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
 	return boot, nil
 }
 
@@ -506,7 +521,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 
 	return &node{
 		engine: e, app: app, server: srv, model: model,
-		id:          boot.Node.ID,
+		id:          e.Node().ID(),
 		snapshotDir: boot.Store.SnapshotDirFor(),
 	}, stops, nil
 }
@@ -644,7 +659,7 @@ const clusterSettle = 10 * time.Second
 func (c *cluster) whole(t *testing.T, n *node) func() bool {
 	t.Helper()
 	return func() bool {
-		if !n.engine.NativeHydrated(t.Context()) {
+		if !n.engine.StateLogHydrated(t.Context()) {
 			return false
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), engine.ProbeReadBudget)
@@ -890,7 +905,16 @@ func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages", "usage"} {
+	//
+	// ASKED OF THE ENGINE rather than listed here: a literal list of three
+	// outlived the org chart and the identity directory joining the
+	// register, and certified neither. Every node runs every registered
+	// domain, so the register is exactly what the artefact must name.
+	var runs []string
+	for _, domain := range engine.Domains() {
+		runs = append(runs, domain.Name())
+	}
+	for _, want := range runs {
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",
@@ -1449,7 +1473,7 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 		t.Fatalf("a JetStream client on member 0: %v", err)
 	}
 	var out []statelog.Position
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		name := domain.Stream().Name
 		stream, err := js.Stream(t.Context(), name)
 		if err != nil {
@@ -1480,11 +1504,11 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 // table name beside it is what sends somebody to the right applier.
 //
 // The domain list comes from the ENGINE rather than from a copy here, because
-// a second list is how a fourth domain is silently left uncompared.
+// a second list is how a new domain is silently left uncompared.
 func replicatedDigest(t *testing.T, n *node) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		for table, class := range domain.Tables() {
 			if class != statelog.Replicated {
 				continue

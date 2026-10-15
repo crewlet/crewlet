@@ -30,7 +30,9 @@
  * list — is this the one I meant, and what is it doing — and every one of them
  * ends at `Open ↗`, which the rail draws. A peek that grew tabs would be a
  * page in a narrow column, and the reason the rail exists is that the list
- * behind it stays on screen.
+ * behind it stays on screen. The one exception is a kind with no page at all
+ * (`KindSpec.peekIsPage`): a person's directory row is read here and nowhere
+ * else, so their peek is their page and the rail draws no `Open` over it.
  */
 
 import type { ObjectKind, ObjectRef } from "./objects.ts";
@@ -54,6 +56,7 @@ const ToolPeek = lazyScreen("settings", (m) => m.ToolPeek);
 const IntegrationPeek = lazyScreen("settings", (m) => m.IntegrationPeek);
 const CredentialPeek = lazyScreen("settings", (m) => m.CredentialPeek);
 const RevisionPeek = lazyScreen("settings", (m) => m.RevisionPeek);
+const PersonPeek = lazyScreen("settings", (m) => m.PersonPeek);
 const PagePeek = lazyScreen("knowledge", (m) => m.PagePeek);
 const ContainerPeek = lazyScreen("knowledge", (m) => m.ContainerPeek);
 
@@ -71,7 +74,7 @@ export interface PeekProps {
 /**
  * The body for each kind, or `undefined` where a kind has no peek.
  *
- * EIGHTEEN OF `objects.ts`'s NINETEEN, and the missing one is deliberate:
+ * EVERY KIND `objects.ts` ADDRESSES BUT ONE, and the missing one is deliberate:
  * `notice` is addressed — an inbox row links to one — and its "peek" IS the
  * Inbox, where the notice is read in place and marked. A rail over it would
  * be the same rows in a narrower column.
@@ -97,6 +100,7 @@ export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.React
   integration: ({ id }) => <IntegrationPeek kind={id} />,
   credential: ({ id }) => <CredentialPeek name={id} />,
   revision: ({ id }) => <RevisionPeek id={id} />,
+  person: ({ id }) => <PersonPeek id={id} />,
 };
 
 /** Whether this kind can be peeked at all. */

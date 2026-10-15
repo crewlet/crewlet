@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -121,10 +120,12 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 				// A REFUSAL, RENDERED BY THE ROUTE'S OWN RENDERER, so the
 				// actions this command turns into flags are the ones a real
 				// node sends.
+				// Written through [api.GateRefusal.Write], as the route
+				// writes it, so a 503 carries its Retry-After beside the
+				// envelope rather than a body this fake encoded itself.
 				if refusal, ok := api.RenderGateRefusal(r.PathValue("node"),
 					opID, n.gateErr); ok {
-					w.WriteHeader(refusal.Status)
-					_ = json.NewEncoder(w).Encode(refusal.Body)
+					refusal.Write(w)
 					return
 				}
 				result := engine.GateResult{Node: r.PathValue("node"), OpID: opID,
@@ -180,8 +181,8 @@ func blockedReport() *statelog.Report {
 			TrimFloorState:   statelog.TrimFloorPublished,
 			BlockedBy:        statelog.TermBackupFloor,
 			BlockedSince:     stamp("2031-03-30T02:00:00Z"),
-			Prose: "Nothing is being trimmed on tracker: the newest complete " +
-				"backup is 3 days old (backup_max_age is 24h).",
+			Prose: "Nothing is being trimmed on tracker: the newest backup is " +
+				"72h0m0s old, past the 24h0m0s this deployment accepts.",
 			Terms: []statelog.TermReport{
 				{Name: statelog.TermApplied, State: statelog.TermKnown, Seq: 918279004},
 				{Name: statelog.TermBackupFloor, State: statelog.TermUnreadable,
@@ -400,8 +401,10 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 			Detail: "no verified backup has been recorded, and the policy asks for one every 24h",
 			Remedy: "Run `crewlet backup` against any node.",
 			Domains: []statelog.AlarmDomain{
-				{Domain: "tracker", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
-				{Domain: "pages", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+				{Domain: "tracker", Detail: "the trim has not advanced for 46h, and the log is " +
+					"keeping up to 1200 record(s) older than its 24h replay window", Term: statelog.TermBackupFloor},
+				{Domain: "pages", Detail: "the trim has not advanced for 46h, and the log is " +
+					"keeping up to 7 record(s) older than its 24h replay window", Term: statelog.TermBackupFloor},
 			},
 		},
 		{
@@ -419,8 +422,8 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 	}
 	for _, want := range []string{
 		"backup_age: no verified backup has been recorded",
-		"  tracker (backup_floor): the trim has not advanced for 46h",
-		"  pages (backup_floor): the trim has not advanced for 46h",
+		"  tracker (backup_floor): the trim has not advanced for 46h, and the log is keeping up to 1200 record(s)",
+		"  pages (backup_floor): the trim has not advanced for 46h, and the log is keeping up to 7 record(s)",
 		"log_headroom on vectors: 3% of the log's byte ceiling for ordinary writes is left",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -488,6 +491,33 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	if !strings.Contains(stdout, "waiting on its operator") {
 		t.Errorf("an operation with nobody outstanding printed no reason:\n%s",
 			stdout)
+	}
+}
+
+// AN ABANDONED WINDOW SAYS WHOSE DECISION IT IS STILL CARRYING OUT.
+//
+// Abandoning from anywhere but `opened` keeps the window — and the fleet in it —
+// until the seal restart, and the banner said only that it was blocked, beside
+// the name of whoever OPENED it. Mutation: drop the line and the want goes red.
+func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = &statelog.MaintenanceReport{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "sealing", Attempt: 1,
+		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		By:    "sre@example.com", Blocked: "abandoned_by_operator",
+		AbandonedBy: coord.MaintenanceParty{By: "ana.admin",
+			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"},
+	}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if want := "abandoned by ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)"; !strings.Contains(stdout, want) {
+		t.Errorf("the banner never says %q:\n%s", want, stdout)
 	}
 }
 
@@ -607,6 +637,25 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 	// answer that failed used to print nothing, silently.
 	if !strings.Contains(stdout, "tracker trim floor 918100000 → 918100000") {
 		t.Errorf("the eviction printed no watermark:\n%s", stdout)
+	}
+}
+
+// AN -op-id THE ENGINE COULD NOT HAVE MINTED IS REFUSED BEFORE ANYTHING IS
+// ASKED, naming the flag. The node refuses it `400 op_id_invalid` anyway — an
+// id with no instant is one no log's ledger could vouch for — and refused
+// there, the error named a query parameter this command composed.
+func TestAGateUnderAnIDTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	_, _, err := cli(t, "retention", "evict", "node-4",
+		bootstrapForURL(t, node.server.URL), "-confirm", "node-4", "-op-id", "op-abc")
+	if err == nil || !strings.Contains(err.Error(), "-op-id") {
+		t.Fatalf("an eviction under a hand-made id = %v, want a refusal naming -op-id", err)
+	}
+	node.mu.Lock()
+	gated := node.gated
+	node.mu.Unlock()
+	if gated != "" {
+		t.Errorf("an eviction under a hand-made id still reached the node for %q", gated)
 	}
 }
 
@@ -857,8 +906,8 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 // The node minted the id and sent it back in the answer, so a request that
 // timed out or dropped — after the node had very likely written every log —
 // left the operator no handle on the gesture but a second one under a fresh id.
-// And the wait was the ten seconds every other verb takes, which two of the
-// five-second resolutions a gesture legitimately makes use up between them.
+// (How long the command waits is [engine.GateClientWait]'s, and held against
+// the node's own bound in internal/engine.)
 func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
@@ -884,13 +933,6 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	}
 	if want := "-op-id " + sent + " -force"; !strings.Contains(stderr, want) {
 		t.Errorf("the unanswered gesture never says %q:\n%s", want, stderr)
-	}
-
-	// AND THE NODE'S OWN BOUND IS INSIDE THE WAIT, so its answer — not a
-	// client timeout that knows none of it — is what reaches the operator.
-	if gateRequestTimeout <= engine.GateAnswerBudget {
-		t.Fatalf("the command waits %s for a gesture the node answers within %s",
-			gateRequestTimeout, engine.GateAnswerBudget)
 	}
 }
 
@@ -991,16 +1033,17 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
-	node := []string{"-url", base, "-token", "a-test-token"}
+	// THE FIXTURE'S OWN CREDENTIAL, through the environment [cli] sets:
+	// the command takes one there and nowhere else.
+	node := []string{"-url", base}
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated(t.Context()) {
+	for !e.StateLogHydrated(t.Context()) {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never established its state log")
 		}
@@ -1015,7 +1058,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 			t.Fatalf("evict %s: %v", away, err)
 		}
 	}
-	client := &nodeClient{base: base, token: "a-test-token", http: httpxtest.Pool(t)}
+	client := &nodeClient{base: base, token: cliFixtureToken, http: httpxtest.Pool(t)}
 	var report retentionReport
 	if err := client.get(t.Context(), "/query/retention", &report); err != nil {
 		t.Fatalf("read the retention report: %v", err)
@@ -1095,4 +1138,54 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	} else if !strings.Contains(stdout, "node-away") {
 		t.Errorf("retention status against a real node never lists node-away:\n%s", stdout)
 	}
+}
+
+// A LOG'S DAILY INTAKE PRINTS AS MEASURED, AND AN UNMEASURED ONE AS A DASH.
+//
+// The column is what `log_ceiling_short` holds a ceiling against, so an
+// operator reading the alarm needs to see it beside the ceiling. A measured
+// zero is a log that took in nothing; a dash is a log nobody could measure —
+// compacted, younger than a day, or on a node that has not ticked — and
+// printing the second as `0 B` would claim the first.
+func TestRetentionStatusPrintsEachLogsDailyIntake(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	measured, nothing := uint64(3<<20), uint64(0)
+	tracked := report.Domains[0]
+	tracked.BytesPerDay = &measured
+	idle := tracked
+	idle.Domain, idle.Stream, idle.BytesPerDay = "pages", "CREWLET_PAGES_LOG", &nothing
+	unmeasured := tracked
+	unmeasured.Domain, unmeasured.Stream, unmeasured.BytesPerDay =
+		"vectors", "CREWLET_VECTORS_LOG", nil
+	report.Domains = []statelog.DomainReport{tracked, idle, unmeasured}
+	node.report = report
+
+	stdout, _, _ := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if !strings.Contains(stdout, "PER DAY") {
+		t.Fatalf("the domain table has no daily intake column:\n%s", stdout)
+	}
+	for domain, want := range map[string]string{
+		"tracker": "3.0 MiB", "pages": "0 B", "vectors": " - ",
+	} {
+		row := lineStarting(stdout, domain+" ")
+		if !strings.Contains(row, want) {
+			t.Errorf("%s's row reads %q, want %q in it", domain, row, want)
+		}
+	}
+	// AND THE DASH IS THE ONLY THING THE UNMEASURED LOG SAYS: a row that
+	// printed `0 B` beside another column's dash would still carry one.
+	if row := lineStarting(stdout, "vectors "); strings.Contains(row, "0 B") {
+		t.Errorf("the unmeasured log's row claims a measured zero: %q", row)
+	}
+}
+
+// lineStarting is the first line of out that begins with prefix.
+func lineStarting(out, prefix string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	return ""
 }

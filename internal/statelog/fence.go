@@ -220,18 +220,30 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 //
 // THE THIRD VALUE BLOCKS. An eviction that cannot be read is not an eviction
 // that did not happen, and publishing under it produces durable records every
-// node drops. A cancelled caller is the exception, and only because it is not a
-// reading at all: it is the caller leaving, and naming it `evicted` would put a
-// shutdown on the refusal counter as a fleet event.
+// node drops — but it is not an eviction either, and the reason says which:
+// [ReasonEvictionUnknown] clears when the state is read again, so a caller is
+// told to come back rather than to give up on this node. A cancelled caller is
+// the exception, and only because it is not a reading at all: it is the caller
+// leaving, and naming it a refusal would put a shutdown on the refusal counter
+// as a fleet event.
+//
+// AND THE STORE'S OWN WORDS GO TO THE LOG, never onto the detail: every
+// surface sends a refusal's detail to the caller, and the read's error is a
+// driver's message or a database path — see [Reader.scopeUnread]. The error
+// still travels as the refusal's Cause, for a caller in this process that
+// recognises it.
 func evictionRefusal(ctx context.Context, evicted bool, err error) error {
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return ctx.Err()
 	case err != nil:
+		log.WarnContext(ctx, "statelog_eviction_unread", "error", err.Error())
 		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
-			Cause:  err,
+			Reason: ReasonEvictionUnknown,
+			Detail: "this node's own eviction state could not be read from its " +
+				"store, and publishing under an eviction nobody can see produces " +
+				"records every node drops — the reason is in this node's log",
+			Cause: err,
 		}
 	case evicted:
 		return &Unavailable{

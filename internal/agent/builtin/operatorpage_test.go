@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -10,35 +11,74 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 )
 
-// A PAGE THAT NAMES NO SPACE LANDS IN THE PERSON'S TEAM SPACE, never the
-// token's: an operator's token names no seat, and the seat it is bound to does.
-// Asked for the token, the default found no team and the dashboard's "Save as a
-// page" was refused for every person who used it.
-func TestAnOperatorsPageWithNoSpaceLandsInThePersonsTeamSpace(t *testing.T) {
+// A PAGE THAT NAMES NO SPACE LANDS IN THE WRITER'S TEAM SPACE, asked of the
+// handle the write is recorded under.
+//
+// A person writes AS their seat whichever credential carried the write, so a
+// person's page lands where their seat's own pages do. Without a default on
+// the operator surface, the dashboard's "Save as a page" was refused for every
+// person who used it. A credential nobody is bound through writes under its
+// login, which no seat matches, so its write is refused naming the argument it
+// left out rather than filed somewhere guessed for it.
+func TestAPageWithNoSpaceLandsInTheWritersTeamSpace(t *testing.T) {
 	t.Parallel()
-	kb := newFakeKB()
-	var asked []string
-	reg := kbRegistry(t, builtin.PageDeps{
-		Reader: kb, Writer: kb,
-		Actor: func(context.Context, *turnctx.Turn) (pages.Actor, error) {
-			return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
-				OperatorID: "founder", Seat: "jane"}, nil
+	for name, tc := range map[string]struct {
+		actor  pages.Actor
+		asked  string
+		filed  string
+		refuse bool
+	}{
+		"a person, through their own token": {
+			actor: pages.Actor{Handle: "jane", Kind: pages.AuthorHuman, OperatorID: "pat:4c1e"},
+			asked: "jane", filed: "HOME",
 		},
-		DefaultContainer: func(handle string) string {
-			asked = append(asked, handle)
-			if handle == "jane" {
-				return "HOME"
+		"a credential nobody is bound through": {
+			actor: pages.Actor{Handle: "token:ops", Kind: pages.AuthorOperator,
+				OperatorID: "token:ops"},
+			asked: "token:ops", refuse: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			kb := newFakeKB()
+			var asked []string
+			reg := kbRegistry(t, builtin.PageDeps{
+				Reader: kb, Writer: kb,
+				Actor: func(context.Context, *turnctx.Turn) (pages.Actor, error) {
+					return tc.actor, nil
+				},
+				DefaultContainer: func(handle string) string {
+					asked = append(asked, handle)
+					if handle == "jane" {
+						return "HOME"
+					}
+					return ""
+				},
+			})
+			got := callWork(t, reg, builtin.WritePageTool, map[string]any{
+				"title": "Notes from the call", "body": "prose",
+			})
+			if !slices.Equal(asked, []string{tc.asked}) {
+				t.Fatalf("the default was asked for %v, want %q: the handle the "+
+					"write is recorded under", asked, tc.asked)
 			}
-			return ""
-		},
-	})
-	if got := callWork(t, reg, builtin.WritePageTool, map[string]any{
-		"title": "Notes from the call", "body": "prose",
-	}); got.Failed {
-		t.Fatalf("the person's page was refused: %s", got.Output)
-	}
-	if !slices.Equal(asked, []string{"jane"}) || kb.created[0].Container != "HOME" {
-		t.Fatalf("the default was asked for %v and the page filed in %q, want the person's HOME",
-			asked, kb.created[0].Container)
+			if tc.refuse {
+				if !got.Failed || !strings.Contains(got.Output, "needs a `container`") {
+					t.Fatalf("a write with no space and no team was answered %q, want "+
+						"the refusal naming the container argument", got.Output)
+				}
+				if len(kb.created) != 0 {
+					t.Fatalf("a refused write still created %+v", kb.created)
+				}
+				return
+			}
+			if got.Failed {
+				t.Fatalf("the person's page was refused: %s", got.Output)
+			}
+			if kb.created[0].Container != tc.filed {
+				t.Fatalf("the page was filed in %q, want the person's %s",
+					kb.created[0].Container, tc.filed)
+			}
+		})
 	}
 }

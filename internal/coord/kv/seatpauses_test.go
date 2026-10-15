@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // AN UNREACHABLE STORE IS NOT UNPAUSED.
@@ -23,15 +26,19 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	store := openFleet(t, nc)
+	swe := uuid.MustParse("7a1e4c90-2b3d-5f68-9a0c-4e5d6f7a8b9c")
+	// BY A SEAT'S HANDLE, kind human, as a signed-in person is recorded:
+	// every person holds a human seat (ADR-0032), and a login written as
+	// kind human is no principal [iam.ActorFor] makes.
 	if _, created, err := store.CreateSeatPause(t.Context(), coord.SeatPause{
-		Handle: "swe", By: "jane-token", At: time.Now(),
+		Seat: swe, By: "jane-doe", ByKind: iam.ActorHuman, At: time.Now(),
 	}); err != nil || !created {
 		t.Fatalf("CreateSeatPause = (%v, %v)", created, err)
 	}
 
 	dead, cancel := context.WithCancel(t.Context())
 	cancel()
-	p, found, err := store.SeatPause(dead, "swe")
+	p, found, err := store.SeatPause(dead, swe)
 	if err == nil {
 		t.Fatalf("SeatPause on a dead context = (%+v, %v) with no error: an outage "+
 			"answered as a fact about the seat", p, found)
@@ -47,10 +54,10 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 
 	// And the same after the connection itself is gone.
 	nc.Close()
-	if _, found, err := store.SeatPause(t.Context(), "swe"); err == nil {
+	if _, found, err := store.SeatPause(t.Context(), swe); err == nil {
 		t.Fatalf("SeatPause over a closed connection answered found=%v with no error", found)
 	}
-	if gone, err := store.DeleteSeatPause(t.Context(), "swe", 1); err == nil || gone {
+	if gone, err := store.DeleteSeatPause(t.Context(), swe, 1); err == nil || gone {
 		t.Fatalf("DeleteSeatPause over a closed connection = (%v, %v), want an error "+
 			"that is not a lost race", gone, err)
 	}
@@ -71,8 +78,8 @@ func TestAPauseWatchWhosePassGoesQuietStillAnswersWhole(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	f := openFleet(t, nc)
-	for _, handle := range []string{"ops", "qa", "swe"} {
-		pauseSeat(t, f, handle)
+	for _, name := range []string{"ops", "qa", "swe"} {
+		pauseSeat(t, f, name)
 	}
 	pass := recordPass(t.Context(), t, f.positions)
 	if len(pass) != 3 {
@@ -90,9 +97,9 @@ func TestAPauseWatchWhosePassGoesQuietStillAnswersWhole(t *testing.T) {
 			"caller for %v and failed: %v", time.Since(started), err)
 	}
 	answer := firstPauseAnswer(ctx, t, updates)
-	if want := []string{"ops", "qa", "swe"}; !slices.Equal(handlesOf(answer), want) {
+	if want := inSeatOrder("ops", "qa", "swe"); !slices.Equal(namesOf(answer), want) {
 		t.Fatalf("the first answer paused %v, want %v: a pause missing from it is "+
-			"a hold the node lifts and a seat it lets take work", handlesOf(answer), want)
+			"a hold the node lifts and a seat it lets take work", namesOf(answer), want)
 	}
 	if n := wire.leaderReads(t); n != 2 {
 		t.Errorf("the watch sent the leader %d reads, want 2 — one for each pause "+
@@ -126,7 +133,7 @@ func TestAPauseWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *test
 	swe := pauseSeat(t, f, "swe")
 	var stale jetstream.KeyValueEntry
 	for _, kve := range recordPass(ctx, t, f.positions) {
-		if kve.Key() == coord.SeatPauseKey("swe") {
+		if kve.Key() == coord.SeatPauseKey(pausedSeat("swe")) {
 			stale = kve
 		}
 	}
@@ -147,24 +154,29 @@ func TestAPauseWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *test
 		t.Fatalf("WatchSeatPauses: %v", err)
 	}
 	answer := firstPauseAnswer(ctx, t, updates)
-	if want := []string{"ops", "swe"}; !slices.Equal(handlesOf(answer), want) {
+	if want := inSeatOrder("ops", "swe"); !slices.Equal(namesOf(answer), want) {
 		t.Fatalf("the first answer paused %v, want %v: the client's marker came "+
 			"before either pause, and an answer that trusted it holds neither",
-			handlesOf(answer), want)
+			namesOf(answer), want)
 	}
-	if got := answer[1].Pause; !got.StopRunning || got.Version != amended.Version {
-		t.Errorf("swe answered as %+v, want the amended pause at %d", *got, amended.Version)
+	for _, u := range answer {
+		if u.Seat != pausedSeat("swe") {
+			continue
+		}
+		if got := u.Pause; !got.StopRunning || got.Version != amended.Version {
+			t.Errorf("swe answered as %+v, want the amended pause at %d", *got, amended.Version)
+		}
 	}
 
 	qa := pauseSeat(t, f, "qa")
-	fresh, err := getLatest(ctx, f.js, f.positions, coord.SeatPauseKey("qa"))
+	fresh, err := getLatest(ctx, f.js, f.positions, coord.SeatPauseKey(pausedSeat("qa")))
 	if err != nil {
 		t.Fatalf("read qa's pause: %v", err)
 	}
 	script <- stale
 	script <- fresh
 	u := nextPauseUpdate(ctx, t, updates)
-	if u.Handle != "qa" || u.Pause == nil || u.Pause.Version != qa.Version {
+	if u.Seat != pausedSeat("qa") || u.Pause == nil || u.Pause.Version != qa.Version {
 		t.Fatalf("the update after an older revision of swe and qa's new pause = %+v, "+
 			"want qa's pause: swe's older revision is not a change, and sent as one "+
 			"it undoes swe's amendment", u)
@@ -183,14 +195,41 @@ func (k scriptedKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetst
 	return stubWatcher{ch: k.script}, nil
 }
 
+// pausedSeat is the id of the seat a case calls name: a pause is filed by the
+// seat's id, so a case that wants "the swe's pause" needs a uuid it can derive
+// twice and read back the same.
+func pausedSeat(name string) uuid.UUID {
+	return uuid.NewSHA1(uuid.MustParse("0b6f3d2a-8e41-4c7a-9f5d-1a2b3c4d5e6f"), []byte(name))
+}
+
+// seatNames maps every id [pausedSeat] can mint in these cases back to its
+// name, for a failure message a person can read.
+var seatNames = func() map[uuid.UUID]string {
+	out := map[uuid.UUID]string{}
+	for _, name := range []string{"ops", "qa", "swe"} {
+		out[pausedSeat(name)] = name
+	}
+	return out
+}()
+
+// inSeatOrder is names in the order the register lists their pauses: by
+// seat id, since that is what each is keyed on.
+func inSeatOrder(names ...string) []string {
+	out := slices.Clone(names)
+	slices.SortFunc(out, func(a, b string) int {
+		return strings.Compare(pausedSeat(a).String(), pausedSeat(b).String())
+	})
+	return out
+}
+
 // pauseSeat pauses a free seat, failing the case if it was not free.
-func pauseSeat(t *testing.T, f *FleetStore, handle string) coord.SeatPause {
+func pauseSeat(t *testing.T, f *FleetStore, name string) coord.SeatPause {
 	t.Helper()
 	p, created, err := f.CreateSeatPause(t.Context(), coord.SeatPause{
-		Handle: handle, By: "jane-token", At: time.Now(),
+		Seat: pausedSeat(name), By: "jane-token", ByKind: iam.ActorOperator, At: time.Now(),
 	})
 	if err != nil || !created {
-		t.Fatalf("CreateSeatPause(%s) = (%v, %v)", handle, created, err)
+		t.Fatalf("CreateSeatPause(%s) = (%v, %v)", name, created, err)
 	}
 	return p
 }
@@ -225,17 +264,20 @@ func nextPauseUpdate(ctx context.Context, t *testing.T, updates <-chan coord.Sea
 	return coord.SeatPauseUpdate{}
 }
 
-// handlesOf names the paused seats in an answer, in the order it gave them. An
+// namesOf names the paused seats in an answer, in the order it gave them. An
 // update that paused nothing is named as one, so it fails any comparison: a
 // first answer holds the pauses that exist and nothing else.
-func handlesOf(answer []coord.SeatPauseUpdate) []string {
-	handles := make([]string, 0, len(answer))
+func namesOf(answer []coord.SeatPauseUpdate) []string {
+	names := make([]string, 0, len(answer))
 	for _, u := range answer {
-		if u.Pause == nil {
-			handles = append(handles, u.Handle+" (no pause)")
-			continue
+		name, known := seatNames[u.Seat]
+		if !known {
+			name = u.Seat.String()
 		}
-		handles = append(handles, u.Handle)
+		if u.Pause == nil {
+			name += " (no pause)"
+		}
+		names = append(names, name)
 	}
-	return handles
+	return names
 }

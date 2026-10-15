@@ -68,7 +68,9 @@ import {
 } from "../scope.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRecents, type Recent } from "~/lib/recents.ts";
+import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import type { WorkProjectRow, WorkProjectsAnswer } from "~/protocol/index.ts";
@@ -83,8 +85,6 @@ const RECENT_FROM = 8;
 const RECENT_ROWS = 3;
 /** The panel's name, which the button's tooltip leads with too. */
 const LABEL = "Switch project";
-/** Why New project is held for a viewer without the credential Edit org needs. */
-export const NEW_PROJECT_HELD = "Needs an operator credential";
 
 const ALL: Scope = { kind: "all" };
 
@@ -125,8 +125,15 @@ export interface PanelInput {
   /** Where the reader is, or null away from Work's scope pages. */
   at: ScopeAt | null;
   recents: readonly Recent[];
-  /** Whether this viewer can make a project (Edit org needs an operator credential). */
-  operator: boolean;
+  /**
+   * Whether this viewer can make a project, and why not: the company grant's
+   * gate (`useConfigWriteAccess`), never a lead's. A project key is one of the
+   * KEYS another system finds a team by and it outlives the team that declared
+   * it, so the engine refuses a lead every write that sets one
+   * (`config.DiffOrg`'s keyed fields) — offered to a lead, New project would
+   * end on a Project field Edit org draws locked.
+   */
+  newProject: ConfigWriteAccess;
 }
 
 /** What taking a row does. */
@@ -154,7 +161,7 @@ export interface Panel {
  * of what was read, so every state is held by the suite without a socket.
  */
 export function panelOf(input: PanelInput, act: PanelActions): Panel {
-  const { base, searched, at, recents, operator } = input;
+  const { base, searched, at, recents, newProject } = input;
   const q = input.query.trim();
   const answer = base.data;
   const current = at?.scope ?? null;
@@ -175,9 +182,16 @@ export function panelOf(input: PanelInput, act: PanelActions): Panel {
     id: "new",
     label: "New project…",
     icon: <PlusGlyph size="md" />,
-    ...(operator
+    // HELD WITH THE GATE'S OWN SENTENCE, the one Add seat and every org chart
+    // write give: a key mark only where a grant is what is missing.
+    ...(newProject.can
       ? { onSelect: act.newProject }
-      : { held: NEW_PROJECT_HELD, meta: <KeyGlyph size="xs" aria-hidden="true" /> }),
+      : {
+          held: newProject.reason,
+          ...(newProject.block === "no_grant"
+            ? { meta: <KeyGlyph size="xs" aria-hidden="true" /> }
+            : {}),
+        }),
   });
 
   if (!answer) {
@@ -358,8 +372,14 @@ const NewProjectDialog = lazyScreen("work", (module) => module.NewProjectDialog)
 export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   const route = useRoute();
   const nav = useNavigator();
-  const viewer = useViewer();
   const recents = useRecents();
+  const newProjectAccess = useConfigWriteAccess();
+  // A BROWSER THE ENGINE REFUSED ASKS IT NOTHING, as the palette does not:
+  // the listing would wait on a socket nobody dials and draw a panel that
+  // never loads. NOR DOES A READER WITHOUT TRACKER, whose every project the
+  // engine would refuse — the palette offers them no switch to open.
+  const tracker = useViewer().tracker;
+  const served = useConnection().accessRefused === null && tracker;
   const at = useMemo(() => scopeAt(route.path, route.query), [route.path, route.query]);
 
   const [state, setState] = useState({ open: false, centred: false });
@@ -376,13 +396,13 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   const base = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { enabled: state.open || at !== null, pollMs: 120_000 },
+    { enabled: served && (state.open || at !== null), pollMs: 120_000 },
   );
   const truncated = base.data?.truncated === true;
   const search = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE, q: sent },
-    { enabled: state.open && truncated && sent !== "" },
+    { enabled: served && state.open && truncated && sent !== "" },
   );
 
   // THE ENGINE SEARCHES ONLY WHAT THE LISTING COULD NOT HOLD, once typing
@@ -457,7 +477,10 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   );
 
   const searched = sent !== "" && sent === query.trim() ? search.data : null;
-  const panel = panelOf({ base, searched, query, at, recents, operator: viewer.operator }, actions);
+  const panel = panelOf(
+    { base, searched, query, at, recents, newProject: newProjectAccess },
+    actions,
+  );
 
   const value: SwitcherContextValue = {
     open: state.open,

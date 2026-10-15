@@ -1,74 +1,402 @@
 /**
- * Settings › People & access: the people in the chart, where agents reach
- * them, and the credentials that reach the company through this engine — and
- * as whom.
+ * Settings › People & access: who can reach this company, and as whom.
  *
  * # One join, drawn from both ends
  *
- * A person acts from the dashboard as themself when their seat names an API
- * token's label in `contact.crewlet_operator_id` (ADR-0024). The two halves of
- * that live in two tiers — the token in Tier A, the binding in the company
- * document — and each half alone hides the half that goes wrong: a token
- * nobody binds looks like a pipeline's credential, and a binding with a typo
- * in it looks bound until that person presses a button and is refused. So the
- * engine answers the join (`access`) and this screen draws both lists: each
- * person with the state of their binding, and each token with the person it
- * acts as.
+ * A person acts in this company as themself once the identity directory holds
+ * them and they prove who they are; they act AS A SEAT when their row binds
+ * them to one. A Tier A API token is a credential of the node it is declared
+ * on, and acts as a seat only when the directory row its `token:<id>` login
+ * names is bound to one. Each half alone hides the half that goes wrong — a
+ * seat nobody holds looks staffed on the chart, and a token label mistyped on
+ * either side leaves the token acting as itself while its operator believes it
+ * acts as a seat — so this screen draws the directory from both ends: each
+ * principal with the seat it holds, each human seat with whoever holds it, and
+ * each of this node's tokens with the row its login names.
  *
- * # Labels, never values
+ * # Read from the identity directory
  *
- * The answer has no member a token's value could travel in, and this screen
- * holds none either — not even the one this browser presents, which lives in
- * the token dialog and nowhere on a page. A contact is drawn as WRITTEN: a
- * `${VAR}` is its name, never the variable's value.
+ * Six answers of `/iam`:
  *
- * Operator-only, like every other answer on this column: which labels the
- * guard accepts and whom each one is, is a map of which credential to take.
+ *  - `GET /iam/people` — every principal, walked to its last page, because a
+ *    directory drawn from its first page is a company that looks smaller than
+ *    it is. A row opens that principal in the frame's peek ([PersonPeek]),
+ *    which reads their row (`GET /iam/people/{id}`), credentials
+ *    (`GET /iam/credentials?person=`) and sessions
+ *    (`GET /iam/people/{id}/sessions`) for itself.
+ *  - `GET /iam/seats` — every human seat of the running company and what
+ *    holds it: a person, a service account, or an open invitation.
+ *  - `GET /iam/node-tokens` — THIS NODE's Tier A tokens by label, each joined
+ *    to the directory row its login names, and the tokens a MANAGED company
+ *    document names as its only writers (`api.auth.company_writers`,
+ *    ADR-0030) — drawn on that card only when the list is not empty, since
+ *    "every credential may" is the default nobody configured.
+ *  - `GET /iam/check` — what the directory reports wrong, worded per kind
+ *    with the engine's own detail beside it, so a kind this build does not
+ *    know still reads.
+ *  - `GET /iam/invitations` — the invitations nobody has redeemed and that
+ *    are still good, and with `?all=true` the expired and redeemed ones the
+ *    estate still holds. Never a link: it was shown once.
+ *
+ * # And written, by an admin
+ *
+ * Creating a service account and minting its token, cancelling an invitation,
+ * and — in an opened person's peek — changing a login, a seat or access,
+ * suspending and reactivating, resetting a second factor, issuing a password
+ * reset link, ending every session, revoking one credential and removing
+ * somebody. Every write is announced ([directoryMoved]), so the list and the
+ * peek beside it, two trees, each read again what it moved.
+ *
+ * NOT INVITING OR CREATING A PERSON. Every person holds exactly one human seat
+ * for as long as they exist, so a person comes from a vacant human seat: its
+ * card on the org chart, its peek and its page offer Invite and Create
+ * (`components/people.tsx`), and this screen points there. A person's seat is
+ * changed here, among the vacant ones, and never cleared — removing them is
+ * what frees it; only a service account is unbound.
+ *
+ * Each is one `/iam` write through `lib/iamWrite.ts`: a
+ * step-up the engine asks for is confirmed and the same request replayed, an
+ * unknown answer is retried under the same operation key, and a refusal is the
+ * engine's sentence with the access that would admit. After each write the
+ * lists it moved are read again. The controls are drawn for an admin only,
+ * who is the only reader the section opens for (`nav.ts`).
+ *
+ * # Labels and verifiers, never values
+ *
+ * No answer here has a member a credential's value could travel in — the
+ * engine stores verifiers, and a Tier A token is named by its label — and this
+ * screen holds none either. Where a seat is reached on a chat surface, the
+ * identity is drawn as the company document writes it: a `${VAR}` is its
+ * name, never the variable's value.
+ *
+ * # Decided by the engine, drawn as it decided
+ *
+ * Every read of somebody else's row is Admin's (`authz.ClassDirectory`). A
+ * reader refused sees the refusal and the access that would have admitted
+ * them — never an empty company. The contact identities are the company
+ * document's, which takes Admin too, and a reader without it is told so
+ * rather than shown seats nobody can reach.
+ *
+ * # Access is a line, not a list
+ *
+ * A row's ACCESS column says what it amounts to — "Admin" (which includes
+ * every app), the apps it holds ("Tracker · Knowledge"), or "Overview only" —
+ * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
+ * stored as `[admin, tracker, knowledge]` read the same, as the engine treats
+ * them.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
+  Button,
+  ButtonLink,
   Callout,
   Card,
+  Checkbox,
+  EMPTY_VALUE,
+  EmptyState,
   EmptyValue,
   InlineCode,
+  Modal,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
+  useToast,
 } from "@crewlethq/ui";
-import { KeyGlyph, TriangleAlertGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
+import {
+  KeyGlyph,
+  SendGlyph,
+  PlusGlyph,
+  ShieldGlyph,
+  TriangleAlertGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import {
+  CancelInvitation,
+  canManagePeople,
+  ConfirmDialog,
+  DIRECTORY_READ,
+  directoryMoved,
+  endedWord,
+  holderName,
+  ExpiresCell,
+  AccessTags,
+  IamOutcome,
+  listsNoCompany,
+  MintTokenDialog,
+  ShownOnce,
+  useDirectoryMoved,
+  useHumanSeats,
+  useSeatEntry,
+} from "~/components/people.tsx";
+import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import type { ObjectRef } from "~/app/frame/objects.ts";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
-import { indexOrg } from "~/lib/seats.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, tsKey } from "~/lib/format.ts";
+import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
+import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
+import { useIamGesture } from "~/lib/iamWrite.ts";
+import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import type {
-  AccessAuth,
-  AccessBinding,
-  AccessContact,
-  AccessPerson,
-  AccessSeat,
-  AccessToken,
-  TokenScope,
-} from "~/contract/access.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
+import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { auth, rest } from "~/protocol/index.ts";
+import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
+import { EditPersonDialog, OnYourself, ServiceAccountDialog } from "./AccessDialogs.tsx";
+
+// ---------------------------------------------------------------------------
+// The wire, as internal/api/iamapi writes it
+// ---------------------------------------------------------------------------
+
+/** One directory row (`iamapi.personView`): the sealed values opened, the verifiers absent. */
+export interface DirectoryRow {
+  id: string;
+  /** `person`, `machine`, `seat` or `engine` (`iam.Kind`). */
+  kind: string;
+  /** `invited`, `enrolling`, `active`, `suspended` or `retired` (`iam.Stage`). */
+  stage: string;
+  login?: string;
+  name?: string;
+  email?: string;
+  /** Ciphertext this node's keyring cannot open — a STATE, never an empty name. */
+  sealed?: boolean;
+  /** The seat the row is bound to, by its handle. */
+  seat?: string;
+  grants?: string[] | null;
+  created_at?: string;
+}
+
+interface DirectoryPage {
+  people: DirectoryRow[] | null;
+  /** The cursor of the next page, "" on the last. */
+  next: string;
+}
+
+/** One credential (`iamapi.credentialView`). No verifier, ever. */
+export interface CredentialRow {
+  id: string;
+  person: string;
+  /** `password`, `totp`, `recovery`, `token` or `reset`. */
+  method: string;
+  label?: string;
+  created_at?: string;
+  expires_at?: string;
+  revoked_at?: string;
+  /**
+   * Revoked, expired, or ended by a counter — a machine token its owner's
+   * revocation epoch or a restore moved past — as the engine judged it at
+   * the read.
+   */
+  revoked: boolean;
+  /** A reset link its person used, which is revoked too. */
+  spent?: boolean;
+  /** What a machine token was minted carrying. */
+  grants?: string[] | null;
+}
+
+/** One session (`iamapi.sessionView`): its lineage, nothing a session resumes from. */
+export interface SessionRow {
+  lineage: string;
+  person: string;
+  created_at?: string;
+  expires_at?: string;
+  ended_at?: string;
+  ended_reason?: string;
+  live: boolean;
+  enrolment_only?: boolean;
+}
 
 /**
- * How often the answer is asked again, in ms.
- *
- * Both halves change only on an operator's hand: Tier A at a restart, the
- * binding at a config activation. A minute is soon enough to see an
- * activation made in another tab land, and the page is read, not watched.
+ * `GET /iam/node-tokens`: this node's Tier A tokens, and the ids of those a
+ * managed company document names as its writers — empty where the document
+ * is not managed.
  */
-const POLL_MS = 60_000;
+export interface NodeTokens {
+  tokens: NodeToken[];
+  /**
+   * `api.auth.company_writers`: the Tier A token ids that alone may change
+   * the company document while it is managed (ADR-0030). Every other
+   * credential — a person's session, a machine token, this node's other
+   * tokens — reads it, and can still rotate a credential it names.
+   */
+  companyWriters: string[];
+}
+
+/** One of this node's Tier A tokens, by label, joined to its directory row. */
+export interface NodeToken {
+  id: string;
+  /** `token:<id>`, the login the token acts under. */
+  login: string;
+  /** `none` or `held`. */
+  row: string;
+  person?: string;
+  stage?: string;
+  /**
+   * The seat the row binds the token to, by handle — what the row holds, never
+   * a verdict: whether the company still holds it is `/iam/check`'s finding.
+   */
+  seat?: string;
+}
+
+/** One invitation (`iamapi.invitationView`): never its link, its secret or what the estate keeps of it. */
+export interface InvitationRow {
+  id: string;
+  email?: string;
+  /** The address this node's keyring cannot open — a state, never a blank. */
+  sealed?: boolean;
+  /** The human seat redeeming it binds, by handle. */
+  seat?: string;
+  grants: string[] | null;
+  invited_by?: string;
+  created_at?: string;
+  expires_at?: string;
+  redeemed_at?: string;
+  /** The person a redemption created. */
+  person?: string;
+  /** `open`, `expired` or `redeemed`. */
+  state: string;
+}
+
+interface InvitationPage {
+  invitations: InvitationRow[] | null;
+  next: string;
+}
+
+/** One row of `GET /iam/check`. */
+export interface DirectoryFinding {
+  kind: string;
+  person?: string;
+  login?: string;
+  seat?: string;
+  grant?: string;
+  detail: string;
+}
+
+interface DirectoryCheck {
+  findings: DirectoryFinding[] | null;
+  /**
+   * Active, enrolled PERSONS holding Admin — never a service account, whose
+   * token can write no administrative record — which the last-admin guard
+   * reads.
+   */
+  people_with_admin: number;
+  bindings_unchecked: number;
+}
+
+// ---------------------------------------------------------------------------
+// Words
+// ---------------------------------------------------------------------------
+
+type Tone = "success" | "neutral" | "warning" | "danger";
+
+interface Words {
+  label: string;
+  tone: Tone;
+  hint: string;
+}
+
+/**
+ * The five stages, in the engine's words (`internal/iam/principal.go`). A
+ * value this build has no word for is drawn as written — the engine adds one
+ * additively, and naming it beats dropping it. So for every table below.
+ */
+export const STAGE_WORDS: Record<string, Words> = {
+  invited: {
+    label: "Invited",
+    tone: "neutral",
+    hint: "Created, and has proved nothing yet. May not act.",
+  },
+  enrolling: {
+    label: "Enrolling",
+    tone: "neutral",
+    hint: "Part-way through proving who they are. May not act yet.",
+  },
+  active: { label: "Active", tone: "success", hint: "Enrolled, and the only stage that may act." },
+  suspended: {
+    label: "Suspended",
+    tone: "warning",
+    hint: "Enrolled and may not act; the record is kept, and reinstating does not re-enrol.",
+  },
+  retired: {
+    label: "Retired",
+    tone: "neutral",
+    hint: "Has left. Kept so every audit row they wrote still resolves to a name.",
+  },
+};
+
+/** The principal kinds, as a reader says them. */
+const KIND_WORDS: Record<string, string> = {
+  person: "Person",
+  machine: "Service account",
+  seat: "Seat",
+  engine: "Engine",
+};
+
+/** What a Tier A token's login names in the directory. */
+export const TOKEN_ROW_WORDS: Record<string, Words> = {
+  none: {
+    label: "No row",
+    tone: "neutral",
+    hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. To have it act as a human seat nothing else holds, create its row bound to one: crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none — the row carries nothing itself, since the token's permissions are its Tier A entry's.",
+  },
+  held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
+};
+
+/**
+ * The directory report's kinds in words — KEYED ON THE ENGINE'S OWN LIST
+ * (`FINDING_KINDS`, held against `iamapi.FindingKinds`), so a kind the engine
+ * grew is a compile error here rather than a raw code on the screen. The
+ * report arrives sorted in that list's order.
+ */
+export const FINDING_WORDS: Record<(typeof FINDING_KINDS)[number], { label: string; tone: Tone }> =
+  {
+    no_admin_holder: { label: "Nobody can administer", tone: "danger" },
+    person_without_credential: { label: "Active, no credential", tone: "warning" },
+    binding_dangling: { label: "Seat gone", tone: "warning" },
+    admin_clamped_by_node: { label: "Admin withheld here", tone: "neutral" },
+  };
+
+/** A finding's words, or none for a kind this build does not know. */
+function findingWords(kind: string): { label: string; tone: Tone } | undefined {
+  return (FINDING_KINDS as readonly string[]).includes(kind)
+    ? FINDING_WORDS[kind as (typeof FINDING_KINDS)[number]]
+    : undefined;
+}
+
+/** What a credential method is called. */
+const METHOD_WORDS: Record<string, string> = {
+  password: "Password",
+  totp: "Authenticator app",
+  recovery: "Recovery codes",
+  token: "Machine token",
+  reset: "Password reset link",
+};
+
+/** What an invitation's state is called. */
+export const INVITATION_WORDS: Record<string, Words> = {
+  open: { label: "Open", tone: "success", hint: "Not redeemed, and still good." },
+  expired: {
+    label: "Expired",
+    tone: "neutral",
+    hint: "Past its deadline; the link answers that it is no longer valid.",
+  },
+  redeemed: { label: "Redeemed", tone: "neutral", hint: "Spent: it created the person it names." },
+};
 
 /**
  * The surface each contact field reaches a person on, in the chart's own
- * field order. A key this build has no word for is drawn as the key itself —
- * the engine adds a surface additively, and naming it beats dropping it.
+ * field order. A key this build has no word for is drawn as the key itself.
  */
 const CONTACT_SURFACES: Record<string, string> = {
   slack_user_id: "Slack",
@@ -78,329 +406,1679 @@ const CONTACT_SURFACES: Record<string, string> = {
   gitlab_username: "GitLab",
 };
 
-/**
- * What each binding state means to the person reading it, and what to do.
- *
- * EXHAUSTIVE OVER THE CONTRACT'S UNION, so a state the engine adds fails the
- * typecheck here rather than drawing as nothing.
- */
-export const BINDING_WORDS: Record<
-  AccessBinding,
-  { label: string; tone: "success" | "neutral" | "warning"; hint: string }
-> = {
-  bound: {
-    label: "Acts as themself",
-    tone: "success",
-    hint: "Changes they make are recorded under their name.",
-  },
-  unbound: {
-    label: "Not bound",
-    tone: "neutral",
-    hint: "No token is bound, so they can’t make changes here.",
-  },
-  unresolved: {
-    label: "Variable unset",
-    tone: "warning",
-    hint: "Its token variable isn’t set. Set it, or write the label directly.",
-  },
-  no_token: {
-    label: "No such token",
-    tone: "warning",
-    hint: "The label matches no token. Fix it on either side.",
-  },
-};
+/** The engine writes a detail in its own lower case; drawn, it is a sentence. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return "";
+  const opened = trimmed[0]!.toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(opened) ? opened : `${opened}.`;
+}
 
-/** The two scopes, in words. */
-export const SCOPE_WORDS: Record<TokenScope, { label: string; hint: string }> = {
-  person: {
-    label: "Person",
-    hint: "Reads, writes, and acting as its person",
-  },
-  operator: {
-    label: "Operator",
-    hint: "Full access, including configuration and secrets. Can’t act as a person.",
-  },
-};
+function WordTag({ words, fallback }: { words: Words | undefined; fallback: string }) {
+  return (
+    <Tag size="sm" variant={words?.tone ?? "neutral"} title={words?.hint}>
+      {words?.label ?? fallback}
+    </Tag>
+  );
+}
+
+/**
+ * What comes next in a company nobody has joined: put yourself on your seat —
+ * every person holds a human seat, so the org chart is where a person comes
+ * from — or, once an invitation is open, open its link, which is where its
+ * person chooses a login and password.
+ *
+ * THE SEAT LISTING DECIDES THE STEP, so it is read whole rather than as its
+ * rows. A node running NO COMPANY answers it `409 no_active_revision`, and
+ * the step is creating one that declares a human seat: read as its rows, the
+ * refusal was an empty answer taken for a company holding seats, and the
+ * callout sent the operator to "choose your human seat" on a chart with no
+ * company behind it. A company with NO HUMAN SEAT can admit nobody, and is
+ * told so with the way to add one. A listing refused for any other reason
+ * says nothing about the seats, so the callout claims nothing about them.
+ */
+function FirstPerson({
+  waiting,
+  seats,
+}: {
+  waiting: InvitationRow[];
+  seats: RestResult<HumanSeat[]>;
+}) {
+  if (waiting.length > 0) {
+    const only = waiting.length === 1 ? waiting[0]! : null;
+    const which = only
+      ? only.email && !only.sealed
+        ? `The invitation to ${only.email} is`
+        : "An invitation is"
+      : `${waiting.length} invitations are`;
+    return (
+      <Callout variant="neutral" title="Nobody has joined yet">
+        {which} waiting to be redeemed: {only ? "its" : "an invitation's"} link is where its person
+        chooses a login and password, and until somebody opens one nobody can sign in with a
+        password. A link is shown once, when it is issued — a lost one is cancelled below or on its
+        seat, and issued again from the seat. The API token you are using stays the way back in.
+      </Callout>
+    );
+  }
+  if (listsNoCompany(seats)) {
+    return (
+      <Callout
+        variant="neutral"
+        title="Nobody has joined yet"
+        action={
+          <ButtonLink size="small" variant="primary" href={href(["agents", "edit"])}>
+            Create the company
+          </ButtonLink>
+        }
+      >
+        This node runs no company yet, so it has no human seat for anybody to hold. Create one in
+        the org chart — or import one with <InlineCode>crewlet config import</InlineCode> — that
+        declares a human seat for you, then invite or create yourself on it. The API token you are
+        using stays the way back in.
+      </Callout>
+    );
+  }
+  if (seats.data && seats.data.length === 0) {
+    return (
+      <Callout
+        variant="neutral"
+        title="Nobody has joined yet"
+        action={
+          <ButtonLink
+            size="small"
+            variant="primary"
+            href={href(["agents", "edit"], { add: "human" })}
+          >
+            Add a human seat
+          </ButtonLink>
+        }
+      >
+        This company has no person in it, and no human seat for one: every person holds a human
+        seat, so add one for yourself in the org chart first, then invite or create yourself on it.
+        The API token you are using stays the way back in.
+      </Callout>
+    );
+  }
+  const chart = (
+    <ButtonLink size="small" variant="primary" href={href(["agents"])}>
+      Open the org chart
+    </ButtonLink>
+  );
+  if (!seats.data) {
+    return (
+      <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
+        This company has no person in it, so nobody can sign in with a password yet. Every person is
+        invited or created on a human seat in the org chart; this node could not list the seats just
+        now, so Human seats below says why. The API token you are using stays the way back in.
+      </Callout>
+    );
+  }
+  return (
+    <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
+      This company has no person in it, so nobody can sign in with a password yet. Open the org
+      chart, choose your human seat and invite or create yourself on it: the link it shows is where
+      you choose your password. The API token you are using stays the way back in.
+    </Callout>
+  );
+}
+
+/**
+ * Whether a read has said something — answered or been refused — rather than
+ * being on its way for the first time. A step decided before then is decided
+ * on nothing, and says the wrong one first.
+ */
+function settled(read: RestResult<unknown>): boolean {
+  return !(read.loading && read.data === null && read.error === null);
+}
+
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+
+/** A page as large as the directory serves (`iamdomain.MaxPageSize`). */
+const PAGE = 200;
+
+/** The access the company document — and so every contact identity — is read under. */
+const CONFIG_READ = ADMIN;
+
+/** Every row of the directory, walked to its last page. */
+async function readDirectory(signal: AbortSignal): Promise<DirectoryRow[]> {
+  return walk(
+    (query) => rest.get(`/iam/people?${query}`, signal) as Promise<DirectoryPage | null>,
+    "",
+    (page) => page.people,
+  );
+}
+
+/** Every invitation the listing holds — the open ones, or with `all` every state. */
+function readInvitations(all: boolean) {
+  return (signal: AbortSignal) =>
+    walk(
+      (query) => rest.get(`/iam/invitations?${query}`, signal) as Promise<InvitationPage | null>,
+      all ? "all=true" : "",
+      (page) => page.invitations,
+    );
+}
+
+/**
+ * A paged `/iam` listing, walked to its last page: `read` asks one page with
+ * the query it is handed — its own path a literal at its call, which is what
+ * the dev proxy's gate reads.
+ */
+async function walk<T, P extends { next: string }>(
+  read: (query: string) => Promise<P | null>,
+  extra: string,
+  rowsOf: (page: P) => T[] | null,
+): Promise<T[]> {
+  const rows: T[] = [];
+  let after = "";
+  for (;;) {
+    const params = new URLSearchParams(extra);
+    params.set("limit", String(PAGE));
+    if (after) params.set("after", after);
+    const page = await read(params.toString());
+    rows.push(...((page && rowsOf(page)) ?? []));
+    // THE CURSOR MUST MOVE: a page that names its own cursor again would
+    // otherwise be asked for ever.
+    if (!page?.next || page.next === after) return rows;
+    after = page.next;
+  }
+}
+
+/** The list an `/iam` answer carries under `field`, or none. */
+function listOf<T>(answer: unknown, field: string): T[] {
+  const list = (answer as Record<string, unknown> | null)?.[field];
+  return Array.isArray(list) ? (list as T[]) : [];
+}
+
+/** `GET /iam/node-tokens`, read whole: the tokens and the managed document's writers. */
+async function readNodeTokens(signal: AbortSignal): Promise<NodeTokens> {
+  const answer = await rest.get("/iam/node-tokens", signal);
+  return {
+    tokens: listOf<NodeToken>(answer, "tokens"),
+    companyWriters: listOf<string>(answer, "company_writers"),
+  };
+}
+
+/** How every `/iam` read here is kept current: as every directory read is. */
+const READ = DIRECTORY_READ;
+
+// ---------------------------------------------------------------------------
+// The screen
+// ---------------------------------------------------------------------------
 
 export function PeopleAndAccess() {
-  const { data, loading, error } = useQuery("access", undefined, { pollMs: POLL_MS });
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const viewer = useViewer();
+  const health = useEngineHealth();
+  const manages = canManagePeople(viewer.grants);
+  const [creating, setCreating] = useState(false);
+  const [allInvitations, setAllInvitations] = useState(false);
 
-  const people = useMemo(() => data?.people ?? [], [data]);
-  const tokens = useMemo(() => data?.tokens ?? [], [data]);
-  const bound = people.filter((p) => p.binding === "bound").length;
-  const broken = people.filter((p) => p.binding === "unresolved" || p.binding === "no_token");
-  const personTokens = tokens.filter((t) => t.scope === "person").length;
+  const directory = useRest("/iam/people", readDirectory, READ);
+  // THE ONE READING OF THE SEATS every seat surface takes, so a gesture made
+  // on a seat elsewhere on the page — or this page's own — is heard here too.
+  const seats = useHumanSeats(true);
+  const tokens = useRest("/iam/node-tokens", readNodeTokens, READ);
+  const check = useRest(
+    "/iam/check",
+    async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
+    READ,
+  );
+  const invitations = useRest(
+    `/iam/invitations?all=${allInvitations}`,
+    readInvitations(allInvitations),
+    READ,
+  );
+  // AFTER A WRITE, EVERY LIST IT MAY HAVE MOVED is read again, quietly: a
+  // cancellation moves the invitations and the vacant seats, a create the
+  // directory, an edit the directory, the seats and the report. A write is
+  // ANNOUNCED ([directoryMoved]) rather than re-read here, because the person
+  // peek beside this list is another tree: an edit or a removal made there
+  // left this list naming what it had replaced until the next poll. The
+  // seats hear it for themselves ([useHumanSeats]).
+  const { reload: reloadDirectory } = directory;
+  const { reload: reloadTokens } = tokens;
+  const { reload: reloadCheck } = check;
+  const { reload: reloadInvitations } = invitations;
+  useDirectoryMoved(
+    useCallback(() => {
+      for (const reload of [reloadDirectory, reloadTokens, reloadCheck, reloadInvitations]) {
+        void reload({ quiet: true });
+      }
+    }, [reloadDirectory, reloadTokens, reloadCheck, reloadInvitations]),
+  );
+  // A ROW OPENS ITS PERSON IN THE FRAME'S PEEK, beside the list on a wide
+  // window and as a drawer on a phone: the panel was drawn under the stats,
+  // the report and the whole People grid, so the row a reader pressed opened
+  // something below the fold and the page did not move. `[` and `]` step
+  // through the rows as the grid draws them.
+  const { open: openPeek } = usePeekControls();
+  usePeekNeighbours(
+    useMemo(() => (directory.data ?? []).map((p) => personRef(p.id)), [directory.data]),
+  );
+  // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes Admin. A
+  // reader without it is never asked: the refusal is known before the
+  // question, and each seat says what it would take instead.
+  const readsConfig = holds(viewer.grants, CONFIG_READ);
+  const config = useQuery("config", undefined, { enabled: readsConfig });
+  const contacts = useMemo(() => contactsByHandle(config.data), [config.data]);
+
+  const people = useMemo(() => directory.data ?? [], [directory.data]);
+  const active = people.filter((p) => p.stage === "active").length;
+  const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
+  // VACANT IS HELD BY NOTHING: an open invitation holds its seat as surely as
+  // a person does, and counted as vacant it read as a seat an administrator
+  // could still invite somebody onto.
+  const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
+  const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
+  const tokenRows = useMemo(() => tokens.data?.tokens ?? [], [tokens.data]);
+  const companyWriters = tokens.data?.companyWriters ?? [];
+  const boundTokens = tokenRows.filter((t) => t.seat).length;
 
   return (
     <>
       <PageActions>
-        {/* THE CHART IS WHERE A PERSON AND THEIR BINDING ARE WRITTEN, so the
-            one action here leaves for it rather than editing a copy. */}
+        {manages && (
+          <Button
+            variant="secondary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            onClick={() => setCreating(true)}
+          >
+            New service account
+          </Button>
+        )}
+        {/* A PERSON COMES FROM A SEAT: inviting and creating are the vacant
+            seat's, on the chart, its peek and its page — see the file's doc. */}
+        {manages && (
+          <a className="t-link" href={href(["agents"])}>
+            Invite or create from the org chart →
+          </a>
+        )}
+        <a className="t-link" href={href(["settings", "audit"], { kind: "identity" })}>
+          Identity trail →
+        </a>
+        {/* THE CHART IS WHERE A SEAT AND ITS CONTACTS ARE WRITTEN, so the
+            action here leaves for it rather than editing a copy. */}
         <a className="t-link" href={href(["agents", "edit"])}>
-          Edit people in org →
+          Edit org →
         </a>
       </PageActions>
+      <PageNote>
+        {manages
+          ? "Invite or create people from their human seat in the org chart; change, suspend or remove them here. A link or token is shown once."
+          : needsWords("Changing any of this", [ADMIN])}
+      </PageNote>
+      {creating && (
+        <ServiceAccountDialog
+          held={viewer.grants}
+          onClose={() => setCreating(false)}
+          onDone={directoryMoved}
+        />
+      )}
 
-      {error && !data && <QueryState error={error} loading={false} />}
+      {/* FIRST RUN: nobody has JOINED — `/health`'s `unclaimed` says no person
+          is enrolled, and an invitation creates its person only when it is
+          redeemed — and somebody signed in with an API token is reading
+          this. Which step is next turns on the invitations and the seats:
+          with an invitation open, its link; with none, the seat to put
+          yourself on, or — with no human seat at all — adding one. Keyed on
+          `unclaimed` alone, the callout said "nobody has been invited" above
+          the invitation just issued. Drawn once the invitations AND the
+          seats have answered or been refused, so it never says the wrong one
+          first — keyed on the invitations alone, it said "Open the org
+          chart" while the seats were in flight and "Add a human seat" once
+          they answered none. */}
+      {health?.identity === "unclaimed" && settled(invitations) && settled(seats) && (
+        <FirstPerson
+          waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
+          seats={seats}
+        />
+      )}
 
-      {data && (
+      {/* A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: every read here is
+          decided on the same grant, so the first refusal is the whole page's,
+          drawn with the grants that would have admitted the reader. */}
+      {directory.code && !directory.data && (
+        <QueryState
+          error={directory.code}
+          refusal={directory.refusal}
+          detail={directory.error?.detail || undefined}
+          loading={false}
+        />
+      )}
+      {directory.loading && !directory.data && (
+        <Skeleton variant="text" rows={6} label="Loading the directory" />
+      )}
+
+      {directory.data && (
         <>
-          <TierACallout auth={data.auth} />
-          {data.auth.disabled && (
-            <Callout variant="danger" role="alert">
-              <InlineCode>api.auth.disabled</InlineCode> is on: no token is needed and nobody can
-              act as a person. For local development only.
-            </Callout>
-          )}
-
           <Card padding="none">
             <StatGroup columns={3}>
               <StatCard
                 icon={<UsersGlyph size="xs" />}
                 label="People"
                 value={people.length}
-                sub={`${bound} act${bound === 1 ? "s" : ""} here as themselves`}
-              />
-              <StatCard
-                icon={<KeyGlyph size="xs" />}
-                label="API tokens"
-                value={tokens.length}
-                sub={`${personTokens} bound to a person`}
+                sub={`${active} active`}
               />
               <StatCard
                 icon={<TriangleAlertGlyph size="xs" />}
-                label="Broken bindings"
-                value={broken.length}
+                label="Human seats nobody holds"
+                value={seats.data ? vacant : EMPTY_VALUE}
                 sub={
-                  broken.length
-                    ? "a seat names a token that binds nobody"
-                    : "every binding reaches a token"
+                  seats.data
+                    ? `${invited > 0 ? `${invited} invited · ` : ""}of ${seatRows.length} human seat${seatRows.length === 1 ? "" : "s"}`
+                    : listsNoCompany(seats)
+                      ? "no company yet"
+                      : "not read"
                 }
+              />
+              <StatCard
+                icon={<KeyGlyph size="xs" />}
+                label="API tokens on this node"
+                value={tokens.data ? tokenRows.length : EMPTY_VALUE}
+                sub={tokens.data ? `${boundTokens} bound to a seat` : "not read"}
               />
             </StatGroup>
           </Card>
+
+          <Findings check={check} />
 
           <Card padding="none">
             <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
               People
             </Card.Header>
-            {people.length === 0 ? (
-              <div style={{ padding: "var(--spacing-4)" }}>
-                <p className="t-body muted">No people in the chart yet. Add one in Edit org.</p>
-              </div>
+            <DataGrid<DirectoryRow>
+              rows={people}
+              rowKey={(p) => p.id}
+              defaultSort="person"
+              // A ROW IS A REAL LINK AND A PLAIN CLICK PEEKS — the frame's one
+              // rule — and the grid marks the row the peek is open on.
+              rowHref={(p) => peekHref(personRef(p.id))}
+              onRowActivate={peekRow((p: DirectoryRow) => openPeek(personRef(p.id)))}
+              empty={{
+                title: "Nobody is in the directory yet",
+                hint: "Invite or create the first person on their human seat in the org chart (or crewlet iam invite EMAIL -seat SEAT), signed in with this node's API token.",
+              }}
+              columns={[
+                {
+                  key: "person",
+                  header: "Name",
+                  floor: "12rem",
+                  sortValue: (p) => p.name || p.login || p.id,
+                  cell: (p) => <PersonName row={p} />,
+                },
+                {
+                  key: "login",
+                  header: "Login",
+                  shrink: true,
+                  // LAST TO GO, and it does go: the name column draws the
+                  // login of anybody with no name, and the peek beside the
+                  // list leads with it.
+                  drop: 3,
+                  sortValue: (p) => p.login ?? "",
+                  cell: (p) =>
+                    p.login ? <KeyCell value={p.login} /> : <EmptyValue label="No login" />,
+                },
+                {
+                  key: "kind",
+                  header: "Kind",
+                  shrink: true,
+                  drop: 2,
+                  sortValue: (p) => p.kind,
+                  cell: (p) => <TextCell>{KIND_WORDS[p.kind] ?? p.kind}</TextCell>,
+                },
+                {
+                  key: "stage",
+                  header: "Stage",
+                  shrink: true,
+                  sortValue: (p) => p.stage,
+                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
+                },
+                {
+                  key: "seat",
+                  header: "Seat",
+                  // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
+                  // the person peek the list is a column of the sheet, and a
+                  // flexible track at zero gave way to every content-sized
+                  // one — the seat drew its avatar alone and the grants
+                  // stacked one tag per line, a row ten lines tall — while the
+                  // columns that could have gone stayed. With floors the
+                  // tracks overrun instead, and the grid drops by `drop`. Eight
+                  // rem each, so the full list at 1280 still draws every column
+                  // it drew before.
+                  floor: "8rem",
+                  sortValue: (p) => p.seat ?? "",
+                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
+                },
+                {
+                  key: "grants",
+                  header: "Access",
+                  floor: "8rem",
+                  drop: 1,
+                  sortValue: (p) => accessLine(p.grants ?? []),
+                  cell: (p) => <TextCell>{accessLine(p.grants ?? [])}</TextCell>,
+                },
+              ]}
+            />
+          </Card>
+
+          <Invitations
+            invitations={invitations}
+            all={allInvitations}
+            onAll={setAllInvitations}
+            manages={manages}
+            index={index}
+            onChanged={directoryMoved}
+          />
+
+          <Card padding="none">
+            <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
+              Human seats
+            </Card.Header>
+            {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
+                saying it has no seat to list yet, which the generic refusal
+                read as "the engine failed to answer". */}
+            {listsNoCompany(seats) ? (
+              <Callout variant="neutral">
+                This node runs no company yet, so it has no human seat to list. Seats appear here
+                once a company that declares them is created or imported.
+              </Callout>
             ) : (
-              <DataGrid<AccessPerson>
-                rows={people}
-                rowKey={(p) => p.handle}
-                defaultSort="person"
-                columns={[
-                  {
-                    key: "person",
-                    header: "Person",
-                    floor: "12rem",
-                    sortValue: (p) => p.name || p.handle,
-                    cell: (p) => <SeatCell handle={p.handle} name={p.name} kind="human" />,
-                  },
-                  {
-                    key: "unit",
-                    header: "Team",
-                    shrink: true,
-                    drop: 2,
-                    sortValue: (p) => index.byHandle.get(p.handle)?.unit?.name ?? "",
-                    cell: (p) => {
-                      const unit = index.byHandle.get(p.handle)?.unit?.name;
-                      return unit ? <TextCell>{unit}</TextCell> : <EmptyValue label="No team" />;
+              <QueryState
+                error={seats.code}
+                refusal={seats.refusal}
+                detail={seats.error?.detail || undefined}
+                loading={seats.loading && !seats.data}
+              >
+                <DataGrid<HumanSeat>
+                  rows={seatRows}
+                  rowKey={(s) => s.handle}
+                  defaultSort="seat"
+                  empty={{ title: "The running company has no human seats" }}
+                  columns={[
+                    {
+                      key: "seat",
+                      header: "Seat",
+                      floor: "12rem",
+                      sortValue: (s) => s.name || s.handle,
+                      cell: (s) => <SeatCell handle={s.handle} name={s.name} kind="human" />,
                     },
-                  },
-                  {
-                    key: "reach",
-                    header: "Reached on",
-                    cell: (p) => <Contacts contacts={p.contacts} />,
-                  },
-                  {
-                    key: "binding",
-                    header: "Acts here",
-                    shrink: true,
-                    sortValue: (p) => p.binding,
-                    cell: (p) => <Binding binding={p.binding} />,
-                  },
-                  {
-                    key: "token",
-                    header: "Token",
-                    shrink: true,
-                    drop: 1,
-                    sortValue: (p) => p.operator_id,
-                    // THE BINDING AS WRITTEN — a label or a `${VAR}`, never a
-                    // variable's value — so a typo is readable beside the
-                    // state it caused.
-                    cell: (p) =>
-                      p.operator_id ? (
-                        <KeyCell value={p.operator_id} />
-                      ) : (
-                        <EmptyValue label="Names no token" />
-                      ),
-                  },
-                ]}
-              />
+                    {
+                      key: "unit",
+                      header: "Team",
+                      shrink: true,
+                      drop: 2,
+                      sortValue: (s) => (s.unit ? (unitByKey(index, s.unit)?.name ?? s.unit) : ""),
+                      cell: (s) => {
+                        if (!s.unit) return <EmptyValue label="No team" />;
+                        return <TextCell>{unitByKey(index, s.unit)?.name ?? s.unit}</TextCell>;
+                      },
+                    },
+                    {
+                      key: "holder",
+                      header: "Held by",
+                      sortValue: (s) =>
+                        s.holder?.login ?? s.holder?.person ?? s.invitation?.email ?? "",
+                      cell: (s) => <Holder seat={s} />,
+                    },
+                    {
+                      key: "reach",
+                      header: "Reached on",
+                      drop: 1,
+                      cell: (s) =>
+                        readsConfig ? (
+                          <Contacts contact={contacts.get(s.handle)} />
+                        ) : (
+                          <EmptyValue
+                            label={needsWords("Reading where a seat is reached", [CONFIG_READ])}
+                          />
+                        ),
+                    },
+                  ]}
+                />
+              </QueryState>
             )}
           </Card>
 
           <Card padding="none">
-            <Card.Header icon={<KeyGlyph size="sm" />} count={tokens.length}>
-              API tokens
+            <Card.Header icon={<KeyGlyph size="sm" />} count={tokenRows.length}>
+              API tokens on this node
             </Card.Header>
-            {tokens.length === 0 ? (
-              <div style={{ padding: "var(--spacing-4)" }}>
-                <p className="t-body muted">
-                  {data.auth.disabled ? (
-                    "The guard is disabled, so it accepts no token at all."
-                  ) : (
-                    <>
-                      No tokens configured. Add one under <InlineCode>api.auth.tokens</InlineCode>{" "}
-                      to allow changes.
-                    </>
-                  )}
-                </p>
-              </div>
-            ) : (
-              <DataGrid<AccessToken>
-                rows={tokens}
+            {companyWriters.length > 0 && (
+              <Card.Body padding="md">
+                <CompanyWriters writers={companyWriters} />
+              </Card.Body>
+            )}
+            <QueryState
+              error={tokens.code}
+              refusal={tokens.refusal}
+              detail={tokens.error?.detail || undefined}
+              loading={tokens.loading && !tokens.data}
+            >
+              <DataGrid<NodeToken>
+                rows={tokenRows}
                 rowKey={(t) => t.id}
                 defaultSort="id"
+                empty={{
+                  title: "This node declares no API token",
+                  hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
+                }}
                 columns={[
                   {
                     key: "id",
                     header: "Label",
                     shrink: true,
                     sortValue: (t) => t.id,
-                    cell: (t) => (
-                      <span className="row gap-2">
-                        <KeyCell value={t.id} />
-                        {t.yours && <Tag variant="brand">yours</Tag>}
-                      </span>
-                    ),
+                    cell: (t) => <KeyCell value={t.id} />,
+                  },
+                  {
+                    key: "login",
+                    header: "Acts under",
+                    shrink: true,
+                    drop: 1,
+                    sortValue: (t) => t.login,
+                    cell: (t) => <KeyCell value={t.login} />,
+                  },
+                  {
+                    key: "row",
+                    header: "Directory",
+                    shrink: true,
+                    sortValue: (t) => t.row,
+                    cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
                   },
                   {
                     key: "seat",
-                    header: "Acts as",
+                    header: "Seat",
                     floor: "10rem",
-                    sortValue: (t) => t.seat?.name ?? "",
-                    cell: (t) => <ActsAs seat={t.seat} />,
-                  },
-                  {
-                    key: "scope",
-                    header: "Scope",
-                    shrink: true,
-                    sortValue: (t) => t.scope,
-                    cell: (t) => (
-                      <Tag appearance="outline" title={SCOPE_WORDS[t.scope].hint}>
-                        {SCOPE_WORDS[t.scope].label}
-                      </Tag>
-                    ),
+                    sortValue: (t) => t.seat ?? "",
+                    cell: (t) => <BoundSeat seat={t.seat} index={index} />,
                   },
                 ]}
               />
-            )}
+            </QueryState>
           </Card>
         </>
       )}
-
-      {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
     </>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
 /**
- * Where tokens are declared, and the read posture beside them.
+ * WHO MAY CHANGE THE COMPANY, where a managed document says (ADR-0030).
  *
- * THE KEY, NOT THE TONE'S OWN INFO MARK: this is about where a credential
- * lives and who can hold one.
- *
- * WHO MAY CHANGE THE COMPANY is part of that posture (ADR-0030): a managed
- * document names its writers in Tier A beside the tokens, and this is the
- * screen an operator reads the deployment's `api.auth` on — so it says which
- * credentials write the company, and that the rest only read it. Said only
- * when it is managed: "every token may" is the default nobody configured.
+ * Part of what a Tier A token is: the deployment's `api.auth` names the tokens
+ * that alone write a managed document, and this is the screen an operator
+ * reads that posture on. Worded for EVERY credential rather than "every other
+ * token", because a person's session and a machine token are refused
+ * `config_managed` exactly as an unlisted token is — the managed check judges
+ * the credential, whatever grants stand behind it.
  */
-function TierACallout({ auth }: { auth: AccessAuth }) {
-  const origins = auth.allowed_origins;
-  const writers = auth.company_writers;
+function CompanyWriters({ writers }: { writers: readonly string[] }) {
   return (
-    <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-      <span className="col" style={{ gap: 4 }}>
-        <span>
-          Tokens are set in <InlineCode>api.auth.tokens</InlineCode> in the bootstrap file.
-        </span>
-        <span className="t-caption">
-          {auth.anonymous_read ? (
-            <>
-              Most reads are open without a token (<InlineCode>allow_anonymous_read</InlineCode>).
-            </>
-          ) : (
-            "Every read needs a token (allow_anonymous_read is off)."
-          )}{" "}
-          {origins.length
-            ? `Browsers may also call from ${origins.join(", ")}.`
-            : "Browsers may call from this origin only."}
-        </span>
-        {writers.length > 0 && (
-          <span className="t-caption">
-            Only{" "}
-            {writers.map((id, i) => (
-              <span key={id}>
-                {i > 0 && ", "}
-                <InlineCode>{id}</InlineCode>
-              </span>
-            ))}{" "}
-            can change the company document.
+    <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
+      <span>
+        Only{" "}
+        {writers.map((id, i) => (
+          <span key={id}>
+            {i > 0 && ", "}
+            <InlineCode>{id}</InlineCode>
           </span>
-        )}
+        ))}{" "}
+        can change the company document (<InlineCode>api.auth.company_writers</InlineCode>). Every
+        other credential, sessions and machine tokens included, can read it and rotate a credential
+        it names.
       </span>
     </Callout>
   );
 }
 
-/** Where agents reach a person: one chip per field, as written. */
-function Contacts({ contacts }: { contacts: AccessContact[] }) {
-  if (contacts.length === 0) return <EmptyValue label="No surface" />;
-  return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
-      {contacts.map((c) => {
-        const surface = CONTACT_SURFACES[c.key] ?? c.key;
-        return (
-          <Tag
-            key={c.key}
-            size="sm"
-            appearance="outline"
-            variant={c.resolves ? "neutral" : "warning"}
-            title={
-              c.resolves
-                ? `${c.key}: ${c.value}`
-                : `${c.value} isn’t set, so agents can’t reach them here`
-            }
-          >
-            {surface} <span className="mono">{c.value}</span>
-          </Tag>
-        );
-      })}
-    </span>
-  );
+/**
+ * Every seat's contact identities, by handle, from the company document —
+ * top-level seats and every unit's, as `seatSettings` walks them.
+ */
+function contactsByHandle(
+  doc: CompanyDocument | null | undefined,
+): Map<string, ConfigRole["contact"]> {
+  const out = new Map<string, ConfigRole["contact"]>();
+  const roles: ConfigRole[] = [...(doc?.roles ?? [])];
+  for (const unit of documentUnits(doc)) roles.push(...(unit.roles ?? []));
+  for (const role of roles) if (role.handle) out.set(role.handle, role.contact);
+  return out;
 }
 
-/** Whether a person acts through this engine as themself, with why in its title. */
-function Binding({ binding }: { binding: AccessBinding }) {
-  const words = BINDING_WORDS[binding];
+/**
+ * A principal's name. A SEALED value is a state the operator can end by
+ * putting a key back, never a blank — a blank reads as somebody who never
+ * gave a name.
+ */
+function PersonName({ row }: { row: DirectoryRow }) {
+  if (row.sealed) return <SealedTag />;
+  return <TextCell>{row.name || row.login || row.id}</TextCell>;
+}
+
+/**
+ * What holds a seat: its holder by login and stage, the open invitation that
+ * names it, or the plain fact that nothing does. An INVITED seat is not a
+ * vacant one — nothing else may be invited onto it or bound to it until the
+ * invitation is redeemed, cancelled or lapses — so it is never drawn as
+ * "Nobody holds it".
+ */
+function Holder({ seat }: { seat: HumanSeat }) {
+  const { holder, invitation } = seat;
+  if (!holder && invitation) {
+    return (
+      <span className="row gap-1">
+        <Tag size="sm" variant="neutral" title={`Open invitation ${invitation.id}`}>
+          Invited
+        </Tag>
+        {invitation.sealed ? (
+          <SealedTag />
+        ) : invitation.email ? (
+          <TextCell>{invitation.email}</TextCell>
+        ) : null}
+      </span>
+    );
+  }
+  if (!holder) return <EmptyValue label="Nobody holds it" />;
   return (
-    <Tag size="sm" variant={words.tone} title={words.hint}>
-      {words.label}
+    <Tag
+      size="sm"
+      variant={STAGE_WORDS[holder.stage ?? ""]?.tone ?? "neutral"}
+      title={STAGE_WORDS[holder.stage ?? ""]?.label ?? holder.stage}
+    >
+      {holder.login ? <span className="mono">{holder.login}</span> : holderName(holder)}
     </Tag>
   );
 }
 
-/** The person a token acts as, or the plain fact that it acts as nobody. */
-function ActsAs({ seat }: { seat: AccessSeat | null }) {
-  if (!seat) return <EmptyValue label="Nobody, writes as itself" />;
-  return <SeatCell handle={seat.handle} name={seat.name} kind="human" />;
+/** Where agents reach a seat: one chip per field, as the document writes it. */
+function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
+  const entries = Object.entries(contact ?? {}).filter(([, value]) => value);
+  if (entries.length === 0) return <EmptyValue label="No surface" />;
+  return (
+    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+      {entries.map(([key, value]) => (
+        <Tag key={key} size="sm" appearance="outline" title={`${key}: ${value}`}>
+          {CONTACT_SURFACES[key] ?? key} <span className="mono">{value}</span>
+        </Tag>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The seat a directory row binds — a person's or a token's — or the plain fact
+ * that it binds none. What the row holds, never a verdict on it: a seat the
+ * company no longer holds is the report's finding, below.
+ *
+ * THE KIND IS THE CHART'S, never assumed: a row bound to an AGENT seat is the
+ * residue the report names, and drawn with a person's badge this cell would
+ * state the opposite of the chart on the row the report calls dangling. A seat
+ * the chart does not hold has no kind, which the cell draws as its default.
+ *
+ * BOUND TO NONE is a service account's or a token's row acting as itself,
+ * which is ordinary: a person always holds a human seat (ADR-0032).
+ */
+function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!seat) return <EmptyValue label="Bound to no seat" />;
+  const held = index.byHandle.get(seat);
+  return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;
+}
+
+/**
+ * What the directory reports wrong. Each finding by its kind and, beside it,
+ * the engine's own detail — so a kind this build has no word for still reads
+ * as the sentence the engine wrote.
+ */
+function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
+  const findings = check.data?.findings ?? [];
+  const unchecked = check.data?.bindings_unchecked ?? 0;
+  return (
+    <Card padding="none">
+      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
+        What the directory reports
+      </Card.Header>
+      <QueryState
+        error={check.code}
+        refusal={check.refusal}
+        detail={check.error?.detail || undefined}
+        loading={check.loading && !check.data}
+      >
+        <div className="col" style={{ gap: "var(--spacing-2)", padding: "var(--spacing-4)" }}>
+          {findings.length === 0 && <p className="t-body muted">Nothing to report.</p>}
+          {findings.map((f, i) => {
+            const words = findingWords(f.kind);
+            return (
+              <div key={`${f.kind}:${f.person ?? f.seat ?? i}`} className="row gap-2">
+                <Tag size="sm" variant={words?.tone ?? "neutral"}>
+                  {words?.label ?? f.kind}
+                </Tag>
+                <span className="t-body">{sentence(f.detail)}</span>
+              </div>
+            );
+          })}
+          {/* SAID RATHER THAN SILENT: "no dangling binding" and "this node
+              could not say" are different answers. */}
+          {unchecked > 0 && (
+            <p className="t-caption muted">
+              {unchecked} binding{unchecked === 1 ? "" : "s"} could not be checked against this
+              node&rsquo;s chart just now.
+            </p>
+          )}
+        </div>
+      </QueryState>
+    </Card>
+  );
+}
+
+/**
+ * The invitations nobody has redeemed and that are still good — and, asked, the
+ * expired and redeemed ones the estate still holds until the sweep collects
+ * them. Never a link: it was shown once, and an inviter who lost it cancels and
+ * issues another.
+ */
+function Invitations({
+  invitations,
+  all,
+  onAll,
+  manages,
+  index,
+  onChanged,
+}: {
+  invitations: RestResult<InvitationRow[]>;
+  all: boolean;
+  onAll: (all: boolean) => void;
+  manages: boolean;
+  index: ReturnType<typeof indexOrg>;
+  onChanged: () => void;
+}) {
+  const now = useNow();
+  const [cancelling, setCancelling] = useState<InvitationRow | null>(null);
+  const rows = invitations.data ?? [];
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<SendGlyph size="sm" />}
+        count={rows.length}
+        actions={
+          <Checkbox label="Show expired and redeemed" checked={all} onCheckedChange={onAll} />
+        }
+      >
+        Invitations
+      </Card.Header>
+      <QueryState
+        error={invitations.code}
+        refusal={invitations.refusal}
+        detail={invitations.error?.detail || undefined}
+        loading={invitations.loading && !invitations.data}
+      >
+        <DataGrid<InvitationRow>
+          rows={rows}
+          rowKey={(i) => i.id}
+          defaultSort="expires"
+          empty={{
+            title: all ? "No invitations are held" : "No invitation is waiting to be redeemed",
+          }}
+          columns={[
+            {
+              key: "email",
+              header: "Address",
+              floor: "12rem",
+              sortValue: (i) => i.email ?? "",
+              cell: (i) =>
+                i.sealed ? (
+                  <SealedTag />
+                ) : i.email ? (
+                  <TextCell>{i.email}</TextCell>
+                ) : (
+                  // NO ADDRESS AND NONE SEALED: a removal erases every value
+                  // of its person's that other rows hold, the invitation
+                  // they redeemed included — the cell was simply empty.
+                  <EmptyValue label="Erased with the person it invited" />
+                ),
+            },
+            {
+              key: "seat",
+              header: "Seat",
+              drop: 2,
+              sortValue: (i) => i.seat ?? "",
+              cell: (i) => <BoundSeat seat={i.seat} index={index} />,
+            },
+            {
+              key: "grants",
+              header: "Access",
+              drop: 1,
+              sortValue: (i) => accessLine(i.grants ?? []),
+              cell: (i) => <TextCell>{accessLine(i.grants ?? [])}</TextCell>,
+            },
+            {
+              key: "by",
+              header: "Invited by",
+              shrink: true,
+              drop: 2,
+              sortValue: (i) => i.invited_by ?? "",
+              cell: (i) => <Inviter author={i.invited_by} index={index} />,
+            },
+            {
+              key: "expires",
+              header: "Expires",
+              shrink: true,
+              sortValue: (i) => i.expires_at ?? "",
+              cell: (i) =>
+                i.state === "open" ? (
+                  <DateCell at={i.expires_at} now={now} />
+                ) : (
+                  <WordTag words={INVITATION_WORDS[i.state]} fallback={i.state} />
+                ),
+            },
+            ...(manages
+              ? [
+                  {
+                    key: "cancel",
+                    header: "",
+                    action: true,
+                    shrink: true,
+                    cell: (i: InvitationRow) =>
+                      i.state === "redeemed" ? null : (
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          aria-label={`Cancel the invitation to ${i.sealed ? i.id : i.email}`}
+                          onClick={() => setCancelling(i)}
+                        >
+                          Cancel
+                        </Button>
+                      ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </QueryState>
+      {cancelling && (
+        <CancelInvitation
+          row={cancelling}
+          seatName={cancelling.seat ? index.byHandle.get(cancelling.seat)?.name : undefined}
+          onClose={() => setCancelling(null)}
+          onChanged={onChanged}
+        />
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Who issued an invitation, as the chart names them: a person bound to a seat
+ * writes as the seat, so the record holds its handle — "jane-founder" here
+ * beside "Jane Founder" on the invitation's own page. Anybody else, a machine
+ * included, by the login the record holds.
+ */
+function Inviter({ author, index }: { author?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!author) return <EmptyValue label="Unknown" />;
+  const seat = index.byHandle.get(author);
+  return seat ? (
+    <SeatCell handle={author} name={seat.name || author} kind={seat.kind} />
+  ) : (
+    <KeyCell value={author} />
+  );
+}
+
+/** A name or an address this node's keyring cannot open. */
+function SealedTag() {
+  return (
+    <Tag
+      size="sm"
+      variant="warning"
+      title="This node's keyring cannot open this value: a key was dropped before crewlet secrets rekey moved it off, or the estate was restored under another keyring."
+    >
+      sealed
+    </Tag>
+  );
+}
+
+/**
+ * A gesture on one opened principal.
+ *
+ * A STAGE GESTURE NAMES ITS DIRECTION when it opens, never from the live row:
+ * an unknown answer re-reads the directory, and a suspension that did land
+ * would turn the dialog's "Try again" — the same key, which promises the same
+ * operation — into a reactivation the engine takes as a new one.
+ */
+type PersonGesture =
+  | "edit"
+  | "suspend"
+  | "reactivate"
+  | "mfa"
+  | "reset"
+  | "sessions"
+  | "remove"
+  | "mint"
+  | { revoke: CredentialRow };
+
+/** A directory row's peek reference: by its id, never a login, which a rename moves. */
+function personRef(id: string): ObjectRef {
+  return { kind: "person", id };
+}
+
+/**
+ * One principal, beside the directory it was found in — the frame's peek on
+ * `person:{id}`, opened from a row of People & access, and their only page
+ * (`KindSpec.peekIsPage`).
+ *
+ * IN THE PEEK, NOT UNDER THE LIST. It was a card drawn after the stats, the
+ * report and the whole People grid, so pressing a row — your own row
+ * included — opened it below the fold and the page did not move: it looked
+ * as if nothing had happened. The peek opens in view beside the list on a
+ * wide window and as a drawer on a phone, steps through the rows with `[` and
+ * `]`, and closes on Back.
+ *
+ * IT ASKS FOR ITS OWN ROW (`GET /iam/people/{id}`), because a `peek=` arrives
+ * pasted as often as clicked, and an id the directory does not hold — a
+ * person removed since the link was made, or a mistyped one — is said rather
+ * than drawn as an empty rail.
+ *
+ * THE READER'S OWN ROW LEADS WITH THEIR ACCOUNT. Every gesture here is an
+ * administrator's, made about somebody — a reset link, a reset factor, every
+ * session ended — and the reader who opened their own row was offered those
+ * and nothing that said their password, their second factor and their
+ * sessions are theirs to manage, on their Account. It says so first; the
+ * administrator's gestures follow, each warning what it does to the reader.
+ */
+export function PersonPeek({ id }: { id: string }) {
+  const viewer = useViewer();
+  const toast = useToast();
+  const { close } = usePeekControls();
+  const at = encodeURIComponent(id);
+  const read = useRest(
+    id ? `/iam/people/${at}` : null,
+    // THE PATH A LITERAL AT ITS CALL, which is what the dev proxy's gate reads.
+    async (signal) => (await rest.get(`/iam/people/${at}`, signal)) as DirectoryRow | null,
+    READ,
+  );
+  const row = read.data;
+  // WHO IS READING, by the id the session names — never the login, which a
+  // rename moves to somebody else: a gesture on the reader's own row signs
+  // them out, and the panel names that row in the second person.
+  const reader = useFrameSession().answer?.person;
+  const you = row !== null && reader !== undefined && row.id === reader;
+  // THE ADMINISTRATORS' COUNT, asked only about the reader's own row — the one
+  // place it changes a sentence (`alone`).
+  const check = useRest(
+    you ? "/iam/check" : null,
+    async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
+    READ,
+  );
+  const { reload } = read;
+  const { reload: reloadCheck } = check;
+  useDirectoryMoved(
+    useCallback(() => {
+      void reload({ quiet: true });
+      void reloadCheck({ quiet: true });
+    }, [reload, reloadCheck]),
+  );
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+
+  if (read.loading && !row) return <Skeleton variant="text" rows={6} label="Loading" />;
+  // NOT AN EMPTY RAIL: an id nobody holds is said — the rail's own Close is
+  // the way back to the list — and every other refusal is the read's own.
+  if (read.code === "not_found") {
+    return (
+      <EmptyState
+        size="compact"
+        icon={<UsersGlyph size="xl" />}
+        title="Nobody in the directory has this id"
+        description={`${id} is not a person or service account here: they were removed, or the link was mistyped.`}
+      />
+    );
+  }
+  if (!row) {
+    return (
+      <QueryState
+        error={read.code}
+        refusal={read.refusal}
+        detail={read.error?.detail || undefined}
+        loading={false}
+      />
+    );
+  }
+  const who = row.sealed ? row.id : row.name || row.login || row.id;
+  return (
+    <>
+      <ObjectHeader
+        size="peek"
+        kind={KIND_WORDS[row.kind] ?? row.kind}
+        icon="user"
+        identifier={row.sealed ? undefined : row.login}
+        title={row.sealed ? <SealedTag /> : who}
+        status={<WordTag words={STAGE_WORDS[row.stage]} fallback={row.stage} />}
+        facts={[
+          { label: "Seat", value: <BoundSeat seat={row.seat} index={index} /> },
+          { label: "Access", value: <AccessTags grants={row.grants} /> },
+        ]}
+      />
+      <div className="col gap-3">
+        {you && (
+          <Callout
+            variant="neutral"
+            title="This is you"
+            action={
+              <ButtonLink size="small" variant="secondary" href={href(["account"])}>
+                Your Account
+              </ButtonLink>
+            }
+          >
+            Your password, two-step verification, sessions and personal access tokens are yours to
+            manage on your Account.
+            {canManagePeople(viewer.grants)
+              ? " What follows is what an administrator does to anybody's row, and each gesture says what it would do to you."
+              : ""}
+          </Callout>
+        )}
+        <Principal
+          row={row}
+          who={who}
+          you={you}
+          administrators={check.data?.people_with_admin}
+          manages={canManagePeople(viewer.grants)}
+          held={viewer.grants}
+          onRemoved={() => {
+            // THE PEEK CLOSES ON ITS OWN REMOVAL, with what happened said:
+            // left open, the re-read row answered 404 and the rail turned into
+            // the note for a link naming nobody, a raw id included, right after
+            // the reader's own action.
+            toast.ok(`${who} was removed`);
+            close();
+          }}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * One principal's credentials and sessions, read for this row alone — and, for
+ * an admin, what may be done about them. A machine is offered what applies to
+ * one: its access, its stage, its tokens and its removal; it has no password,
+ * no second factor and no session.
+ *
+ * SECTIONS, NOT CARDS: the rail is the panel already, so they run on as plain
+ * blocks rather than growing a second frame inside the first.
+ */
+function Principal({
+  row,
+  who,
+  you,
+  administrators,
+  manages,
+  held,
+  onRemoved,
+}: {
+  row: DirectoryRow;
+  /** What the panel calls them. */
+  who: string;
+  /** Whether this row is the person reading it. */
+  you: boolean;
+  /** How many active, enrolled PERSONS `GET /iam/check` counts holding Admin. */
+  administrators: number | undefined;
+  manages: boolean;
+  held: readonly string[];
+  /** The row's removal landed. */
+  onRemoved: () => void;
+}) {
+  const now = useNow();
+  const id = encodeURIComponent(row.id);
+  const credentials = useRest(
+    `/iam/credentials?person=${id}`,
+    async (signal) =>
+      listOf<CredentialRow>(await rest.get(`/iam/credentials?person=${id}`, signal), "credentials"),
+    READ,
+  );
+  const sessions = useRest(
+    `/iam/people/${id}/sessions`,
+    async (signal) =>
+      listOf<SessionRow>(await rest.get(`/iam/people/${id}/sessions`, signal), "sessions"),
+    READ,
+  );
+  const [gesture, setGesture] = useState<PersonGesture | null>(null);
+  // THE SEAT AS THE CHART NAMES IT, which a suspension withholds and a
+  // removal frees — said by name, since it is the seat the reader will next
+  // look for on the chart.
+  const seatEntry = useSeatEntry();
+  const seatName = row.seat ? seatEntry(row.seat).name : "";
+  const machine = row.kind === "machine";
+  const live = (credentials.data ?? []).filter((c) => !c.revoked);
+  const holdsFactor = live.some((c) => c.method === "totp" || c.method === "recovery");
+  const suspended = row.stage === "suspended";
+  // THE ONE ADMIN LEFT, by the engine's own count — active, enrolled persons
+  // holding Admin, never a service account — which the reader, signed in, is
+  // among.
+  const alone = you && canManagePeople(row.grants ?? []) && administrators === 1;
+  // EVERY WRITE IS ANNOUNCED ([directoryMoved]), and these reads hear it
+  // with the list this peek is beside.
+  const { reload: reloadCredentials } = credentials;
+  const { reload: reloadSessions } = sessions;
+  useDirectoryMoved(
+    useCallback(() => {
+      void reloadCredentials({ quiet: true });
+      void reloadSessions({ quiet: true });
+    }, [reloadCredentials, reloadSessions]),
+  );
+  const changed = directoryMoved;
+  const close = () => setGesture(null);
+
+  return (
+    <>
+      {manages && (
+        <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+          <Button size="small" variant="secondary" onClick={() => setGesture("edit")}>
+            Edit login, seat and access
+          </Button>
+          {(row.stage === "active" || suspended) && (
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => setGesture(suspended ? "reactivate" : "suspend")}
+            >
+              {suspended ? "Reactivate" : "Suspend"}
+            </Button>
+          )}
+          {machine ? (
+            <Button size="small" variant="secondary" onClick={() => setGesture("mint")}>
+              Mint token
+            </Button>
+          ) : (
+            <>
+              {/* NOT FOR A STOPPED PERSON: a link would hand back an account
+                  somebody stopped, and the engine refuses it naming the stage. */}
+              {!suspended && row.stage !== "retired" && (
+                <Button size="small" variant="secondary" onClick={() => setGesture("reset")}>
+                  Issue password reset link
+                </Button>
+              )}
+              {holdsFactor && (
+                <Button size="small" variant="secondary" onClick={() => setGesture("mfa")}>
+                  Reset second factor
+                </Button>
+              )}
+              <Button size="small" variant="secondary" onClick={() => setGesture("sessions")}>
+                End all sessions
+              </Button>
+            </>
+          )}
+          <Button size="small" variant="danger" onClick={() => setGesture("remove")}>
+            Remove
+          </Button>
+        </div>
+      )}
+      {gesture === "edit" && (
+        <EditPersonDialog
+          row={row}
+          held={held}
+          you={you}
+          alone={alone}
+          onClose={close}
+          onDone={changed}
+        />
+      )}
+      {gesture === "mint" && (
+        <MintTokenDialog owner={row} held={held} onClose={close} onDone={changed} />
+      )}
+      {gesture === "reset" && (
+        <ResetLink row={row} who={who} you={you} onClose={close} onDone={changed} />
+      )}
+      {gesture !== null && typeof gesture === "object" && (
+        <PersonWrite
+          title={`Revoke this ${METHOD_WORDS[gesture.revoke.method]?.toLowerCase() ?? "credential"}?`}
+          confirm="Revoke"
+          danger
+          request={{
+            method: "DELETE",
+            path: `/iam/credentials/${encodeURIComponent(gesture.revoke.id)}`,
+            query: { person: row.id },
+          }}
+          onClose={close}
+          onDone={changed}
+        >
+          {gesture.revoke.method === "token"
+            ? `Anything presenting it is refused from now on${gesture.revoke.label ? ` — "${gesture.revoke.label}"` : ""}.`
+            : gesture.revoke.method === "reset"
+              ? `The link stops working; issue another if ${you ? "you" : "they"} still need one.`
+              : you
+                ? "You can no longer prove who you are with it."
+                : `${who} can no longer prove who they are with it.`}
+        </PersonWrite>
+      )}
+      {(gesture === "suspend" || gesture === "reactivate") && (
+        <PersonWrite
+          title={
+            gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${you ? "yourself" : who}?`
+          }
+          confirm={gesture === "reactivate" ? "Reactivate" : "Suspend"}
+          danger={gesture === "suspend"}
+          request={{
+            method: "PATCH",
+            path: `/iam/people/${id}`,
+            body: { stage: gesture === "reactivate" ? "active" : "suspended" },
+          }}
+          onClose={close}
+          onDone={changed}
+        >
+          {gesture === "suspend" && you && <OnYourself alone={alone} />}
+          {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
+              withheld, and the sessions a suspension ends stay ended — a
+              password reset link among them, which a reactivation does not
+              bring back either. A SUSPENDED PERSON KEEPS THEIR SEAT: it is
+              withheld, never freed, so nobody else is put on it meanwhile. */}
+          {gesture === "reactivate"
+            ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions, tokens and password reset link the suspension ended stay ended, so issue a new link if they need one.`
+            : you
+              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? `, and your seat ${seatName} is withheld — it stays yours, and nobody else can hold it meanwhile` : ""}. Your record is kept, and an admin can reactivate you.`
+              : `${who} may not act while suspended: every session, token and password reset link they hold ends and their sign-ins are refused${row.seat ? `, and their seat ${seatName} is withheld — it stays theirs, and nobody else can hold it meanwhile` : ""}. Their record is kept, and reactivating lets them sign in again.`}
+        </PersonWrite>
+      )}
+      {gesture === "mfa" && (
+        <PersonWrite
+          title={you ? "Reset your second factor?" : `Reset ${who}'s second factor?`}
+          confirm="Reset second factor"
+          danger
+          request={{ method: "POST", path: `/iam/people/${id}/mfa/reset` }}
+          onClose={close}
+          onDone={changed}
+        >
+          {you && <OnYourself />}
+          {/* A RESET LINK ENDS WITH THE SESSIONS, so one already sent is dead
+              by the time it is opened: said here, where the order that works
+              — the factor first, then the link — is still a choice. */}
+          {you
+            ? "Your authenticator app and recovery codes stop working, and every session, token and password reset link you hold ends. "
+            : "Their authenticator app and recovery codes stop working, and every session, token and password reset link they hold ends — if they need a new password too, issue the link after this. "}
+          <AfterFactorReset you={you} />
+        </PersonWrite>
+      )}
+      {gesture === "sessions" && (
+        <PersonWrite
+          title={you ? "End every session you hold?" : `End every session ${who} holds?`}
+          confirm="End all sessions"
+          danger
+          request={{ method: "DELETE", path: `/iam/people/${id}/sessions` }}
+          onClose={close}
+          onDone={changed}
+        >
+          {you && <OnYourself />}
+          {you
+            ? "You are signed out everywhere, and every personal access token you minted and any password reset link issued for you stop working too."
+            : "They are signed out everywhere, and every personal access token they minted and any password reset link issued for them stop working too — if they need a new password, issue the link after this."}
+        </PersonWrite>
+      )}
+      {gesture === "remove" && (
+        <PersonWrite
+          title={`Remove ${you ? "yourself" : who}?`}
+          confirm="Remove"
+          danger
+          typeToConfirm={row.login || row.id}
+          request={{ method: "DELETE", path: `/iam/people/${id}` }}
+          onClose={close}
+          onDone={changed}
+          onLanded={onRemoved}
+        >
+          {you && <OnYourself alone={alone} />}
+          {/* A SERVICE ACCOUNT IS NOT INVITED BACK: nobody redeems a link for
+              one, so its way back is the create it came from. */}
+          {you
+            ? `Your row, credentials and sessions are deleted, ${row.seat ? `your seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of yours is erased. This cannot be undone: to come back, you must be invited onto a seat again. The trail keeps what you did.`
+            : machine
+              ? `Its row and every token it holds are deleted, ${row.seat ? `the seat ${seatName} it is bound to is freed, ` : ""}and its sealed values are erased. This cannot be undone: to bring it back, create the service account again. The trail keeps what it did.`
+              : `Their row, credentials and sessions are deleted, ${row.seat ? `their seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of theirs is erased. This cannot be undone: to bring them back, invite them onto a seat again. The trail keeps what they did.`}
+        </PersonWrite>
+      )}
+      <section className="col gap-2">
+        <div className="t-label">Credentials</div>
+        <QueryState
+          error={credentials.code}
+          refusal={credentials.refusal}
+          detail={credentials.error?.detail || undefined}
+          loading={credentials.loading && !credentials.data}
+        >
+          <DataGrid<CredentialRow>
+            rows={credentials.data ?? []}
+            rowKey={(c) => c.id}
+            defaultSort="method"
+            empty={{ title: "Holds no credential" }}
+            columns={[
+              {
+                key: "method",
+                header: "Credential",
+                // THE POINT OF THE LIST HAS A FLOOR, and so does Carries: in
+                // the peek's column every flexible track at zero gave way to
+                // the content-sized ones, so "Password" read "P…" and the
+                // header "C…" while Expires and Carries — which go first —
+                // stayed at a pixel each.
+                floor: "8rem",
+                sortValue: (c) => c.method,
+                cell: (c) => (
+                  <TextCell>
+                    {METHOD_WORDS[c.method] ?? c.method}
+                    {c.label ? ` · ${c.label}` : ""}
+                  </TextCell>
+                ),
+              },
+              {
+                key: "state",
+                header: "State",
+                // ITS OWN WIDTH, EXACTLY: one of four short words in a pill,
+                // which a content-sized column's cap — a fifth of a 385px peek
+                // — cut to "In u…".
+                width: "max-content",
+                sortValue: (c) => (c.revoked ? 1 : 0),
+                cell: (c) =>
+                  c.revoked ? (
+                    <Tag size="sm" variant="neutral">
+                      {endedWord(c, now)}
+                    </Tag>
+                  ) : (
+                    <Tag size="sm" variant="success">
+                      In use
+                    </Tag>
+                  ),
+              },
+              {
+                key: "created",
+                header: "Created",
+                shrink: true,
+                drop: 3,
+                sortValue: (c) => c.created_at ?? "",
+                cell: (c) => <DateCell at={c.created_at} now={now} />,
+              },
+              {
+                key: "expires",
+                header: "Expires",
+                shrink: true,
+                drop: 1,
+                sortValue: (c) => c.expires_at ?? "",
+                cell: (c) => <ExpiresCell c={c} now={now} />,
+              },
+              {
+                key: "grants",
+                header: "Carries",
+                floor: "8rem",
+                drop: 2,
+                // A RESET LINK CARRIES NO ACCESS: it sets a password once and
+                // signs nobody in, and "Its holder's access" beside it read as
+                // a link that opened the account.
+                cell: (c) =>
+                  c.method === "token" ? (
+                    <AccessTags grants={c.grants} />
+                  ) : (
+                    <EmptyValue
+                      label={c.method === "reset" ? "Sets a password once" : "Its holder's access"}
+                    />
+                  ),
+              },
+              ...(manages
+                ? [
+                    {
+                      key: "revoke",
+                      header: "",
+                      action: true,
+                      shrink: true,
+                      cell: (c: CredentialRow) =>
+                        c.revoked ? null : (
+                          <Button
+                            size="small"
+                            variant="ghost"
+                            aria-label={`Revoke ${METHOD_WORDS[c.method] ?? c.method}${c.label ? ` ${c.label}` : ""}`}
+                            onClick={() => setGesture({ revoke: c })}
+                          >
+                            Revoke
+                          </Button>
+                        ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </QueryState>
+      </section>
+      {!machine && (
+        <section className="col gap-2">
+          <div className="t-label">Sessions</div>
+          <QueryState
+            error={sessions.code}
+            refusal={sessions.refusal}
+            detail={sessions.error?.detail || undefined}
+            loading={sessions.loading && !sessions.data}
+          >
+            <DataGrid<SessionRow>
+              rows={sessions.data ?? []}
+              rowKey={(s) => s.lineage}
+              defaultSort="started"
+              empty={{ title: "Signed in nowhere" }}
+              columns={[
+                {
+                  // A TIMESTAMP, so it is not the flexible column: it took the
+                  // grid's flexible width and drew it nearly empty while the
+                  // State beside it, capped as a shrink column, cut a session's
+                  // reason off at its edge with no ellipsis and no way to read
+                  // the rest. ITS OWN WIDTH, EXACTLY, rather than capped: a
+                  // relative time is short, and the cap — a fifth of the
+                  // peek's column — cut its own header to "SESS…".
+                  key: "started",
+                  header: "Session",
+                  width: "max-content",
+                  sortValue: (s) => s.created_at ?? "",
+                  cell: (s) => <DateCell at={s.created_at} now={now} />,
+                },
+                {
+                  key: "state",
+                  header: "State",
+                  // THE POINT OF THE LIST — signed in, or ended and why — so it
+                  // keeps a floor, and Ends goes before it narrows to nothing.
+                  floor: "8rem",
+                  sortValue: (s) => (s.live ? 0 : 1),
+                  cell: (s) =>
+                    s.live ? (
+                      <Tag
+                        size="sm"
+                        variant="success"
+                        title={s.enrolment_only ? "May only enrol a second factor" : undefined}
+                      >
+                        {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
+                      </Tag>
+                    ) : (
+                      // WHY, SAID: it rode in a tooltip, so a session a password
+                      // change ended read as one that merely had. ONE LINE, cut
+                      // with an ellipsis and whole on its title where the column
+                      // is narrower than the sentence.
+                      <span className="row gap-1" style={{ minWidth: 0 }}>
+                        <Tag size="sm" variant="neutral">
+                          Ended
+                        </Tag>
+                        {s.ended_reason && (
+                          <span className="t-caption muted truncate" title={s.ended_reason}>
+                            {s.ended_reason}
+                          </span>
+                        )}
+                      </span>
+                    ),
+                },
+                {
+                  key: "ends",
+                  header: "Ends",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
+                  cell: (s) =>
+                    // A DEADLINE IS NOT AN END: a session a counter ended — a
+                    // password change, signing out everywhere — has no ended_at,
+                    // and its expiry read "in 6d" beside "Ended".
+                    !s.live && !s.ended_at && s.expires_at && tsKey(s.expires_at) > now ? (
+                      <EmptyValue label="Not recorded" />
+                    ) : (
+                      <DateCell at={s.ended_at ?? s.expires_at} now={now} />
+                    ),
+                },
+              ]}
+            />
+          </QueryState>
+        </section>
+      )}
+    </>
+  );
+}
+
+/**
+ * What a reset second factor leaves its person to do, as this deployment
+ * decides it (`api.auth.totp`): enrol a new one before anything else opens, or
+ * nothing — a deployment where a factor is optional signs them in on their
+ * password alone, and promising an enrolment there was a promise nothing
+ * keeps. Said only once the setting is read.
+ */
+function AfterFactorReset({ you }: { you: boolean }) {
+  const config = useRest("/auth/config", (signal) => auth.config(signal));
+  switch (config.data?.second_factor) {
+    case "required":
+      return you
+        ? "You enrol a new factor at your next sign-in, before anything else opens."
+        : "They enrol a new factor at their next sign-in, before anything else opens.";
+    case "optional":
+      return you
+        ? "You sign in with your password alone until you set up a new one."
+        : "They sign in with their password alone until they set up a new one.";
+  }
+  return null;
+}
+
+/** One confirmed write about a principal: the dialog, the request, the answer. */
+function PersonWrite({
+  title,
+  confirm,
+  danger,
+  typeToConfirm,
+  request,
+  onClose,
+  onDone,
+  onLanded,
+  children,
+}: {
+  title: string;
+  confirm: string;
+  danger?: boolean;
+  typeToConfirm?: string;
+  request: Parameters<ReturnType<typeof useIamGesture>["run"]>[0];
+  onClose: () => void;
+  onDone: () => void;
+  /** The write landed — applied here, or durable and not yet applied. */
+  onLanded?: () => void;
+  children: React.ReactNode;
+}) {
+  const write = useIamGesture();
+  return (
+    <ConfirmDialog
+      title={title}
+      confirm={confirm}
+      danger={danger}
+      typeToConfirm={typeToConfirm}
+      write={write}
+      onClose={onClose}
+      onConfirm={async () => {
+        const answer = await write.run(request);
+        if (!answer) return;
+        onDone();
+        if (answer.kind === "done") onLanded?.();
+        if (answer.kind === "done" && !answer.pending) onClose();
+      }}
+    >
+      {children}
+    </ConfirmDialog>
+  );
+}
+
+/**
+ * Issue a one-time password reset link, and show it ONCE: it sets a new
+ * password, ends every session and token the person holds, and signs nobody
+ * in. Issuing another revokes this one; the outstanding link is listed among
+ * their credentials, where it can be revoked. Whatever ends their sessions —
+ * a second factor's reset, ending them, a suspension — ends it too, so the
+ * dialog says to issue it after those rather than leave a dead link in flight.
+ *
+ * ON THE READER'S OWN ROW IT SPEAKS TO THEM, as every other gesture there
+ * does, and says what they would more likely want: a password they know is
+ * changed on their Account with no link.
+ */
+function ResetLink({
+  row,
+  who,
+  you,
+  onClose,
+  onDone,
+}: {
+  row: DirectoryRow;
+  who: string;
+  /** The row is the reader's own. */
+  you: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const write = useIamGesture();
+  const issued = write.answer?.kind === "done" ? write.answer.body : null;
+  if (issued) {
+    const url = typeof issued.url === "string" ? issued.url : "";
+    const expires = typeof issued.expires_at === "string" ? issued.expires_at : "";
+    // DONE ALONE, as an invitation's link is: the link exists, and a Cancel
+    // beside it read as a way to take it back, which closing does not do.
+    return (
+      <Modal
+        open
+        size="sm"
+        title={you ? "Your password reset link" : `Password reset link for ${who}`}
+        onClose={onClose}
+        stackBody
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        }
+      >
+        <ShownOnce label="Reset link" value={url}>
+          {you
+            ? `This link sets a new password for you once, and expires ${fmtDateTime(expires)}. It is shown only now. Setting the password ends every session and token you hold, this browser's included; you sign in afterwards, with your second factor if you hold one.`
+            : `This link sets a new password for ${who} once, and expires ${fmtDateTime(expires)}. It is shown only now — send it to them yourself. Setting the password ends every session and token they hold; they sign in afterwards, with their second factor if they hold one.`}
+        </ShownOnce>
+        <IamOutcome answer={write.answer} />
+      </Modal>
+    );
+  }
+  return (
+    <ConfirmDialog
+      title={
+        you
+          ? "Issue a password reset link for yourself?"
+          : `Issue a password reset link for ${who}?`
+      }
+      confirm="Issue link"
+      write={write}
+      onClose={onClose}
+      onConfirm={async () => {
+        // A LINK READS NO KEY: a replay could not hand back a secret its first
+        // attempt never showed, so a retry is a new link — which revokes the one
+        // that may have landed.
+        const answer = await write.run(
+          { method: "POST", path: `/iam/people/${encodeURIComponent(row.id)}/password-reset` },
+          false,
+        );
+        if (answer) onDone();
+      }}
+    >
+      {you
+        ? "The link lets you choose a new password once, within a day, and revokes any link issued for you before. To change a password you know, Account › Security needs no link."
+        : `The link lets ${who} choose a new password once, within a day. It revokes any link issued for them before, and resetting their second factor, ending their sessions or suspending them ends it too — so issue it after those.`}
+    </ConfirmDialog>
+  );
 }

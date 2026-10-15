@@ -42,8 +42,12 @@ func TestANewerBuildsDaysOfOneKindAreAllRetained(t *testing.T) {
 		t.Fatalf("open the log: %v", err)
 	}
 	var last uint64
+	signer := testSigner(t)
 	for _, team := range []string{"payments", "search"} {
-		payload := newerKindFor(t, usage.RecordVersion+1, team)
+		// SEALED, as the newer build's own writer seals it: a record is
+		// retained for its version only once its frame verifies, and an
+		// unsigned one is refused as tampered rather than deferred.
+		payload := signer.Seal(newerKindFor(t, usage.RecordVersion+1, team))
 		// THE NEWER BUILD'S OWN SUBJECT, composed as it composes it — never
 		// this build's reading of the record.
 		subject := topics.LogSubject(spec.SubjectPrefix, "a_kind_from_a_later_build",

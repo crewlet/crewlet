@@ -20,7 +20,9 @@ import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { isLogRefusal } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { needsWords } from "~/lib/access.ts";
 import {
   activityOf,
   activityWord,
@@ -35,7 +37,7 @@ import {
   type SeatKind,
 } from "~/lib/seats.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import type { AgentRow, FeedRow } from "~/protocol/index.ts";
+import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
@@ -340,16 +342,19 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       variant="warning"
       icon={<KeyGlyph size="md" />}
       action={
-        // The banner used to say "set a token" and offer nothing that could.
-        // With anonymous reads allowed the socket is never refused, so the
-        // dialog's only other doors — a socket refusal, and the palette —
-        // both stay shut on exactly the screen that needs it.
-        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
-          Set token
+        // A BANNER THAT NAMES A REPAIR OFFERS IT. The sign-in comes back to
+        // this screen, so somebody who holds the access lands where the
+        // refusal was.
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+          Sign in
         </Button>
       }
     >
-      This needs an API token.
+      {/* ABOUT ACCESS, NOT A TOKEN: what a signed-in reader refused here
+          lacks is access — Admin or an app's — and an answer that names it
+          is drawn by `RefusedOnAuthority` below instead. */}
+      This needs access you don’t hold. An admin can give it to you, or sign in as somebody who
+      holds it.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
@@ -386,6 +391,75 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 };
 
 /**
+ * A refusal on authority that says WHY: the access any one of which would
+ * have admitted the reader ("needs Tracker access"), or — an empty list — that
+ * none would, because what is missing is a relation the org chart does not
+ * hold.
+ *
+ * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
+ * deciding rule's own reason and grants under the keys its REST envelope uses;
+ * a sentence naming a permission typed into this file is a second statement
+ * of the rule, and it is the one that goes stale the day the rule moves.
+ */
+function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
+  return (
+    <Callout
+      variant="warning"
+      icon={<KeyGlyph size="md" />}
+      action={
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+          Sign in
+        </Button>
+      }
+    >
+      {refusal.grants.length > 0 ? (
+        needsWords("This answer", refusal.grants)
+      ) : (
+        <>
+          You may not read this, and no access would change that: the rule that decided asks a
+          relation the org chart does not hold — leading this person, or the record being your own.
+        </>
+      )}{" "}
+      <span className="t-caption">
+        Refused as <code className="inline">{refusal.reason}</code>.
+      </span>
+    </Callout>
+  );
+}
+
+/**
+ * A refusal by this node's STATE LOG that waiting will not clear — its log at
+ * the byte ceiling, a record it cannot decode, a barrier its broker refused —
+ * said as what it is rather than as the node catching up.
+ *
+ * `unavailable` covers both, and the generic banner promises "this screen asks
+ * again on its own", which for these would be a promise of a loop: the same
+ * read is refused until an operator acts or another node is asked. So the
+ * banner names the refusal and its own words and says the screen is NOT
+ * asking again — nothing re-asks it on a timer — so it says what does: a
+ * reload once somebody has acted. FROM THE ANSWER, NEVER WRITTEN HERE, for the
+ * reason `RefusedOnAuthority` gives.
+ */
+function RefusedByTheLog({ refusal }: { refusal: LogRefusal }) {
+  return (
+    <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+      This node refused the read, and asking it again will not change that
+      {refusal.detail ? <>: {refusal.detail}</> : null}. Another node can answer it, or an operator
+      has to act on this one; the screen does not keep asking it, so reload it once they have.
+      <strong> This is not an empty company.</strong>
+      {refusal.code ? (
+        <>
+          {" "}
+          <span className="t-caption">
+            Refused as <code className="inline">{refusal.code}</code>.
+          </span>
+        </>
+      ) : null}
+    </Callout>
+  );
+}
+
+/**
  * What an empty or failed answer means, said precisely.
  *
  * `unauthorized` and a company with no seats are the same empty list and
@@ -395,12 +469,21 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  */
 export function QueryState({
   error,
+  refusal,
   detail,
   loading,
   empty,
   children,
 }: {
   error: string | null;
+  /**
+   * Why the answer was refused — `useQuery`'s and `useRest`'s own `refusal`.
+   * For an `unauthorized` answer the banner then says which grant would have
+   * admitted the reader, or that none would; for an `unavailable` one the
+   * state log refused and waiting will not change, it says so and what the
+   * refusal names, rather than that the node is catching up.
+   */
+  refusal?: QueryRefusal | LogRefusal | null;
   /**
    * The engine's own sentence on a `bad_params` refusal (`useQuery`'s
    * `detail`). Given, the refusal is the ENGINE'S words about what to change
@@ -421,11 +504,17 @@ export function QueryState({
   empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
+  if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
+    return <RefusedOnAuthority refusal={refusal} />;
+  }
+  if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
+    return <RefusedByTheLog refusal={refusal} />;
+  }
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
   }
-  const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
-  if (refusal) return <>{refusal}</>;
+  const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
+  if (banner) return <>{banner}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
   // evolves additively — and naming it is more use than calling it a refusal.
   if (error) {

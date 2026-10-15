@@ -28,6 +28,16 @@
  * behind. The peek heads itself with the task's identity (it has no page bar),
  * stacks the rail above the body in its one column, and leaves out what only
  * the page has room for: the cost and the record.
+ *
+ * # Opened by the person an ask names, without Tracker
+ *
+ * The engine answers `work_item` to a reader without Tracker while an open
+ * ask on the task names them, so that they can answer it (and nothing else).
+ * Every other read here — the project, the sub-tasks, the histories — is the
+ * tracker's, so for such a reader none is asked: the task is drawn from its
+ * own answer, its thread is the one that answer carried, and the ask in it is
+ * answered on its row ([Activity]). The frame lets the task's address through
+ * for exactly this reader (`App.tsx`'s `Screen`).
  */
 
 import { useMemo } from "react";
@@ -39,11 +49,12 @@ import {
   SquareKanbanGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useNavigator } from "~/app/router.tsx";
+import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import {
   authorKinds,
@@ -57,7 +68,7 @@ import type { OrgIndex } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useNow } from "~/lib/clock.ts";
-import { typeIcon, type LabelContext } from "~/lib/work.ts";
+import { typeIcon, type LabelContext, detailItem, itemAddress, projectPath } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -184,15 +195,20 @@ export function liveOn(
   return null;
 }
 
-/** One task's reads: the task, its project's vocabulary and its sub-tasks. */
+/**
+ * One task's reads: the task, its project's vocabulary and its sub-tasks —
+ * the last two the tracker's, asked only of a reader holding it (see the
+ * file's doc).
+ */
 function useTask(id: string) {
+  const { tracker } = useViewer();
   const state = useQuery("work_item", { id }, { enabled: id !== "", pollMs: ITEM_POLL_MS });
   const item = state.data?.task;
   // ENABLED ON THE ITEM, not just parameterised by it: `undefined` params are
   // an EMPTY question on the wire rather than a skipped one, and the engine
   // refuses a project with no key.
   const project = useQuery("work_project", item ? { key: item.project } : undefined, {
-    enabled: Boolean(item),
+    enabled: Boolean(item) && tracker,
     pollMs: 300_000,
   });
   // A SUBTREE IS ITS OWN QUESTION, and the one read that can see a task's
@@ -200,9 +216,9 @@ function useTask(id: string) {
   const children = useQuery(
     "work_items",
     item ? { container: `project:${item.project}`, parent: item.id, limit: 100 } : undefined,
-    { enabled: Boolean(item), pollMs: SUBTASKS_POLL_MS },
+    { enabled: Boolean(item) && tracker, pollMs: SUBTASKS_POLL_MS },
   );
-  return { state, item, project, children };
+  return { state, item, project, children, tracker };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +230,7 @@ export function WorkItem({ id }: { id: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const now = useNow();
-  const { state, item, project, children } = useTask(id);
+  const { state, item, project, children, tracker } = useTask(id);
   const chrome = useItemChrome(index, state.data, project.data);
   const { open: openPeek } = usePeekControls();
   const nav = useNavigator();
@@ -236,11 +252,16 @@ export function WorkItem({ id }: { id: string }) {
     item ? { [id]: item.key, ...(projectName ? { [item.project]: projectName } : {}) } : {},
   );
   const liveTurn = turnIdOf(live);
+  // THE TASK'S ADDRESS, which every write, peek and step on this page names
+  // it by: its key, or its id where another task claimed that key first.
+  const address = state.data ? itemAddress(detailItem(state.data)) : "";
 
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
   // and the task is the frame's `peek=` token.
   const openOnBoard = () => {
-    if (item) nav.to(["work", item.project], { peek: refToken({ kind: "item", id: item.key }) });
+    if (item && address) {
+      nav.to(projectPath(item.project), { peek: refToken({ kind: "item", id: address }) });
+    }
   };
   // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
   // link, rather than a second ellipsis next to the frame's.
@@ -261,7 +282,7 @@ export function WorkItem({ id }: { id: string }) {
     <>
       <PageActions>
         {/* WHERE THIS TASK SITS IN THE LIST IT WAS OPENED FROM. */}
-        {item && <ListPosition itemKey={item.key} />}
+        {item && address && tracker && <ListPosition address={address} />}
         {/* WATCH LIVE ONLY WHILE A TURN IS RUNNING ON THIS TASK. */}
         {live && liveTurn && (
           <ButtonLink
@@ -274,7 +295,9 @@ export function WorkItem({ id }: { id: string }) {
           </ButtonLink>
         )}
         {/* A task in the trash is offered the way back. */}
-        {item?.removed && <RestoreButton key={item.key} item={item.key} />}
+        {item?.removed && address && (
+          <RestoreButton key={item.id} item={address} label={item.key} />
+        )}
         {item && (
           <span className="page-action-folds">
             <Menu
@@ -297,9 +320,14 @@ export function WorkItem({ id }: { id: string }) {
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={8} label="Loading the task" />
       )}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data && item && (
-          <ItemEditsProvider item={item.key} version={item.version} seatName={chrome.seatName}>
+          <ItemEditsProvider
+            item={address}
+            label={item.key}
+            version={item.version}
+            seatName={chrome.seatName}
+          >
             <div className="task-frame">
               <div className="task-main">
                 <div className="task-col">
@@ -310,15 +338,26 @@ export function WorkItem({ id }: { id: string }) {
                   <ItemTitle item={item} />
                   <ItemDescription item={item} />
                   <Checklists item={item} chrome={chrome} />
-                  <Subtasks
-                    rows={children.data?.items ?? []}
-                    error={children.error}
+                  {tracker && (
+                    <Subtasks
+                      rows={children.data?.items ?? []}
+                      error={children.error}
+                      refusal={children.refusal}
+                      chrome={chrome}
+                      parent={item.removed ? undefined : item}
+                      statusOf={statusFor}
+                      peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
+                    />
+                  )}
+                  <Activity
+                    item={item}
+                    address={address}
                     chrome={chrome}
-                    parent={item.removed ? undefined : item}
-                    statusOf={statusFor}
-                    peek={(row: WorkSummary) => openPeek({ kind: "item", id: row.key })}
+                    index={index}
+                    now={now}
+                    live={live}
+                    {...(state.data.comments ? { thread: state.data.comments } : {})}
                   />
-                  <Activity item={item} chrome={chrome} index={index} now={now} live={live} />
                 </div>
               </div>
               <aside className="task-rail" aria-label={`Properties of ${item.key}`}>
@@ -352,19 +391,26 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const now = useNow();
-  const { state, item, project, children } = useTask(itemKey);
+  const { state, item, project, children, tracker } = useTask(itemKey);
   const chrome = useItemChrome(index, state.data, project.data);
   const live = item ? liveOn(agents, item) : null;
+  // THE ADDRESS ITS WRITES NAME, as the page's — see [WorkItem].
+  const address = state.data ? itemAddress(detailItem(state.data)) : "";
 
   return (
     <>
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={6} label="Loading the task" />
       )}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data &&
           (item ? (
-            <ItemEditsProvider item={item.key} version={item.version} seatName={chrome.seatName}>
+            <ItemEditsProvider
+              item={address}
+              label={item.key}
+              version={item.version}
+              seatName={chrome.seatName}
+            >
               {/* IDENTITY AND STATE MARKS ONLY: the rail below is in the SAME
                   column and states every field once. */}
               <ObjectHeader
@@ -391,18 +437,23 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 {/* A CHILD NAVIGATES FROM THE PEEK rather than replacing its
                     parent in it: `[` and `]` step the list the peek was
                     opened from, which this task is in and its child is not. */}
-                <Subtasks
-                  rows={children.data?.items ?? []}
-                  error={children.error}
-                  chrome={chrome}
-                />
+                {tracker && (
+                  <Subtasks
+                    rows={children.data?.items ?? []}
+                    error={children.error}
+                    refusal={children.refusal}
+                    chrome={chrome}
+                  />
+                )}
                 <Activity
                   item={item}
+                  address={address}
                   chrome={chrome}
                   index={index}
                   now={now}
                   live={live}
                   param="peek_activity"
+                  {...(state.data.comments ? { thread: state.data.comments } : {})}
                 />
               </div>
             </ItemEditsProvider>

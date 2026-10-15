@@ -10,15 +10,30 @@
  *
  * QUIET, because it sits under every row: a column of full accent links reads
  * as a column of links rather than of things to read.
+ *
+ * NAMED BY ITS KEY, OPENED AT ITS ADDRESS ([itemAddress]): a key another task
+ * claimed first opens that task, so a row about the task that did not claim it
+ * would open the claimant's page and thread from a duplicate's notice.
  */
 
 import { Link } from "@crewlethq/ui";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
+import { itemAddress, type ItemRef } from "~/lib/work.ts";
 
-export function TaskLink({ item, title }: { item: string; title?: string | undefined }) {
+export function TaskLink({
+  item,
+  label,
+  title,
+}: {
+  /** What it opens ([itemAddress]). */
+  item: ItemRef;
+  /** The key it is named by, or "": a turn's task is addressed by id alone. */
+  label: string;
+  title?: string | undefined;
+}) {
   const peek = usePeekControls();
-  const ref: ObjectRef = { kind: "item", id: item };
+  const ref: ObjectRef = { kind: "item", id: itemAddress(item) };
   return (
     <Link
       href={peekHref(ref)}
@@ -26,7 +41,7 @@ export function TaskLink({ item, title }: { item: string; title?: string | undef
       size="inherit"
       onClick={rowPeekHandler(() => peek.open(ref))}
     >
-      <span className="mono">{item}</span>
+      <span className="mono">{label || "Task"}</span>
       {title ? ` ${title}` : ""}
     </Link>
   );

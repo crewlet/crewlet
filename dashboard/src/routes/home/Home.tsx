@@ -15,18 +15,17 @@
  *
  * # Four questions, and the rest is pushes
  *
- * `work_flow` (the tracker's history replayed backward from today's census),
+ * `work_flow` (the tracker's history replayed backward from today's census,
+ * asked only with Tracker),
  * `token_series` (the spend over the window, by team), `company_feed` (one merged feed with one cursor) and `decisions` (what
  * waits on this person). Who is working, the budget meter and the fleet are
  * the pushes every screen already holds, so nothing here polls for them.
  *
  * # Every sentence is the engine's, and none prints a zero
  *
- * The status line is the health push and the engine's own seat vocabulary;
- * the day is written on the COMPANY's clock, because the company's day is the
- * one every due date and budget window is cut on; the greeting is the
- * reader's own, because it is their morning. See `model.ts` for how each
- * clause reads for none, one and many.
+ * The status line is the health push and the engine's own seat vocabulary,
+ * and the greeting is the reader's own, because it is their morning. See
+ * `model.ts` for how each clause reads for none, one and many.
  */
 
 import { useMemo } from "react";
@@ -36,8 +35,9 @@ import { useWorkingNow } from "~/app/Shell.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
-import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
+import { ownName, useViewer } from "~/lib/viewer.ts";
+import { managedBlock, mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { toWall } from "~/lib/format.ts";
 import { useAttention } from "~/lib/useAttention.ts";
@@ -45,6 +45,7 @@ import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-h
 import { Kpis } from "./Kpis.tsx";
 import { Decisions } from "./Decisions.tsx";
 import { seatConditionsOf, seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { useLeadScope } from "~/lib/leadScope.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import { LiveNow } from "./LiveNow.tsx";
 import { CompletedChart } from "./CompletedChart.tsx";
@@ -68,12 +69,20 @@ const DECISIONS_POLL_MS = 30_000;
 /** The series and the spend move on the scale of minutes. */
 const SLOW_POLL_MS = 60_000;
 
+/** The leads a managed document honours: none, since it refuses a lead's write too. */
+const NO_LEADS: ReadonlySet<string> = new Set();
+
 export function Home() {
   // WHO IS WORKING, at the head of this page and no other (`useWorkingNow`).
   useWorkingNow();
   const now = useNow();
   const org = useOrg();
   const viewer = useViewer();
+  // THE READER IS GREETED BY THEIR OWN NAME, which their directory row holds
+  // and the frame's `GET /auth/session` answered (`ownName`) — never the
+  // seat's, which is the chart's name for a place and often a role: a person
+  // with no name was greeted "Good afternoon, Founder". No name, no name.
+  const own = ownName(useFrameSession().answer);
   const agents = useAgents();
   const engine = useEngineHealth();
   const { connected, authRejected } = useConnection();
@@ -82,13 +91,16 @@ export function Home() {
   const range = rangeOf(rangeValue);
 
   const decisions = useQuery("decisions", undefined, {
-    enabled: viewer.handle !== "",
+    enabled: viewer.owner !== "",
     pollMs: DECISIONS_POLL_MS,
   });
+  // THE TRACKER'S HISTORY, asked only of a reader holding Tracker: the
+  // engine refuses it to anybody else, and the tiles and chart it feeds say
+  // what would open them rather than drawing a refusal as a broken read.
   const flow = useQuery(
     "work_flow",
     { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS },
+    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker },
   );
   const spend = useQuery(
     "token_series",
@@ -100,23 +112,30 @@ export function Home() {
   // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
   // or hand on are decisions waiting on them; the rest are conditions they
   // can see and nothing more. See `seatDecisionsFor`.
+  // A LEAD raises a seat they lead whose OWN window refused — never the
+  // company's ceiling — and on a MANAGED document nobody outside its writers
+  // raises anything, a lead included: the engine refuses their `/config` write
+  // `config_managed` exactly as it refuses anybody's (ADR-0030).
+  const leads = useLeadScope().seats;
+  const managed = managedBlock(viewer) !== null;
   const seats = useMemo(
     () =>
-      seatDecisionsFor(seatConditionsOf(agents), {
-        configWrite: mayChangeConfig(viewer),
-        acts: viewer.acts,
-      }),
-    [agents, viewer],
+      seatDecisionsFor(
+        seatConditionsOf(agents),
+        { configWrite: mayChangeConfig(viewer), acts: viewer.acts },
+        managed ? NO_LEADS : leads,
+      ),
+    [agents, viewer, leads, managed],
   );
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
-  // runs, and the stopped seats they can act on. Unknown — nobody bound, or
-  // not answered yet — is null, never zero.
-  const waiting = viewer.handle ? waitingOf(decisions.data, seats.mine) : null;
+  // runs, and the stopped seats they can act on. Unknown — nobody signed in,
+  // or not answered yet — is null, never zero.
+  const waiting = viewer.owner ? waitingOf(decisions.data, seats.mine) : null;
   // THE OTHER CONDITIONS: what the engine raised that a person decides and
   // that is not one of this reader's own decisions — a seat stopped for
   // another reason, a budget near its ceiling. Exactly the Inbox's condition
   // rows (`conditionsToDecide`): the engine's own rows are the sentence's
-  // precedence and the health card's, a stalled round and the parked runs are
+  // precedence and the engine row's, a stalled round and the parked runs are
   // Live's, and a budget-stopped seat is one of the decisions.
   const raised = conditionsToDecide(attention);
   // A stopped seat counts here exactly when it is not counted as one of the
@@ -155,7 +174,7 @@ export function Home() {
 
       <header className="home-head">
         <div className="home-head-text">
-          <h2 className="home-greeting">{greeting(now, viewer.name)}</h2>
+          <h2 className="home-greeting">{greeting(now, own)}</h2>
           <p className="home-status">
             {sentence.map((run, i) =>
               run.strong ? (
@@ -197,6 +216,7 @@ export function Home() {
           viewer={viewer}
           answer={decisions.data}
           error={decisions.error}
+          refusal={decisions.refusal}
           loading={decisions.loading}
           seatConditions={seats.mine}
           now={now}
@@ -205,7 +225,7 @@ export function Home() {
       </div>
 
       <div className="home-row home-row-three">
-        <CompletedChart flow={flow} />
+        <CompletedChart flow={flow} locked={!viewer.loading && !viewer.tracker} />
         <TokensByTeam spend={spend} range={range} />
         <Projects />
       </div>

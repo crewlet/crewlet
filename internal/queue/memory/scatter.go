@@ -53,6 +53,10 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 		retire()
 		return nil, ErrNotStarted
 	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
+	}
 	q.broker.servers = append(q.broker.servers, sub)
 	q.broker.mu.Unlock()
 	log.Debug("scatter_server_added", "subject", subject)
@@ -101,6 +105,12 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return nil, ErrNotStarted
+	}
+	if q.broker.down {
+		// REFUSED, as the real backend refuses a request it cannot send
+		// rather than buffering it — see [queue.EventQueue.Ask].
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
 	}
 	servers := make([]*serveSub, 0, len(q.broker.servers))
 	for _, s := range q.broker.servers {

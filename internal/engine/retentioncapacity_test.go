@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -250,8 +251,9 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 
 // THE FOUR WINDOWED COUNTERS FOUR MORE ALARMS READ, and nothing read them.
 //
-// `pool_starved`, `records_gated`, `feed_unreadable` and `census_drift` each
-// take a field of [statelog.Reading] off this process's own recorder. Every
+// `pool_starved`, `records_gated` and `feed_unreadable` each take a field of
+// [statelog.Reading] off this process's own recorder, and `census_drift` takes
+// each log's from the same recorder ([retention.census]). Every
 // one of those fields was left at its zero value, so four conditions in a
 // twenty-row table could not fire — and three of them are the only report
 // their subject has: a gated record is recoverable by nothing, an
@@ -289,15 +291,23 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Errorf("three untranslatable records reached the reading as %d",
 			reading.FeedUnreadable)
 	}
-	if reading.LinearizableReadsExpected != (statelog.Census{Seats: 100}).Expected() ||
-		reading.CensusLog != trackerLog.Name() {
-		t.Errorf("the declared read rate reached the reading as %d on %q, so "+
-			"`census_drift` compares against nothing",
-			reading.LinearizableReadsExpected, reading.CensusLog)
+	// THE CENSUS IS EACH LOG'S, as the report evaluates it
+	// ([statelog.DomainInputs.LinearizableReads]).
+	held, counted := r.census(r.state.running())[trackerLog.Name()]
+	if !counted || held.expected != (statelog.Census{Seats: 100}).Expected() ||
+		held.reads != 3*held.expected {
+		t.Errorf("the tracker's log reached its census as %d read against %d (counted "+
+			"%v), so `census_drift` compares against nothing", held.reads,
+			held.expected, counted)
 	}
 
 	fired := map[statelog.Kind]bool{}
 	for _, alarm := range statelog.Evaluate(reading) {
+		fired[alarm.Kind] = true
+	}
+	for _, alarm := range statelog.Evaluate(statelog.Reading{
+		LinearizableReads: held.reads, LinearizableReadsExpected: held.expected,
+	}) {
 		fired[alarm.Kind] = true
 	}
 	for _, kind := range []statelog.Kind{
@@ -316,8 +326,16 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Fatalf("recorder: %v", err)
 	}
 	var empty statelog.Reading
-	(&retention{metrics: quiet}).observed(&empty)
-	for _, alarm := range statelog.Evaluate(empty) {
+	silent := &retention{metrics: quiet, state: censusLogs(trackerLog),
+		seats: func() int { return 100 }}
+	silent.observed(&empty)
+	alarms := statelog.Evaluate(empty)
+	for _, c := range silent.census(silent.state.running()) {
+		alarms = append(alarms, statelog.Evaluate(statelog.Reading{
+			LinearizableReads: c.reads, LinearizableReadsExpected: c.expected,
+		})...)
+	}
+	for _, alarm := range alarms {
 		switch alarm.Kind {
 		case statelog.KindPoolStarved, statelog.KindRecordsGated,
 			statelog.KindFeedUnreadable, statelog.KindCensusDrift:
@@ -374,6 +392,55 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 			"series — every kind is written on every observation, firing or "+
 			"not, because a series that disappears reads as `no data` on "+
 			"every dashboard", series, len(statelog.Kinds()))
+	}
+}
+
+// THE VECTOR COVERAGE IS MEASURED ON EVERY TICK, AND ONLY ON A TICK.
+//
+// It used to be measured inside the report whenever the cached figure was a
+// whole interval old — which the next tick's report usually was not, because
+// the ticker fires on a fixed period and the report starts after the tick's
+// other measurements. Whenever the previous tick's took longer, the figure was
+// a few milliseconds short of an interval old, the scan was skipped, and
+// `recall_below_floor` read a coverage half an hour stale beside inputs a
+// quarter of an hour old. And a report is assembled on every dashboard poll,
+// so the scan must never run from one.
+func TestTheVectorCoverageIsMeasuredOnEveryTickAndReadByTheReport(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	scans := 0
+	fraction := 0.99
+	var fail error
+	r := &retention{coverage: func(context.Context) (float64, bool, error) {
+		scans++
+		return fraction, true, fail
+	}}
+	if got := r.semanticCoverage(); got != nil {
+		t.Fatalf("a node that has never ticked read a coverage of %v", *got)
+	}
+
+	r.measureCoverage(ctx)
+	fraction = 0.5
+	// THE NEXT TICK, however little time the drift left between them.
+	r.measureCoverage(ctx)
+	if scans != 2 {
+		t.Fatalf("two ticks scanned %d time(s): a tick skipped its measurement", scans)
+	}
+	for range 5 {
+		if got := r.semanticCoverage(); got == nil || *got != 0.5 {
+			t.Fatalf("the report read %v, want the latest tick's 0.5", got)
+		}
+	}
+	if scans != 2 {
+		t.Errorf("reading the report scanned the corpus %d more time(s)", scans-2)
+	}
+
+	// A FAILED SCAN LEAVES NOTHING: an unreadable corpus is not the
+	// covered one the last tick saw.
+	fail = errors.New("store closed")
+	r.measureCoverage(ctx)
+	if got := r.semanticCoverage(); got != nil {
+		t.Errorf("a failed scan left a coverage of %v standing", *got)
 	}
 }
 
@@ -485,19 +552,28 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			r := &retention{metrics: recorder, state: censusLogs(tc.logs...),
 				seats:      func() int { return tc.seats },
 				background: func(domain string) int { return tc.background[domain] }}
-			var reading statelog.Reading
-			r.observed(&reading)
-			if reading.CensusLog != tc.log || reading.LinearizableReadsExpected != tc.expected {
-				t.Errorf("the census names %q expecting %d a day, want %q expecting %d",
-					reading.CensusLog, reading.LinearizableReadsExpected, tc.log, tc.expected)
+			census := r.census(r.state.running())
+			held, counted := census[tc.log]
+			if !counted || held.expected != tc.expected {
+				t.Errorf("the census holds %q to %d a day (counted %v), want %d",
+					tc.log, held.expected, counted, tc.expected)
 			}
+			if _, counted := census[vectorLog.Name()]; counted {
+				t.Error("the vector log, which no read appends to, is held to a census")
+			}
+			// PER LOG, as the report evaluates it: each log's reads against
+			// its own census, and the alarm names the log.
 			fired := false
-			for _, alarm := range statelog.Evaluate(reading) {
-				fired = fired || alarm.Kind == statelog.KindCensusDrift
+			for _, c := range census {
+				for _, alarm := range statelog.Evaluate(statelog.Reading{
+					LinearizableReads: c.reads, LinearizableReadsExpected: c.expected,
+				}) {
+					fired = fired || alarm.Kind == statelog.KindCensusDrift
+				}
 			}
 			if fired != tc.fires {
 				t.Errorf("census_drift fired %v on %d a day against %d, want %v",
-					fired, reading.LinearizableReads, reading.LinearizableReadsExpected, tc.fires)
+					fired, held.reads, held.expected, tc.fires)
 			}
 		})
 	}
@@ -524,7 +600,7 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
-    manages: ["CTO", "Engineer"]
+    manages: ["cto", "eng"]
   - name: CTO
     handle: cto
     llm: zulu

@@ -14,11 +14,10 @@ import { AVATAR_CHARACTERS, AVATAR_COLORS } from "~/contract/avatar.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 import { fromDocument } from "./document.ts";
 import { suggestAvatar } from "./draft.ts";
-import { fixtureDerived } from "./testkit.ts";
 
 const draftOf = (roles: ConfigRole[]) => {
   const doc: CompanyDocument = { name: "Acme", roles };
-  return fromDocument(doc, fixtureDerived(doc));
+  return fromDocument(doc);
 };
 
 describe("suggestAvatar", () => {

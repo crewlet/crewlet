@@ -35,7 +35,7 @@ node:
 | `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and serves their agent-mode tool bridge when `CREWLET_MCP_BRIDGE_URL` is set |
-| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion). These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node does that at start and on each apply |
+| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, the learning passes (skill clustering, curation, episode compaction, promotion), the state logs' trim, the embedding duty and the identity sweep. These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node converges those, at start, on each apply and on its own seat sweep — see [What a mailbox costs](#what-a-mailbox-costs) for why running it everywhere is affordable |
 
 ```mermaid
 flowchart TB
@@ -78,7 +78,11 @@ JetStream, no replica, no vote — and runs `seats` only. Its seats' tools read
 and write the tracker and the knowledge base through a data node over the
 broker — the same router a data node's own seats go through, which answers
 from the node's own copy where it has one — carrying the node's own writes as a
-floor so whichever data node answers has applied them, and what it publishes about its turns is kept in
+floor so whichever data node answers has applied them. The identity
+directory is read the same way: the seat bindings its inbound routing withholds
+a suspended person's seat by, and the login a lead's tools resolve to a
+person's seat, are answered by a data node, floored on the identity log. What
+it publishes about its turns is kept in
 exactly one data node's event log ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
 It joins no **fleet-wide consumer group** whose handler needs data — the
 custody group and each domain's wake feed — and takes its share of the one
@@ -138,6 +142,22 @@ flowchart TD
   one data node answered *unvouched* — its ledger cannot say whether the
   operation landed — is asked of the next under the same id before the caller is
   told the outcome is unknown.
+- **Every request and every answer is signed.** A data node runs a write as
+  the actor the request names, so the request is an instruction, and an
+  unsigned one would be an instruction anybody who can reach the broker's port
+  could write. Each request envelope and each reply carries a MAC under the
+  fleet keyring every node already holds, in a key domain of its own
+  (`estate`), so nothing lifted off the state logs verifies here — the same
+  rule every state-log record is held to
+  ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
+  A request signed under a key the answering node does not hold **did not
+  run**, so the router asks the next data node; one whose MAC fails under a
+  key it holds is refused and logged, because no data node will ever accept
+  it. A custody batch is outside the rule: it carries events a data node
+  keeps, not an instruction it acts on. The rule is not the estate's alone:
+  every request one node asks another to carry out — a broker member removing
+  a voter, the node running a turn taking a person's note — is signed and
+  bound the same way, by one implementation.
 - **Nobody answering is an answer that says so**, with what each data node said
   — never an empty list, which would say the company has none of what was asked
   for. A knowledge search nobody answered is the one exception that does not
@@ -253,12 +273,30 @@ has not acked it exists, so a subject no consumer covers drops what is
 published to it. See [a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
 and [the fleet guide](../guides/fleet.md#what-a-fleet-needs).
 
-**Both halves ride one connection**, deliberately. The coordination KV is
-JetStream KV on the stream's own NATS connection rather than an estate of its
-own: two connections to one broker fail independently, so a node could hold
-live leases over a connection that still works while the one carrying its inbox
-has dropped — alive to its peers, deaf to its work. One connection makes
-"reachable" a single fact about a node rather than two that can disagree.
+**Both halves live on one broker**, deliberately. The coordination KV is
+JetStream KV on the stream's own NATS servers rather than an estate of its own,
+so reaching the leases is reaching the mail. A node's *connections* to that
+broker are one on an external cluster — the coordination store rides the
+queue's — and two on the embedded one, where the coordination store, the
+seat-memory replay and the backup's stream copies share a second connection so
+that none of them sits on the read loop every mailbox consumes through. Two
+connections fail independently, and a node holding live leases over one while
+the one carrying its inbox has gone would be alive to its peers and deaf to its
+work — so both are watched, and the client closing either one for good stops
+the node. "Reachable" can disagree with itself for no longer than a reconnect.
+
+**The state logs share one byte budget on that broker.** Each state log's
+stream reserves its whole byte ceiling when it is created, so the logs are
+sized together: `StreamBudgetShare` — half — of what the broker can grant,
+divided over every domain this build registers
+(`internal/engine/statelogceilings.go`) rather than over the ones a node's
+roles apply, because every node creates every log's stream and a stream keeps
+the ceiling its creator gave it. The other half is for what reserves nothing:
+every seat's mailbox, every coordination bucket and the snapshot a joining
+node reads. A log allowed the whole broker would starve the estate it is part
+of, and the failure would not be a full log but a company that cannot claim a
+seat. See
+[Replication § How the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized).
 
 ### What stays per-process, deliberately
 
@@ -282,6 +320,95 @@ has dropped — alive to its peers, deaf to its work. One connection makes
   state, or a local cache?
 - **The dashboard's live-state projection.** Each ingress node builds its own
   from the event stream, so any node can answer without a fan-out.
+- **The store's connection pool.** One file per node, opened by one process, so
+  the pool is a per-node resource and nothing about it is shared. Its default
+  is derived from the machine rather than fixed — see
+  [The admission semaphore, and the connection it cannot take](#the-admission-semaphore-and-the-connection-it-cannot-take)
+  below.
+
+---
+
+## The admission semaphore, and the connection it cannot take
+
+Two bounds sit between a room full of dashboards and this node's store, and
+they are deliberately different mechanisms.
+
+### The socket's admission semaphore
+
+One **socket** may have **four queries running at once**
+(`stream.MaxInFlightQueries`). Queries run on their own goroutines so a store
+scan cannot stall the live feed, and the bound is a token pool taken **on the
+read loop's own goroutine**: a burst past it pauses the reader rather than
+piling up as blocked goroutines, so the backpressure is where it can be seen.
+
+**Four per socket is the number the pool below is sized from.** The reader
+floor is eight, derived as "two full dashboards at four queries each", and a
+dashboard is a tab — so the semaphore and the floor are one decision stated
+twice, and changing either means changing both. A person with three tabs open
+offers twelve concurrent queries, and that is accepted rather than engineered
+away: past the pool, a query waits in the pool's own queue, and the one read
+that must never wait behind such a burst — resolving who is acting — runs on
+the connection the store reserves for it (below). The allowance used to be per
+**principal**, one budget shared and reference-counted across every socket a
+person held; it bought a bound the reserved connection already gives where it
+matters, and cost a person's second tab a wait on their first.
+
+### The store's reserved connection
+
+A node's store pool is bounded, and **every reader on the node draws from it**:
+the dashboard's queries, the coverage probes, a seat's tool reads, the health
+body. Left unset, `store.max_open_conns` resolves to
+
+```
+max(8, GOMAXPROCS) readers  +  1 reserved  +  one per pinned writer
+```
+
+where the pinned writers are the state-log appliers on the replicated estate
+(see [Replication](../guides/replication.md)). The derivation and what the flat
+`4` it replaced cost are in
+[Deployment § The connection pool](../guides/deployment.md#the-connection-pool-and-the-one-connection-ordinary-work-cannot-take).
+
+**The reserved connection is the part that needs a mechanism.** Adding one to
+the bound buys nothing on its own: connections are handed out
+first-come-first-served, so a spare one nobody holds is taken by the first
+burst that wants it. So the store **draws that connection at open and holds
+it** for the life of the handle — the same move a
+[pinned writer](../guides/replication.md) makes, one layer over — and only
+work marked as **identity work** (resolving who is acting, before a route, a
+query or a tool call can decide anything) ever runs on it. Identity reads
+serialise on that one connection, which is exactly what "one connection's
+worth" means, and it is enough because an identity read is a keyed lookup
+rather than a scan.
+
+The failure it stops has the same shape as the one the pinned writers exist to
+break:
+
+1. A socket storm arrives: N tabs, four concurrent queries each, every
+   one of them a scan.
+2. They take every connection.
+3. The identity lookup that would let those very requests be decided queues
+   behind all of them.
+4. The queue feeds itself — the reads that are waiting are the ones identity
+   has to clear.
+
+**Why held and not gated.** A semaphore in front of the pool would do the same
+job and break something else: it would bound ordinary work *below* the pool's
+own limit, so `database/sql` would never reach that limit, its wait counter
+would stop climbing, and the `pool_starved` alarm — whose entire input is that
+counter — would go quiet for good. Holding a connection moves no queue at all.
+Ordinary work still waits exactly where it waited before, and the alarm still
+sees it.
+
+A handle opened with an explicit `max_open_conns` owns its own arithmetic: the
+reserve comes out of the number given, and at `1` nothing is held back at all,
+because a handle with no connection left is a deadlock rather than a tight fit.
+A backup's own handle and an adoption's are both that case, and an identity
+read on such a handle queues with everybody else — which is where it was before
+the reserve existed.
+
+The knob to watch is the `pool_starved` alarm — see
+[Alarms](../reference/alarms.md). It means reads are queuing before they start,
+which is a pool to raise rather than a reserve to spend.
 
 ---
 
@@ -302,7 +429,7 @@ way would.
 
 | What a handover rests on | What the backend does |
 |---|---|
-| Creating a seat's mailbox | A durable consumer created with **nothing attached**, at `DeliverAll` — **1.7 ms**, a plain client call, which is what makes it affordable for every node to create every seat's mailbox at boot |
+| Creating a seat's mailbox | A durable consumer created with **nothing attached**, at `DeliverAll` — **1.7 ms**, a plain client call, which is what makes it affordable for every node to create every seat's mailbox at boot. It is also a **proposal through the metadata Raft group**, which is why a node asks before it creates: see [What a mailbox costs](#what-a-mailbox-costs) |
 | Handing a seat over cleanly | The loser NAKs its unfinished partition (a `Defer`); the successor sees it in **about a millisecond** |
 | Losing a node with no handoff | Nothing NAKs, so those deliveries wait out the ack window — **30 minutes** — before they are redelivered |
 | Prefetch a consumer can hold | **None.** Pull consumers fetch one message, or one drain's worth, when they are ready to run it |
@@ -360,6 +487,45 @@ What each one decides:
   makes a supervisor's restart log say what happened. It is also
   why correctness against zombies comes from epoch fencing rather than from
   waiting for anything to time out.
+
+---
+
+## What a mailbox costs
+
+Creating a seat's mailbox is cheap in wall-clock time and is **not** free in
+the cluster. A durable consumer is a replicated object: the create goes to the
+broker's metadata Raft group and is ordered there, whether or not the consumer
+it names is already present. So the question is not how fast one is, it is how
+many a node sends.
+
+A node therefore **asks before it creates**. It reads the broker's own
+subscription listing over the seat-inbox subject space — one listing, a read —
+diffs it against the company's seats, and creates only what is missing. The
+measurement, on the embedded broker, over a company whose mailboxes all exist:
+
+| | One apply over a 10-seat company whose mailboxes exist | Hiring one seat into that company |
+|---|---|---|
+| **Before** — one create per seat, unconditionally | **10** consumer proposals | **10**: the new seat's, plus nine for mailboxes that were already there |
+| **After** — one listing, then creates for the difference | **0** consumer proposals | **1**: the new seat's mailbox, and nothing else |
+
+Both columns are **per node**, and that is the multiplier that made the old
+shape expensive: every node ensures every seat, so a fleet of three paid the
+metadata group `seats × nodes` writes on every boot and every configuration
+change. A hire now costs the fleet one proposal per node that reaches the
+create before a peer's has landed — at most one each, against `seats` each
+before, and in practice one in total, because nodes apply a revision on their
+own reconcile ticks rather than together: by the time the second node lists,
+the first node's mailbox is there and it writes nothing.
+
+What a converged node spends per [seat sweep](seat-ownership.md#the-unowned-seat)
+in the steady state is **nothing**: with every seat in its set and the set
+younger than a lease, the pass makes no broker call at all. The listing comes
+back when there is something to look up — a boot, a revision that adds a seat,
+a create that failed — or when the set is older than the **seat lease TTL**,
+which is the interval at which a node re-asks rather than trusting itself.
+That last one is what makes the convergence survive a recreated stream: the
+consumers are gone, nothing announces it, and a node reading its own memory
+would leave every seat silently dropping its mail.
 
 ---
 

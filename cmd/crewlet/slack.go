@@ -27,7 +27,7 @@ import (
 // takes the code back — and when there is no operator to ask (-dry-run, or a
 // pipe), it prints the URLs and stops rather than pretending.
 
-func runSlackProvision(args []string, stdout, stderr io.Writer) error {
+func runSlackProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("slack provision", flag.ContinueOnError)
@@ -36,7 +36,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	publicURL := fs.String("public-url", "",
 		"this deployment's public HTTPS base URL; every app's request URL "+
 			"and redirect URL are built from it. Defaults to "+
-			"integrations.public_base_url")
+			publicURLDefault)
 	refreshToken := fs.String("config-token", "",
 		"a Slack app-configuration REFRESH token; empty reads SLACK_CONFIG_REFRESH_TOKEN")
 	ledgerPath := fs.String("ledger", "",
@@ -72,22 +72,24 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// THROUGH THE SAME CHAIN EVERY OTHER COMMAND USES, because
-	// `public_base_url` may be a whole ${VAR} and what goes into an app
-	// MANIFEST is an address: read raw, the manifest carries
-	// "${PUBLIC_URL}/webhooks/slack/<handle>" where a URL belongs, Slack
-	// refuses the app, and nothing anywhere names the cause.
+	// THROUGH THE SAME CHAIN EVERY OTHER COMMAND USES, for the company's
+	// own ${VAR} values. The ADDRESS is no longer one of them: what goes
+	// into an app manifest is a URL, and while it was a Tier B pointer a
+	// manifest could carry "${PUBLIC_URL}/webhooks/slack/<handle>" where
+	// an address belongs — Slack refuses such an app and names nothing.
+	// The address is Tier A's now ([webhookBase]), resolved before the file
+	// is decoded.
 	resolveCtx := context.Background()
-	env, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
+	_, boot, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
 	defer closeEnv()
 
-	// RESOLVED ONCE. Four places below build a URL from it, and four
-	// separate reads of the flag is how one of them ends up using the flag
-	// while the others use the document.
-	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	// READ ONCE. Four places below build a URL from it, and four separate
+	// reads of the flag is how one of them ends up using the flag while
+	// the others use the deployment's own address.
+	base := webhookBase(*publicURL, boot)
 
 	plans := slack.PlanFor(organization)
 	if *ledgerPath == "" {
@@ -127,19 +129,17 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	if base == "" {
-		// THREE WAYS TO BE EMPTY, and they need different work. The flag
-		// is one source and integrations.public_base_url is the other,
-		// and the second can be SET and still resolve to nothing — a
-		// whole ${VAR} this process cannot see becomes "" rather than a
-		// literal, deliberately, because registering the text of a
-		// variable is worse than registering nothing. The message named
-		// only the flag, so an operator who had set the field went
-		// looking for a flag they did not need.
-		return errors.New(noPublicBase(&company.Integrations))
+		// TWO WAYS TO BE EMPTY, and they need different work: no Tier A
+		// file was read, so only the flag could have supplied one, or the
+		// file names no webhook address — and which key that is depends
+		// on whether it sets a public listener. The message named only the
+		// flag once, so an operator who had set the field went looking for
+		// a flag they did not need; see [noPublicBase] for the rest.
+		return errors.New(noPublicBase(boot))
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout)
+	sink, closeSink, err := sinks.open(ctx, environ, stdout)
 	if err != nil {
 		return err
 	}

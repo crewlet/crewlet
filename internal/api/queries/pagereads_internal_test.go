@@ -7,8 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// A SEAT CARRIES ONE NAME IN BOTH FOLDS. A seat renamed inside the window has
-// rows under both handles, and when two of them share a last read the page's
+// A SEAT CARRIES ONE NAME IN BOTH FOLDS. When a seat's rows name it under two
+// handles and two of them share a last read, the page's
 // `skill_loaded_by` and its `page_reads` must still agree on which name the
 // reader sees — so both folds break the tie the same way, through one rule.
 func TestBothFoldsNameASeatAlikeOnATiedLastRead(t *testing.T) {

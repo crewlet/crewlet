@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -155,8 +156,16 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// answering turn is on nothing either.
 		WorkItem: turn.WorkItem, WorkItemBasis: turn.WorkItemBasis,
 	})
-	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not reach %s: %v", resolved.Handle, err)), nil
+	switch {
+	case errors.Is(err, a2a.ErrSelfChannel), errors.Is(err, a2a.ErrNotAnAgent):
+		// THE TARGET'S FAULT, and the service's sentence names why: the
+		// checks above catch both first, so this arm is a chart that moved
+		// between the resolve and the open.
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("Could not ask %s: %v.",
+			resolved.Handle, err)), nil
+	case err != nil:
+		return nodeFailure(ctx, A2AAskTool, err, fmt.Sprintf("Could not reach %s",
+			resolved.Handle), ""), nil
 	}
 	return tools.Result{Output: fmt.Sprintf(
 		"Asked %s (%s). They answer in their own turn — their reply arrives "+
@@ -174,7 +183,7 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, *to
 		return colleague.Seat{}, refusalOf(refused(tools.RefusalUnavailable,
 			"No organization is in scope, so there is nobody to ask."))
 	}
-	found := colleague.Resolve(target, Corpus(turn.Org, t.env))
+	found := colleague.Resolve(target, Corpus(turn.Org, t.env, turn.WithholdsContacts))
 	switch len(found) {
 	case 0:
 		return colleague.Seat{}, refusalOf(failed(fmt.Sprintf(

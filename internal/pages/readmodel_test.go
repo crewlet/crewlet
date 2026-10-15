@@ -6,18 +6,20 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 )
 
-// A PAGE NAMES THE PERSON BEHIND ITS AUTHOR, ITS SAVES AND ITS COMMENTS, read
-// from the history row each record wrote, so the page never shows a person
-// under a credential's name while its activity beside it shows their own.
-func TestAPageNamesThePersonBehindEveryTokenThatWroteIt(t *testing.T) {
+// A PAGE NAMES THE PERSON WHO WROTE IT UNDER THE ONE NAME THEY WRITE AS, their
+// seat, on its author, every revision, every comment and the listing's last
+// save, whichever credential carried each write. There is no second column to
+// read the person off: a screen draws the name the row holds, and the
+// credential is the operator id beside it on the page's activity.
+func TestAPageNamesThePersonWhoWroteItAsTheirSeat(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	created := r.write(boundOperator(), pages.NewPage{Title: "Runbook", Body: "prose"})
-	if _, err := r.store.SavePage(t.Context(), boundOperator(), created.Page.ID,
+	created := r.write(personThroughToken(), pages.NewPage{Title: "Runbook", Body: "prose"})
+	if _, err := r.store.SavePage(t.Context(), personThroughToken(), created.Page.ID,
 		pages.Save{BaseVersion: 1, Body: ptr("revised")}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	comment, _, err := r.store.Comment(t.Context(), boundOperator(), created.Page.ID,
+	comment, _, err := r.store.Comment(t.Context(), personThroughToken(), created.Page.ID,
 		pages.NewComment{Body: "Looks right."})
 	if err != nil {
 		t.Fatalf("comment: %v", err)
@@ -25,25 +27,26 @@ func TestAPageNamesThePersonBehindEveryTokenThatWroteIt(t *testing.T) {
 	r.drain()
 
 	detail := r.get(created.Page.ID)
-	if detail.AuthorSeat != "jane" {
-		t.Errorf("the page names its author's person %q, want jane", detail.AuthorSeat)
+	if detail.Page.Author != "jane" {
+		t.Errorf("the page names its author %q, want the person's seat", detail.Page.Author)
 	}
-	if got := detail.CommentSeats[comment.ID]; got != "jane" {
-		t.Errorf("the comment names its person %q, want jane", got)
+	if len(detail.Comments) != 1 || detail.Comments[0].ID != comment.ID ||
+		detail.Comments[0].Author != "jane" {
+		t.Errorf("the thread reads %+v, want one comment by jane", detail.Comments)
 	}
 	if len(detail.History) != 2 {
 		t.Fatalf("the page has %d revisions, want 2", len(detail.History))
 	}
 	for _, revision := range detail.History {
-		if revision.Author != "founder" || revision.AuthorSeat != "jane" {
-			t.Errorf("revision %d names %q and %q, want the token and the person",
-				revision.Version, revision.Author, revision.AuthorSeat)
+		if revision.Author != "jane" {
+			t.Errorf("revision %d names %q, want the person's seat",
+				revision.Version, revision.Author)
 		}
 	}
 	summary := r.list(pages.Filter{Container: "ENG"}).Pages[0]
-	if summary.AuthorSeat != "jane" || summary.SavedBy != "founder" || summary.SavedBySeat != "jane" {
-		t.Errorf("the listing names author seat %q, saved by %q and %q", summary.AuthorSeat,
-			summary.SavedBy, summary.SavedBySeat)
+	if summary.Author != "jane" || summary.SavedBy != "jane" {
+		t.Errorf("the listing names author %q and last saver %q, want jane for both",
+			summary.Author, summary.SavedBy)
 	}
 }
 

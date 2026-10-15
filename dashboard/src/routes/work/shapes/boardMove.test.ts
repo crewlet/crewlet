@@ -30,9 +30,9 @@ const lanes = (): WorkGroup[] => [
 // nearest card of its own project, or not at all.
 test("a neighbour from another project is never named", () => {
   // Dropped above OPS-1 within its own lane: no neighbour it can rank against.
-  expect(moveFor({ key: "ENG-2", lane: "todo", above: "OPS-1" }, lanes(), "status")).toBeNull();
+  expect(moveFor({ id: "eng-2", lane: "todo", above: "ops-1" }, lanes(), "status")).toBeNull();
   // Dropped at the bottom of a lane: after the last card of ITS project.
-  expect(moveFor({ key: "ENG-1", lane: "todo", above: "" }, lanes(), "status")).toEqual({
+  expect(moveFor({ id: "eng-1", lane: "todo", above: "" }, lanes(), "status")).toEqual({
     item: "ENG-1",
     after: "ENG-2",
     if_match: 4,
@@ -46,10 +46,10 @@ test("a lane change on another axis sends nothing", () => {
     { key: "ada", count: 1, rows: [row("ENG-1")] },
     { key: "rui", count: 1, rows: [row("ENG-2")] },
   ];
-  expect(moveFor({ key: "ENG-1", lane: "rui", above: "" }, byAssignee, "assignee")).toBeNull();
+  expect(moveFor({ id: "eng-1", lane: "rui", above: "" }, byAssignee, "assignee")).toBeNull();
   // AND A REORDER WITHIN ONE OF THEM IS STILL A PLACE.
   const one: WorkGroup[] = [{ key: "ada", count: 2, rows: [row("ENG-1"), row("ENG-2")] }];
-  expect(moveFor({ key: "ENG-2", lane: "ada", above: "ENG-1" }, one, "assignee")).toEqual({
+  expect(moveFor({ id: "eng-2", lane: "ada", above: "eng-1" }, one, "assignee")).toEqual({
     item: "ENG-2",
     before: "ENG-1",
     if_match: 4,
@@ -61,28 +61,28 @@ test("a lane change on another axis sends nothing", () => {
 test("Alt with an arrow is a drop the pointer could have made", () => {
   // OVER THE OTHER PROJECT'S CARD, to its own neighbour — a step onto OPS-1
   // would be a move with nothing to rank against.
-  expect(keyboardDrop("ENG-2", lanes(), "up")).toEqual({
-    key: "ENG-2",
+  expect(keyboardDrop("eng-2", lanes(), "up")).toEqual({
+    id: "eng-2",
     lane: "todo",
-    above: "ENG-1",
+    above: "eng-1",
   });
-  expect(moveFor(keyboardDrop("ENG-2", lanes(), "up")!, lanes(), "status")).toEqual({
+  expect(moveFor(keyboardDrop("eng-2", lanes(), "up")!, lanes(), "status")).toEqual({
     item: "ENG-2",
     before: "ENG-1",
     if_match: 4,
   });
-  expect(keyboardDrop("ENG-1", lanes(), "down")).toEqual({
-    key: "ENG-1",
+  expect(keyboardDrop("eng-1", lanes(), "down")).toEqual({
+    id: "eng-1",
     lane: "todo",
     above: "",
   });
-  expect(keyboardDrop("ENG-3", lanes(), "right")).toEqual({
-    key: "ENG-3",
+  expect(keyboardDrop("eng-3", lanes(), "right")).toEqual({
+    id: "eng-3",
     lane: "done",
     above: "",
   });
-  expect(keyboardDrop("ENG-1", lanes(), "left")).toBeNull();
-  expect(keyboardDrop("ENG-1", lanes(), "up")).toBeNull();
+  expect(keyboardDrop("eng-1", lanes(), "left")).toBeNull();
+  expect(keyboardDrop("eng-1", lanes(), "up")).toBeNull();
 });
 
 // THE CARD IS DRAWN WHERE IT WAS DROPPED while the engine decides, and the
@@ -90,7 +90,7 @@ test("Alt with an arrow is a drop the pointer could have made", () => {
 // whatever else either holds. A heading still reading the old tally over a
 // card already drawn beneath it is two claims that disagree.
 test("an in-flight drop moves the card and the two counts it changes", () => {
-  const drawn = withDrop(lanes(), { key: "ENG-1", lane: "in_progress", above: "ENG-3" });
+  const drawn = withDrop(lanes(), { id: "eng-1", lane: "in_progress", above: "eng-3" });
   expect(drawn[0]!.rows.map((r) => r.key)).toEqual(["OPS-1", "ENG-2"]);
   expect(drawn[1]!.rows.map((r) => r.key)).toEqual(["ENG-1", "ENG-3"]);
   expect(drawn.map((g) => g.count)).toEqual([2, 2, 0]);
@@ -100,7 +100,37 @@ test("an in-flight drop moves the card and the two counts it changes", () => {
 
 // A REORDER WITHIN ONE LANE changes no tally at all.
 test("an in-flight reorder leaves every count alone", () => {
-  const drawn = withDrop(lanes(), { key: "ENG-2", lane: "todo", above: "ENG-1" });
+  const drawn = withDrop(lanes(), { id: "eng-2", lane: "todo", above: "eng-1" });
   expect(drawn[0]!.rows.map((r) => r.key)).toEqual(["ENG-2", "ENG-1", "OPS-1"]);
   expect(drawn.map((g) => g.count)).toEqual([3, 1, 0]);
+});
+
+// A CARD IS ITS TASK, NOT ITS KEY. A key another task claimed first stays on
+// the task that did not claim it (`key_collision`), so two cards on one board
+// can carry it — and a drag that knew its card by the key lifted whichever of
+// the two came first and sent the claimant's key, which the engine resolves to
+// the claimant. The duplicate moves as itself, and is sent by its id.
+test("of two cards under one key, the one dragged is the one moved", () => {
+  const claimant = { ...row("ENG-7"), id: "t-claimant" };
+  const duplicate = { ...row("ENG-7"), id: "t-duplicate", key_collision: true };
+  const board: WorkGroup[] = [
+    { key: "todo", count: 2, rows: [claimant, duplicate] },
+    { key: "in_progress", count: 0, rows: [] },
+  ];
+  expect(moveFor({ id: "t-duplicate", lane: "in_progress", above: "" }, board, "status")).toEqual({
+    item: "t-duplicate",
+    status: "in_progress",
+    if_match: 4,
+  });
+  // AND PLACED ABOVE THE CLAIMANT, it names the claimant by the key it holds.
+  expect(
+    moveFor({ id: "t-duplicate", lane: "todo", above: "t-claimant" }, board, "status"),
+  ).toEqual({
+    item: "t-duplicate",
+    before: "ENG-7",
+    if_match: 4,
+  });
+  const drawn = withDrop(board, { id: "t-duplicate", lane: "in_progress", above: "" });
+  expect(drawn[0]!.rows.map((r) => r.id)).toEqual(["t-claimant"]);
+  expect(drawn[1]!.rows.map((r) => r.id)).toEqual(["t-duplicate"]);
 });

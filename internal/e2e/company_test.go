@@ -59,15 +59,23 @@ roles:
 # anything can be filed in it — and the only thing that makes one is the chart
 # apply reading these keys. A company that declared none could file no work at
 # all, which is what these two exercise end to end.
+#
+# ENGINEERING ALSO DECLARES A SPACE, for the same reason one level over: a page
+# is created only in a space the company declares — a unit's or a seat's
+# space:, the root space or the tool-skills space — and the knowledge cases
+# here write their pages in ENG.
 units:
   - name: Engineering
+    id: engineering
     purpose: builds and runs the product
     project: ENG
-    lead: CEO
+    space: ENG
+    lead: ceo
   - name: Operations
+    id: operations
     purpose: keeps the lights on
     project: OPS
-    lead: CEO
+    lead: ceo
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 3
@@ -93,11 +101,11 @@ const tickInterval = 25 * time.Millisecond
 // A harness node boots straight onto a company, standing in for `crewlet run`
 // without the reconciler that would publish it and apply it with the
 // activation pointer's own instant — and a company booted with no activation
-// is not charted until an activation names it, so its projects and knowledge
-// spaces would never exist. Every node of one harness fleet boots with the
-// SAME instant, because they are running one activation — and every RESTART
-// boots with it too: a value read off a clock per node or per boot would be
-// exactly the bug the chart's activation stamp exists to rule out.
+// has its projects and knowledge spaces applied by nothing, since each is
+// stamped with the activation that named it. Every node of one harness fleet
+// boots with the SAME instant, because they are running one activation — and
+// every RESTART boots with it too: a value read off a clock per node or per
+// boot is exactly what the stamp exists to rule out.
 var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 
 // middayZone names a fixed-offset zone whose local time is within half an hour
@@ -211,6 +219,12 @@ type node struct {
 	// that addresses one member by name has to use the SAME string the
 	// engine registered under, and deriving it a second time from the
 	// index would be a second place to decide what a member is called.
+	//
+	// READ OFF THE ENGINE (`e.Node().ID()`), never off the bootstrap: a
+	// single-node boot leaves `node.id` empty and the engine resolves it
+	// itself ([config.ResolveNodeID] — CREWLET_NODE_ID, then the default),
+	// so the bootstrap's field was the empty string there, and a reconciler
+	// built from it was refused for naming no node.
 	id string
 
 	// snapshotDir is where this node writes its own snapshots of the
@@ -284,6 +298,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	withServingTierA(t, &boot)
 	if spec.boot != nil {
 		spec.boot(&boot)
 	}
@@ -303,7 +318,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 
 	app, srv := serveAPI(t, e, &boot, nil)
 
-	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
+	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
 }
 
 // seedStore writes the migrated store image where boot's store will open, so a
@@ -837,9 +852,9 @@ func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string)
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// hydrated is [engine.Engine.NativeHydrated] as the condition a wait polls,
-// under the test's own context.
+// hydrated is [engine.Engine.StateLogHydrated] — the one gate a node admits
+// its seats on — as the condition a wait polls, under the test's own context.
 func hydrated(t *testing.T, e *engine.Engine) func() bool {
 	t.Helper()
-	return func() bool { return e.NativeHydrated(t.Context()) }
+	return func() bool { return e.StateLogHydrated(t.Context()) }
 }

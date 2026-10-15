@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // letter is mail addressed to a seat, so a test can ask whether a mailbox
@@ -45,7 +48,7 @@ type roster struct {
 	during func()
 }
 
-func (r *roster) read(context.Context) ([]string, error) {
+func (r *roster) read(context.Context) ([]placement.Seat, error) {
 	r.mu.Lock()
 	hook := r.during
 	r.during = nil
@@ -58,7 +61,7 @@ func (r *roster) read(context.Context) ([]string, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	return slices.Clone(r.handles), nil
+	return seats(r.handles...), nil
 }
 
 func (r *roster) set(handles ...string) {
@@ -150,11 +153,16 @@ type runRetirements struct {
 	calls   []runRetirement
 	failure error
 	// observe, when set, runs inside each call, so a test can read the
-	// state of the world the retirement is in the middle of.
-	observe func(handle string) runRetirement
+	// state of the world the retirement is in the middle of. Handed the
+	// SEAT, which is what the retirement ends runs by.
+	observe func(seat uuid.UUID) runRetirement
 }
 
 type runRetirement struct {
+	// seat is what the runs were selected by, and handle the label the
+	// retirement's record carried beside it — empty for a mailbox the
+	// broker's listing alone found.
+	seat          uuid.UUID
 	handle, owner string
 	epoch         int64
 	// inboxThere and controlThere are whether the seat's subscriptions still
@@ -164,13 +172,13 @@ type runRetirement struct {
 	claimable bool
 }
 
-func (r *runRetirements) retire(_ context.Context, handle, owner string, epoch int64) error {
+func (r *runRetirements) retire(_ context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
 	r.mu.Lock()
 	observe, failure := r.observe, r.failure
 	r.mu.Unlock()
-	call := runRetirement{handle: handle, owner: owner, epoch: epoch}
+	call := runRetirement{seat: seat, handle: handle, owner: owner, epoch: epoch}
 	if observe != nil {
-		seen := observe(handle)
+		seen := observe(seat)
 		call.inboxThere, call.controlThere, call.claimable = seen.inboxThere, seen.controlThere, seen.claimable
 	}
 	r.mu.Lock()
@@ -251,7 +259,7 @@ func (h *mailboxHarness) build(tune func(*maintenance.MailboxOptions)) *maintena
 // something.
 func (h *mailboxHarness) seat(handle string) {
 	h.t.Helper()
-	if err := h.m.Register(h.t.Context(), handle); err != nil {
+	if err := h.m.Register(h.t.Context(), seat(handle)); err != nil {
 		h.t.Fatalf("Register(%s): %v", handle, err)
 	}
 	h.ensure(handle)
@@ -264,8 +272,8 @@ func (h *mailboxHarness) seat(handle string) {
 func (h *mailboxHarness) owned(handle string) {
 	h.t.Helper()
 	for _, sub := range [][2]string{
-		{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
-		{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)},
+		{control(handle), controlGroup(handle)},
+		{reflection(handle), reflectionGroup(handle)},
 	} {
 		if _, err := h.queue.EnsureSubscription(h.t.Context(), sub[0], sub[1]); err != nil {
 			h.t.Fatalf("subscription %s/%s: %v", sub[0], sub[1], err)
@@ -276,7 +284,7 @@ func (h *mailboxHarness) owned(handle string) {
 func (h *mailboxHarness) ensure(handle string) {
 	h.t.Helper()
 	if _, err := h.queue.EnsureSubscription(h.t.Context(),
-		topics.AgentInbox(handle), topics.AgentInboxGroup(handle)); err != nil {
+		inbox(handle), inboxGroup(handle)); err != nil {
 		h.t.Fatalf("inbox for %s: %v", handle, err)
 	}
 }
@@ -284,14 +292,14 @@ func (h *mailboxHarness) ensure(handle string) {
 func (h *mailboxHarness) send(handle, body string) {
 	h.t.Helper()
 	ev := events.New(letter{Body: body}, events.TraceContext{})
-	if err := h.queue.Publish(h.t.Context(), topics.AgentInbox(handle), ev); err != nil {
+	if err := h.queue.Publish(h.t.Context(), inbox(handle), ev); err != nil {
 		h.t.Fatalf("publish to %s: %v", handle, err)
 	}
 }
 
 // held is how many letters the seat's inbox retains.
 func (h *mailboxHarness) held(handle string) int {
-	return len(h.queue.Backlog(topics.AgentInbox(handle), topics.AgentInboxGroup(handle)))
+	return len(h.queue.Backlog(inbox(handle), inboxGroup(handle)))
 }
 
 // exists reports whether a subscription is there, without creating one.
@@ -312,20 +320,20 @@ func (h *mailboxHarness) exists(topic, group string) bool {
 }
 
 func (h *mailboxHarness) inboxExists(handle string) bool {
-	return h.exists(topics.AgentInbox(handle), topics.AgentInboxGroup(handle))
+	return h.exists(inbox(handle), inboxGroup(handle))
 }
 
 func (h *mailboxHarness) controlExists(handle string) bool {
-	return h.exists(topics.AgentControl(handle), topics.AgentControlGroup(handle))
+	return h.exists(control(handle), controlGroup(handle))
 }
 
 func (h *mailboxHarness) reflectExists(handle string) bool {
-	return h.exists(topics.AgentReflect(handle), topics.AgentReflectGroup(handle))
+	return h.exists(reflection(handle), reflectionGroup(handle))
 }
 
 func (h *mailboxHarness) record(handle string) (coord.MailboxRecord, bool) {
 	h.t.Helper()
-	rec, found, err := h.records.Mailbox(h.t.Context(), handle)
+	rec, found, err := h.records.Mailbox(h.t.Context(), seatID(handle))
 	if err != nil {
 		h.t.Fatalf("Mailbox(%s): %v", handle, err)
 	}
@@ -400,7 +408,7 @@ func TestARemovedSeatsMailboxSurvivesTheGracePeriod(t *testing.T) {
 
 // Past the grace period the removed seat's mailbox is deleted, mail and all,
 // and so is its sandbox control subscription. A seat still in the company is
-// untouched, and a seat added again under the retired handle starts empty
+// untouched, and a seat added again under the removed seat's handle starts empty
 // rather than working the old backlog under a new role.
 func TestARemovedSeatsMailboxIsRetiredAfterTheGracePeriod(t *testing.T) {
 	h := newMailboxHarness(t, nil)
@@ -424,12 +432,12 @@ func TestARemovedSeatsMailboxIsRetiredAfterTheGracePeriod(t *testing.T) {
 
 	// The same handle, added again.
 	h.roster.set("ceo", "swe")
-	if err := h.m.Register(t.Context(), "swe"); err != nil {
+	if err := h.m.Register(t.Context(), seat("swe")); err != nil {
 		t.Fatalf("Register after retirement: %v", err)
 	}
 	h.ensure("swe")
 	if got := h.held("swe"); got != 0 {
-		t.Fatalf("a seat added under a retired handle inherited %d letters of its predecessor", got)
+		t.Fatalf("a seat added under a removed seat's handle inherited %d letters of its predecessor", got)
 	}
 }
 
@@ -447,7 +455,7 @@ func TestASeatReturningWithinTheGraceClearsTheRecord(t *testing.T) {
 		}},
 		{"registered by a node applying the revision", func(h *mailboxHarness) {
 			h.roster.set("ceo", "swe")
-			if err := h.m.Register(h.t.Context(), "swe"); err != nil {
+			if err := h.m.Register(h.t.Context(), seat("swe")); err != nil {
 				h.t.Fatalf("Register: %v", err)
 			}
 		}},
@@ -613,7 +621,7 @@ func TestNothingIsRetiredWhileTheActiveRevisionCannotBeRead(t *testing.T) {
 func TestAMailboxAHolderStillConsumesIsKept(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.removed()
-	lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+	lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(seatID("swe")),
 		coord.AcquireOptions{Owner: "lagging-node", TTL: time.Hour})
 	if err != nil || lease == nil {
 		t.Fatalf("TryAcquire = (%v, %v)", lease, err)
@@ -657,7 +665,7 @@ func TestNoNodeCanClaimASeatWhileItsMailboxIsRetired(t *testing.T) {
 
 	claim := func() *coord.Lease {
 		t.Helper()
-		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(seatID("swe")),
 			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
 		if err != nil {
 			t.Fatalf("TryAcquire: %v", err)
@@ -753,7 +761,7 @@ func TestARetirementMarkCarriesTheTimeItWasWritten(t *testing.T) {
 		o.Records = marks
 		// The first record in handle order is slow to claim, so the second
 		// is marked at least that long after the tick began.
-		o.Leases = &slowSeatLeases{Backend: h.leases, resource: coord.SeatResource("aaa"), delay: delay}
+		o.Leases = &slowSeatLeases{Backend: h.leases, resource: coord.SeatResource(seatID("aaa")), delay: delay}
 	})
 	h.seat("aaa")
 	h.removed()
@@ -796,7 +804,7 @@ func TestARegistrationWaitsForARetirementInFlight(t *testing.T) {
 	}
 
 	registered := make(chan error, 1)
-	go func() { registered <- h.m.Register(context.WithoutCancel(t.Context()), "swe") }()
+	go func() { registered <- h.m.Register(context.WithoutCancel(t.Context()), seat("swe")) }()
 	select {
 	case err := <-registered:
 		t.Fatalf("Register returned (%v) while the previous mailbox was still being deleted", err)
@@ -830,7 +838,7 @@ func TestARegistrationTakesOverAnAbandonedRetirement(t *testing.T) {
 	h.markRetiring("swe", base.Add(grace))
 
 	started := time.Now()
-	if err := h.m.Register(t.Context(), "swe"); err != nil {
+	if err := h.m.Register(t.Context(), seat("swe")); err != nil {
 		t.Fatalf("Register over an abandoned retirement: %v", err)
 	}
 	if waited := time.Since(started); waited < 2*budget {
@@ -900,7 +908,7 @@ func TestAnAbandonedRetirementOfAReturningSeatRestoresItsInbox(t *testing.T) {
 	marked := base.Add(grace)
 	h.markRetiring("swe", marked)
 	if _, err := h.queue.Queue.DeleteSubscription(t.Context(),
-		topics.AgentInbox("swe"), topics.AgentInboxGroup("swe")); err != nil {
+		inbox("swe"), inboxGroup("swe")); err != nil {
 		t.Fatalf("simulate the partial retirement: %v", err)
 	}
 
@@ -1054,25 +1062,15 @@ func TestAFailedRetirementIsRetriedOnTheNextTick(t *testing.T) {
 // recover them, and exactly once, for the retired seat alone.
 func TestARetirementEndsTheSeatsCodingRunsBeforeItsSubscriptions(t *testing.T) {
 	h := newMailboxHarness(t, nil)
-	h.runs.observe = func(handle string) runRetirement {
-		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
-			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
-		if err != nil {
-			t.Errorf("TryAcquire: %v", err)
-		}
-		return runRetirement{
-			inboxThere: h.inboxExists(handle), controlThere: h.controlExists(handle),
-			claimable: lease != nil,
-		}
-	}
+	h.runs.observe = h.observeRetirement
 	h.removed()
 
 	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
 		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
 	}
 	calls := h.runs.recorded()
-	if len(calls) != 1 || calls[0].handle != "swe" {
-		t.Fatalf("runs were ended for %+v, want once for the retired seat swe", calls)
+	if len(calls) != 1 || calls[0].seat != seatID("swe") || calls[0].handle != "swe" {
+		t.Fatalf("runs were ended for %+v, want once for the retired seat swe (%s)", calls, seatID("swe"))
 	}
 	call := calls[0]
 	if !call.inboxThere || !call.controlThere {
@@ -1117,6 +1115,139 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 	}
 }
 
+// observeRetirement is what a run retirement can see of the seat it is ending
+// the runs of: whether the seat's inbox and control subscription are still
+// there, and whether another node could claim the seat — all asked by the
+// seat's id, the only thing a retirement is handed that names it for certain.
+func (h *mailboxHarness) observeRetirement(seat uuid.UUID) runRetirement {
+	lease, _, err := h.leases.TryAcquire(h.t.Context(), coord.SeatResource(seat),
+		coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
+	if err != nil {
+		h.t.Errorf("TryAcquire: %v", err)
+	}
+	return runRetirement{
+		inboxThere:   h.exists(topics.AgentInbox(seat), topics.AgentInboxGroup(seat)),
+		controlThere: h.exists(topics.AgentControl(seat), topics.AgentControlGroup(seat)),
+		claimable:    lease != nil,
+	}
+}
+
+// A MAILBOX ONLY THE BROKER REMEMBERED ENDS ITS SEAT'S RUNS TOO. Its record
+// carries no handle — nothing the fleet still holds can say what the seat was
+// called — so a retirement that ended runs by handle ended none of them, then
+// deleted the inbox and control subscription every one of them is reached on:
+// billed boxes no completion, answer or resume could ever reach again. The runs
+// are ended by the seat's id, while both subscriptions are still there, and a
+// retirer that cannot end them keeps the mailbox.
+func TestADiscoveredMailboxEndsItsSeatsRunsByItsID(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.runs.observe = h.observeRetirement
+	h.seat("ceo")
+	h.unregistered("ghost",
+		[2]string{inbox("ghost"), inboxGroup("ghost")},
+		[2]string{control("ghost"), controlGroup("ghost")},
+		[2]string{reflection("ghost"), reflectionGroup("ghost")})
+	h.roster.set("ceo")
+	h.mustTick(base)
+	if rec, found := h.record("ghost"); !found || rec.Handle != "" {
+		t.Fatalf("the discovered record is %+v (found %v), want one that names no handle", rec, found)
+	}
+
+	stuck := errors.New("a box could not be reached")
+	h.runs.fail(stuck)
+	if _, err := h.tick(h.m, base.Add(grace+time.Minute)); !errors.Is(err, stuck) {
+		t.Fatalf("tick = %v, want the runs' failure", err)
+	}
+	if !h.inboxExists("ghost") || !h.controlExists("ghost") {
+		t.Fatal("the discovered seat's subscriptions are gone although its runs were not ended")
+	}
+
+	h.runs.fail(nil)
+	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
+		t.Fatalf("the retry retired %d mailboxes, want the discovered one", n)
+	}
+	calls := h.runs.recorded()
+	if len(calls) != 2 {
+		t.Fatalf("runs were ended %d times, want the refused attempt and the retry: %+v", len(calls), calls)
+	}
+	for _, call := range calls {
+		if call.seat != seatID("ghost") {
+			t.Fatalf("the runs were ended for seat %s, want the discovered seat %s — a "+
+				"retirement that cannot name the seat ends nobody's runs", call.seat, seatID("ghost"))
+		}
+		if !call.inboxThere || !call.controlThere {
+			t.Fatalf("the runs were ended after the subscriptions they are reached through were "+
+				"deleted (inbox %v, control %v)", call.inboxThere, call.controlThere)
+		}
+		if call.claimable {
+			t.Fatal("another node could claim the seat while its runs were being ended")
+		}
+	}
+	if h.inboxExists("ghost") || h.controlExists("ghost") || h.reflectExists("ghost") {
+		t.Fatal("the discovered mailbox's subscriptions survived its retirement")
+	}
+}
+
+// A DISCOVERED RECORD IS GIVEN ITS HANDLE when its seat comes back, by
+// whichever writer sees the seat first, so every later line about the mailbox
+// names whose it is rather than an id. A record already carrying it is not
+// written again.
+func TestADiscoveredRecordIsLabelledWhenItsSeatReturns(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		comeBack func(h *mailboxHarness)
+	}{
+		{"seen by the sweep", func(h *mailboxHarness) {
+			h.roster.set("ceo", "ghost")
+			h.mustTick(base.Add(time.Hour))
+		}},
+		{"registered by a node applying the revision", func(h *mailboxHarness) {
+			h.roster.set("ceo", "ghost")
+			if err := h.m.Register(h.t.Context(), seat("ghost")); err != nil {
+				h.t.Fatalf("Register: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newMailboxHarness(t, nil)
+			h.seat("ceo")
+			h.unregistered("ghost", [2]string{inbox("ghost"), inboxGroup("ghost")})
+			h.roster.set("ceo")
+			h.mustTick(base)
+
+			tc.comeBack(h)
+			rec, found := h.record("ghost")
+			if !found || !rec.Present() || rec.Handle != "ghost" {
+				t.Fatalf("the returned seat's record is %+v (found %v), want it present and "+
+					"labelled ghost", rec, found)
+			}
+			version := rec.Version
+			tc.comeBack(h)
+			if again, _ := h.record("ghost"); again.Version != version {
+				t.Fatalf("a labelled, present record was written again (version %d, then %d)",
+					version, again.Version)
+			}
+		})
+	}
+}
+
+// THE LABEL TOO, on a record that was never stamped absent: a discovery whose
+// absence stamp did not land leaves a present record with no handle, and the
+// seat it belongs to coming back must still name it.
+func TestAPresentRecordWithNoHandleIsLabelled(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	if _, _, err := h.records.CreateMailbox(t.Context(),
+		coord.MailboxRecord{Seat: seatID("ghost")}); err != nil {
+		t.Fatalf("CreateMailbox: %v", err)
+	}
+	if err := h.m.Register(t.Context(), seat("ghost")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if rec, _ := h.record("ghost"); !rec.Present() || rec.Handle != "ghost" {
+		t.Fatalf("the record is %+v, want it present and labelled ghost", rec)
+	}
+}
+
 // A mailbox created by a node whose registration failed is registered by the
 // sweep while its seat is still in the company, so it can be retired if the
 // seat is ever removed.
@@ -1139,7 +1270,7 @@ func (h *mailboxHarness) unregistered(handle string, subs ...[2]string) {
 		if _, err := h.queue.EnsureSubscription(h.t.Context(), sub[0], sub[1]); err != nil {
 			h.t.Fatalf("subscription %s/%s: %v", sub[0], sub[1], err)
 		}
-		if sub[0] == topics.AgentInbox(handle) {
+		if sub[0] == inbox(handle) {
 			h.send(handle, "hello "+handle)
 		}
 	}
@@ -1152,17 +1283,17 @@ func (h *mailboxHarness) unregistered(handle string, subs ...[2]string) {
 // other. A control or reflection subscription left on its own (an inbox a
 // failed retirement already deleted) is found the same way.
 func TestAMailboxTheRegistryMissedIsFoundAndRetired(t *testing.T) {
-	inbox := [2]string{topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")}
-	control := [2]string{topics.AgentControl("ghost"), topics.AgentControlGroup("ghost")}
-	reflect := [2]string{topics.AgentReflect("ghost"), topics.AgentReflectGroup("ghost")}
+	mail := [2]string{inbox("ghost"), inboxGroup("ghost")}
+	ctl := [2]string{control("ghost"), controlGroup("ghost")}
+	refl := [2]string{reflection("ghost"), reflectionGroup("ghost")}
 	for _, tc := range []struct {
 		name      string
 		subs      [][2]string
 		withInbox bool
 	}{
-		{"an inbox and its owner's subscriptions", [][2]string{inbox, control, reflect}, true},
-		{"a control subscription on its own", [][2]string{control}, false},
-		{"a reflection subscription on its own", [][2]string{reflect}, false},
+		{"an inbox and its owner's subscriptions", [][2]string{mail, ctl, refl}, true},
+		{"a control subscription on its own", [][2]string{ctl}, false},
+		{"a reflection subscription on its own", [][2]string{refl}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newMailboxHarness(t, nil)
@@ -1207,7 +1338,7 @@ func TestAMailboxTheRegistryMissedIsFoundAndRetired(t *testing.T) {
 // the real consumer went on retaining its mail.
 func TestASubscriptionThatIsNoSeatsMailboxIsNotRegistered(t *testing.T) {
 	h := newMailboxHarness(t, nil)
-	if _, err := h.queue.EnsureSubscription(t.Context(), topics.AgentInbox("ghost"), "audit-tap"); err != nil {
+	if _, err := h.queue.EnsureSubscription(t.Context(), inbox("ghost"), "audit-tap"); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
 	h.roster.set("ceo")
@@ -1222,7 +1353,7 @@ func TestASubscriptionThatIsNoSeatsMailboxIsNotRegistered(t *testing.T) {
 // finds its mailbox, and a seat that is in the company is not a removed one.
 func TestTheListingNeverStampsASeatInTheRosterAbsent(t *testing.T) {
 	refusal := errors.New("the registry refused the write")
-	records := &failFirstCreate{MailboxRecords: coordmem.NewFleet(), handle: "swe", err: refusal}
+	records := &failFirstCreate{MailboxRecords: coordmem.NewFleet(), seat: seatID("swe"), err: refusal}
 	h := newMailboxHarness(t, func(o *maintenance.MailboxOptions) { o.Records = records })
 	h.records = nil
 	h.ensure("swe")
@@ -1231,7 +1362,7 @@ func TestTheListingNeverStampsASeatInTheRosterAbsent(t *testing.T) {
 	if _, err := h.tick(h.m, base); !errors.Is(err, refusal) {
 		t.Fatalf("tick = %v, want the refused registration reported", err)
 	}
-	rec, found, err := records.Mailbox(t.Context(), "swe")
+	rec, found, err := records.Mailbox(t.Context(), seatID("swe"))
 	if err != nil {
 		t.Fatalf("Mailbox: %v", err)
 	}
@@ -1271,16 +1402,16 @@ func (c *countingCreates) CreateMailbox(ctx context.Context, rec coord.MailboxRe
 	return c.MailboxRecords.CreateMailbox(ctx, rec)
 }
 
-// failFirstCreate refuses the first registration of one handle.
+// failFirstCreate refuses the first registration of one seat.
 type failFirstCreate struct {
 	maintenance.MailboxRecords
-	handle string
-	err    error
-	done   atomic.Bool
+	seat uuid.UUID
+	err  error
+	done atomic.Bool
 }
 
 func (f *failFirstCreate) CreateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
-	if rec.Handle == f.handle && f.done.CompareAndSwap(false, true) {
+	if rec.Seat == f.seat && f.done.CompareAndSwap(false, true) {
 		return coord.MailboxRecord{}, false, f.err
 	}
 	return f.MailboxRecords.CreateMailbox(ctx, rec)
@@ -1292,7 +1423,7 @@ func (f *failFirstCreate) CreateMailbox(ctx context.Context, rec coord.MailboxRe
 func TestAnUnlistableBrokerStillRetiresRegisteredMailboxes(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.removed()
-	h.unregistered("ghost", [2]string{topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")})
+	h.unregistered("ghost", [2]string{inbox("ghost"), inboxGroup("ghost")})
 	unlistable := errors.New("the broker could not list its consumers")
 	h.queue.failListings(unlistable)
 

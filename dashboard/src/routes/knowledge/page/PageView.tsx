@@ -17,8 +17,8 @@
  * which is why this page tells the frame to draw none of its own
  * ([useOwnStar]): one control per action on screen. History swaps the outline
  * for the revisions and the comments for the page's changes; Edit writes
- * through `save_page` as the person the token is bound to, against the
- * revision they opened (`Editor.tsx`). For a reader who cannot write, every
+ * through `save_page` as the person signed in, against the revision they
+ * opened (`Editor.tsx`). For a reader who cannot write, every
  * control stays drawn and says why.
  *
  * # What a wiki cannot tell you, and this can
@@ -65,13 +65,13 @@ import { copyPageLink } from "~/lib/pageLink.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar } from "~/lib/starred.ts";
+import { useReader } from "~/lib/reader.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { PageDetail } from "~/protocol/index.ts";
 import {
   Face,
   KnowledgeBar,
-  drawnBy,
   newPagePath,
   pagePath,
   usePeople,
@@ -135,8 +135,8 @@ function PageProps({
 }) {
   const page = detail.page;
   const last = detail.history?.[0];
-  const author = drawnBy(page.author, detail.author_seat);
-  const saver = last ? drawnBy(last.author, last.author_seat) : "";
+  const author = page.author ?? "";
+  const saver = last?.author ?? "";
   const kind = kindOf(detail, who);
   const revision = last
     ? `Revision ${last.version}: ${last.message ? `“${last.message}”` : "no note was kept with this save"}`
@@ -248,7 +248,7 @@ export function PageView({ id }: { id: string }) {
   const now = useNow();
   const nav = useNavigator();
   const toast = useToast();
-  const { data, loading, error } = useQuery(
+  const { data, loading, error, refusal } = useQuery(
     "page",
     { id },
     { enabled: id !== "", pollMs: PAGE_POLL_MS },
@@ -262,6 +262,11 @@ export function PageView({ id }: { id: string }) {
   const canWrite = useWriteAccess("write_page");
   const stars = useStarred();
   const toggleStar = useToggleStar();
+  // STARS ARE KEPT PER READER (`lib/starred.ts`), so a tab that has not
+  // learned who reads it has no list to keep one in, and the star is not
+  // offered: a star kept in a list nobody owns would be offered to whoever
+  // signs in next. The page header's star follows the same rule (`StarPage`).
+  const reader = useReader();
   // THE STAR IS IN THIS PAGE'S MORE MENU, so the frame draws none beside it.
   useOwnStar();
 
@@ -303,17 +308,21 @@ export function PageView({ id }: { id: string }) {
   };
   const menu: PageMenuEntry[] = page
     ? [
-        {
-          key: "star",
-          label: starred ? "Remove the star" : "Star this page",
-          icon: <StarGlyph filled={starred} size="sm" />,
-          ...(starred ? {} : { description: "Pinned on Knowledge and kept in the sidebar" }),
-          onSelect: () => {
-            if (toggleStar({ path, label: page.title, workspace: "knowledge" }) === "full") {
-              toast.show({ variant: "warning", title: `${MaxStars} is the limit` });
-            }
-          },
-        },
+        ...(reader === null
+          ? []
+          : [
+              {
+                key: "star",
+                label: starred ? "Remove the star" : "Star this page",
+                icon: <StarGlyph filled={starred} size="sm" />,
+                ...(starred ? {} : { description: "Pinned on Knowledge and kept in the sidebar" }),
+                onSelect: () => {
+                  if (toggleStar({ path, label: page.title, workspace: "knowledge" }) === "full") {
+                    toast.show({ variant: "warning", title: `${MaxStars} is the limit` });
+                  }
+                },
+              },
+            ]),
         {
           key: "sub-page",
           label: "New sub-page",
@@ -414,7 +423,7 @@ export function PageView({ id }: { id: string }) {
       </KnowledgeBar>
 
       {loading && !data && <Skeleton variant="text" rows={10} label="Loading the page" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data && page && (
           <div className="knowledge-read">
             <div className="knowledge-read-side">
@@ -458,7 +467,6 @@ export function PageView({ id }: { id: string }) {
                     pageID={page.id}
                     title={page.title}
                     comments={data.comments ?? []}
-                    seats={data.comment_seats}
                     who={who}
                     now={now}
                   />

@@ -14,11 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // THE TWO LISTENERS ARE EXACT COMPLEMENTS. With api.public set, every route
@@ -75,11 +76,11 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 			Publisher: memory.New(),
 		},
 		OtelReceiver: otlpReceiver(t, "http://127.0.0.1:1"),
-		Bridge:       mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
-		Operator: operatorSurface(t, operator.Options{
-			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
+		Bridge: bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
 		}),
-		Sources: queries.Sources{Company: active()},
+		Operator: operatorSurface(t, builtin.WorkDeps{Reader: stubWorkReader{}}),
+		Sources:  queries.Sources{Company: active(t)},
 	})
 }
 
@@ -213,6 +214,82 @@ func TestWithoutAPublicListenerEveryRouteIsOnTheAPIPort(t *testing.T) {
 	for _, req := range append(publicRoutes[:len(publicRoutes):len(publicRoutes)], adminRoutes...) {
 		if rec := sendTo(t, a, req.method, req.path); absent(t, rec) {
 			t.Errorf("%s %s is absent from the only listener", req.method, req.path)
+		}
+	}
+}
+
+// EACH LISTENER SAYS WHETHER IT IS HTTPS BY THE ADDRESS IT IS PUBLISHED AT.
+//
+// The two sockets are published apart, and the natural shape of the split is
+// an admin side on a private http address beside a public side behind TLS —
+// which serves the GitHub App return and the Slack OAuth landing, pages a
+// browser renders. One flag decided from `api.external_url` for both sent no
+// Strict-Transport-Security on exactly those pages, and sent it from a plain
+// http admin socket in the reverse arrangement. Both arrangements are held, so
+// a build that hands either listener the other's answer fails one of them.
+func TestEachListenerSendsHSTSByItsOwnAddress(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, admin, public string
+		adminHSTS, pubHSTS  bool
+	}{
+		{"a private http admin side beside a public one behind TLS",
+			"http://127.0.0.1:8080", "https://hooks.example.com", false, true},
+		{"an admin side behind TLS beside a plain http public one",
+			"https://crewlet.example.com", "http://10.0.0.5:8443", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := closedPosture()
+			b.API.Port = 8080
+			b.API.ExternalURL = tc.admin
+			b.API.Public = config.APIPublic{Port: 8443, ExternalURL: tc.public}
+			a := newApp(t, api.Options{
+				Bootstrap: &b,
+				Runtime:   &fakeRuntime{state: api.RuntimeState{Posture: "serve"}},
+				Sources:   queries.Sources{Company: active(t)},
+			})
+			for _, side := range []struct {
+				name string
+				h    http.Handler
+				path string
+				want bool
+			}{
+				{"api.port", a, "/nope", tc.adminHSTS},
+				{"the public listener", a.Public(), "/webhooks/nope", tc.pubHSTS},
+			} {
+				got := sendTo(t, side.h, http.MethodGet, side.path).
+					Header().Get("Strict-Transport-Security")
+				if want := map[bool]string{true: pagepolicy.HSTS}[side.want]; got != want {
+					t.Errorf("%s: Strict-Transport-Security = %q, want %q", side.name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// AND THE BRIDGE-ONLY LISTENER IS THE PUBLIC ONE. A seats node without the
+// ingress role binds it on api.public, so it answers by the public listener's
+// address — never api.port's, which is another socket under another scheme.
+func TestTheBridgeOnlyListenerSendsHSTSByThePublicAddress(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		admin, public string
+		want          string
+	}{
+		{"http://127.0.0.1:8080", "https://hooks.example.com", pagepolicy.HSTS},
+		{"https://crewlet.example.com", "http://10.0.0.5:8443", ""},
+	} {
+		b := closedPosture()
+		b.API.ExternalURL = tc.admin
+		b.API.Public = config.APIPublic{Port: 8443, ExternalURL: tc.public}
+		h := api.BridgeOnly(&b, bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
+		}))
+		got := sendTo(t, h, http.MethodGet, "/nope").Header().Get("Strict-Transport-Security")
+		if got != tc.want {
+			t.Errorf("published at %s beside an admin side at %s: "+
+				"Strict-Transport-Security = %q, want %q", tc.public, tc.admin, got, tc.want)
 		}
 	}
 }

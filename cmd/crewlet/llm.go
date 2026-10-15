@@ -93,7 +93,7 @@ Flags:
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
-func runLLM(args []string, stdout, stderr io.Writer) error {
+func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -159,7 +159,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	case "list":
 		return listLLMProviders(providers, stdout)
 	case "login":
-		return loginLLM(ctx, loginRequest{
+		return loginLLM(ctx, environ, loginRequest{
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
@@ -182,7 +182,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
 		return nil
 	case "export":
-		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
 	case "import":
 		return importLLM(providers, key, os.Stdin, stdout)
 	default:
@@ -211,7 +211,7 @@ func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	resolver, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
+	resolver, _, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -428,7 +428,7 @@ type loginRequest struct {
 	printToken    bool
 }
 
-func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) error {
+func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdout, stderr io.Writer) error {
 	p, err := oneProvider(req.providers, req.key)
 	if err != nil {
 		return err
@@ -521,7 +521,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
+		if err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
@@ -560,7 +560,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -580,7 +580,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle); err != nil {
+	if err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle); err != nil {
 		return err
 	}
 	// NOT "any engine sharing that database". The store is one file, one
@@ -598,13 +598,13 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 }
 
 // storeLLMSecret writes one value into the encrypted secret store.
-func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, "")
+func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) error {
+	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
 	defer closeStore()
-	if err := sv.Set(ctx, name, value, currentOperator(), "llm-login", time.Now().UTC()); err != nil {
+	if _, err := sv.Set(ctx, name, value, hostAuthor(), "llm-login", time.Now().UTC()); err != nil {
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil

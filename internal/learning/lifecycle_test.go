@@ -1372,11 +1372,13 @@ func TestTheSummarizerCondensesOnlyTheOutliersBeforeTheCall(t *testing.T) {
 		asked  = map[string]EpisodeField{}
 		budget int
 	)
-	fit := func(_ context.Context, role string, field EpisodeField, text string, n int) (string, error) {
+	fit := func(_ context.Context, handle string, field EpisodeField, text string, n int) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		if role != "ceo-role" {
-			t.Errorf("fit asked on role %q, want the cluster's", role)
+		// THE SEAT'S HANDLE, never its role: the handle is what
+		// addresses the seat's chain, and the role is prose.
+		if handle != "ceo" {
+			t.Errorf("fit asked on seat %q, want the cluster's handle", handle)
 		}
 		if _, again := asked[text]; again {
 			t.Errorf("one text was rewritten twice")

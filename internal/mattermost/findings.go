@@ -30,21 +30,6 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	// THE PASS COULD NOT RUN AT ALL, and this says so as the operator's
-	// work rather than as a fault the engine is retrying. Provisioning
-	// here creates an ACCOUNT and then a token on it, so a node with
-	// nowhere to seal the token must not create the account either — see
-	// [provision.CanMint].
-	if r.NoKeyring {
-		return append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
-			Subject: "secrets.keys",
-			Detail: "this node has no keyring, so a token minted for a seat " +
-				"could not be sealed and no account was created — set " +
-				"secrets.keys in the bootstrap configuration",
-		})
-	}
-
 	// THE ADMINISTRATOR TOKEN RESOLVED AND CANNOT WRITE.
 	//
 	// REJECTED rather than MISSING, which is the distinction that kind was

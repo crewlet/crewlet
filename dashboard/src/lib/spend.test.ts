@@ -3,7 +3,7 @@ import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 
 import { bandColor, bandLabel, bandsOf, phaseColor, spentOnly, unbandedTokens } from "./spend.ts";
 import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
-import type { Bucket, SeriesPoint, TokenSeries } from "~/protocol/types.ts";
+import type { Bucket, TokenSeries } from "~/protocol/types.ts";
 
 function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
   return {
@@ -31,11 +31,6 @@ function series(over: Partial<TokenSeries> = {}): TokenSeries {
     grouped: bucket(0),
     ...over,
   };
-}
-
-/** One day's point. */
-function point(at: string, b: Bucket, over: Partial<SeriesPoint> = {}): SeriesPoint {
-  return { ...b, at, window: at.slice(0, 10), days: 1, groups: {}, other: bucket(0), ...over };
 }
 
 describe("the legend", () => {
@@ -94,23 +89,17 @@ describe("the legend", () => {
   });
 
   // A SEAT IS NAMED AS THE REST OF THE SCREEN NAMES IT: the engine keys the
-  // band on the handle, and the legend reads the chart's name for it — the
-  // handle only for a seat the chart no longer has. Any other grouping keeps
-  // the engine's own label.
-  it("labels a seat band with the seat's name, and nothing else", () => {
+  // band on the seat's agent id — an identity two namesakes cannot share —
+  // and sends the name beside it as `label`. A band it sent no label for is
+  // drawn as its key, which is already the words (a model, a phase's own).
+  it("labels a band with the engine's label, and its key where there is none", () => {
     const by_group = [
-      { ...bucket(90), group: "agent-pm", handle: "agent-pm", other: false, folded: 0 },
-      { ...bucket(10), group: "gone", other: false, folded: 0 },
+      { ...bucket(90), group: "a-1f3c", label: "Agent PM", other: false, folded: 0 },
+      { ...bucket(10), group: "claude-sonnet-5", other: false, folded: 0 },
     ];
-    const names: Record<string, string> = { "agent-pm": "Agent PM" };
-    const nameOf = (h: string) => names[h] ?? h;
-    expect(bandsOf(series({ by_group }), "seat", nameOf).map((b) => b.label)).toEqual([
+    expect(bandsOf(series({ by_group }), "seat").map((b) => b.label)).toEqual([
       "Agent PM",
-      "gone",
-    ]);
-    expect(bandsOf(series({ by_group }), "model", nameOf).map((b) => b.label)).toEqual([
-      "agent-pm",
-      "gone",
+      "claude-sonnet-5",
     ]);
   });
 

@@ -24,7 +24,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 	d := stageDivergedBroker(t)
 	e, _ := bootNode(t, &d.a, d.cfg)
 	stream := tracker.Domain{}.Stream().Name
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
@@ -42,7 +42,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 
 	// REFUSED WITHOUT THE OPERATOR'S WORD, and nothing moved.
 	_, err = e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1",
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
 	})
 	if !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), "discard") {
 		t.Fatalf("Reanchor without -discard = %v, want the refusal naming it", err)
@@ -53,7 +53,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 
 	// WITH IT, A KEEPS ITS ROWS.
 	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1",
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
 		Discard: true,
 	})
 	if err != nil {
@@ -93,7 +93,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 // sequence it landed at.
 func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	t.Helper()
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	in, _, err := e.reanchorInputs(t.Context(), running)
 	if err != nil {
 		t.Fatalf("reanchorInputs: %v", err)
@@ -101,7 +101,7 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	gen := max(in.Generation, in.Abandoned) + 1
 	record, keeps, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: gen, Case: statelog.ReanchorRestored, Inputs: in,
-		By: "ops-1", Writer: e.native.Load().nodeID, At: time.Now().UTC(),
+		By: "ops-1", Writer: e.core.Load().nodeID, At: time.Now().UTC(),
 	})
 	if err != nil || !keeps {
 		t.Fatalf("encode the generation record: (%v, %v)", keeps, err)
@@ -109,7 +109,7 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	zero := uint64(0)
 	seq, _, err := running.log.Append(t.Context(),
 		tracker.Domain{}.Stream().SubjectPrefix+"."+record.Subject.String(),
-		record.OpID, &zero, record.Payload)
+		record.OpID, &zero, running.signer.Seal(record.Payload))
 	if err != nil {
 		t.Fatalf("append the first attempt's generation record: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestARerunOfARestoredReanchorThatFailedAfterItsAppendFinishes(t *testing.T)
 			d := c.stage(t)
 			e, _ := bootNode(t, &d.a, d.cfg)
 			stream := tracker.Domain{}.Stream().Name
-			running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+			running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 			opened := appendOwnGeneration(t, e)
 
 			view, err := e.ReanchorStatus(t.Context(), stream)
@@ -165,7 +165,7 @@ func TestARerunOfARestoredReanchorThatFailedAfterItsAppendFinishes(t *testing.T)
 					"— the one its own record hid", view.Discards)
 			}
 			req := ReanchorRequest{Stream: stream,
-				Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1"}
+				Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator}
 			if c.discards {
 				if _, err := e.Reanchor(t.Context(), req); !errors.Is(err,
 					statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), d.b.Node.ID) {

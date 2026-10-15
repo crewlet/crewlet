@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -317,15 +318,24 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	clear(objects.objects)
 	objects.mu.Unlock()
 	got = callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "lost.md"})
-	if !got.Failed || !strings.Contains(got.Output, "NOT empty or missing") {
-		t.Fatalf("a read whose bytes failed answered %s", got.Output)
+	if !got.Failed || !strings.Contains(got.Output, "NOT empty or missing") ||
+		tools.RefusalOf(got) != tools.RefusalUnavailable {
+		t.Fatalf("a read whose bytes failed answered %s (refusal %q)", got.Output,
+			tools.RefusalOf(got))
+	}
+	// AND THE STORE'S OWN ERROR STAYS IN THE LOG: it names the object's key
+	// here, and a real store's names its endpoint and bucket too.
+	if strings.Contains(got.Output, "no such object") || !errors.Is(got.Cause, objstore.ErrNotFound) {
+		t.Errorf("the object store's error reached the sentence, or left the cause: %s",
+			got.Output)
 	}
 }
 
 // A LIVE FILE NAMING NO OBJECT IS THE ENGINE'S FAULT, NOT A FILE THAT IS GONE:
 // the applier refuses to write one, so a read that meets one says the content
-// cannot be returned and a retry will not help — never not_found, which would
-// tell the seat the file does not exist while it is listed.
+// cannot be returned and a retry will not help — internal_error, never
+// not_found, which would tell the seat the file does not exist while it is
+// listed, and never unavailable, which would invite the retry that cannot help.
 func TestALiveFileNamingNoObjectIsNotReadAsGone(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
@@ -334,16 +344,17 @@ func TestALiveFileNamingNoObjectIsNotReadAsGone(t *testing.T) {
 		Hash: objstore.HashOf([]byte("odd")), Size: 3, Version: 1}
 
 	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "odd.md"})
-	if !got.Failed || got.Refusal != tools.RefusalUnavailable ||
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInternalError ||
 		!strings.Contains(got.Output, "will not help") {
 		t.Fatalf("a read of a live file naming no object answered %s (refusal %q)",
-			got.Output, got.Refusal)
+			got.Output, tools.RefusalOf(got))
 	}
 }
 
 // CONTENT THE STORE HOLDS WRONG IS NOT A READ TO RETRY: the store answered,
 // and its bytes are not the file's — so the seat is told not to use them and
-// to get the file restored, rather than to try again.
+// to get the file restored, rather than to try again, and the class is
+// internal_error for the same reason: damage no wait reads past.
 func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
@@ -357,9 +368,10 @@ func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
 	objects.corrupt = true
 	objects.mu.Unlock()
 	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "a.md"})
-	if !got.Failed || got.Refusal != tools.RefusalUnavailable ||
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInternalError ||
 		!strings.Contains(got.Output, "will not help") {
-		t.Fatalf("a read of corrupt content answered %s (refusal %q)", got.Output, got.Refusal)
+		t.Fatalf("a read of corrupt content answered %s (refusal %q)", got.Output,
+			tools.RefusalOf(got))
 	}
 }
 
@@ -410,11 +422,56 @@ func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
 		"path": "r.md", "content": "late",
 	})
-	if !got.Failed || got.Refusal != tools.RefusalUnavailable ||
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
 		!strings.Contains(got.Output, "Make the same call again") {
-		t.Fatalf("a stale upload answered %s (refusal %q)", got.Output, got.Refusal)
+		t.Fatalf("a stale upload answered %s (refusal %q)", got.Output, tools.RefusalOf(got))
 	}
 	if !errors.Is(files.refuse, tracker.ErrUploadStale) {
 		t.Fatal("the premise")
+	}
+}
+
+// A FILE IS TAKEN OUT OF A PROJECT BY ITS LEAD, and kept in it by anybody who
+// files work: removing one deletes its content, which is the destructive
+// class's question — and it is asked on the project the call SETTLED, a call
+// naming none being about the caller's own team's, which the gate could not
+// know. A colleague who leads nothing is refused before anything is written,
+// in the authority's own words.
+func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		chart   authz.Chart
+		allowed bool
+	}{
+		{"the project's lead", chartLeads, true},
+		{"a colleague who leads nothing", chartRefuses, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			files, objects := newFakeFiles(), newFakeObjects()
+			reg := tools.NewRegistry()
+			if _, err := builtin.Register(reg, builtin.Deps{
+				Work: fileDeps(files, objects), Authorize: builtin.Decide(c.chart),
+			}); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			if got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectFileTool,
+				map[string]any{"path": "notes.md", "content": "kept"}); got.Failed {
+				t.Fatalf("a colleague could not keep a file in the project: %s", got.Output)
+			}
+			got := callWorkAs(colleagueCaller(), t, reg, tracker.RemoveProjectFileTool,
+				map[string]any{"path": "notes.md"})
+			_, err := files.File(t.Context(), "ENG", "notes.md", statelog.Freshness{})
+			removed := errors.Is(err, tracker.ErrNoFile)
+			switch {
+			case c.allowed && (got.Failed || !removed):
+				t.Errorf("the project's lead could not remove the file: %s", got.Output)
+			case !c.allowed && (!got.Failed || removed):
+				t.Errorf("a colleague leading nothing removed the file: %s", got.Output)
+			case !c.allowed && !errors.Is(got.Cause, builtin.ErrRefused):
+				t.Errorf("the refusal carries %v, not the authority's own answer", got.Cause)
+			}
+		})
 	}
 }

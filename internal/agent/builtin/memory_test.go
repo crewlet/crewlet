@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The company's own retrieval_limit, honoured. It was validated (1..20),
@@ -357,62 +359,82 @@ func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 // rounds of every turn on it until an operator fixed providers.embeddings.
 // Each case is the error as the recall path really hands it over: the
 // provider's classified error, wrapped twice on the way.
+//
+// AND THE CLASS SAYS THE SAME AS THE SENTENCE, for a reader that is not a
+// model: what this deployment runs, or an embedder's answer, is a CONDITION
+// (or, for a query the embedder refuses, the argument's); only an episode store
+// that broke is a FAULT of the node — internal_error, its error in the node's
+// log and never in the sentence, where a database path reaches a model's
+// prompt and a person's screen and helps neither.
+//
+// Mutation: class the store's failure through similarityFailure's embedder
+// arms and its case goes red as unavailable with the path in the sentence;
+// drop the learning.ErrNoEmbeddings arm and the no-embeddings case does.
 func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 	t.Parallel()
 	const retry = "calling again may answer"
 	// failed is an embed failure as prefetch.RecallEpisodes wraps it.
 	failed := func(err error) builtin.Recaller {
-		return &fakeRecall{err: fmt.Errorf("prefetch: the similarity search could not run: embedding the query: %w", err)}
+		return &fakeRecall{err: fmt.Errorf("%w: embedding the query: %w", prefetch.ErrSimilarityFailed, err)}
 	}
 	for _, tc := range []struct {
 		name    string
 		recall  builtin.Recaller
+		class   tools.Refusal
 		want    string
 		wantNot string
 	}{
 		{
 			name:   "a company with no embeddings",
-			recall: &fakeRecall{err: fmt.Errorf("prefetch: a similarity search cannot run: %w", learning.ErrNoEmbeddings)},
+			recall: &fakeRecall{err: fmt.Errorf("prefetch: a similarity search cannot run: %w", prefetch.ErrNoSimilarity)},
+			class:  tools.RefusalUnavailable,
 			want:   "configures no embeddings", wantNot: "again",
 		},
 		{
 			name: "a provider that rejects the key",
 			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 401,
 				Class: embeddings.ErrConfiguration, Err: errors.New("invalid api key")}),
-			want: "until an operator fixes providers.embeddings", wantNot: retry,
+			class: tools.RefusalUnavailable,
+			want:  "until an operator fixes providers.embeddings", wantNot: retry,
 		},
 		{
 			name: "a vector of a width the store was not sized for",
 			recall: failed(fmt.Errorf("%w: text-embedding-3-small returned a 3072-wide vector but "+
 				"providers.embeddings.dimensions says 1536", embeddings.ErrConfiguration)),
-			want: "misconfigured on this deployment", wantNot: retry,
+			class: tools.RefusalUnavailable,
+			want:  "misconfigured on this deployment", wantNot: retry,
 		},
 		{
 			name: "a provider that refuses this query",
 			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 400,
 				Class: embeddings.ErrRefused, Err: errors.New("invalid input")}),
-			want: "will refuse it again unchanged", wantNot: retry,
+			class: tools.RefusalInvalid,
+			want:  "will refuse it again unchanged", wantNot: retry,
 		},
 		{
 			name: "a provider that is overloaded",
 			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 503,
 				Class: embeddings.ErrTransient, Err: errors.New("service unavailable")}),
-			want: retry, wantNot: "no embeddings",
+			class: tools.RefusalUnavailable,
+			want:  retry, wantNot: "no embeddings",
 		},
 		{
 			name:   "an embedder that did not answer in time",
 			recall: failed(context.DeadlineExceeded),
+			class:  tools.RefusalUnavailable,
 			want:   retry, wantNot: "no embeddings",
 		},
 		{
 			name: "an episode store that could not be read",
-			recall: &fakeRecall{err: fmt.Errorf("prefetch: the similarity search could not run: "+
-				"reading ceo's episodes: %w", errors.New("database disk image is malformed"))},
-			want: "could not run (", wantNot: "again",
+			recall: &fakeRecall{err: fmt.Errorf("%w: reading ceo's episodes: %w", prefetch.ErrSimilarityFailed,
+				errors.New("learning: recall: open /var/lib/crewlet/node.db: database disk image is malformed"))},
+			class: tools.RefusalInternalError,
+			want:  "node's log", wantNot: "/var/lib",
 		},
 		{
-			name: "a registry with no search wired",
-			want: "not available here", wantNot: "no embeddings",
+			name:  "a registry with no search wired",
+			class: tools.RefusalUnavailable,
+			want:  "not available here", wantNot: "no embeddings",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -425,6 +447,9 @@ func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 			res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
 			if !res.Failed {
 				t.Fatalf("a search that could not run reported success: %q", res.Output)
+			}
+			if got := tools.RefusalOf(res); got != tc.class {
+				t.Errorf("classed %q, want %q: %q", got, tc.class, res.Output)
 			}
 			if !strings.Contains(res.Output, tc.want) || strings.Contains(res.Output, tc.wantNot) {
 				t.Errorf("refusal = %q, want it to say %q and not %q", res.Output, tc.want, tc.wantNot)

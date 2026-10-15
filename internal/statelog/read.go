@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -84,12 +85,13 @@ const (
 
 	// RefuseBelowFloor — records this node never applied are gone from
 	// the log, so its rows are missing state no replay can supply. It
-	// adopts a peer's snapshot; another node can answer meanwhile.
+	// clears when the node adopts a peer's snapshot, which it does on its
+	// own; another node can answer meanwhile.
 	RefuseBelowFloor ReadRefusal = "below_floor"
 
-	// RefuseFloorUnknown — the published floor could not be read, and an
-	// unreadable floor BLOCKS. Guessing here keeps a node serving over a
-	// hole it cannot see.
+	// RefuseFloorUnknown — the published floor could not be read, and the
+	// third value BLOCKS. Guessing here keeps a node serving over a hole
+	// it cannot see. It clears the next time the floor is read.
 	RefuseFloorUnknown ReadRefusal = "floor_unknown"
 
 	// RefuseEvicted — this node has been removed from the fleet.
@@ -108,8 +110,23 @@ const (
 	// levels that append; the ones that do not keep answering.
 	RefuseLogFull ReadRefusal = "log_full"
 
-	// RefuseWrongStream — the position this read was asked to reach is on
-	// another stream, which is a caller bug rather than a state.
+	// RefuseBrokerRefused — the broker refused to store the barrier and
+	// named a reason this framework has no remedy for: a sealed stream, a
+	// JetStream store with no resources left. The levels that append are
+	// refused until somebody acts on the broker's words, and the ones that
+	// do not keep answering. Not a missed quorum: the broker answered.
+	RefuseBrokerRefused ReadRefusal = "broker_refused"
+
+	// RefuseWrongStream — this node's rows are keyed to a log that is not
+	// the one the broker now holds: its checkpoint is past the log's end,
+	// or the stream was deleted and rebuilt under it — or a position this
+	// node derived for the read, a session mark or a barrier, is on another
+	// log. A STATE of this node, which an operator answers by re-anchoring
+	// — see [Health.Refusal].
+	//
+	// A CALLER'S floor on another log is not this refusal. It is the
+	// request's mistake, which every node answers the same, so it is
+	// [ErrForeignPosition] and not a refusal at all.
 	RefuseWrongStream ReadRefusal = "wrong_stream"
 
 	// RefuseTooStale — this node's lag is past what the caller said it
@@ -132,8 +149,8 @@ const (
 var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
-	RefuseNoQuorum, RefuseLogFull, RefuseWrongStream, RefuseTooStale,
-	RefuseMaintenance,
+	RefuseNoQuorum, RefuseLogFull, RefuseBrokerRefused, RefuseWrongStream,
+	RefuseTooStale, RefuseMaintenance,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -146,9 +163,18 @@ func (r ReadRefusal) Valid() bool { return slices.Contains(ReadRefusals, r) }
 // catch up; a node holding a record it cannot decode will not, however long
 // the caller waits, and a hint there would send a caller round a loop that
 // cannot terminate.
+//
+// A FLOOR THAT COULD NOT BE READ IS READ AGAIN, and a node BELOW the floor
+// rejoins by adopting a peer's snapshot on its own — the position heartbeat
+// requests it — so both clear without anybody doing anything, which is what
+// their write-side twins ([ReasonFloorUnknown], [ReasonBelowFloor]) already
+// said. Answered as final here, a coordination blip long enough to age the
+// cached floor told every reader on the node to stop asking, while every
+// writer on it was told to come back.
 func (r ReadRefusal) Retryable() bool {
 	switch r {
-	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseStalled:
+	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseStalled,
+		RefuseBelowFloor, RefuseFloorUnknown:
 		return true
 	}
 	return false
@@ -172,7 +198,9 @@ type Refused struct {
 	Level ReadLevel
 
 	// Detail names the specific thing — the deferred record's version and
-	// position, the field an operator has to change.
+	// position, the field an operator has to change. Written for a CALLER,
+	// since every surface sends it on, so it is never an error's own text
+	// — see [Unavailable]'s detail, held to the same rule.
 	Detail string
 
 	// RetryAfter is DERIVED rather than fixed where it can be: how far
@@ -207,6 +235,14 @@ func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Dura
 	switch code {
 	case RefuseNoQuorum, RefuseBrokerUnreachable:
 		return ElectionRetryHint
+	case RefuseFloorUnknown, RefuseBelowFloor:
+		// ONE HEARTBEAT, and never the drain: neither clears by
+		// applying what is ahead of this node. The floor is read again,
+		// and a below-floor node's rejoin is requested, on the position
+		// heartbeat — so nothing can have changed sooner than the next
+		// one, and a drain-derived figure would be a lag this node
+		// cannot replay across.
+		return coord.ReconcileInterval
 	}
 	if recordsPerSecond <= 0 || lag == 0 {
 		// Nothing measured, or nothing to catch up on. A hint derived
@@ -474,6 +510,10 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 //
 // # The order, and why every step is where it is
 //
+//  0. The REQUEST: a level this build knows, and a floor on this read's own
+//     log ([Position.On]). Neither is a state of this node, so neither waits
+//     behind one — every node refuses the same request the same way, and an
+//     evicted or stalled node must not answer it with a refusal about itself.
 //  1. The cheap LOCAL refusals, so a doomed read never appends, in
 //     [Health.Refusal]'s order. Each is answered from what this node
 //     already knows, for nothing.
@@ -494,6 +534,13 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	if !q.Level.Valid() {
 		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
 			q.Level, ReadLevels)
+	}
+	// THE CALLER'S FLOOR NAMES A STREAM, and it is checked before any
+	// level — or this node's own health — looks at anything.
+	// [Query.MinPosition] is the one value here that came off a wire; the
+	// session mark and the barrier are this domain's own.
+	if err := q.MinPosition.On(r.stream); err != nil {
+		return Answer{}, fmt.Errorf("this read's floor: %w", err)
 	}
 	if q.Resolve != nil && !q.Scope.Empty() {
 		return Answer{}, fmt.Errorf("statelog: this read both declares a scope " +
@@ -530,7 +577,13 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	if h.Deferred > 0 {
 		gap, err := r.coverage(ctx, q)
 		if err != nil {
-			return r.refuse(h, q, RefuseDeferredScopeUnknown, err.Error(), started)
+			// A CALLER THAT GAVE UP is not a scope this node could not
+			// read, exactly as it is not a node that fell behind in
+			// the wait below.
+			if ctx.Err() != nil {
+				return Answer{}, ctx.Err()
+			}
+			return r.refuse(h, q, RefuseDeferredScopeUnknown, r.scopeUnread(err), started)
 		}
 		if gap != nil {
 			if !q.Set {
@@ -566,6 +619,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 
 	// 4. The wait, holding nothing.
 	if !target.IsZero() {
+		// THE CALLER'S FLOOR WAS HELD TO THIS LOG in step 0, so what
+		// can still name another here is a position this node derived
+		// for the read — a session mark, a barrier — which is this
+		// node's own state rather than the request's.
 		if target.Stream != "" && target.Stream != r.stream {
 			return r.refuse(h, q, RefuseWrongStream,
 				fmt.Sprintf("this read names a position on %s and this domain "+
@@ -670,6 +727,13 @@ type gap struct {
 	scope   ScopeSet
 }
 
+// errNoScope is a read that names no objects on a node holding a deferred
+// record: it cannot be certified about any, so it is the domain term rather
+// than a free pass. Its words are this package's own, and a caller is told
+// them.
+var errNoScope = errors.New("this read declares no scope, so nothing can be " +
+	"said about what a deferred record would cover")
+
 // coverage probes this node's deferred scope index for anything covering what
 // the read is about.
 func (r *Reader) coverage(ctx context.Context, q Query) (*gap, error) {
@@ -681,9 +745,10 @@ func (r *Reader) coverage(ctx context.Context, q Query) (*gap, error) {
 		}
 		if s.Empty() {
 			// A READ THAT NAMES NO OBJECTS cannot be certified about
-			// any, so it is the domain term rather than a free pass.
-			return fmt.Errorf("this read declares no scope, so nothing can " +
-				"be said about what a deferred record would cover")
+			// any, so it is the domain term rather than a free pass —
+			// decided here, inside the transaction, because a read by
+			// reference has no scope until its rows are read.
+			return errNoScope
 		}
 		d, hit, err := r.tables.deferredIn(ctx, tx, s)
 		if err != nil {
@@ -700,36 +765,33 @@ func (r *Reader) coverage(ctx context.Context, q Query) (*gap, error) {
 	return found, nil
 }
 
+// scopeUnread is what a caller is told about a deferred scope this node could
+// not read, and the one place the reason is sent to the log instead.
+//
+// A REFUSAL'S DETAIL IS WRITTEN FOR A CALLER — every surface that answers a
+// refusal sends it on, because it names what the refusal is about and what
+// changes it. The probe's own error is not that: it is the store's, a driver's
+// words or a database path, and it reached every holder of the question's
+// grant in a REST body and a socket frame the day refusals stopped being
+// answered as faults. So the sentence is this package's, and the error is
+// logged where an operator reads it.
+func (r *Reader) scopeUnread(err error) string {
+	if errors.Is(err, errNoScope) {
+		return errNoScope.Error()
+	}
+	log.Warn("statelog_deferred_scope_unread", "domain", r.domain.Name(),
+		"error", err.Error())
+	return "the scope of a record this node cannot decode could not be read " +
+		"from its store, so nothing can be said about what it covers — the " +
+		"reason is in this node's log"
+}
+
 // target is the position this read must wait for, by level.
 func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error) {
-	// THE CALLER'S FLOOR NAMES A STREAM, AND IT IS CHECKED BEFORE ANY
-	// LEVEL LOOKS AT IT.
-	//
-	// [Query.MinPosition] is the one value here that came off a wire; the
-	// session mark and the barrier are this domain's own. A position is a
-	// triple, but [Position.Packed] deliberately carries only two of it —
-	// the stream is not in the number — so comparing a foreign floor
-	// against a local target is comparing coordinates from two number
-	// spaces. Selecting the maximum first therefore DISCARDS a foreign
-	// floor whenever it happens to sort low (`OTHER@0:0` against any live
-	// barrier), and the post-selection guard below then inspects a purely
-	// local position and waves it through: the read is served as though no
-	// floor was named, labelled with the level the caller asked for.
-	//
-	// Refusing here instead makes the answer honest at every level, and it
-	// is the caller's bug rather than a state that clears — see
-	// [RefuseWrongStream].
-	if !q.MinPosition.IsZero() && q.MinPosition.Stream != "" &&
-		q.MinPosition.Stream != r.stream {
-
-		return Position{}, &Refused{
-			Code: RefuseWrongStream, Level: q.Level,
-			Detail: fmt.Sprintf("this read floors at a position on %s and this "+
-				"domain reads %s — a position names the log it is a position "+
-				"in, and this one is not from this log",
-				q.MinPosition.Stream, r.stream),
-		}
-	}
+	// THE CALLER'S FLOOR IS ON THIS LOG: [Reader.Read] refused one that is
+	// not before it got here, because comparing a foreign floor against a
+	// local target is comparing coordinates from two number spaces — see
+	// [Position.On].
 	switch q.Level {
 	case ReadLinearizable:
 		if !r.mode.Publishes() {
@@ -752,7 +814,16 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		}
 		at, err := r.index.Read(ctx)
 		if err != nil {
-			return Position{}, barrierRefusal(q.Level, err)
+			// A CALLER THAT GAVE UP IS NOT A MISSED QUORUM. The read
+			// index answers a caller's own cancellation or deadline with
+			// that context's error, and mapped onto `no_quorum` it was
+			// counted as a refusal, handed an election's retry hint, and
+			// — on a deadline the caller set — told a caller still
+			// listening that the broker's members had not agreed.
+			if ctx.Err() != nil {
+				return Position{}, ctx.Err()
+			}
+			return Position{}, barrierRefusal(q.Level, r.index.subject, err)
 		}
 		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier
 		// was appended to — a position a write returned was acknowledged
@@ -836,10 +907,20 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 
 // barrierRefusal maps the read index's own failures onto refusal codes.
 //
-// The three are genuinely different: a broker that did not answer, a majority
-// that did not agree, and a log that is full. Only the first two are worth
-// coming back for, and only the third names a field an operator has to change.
-func barrierRefusal(level ReadLevel, err error) error {
+// The four are genuinely different: a majority that did not agree, a log that
+// is full, a broker that refused the barrier for a reason of its own, and a
+// duplicate answer that proves nothing. Only the first is worth coming back
+// for; a full log names a field an operator has to change, and a broker's
+// refusal names what the broker wants changed.
+//
+// A BARRIER NOBODY CONFIRMED IS TOLD IN THIS PACKAGE'S WORDS, never the
+// error's. The error is the client's or the broker's own — a timeout, a
+// connection closed, whatever the transport said — and a refusal's detail is
+// sent to the caller by every surface that answers one, so it reached every
+// holder of the question's grant the day refusals stopped being answered as
+// faults. [barrierAppendError] logs the error once per append, where an
+// operator reads it, rather than once per reader waiting on it.
+func barrierRefusal(level ReadLevel, subject string, err error) error {
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {
@@ -849,13 +930,23 @@ func barrierRefusal(level ReadLevel, err error) error {
 				Detail: unavailable.Detail + " — a full log costs every level " +
 					"that appends, while `stale` and `session` keep answering",
 			}
+		case ReasonBrokerRefused:
+			return &Refused{
+				Code: RefuseBrokerRefused, Level: level,
+				Detail: unavailable.Detail + " — every level that appends is " +
+					"refused until it is acted on, while `stale` and `session` " +
+					"keep answering",
+			}
 		case ReasonSkew:
 			return &Refused{Code: RefuseNoQuorum, Level: level, Detail: unavailable.Detail}
 		}
 	}
 	return &Refused{
 		Code: RefuseNoQuorum, Level: level,
-		Detail: err.Error(),
+		Detail: fmt.Sprintf("the barrier on %s was not confirmed — the broker "+
+			"did not answer its append, or a majority of its members did not "+
+			"agree — so no position could be established as the log's end; "+
+			"the broker's own error is in this node's log", subject),
 	}
 }
 
@@ -911,7 +1002,15 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 			"through %d", *h.TrimFloor, *h.TrimFloor-1)
 	case RefuseStalled:
 		if h.Err != "" {
-			return h.Err
+			// NOT h.Err, which is the applier's own error or the one a
+			// health read failed with — a driver's message, a database
+			// path — and a refusal's detail reaches every caller. An
+			// operator reads the error where it already is.
+			return "this node's applier has stopped, or has retried one " +
+				"failure for longer than its budget, so its rows are frozen " +
+				"rather than merely old — `crewlet retention status` names the " +
+				"domain, its position and the error, which this node's log " +
+				"carries too"
 		}
 		return fmt.Sprintf("this node's applied prefix has not moved for %s, so "+
 			"its rows are frozen rather than merely old", StallGrace)

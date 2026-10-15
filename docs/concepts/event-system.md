@@ -14,8 +14,8 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving; left empty a broker member keeps them in memory, which a company whose tracker and knowledge base are both a vendor's may use. Only a member keeps streams at all: a leaf — an embedded node without `data`, joining the members over `stream.leaf.urls` — runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). On either native backend — the default pairing — the engine **refuses** an in-memory stream, because the company's own tracker and knowledge base keep their logs there and a restart would recreate them empty (see [Configuration](../getting-started/configuration.md#tier-a-crewletyaml)). |
-| **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. |
+| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member — a solo node included — it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot — the **identity estate** among the state logs whose records live on that stream — and the native tracker and knowledge base put their items and pages there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf — an embedded node without `data`, joining the members over `stream.leaf.urls` — runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
+| **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. One thing the operator's server has to promise that the embedded one is built with: messages of 8 MiB, the largest the engine sends — a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write (see [Deployment](../guides/deployment.md#an-external-nats-server)). |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
 Both are certified by **one** conformance suite (`internal/queue/queuetest`). A backend that suite has not certified does not exist as far as the engine is concerned — which is exactly why the twin is certified by the same cases as the real broker rather than by cases written for a twin.
@@ -29,14 +29,14 @@ A fleet's shape is a stream choice: clustered embedded members (`stream.cluster.
 ```text
 # Per-seat, durable. One consumer group per seat, so membership IS ownership:
 # the node that attaches is the node that gets that seat's work.
-crewlet.agent.{handle}.inbox         # Per-agent inbox — all work arrives here
-crewlet.agent.{handle}.control       # Sandbox starts and completions. Separate,
+crewlet.agent.{seat-id}.inbox        # Per-agent inbox — all work arrives here
+crewlet.agent.{seat-id}.control      # Sandbox starts and completions. Separate,
                                      #   because while a run holds the seat
                                      #   every inbox delivery is parked, and a
                                      #   completion riding the inbox would be
                                      #   parked behind the very busy state it
                                      #   exists to clear
-crewlet.agent.{handle}.reflect       # A finished turn, put in front of post-turn
+crewlet.agent.{seat-id}.reflect      # A finished turn, put in front of post-turn
                                      #   reflection on the node HOLDING the
                                      #   seat, whose store is the one its
                                      #   memory is written to and carried from
@@ -63,7 +63,7 @@ crewlet.config.revision_applied
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
 # every write, and a node acquiring a seat replays it in a single pass
-crewlet.memory.{handle}.{table}.{key-digest}
+crewlet.memory.{seat-id}.{table}.{key-digest}
 
 # Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's
 # crewlet.events.> stream cannot resurface poison as live traffic
@@ -126,7 +126,7 @@ Work reaches a seat by being **published straight to its inbox subject** by what
 
 A producer reads the organization from the epoch current when it handles the event (`Engine.Company`), never from a snapshot captured earlier, so an applied revision (including a seat-kind flip) re-routes from the next event on.
 
-**Routing is an org function, not a process-local one.** Every producer resolves its recipient from the organization (a handle, a role name or an agent id to a seat, and a seat to its inbox subject) and never from which seats this node runs. The inbound work queue has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox`, because a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
+**Routing is an org function, not a process-local one.** Every producer resolves its recipient from the organization (a handle or an agent id to a seat — never a display name, which two seats may share — and a seat to its id, which names its inbox subject) and never from which seats this node runs. The inbound work queue has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox(seat id)`, because a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
 
 ### A seat's mailbox exists before the seat is running
 
@@ -171,11 +171,11 @@ flowchart TD
 
 **The ack budget.** Every drained message's ack clock starts at receive, but a partition handler is typically a full multi-minute turn — so dispatching a long tail of partitions sequentially holds later messages delivered-but-unacked for the *sum* of the preceding turns. That clock is real: `ackWait` is 30 minutes, and collection plus one handler run must fit inside it — which is why the linger is capped at 60 s. The number lives once, as `queue.MaxLingerSeconds`: the contract clamps to it on every read so programmatic construction cannot bypass it, and config validation refuses an out-of-range value at load from that same constant, so an operator is told rather than silently cut. A drain whose partitions together outlast the window is not lost, it is **redelivered**: the tail comes back, each redelivery spends one unit of the 25-delivery budget, and the [completion ledger](seat-ownership.md#the-completion-ledger) plus the same-id dedupe are what make that a redelivery rather than a second turn (`TurnTriggerSkipped` is emitted precisely so it is not invisible). What is never substituted is a republish: it would be a *new* message at the stream's tail, and both the ledger's idempotency and the batch layer's aging key on the identity a NAK preserves. Partitions dispatch **oldest conversation first** (by oldest constituent event timestamp): a waiting conversation ages and outranks the hot conversation's fresh arrivals on the next drain, so steady inflow on one issue cannot starve a waiting DM.
 
-**Partition keys** (`notify.Prompt.PartitionKey`, namespaced by source) are derived by pure logic from webhook metadata, via the same per-source `notify.Prompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field; a human firing four rapid top-level DM messages is one batch, and a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001`: a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else (`task_assigned`, A2A wakes, notifications without a derivable conversation) keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
+**Partition keys** (`notify.Prompt.PartitionKey`, namespaced by source) are derived by pure logic from webhook metadata, via the same per-source `notify.Prompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`, and the engine's own tracker on the task's **id** (`work:task:<id>`) — never its key, because a key is an address two tasks can share (a counter restored beside newer work mints numbers they already hold) and a cross-project move changes, and keyed on it two tasks' wakes merged into one digest and a moved task's thread started over. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field; a human firing four rapid top-level DM messages is one batch, and a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001`: a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else (`task_assigned`, A2A wakes, notifications without a derivable conversation) keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
 
 **Conversation identities** (`notify.Prompt.ConversationIdentity`, namespaced the same way) are the SECOND key, and the one that outlives the drain. Coalescing merges the messages of one partition that arrive *together*; [conversation sessions](conversation-sessions.md) carry what the seat did about them into that conversation's **next** turn, and the episode row and the turn's telemetry are stamped with the identity so history can be asked for by thread rather than only by agent and time. The `event:{uuid}` fallback above serves both keys, which is exactly why those consumers store nothing for a trigger without a real conversation: no later message could ever reproduce that key to read the row back.
 
-For every source but chat the two are the same string — an issue key, a page id, a monitor id and a task key are each one object that is both the merge unit and the durable thread. **Chat is where they differ, and only for a direct message**: a DM is one conversation however it is threaded, so its identity is the bare channel (`slack:D1`) while a reply in a thread still partitions on that thread (`slack:D1:1718.001`). In a shared channel a thread IS the conversation and the two coincide again. The rule that decides it is that **a partition key is always the identity or a finer cut of it**, so every event in one partition carries one identity: a turn is a partition and its ledger entry is written once, and constituents that disagreed about the identity would file it under whichever event sorted first. Before the two were separated, one value answered both questions — so a DM's first turn was filed under the channel, its thread reply looked its history up under the thread, and a seat re-read its own 1:1 line as a first turn every time.
+For every source but chat the two are the same string — an issue key, a page id, a monitor id and a task's id are each one object that is both the merge unit and the durable thread. **Chat is where they differ, and only for a direct message**: a DM is one conversation however it is threaded, so its identity is the bare channel (`slack:D1`) while a reply in a thread still partitions on that thread (`slack:D1:1718.001`). In a shared channel a thread IS the conversation and the two coincide again. The rule that decides it is that **a partition key is always the identity or a finer cut of it**, so every event in one partition carries one identity: a turn is a partition and its ledger entry is written once, and constituents that disagreed about the identity would file it under whichever event sorted first. Before the two were separated, one value answered both questions — so a DM's first turn was filed under the channel, its thread reply looked its history up under the thread, and a seat re-read its own 1:1 line as a first turn every time.
 
 A notification the engine's own tracker or knowledge base raised also carries `trigger_position` — where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain — a tracker list or item, a page or a listing of pages — on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
 
@@ -185,7 +185,7 @@ On the wire of an inbound notification the partition key rides the payload field
 
 **A held seat costs nothing while it waits.** It used to cost a great deal: a held seat's deliveries were *parked* — requeued onto the inbox they had just been fetched from, then acked — and nothing stopped the consumer, so each copy was the next thing it fetched. For the length of a run, every message waiting on the seat went round a fetch, a screening, an answer-match store read, a replicated publish (and the event-store write its publish listener makes) and an ack, at whatever rate the broker would serve. The hold replaced the park: the condition that makes the seat wait (a run holding it) is the coordinator's own count, so the hold is taken and lifted at the transitions that move it, and the in-memory twin and JetStream both certify that a held seat's mail is neither delivered nor republished until the run stops holding it.
 
-**Letting go of a subscription: four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per agent handle: the node's own start and every config apply both walk the company's seats (`node.EnsureMailboxes`), and only the first call per seat creates a consumer.
+**Letting go of a subscription: four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per seat — keyed by the seat's agent id, derived from its handle: the node's own start and every apply both walk the company's seats (`node.EnsureMailboxes`), and only the first call per seat creates a consumer.
 
 **A removed seat's subscriptions are retired, not kept.** `DeleteSubscription`'s caller is the maintenance duty: once a seat has been absent from the active revision for 24 hours, its coding runs are ended and its inbox and its sandbox control subscription are deleted together with the mail they still hold. The walk that creates inboxes records each seat in the coordination store first, because a removed handle is gone from the org the names are derived from and the retirement's stamps have to live somewhere; each sweep also lists the seat mailboxes the broker holds, so one that escaped that record is still found. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
@@ -221,26 +221,40 @@ this is the shape of it, with the notes that need a sentence.
 org_started, org_stopped
 config_revision_activated  # a new revision is the one to serve
 config_revision_applied    # one node's outcome, and how far it got
-# the runtime audit: source "operator", actor the token's own name, and
-# actor_seat the person it is bound to. One per call, whatever became of it;
-# never the arguments. Written by the node the call reached. The event store
-# promotes actor_seat, tool and dir to tags (beside every row's `node`), so a
-# listing — which carries no payload — can still say who, which tool, where
+# the runtime audit: source "operator", and the caller exactly as every
+# record the call wrote names it — `actor` and `actor_kind` from
+# iam.ActorFor (a person is the seat they hold, as is a token or service
+# account the directory binds to one, kind human; a credential bound to no
+# seat is its login, kind operator) and the credential it came through in
+# `operator_id` (pat:<id>, session:<lineage>, or the login). One per call,
+# whatever became of it; never the arguments. Written by the node the call
+# reached. The event store keeps the actor as the row's own column and
+# promotes actor_kind, operator_id, tool and dir to tags (beside every row's
+# `node`), so a listing — which carries no payload — can still say who,
+# through what, which tool, where
 operator_acted             # an operator tool call that is not a proven read,
-                           # from the dashboard (/operator/act) or a person's
-                           # assistant (/operator/mcp): tool, transport,
-                           # request id, outcome, position or refusal
+                           # on any of three transports — the dashboard's act
+                           # route (act), a person's assistant over MCP (mcp)
+                           # and the human write surface's routes under /work
+                           # and /pages (work), whose own refusals and
+                           # tool-less verbs are recorded too: tool,
+                           # transport, request_id (the operation the call's
+                           # key became, scoped to the caller, so a retry
+                           # carries the same one), outcome, position or
+                           # refusal
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
-seat_paused                # a person paused a seat (paused_by, paused_by_seat,
-                           # reason, stop_running, paused_at). Published once
-                           # per CHANGE by the caller whose compare-and-set
-                           # won, so a second pause of a paused seat is none;
-                           # re-announced when a pause is amended to stop the
-                           # running turn
-seat_resumed               # the pause was lifted (resumed_by, resumed_by_seat,
-                           # and the paused_by / paused_at it ended)
+seat_paused                # a person paused a seat (paused_by,
+                           # paused_by_kind and operator_id from
+                           # iam.ActorFor, reason, stop_running, paused_at).
+                           # Published once per CHANGE by the caller whose
+                           # compare-and-set won, so a second pause of a
+                           # paused seat is none; re-announced when a pause
+                           # is amended to stop the running turn
+seat_resumed               # the pause was lifted (resumed_by,
+                           # resumed_by_kind, operator_id, and the paused_by,
+                           # paused_by_kind and paused_at it ended)
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection
@@ -339,17 +353,19 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
                            # coding run rather than ended, and `stopped`
                            # (never with `failed`) on a turn a person ended
 agent_turn_stopped         # a pause with stop_running ended this turn at its
-                           # next round: stopped_by, stopped_by_seat, reason.
-                           # Its trigger is recorded as worked, not retried
+                           # next round: stopped_by, stopped_by_kind and
+                           # operator_id (the pauser, from iam.ActorFor),
+                           # reason. Its trigger is recorded as worked, not
+                           # retried
 agent_turn_steered         # what became of a person's note to this running
                            # turn, published by the node that ran it:
                            # `delivered` with the phase, iteration and round
                            # that first read it, or `expired` — the turn ended
                            # or parked before its next round. Carries the
                            # note, note_id (the request's id), steered_by,
-                           # steered_by_seat and sent_at: the note itself
-                           # crossed an ephemeral scatter, so this row is its
-                           # only durable record
+                           # steered_by_kind, operator_id and sent_at: the
+                           # note itself crossed an ephemeral scatter, so
+                           # this row is its only durable record
 agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
@@ -402,6 +418,54 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # agent_phase_completed, and measuring them there
                            # means hauling every phase payload back
 
+# auth: who signed in and how, what ended a session, what changed about
+#       what a person may do, and whether a record on a fleet log was
+#       written by the fleet at all. The LIVE half of the trail: each row is
+#       the publishing node's, and the fleet-wide record is iam_history
+iam_session_started        # method, second factor, lineage, client address
+iam_session_ended          # logout / logout_all / revoked / person_removed.
+                           # A session past its own idle or absolute deadline
+                           # is no row: an expiry nobody authored
+iam_login_failures         # ONE per node per minute that had a failure, from
+                           # the engine's own flush loop: each source's count
+                           # of failed attempts — a source is the throttle's
+                           # unit, an address or an IPv6 /64 — at most 64
+                           # sources and the rest one overflow count. Never
+                           # what was presented, and never whom it named
+iam_stepup_completed       # a signed-in person confirming who they are
+iam_credential_minted, iam_credential_revoked, iam_mfa_reset
+iam_invitation_cancelled   # an unredeemed invitation withdrawn: which one and
+                           # by whom, never the address. It frees the address
+                           # and the human seat the invitation held
+iam_password_changed       # a person changing their own, which ended every
+                           # other session and token they held
+iam_password_reset_issued  # an administrator issuing a one-time reset link:
+                           # for whom, by whom, until when — never the link.
+                           # With first: true, the FIRST password link an
+                           # administrator's create issued the person it
+                           # created on their seat — announced once, by the
+                           # call that created them, never by its retry
+iam_password_reset         # a reset link spent: the password set, every
+                           # session and token ended, nobody signed in. With
+                           # first: true, a created person setting their first
+                           # password, which ended nothing — there was nothing
+                           # to end
+iam_grants_changed         # one per person write, from the writer that
+                           # decided it: added, removed, by, record version
+iam_recovery_code_used     # and how many the person has left
+iam_second_factor_throttled   # a person's second-factor curve reaching its
+                              # ceiling: somebody holding their password is
+                              # guessing at their code. Once per climb per
+                              # node — a run held there writes no more
+iam_session_generation_bumped   # every session in the company ended
+statelog_record_unverifiable    # a state-log record signed under a key this
+                                # node does not hold; nothing under it applies
+                                # until it does. Once per domain and key id
+                                # per node process, at most 16 ids — the id is
+                                # whatever the frame says
+statelog_record_tampered        # a record whose signature fails under a key
+                                # this node holds; the applier stopped
+
 # webhook: inbound_delivery — one delivery presented to one seat, counted
 #          once across the fleet, from a webhook route or a Mattermost
 #          socket. The ONE type whose rows do not carry its name: each is
@@ -422,15 +486,79 @@ work item — a tracker record whose wakes are the tracker's own (`asked`,
 writes through, which is why the `decision` category exists to filter on at
 all.
 
-**Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
-live-only per-round signal whose durable record is `agent_phase_completed`),
-`budget_meters` (a snapshot of the fleet's shared token counters, every capped
-calendar window with its engine-computed state, published by every node on a
-fixed tick and at once when a window first turns work away on it, which the
-next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its edge publishes beside it), and the two
-A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
-already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
-exclusions table in the Deployment page above.
+**Excluded from the store**, each with a stated CAUSE as well as a reason:
+`agent_turn_progress` (an intermediate state whose finished record is
+`agent_phase_completed`), `agent_spawned` and `agent_terminated` (placement —
+a fact about scheduling rather than about the company, which the live seat
+state answers), `budget_meters` (a periodic snapshot of the fleet's shared
+token counters, every capped calendar window with its engine-computed state,
+published by every node on a fixed tick and at once when a window first turns
+work away on it, which the next report supersedes; the live projection reads
+it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its
+edge publishes beside it), `custody_batch` (a carrier rather than an event: the
+data node that keeps a batch writes each event inside it as the row it is),
+`reflection_due` (the wake that puts a finished turn in front of reflection on
+the seat's holder: the turn is already `turn_completed`, and what reflecting on
+it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
+already rows as `a2a_channel_opened` and `a2a_message_sent`),
+`sandbox_answer_given` (the wake an answer by turn puts on the seat's inbox:
+what the answer became is `sandbox_run_answered`, and that a person gave it is
+their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
+nodes about an edit the webhook receiver already recorded). The cause is a
+value rather than a sentence, because the admission rule below is checked by a
+walk and no walk can read intent out of prose. See the exclusions table in the
+Deployment page above.
+
+### What may reach the node estate
+
+A category is an **admission** as much as a filing: the map is what decides
+whether a type becomes a durable row, and the [event
+store](../guides/deployment.md#the-event-store) is a file on a disk an operator
+sized, copied whole by every backup, every snapshot a lagging node installs and
+every integrity check before either counts.
+
+So each categorised type also records **who authors its rate** — who decides
+how often it is published, which is never the same question as who publishes
+it:
+
+| Author | What sets the pace | Examples |
+|---|---|---|
+| `engine` | This company's own work: a turn, a tick, a duty, a schedule | `agent_phase_completed`, `sandbox_run_started`, `reflection_completed` |
+| `authenticated` | An admitted caller: an operator holding a token, a seat, a delivery whose signature or shared token verified | `external_notification`, `config_revision_activated`, `task_assigned` |
+| `anonymous` | Anybody who can reach the listener, with no credential and no identity | — none, and that is the rule |
+
+**No event type whose rate an unauthenticated caller authors reaches the node
+estate.** A failed login is the worked example: anyone who can reach the API
+can author millions a day for nothing, so a row per attempt hands the size of
+the store — and of every artefact taken from it — to whoever is making the
+attempts, with no credential to revoke and no identity on the row. The
+per-attempt fact is the `crewlet.auth.attempts.failed` counter; what becomes a
+row is `iam_login_failures`, one per node per minute that had a failure,
+published by the engine's own flush loop and therefore rated by the engine. It
+carries a count per source (an address, or an IPv6 client's `/64`, the unit
+the sign-in throttle keys on) and never the presented value — not a mistyped
+login, not a password typed into the login box, and not a hash of either, which
+would reverse against the company's own roster in one pass. Past a fixed number
+of sources in one minute the rest fold into one overflow count, so a
+distributed attack's size is recorded without its address pool deciding how
+large the row is. A type that must stay out for this
+reason is excluded with the cause `anonymous_rate`.
+
+Two facts are kept out by having **no type at all**: a per-request
+authorization decision (a fact about a poll rather than about the company; a
+Tier A token refused by a route is a WARN log line on the node it reached
+instead) and a session touch (a clock, not an event). The exclusion map is
+for types something publishes, and nothing publishes either. Nothing *refuses*
+them either, and that is stated rather than implied: both are caused by a
+caller the guard admitted, so a type for either would declare an
+authenticated rate, which the walk below admits. They stay out because no type
+exists, and adding one is a decision a reviewed change has to argue against
+those two reasons.
+
+The rule is enforced by a walk over the taxonomy rather than remembered: a type
+given a category while declaring an anonymous rate, and a type given a category
+while declaring no rate author at all, both fail the suite in
+`internal/events`. An unstated author is not a claim that the rate is bounded.
 
 **Stored, not fed.** One type is a row like every other and is kept out of the
 activity feed: `auxiliary_spend`, which is accounting rather than activity. The
@@ -582,7 +710,10 @@ sequenceDiagram
   the asker's instant (below), which it would ignore and answer as of its own
   clock — so nothing that comes back has to be re-cut or corrected for the
   build that sent it. A fleet half way through an upgrade answers its history
-  from the nodes on the asker's build, and says so.
+  from the nodes on the asker's build, and says so. A question narrowed to one seat — a
+  listing, the company's `phases` and a window's phase spend among them — names
+  it by the seat's id, never by a role name two seats in different units can
+  share and every node would answer for both.
 - **Every question is asked at one instant.** The asker reads its clock once
   per question and sends the instant with it, and every node floors the
   30-day history at that instant rather than at its own clock — the events

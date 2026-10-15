@@ -45,7 +45,7 @@ roles:
 func TestASeatsOwnAppIsRegisteredUnderBothItsNames(t *testing.T) {
 	t.Parallel()
 	c := companyWith(t, appSeatsDoc)
-	reg := notify.NewRegistry(c.Org)
+	reg := notify.NewRegistry(c.Org, nil)
 
 	ids := &githubIdentities{}
 	if got := ids.register(reg, c, config.NewResolver(nil)); got != 1 {
@@ -98,7 +98,7 @@ roles:
         GITHUB_TOKEN: ghp-seat
 `
 	c := companyWith(t, doc)
-	reg := notify.NewRegistry(c.Org)
+	reg := notify.NewRegistry(c.Org, nil)
 	ids := &githubIdentities{identityCache[string]{known: map[string]string{"ghp-seat": "SreLead"}}}
 
 	if got := ids.register(reg, c, config.NewResolver(nil)); got != 1 {
@@ -135,7 +135,7 @@ roles:
         private_key: pem
 `
 	c := companyWith(t, doc)
-	reg := notify.NewRegistry(c.Org)
+	reg := notify.NewRegistry(c.Org, nil)
 	ids := &githubIdentities{identityCache[string]{known: map[string]string{"ghp-old": "somebody-else"}}}
 	ids.register(reg, c, config.NewResolver(nil))
 
@@ -175,7 +175,7 @@ roles:
         GITHUB_TOKEN: ghp-reviewer
 `
 	c := companyWith(t, doc)
-	reg := notify.NewRegistry(c.Org)
+	reg := notify.NewRegistry(c.Org, nil)
 	ids := &githubIdentities{identityCache[string]{known: map[string]string{"ghp-reviewer": "rev-account"}}}
 
 	if got := ids.register(reg, c, config.NewResolver(nil)); got != 2 {

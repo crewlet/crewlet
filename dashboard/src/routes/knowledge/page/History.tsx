@@ -26,7 +26,7 @@ import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { PageRevision } from "~/protocol/index.ts";
-import { Face, changeNote, changeWords, drawnBy, type Who } from "../parts.tsx";
+import { Face, changeNote, changeWords, changedBy, type Who } from "../parts.tsx";
 
 /**
  * A line diff, rendered as the document it is.
@@ -145,7 +145,7 @@ export function VersionView({
     { enabled: previous > 0 && lens === "diff" },
   );
   const rev = history.find((r) => r.version === version);
-  const by = rev ? drawnBy(rev.author, rev.author_seat) : "";
+  const by = rev?.author ?? "";
 
   return (
     <section className="knowledge-version" aria-label={`Revision ${version}`}>
@@ -188,10 +188,10 @@ export function VersionView({
           Back to the page
         </Button>
       </div>
-      <QueryState error={body.error} loading={body.loading}>
+      <QueryState error={body.error} refusal={body.refusal} loading={body.loading}>
         {body.data ? (
           lens !== "full" && previous > 0 ? (
-            <QueryState error={prior.error} loading={prior.loading}>
+            <QueryState error={prior.error} refusal={prior.refusal} loading={prior.loading}>
               {prior.data && (
                 <BodyDiff
                   before={prior.data.body ?? ""}
@@ -243,6 +243,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
       </h2>
       <QueryState
         error={feed.error}
+        refusal={feed.refusal}
         loading={feed.loading}
         empty={
           changes.length
@@ -255,7 +256,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
       >
         <ol className="knowledge-change-list">
           {changes.map((change) => {
-            const by = drawnBy(change.actor, change.actor_seat);
+            const by = changedBy(change);
             const note = changeNote(change);
             return (
               <li key={change.id} className="knowledge-change">

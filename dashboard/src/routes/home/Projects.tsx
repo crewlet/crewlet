@@ -15,11 +15,14 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, needsWords } from "~/lib/access.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
+import { projectPath } from "~/lib/work.ts";
 
 /** How many projects the card draws before "All projects". */
 export const PROJECT_ROWS = 3;
@@ -29,7 +32,13 @@ export const PROJECT_ROWS = 3;
 const PROJECTS_PAGE = 200;
 
 export function Projects() {
-  const read = useQuery("work_projects", { limit: PROJECTS_PAGE }, { pollMs: 120_000 });
+  // THE TRACKER'S LIST, asked only of a reader holding Tracker.
+  const viewer = useViewer();
+  const read = useQuery(
+    "work_projects",
+    { limit: PROJECTS_PAGE },
+    { pollMs: 120_000, enabled: viewer.tracker },
+  );
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const rows = read.data?.projects?.filter((p) => !p.archived) ?? [];
@@ -57,38 +66,43 @@ export function Projects() {
       >
         <Card.Title as="h3">Projects</Card.Title>
       </Card.Header>
-      <QueryState
-        error={read.error}
-        loading={read.loading && !read.data}
-        empty={
-          read.data && rows.length === 0
-            ? {
-                title: "No projects yet",
-                hint: "Add one with New project in Work.",
-              }
-            : undefined
-        }
-      >
-        <ul className="project-list">
-          {shown.map((p) => (
-            <ProjectRow
-              key={p.key}
-              project={p}
-              leadName={
-                p.lead.handle ? (index.byHandle.get(p.lead.handle)?.name ?? p.lead.handle) : ""
-              }
-              leadAvatar={
-                p.lead.handle ? (index.byHandle.get(p.lead.handle)?.avatar ?? null) : null
-              }
-            />
-          ))}
-        </ul>
-        {rows.length > PROJECT_ROWS && (
-          <a className="home-card-more t-link" href={href(["work"])}>
-            {`All ${plural(rows.length, "project")}`}
-          </a>
-        )}
-      </QueryState>
+      {!viewer.loading && !viewer.tracker ? (
+        <p className="home-card-note">{needsWords("Projects", [TRACKER])}</p>
+      ) : (
+        <QueryState
+          error={read.error}
+          refusal={read.refusal}
+          loading={read.loading && !read.data}
+          empty={
+            read.data && rows.length === 0
+              ? {
+                  title: "No projects yet",
+                  hint: "Add one with New project in Work.",
+                }
+              : undefined
+          }
+        >
+          <ul className="project-list">
+            {shown.map((p) => (
+              <ProjectRow
+                key={p.key}
+                project={p}
+                leadName={
+                  p.lead.handle ? (index.byHandle.get(p.lead.handle)?.name ?? p.lead.handle) : ""
+                }
+                leadAvatar={
+                  p.lead.handle ? (index.byHandle.get(p.lead.handle)?.avatar ?? null) : null
+                }
+              />
+            ))}
+          </ul>
+          {rows.length > PROJECT_ROWS && (
+            <a className="home-card-more t-link" href={href(["work"])}>
+              {`All ${plural(rows.length, "project")}`}
+            </a>
+          )}
+        </QueryState>
+      )}
     </Card>
   );
 }
@@ -111,7 +125,7 @@ function ProjectRow({
   const pct = whole > 0 ? Math.round((done / whole) * 100) : null;
   return (
     <li>
-      <a className="project-row" href={href(["work", project.key])}>
+      <a className="project-row" href={href(projectPath(project.key))}>
         <span className="project-row-head">
           <span className="project-key mono">{project.key}</span>
           <span className="project-name">{project.name}</span>

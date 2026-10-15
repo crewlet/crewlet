@@ -20,11 +20,11 @@ import (
 // the managing system, and a revision written here would be replaced at its
 // next reconcile exactly as an API edit would.
 //
-// What stays open is what changes no byte of the company: `config seal` and
-// `config rekey` re-encrypt the active document under the keyring, which is
-// Tier A's own business and nothing the managing system can do, and
-// `config activate` of the revision that is already active, which is the
-// offline re-publish a rotated credential needs.
+// What stays open is what changes no byte of the company: `config rekey`
+// re-seals the active revision under the keyring, which is Tier A's own
+// business and nothing the managing system can do, and `config activate` of
+// the revision that is already active, which is the offline re-publish a
+// rotated credential needs.
 
 // managedRefusal is what a host-side write of a managed document is told:
 // who manages it, why the write is refused, and the two ways forward.

@@ -146,8 +146,10 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 // AN AGENT SEAT'S, by its derived id, except on the operator stage; anything
 // else is a PERSON's — the human seat a person's credential is bound to, or the
 // one leading a unit whose background pass runs on its chain. A human seat has
-// no agent id and no seat budget, and the record's `role` is what the live
-// projection keys a SEAT on, so a person is named on its own two keys instead.
+// no agent id and no seat budget, and the record's `role` labels an AGENT seat
+// — it fills the store's `agent_role` column, which every per-seat read prints
+// as an agent's name — so a person is named on its own two keys instead
+// (`actor_seat`, `actor_role`).
 func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Seat {
 	if role == nil {
 		return auxspend.Seat{}
@@ -377,9 +379,10 @@ func (e *Engine) seatCompactor(c *Company, handle string, use auxspend.Use) comp
 const auxSpendStopBudget = 5 * time.Second
 
 // stopAuxSpend flushes the ledger one last time. Ordered by the teardown after
-// every producer of auxiliary calls has stopped and before the custody flush
+// every producer of auxiliary calls has stopped, and before the usage
+// publisher's last flush — whose day counts these records — the custody flush
 // and the broker's close, so the last records reach a stream that is still
-// there. Nil-safe.
+// there and a day that is published after them. Nil-safe.
 func (e *Engine) stopAuxSpend(ctx context.Context) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), auxSpendStopBudget)
 	defer cancel()

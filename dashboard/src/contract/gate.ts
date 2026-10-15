@@ -3,10 +3,10 @@
  * it: the remedy vocabulary a gate answer speaks, which of those remedies keep
  * the gesture's own operation id, and how long a gesture may take to answer.
  *
- * Each is a COPY of something the engine owns, held to it in both directions
- * by `internal/api`'s `gate_client_test.go`. What is done with them — whether
- * an action keeps the id, the operation id's grammar — is behaviour, and lives
- * in `protocol/gate.ts`.
+ * Each is a COPY of something the engine owns, held to it by `internal/api`'s
+ * `gate_client_test.go` — the two lists in both directions, the wait exactly.
+ * What is done with them — whether an action keeps the id, the operation id's
+ * grammar — is behaviour, and lives in `protocol/gate.ts`.
  */
 
 /**
@@ -50,16 +50,20 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
 ] as const;
 
 /**
- * How long one gesture's request may take before the dialog gives up on it,
- * held above `engine.GateAnswerBudget` by
- * `internal/api.TestTheDashboardWaitsPastTheGateBudget`.
+ * How long one gesture's request may take before the dialog gives up on it —
+ * `engine.GateClientWait`, held EXACTLY by
+ * `internal/api.TestTheDashboardWaitsAsLongAsTheEngineSaysAClientShould`.
  *
- * ONE MINUTE, the command line's own `gateRequestTimeout` and for its reason:
- * the engine answers one gesture within `engine.GateAnswerBudget` — fifty
- * seconds: twenty to judge it and thirty to write every log — and the ten
- * beyond it are the request's round trip. Waiting past the node's own bound is
- * what makes its answer — every log's outcome — reach the operator rather than
- * a client timeout that knows none of it. The default thirty seconds gave up on
- * a gesture the node went on to finish.
+ * ONE MINUTE, and the command line waits it too: the engine answers one
+ * gesture within `engine.GateAnswerBudget` — fifty seconds: twenty to judge it
+ * and thirty to write every log, all of them at once — and a client waits the
+ * request's round trip beyond that. Waiting past the node's own bound is what
+ * makes its answer — every log's outcome — reach the operator rather than a
+ * client timeout that knows none of it. The default thirty seconds gave up on a
+ * gesture the node went on to finish.
+ *
+ * HELD EXACTLY, not merely above the budget, because a copy that was only
+ * larger goes on passing the day the engine's bound grows past it — the
+ * engine states the wait once and this is that statement copied.
  */
 export const GATE_REQUEST_TIMEOUT_MS = 60_000;

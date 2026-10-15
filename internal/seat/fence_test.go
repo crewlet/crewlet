@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
@@ -76,7 +75,7 @@ func TestAReclaimAtANewEpochClosesTheOldFence(t *testing.T) {
 
 	f.peerTakes("ceo", "peer:1", h.Owner(), first)
 	h.Heartbeat(f.ctx)
-	if _, err := f.store.Release(f.ctx, coord.SeatResource("ceo"), "peer:1", first+1); err != nil {
+	if _, err := f.store.Release(f.ctx, seatResource("ceo"), "peer:1", first+1); err != nil {
 		t.Fatalf("peer release: %v", err)
 	}
 	// Past the backoff dropLostSeat set, so this node may claim again.

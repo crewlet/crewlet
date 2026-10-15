@@ -12,12 +12,15 @@ import (
 
 // Domain is the usage domain as the state-log framework sees it.
 //
-// THE FRAMEWORK'S FOURTH DOMAIN, AND ITS SECOND COMPACTED ONE. It answers every
+// THE FRAMEWORK'S FIFTH DOMAIN, AND ITS SECOND COMPACTED ONE. It answers every
 // question the vector domain answers, the same way and for the same reasons —
 // a keyed table rather than a log, no arbitration, no operation ledger, no
-// identity claim, no seat gating — and differs from it in the one respect that
-// matters to a reader: there is no singleton duty behind it. EVERY node is a
-// writer, of its own days only, which is what the node in the subject buys.
+// identity claim, no seat gating, no generation record ([GenerationRecord]) —
+// and differs from it in the one respect that matters to a reader: there is no
+// singleton duty behind it. EVERY DATA NODE is a writer, of its own days only,
+// which is what the node in the subject buys — and a node without `data` is no
+// writer at all, since its spend is counted in its custody keeper's day (see
+// the package doc).
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
@@ -25,7 +28,7 @@ func (Domain) Name() string { return "usage" }
 
 const (
 	// History is how far back a node's day is kept: on the stream (its age
-	// bound) and in every node's rows (the apply's own horizon).
+	// bound) and in every data node's rows (the apply's own horizon).
 	//
 	// A HUNDRED AND EIGHTY-ONE DAYS, and the arithmetic is the offered
 	// range rather than a round number: a spend window reaches back ninety
@@ -35,14 +38,21 @@ const (
 	// empty previous half — which is the bug this domain replaced.
 	History = 181 * 24 * time.Hour
 
-	// FlushInterval is how often a node re-derives the days that moved and
-	// publishes what changed.
+	// FlushInterval is how often a data node re-derives the days that moved
+	// and publishes what changed.
 	//
-	// FIFTEEN SECONDS, the staleness of "today" on every node, and it is
+	// FIFTEEN SECONDS, the staleness of "today" in the fleet's rows, and it is
 	// the cadence the live budget meters are pushed on: a spend figure that
 	// trailed the meter above it by more than one of the meter's own
 	// refreshes would read as two different numbers. A tick that finds
-	// nothing moved costs two indexed counts per day it looks at.
+	// nothing moved costs one read of the re-derive marks, two reads of the
+	// recorded day cuts (usage_day_windows: the cut now falls in, and
+	// yesterday's), and, for each of the two days it looks at, two counts:
+	// one seeks the day's window per event type and probes the in-flight
+	// custody identities' key once per row it counts, the other seeks the
+	// dispatch ledger's window. A day that moved adds its derivation, and
+	// each object whose derivation changed one read of what the fleet holds
+	// of it ([Applied]) beside its publish.
 	FlushInterval = 15 * time.Second
 
 	// ReadsPerSeatDay is how many (page, via) entries one seat-day record
@@ -53,13 +63,12 @@ const (
 	// most the 400 bytes a search accepts ([knowledge.MaxQueryBytes]), so
 	// a seat-day at the cap is under 200 KiB with a full-length query in
 	// every entry and under 1 MiB even where JSON escapes every byte of
-	// every one — far under the transport's 8 MiB message ceiling
-	// ([queue.MaxPayloadBytes], which the embedded broker is configured
-	// to and an external one is refused below), as
-	// TestAFullSeatDayRecordFitsOneMessage measures — and it is past what
-	// any person reads about one seat on one day. The most-read entries
-	// survive, and what was dropped is counted on the record rather than
-	// lost silently.
+	// every one — far under the largest record this log takes
+	// ([LogMaxRecordBytes], the transport's own ceiling less what a signed
+	// append carries beside it), as TestAFullSeatDayRecordFitsOneMessage
+	// measures — and it is past what any person reads about one seat on one
+	// day. The most-read entries survive, and what was dropped is counted on
+	// the record rather than lost silently.
 	//
 	// It does NOT bound the stream: [LogMaxBytes] is sized from busy
 	// seat-days, and a fleet whose every seat reached this cap every day
@@ -80,6 +89,20 @@ const (
 	// the log's headroom alarm rather than dropping the oldest day.
 	LogMaxBytes = 1 << 30
 
+	// LogMaxRecordBytes is the largest record this domain publishes
+	// ([statelog.StreamSpec.MaxRecordBytes]).
+	//
+	// THE LARGEST THE TRANSPORT CARRIES ([statelog.MaxTransportRecordBytes]),
+	// on the vector domain's precedent and for its reason: this log claims
+	// no identity and keeps no gate reserve, so the declaration sizes
+	// nothing and only says where the publisher and the broker refuse. A
+	// record is bounded far below it by its own caps — a seat-day's reads
+	// at [ReadsPerSeatDay], and a schedule-day's fires at one per cron
+	// minute, 1 440 fires of about 150 bytes — so a record that does meet
+	// the refusal is one no retry places, and the publisher says so once
+	// rather than every tick ([Publisher]).
+	LogMaxRecordBytes = statelog.MaxTransportRecordBytes
+
 	// LogDuplicates is the window the broker collapses a repeated op id in.
 	//
 	// An optimisation, as it is for the vectors: nothing here relies on it,
@@ -93,11 +116,12 @@ const (
 // budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.UsageLogStream,
-		Subjects:      []string{topics.UsageLogWildcard},
-		SubjectPrefix: topics.UsageLogPrefix,
-		MaxBytes:      LogMaxBytes,
-		MaxPerSubject: 1,
+		Name:           topics.UsageLogStream,
+		Subjects:       []string{topics.UsageLogWildcard},
+		SubjectPrefix:  topics.UsageLogPrefix,
+		MaxBytes:       LogMaxBytes,
+		MaxRecordBytes: LogMaxRecordBytes,
+		MaxPerSubject:  1,
 		// THE STREAM FORGETS A DAY WHEN THE ROWS DO. A message older than
 		// the history describes a day no read will ask for, and a node
 		// replaying the stream would apply it only for the next record's
@@ -235,7 +259,21 @@ type Gates struct{}
 // NewGates builds it.
 func NewGates() Gates { return Gates{} }
 
-// GatedAt implements [statelog.Gates].
-func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
+// GatedAt implements [statelog.Gates]. The record's body is not read: no
+// marker exists that a payload could name.
+func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position,
+	[]byte) (statelog.Reason, bool, error) {
 	return "", false, nil
 }
+
+// THE FRAMEWORK'S SEAMS, held at compile time: the engine's register wires
+// each of these by its interface, so a signature the framework moves under
+// them is a build failure here rather than a register entry that no longer
+// compiles in a package nobody built.
+var (
+	_ statelog.Domain            = Domain{}
+	_ statelog.Applier           = Applier{}
+	_ statelog.Fence             = Fence{}
+	_ statelog.Gates             = Gates{}
+	_ statelog.GenerationEncoder = GenerationRecord{}
+)

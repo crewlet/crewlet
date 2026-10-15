@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strconv"
@@ -14,24 +15,34 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The org projection is ANONYMOUSLY READABLE, so what it carries is a security
-// decision made one field at a time. These tests are what keep it one.
+// The org projection is read by everybody a node resolves — it is the
+// company's overview, a principal holding no permission at all included — an
+// audience far wider than the configuration's, which is an admin's, so what it
+// carries is a security decision made one field at a time. These tests are
+// what keep it one.
 
 // exposure is the decision recorded for one authored field.
 type exposure int
 
 const (
-	// exposurePublic: founder prose and structure, carried by /org.
+	// exposurePublic: founder prose and structure, carried by /org to
+	// every reader.
 	exposurePublic exposure = iota + 1
-	// exposureGuarded: read only through the guarded `config` query.
+	// exposureGuarded: read only through the admin's configuration
+	// answers.
 	exposureGuarded
 	// exposureResolved: read, with others, into the RESOLVED seat field
 	// named by `into`, which carries the labels the value decides (a
-	// provider key, a server name) and never the value's own contents.
+	// provider key, a server name) and never the value's own contents —
+	// and which only an admin's audience is handed, because the labels are
+	// read off a seat's runtime settings, which `GET /config` serves to
+	// nobody else.
 	exposureResolved
 )
 
@@ -58,12 +69,12 @@ var companyFields = map[string]classified{
 	"Knowledge":      {exposure: exposureGuarded, why: "which knowledge backend and container keys"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
 	"Providers": {exposure: exposureResolved, into: "llm",
-		why: "only the KEYS reach a reader, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},
+		why: "only the KEYS reach an admin, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},
 	"TurnEngine": {exposure: exposureGuarded, why: "an operational setting"},
 	"Learning":   {exposure: exposureGuarded, why: "an operational setting"},
 	"Scheduling": {exposure: exposureGuarded, why: "an operational setting"},
 	"MCPServers": {exposure: exposureResolved, into: "tool_sources",
-		why: "only a granted server's NAME reaches a reader, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
+		why: "only a granted server's NAME reaches an admin, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
 	"NotificationRateLimit":             {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
@@ -81,12 +92,12 @@ var projectionOnly = map[string]string{
 // A tracker project and a knowledge space are the decision here that is not
 // about credentials: `project` and `space` hold neither a secret nor a ${VAR},
 // and both are guarded anyway. A project key or a space key names a
-// THIRD-PARTY CONTAINER, so handing one to an anonymous reader says where this
+// THIRD-PARTY CONTAINER, so handing one to every reader says where this
 // company files its work and writes its pages, and what to go looking at. It
 // is the reasoning internal/api/setupapi's package doc records for guarding
 // even its reads: what a company has wired up, and to what, is a map of what
 // to attack. They are read with the rest of the integration picture instead,
-// through the operator-only `config` and `integrations` answers.
+// through the admin's answers, `config` and `integrations`.
 
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{
@@ -124,7 +135,7 @@ var roleFields = map[string]classified{
 // unitFields classifies every field of config.Unit.
 var unitFields = map[string]classified{
 	"Name":      {exposurePublic, "the unit's identity in the chart", ""},
-	"ID":        {exposureGuarded, "a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name", ""},
+	"ID":        {exposurePublic, "the unit's KEY: a `manages:` entry and a seat's `unit:` resolve it, so a client reading this projection needs it to resolve a reference the projection itself carries. The chart still draws Name", ""},
 	"Type":      {exposurePublic, "an informational label", ""},
 	"Purpose":   {exposurePublic, "founder prose", ""},
 	"Lead":      {exposurePublic, "the structure the chart draws", ""},
@@ -139,16 +150,16 @@ var unitFields = map[string]classified{
 	"Schedules": {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it", ""},
 }
 
-// EVERY AUTHORED FIELD HAS A DECISION, and the public ones are exactly what
-// the projection carries.
+// EVERY AUTHORED FIELD HAS A DECISION, and the public and resolved ones are
+// exactly what the projection carries.
 //
 // A field added to config.Company, config.Role or config.Unit fails the first
-// half until somebody decides whether an anonymous reader may see it. Marking
-// it public without adding it to the projection (or the reverse) fails the
-// second half, so the table and the type cannot drift apart. A RESOLVED field
-// must name the api.OrgSeat field it reaches, and every resolved seat field
-// must be reached by something classified, so a resolved field is never a way
-// to publish a value nobody decided on.
+// half until somebody decides whether every reader of /org may see it.
+// Marking it public without adding it to the projection (or the reverse) fails
+// the second half, so the table and the type cannot drift apart. A RESOLVED
+// field must name the api.OrgSeat field it reaches, and every resolved seat
+// field must be reached by something classified, so a resolved field is never
+// a way to publish a value nobody decided on.
 func TestEveryOrgFieldIsClassified(t *testing.T) {
 	t.Parallel()
 	seatWire := map[string]bool{}
@@ -191,10 +202,11 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 				seen[field.Name] = true
 				decision, ok := tc.table[field.Name]
 				if !ok {
-					t.Errorf("config.%s.%s is not classified. Decide whether an anonymous "+
-						"reader of /org may see it: add it to this test's table as public "+
-						"(and to api.%s), resolved (naming the api.OrgSeat field it "+
-						"reaches) or guarded (and read it through the config query)",
+					t.Errorf("config.%s.%s is not classified. Decide whether every "+
+						"reader of /org may see it: add it to this test's table as "+
+						"public (and to api.%s), resolved (naming the api.OrgSeat field it "+
+						"reaches, which only an admin is handed) or guarded (and read it "+
+						"through the config query)",
 						tc.authored.Name(), field.Name, tc.projection.Name())
 					continue
 				}
@@ -229,69 +241,125 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 	}
 }
 
-// NOTHING GUARDED REACHES AN ANONYMOUS READER, whatever it holds.
+// The two credentials an org reader presents in these cases: an admin's, and
+// one holding no permission at all — the widest audience the projection
+// reaches, since the overview is everybody's.
+const (
+	orgOpsToken    = "org-ops-token-long-enough-to-pass"
+	orgReaderToken = "org-reader-token-long-enough-to-pass"
+)
+
+// orgReaders is an app's org surface with both credentials authorised.
+func orgReaders(t *testing.T, company *config.Company) *api.App {
+	t.Helper()
+	b := config.DefaultBootstrap()
+	authorize(&b,
+		config.APIToken{ID: "ops", Token: orgOpsToken},
+		config.APIToken{ID: "reader", Token: orgReaderToken, Grants: []iam.Grant{}},
+	)
+	return newApp(t, api.Options{
+		Bootstrap: &b,
+		Sources:   queries.Sources{Company: companySource(t, company)},
+	})
+}
+
+// orgBody is GET /org as the holder of token reads it.
+func orgBody(t *testing.T, a *api.App, token string) []byte {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/org", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	res := rec.Result()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /org = %d, want 200", res.StatusCode)
+	}
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read /org: %v", err)
+	}
+	return raw
+}
+
+// NOTHING GUARDED REACHES ANY READER, and nothing resolved reaches a reader
+// who is not an admin — whatever the company holds.
 //
 // Every guarded field of every seat and unit (and every field of the company
 // outside its charter) is filled, all the way down through pointers, slices
 // and maps, keys included: once with a distinct literal, once with a distinct
 // whole ${VAR} reference. The projection is read the three ways a browser
-// reaches it, and none may contain a fill value, a `${`, or any key outside
-// the public shape. The public fields are filled with distinct prose that
-// MUST appear, which is what stops this passing on an empty answer.
+// reaches it, by a reader holding no permission and by an admin, and none may
+// contain a fill value, a `${`, or any key outside the public shape. The
+// public fields are filled with distinct prose that MUST appear to both, which
+// is what stops this passing on an empty answer; the labels a seat's chain and
+// tool sources resolve to MUST appear to the admin and must not to the other —
+// a label read off a seat's runtime settings is the configuration's, which is
+// an admin's to read.
+//
+// Mutation: hand every audience the whole projection, and the reader's
+// surfaces carry the resolved labels.
 func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []fillMode{fillLiteral, fillReference} {
 		t.Run(string(mode), func(t *testing.T) {
 			t.Parallel()
 			f := &filler{mode: mode}
-			company := f.company()
-			a := newApp(t, api.Options{
-				Sources: queries.Sources{Company: func() *config.Company { return company }},
-			})
-
-			res := fetch(t, a, "/org", nil)
-			if res.StatusCode != http.StatusOK {
-				t.Fatalf("GET /org = %d, want an anonymous 200", res.StatusCode)
-			}
-			rest, err := io.ReadAll(res.Body)
-			if err != nil {
-				t.Fatalf("read /org: %v", err)
-			}
-			snapshot, err := json.Marshal(a.Stream().Snapshot()["org"])
-			if err != nil {
-				t.Fatalf("marshal the snapshot's org: %v", err)
-			}
-			push, err := json.Marshal(a.Stream().Org())
-			if err != nil {
-				t.Fatalf("marshal the org push: %v", err)
+			a := orgReaders(t, f.company())
+			if len(f.resolvedValues) == 0 {
+				t.Fatal("the fixture resolves no label, so the audience split is unasserted")
 			}
 
-			for surface, body := range map[string][]byte{
-				"GET /org": rest, "snapshot": snapshot, "org push": push,
+			for _, reader := range []struct {
+				name     string
+				token    string
+				audience stream.Audience
+				resolved bool
+			}{
+				{"the overview reader", orgReaderToken, overviewReader, false},
+				{"the admin", orgOpsToken, adminReader, true},
 			} {
-				text := string(body)
-				if strings.Contains(text, "${") {
-					t.Errorf("%s carries a ${VAR} reference:\n%s", surface, text)
+				snapshot, err := json.Marshal(a.Stream().Snapshot(reader.audience)["org"])
+				if err != nil {
+					t.Fatalf("marshal the snapshot's org: %v", err)
 				}
-				for _, secret := range f.guardedValues {
-					if strings.Contains(text, secret) {
-						t.Errorf("%s carries the guarded value %q:\n%s", surface, secret, text)
+				push, err := json.Marshal(stream.ShapeFor(a.Stream().Org(), reader.audience))
+				if err != nil {
+					t.Fatalf("marshal the org push: %v", err)
+				}
+				for surface, body := range map[string][]byte{
+					"GET /org": orgBody(t, a, reader.token), "snapshot": snapshot, "org push": push,
+				} {
+					surface = reader.name + " " + surface
+					text := string(body)
+					if strings.Contains(text, "${") {
+						t.Errorf("%s carries a ${VAR} reference:\n%s", surface, text)
 					}
-				}
-				for _, prose := range f.publicValues {
-					if !strings.Contains(text, prose) {
-						t.Errorf("%s is missing the public value %q, so a public field "+
-							"was dropped:\n%s", surface, prose, text)
+					for _, secret := range f.guardedValues {
+						if strings.Contains(text, secret) {
+							t.Errorf("%s carries the guarded value %q:\n%s", surface, secret, text)
+						}
 					}
-				}
-				var decoded any
-				if err := json.Unmarshal(body, &decoded); err != nil {
-					t.Fatalf("%s is not JSON: %v", surface, err)
-				}
-				for key := range objectKeys(decoded) {
-					if !publicKeys[key] {
-						t.Errorf("%s carries the key %q, which is not in the public shape",
-							surface, key)
+					for _, prose := range f.publicValues {
+						if !strings.Contains(text, prose) {
+							t.Errorf("%s is missing the public value %q, so a public field "+
+								"was dropped:\n%s", surface, prose, text)
+						}
+					}
+					for _, label := range f.resolvedValues {
+						if got := strings.Contains(text, label); got != reader.resolved {
+							t.Errorf("%s carries the resolved label %q = %v, want %v:\n%s",
+								surface, label, got, reader.resolved, text)
+						}
+					}
+					var decoded any
+					if err := json.Unmarshal(body, &decoded); err != nil {
+						t.Fatalf("%s is not JSON: %v", surface, err)
+					}
+					for key := range objectKeys(decoded) {
+						if !publicKeys[key] {
+							t.Errorf("%s carries the key %q, which is not in the public shape",
+								surface, key)
+						}
 					}
 				}
 			}
@@ -384,6 +452,10 @@ type filler struct {
 
 	guardedValues []string
 	publicValues  []string
+	// resolvedValues are the labels a seat's resolved fields carry — each
+	// provider key a seat names and the shared server's name — which reach
+	// an admin and nobody else.
+	resolvedValues []string
 	// providerKeys is every provider key a seat was given.
 	providerKeys []string
 }
@@ -409,6 +481,12 @@ func (f *filler) secret() string {
 func (f *filler) prose() string {
 	value := fmt.Sprintf("publicprose%04d", f.next())
 	f.publicValues = append(f.publicValues, value)
+	return value
+}
+
+func (f *filler) label() string {
+	value := fmt.Sprintf("resolvedlabel%04d", f.next())
+	f.resolvedValues = append(f.resolvedValues, value)
 	return value
 }
 
@@ -438,10 +516,11 @@ func (f *filler) company() *config.Company {
 		}
 	}
 	// One SHARED server, so every agent seat is granted it and its name
-	// must reach every seat's tool_sources while its command, URL, env and
-	// headers — filled with secrets above — reach nothing.
-	c.MCPServers[0].Name = f.prose()
-	c.Roles = []config.Role{f.role()}
+	// must reach every agent seat's tool_sources while its command, URL,
+	// env and headers — filled with secrets above — reach nothing.
+	c.MCPServers[0].Name = f.label()
+	c.MCPServers[0].Shared = org.On()
+	c.Roles = f.seats()
 	c.Units = []config.Unit{f.unit(2)}
 	// Every provider key a seat names is configured, each entry filled with
 	// secrets, so a key reaching the answer is the resolved chain and the
@@ -455,21 +534,82 @@ func (f *filler) company() *config.Company {
 	return c
 }
 
-func (f *filler) role() config.Role {
+// agentOnlyRoleFields are refused on a HUMAN seat, and humanOnlyRoleFields on
+// an agent one.
+//
+// TWO SEATS, NOT ONE, is what these force, and it is the fixture telling the
+// truth rather than a concession: a company cannot have a seat carrying both
+// sets, so a single filled seat could never have built an org at all. It did
+// not have to while the projection was copied out of the document; it does
+// now that the projection is DERIVED from the company the node runs.
+var agentOnlyRoleFields = map[string]bool{
+	"LLM": true, "LLMReview": true, "LLMSubagent": true, "LLMAuxiliary": true,
+	"LLMJudge": true, "LLMSandbox": true, "Sandbox": true, "TokenBudget": true,
+	"Workers": true, "LearningEnabled": true, "Schedules": true,
+	"MCPEnv": true, "BehavioralGuidelines": true,
+	// How an AGENT seat is drawn; a human seat is drawn as the person it
+	// is, and the company refuses an avatar on one.
+	"Avatar": true,
+	// Where a seat RUNS: a human seat runs nowhere, so the org model
+	// refuses a placement on one.
+	"Placement": true,
+	// The per-seat vendor blocks and the two keys that ARE a vendor
+	// identity — a person acts at a third-party app as themselves, so an
+	// app or a project created for one would be a second identity for
+	// somebody who already has one.
+	"Integrations": true, "Project": true, "Space": true,
+}
+
+var humanOnlyRoleFields = map[string]bool{"Contact": true, "Availability": true}
+
+// role fills one seat of the given kind, leaving out the fields the other
+// kind owns.
+func (f *filler) role(kind org.RoleKind) config.Role {
 	var r config.Role
 	v := reflect.ValueOf(&r).Elem()
 	for field := range fieldsOf(v.Type()) {
 		target := v.FieldByIndex(field.Index)
-		switch roleFields[field.Name].exposure {
-		case exposurePublic:
+		switch {
+		case field.Name == "Kind":
+			// A CLOSED SET, not prose. `kind:` is public and it is an
+			// enum, so the value that has to reach the projection is a
+			// value the org model ACCEPTS — filled with prose, the org
+			// refused to build and every seat vanished from /org with
+			// nothing in the response to say why.
+			target.SetString(string(kind))
+		case kind == org.KindHuman && agentOnlyRoleFields[field.Name],
+			kind == org.KindAgent && humanOnlyRoleFields[field.Name]:
+			// Not this seat's to carry; the other kind's seat has it.
+		case roleFields[field.Name].exposure == exposurePublic:
 			f.public(target)
-		case exposureResolved:
+		case roleFields[field.Name].exposure == exposureResolved:
 			f.resolved(target)
 		default:
 			f.guarded(target, 0)
 		}
 	}
+	// AND THE GUARDED FIELDS THE ORG MODEL PARSES. A schedule's cron is a
+	// five-field expression, its timezone an IANA name and its target a
+	// closed set — none of them free text — so prose in any of them
+	// refuses the whole company, and the projection is derived from the
+	// company now. The schedule's own NAME and TASK stay guarded prose,
+	// which is what this case is about; these three are the values it
+	// stops asserting are hidden, because a valid cron has to be a valid
+	// cron.
+	for i := range r.Schedules {
+		r.Schedules[i].Cron = "0 9 * * 1"
+		r.Schedules[i].Timezone = "UTC"
+		r.Schedules[i].Target = org.TargetEach
+	}
 	return r
+}
+
+// seats is one seat of each kind, so every public field of either reaches the
+// projection and is asserted there.
+func (f *filler) seats() []config.Role {
+	f.publicValues = append(f.publicValues,
+		string(org.KindAgent), string(org.KindHuman))
+	return []config.Role{f.role(org.KindAgent), f.role(org.KindHuman)}
 }
 
 // resolved fills a seat field the projection resolves, by what it resolves.
@@ -493,7 +633,7 @@ func (f *filler) resolved(v reflect.Value) {
 // the same phase inside the mapping, so a key written there would be one no
 // chain resolves to and nothing could require it to appear.
 func (f *filler) resolvedLLM(v reflect.Value) {
-	key := f.prose()
+	key := f.label()
 	f.providerKeys = append(f.providerKeys, key)
 	switch field := v.Addr().Interface().(type) {
 	case *config.ProviderKeys:
@@ -505,7 +645,8 @@ func (f *filler) resolvedLLM(v reflect.Value) {
 	}
 }
 
-// unit fills one unit, with a seat and, above depth zero, a child unit.
+// unit fills one unit, with a seat of each kind and, above depth zero, a child
+// unit.
 func (f *filler) unit(depth int) config.Unit {
 	var u config.Unit
 	v := reflect.ValueOf(&u).Elem()
@@ -520,7 +661,15 @@ func (f *filler) unit(depth int) config.Unit {
 			f.guarded(target, 0)
 		}
 	}
-	u.Roles = []config.Role{f.role()}
+	// THE PARSED FIELDS, on [filler.role]'s own reasoning: a unit carries
+	// schedules too, and prose in a cron, a timezone or a target refuses
+	// the whole company.
+	for i := range u.Schedules {
+		u.Schedules[i].Cron = "0 9 * * 1"
+		u.Schedules[i].Timezone = "UTC"
+		u.Schedules[i].Target = org.TargetEach
+	}
+	u.Roles = f.seats()
 	if depth > 0 {
 		u.Children = []config.Unit{f.unit(depth - 1)}
 	}
@@ -592,6 +741,30 @@ func (f *filler) guarded(v reflect.Value, depth int) {
 	}
 }
 
+// adminReader is an administrator's audience — the one a seat's resolved
+// fields reach.
+var adminReader = stream.NewAudience(iam.Principal{Login: "erin.ng",
+	Kind: iam.KindPerson, Seat: "founder", Stage: iam.StageActive,
+	Grants: []iam.Grant{iam.GrantAdmin}}, nil)
+
+// overviewReader is the audience of a person holding no permission at all:
+// the widest the projection reaches, since the overview is everybody's.
+var overviewReader = stream.NewAudience(iam.Principal{Login: "pat.kim",
+	Kind: iam.KindPerson, Seat: "intern", Stage: iam.StageActive,
+	Grants: []iam.Grant{}}, nil)
+
+// projectionOf is the org surface as audience reads it, typed — shaped the
+// one way every surface shapes it ([stream.ShapeFor]).
+func projectionOf(t *testing.T, a *api.App, audience stream.Audience) api.OrgProjection {
+	t.Helper()
+	got := stream.ShapeFor(a.Stream().Org(), audience)
+	projection, ok := got.(api.OrgProjection)
+	if !ok {
+		t.Fatalf("the org surface answers %T, want api.OrgProjection", got)
+	}
+	return projection
+}
+
 // THE PROJECTION SHARES NO MEMORY WITH THE APPLIED COMPANY.
 //
 // The company is shared by every reader of the epoch, and the projection is
@@ -625,13 +798,10 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 	}
 	company := fresh()
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
+		Sources: queries.Sources{Company: companySource(t, company)},
 	})
 
-	projection, ok := a.Stream().Org().(api.OrgProjection)
-	if !ok {
-		t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org())
-	}
+	projection := projectionOf(t, a, adminReader)
 	scribble := func(lists ...[]string) {
 		for _, list := range lists {
 			for i := range list {
@@ -641,7 +811,8 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 	}
 	scribbleSeats := func(seats []api.OrgSeat) {
 		for i := range seats {
-			scribble(seats[i].Responsibilities, seats[i].BehavioralGuidelines, seats[i].Manages)
+			scribble(seats[i].Responsibilities, seats[i].BehavioralGuidelines,
+				seats[i].Manages, seats[i].ToolSources)
 		}
 	}
 	scribble(projection.Policies)
@@ -660,8 +831,8 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S CLOCK IS ON THE ANONYMOUS PROJECTION, AS THE ENGINE RESOLVED IT
-// (ADR-0018).
+// THE COMPANY'S CLOCK IS ON THE OVERVIEW'S PROJECTION, AS THE ENGINE RESOLVED
+// IT (ADR-0018).
 //
 // Every date a dashboard reader is shown is cut on it, so a screen without it
 // cuts "today" on the browser's own zone and disagrees with the engine's own
@@ -671,6 +842,7 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 // still answers `{}`.
 func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 	t.Parallel()
+	reader := overviewReader
 	for _, tc := range []struct {
 		name    string
 		company *config.Company
@@ -682,22 +854,18 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			a := newApp(t, api.Options{
-				Sources: queries.Sources{Company: func() *config.Company { return tc.company }},
+				Sources: queries.Sources{Company: companySource(t, tc.company)},
 			})
-			projection, ok := a.Stream().Org().(api.OrgProjection)
-			if !ok {
-				t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org())
-			}
-			if projection.Timezone != tc.want {
-				t.Errorf("the projection's clock is %q, want %q", projection.Timezone, tc.want)
+			if got := projectionOf(t, a, reader).Timezone; got != tc.want {
+				t.Errorf("the projection's clock is %q, want %q", got, tc.want)
 			}
 		})
 	}
 
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return nil }},
+		Sources: queries.Sources{Company: companySource(t, nil)},
 	})
-	body, err := json.Marshal(a.Stream().Org())
+	body, err := json.Marshal(stream.ShapeFor(a.Stream().Org(), reader))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,16 +876,18 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 }
 
 // WHAT A SEAT RUNS ON AND WHAT IT CAN REACH ARE PUBLISHED AS THE ENGINE
-// RESOLVES THEM.
+// RESOLVES THEM — to an admin, and to nobody else.
 //
 // The model chain is every phase's, the way a turn resolves it: a flat
 // llm_<phase> field wins, a phase naming nothing falls to the seat's llm, and a
 // seat naming nothing lands on the company's `default` provider. The tool
 // sources are the builtins, every shared server, and a per-seat template only
 // where the seat — or its unit — declares credentials for it, which is the
-// grant the engine starts a seat's children by. A human seat runs neither. The
-// budgets are the ceilings as written, company and seat alike, and a window
-// nobody caps is absent rather than zero.
+// grant the engine starts a seat's children by. Both are resolved from the
+// seat AS THE CHART HOLDS IT, the composed org. A human seat runs neither. The
+// budgets are the ceilings in force, company and seat alike, a window nobody
+// caps absent rather than zero — and those every reader is handed too, where
+// the resolved labels they are not.
 func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	t.Parallel()
 	ceiling := func(n int) *int { return &n }
@@ -751,8 +921,10 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 		}},
 	}
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
+		Sources: queries.Sources{Company: companySource(t, company)},
 	})
+	// THE FIXTURE CREDENTIAL IS AN ADMIN'S, so GET /org is the admin's
+	// shape.
 	got := orgOf(t, a)
 
 	if got.TokenBudget == nil || got.TokenBudget.Month == nil || *got.TokenBudget.Month != 40_000_000 ||
@@ -821,11 +993,26 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 		t.Errorf("the CTO's chain covers %d phases, want every one of %d", len(cto.LLM), len(phase.All))
 	}
 
+	// A READER WHO IS NOT AN ADMIN IS HANDED THE SAME TREE WITHOUT THEM, at
+	// every depth — and the budgets all the same.
+	reader := projectionOf(t, a, overviewReader)
+	for name, seat := range map[string]api.OrgSeat{
+		"CTO": reader.Roles[0], "SRE": reader.Units[0].Roles[0],
+	} {
+		if seat.LLM != nil || seat.ToolSources != nil {
+			t.Errorf("a reader who is not an admin is handed %s's chain %v and tool sources %v",
+				name, seat.LLM, seat.ToolSources)
+		}
+	}
+	if b := reader.Roles[0].TokenBudget; b == nil || b.Day == nil || *b.Day != 2_000_000 {
+		t.Errorf("a reader who is not an admin is handed the CTO's budget %+v, want its day of 2000000", b)
+	}
+
 	// A company with no provider has no chain to show, and says nothing
 	// rather than an empty one.
 	bare := &config.Company{Name: "Acme", Roles: []config.Role{{Name: "CTO"}}}
 	b := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return bare }},
+		Sources: queries.Sources{Company: companySource(t, bare)},
 	})
 	if seat := orgOf(t, b).Roles[0]; seat.LLM != nil || !slices.Equal(seat.ToolSources, []string{"builtin"}) {
 		t.Errorf("with no provider and no server, the seat carries %v and %v; want no chain and only the builtins",
@@ -849,7 +1036,7 @@ func TestTheOrgProjectionPublishesHowEachAgentIsDrawn(t *testing.T) {
 		},
 	}
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
+		Sources: queries.Sources{Company: companySource(t, company)},
 	})
 	got := orgOf(t, a)
 	for i, want := range []*api.OrgAvatar{

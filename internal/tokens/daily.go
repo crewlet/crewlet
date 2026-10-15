@@ -1,6 +1,7 @@
 package tokens
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"time"
@@ -148,7 +149,8 @@ func (r Range) Until() time.Time { return r.Last.End }
 //
 // It is the usage domain's `usage_tokens` row with the seat named as that
 // day's record named it. Bucket.Calls is the row's own call count, never one
-// per cell.
+// per cell. AgentID is what the fold keys the seat on; Handle and Role are
+// only what it was CALLED that day, read for a seat the chart no longer holds.
 type Cell struct {
 	Day     string
 	AgentID string
@@ -168,13 +170,29 @@ type Cell struct {
 	Bucket
 }
 
-// who is the cell's spender as a set of seats counts it: the agent id, or the
-// person's handle apart from every id.
+// who is the cell's spender as a set of spenders counts it: the key every fold
+// here files it under ([spenderKey]).
 func (c Cell) who() string {
+	return spenderKey(c.AgentID, c.Role, personOf(c.Handle, c.Person))
+}
+
+// handleNow is the handle a row for this cell's spender links by: the chart's
+// for a seat it holds ([Options.Seats]' rule — none for one it does not), and a
+// person's own handle always, since it is the only identity their row has.
+func (c Cell) handleNow(seat Seat) string {
 	if c.Person {
-		return personKey(c.Handle)
+		return c.Handle
 	}
-	return orUnknown(c.AgentID)
+	return seat.Handle
+}
+
+// personOf is the person a row was spent for — its handle when the row is a
+// person's, and nobody otherwise — in the shape [spenderKey] takes.
+func personOf(handle string, person bool) string {
+	if person {
+		return handle
+	}
+	return ""
 }
 
 // SeatDay is one seat's ended turns on one company day, on one node: the
@@ -195,8 +213,13 @@ type DailyOptions struct {
 	// did the filtering.
 	Range Range
 
-	// Seat is the handle the caller narrowed to, echoed on the answer.
-	Seat string
+	// AgentID is the seat the caller narrowed to, by its id, echoed on the
+	// answer with its handle now ([Rollup.Seat]).
+	AgentID string
+
+	// Seats is the chart ([Seats]), as [Options.Seats] is: what each seat
+	// and person row is called and links to.
+	Seats Seats
 
 	// Horizon is stated on the answer.
 	Horizon Horizon
@@ -212,11 +235,12 @@ type DailyOptions struct {
 // (which the live window cannot count).
 //
 // A seat is keyed on its AGENT ID — the identity every node derives alike from
-// the org name and the handle — and named by the newest row that named it,
-// because the cells arrive in day order and a renamed role's newest name is
-// the one a reader recognises. A PERSON is keyed on their handle, apart from
-// every seat, and carries no turn counts: a person takes no turns, and a zero
-// would read as a seat that ended none.
+// the org name and the seat's handle — and named from the org
+// ([DailyOptions.Seats]), or, for a seat the chart no longer holds, by the
+// newest day that named it, whatever order the rows arrive in. A PERSON is
+// keyed on their handle ([PersonKey]), apart from every seat, named from their
+// human seat the same way, and carries no turn counts: a person takes no turns,
+// and a zero would read as a seat that ended none.
 func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 	h := opts.Horizon
 	out := Rollup{
@@ -225,7 +249,8 @@ func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 		From:    opts.Range.First.Label,
 		To:      opts.Range.Last.Label,
 		Days:    opts.Range.Days(),
-		Seat:    opts.Seat,
+		AgentID: opts.AgentID,
+		Seat:    opts.Seats.handle(opts.AgentID),
 		Horizon: &h,
 
 		ByPhase:  []PhaseRow{},
@@ -238,29 +263,29 @@ func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 	byModel := map[string]*Bucket{}
 	byWorker := map[string]*Bucket{}
 	byAgent := map[string]*AgentRow{}
+	names := map[string]*label{}
 	providers := providerFold{}
 
-	agentFor := func(id, handle, role string, person bool) *AgentRow {
-		key := orUnknown(id)
-		if person {
-			key = personKey(handle)
-		}
+	// agentFor is the row a day's row is filed under, keyed on its spender
+	// ([spenderKey]) and named from the chart or the newest day — see [label].
+	// A row that carried no role is named by the handle it carried, the one
+	// name it has, rather than "unknown".
+	agentFor := func(id, handle, role, day string, person bool) (*AgentRow, string) {
+		key := spenderKey(id, role, personOf(handle, person))
+		seat, known := opts.Seats.lookup(key)
 		a := byAgent[key]
 		if a == nil {
-			a = &AgentRow{AgentID: id, Person: person, ByPhase: map[string]*Bucket{}}
-			if !person {
+			a = &AgentRow{AgentID: id, Handle: seat.Handle, ByPhase: map[string]*Bucket{}}
+			if person {
+				a.AgentID, a.Handle, a.Person = "", handle, true
+			} else {
 				zero, none := 0, 0
 				a.Turns, a.Failed = &zero, &none
 			}
 			byAgent[key] = a
 		}
-		if handle != "" {
-			a.Handle = handle
-		}
-		if role != "" {
-			a.Role = role
-		}
-		return a
+		a.Role = labelFor(names, key).fold(cmp.Or(role, handle), day, seat, known)
+		return a, key
 	}
 
 	for _, c := range cells {
@@ -273,14 +298,13 @@ func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 		if c.Phase == PhaseAuxiliary && c.Worker != "" {
 			bucketFor(byWorker, c.Worker).merge(c.Bucket)
 		}
-		providers.add(c.ProviderKey, model, seatName(c.Handle, c.Role, c.AgentID), c.Bucket)
-
-		a := agentFor(c.AgentID, c.Handle, c.Role, c.Person)
+		a, key := agentFor(c.AgentID, c.Handle, c.Role, c.Day, c.Person)
+		providers.add(c.ProviderKey, model, key, c.Bucket)
 		a.merge(c.Bucket)
 		bucketFor(a.ByPhase, phase).merge(c.Bucket)
 	}
 	for _, s := range seats {
-		a := agentFor(s.AgentID, s.Handle, s.Role, false)
+		a, _ := agentFor(s.AgentID, s.Handle, s.Role, s.Day, false)
 		*a.Turns += s.Turns
 		*a.Failed += s.Failed
 	}
@@ -295,29 +319,14 @@ func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 		out.ByWorker = append(out.ByWorker, WorkerRow{Worker: worker, Bucket: *b})
 	}
 	for _, a := range byAgent {
-		if a.Role == "" {
-			a.Role = orUnknown(a.Handle)
-		}
 		out.ByAgent = append(out.ByAgent, *a)
 	}
-	out.ByProvider = providers.rows()
+	out.ByProvider = providers.rows(seatNames(opts.Seats, names))
 
 	byTokensThen(out.ByPhase, func(r PhaseRow) (int, string) { return r.TotalTokens, r.Phase })
 	byTokensThen(out.ByModel, func(r ModelRow) (int, string) { return r.TotalTokens, r.Model })
 	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) { return r.TotalTokens, r.Worker })
-	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, agentTie(r, r.AgentID) })
+	// Ties as the live rollup's ([agentTie]).
+	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, agentTie(r) })
 	return out
-}
-
-// seatName is how a seat is named in a "used by" list and on a seat band: its
-// handle, which every surface links by; its role where a row carried no
-// handle; its agent id past that; "unknown" when a row carried nothing at all.
-func seatName(handle, role, agentID string) string {
-	switch {
-	case handle != "":
-		return handle
-	case role != "":
-		return role
-	}
-	return orUnknown(agentID)
 }

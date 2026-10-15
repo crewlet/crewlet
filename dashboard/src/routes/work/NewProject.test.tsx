@@ -1,14 +1,16 @@
 /**
- * New project: who can own one, the key it takes, and the hand-off to Edit
- * org, which is where the project is made.
+ * New project: who can own one, the key it takes, who may make one, and the
+ * hand-off to Edit org, which is where the project is made.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, clearToken, storeToken } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import {
   NewProjectDialog,
@@ -24,26 +26,45 @@ const doc: CompanyDocument = {
   roles: [
     { name: "Product Manager", handle: "pm" },
     { name: "Founder", handle: "miles", project: "FAIR" },
-    { name: "Software Engineer", unit: "Engineering" },
+    { name: "Software Engineer", handle: "swe", unit: "engineering" },
+    { name: "Ada Founder", handle: "ada", kind: "human" },
   ],
   units: [
     {
       name: "Engineering",
+      id: "engineering",
       project: "ENG",
-      children: [{ name: "Design", type: "team" }],
+      children: [{ name: "Design", id: "design", type: "team" }],
     },
-    { name: "User research", type: "squad" },
+    { name: "User research", id: "research", type: "squad" },
   ],
 } as CompanyDocument;
 
 describe("who can own a project", () => {
-  test("teams without one, then seats above every team without one", () => {
-    expect(ownersOf(doc).map((o) => [o.name, o.kind, o.query])).toEqual([
-      ["Design", "team", { unit: "Design" }],
-      ["User research", "team", { unit: "User research" }],
-      ["Product Manager", "seat", { seat: "pm" }],
+  // BY IDENTITY: Edit org finds a team by its key and a seat by its handle,
+  // and two teams may share a name. A PERSON OWNS NO PROJECT: the engine
+  // refuses a human seat one, so Ada's seat is not offered.
+  test("teams without one, then agent seats above every team without one, each by its identity", () => {
+    expect(ownersOf(doc).map((o) => [o.id, o.name, o.kind, o.query])).toEqual([
+      ["unit:design", "Design", "team", { unit: "design" }],
+      ["unit:research", "User research", "team", { unit: "research" }],
+      ["seat:pm", "Product Manager", "seat", { seat: "pm" }],
     ]);
     expect(ownersOf(null)).toEqual([]);
+  });
+
+  test("two teams sharing a name are two owners", () => {
+    const twins = {
+      name: "X",
+      units: [
+        { name: "Ops", id: "ops-east" },
+        { name: "Ops", id: "ops-west" },
+      ],
+    } as CompanyDocument;
+    expect(ownersOf(twins).map((o) => o.query)).toEqual([
+      { unit: "ops-east" },
+      { unit: "ops-west" },
+    ]);
   });
 });
 
@@ -60,7 +81,7 @@ describe("the key", () => {
   });
 
   test("says what is wrong with it, or what its tasks will be called", () => {
-    const owner: ProjectOwner = { id: "unit:Design", name: "Design", kind: "team", query: {} };
+    const owner: ProjectOwner = { id: "unit:design", name: "Design", kind: "team", query: {} };
     const free = { inDocument: false, inTracker: false };
     expect(keyVerdict("", owner, free)).toEqual({
       ok: false,
@@ -88,19 +109,34 @@ describe("the key", () => {
 });
 
 describe("the dialog", () => {
-  beforeEach(() => storeToken("operator-token"));
   afterEach(() => {
     cleanup();
-    clearToken();
     location.hash = "#/";
   });
 
-  function mount(taken: string[] = []) {
+  /** The reader: an administrator holding Admin, unless a case says otherwise. */
+  const ADMIN = {
+    login: "ada.admin",
+    grants: ["admin"],
+    handle: "pm",
+    owner: "pm",
+    name: "Ada",
+    kind: "human",
+    acts: [],
+    config_writer: true,
+    config_managed_by: [],
+  };
+
+  function mount(taken: string[] = [], viewer: Record<string, unknown> = ADMIN) {
     const store = new Store();
+    store.setConnected(true);
     const socket = new LiveSocket(store);
+    const asked: string[] = [];
     (
       socket as unknown as { query: (what: string, p?: { key?: string }) => Promise<unknown> }
     ).query = (what, params) => {
+      asked.push(what);
+      if (what === "viewer") return Promise.resolve(viewer);
       if (what === "config") return Promise.resolve(doc);
       if (what === "work_project") {
         return taken.includes(params?.key ?? "")
@@ -111,11 +147,14 @@ describe("the dialog", () => {
     };
     render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <NewProjectDialog onClose={() => {}} />
-        </Router>
+        <ViewerProvider>
+          <Router>
+            <NewProjectDialog onClose={() => {}} />
+          </Router>
+        </ViewerProvider>
       </ClientContext.Provider>,
     );
+    return asked;
   }
 
   test("an owner and a free key continue in Edit org, holding the key for that owner", async () => {
@@ -132,7 +171,21 @@ describe("the dialog", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Continue in Edit org" }));
     });
-    await waitFor(() => expect(location.hash).toBe("#/agents/edit?unit=Design&project=DES"));
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit?unit=design&project=DES"));
+  });
+
+  // A PROJECT KEY IS THE COMPANY GRANT'S: a lead's write that sets one is
+  // refused, so a reader without Admin (a lead on their own team
+  // included) is told the gate's sentence, and nothing is read or offered.
+  test("a reader without Admin is held with the gate's sentence, and the document is not read", async () => {
+    const asked = mount([], { ...ADMIN, login: "lee.lead", grants: ["tracker"] });
+    const dialog = await screen.findByRole("dialog", { name: "New project" });
+    await waitFor(() => expect(dialog.textContent).toContain(CONFIG_WRITE_REASONS.no_grant));
+    expect(screen.queryByRole("textbox", { name: "Project key" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Continue in Edit org" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(asked).not.toContain("config");
   });
 
   test("a key a project already has holds Continue with the reason", async () => {

@@ -7,19 +7,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -42,6 +48,10 @@ const (
 // that must survive an edit, and an integration secret. The integration is
 // GitLab because its signing secret has a SHAPE the validator checks, which
 // makes it the one whose redaction cannot be faked by a fixture.
+//
+// IT HAS NO ORG CHART: the cases written over it are about the settings
+// around one, and the seats and units have a fixture of their own (orgDoc, in
+// seatentity_test.go).
 const companyDoc = `
 name: Acme
 providers:
@@ -55,13 +65,6 @@ integrations:
     enabled: true
     url: https://gitlab.example.com
     signing_secret: ` + signingSecret + `
-roles:
-  - name: CEO
-    handle: ceo
-    llm: zulu
-  - name: CTO
-    handle: cto
-    llm: zulu
 `
 
 // surface is the service plus everything a test needs to look at.
@@ -72,11 +75,63 @@ type surface struct {
 	plane   coord.Plane
 	svc     *configapi.Service
 	cipher  secrets.Cipher
+
+	// grants are what the caller [surface.do] attaches carries: every one,
+	// unless a case about authority narrows them, so a case about what the
+	// surface DOES is never quietly a case about who may.
+	grants []iam.Grant
+
+	// caller replaces the Tier A token [surface.do] attaches, for a case
+	// about who a write is recorded as.
+	caller *iam.Principal
+
+	// held is what the directory this surface asks says holds each seat,
+	// and directoryDown makes every read of it fail; asked is every list of
+	// seats the surface asked about, in order, and askedAt the instant it
+	// asked at.
+	held          map[string]configapi.SeatHolder
+	directoryDown error
+	asked         [][]string
+	askedAt       []time.Time
 }
 
-func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
+// holders is the directory a case's surface asks, answering from s.held.
+func (s *surface) holders(_ context.Context, seats []string, now time.Time) (
+	map[string]configapi.SeatHolder, error) {
+
+	s.asked = append(s.asked, slices.Clone(seats))
+	s.askedAt = append(s.askedAt, now)
+	if s.directoryDown != nil {
+		return nil, s.directoryDown
+	}
+	out := map[string]configapi.SeatHolder{}
+	for _, seat := range seats {
+		if held, ok := s.held[seat]; ok {
+			out[seat] = held
+		}
+	}
+	return out, nil
+}
+
+// newSurface is the service over a store, a plane and a KEYRING of the case's
+// own — the three [configapi.New] requires, the last because every node holds
+// one and a surface built without it stored revisions no node would apply.
+func newSurface(t *testing.T) *surface {
 	t.Helper()
-	return newSurfaceWith(t, func(o *configapi.Options) { o.Cipher = cipher })
+	return newSurfaceWith(t, nil)
+}
+
+// testCipher is a fresh keyring for one case: two surfaces built apart share
+// no key, exactly as two fleets do not.
+func testCipher(t *testing.T) secrets.Cipher {
+	t.Helper()
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key(t)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cipher
 }
 
 // newSurfaceWith is newSurface with the options a case needs to vary, such as
@@ -88,11 +143,12 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 
 	s := &surface{
 		mux: http.NewServeMux(), configs: db.Configs(), db: db,
-		plane: coordmemory.NewFleet(),
+		plane: coordmemory.NewFleet(), grants: iam.AllGrants,
 	}
 	opts := configapi.Options{
-		Store: db, Plane: s.plane, Bootstrap: durableBoot(t),
-		Now: func() time.Time { return pinned },
+		Store: db, Plane: s.plane, Cipher: testCipher(t),
+		Holders: s.holders,
+		Now:     func() time.Time { return pinned },
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -103,7 +159,9 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 		t.Fatalf("configapi.New: %v", err)
 	}
 	s.svc = svc
-	s.svc.Routes(s.mux)
+	if err := s.svc.Routes(s.mux); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
 	return s
 }
 
@@ -117,8 +175,7 @@ func (s *surface) service() *configapi.Service { return s.svc }
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
 const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
-	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}},` +
-	`"roles":[{"name":"CEO","handle":"ceo","llm":"zulu"}]}`
+	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}}}`
 
 func (s *surface) activeDocument(t *testing.T) string {
 	t.Helper()
@@ -139,13 +196,55 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	// THE CALLER THE GUARD WOULD HAVE RESOLVED, attached the way it
+	// attaches one: every route here is decided on a grant, so a request
+	// carrying no principal is refused before it reaches the surface.
+	//
+	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+	// token: presenting it is the proof, so a write here is decided on its
+	// grant alone.
+	caller := iam.Principal{
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: s.grants,
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	if s.caller != nil {
+		caller = *s.caller
+	}
+	req = req.WithContext(iam.WithPrincipal(req.Context(), caller))
 	res := httptest.NewRecorder()
 	s.mux.ServeHTTP(res, req)
 	return res
 }
 
-// seed stores a revision the way the node's own seeding does.
-func (s *surface) seed(t *testing.T, doc string, cipher secrets.Cipher) string {
+// seed stores a revision the way the node's own seeding does: sealed under
+// the node's keyring, which is this surface's.
+func (s *surface) seed(t *testing.T, doc string) string {
+	t.Helper()
+	return s.seedSealedUnder(t, doc, s.cipher)
+}
+
+// seedSealedUnder is seed for a revision sealed under a keyring the case
+// names — one this surface does not hold, for a case about that.
+func (s *surface) seedSealedUnder(t *testing.T, doc string, cipher secrets.Cipher) string {
+	t.Helper()
+	payload, err := secrets.Seal(cipher, companyJSON(t, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.seedPayload(t, payload)
+}
+
+// seedUnsealed stores a revision WITHOUT a seal, as a build from before the
+// keyring was required wrote one into a node's own store. No writer this
+// build has can produce it, which is why the case plants the bytes.
+func (s *surface) seedUnsealed(t *testing.T, doc string) string {
+	t.Helper()
+	return s.seedPayload(t, companyJSON(t, doc))
+}
+
+// companyJSON is an authored document as the bytes a revision stores.
+func companyJSON(t *testing.T, doc string) []byte {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
@@ -155,12 +254,14 @@ func (s *surface) seed(t *testing.T, doc string, cipher secrets.Cipher) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := secrets.Seal(cipher, document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	return document
+}
+
+// seedPayload stores payload as the active revision, byte for byte.
+func (s *surface) seedPayload(t *testing.T, payload []byte) string {
+	t.Helper()
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Source:        "test", CreatedBy: "operator", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
@@ -186,7 +287,7 @@ func TestAnUnconfiguredNodeSaysSoRatherThanFailing(t *testing.T) {
 	// A deployment before its first import has no configuration. Reporting
 	// that as an error would make a working new install look broken on the
 	// operator's first look at it.
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodGet, "/config", "", nil)
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", res.Code)
@@ -210,8 +311,8 @@ func TestTheActiveConfigComesBackRedacted(t *testing.T) {
 	// This surface is guarded, and it still does not serve credentials:
 	// a bearer token authorises reading the COMPANY, not extracting every
 	// secret it holds into a browser's network log.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config", "", nil)
 	if res.Code != http.StatusOK {
@@ -234,8 +335,8 @@ func TestTheConfigCanBeReadAsYAML(t *testing.T) {
 	// YAML is the form an operator edits and the form every example is
 	// written in. A surface that only spoke JSON would make "read it,
 	// change a line, send it back" a format conversion.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config?format=yaml", "", nil)
 	if res.Code != http.StatusOK {
@@ -258,9 +359,9 @@ func TestTheHistoryIsMetadataOnly(t *testing.T) {
 	// A listing carrying every payload would move the whole history
 	// through the process to render a table of summaries, and the
 	// documents are the largest rows in the database.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
-	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1), nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
+	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1))
 
 	res := s.do(t, http.MethodGet, "/config/revisions", "", nil)
 	if res.Code != http.StatusOK {
@@ -292,8 +393,8 @@ func TestPaginationIsClampedNotRefused(t *testing.T) {
 	// A caller asking for more than the ceiling has made no mistake worth a
 	// 400 — they want everything. A page size nobody bounds is one tab
 	// pulling the whole history through a process every other tab shares.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 	if got := s.do(t, http.MethodGet, "/config/revisions?limit=100000", "", nil).Code; got != http.StatusOK {
 		t.Errorf("an oversized limit got %d, want 200", got)
 	}
@@ -307,8 +408,8 @@ func TestPaginationIsClampedNotRefused(t *testing.T) {
 
 func TestOneRevisionComesBackWithItsPayload(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/revisions/"+id, "", nil)
 	if res.Code != http.StatusOK {
@@ -334,7 +435,7 @@ func TestOneRevisionComesBackWithItsPayload(t *testing.T) {
 
 func TestAnUnknownRevisionIsNotFound(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	for _, path := range []string{
 		"/config/revisions/00000000-0000-0000-0000-000000000000",
 		"/config/revisions/00000000-0000-0000-0000-000000000000/diff",
@@ -353,12 +454,10 @@ func TestADiffNamesWhatChanged(t *testing.T) {
 	// form is JSON produced by marshalling a struct, so a re-ordered map
 	// rewrites lines that mean nothing. What an operator asks is "what
 	// changed about the company".
-	s := newSurface(t, nil)
-	first := s.seed(t, companyDoc, nil)
-	grown := strings.Replace(companyDoc,
-		"  - name: CTO\n    handle: cto\n    llm: zulu\n",
-		"  - name: CTO\n    handle: cto\n    llm: zulu\n  - name: Designer\n    handle: designer\n    llm: zulu\n", 1)
-	s.seed(t, grown, nil)
+	s := newSurface(t)
+	first := s.seed(t, serverDoc)
+	grown := serverDoc + "  - {name: notion, command: notion-mcp}\n"
+	s.seed(t, grown)
 
 	res := s.do(t, http.MethodGet, "/config/revisions/"+first+"/diff?against=active", "", nil)
 	if res.Code != http.StatusOK {
@@ -379,10 +478,10 @@ func TestADiffNamesWhatChanged(t *testing.T) {
 	for _, change := range body.Changes {
 		paths = append(paths, change.Path+":"+change.Kind)
 	}
-	// The active side has the extra seat, and the target does not — so
+	// The active side has the extra server, and the target does not — so
 	// from the target's point of view it is removed.
-	if !strings.Contains(strings.Join(paths, " "), "roles[2]") {
-		t.Errorf("the diff does not mention the seat that differs: %v", paths)
+	if !strings.Contains(strings.Join(paths, " "), "mcp_servers[1]") {
+		t.Errorf("the diff does not mention the server that differs: %v", paths)
 	}
 }
 
@@ -391,9 +490,9 @@ func TestADiffNeverCarriesEitherSecret(t *testing.T) {
 	// Comparing raw documents would put the OLD and the NEW value of a
 	// rotated credential in one response — strictly worse than the read
 	// this surface already refuses to serve.
-	s := newSurface(t, nil)
-	first := s.seed(t, companyDoc, nil)
-	s.seed(t, strings.Replace(companyDoc, signingSecret, rotatedSigningSecret, 1), nil)
+	s := newSurface(t)
+	first := s.seed(t, companyDoc)
+	s.seed(t, strings.Replace(companyDoc, signingSecret, rotatedSigningSecret, 1))
 
 	res := s.do(t, http.MethodGet, "/config/revisions/"+first+"/diff", "", nil)
 	if res.Code != http.StatusOK {
@@ -409,51 +508,12 @@ func TestADiffNeverCarriesEitherSecret(t *testing.T) {
 
 // --- writes ----------------------------------------------------------------
 
-// durableBoot is a deployment the fixture company can run on: an embedded
-// stream that persists, so the cross-tier rule has nothing to refuse.
-func durableBoot(t *testing.T) *config.Bootstrap {
-	t.Helper()
-	return &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}}
-}
-
-// A DOCUMENT THE DEPLOYMENT CANNOT RUN IS REFUSED AT THE WRITE, naming the Tier
-// A field, rather than activated and then refused by every node's apply.
-//
-// The write judged the company alone. The apply judges it against the node's
-// own Tier A too ([config.CheckTiers]) — the engine's own tracker on a stream
-// kept in memory is a log a restart recreates empty — so a PUT turning on a
-// native backend was answered 201, activated, and refused everywhere a moment
-// later, leaving the fleet on its old epoch with nothing in the answer saying
-// why.
-func TestAWriteTheDeploymentCannotRunIsRefused(t *testing.T) {
-	t.Parallel()
-	s := newSurfaceWith(t, func(o *configapi.Options) {
-		o.Bootstrap = &config.Bootstrap{} // an embedded stream, in memory
-	})
-	res := s.do(t, http.MethodPut, "/config", companyDoc,
-		map[string]string{"X-Summary": "turn on the native tracker"})
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("got %d, want 400 — a document every node refuses to apply "+
-			"was accepted: %s", res.Code, res.Body)
-	}
-	body := decode(t, res)
-	if body["error"] != "validation_error" {
-		t.Fatalf("error = %v (%s)", body["error"], res.Body)
-	}
-	if !strings.Contains(res.Body.String(), "stream.store_dir") {
-		t.Errorf("the refusal does not name the Tier A field to change: %s", res.Body)
-	}
-	if got := s.do(t, http.MethodGet, "/config", "", nil).Code; got == http.StatusOK {
-		t.Error("the refused document was activated anyway")
-	}
-}
-
 func TestAWriteNeedsASummary(t *testing.T) {
 	t.Parallel()
 	// The history is what an operator reads at 3am to find the change that
 	// broke something. A list of revisions with no summaries is a list of
 	// uuids.
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", companyDoc, nil)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.Code)
@@ -463,9 +523,50 @@ func TestAWriteNeedsASummary(t *testing.T) {
 	}
 }
 
+// EVERY REFUSAL HERE CARRIES THE SENTENCE ITS CODE HAS.
+//
+// `/config` is the surface the org builder's every save goes through, and it
+// was the one whose refusals were hand-built `{"error": code}` objects: a
+// screen rendering the envelope showed the org builder a code and nothing a
+// person could act on. A refusal answered through internal/api/httpjson
+// carries the code's own sentence, so the three shapes a save meets most —
+// nothing configured, no summary, somebody else's change landed first —
+// are asserted on the sentence as well as the code.
+func TestEveryConfigRefusalCarriesItsSentence(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	check := func(what string, res *httptest.ResponseRecorder, status int, code httpjson.Code) {
+		t.Helper()
+		if res.Code != status {
+			t.Fatalf("%s: got %d, want %d: %s", what, res.Code, status, res.Body)
+		}
+		body := decode(t, res)
+		if body["error"] != string(code) {
+			t.Errorf("%s: error = %v, want %s", what, body["error"], code)
+		}
+		if body["message"] != code.Message() {
+			t.Errorf("%s: message = %v, want the code's own sentence", what, body["message"])
+		}
+	}
+	check("a read before anything is configured", s.do(t, http.MethodGet, "/config", "", nil),
+		http.StatusNotFound, httpjson.CodeNoActiveRevision)
+	check("a write with no summary", s.do(t, http.MethodPut, "/config", companyDoc, nil),
+		http.StatusBadRequest, httpjson.CodeSummaryRequired)
+
+	base := s.seed(t, companyDoc)
+	if got := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Theirs", 1),
+		map[string]string{"X-Summary": "theirs"}).Code; got != http.StatusCreated {
+		t.Fatalf("the first write got %d", got)
+	}
+	check("a write somebody else's beat", s.do(t, http.MethodPut, "/config",
+		strings.Replace(companyDoc, "Acme", "Ours", 1),
+		map[string]string{"X-Summary": "ours", "If-Match": base}),
+		http.StatusConflict, httpjson.CodeRevisionAdvanced)
+}
+
 func TestAWriteActivatesANewRevision(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", companyDoc,
 		map[string]string{"X-Summary": "first import"})
 	if res.Code != http.StatusCreated {
@@ -491,8 +592,8 @@ func TestAWriteIsAFullReplacement(t *testing.T) {
 	// Not a merge: a merge would make deleting a role impossible through
 	// this surface, which is the one operation an operator most needs to
 	// be sure of.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 	shrunk := strings.Replace(companyDoc, "  - name: CTO\n    handle: cto\n    llm: zulu\n", "", 1)
 
 	if got := s.do(t, http.MethodPut, "/config", shrunk,
@@ -511,8 +612,8 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 	// fetched the config, changed one line and sent it back would replace
 	// every credential in the company with the mask — silently, and only
 	// discovered when each integration started failing to authenticate.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	fetched := s.do(t, http.MethodGet, "/config?format=yaml", "", nil)
 	if fetched.Code != http.StatusOK {
@@ -530,11 +631,7 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 	}
 
 	// The credentials came back, and the edit landed.
-	active, found, err := s.configs.Active(t.Context())
-	if err != nil || !found {
-		t.Fatal(err)
-	}
-	stored, err := config.DecodeCompany(active.Payload)
+	stored, err := config.DecodeCompany([]byte(s.activeDocument(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,8 +648,8 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 
 func TestAnInvalidDocumentIsRefusedWithItsReason(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	broken := strings.Replace(companyDoc, "llm: zulu", "llm: nonexistent", 1)
+	s := newSurface(t)
+	broken := strings.Replace(companyDoc, "type: anthropic", "type: nonexistent", 1)
 	res := s.do(t, http.MethodPut, "/config", broken,
 		map[string]string{"X-Summary": "break it"})
 	if res.Code != http.StatusBadRequest {
@@ -577,7 +674,7 @@ func TestAnUnknownFieldIsRefusedAtTheDoor(t *testing.T) {
 	// belongs here and not on the stored form: this is where a person's
 	// document arrives, and a typo is a mistake to catch rather than a peer
 	// running a newer build.
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", companyDoc+"\nnaem: typo\n",
 		map[string]string{"X-Summary": "typo"})
 	if res.Code != http.StatusBadRequest {
@@ -592,8 +689,8 @@ func TestConcurrentEditorsAreToldRatherThanOverwritten(t *testing.T) {
 	t.Parallel()
 	// Two operators editing one company through a full-document PUT is a
 	// last-writer-wins race that silently discards the other's change.
-	s := newSurface(t, nil)
-	base := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	base := s.seed(t, companyDoc)
 
 	// Somebody else writes first.
 	if got := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Theirs", 1),
@@ -617,8 +714,8 @@ func TestConcurrentEditorsAreToldRatherThanOverwritten(t *testing.T) {
 
 func TestAMatchingPreconditionWrites(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	base := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	base := s.seed(t, companyDoc)
 	res := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base})
 	if res.Code != http.StatusCreated {
@@ -630,7 +727,7 @@ func TestAPreconditionAgainstNothingIsRefused(t *testing.T) {
 	t.Parallel()
 	// If-Match names a revision to match, and there is none. Accepting it
 	// would let a client believe it had won a race that was never run.
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", companyDoc,
 		map[string]string{"X-Summary": "first", "If-Match": "some-revision"})
 	if res.Code != http.StatusPreconditionFailed {
@@ -645,9 +742,9 @@ func TestARevertIsANewRevision(t *testing.T) {
 	// Never a pointer moved backwards. The history stays append-only, so
 	// "we reverted at 04:12" is a fact somebody can find later — and the
 	// epoch keeps advancing, which is what makes every node reconcile.
-	s := newSurface(t, nil)
-	first := s.seed(t, companyDoc, nil)
-	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Broken", 1), nil)
+	s := newSurface(t)
+	first := s.seed(t, companyDoc)
+	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Broken", 1))
 
 	res := s.do(t, http.MethodPost, "/config/revisions/"+first+"/revert", "", nil)
 	if res.Code != http.StatusCreated {
@@ -675,34 +772,87 @@ func TestRevertingToAnUnreadableRevisionIsRefused(t *testing.T) {
 	t.Parallel()
 	// Activating a document every node will fail to read is worse than
 	// refusing, and finding out now is the point.
-	cipher, err := secrets.NewCipher(secrets.Keyring{
-		ActiveID: "k1", Keys: map[string][]byte{"k1": key(t)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	// Sealed under a keyring this surface does not have.
-	sealedID := s.seed(t, companyDoc, cipher)
+	sealedID := s.seedSealedUnder(t, companyDoc, testCipher(t))
 
 	res := s.do(t, http.MethodPost, "/config/revisions/"+sealedID+"/revert", "", nil)
+	refusedUnreadable(t, res, httpjson.CodeUnreadableRevision, sealedID, "secrets.keys")
+}
+
+// refusedUnreadable asserts the refusal a revision this node cannot open is
+// answered with: 409, the code its cause names, the revision, the code's own
+// sentence as the message and a hint carrying remedy.
+func refusedUnreadable(t *testing.T, res *httptest.ResponseRecorder,
+	code httpjson.Code, revision, remedy string) map[string]any {
+	t.Helper()
 	if res.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409", res.Code)
+		t.Fatalf("got %d, want 409: %s", res.Code, res.Body)
 	}
-	if decode(t, res)["error"] != "unreadable_revision" {
-		t.Errorf("body = %s", res.Body)
+	body := decode(t, res)
+	if body["error"] != string(code) {
+		t.Errorf("error = %v, want %s", body["error"], code)
+	}
+	if body["message"] != code.Message() {
+		t.Errorf("message = %q, want the %s sentence", body["message"], code)
+	}
+	if body["revision_id"] != revision {
+		t.Errorf("revision_id = %v, want %s", body["revision_id"], revision)
+	}
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, remedy) {
+		t.Errorf("hint = %q, want it to name %q", hint, remedy)
+	}
+	return body
+}
+
+// A REVISION STORED WITHOUT A SEAL IS REFUSED BY EVERY READER, naming the
+// import that brings its document back sealed.
+//
+// A node reads only sealed revisions — a plaintext one could have been written
+// by anything that reached the store — so it is neither shown nor applied. It
+// has its own code rather than the key's, whose message would tell the caller
+// to put back a key that was never involved.
+//
+// Mutation: answer it under the key's code and the message names a key.
+func TestAnUnsealedRevisionIsRefusedNamingTheImport(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	plainID := s.seedUnsealed(t, companyDoc)
+
+	for _, req := range []struct{ method, path, body string }{
+		{http.MethodGet, "/config", ""},
+		{http.MethodGet, "/config/references", ""},
+		{http.MethodGet, "/config/revisions/" + plainID, ""},
+		{http.MethodPost, "/config/reload", ""},
+	} {
+		t.Run(req.method+" "+req.path+" while active", func(t *testing.T) {
+			res := s.do(t, req.method, req.path, req.body, nil)
+			refusedUnreadable(t, res, httpjson.CodeUnsealedRevision, plainID,
+				"crewlet config import")
+		})
+	}
+
+	s.seed(t, companyDoc)
+	for _, req := range []struct{ method, path string }{
+		{http.MethodGet, "/config/revisions/" + plainID},
+		{http.MethodGet, "/config/revisions/" + plainID + "/diff?against=active"},
+		{http.MethodPost, "/config/revisions/" + plainID + "/revert"},
+	} {
+		t.Run(req.method+" "+req.path+" once superseded", func(t *testing.T) {
+			res := s.do(t, req.method, req.path, "", nil)
+			refusedUnreadable(t, res, httpjson.CodeUnsealedRevision, plainID,
+				"crewlet config import")
+		})
+	}
+	// And the sealed revision that superseded it is served.
+	if res := s.do(t, http.MethodGet, "/config", "", nil); res.Code != http.StatusOK {
+		t.Errorf("GET /config over a sealed active revision = %d: %s", res.Code, res.Body)
 	}
 }
 
 func TestASealedStoreRoundTripsThroughTheSurface(t *testing.T) {
 	t.Parallel()
-	cipher, err := secrets.NewCipher(secrets.Keyring{
-		ActiveID: "k1", Keys: map[string][]byte{"k1": key(t)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := newSurface(t, cipher)
+	s := newSurface(t)
 	if got := s.do(t, http.MethodPut, "/config", companyDoc,
 		map[string]string{"X-Summary": "sealed import"}).Code; got != http.StatusCreated {
 		t.Fatalf("put: %d", got)
@@ -713,7 +863,7 @@ func TestASealedStoreRoundTripsThroughTheSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !secrets.Sealed(active.Payload) {
-		t.Fatal("a keyring was configured and the revision was stored in plaintext")
+		t.Fatal("the revision was stored in plaintext")
 	}
 	// ...and read back through the surface.
 	res := s.do(t, http.MethodGet, "/config", "", nil)
@@ -727,7 +877,7 @@ func TestASealedStoreRoundTripsThroughTheSurface(t *testing.T) {
 
 func TestABodyOverTheCapIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	huge := companyDoc + "\n# " + strings.Repeat("x", configapi.MaxBodyBytes)
 	res := s.do(t, http.MethodPut, "/config", huge, map[string]string{"X-Summary": "big"})
 	if res.Code != http.StatusRequestEntityTooLarge {
@@ -755,8 +905,8 @@ func TestAStoreThatCannotBeReadIsNotBlamedOnTheCaller(t *testing.T) {
 	// The REASON stays in the log. A store error can carry a database path
 	// or a driver's own message, and this surface is one an operator
 	// reaches from a browser.
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 	if err := s.db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -787,9 +937,9 @@ func TestADiffAgainstANamedRevision(t *testing.T) {
 	// The default is the active revision, which answers "what would change
 	// if I reverted to this". Naming both sides answers "what happened
 	// between these two", which is the question after an incident.
-	s := newSurface(t, nil)
-	first := s.seed(t, companyDoc, nil)
-	second := s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1), nil)
+	s := newSurface(t)
+	first := s.seed(t, companyDoc)
+	second := s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1))
 
 	res := s.do(t, http.MethodGet, "/config/revisions/"+second+"/diff?against="+first, "", nil)
 	if res.Code != http.StatusOK {
@@ -818,8 +968,8 @@ func TestADiffAgainstSomethingMissingSaysWhichSide(t *testing.T) {
 	// "the revision you asked about" and "the one you asked to compare it
 	// with" are different mistakes, and a single not_found makes the caller
 	// check both.
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 	res := s.do(t, http.MethodGet, "/config/revisions/"+id+"/diff?against=nope", "", nil)
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", res.Code)
@@ -839,8 +989,8 @@ func TestADiffAgainstSomethingMissingSaysWhichSide(t *testing.T) {
 // producing the pair takes nothing but a typo on the end of a real id.
 func TestADiffNamesTheMissingSideEvenWhenOneIDContainsTheOther(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet,
 		"/config/revisions/"+id+"/diff?against="+id+"-typo", "", nil)
@@ -857,8 +1007,8 @@ func TestADiffNamesTheMissingSideEvenWhenOneIDContainsTheOther(t *testing.T) {
 // side being READ rather than the answer having flipped.
 func TestADiffOfAMissingRevisionSaysSo(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/revisions/nope/diff?against="+id, "", nil)
 	if res.Code != http.StatusNotFound {
@@ -873,8 +1023,8 @@ func TestADiffAgainstTheActiveOfAnUnconfiguredNode(t *testing.T) {
 	t.Parallel()
 	// There is no active revision to compare against, which is a different
 	// answer from "the revision you named does not exist".
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 	// Deactivate everything, which is what a node looks like before its
 	// first import.
 	if _, err := s.db.SQL().ExecContext(t.Context(),
@@ -898,8 +1048,8 @@ func TestAReshapedKeyListIsRefusedRatherThanStored(t *testing.T) {
 	// refuses rather than storing the literal "__redacted__" as a
 	// credential, which would fail at the first provider call with an error
 	// naming nothing about where it came from.
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	fetched := s.do(t, http.MethodGet, "/config", "", nil)
 	document := decode(t, fetched)
@@ -938,7 +1088,7 @@ func TestAReshapedKeyListIsRefusedRatherThanStored(t *testing.T) {
 // them can put a key in a document and none can necessarily add a header.
 func TestASummaryInTheBodyIsAcceptedInsteadOfTheHeader(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config",
 		"_summary: imported from the body\n"+companyDoc, nil)
 	if res.Code != http.StatusCreated {
@@ -955,7 +1105,7 @@ func TestASummaryInTheBodyIsAcceptedInsteadOfTheHeader(t *testing.T) {
 // — actively hostile rather than merely unused.
 func TestTheSummaryKeyIsStrippedBeforeTheDocumentIsParsed(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config",
 		"_summary: with a header too\n"+companyDoc,
 		map[string]string{"X-Summary": "the header wins"})
@@ -977,7 +1127,7 @@ func TestTheSummaryKeyIsStrippedBeforeTheDocumentIsParsed(t *testing.T) {
 // NEITHER CHANNEL IS STILL A REFUSAL, and the hint names both.
 func TestAWriteWithNoSummaryAtAllNamesBothChannels(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", companyDoc, nil)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("got %d: %s", res.Code, res.Body)
@@ -995,7 +1145,7 @@ func TestAWriteWithNoSummaryAtAllNamesBothChannels(t *testing.T) {
 // A `_summary` THAT IS NOT A STRING is a body problem, named as one.
 func TestANonStringSummaryKeyIsRefusedAsABodyProblem(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config",
 		"_summary:\n  nested: true\n"+companyDoc, nil)
 	if res.Code != http.StatusBadRequest {
@@ -1010,7 +1160,7 @@ func TestANonStringSummaryKeyIsRefusedAsABodyProblem(t *testing.T) {
 // errors keep naming the lines the caller wrote.
 func TestADocumentWithNoSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	// Line 3 of the body is the bad one.
 	bad := "name: Acme\nnotification_coalesce_max_batch: 3\nnonsense: true\n"
 	res := s.do(t, http.MethodPut, "/config", bad,
@@ -1043,14 +1193,14 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 			opening + "name: Acme\nnotification_coalesce_max_batch: 3\nnonsense: true\n", false, 6},
 		{"a patch", http.MethodPatch, "/config",
 			opening + "mission: checked\nnonsense: true\n", true, 5},
-		{"an entity", http.MethodPut, "/config/roles/cto",
-			opening + "name: CTO\nhandle: cto\nllm: zulu\ngaol: ship it\n", true, 7},
+		{"an entity", http.MethodPut, "/config/llm-providers/zulu",
+			opening + "type: anthropic\nmodel: claude-sonnet-5\napi_keys: [\"k\"]\nmodell: haiku\n", true, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
+			s := newSurface(t)
 			if tc.seeded {
-				s.seed(t, companyDoc, nil)
+				s.seed(t, companyDoc)
 			}
 			res := s.do(t, tc.method, tc.path, tc.body, nil)
 			if res.Code != http.StatusBadRequest {
@@ -1068,20 +1218,40 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	}
 }
 
-// A STORE AND A PLANE ARE REQUIRED, and a missing one is refused by name.
+// A STORE, A PLANE AND A KEYRING ARE REQUIRED, and a missing one is refused by
+// name.
 //
-// The engine beside every API holds both, so a nil is a wiring mistake, and a
-// narrower surface built around it (an unregistered /config, every write
-// answering 503) would hide the mistake behind an answer that looks deliberate.
-func TestNewRefusesAMissingStorePlaneOrBootstrap(t *testing.T) {
+// The engine beside every API holds all three, so a nil is a wiring mistake,
+// and a narrower surface built around it (an unregistered /config, every write
+// answering 503) would hide the mistake behind an answer that looks
+// deliberate. The keyring most of all: a surface built without one stored
+// every revision in plaintext and answered 201, and every node refused to
+// apply what it wrote — the e2e harness was built that way until it was
+// noticed by hand.
+//
+// NO TIER A any more: the surface took one only to judge a document against
+// the stream it would log to, and that rule is Tier A's alone now — a node
+// on an in-memory stream does not boot, so no surface is ever asked.
+//
+// The control is the same options with all three: built.
+//
+// Mutation: drop any one refusal and its row builds a surface.
+func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Parallel()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
+	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
+	nobody := func(context.Context, []string, time.Time) (
+		map[string]configapi.SeatHolder, error) {
+
+		return nil, nil
+	}
 	for field, opts := range map[string]configapi.Options{
-		"Store":     {Plane: coordmemory.NewFleet(), Bootstrap: durableBoot(t)},
-		"Plane":     {Store: db, Bootstrap: durableBoot(t)},
-		"Bootstrap": {Store: db, Plane: coordmemory.NewFleet()},
+		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody},
+		"Plane":   {Store: db, Cipher: cipher, Holders: nobody},
+		"Cipher":  {Store: db, Plane: fleet, Holders: nobody},
+		"Holders": {Store: db, Plane: fleet, Cipher: cipher},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1091,6 +1261,10 @@ func TestNewRefusesAMissingStorePlaneOrBootstrap(t *testing.T) {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
+	}
+	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet,
+		Cipher: cipher, Holders: nobody}); err != nil {
+		t.Errorf("a store, a plane, a keyring and a directory were refused: %v", err)
 	}
 }
 
@@ -1134,11 +1308,100 @@ func TestAWritePublishesTheActivationNudge(t *testing.T) {
 	}
 }
 
+// A REVISION NAMES ITS AUTHOR BESIDE THE CREDENTIAL, on the row, in the
+// listing, on the fleet's pointer and in the nudge.
+//
+// `created_by` held one name and it was the credential: a person writing
+// through their own machine token was recorded as `pat:<id>`, and the token's
+// row — the only thing that says whose it was — is swept a week after it
+// lapses, while a revision is kept for ever. The pointer is what every OTHER
+// node records the revision from, so a pointer without the author left every
+// node but this one naming `peer`. Mutation: record the credential as the
+// author (the old conversion) and the first check fails; drop the author from
+// the activation request and the pointer's does.
+func TestARevisionNamesItsAuthorBesideTheCredential(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	for name, tc := range map[string]struct {
+		caller *iam.Principal
+		want   iam.Actor
+	}{
+		"a person through their own machine token": {
+			caller: &iam.Principal{
+				ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+				Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+				ReauthAt: time.Now().Add(time.Hour),
+			},
+			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat},
+		},
+		"a Tier A token, whose login is its credential": {
+			want: iam.Actor{Name: "token:ops", Kind: iam.ActorOperator,
+				OperatorID: "token:ops"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pub := &nudgeRecorder{}
+			s := newSurfaceWith(t, func(o *configapi.Options) { o.Queue = pub })
+			s.caller = tc.caller
+			res := s.do(t, http.MethodPut, "/config", companyDoc,
+				map[string]string{"X-Summary": "raise the cap"})
+			if res.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
+			}
+
+			active, _, err := s.configs.Active(t.Context())
+			if err != nil {
+				t.Fatalf("Active: %v", err)
+			}
+			if got := (iam.Actor{Name: active.CreatedBy,
+				Kind:       active.CreatedByKind,
+				OperatorID: active.OperatorID}); got != tc.want {
+				t.Errorf("the revision records %+v, want %+v", got, tc.want)
+			}
+
+			listing := s.do(t, http.MethodGet, "/config/revisions", "", nil)
+			var revisions []map[string]any
+			if err := json.Unmarshal(listing.Body.Bytes(), &revisions); err != nil {
+				t.Fatal(err)
+			}
+			if len(revisions) == 0 || revisions[0]["created_by"] != tc.want.Name ||
+				revisions[0]["created_by_kind"] != string(tc.want.Kind) ||
+				revisions[0]["operator_id"] != tc.want.OperatorID {
+				t.Errorf("the listing answers %v, want %+v", revisions, tc.want)
+			}
+
+			target, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatalf("Target: %v", err)
+			}
+			if origin := target.Origin; origin.Author != tc.want.Name ||
+				origin.AuthorKind != tc.want.Kind ||
+				origin.OperatorID != tc.want.OperatorID ||
+				origin.Source != "api" || !origin.CreatedAt.Equal(pinned) {
+				t.Errorf("the fleet's pointer carries origin %+v, want %+v from "+
+					"api at %v — every other node records the revision from it",
+					origin, tc.want, pinned)
+			}
+
+			if len(pub.sent) != 1 {
+				t.Fatalf("published %d events, want the one nudge", len(pub.sent))
+			}
+			nudge, _ := pub.sent[0].Data.(*types.ConfigRevisionActivated)
+			if nudge == nil || nudge.CreatedBy != tc.want.Name ||
+				nudge.CreatedByKind != string(tc.want.Kind) ||
+				nudge.OperatorID != tc.want.OperatorID {
+				t.Errorf("the nudge carries %+v, want %+v", nudge, tc.want)
+			}
+		})
+	}
+}
+
 // A queue that is not there costs a poll interval, never a revision: the
 // pointer is the authoritative path and the write must land regardless.
 func TestAWriteWithoutAQueueStillActivates(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", companyDoc,
 		map[string]string{"X-Summary": "first import"})
 	if res.Code != http.StatusCreated {
@@ -1170,8 +1433,8 @@ func (n *nudgeRecorder) Publish(_ context.Context, topic string, ev *events.Even
 // feature nobody can use correctly. RFC 9110 §8.8.3.
 func TestTheDocumentReadCarriesAnEntityTag(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config", "", nil)
 	tag := res.Header().Get("ETag")
@@ -1199,8 +1462,8 @@ func TestTheDocumentReadCarriesAnEntityTag(t *testing.T) {
 // AN UNCHANGED DOCUMENT IS NOT RE-SENT. RFC 9110 §13.1.2.
 func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	first := s.do(t, http.MethodGet, "/config", "", nil)
 	again := s.do(t, http.MethodGet, "/config", "",
@@ -1239,10 +1502,10 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
+			s := newSurface(t)
 			body := companyJSONDoc
 			if tc.configured {
-				s.seed(t, companyDoc, nil)
+				s.seed(t, companyDoc)
 				body = s.activeDocument(t)
 			}
 			res := s.do(t, http.MethodPut, "/config", body,
@@ -1269,8 +1532,8 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 // told the caller their shape was wrong rather than their format.
 func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config",
 		`[{"op":"replace","path":"/name","value":"Renamed"}]`,
@@ -1281,6 +1544,11 @@ func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 	}
 	if got := res.Header().Get("Accept-Patch"); got != "application/merge-patch+json" {
 		t.Errorf("Accept-Patch = %q, which does not name what would have worked", got)
+	}
+	// AND THE HINT NAMES A ROUTE THAT TAKES THE WRITE: one seat is edited at
+	// its own address, because a merge patch replaces a list whole.
+	if body := res.Body.String(); !strings.Contains(body, "PUT /config/roles/{handle}") {
+		t.Errorf("the 415 hint does not send a seat edit to its entity route: %s", body)
 	}
 	// AND THE ONES IT DOES SPEAK STILL WORK, including the registered type
 	// and the bare application/json every published example sends.
@@ -1303,8 +1571,8 @@ func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 // appear in the OPTIONS response for any resource that supports PATCH".
 func TestOptionsAdvertisesWhatThePatchRouteTakes(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodOptions, "/config", "", nil)
 	if res.Code != http.StatusNoContent {
@@ -1340,15 +1608,16 @@ func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
 	}{
 		{"put", http.MethodPut, "/config", "_summary: %s\n" + companyDoc, false},
 		{"patch", http.MethodPatch, "/config", `{"_summary":%q,"mission":"ship it"}`, true},
-		{"entity", http.MethodPut, "/config/roles/ceo", `{"_summary":%q,"name":"CEO"}`, true},
+		{"entity", http.MethodPut, "/config/llm-providers/zulu",
+			`{"_summary":%q,"type":"anthropic","model":"claude-sonnet-5"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			// The body channel alone is enough.
-			s := newSurface(t, nil)
+			s := newSurface(t)
 			if tc.seed {
-				s.seed(t, companyDoc, nil)
+				s.seed(t, companyDoc)
 			}
 			res := s.do(t, tc.method, tc.path, fmt.Sprintf(tc.body, "from the body"), nil)
 			if res.Code != http.StatusCreated {
@@ -1360,9 +1629,9 @@ func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
 			}
 
 			// And when both are set, the header wins — on this route too.
-			s = newSurface(t, nil)
+			s = newSurface(t)
 			if tc.seed {
-				s.seed(t, companyDoc, nil)
+				s.seed(t, companyDoc)
 			}
 			res = s.do(t, tc.method, tc.path, fmt.Sprintf(tc.body, "from the body"),
 				map[string]string{"X-Summary": "from the header"})
@@ -1395,7 +1664,7 @@ func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
 // precisely why the activation pointer is append-only.
 func TestReloadRepublishesTheActiveDocumentUnchanged(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	first := s.do(t, http.MethodPut, "/config", companyDoc,
 		map[string]string{"X-Summary": "first import"})
 	if first.Code != http.StatusCreated {
@@ -1440,7 +1709,7 @@ func TestReloadRepublishesTheActiveDocumentUnchanged(t *testing.T) {
 // activating an empty document.
 func TestReloadRefusesWhenNothingIsActive(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodPost, "/config/reload", "", nil)
 	if res.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409: %s", res.Code, res.Body)
@@ -1455,8 +1724,8 @@ func TestReloadRefusesWhenNothingIsActive(t *testing.T) {
 // sits in a list of api keys beside a literal, so the route has to report the
 // reference and only the reference.
 func TestReferencesReportsEveryPathThatNamesAVariable(t *testing.T) {
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/references", "", nil)
 	if res.Code != http.StatusOK {
@@ -1490,8 +1759,8 @@ func TestReferencesReportsEveryPathThatNamesAVariable(t *testing.T) {
 // delete confirmation cry wolf: removing a stored secret cannot affect a
 // value the document carries inline.
 func TestReferencesNeverReportsALiteralCredential(t *testing.T) {
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/references", "", nil)
 	if body := res.Body.String(); strings.Contains(body, "api_keys[0]") ||
@@ -1510,7 +1779,7 @@ func TestReferencesNeverReportsALiteralCredential(t *testing.T) {
 // either one alone is satisfied by a regression in the other direction.
 func TestAnEmbeddedReferenceIsMaskedOnTheReadAndStillIndexed(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seed(t, companyDoc+`
 mcp_servers:
   - name: tracker
@@ -1518,7 +1787,7 @@ mcp_servers:
     url: https://tracker.example.com/mcp
     headers:
       Authorization: "Bearer sk-live-${SUFFIX}"
-`, nil)
+`)
 
 	read := s.do(t, http.MethodGet, "/config", "", nil)
 	if read.Code != http.StatusOK {
@@ -1545,7 +1814,7 @@ mcp_servers:
 // A node before its first import has no document to reference anything, and
 // reporting that as a failure would make a working new install look broken.
 func TestReferencesAnswersNotFoundBeforeAnythingIsActive(t *testing.T) {
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	res := s.do(t, http.MethodGet, "/config/references", "", nil)
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
@@ -1559,8 +1828,8 @@ func TestReferencesAnswersNotFoundBeforeAnythingIsActive(t *testing.T) {
 // document's own validator and a caller that already has this revision is
 // told so rather than sent the list again.
 func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	first := s.do(t, http.MethodGet, "/config/references", "", nil)
 	tag := first.Header().Get("ETag")
@@ -1571,5 +1840,60 @@ func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
 		map[string]string{"If-None-Match": tag})
 	if again.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want 304: %s", again.Code, again.Body)
+	}
+}
+
+// EVERY ROUTE IS ADMIN'S, reads included.
+//
+// They decided nothing: the guard in front of them answers only whether
+// somebody resolved, which meant "the operator" while an operator token was the
+// only credential this engine had. A person signed in holding a read-only
+// permission alone could then rewrite the company document, revert it to any
+// revision and read every `${VAR}` it names. Each route is stated against a
+// caller holding admin and against one holding EVERY APP — the most a caller
+// can carry without admin, and still refused naming admin alone (ADR-0033: the
+// company document is no app's, and a lead's reach into the org chart is the
+// lead tests' subject, not this one's — the caller here is a token bound to
+// no seat, which leads nothing).
+func TestEveryConfigRouteTakesTheGrantItsVerbNames(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		method, path, body string
+	}{
+		{http.MethodGet, "/config", ""},
+		{http.MethodGet, "/config/revisions", ""},
+		{http.MethodGet, "/config/references", ""},
+		{http.MethodOptions, "/config", ""},
+		{http.MethodPut, "/config", companyJSONDoc},
+		{http.MethodPost, "/config/reload", ""},
+	} {
+		name := c.method + " " + c.path
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.grants = []iam.Grant{iam.GrantAdmin}
+			if res := s.do(t, c.method, c.path, c.body, nil); res.Code == http.StatusForbidden {
+				t.Errorf("holding admin: refused %s", res.Body.String())
+			}
+			s.grants = slices.Clone(iam.Apps)
+			res := s.do(t, c.method, c.path, c.body, nil)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("holding every app and not admin: %d %s, want 403",
+					res.Code, res.Body.String())
+			}
+			var refusal map[string]any
+			if err := json.Unmarshal(res.Body.Bytes(), &refusal); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			grants, _ := refusal[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+				t.Errorf("refused naming %v, want [admin]", refusal[authz.DetailGrants])
+			}
+			// AND THE REFUSAL STILL CARRIES THE SURFACE'S no-store: it is
+			// written under the same wrapper as every other answer here.
+			if got := res.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("a refusal answered Cache-Control %q, want no-store", got)
+			}
+		})
 	}
 }

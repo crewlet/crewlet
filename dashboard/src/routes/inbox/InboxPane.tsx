@@ -61,6 +61,7 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown, safeHref } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
+import { detailItem, itemAddress } from "~/lib/work.ts";
 import type {
   SandboxRun,
   WorkAskRow,
@@ -76,6 +77,7 @@ import {
   noticeNote,
   noticeText,
   noticeTitle,
+  rowItem,
   rowKey,
   rowName,
   rowWho,
@@ -86,6 +88,7 @@ import { Badge } from "./InboxColumn.tsx";
 import { NoticeActions } from "./NoticeActions.tsx";
 import { TaskLink } from "./TaskLink.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
+import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
@@ -137,6 +140,15 @@ interface Frame {
   who: Who | null;
   name: string;
   task: ReactNode;
+  /**
+   * The task's ADDRESS ([itemAddress]), or "": what the pane threads, replies,
+   * answers and reassigns by. Its key is only what it prints, since a key
+   * another task claimed first would read and write the claimant's
+   * conversation from a duplicate's notice.
+   */
+  address: string;
+  /** The key it prints — what a reply's or an answer's toast names it by — or "". */
+  itemKey: string;
   byline: (sentence: ReactNode, note?: string) => ReactNode;
 }
 
@@ -151,7 +163,7 @@ function OpenPane({
   onSettled,
 }: PaneProps & { row: InboxRow }) {
   const who = rowWho(row, index);
-  const key = rowKey(row);
+  const item = rowItem(row);
   const back = onBack ? (
     <IconButton
       size="sm"
@@ -164,7 +176,9 @@ function OpenPane({
   const frame: Frame = {
     who,
     name: rowName(row, who),
-    task: key ? <TaskLink item={key} title={title} /> : null,
+    task: item ? <TaskLink item={item} label={rowKey(row)} title={title} /> : null,
+    address: item ? itemAddress(item) : "",
+    itemKey: rowKey(row),
     byline: (sentence, note) => (
       <ReadingPaneByline
         start={back}
@@ -300,7 +314,8 @@ function AskPane({
       ) : (
         <AnswerAsk
           layout="buttons"
-          item={ask.key}
+          item={frame.address}
+          label={frame.itemKey}
           comment={ask.comment}
           asker={frame.name}
           options={options}
@@ -317,7 +332,8 @@ function AskPane({
       )}
       <RefusalNote write={mark} />
       <Conversation
-        item={ask.key}
+        item={frame.address}
+        itemKey={frame.itemKey}
         of={{ kind: "ask", comment: ask.comment, options }}
         label="Replies to this question"
         to={frame.name}
@@ -391,12 +407,15 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
   return null;
 }
 
-/** A cited task, by its key and title as they are now, opened beside the Inbox. */
+/**
+ * A cited task, by its key and title as they are now, opened beside the Inbox
+ * at its ADDRESS ([itemAddress]) once the read says which task it is.
+ */
 function TaskEvidence({ id, label }: { id: string; label?: string }) {
   const read = useQuery("work_item", { id });
   const task = read.data?.task;
   const peek = usePeekControls();
-  const ref = { kind: "item" as const, id: task?.key ?? id };
+  const ref = { kind: "item" as const, id: read.data ? itemAddress(detailItem(read.data)) : id };
   return (
     <ButtonLink
       variant="secondary"
@@ -413,6 +432,7 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
 /** The conversation under the answer, with the reply box at its end. */
 function Conversation({
   item,
+  itemKey,
   of,
   label,
   to,
@@ -421,7 +441,10 @@ function Conversation({
   index,
   now,
 }: {
+  /** The task's address ([itemAddress]), or "" for no conversation. */
   item: string;
+  /** The key the reply's toast names the task by, or "". */
+  itemKey: string;
   of: ThreadOf;
   /** What is below it, said exactly. */
   label: string;
@@ -440,6 +463,7 @@ function Conversation({
       {replyTo !== null && (
         <Composer
           item={item}
+          label={itemKey}
           mode={replyTo ? { kind: "reply", replyTo } : { kind: "reply" }}
           to={to}
           index={index}
@@ -465,7 +489,11 @@ function RunPane({
   const [text, setText] = useState("");
   const [answered, setAnswered] = useState<string | null>(null);
   const question = run.question ?? "";
-  const heading = firstSentence(question) || "The run paused on a question";
+  const heading =
+    firstSentence(question) ||
+    (questionWithheld(run)
+      ? `The run paused on a question. ${QUESTION_WITHHELD}.`
+      : "The run paused on a question");
   const hold = holdLine(run, now);
   const blocked = text.trim() ? undefined : "Write the answer first.";
   const send = async () => {
@@ -532,7 +560,6 @@ function RunPane({
 }
 
 function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
-  const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const w = seat.window;
   return (
     <ReadingPane>
@@ -558,7 +585,7 @@ function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
           name={frame.name}
           window={seat.window}
         />
-        {item && <ReassignItem item={item.key} />}
+        {frame.address && <ReassignItem item={frame.address} />}
       </Stack>
     </ReadingPane>
   );
@@ -615,7 +642,6 @@ function NoticePane({
   // carries only a preview of (cut at the engine's excerpt bound, and marked
   // so) stays in the conversation, where it is read in full.
   const whole = !said.endsWith("…");
-  const item = notice.subject_key ?? "";
   return (
     <ReadingPane>
       {frame.byline(
@@ -651,7 +677,8 @@ function NoticePane({
         onSettled={() => onSettled(null)}
       />
       <Conversation
-        item={item}
+        item={frame.address}
+        itemKey={frame.itemKey}
         of={comment ? { kind: "comment", comment, whole } : { kind: "item" }}
         label={comment ? "Replies to this comment" : "Conversation on this task"}
         to={frame.name}

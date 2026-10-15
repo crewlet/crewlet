@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 const cliCompanyDoc = `
@@ -39,11 +41,70 @@ func companyFile(t *testing.T, dir, name string, amend func(string) string) stri
 	return path
 }
 
+// fixtureKeyring is the `secrets:` block a CLI fixture's Tier A carries,
+// because every node requires one and a file without it is refused before a
+// case reaches its subject.
+var fixtureKeyring = "secrets:\n  active_key_id: fixture\n  keys:\n" +
+	"    - {id: fixture, material: \"" + secrets.EncodeKey(fixtureKey) + "\"}\n"
+
+// fixtureKey is the one key [fixtureKeyring] declares: thirty-two zero bytes,
+// a key the keyring accepts, sealing nothing a case reads back as a secret.
+var fixtureKey = make([]byte, 32)
+
+// fixtureCipher is [fixtureKeyring] as a cipher, for a case that seeds a store
+// directly: a node seals its revisions under the keyring its Tier A names, and
+// nothing reads or writes a company document without one.
+var fixtureCipher = func() secrets.Cipher {
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "fixture", Keys: map[string][]byte{"fixture": fixtureKey},
+	})
+	if err != nil {
+		panic("the fixture keyring does not build: " + err.Error())
+	}
+	return cipher
+}()
+
+// fixtureStream is the `stream:` block a CLI fixture's Tier A carries: an
+// embedded stream persisting under dir, because one held in memory is refused
+// on every node ([config.Stream.Durable]) and a fixture short of it would be
+// refused for that before its case was judged.
+func fixtureStream(dir string) string {
+	return "stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n"
+}
+
+// runnableTierA is a Tier A document carrying what every node requires —
+// [fixtureKeyring] and a durable stream — so a case states what it is about
+// and nothing else. A document that states its own `secrets:` or `stream:`
+// block is the case whose subject that is, and the block is left as written.
+//
+// ITS STREAM IS NEVER OPENED: the documents here are parsed and judged, so the
+// directory it names is one no case creates.
+func runnableTierA(doc string) string {
+	states := func(key string) bool {
+		return strings.HasPrefix(doc, key+":") || strings.Contains(doc, "\n"+key+":")
+	}
+	if doc != "" && !strings.HasSuffix(doc, "\n") {
+		doc += "\n"
+	}
+	if !states("secrets") {
+		doc += fixtureKeyring
+	}
+	if !states("stream") {
+		doc += fixtureStream("/var/lib/crewlet")
+	}
+	return doc
+}
+
+// parseTierA is [config.ParseBootstrap] over [runnableTierA] of the document.
+func parseTierA(data []byte, r *config.Resolver) (*config.Bootstrap, error) {
+	return config.ParseBootstrap([]byte(runnableTierA(string(data))), r)
+}
+
 // bootstrapForStore writes a Tier A config naming a store in dir.
 func bootstrapForStore(t *testing.T, dir string) string {
 	t.Helper()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+		filepath.Join(dir, "index.db")) + fixtureStream(dir) + fixtureKeyring
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
@@ -94,6 +155,10 @@ func TestImportingIsIdempotentByContent(t *testing.T) {
 		t.Fatalf("edited import: %v", err)
 	} else if !strings.Contains(out, "imported") {
 		t.Fatalf("the edited import said %q", out)
+	} else if !strings.Contains(out, "sealed under fixture") {
+		// THE KEY IT WAS SEALED UNDER, which is a fact; a `sealed=true`
+		// flag said the same thing on every import that ever ran.
+		t.Errorf("the import does not name the key it sealed under: %q", out)
 	}
 	shown, _, err := configCmd(t, cfg, "show")
 	if err != nil {
@@ -312,7 +377,13 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // so a command run while the engine is stopped genuinely cannot reach it.
 // Saying so is the whole value — an operator who activated a revision and saw
 // nothing change would reasonably conclude the command failed, and neither
-// remedy (restart, or PUT /config) is guessable.
+// remedy (restart, or the running node's own route) is guessable.
+//
+// EACH COMMAND NAMES ITS OWN ROUTE to a running fleet. One note served them
+// all and named `PUT /config`, which moves no pointer to a stored revision and
+// re-seals nothing — so it was the wrong answer for an activation. For an
+// import it is the right one: a whole company file is what it stores and
+// activates.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
 // TestANodeWithNoPointerPublishesItsActiveRevision in reconcile_test.go.
@@ -320,21 +391,71 @@ func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
+	imported, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil))
+	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	id := activeRevisionID(t, cfg)
-	out, _, err := configCmd(t, cfg, "activate", id)
+	activated, _, err := configCmd(t, cfg, "activate", id)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	if !strings.Contains(out, id) {
-		t.Errorf("the output does not name the revision: %q", out)
+	if !strings.Contains(activated, id) {
+		t.Errorf("the output does not name the revision: %q", activated)
 	}
-	for _, want := range []string{"next start", "PUT /config"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the output does not mention %q, so an operator cannot tell "+
-				"how to reach a running fleet: %q", want, out)
+	for _, c := range []struct {
+		command, out string
+		want         []string
+	}{
+		{"import", imported, []string{"next start", "PUT /config to a node that is up",
+			"run `crewlet config import` while a node is up"}},
+		{"activate", activated, []string{"next start", "POST /config/revisions/" + id + "/revert"}},
+	} {
+		for _, want := range c.want {
+			if !strings.Contains(c.out, want) {
+				t.Errorf("config %s does not mention %q, so an operator cannot "+
+					"tell how to reach a running fleet: %q", c.command, want, c.out)
+			}
+		}
+	}
+	// AN ACTIVATION IS NOT SENT TO PUT /config, which would store the
+	// document again as a new revision rather than point the fleet at
+	// the one this command activated.
+	if strings.Contains(activated, "PUT /config") {
+		t.Errorf("config activate sends an operator to PUT /config, which cannot "+
+			"do what it did: %q", activated)
+	}
+}
+
+// A LOCKED STORE IS ANSWERED WITH EACH SUBCOMMAND'S OWN ROUTE AROUND IT.
+//
+// The sentence used to be one — "PUT /config stores the revision AND activates
+// it fleet-wide" — for a listing, a diff, an activation and a rekey alike, none
+// of which a PUT does. Every subcommand that opens the store names its own, and
+// the two with no route through the API say so rather than inventing one.
+func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
+	t.Parallel()
+	for sub, want := range map[string]string{
+		"show":      "GET /config",
+		"export":    "GET /config",
+		"revisions": "GET /config/revisions",
+		"diff":      "/diff?against=",
+		"activate":  "/revert",
+		"rekey":     "POST /config/reload",
+	} {
+		remedy := lockedStoreRemedy(sub)
+		if !strings.Contains(remedy, want) {
+			t.Errorf("config %s on a locked store says %q, want it to name %q", sub, remedy, want)
+		}
+		if strings.Contains(remedy, "PUT /config") {
+			t.Errorf("config %s on a locked store names PUT /config: %q", sub, remedy)
+		}
+	}
+	// AND EVERY SUBCOMMAND THAT OPENS THE STORE HAS ONE: import alone routes
+	// around the lock by itself.
+	for _, sub := range configSubcommands {
+		if sub != "import" && lockedStoreRemedy(sub) == "" {
+			t.Errorf("config %s has no remedy for a locked store", sub)
 		}
 	}
 }
@@ -478,7 +599,7 @@ func TestTooManyArgumentsAreCountedAsGiven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var out, errOut bytes.Buffer
-			err := runConfig(tc.args, &out, &errOut)
+			err := runConfig(noEnviron, tc.args, &out, &errOut)
 			if err == nil {
 				t.Fatalf("runConfig(%v) succeeded, want a refusal", tc.args)
 			}
@@ -561,6 +682,11 @@ func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 	}{
 		{"revisions -limit", []string{"revisions", "-limit", "5"}},
 		{"export -redact", []string{"export", "-redact"}},
+		// Every fixture carries a keyring now, so `rekey` can succeed
+		// here: the revision the import sealed is already under the
+		// active key, and -dry-run reports that rather than being refused
+		// by the flag parser.
+		{"rekey -dry-run", []string{"rekey", "-dry-run"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := configCmd(t, cfg, tc.args...); err != nil {
@@ -568,23 +694,6 @@ func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 			}
 		})
 	}
-	// `rekey` cannot SUCCEED here — this fixture declares no keyring, and
-	// rekey refuses without one — so the claim is narrower and has to be
-	// stated as such: -dry-run reached the command rather than being
-	// refused by the flag parser. Asserting success instead would only
-	// prove the fixture had a key.
-	t.Run("rekey -dry-run", func(t *testing.T) {
-		_, _, err := configCmd(t, cfg, "rekey", "-dry-run")
-		if err == nil {
-			t.Fatal("rekey succeeded with no keyring configured")
-		}
-		if strings.Contains(err.Error(), "not defined") {
-			t.Errorf("rekey refused its own flag: %v", err)
-		}
-		if !strings.Contains(err.Error(), "secrets.keys") {
-			t.Errorf("rekey failed for an unexpected reason: %v", err)
-		}
-	})
 	// -revision and -against need a real id, so they are exercised against
 	// the revision the import above wrote rather than a literal.
 	id := activeRevisionID(t, cfg)

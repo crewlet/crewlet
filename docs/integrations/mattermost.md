@@ -45,8 +45,8 @@ each seat's bot token and then disables its bot, in that order. The revoke is
 what makes the disable stand up: a disabled account keeps its username and its
 tokens, so a token left behind starts working again the moment anything
 re-enables the bot, this engine's own reconnect included. Only tokens this
-tool minted are taken (matched on the `crewlet-<handle>` description), so an
-administrator's own token on the same account is left alone. A token that
+tool minted are taken (matched on the `crewlet-<handle>` description),
+so an administrator's own token on the same account is left alone. A token that
 cannot be revoked fails the disconnect with the bot left **enabled**, rather
 than leaving a disabled account quietly holding a live credential; repeating
 the disconnect resumes there. The sealed `${VAR}` is left in the secret store
@@ -310,8 +310,9 @@ mcp_servers:
 
 units:
   - name: Core
+    id: core                             # the unit's key; `name` above is display
     type: team
-    lead: Engineer
+    lead: engineer                       # the lead seat's handle
     roles:
       - name: Engineer
         integrations:                              # per-agent transport identity
@@ -337,7 +338,7 @@ which is reported and left untouched.
 | `url` | The address the engine reaches the server at. Required when enabled. Any route to the server works, the Site URL or an in-cluster Service alike; only its path has to be the Site URL's (see [The address the engine dials](#the-address-the-engine-dials)). |
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
 | `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
-| `provisioning.username_prefix` | Prepended to each handle to form the bot username. |
+| `provisioning.username_prefix` | Prepended to each seat's [handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle) to form the bot username. |
 | `provisioning.channels` | Channels every agent bot is added to. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
 
@@ -376,7 +377,8 @@ crewlet mattermost provision company.yaml
 For every Mattermost-enabled agent seat the command:
 
 1. **finds or creates the bot account** at a deterministic username
-   (`{username_prefix}{handle}`, or an explicit `username`);
+   (`{username_prefix}{handle}`, or an explicit `username`) — see
+   [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle);
 2. **re-enables it if this engine's own disconnect disabled it**, and only
    then — a disabled bot still owns its username, so creating over it fails
    with a conflict nothing else would explain. The test is the
@@ -537,7 +539,8 @@ a command whose whole promise is that it is safe to re-run.
 So a bot is left alone when **both** halves hold: the variable holding its
 token still has a value (answered by the sink the run is writing to, and an
 *unreadable* sink stops the run rather than being read as empty), and the
-account still has a token under this tool's description, `crewlet-<handle>`.
+account still has a token under this tool's description,
+`crewlet-<handle>`.
 Either alone is wrong — a recorded value whose token was revoked leaves a
 bot 401ing for ever, and a live token nobody wrote down cannot be deployed.
 
@@ -643,7 +646,7 @@ FAIL  seat swe         agent-swe authenticates and opens a socket but has joined
 4. the Mattermost transport parses it, applies thread routing and loop
    suppression, and produces a notification.
 5. NotificationService resolves handle → agent and publishes to
-   `crewlet.agent.{handle}.inbox`.
+   `crewlet.agent.{seat-id}.inbox`.
 
 #### Which events wake an agent
 
@@ -901,7 +904,7 @@ claimed twice:
 roles:
   - name: Jane Founder
     kind: human
-    manages: [CEO]
+    manages: [ceo]        # by handle
     contact:
       mattermost_user_id: jane
 ```
@@ -1052,11 +1055,10 @@ submission whenever the model never manages the envelope.
 
 `-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
 avoids the shared refresh token `-from-host` leaves you with — writes into
-the [encrypted secret store](../concepts/secret-store.md), so it needs a
-Tier A keyring first: `crewlet secrets keygen -key-id 2026-01`, then
-uncomment the `secrets:` block in `examples/nimbus-claude-cli.config.yaml`. Worth doing
-before you run this anywhere but a laptop; without a keyring the command
-stops and says so. See [Subscription LLM
+the [encrypted secret store](../concepts/secret-store.md), sealed under the
+Tier A keyring `examples/nimbus-claude-cli.config.yaml` already declares
+(every node needs one: `crewlet secrets keygen -key-id 2026-01` prints the
+key to export). Worth doing before you run this anywhere but a laptop. See [Subscription LLM
 Backends](../concepts/subscription-llm-backends.md#authentication) for the
 other login shapes (a token on stdin, a username/password where the CLI has
 one, a bundle moved onto another host).

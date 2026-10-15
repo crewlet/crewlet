@@ -13,13 +13,16 @@ import (
 )
 
 // managedBootstrap writes a Tier A naming a store in dir and `operator` as
-// the company document's only writer.
+// the company document's only writer — on the keyring and the stream
+// [bootstrapForStore] writes, which every node requires, so a case can open
+// the same store under both.
 func managedBootstrap(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "managed.yaml")
 	body := "node:\n  id: cli-test\nstore:\n  path: " + filepath.Join(dir, "index.db") +
-		"\napi:\n  auth:\n    tokens:\n      - {id: operator, token: op-token}\n" +
-		"    company_writers: [operator]\n"
+		"\napi:\n  auth:\n    tokens:\n      - {id: operator, token: " + cliFixtureToken +
+		", grants: [admin]}\n" +
+		"    company_writers: [operator]\n" + fixtureStream(dir) + fixtureKeyring
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,7 @@
  *
  * There is no reveal button. The one route that returns a value needs an
  * explicit flag and logs the access, and putting that behind a click in a
- * dashboard that anyone with the token can open is not a trade worth making;
+ * dashboard that anyone signed in can open is not a trade worth making;
  * `crewlet secrets get` is the deliberate path. Storing, editing and removing
  * a row need no such trade: none of them reads a value back. THE PEEK INHERITS
  * THAT and may never grow one either — a rail is a smaller screen, not a
@@ -59,9 +59,11 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { authorLabel, throughOf } from "~/lib/attribution.ts";
+import { needsWords } from "~/lib/access.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
-import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
+import type { ConfigReference, LogRefusal, QueryRefusal, SecretRow } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 
@@ -90,7 +92,9 @@ function refusalCode(err: RestError | null): QueryErrorCode | null {
 function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    return "Needs an operator token.";
+    // THE GRANT THE REFUSAL NAMED: "needs an operator token" sent a
+    // signed-in person to find a credential they already held.
+    return needsWords("This", err.grants);
   }
   return err.detail || err.code || "the engine refused the read";
 }
@@ -101,6 +105,11 @@ interface Credentials {
   loading: boolean;
   /** The refusal as a machine code, which is what [QueryState] renders from. */
   error: QueryErrorCode | null;
+  /**
+   * What the refusal said beyond its code — the grants that would have
+   * admitted the reader, or the state log's refusal — for [QueryState].
+   */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Why the reference index is unknown, when it is. */
   unknown: string | null;
   /** The config fields naming one credential, or null where the check did not answer. */
@@ -164,6 +173,7 @@ function useCredentials(enabled = true): Credentials {
     rows: answer.data?.rows ?? null,
     loading: answer.loading,
     error: refusalCode(answer.error),
+    refusal: answer.refusal,
     unknown: answer.data?.unknown ?? null,
     readersOf,
     reload: useCallback(() => reload(), [reload]),
@@ -316,6 +326,17 @@ function CredentialBody({
                 },
                 { label: "Key id", value: <span className="mono">{row.key_id}</span> },
                 { label: "Set by", value: row.updated_by || undefined },
+                {
+                  // THE CREDENTIAL IT WAS STORED THROUGH, beside the author
+                  // rather than folded into the name: a machine token acting
+                  // as its owner writes under the owner's login, and which of
+                  // their credentials stored a value is the question an
+                  // incident asks of this row.
+                  label: "Through",
+                  value: throughOf(row.updated_by, row.operator_id) ? (
+                    <span className="mono">{throughOf(row.updated_by, row.operator_id)}</span>
+                  ) : undefined,
+                },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },
               ],
             },
@@ -347,13 +368,13 @@ function CredentialBody({
  * is what somebody deciding about a name actually reads.
  */
 export function CredentialPeek({ name }: { name: string }) {
-  const { rows, loading, error, unknown, readersOf } = useCredentials(name !== "");
+  const { rows, loading, error, refusal, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
   return (
     <>
       {loading && rows === null && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A name that matches no row is a hand-edited URL
             or a credential removed since the link was made, and naming the one
             that resolved to nothing is more use than a header over no row. */}
@@ -381,7 +402,7 @@ export function CredentialPeek({ name }: { name: string }) {
 export function Secrets({ name }: { name?: string }) {
   const now = useNow();
   const toast = useToast();
-  const { rows, loading, error, unknown, readersOf, reload } = useCredentials();
+  const { rows, loading, error, refusal, unknown, readersOf, reload } = useCredentials();
 
   const [writing, setWriting] = useState<{ editing: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -500,6 +521,7 @@ export function Secrets({ name }: { name?: string }) {
       {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           list.length
@@ -596,7 +618,7 @@ export function Secrets({ name }: { name?: string }) {
                 // for an empty string the reader would read as a name.
                 cell: (s) =>
                   s.updated_by ? (
-                    <TextCell>{s.updated_by}</TextCell>
+                    <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
                   ) : (
                     <EmptyValue label="Nobody recorded" />
                   ),
@@ -612,7 +634,7 @@ export function Secrets({ name }: { name?: string }) {
               {
                 key: "act",
                 header: "",
-                label: "Actions",
+                action: true,
                 shrink: true,
                 cell: (s) => (
                   <span className="row gap-1">

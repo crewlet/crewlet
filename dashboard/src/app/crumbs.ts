@@ -32,7 +32,7 @@
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
-import { ITEM_KEY_SHAPE, resolve } from "./routes.ts";
+import { ITEM_KEY_SHAPE, resolve, type SignInScreen } from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
 export type Labels = Record<string, string>;
@@ -70,8 +70,10 @@ export interface Crumb {
 
 /**
  * The label keys a seat's page publishes besides its name: the unit the seat
- * sits in — its NAME, which is the Teams address, and its path as a reader
- * names it ("Engineering · Core") — and whether it is an agent or a person.
+ * sits in — its KEY, which is the Teams address (`lib/seats.ts`'s
+ * `unitRoute`), and its path as a reader names it ("Engineering · Core") — and
+ * whether it is an agent or a person. The KEY and never the name: two units
+ * may share a name, and a crumb addressed by one led to whichever came first.
  *
  * NO ROUTE SEGMENT CAN SPELL THEM: each starts with a NUL, which a path
  * segment never carries once decoded, so a seat's unit can never title a
@@ -135,7 +137,7 @@ function named(labels: Labels, key: string): Crumb {
 }
 
 /**
- * A segment that IS the object's name — a unit, a node, a secret, a server, a
+ * A segment that IS the object's name — a node, a secret, a server, a
  * model's config key, a backup domain — drawn as a name, never as an
  * identifier awaiting one.
  *
@@ -162,12 +164,23 @@ function projectCrumb(labels: Labels, key: string): Crumb {
   return crumb.mono ? { ...crumb, ...archived } : { ...crumb, tag: key, ...archived };
 }
 
+/** What each screen outside the frame is called. */
+const SIGN_IN_TITLES: Record<SignInScreen["screen"], string> = {
+  login: "Sign in",
+  enrol: "Two-step verification",
+  invite: "Invitation",
+  reset: "Password reset",
+};
+
 export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   const where = resolve(path);
   const row = workspaceRow(where.workspace);
   if (!where.resolved) {
     return row ? [root(row, true), { label: "Not found" }] : [{ label: "Not found" }];
   }
+  // A SIGN-IN SCREEN IS DRAWN OUTSIDE THE FRAME, so nothing draws its trail;
+  // what it has is the one crumb a tab's title is taken from.
+  if (where.workspace === "") return [{ label: SIGN_IN_TITLES[where.screen] }];
   if (!row) return [{ label: "Not found" }];
 
   // A SECTION'S OWN PAGE: the workspace, then the section unless it IS the
@@ -193,6 +206,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "live":
     case "knowledge":
     case "spend":
+    case "account":
       return [root(row, false)];
     case "general":
       // SETTINGS' LANDING IS ONE OF ITS SECTIONS, unlike every other
@@ -228,8 +242,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "roster":
       return sectionPage("roster");
     case "teams":
-      // A UNIT'S SEGMENT IS ITS NAME, so there is no identifier to mark.
-      return where.unit ? inside("teams", ownName(labels, where.unit)) : sectionPage("teams");
+      // A UNIT'S SEGMENT IS ITS KEY (`UnitScreen` resolves it with
+      // `unitByKey`), which is an address and not the name the screen
+      // publishes once it has found the unit — so it follows the seat's rule.
+      return where.unit ? inside("teams", named(labels, where.unit)) : sectionPage("teams");
     case "schedules": {
       if (where.scope.length === 0) return sectionPage("schedules");
       // A SCHEDULE IS THREE SEGMENTS, joined rather than crumbed: `role / ceo
@@ -253,7 +269,13 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
           ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human", avatar } }
           : seat;
       return unit
-        ? [root(row, true), { label: place || unit, path: ["agents", "teams", unit] }, object]
+        ? [
+            root(row, true),
+            place
+              ? { label: place, path: ["agents", "teams", unit] }
+              : { label: unit, path: ["agents", "teams", unit], mono: true },
+            object,
+          ]
         : [root(row, true), object];
     }
     case "turns":

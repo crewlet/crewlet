@@ -39,7 +39,10 @@ of the epoch it is pinned to; a detached coding run in the windows it is
 collected in.
 
 The counters live in `<prefix>_token_windows`, a bucket aged at
-`coord.BudgetRetention` (32 days).
+`coord.BudgetRetention` (32 days). Charging them is part of what running a seat
+means under the seat-host protocol (ADR-0016), because two builds charging
+different counters side by side would each see only their own share of the
+company's spend, and every cap would bind late by what the other had spent.
 
 ## Why the obvious alternative is wrong
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 )
 
 // A SEAT THIS NODE HOLDS HAS ITS MEMORY READ HERE, and the answer says so.
@@ -33,17 +34,22 @@ func TestASeatThisNodeHoldsHasItsMemoryReadHere(t *testing.T) {
 	if reads == nil {
 		t.Fatal("an engine with a store built no memory reader")
 	}
-	for _, handle := range attached {
-		got, err := reads.Memory(t.Context(), handle, 1)
+	company := e.Company()
+	for _, placed := range company.Seats() {
+		// THE SEAT AS THE ASKER RESOLVES IT: its id and its handle —
+		// memread re-resolves nothing.
+		seat := memread.Seat{ID: placed.ID, Handle: placed.Handle}
+		got, err := reads.Memory(t.Context(), seat, 1)
 		if err != nil {
-			t.Fatalf("reading %s's memory on the node holding it: %v", handle, err)
+			t.Fatalf("reading %s's memory on the node holding it: %v", seat.Handle, err)
 		}
 		if got.HeldBy != e.Node().ID() {
-			t.Errorf("%s's memory was answered by %q, want this node %q", handle, got.HeldBy, e.Node().ID())
+			t.Errorf("%s's memory was answered by %q, want this node %q",
+				seat.Handle, got.HeldBy, e.Node().ID())
 		}
-		threads, err := reads.Threads(t.Context(), handle, "", 0)
+		threads, err := reads.Threads(t.Context(), seat, "", 0)
 		if err != nil || threads.HeldBy != e.Node().ID() {
-			t.Errorf("%s's threads: held_by %q, err %v", handle, threads.HeldBy, err)
+			t.Errorf("%s's threads: held_by %q, err %v", seat.Handle, threads.HeldBy, err)
 		}
 	}
 }

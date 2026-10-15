@@ -67,7 +67,7 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 			trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
 		}
 		e.native.Store(n)
-		b := e.estateBackend(n)
+		b := e.estateBackend(&core{}, n)
 		if got := b.Writer != nil && b.PageWriter != nil; got != wantWriters {
 			t.Errorf("%s: writers offered = %v, want %v", mode, got, wantWriters)
 		}
@@ -80,11 +80,11 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 // A TOOL'S WRITE CROSSES TO ANOTHER NODE WITH ITS WHOLE PROVENANCE.
 //
 // It once carried the turn and the chain alone, written before a person's
-// credential, its bound seat, a task's chat origin and the turn's set of
-// written items were part of a provenance — and every write a router took to
-// a peer lost the four, with nothing to say so: an operator's gesture landed on
-// a person record named after their token, a task filed from a thread forgot
-// the thread, and a turn that wrote one item was charged to none. So the
+// credential, a task's chat origin and the turn's set of written items were
+// part of a provenance — and every write a router took to a peer lost the
+// three, with nothing to say so: an operator's gesture lost the credential it
+// was made under, a task filed from a thread forgot the thread, and a turn
+// that wrote one item was charged to none. So the
 // fixture sets EVERY field a provenance has, and a field added to it later is
 // one this test makes its author carry across or explain.
 func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
@@ -92,8 +92,8 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 	written := &turnctx.Written{}
 	actor := builtin.Actor{
 		Handle: "ops-token", Kind: tracker.AuthorOperator,
-		OperatorID: "tok-1", Seat: "ana", TurnID: "run-1", Chain: []string{"cto", "swe"},
-		Origin:  &tracker.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
+		OperatorID: "tok-1", TurnID: "run-1", Chain: []string{"cto", "swe"},
+		Thread:  &tracker.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
 		Written: written,
 	}
 	got := remoteActor(actor)
@@ -107,8 +107,8 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 			t.Errorf("the provenance crossed without its %s", provenance.Type().Field(i).Name)
 		}
 	}
-	want := tracker.Provenance{OperatorID: "tok-1", Seat: "ana", TurnID: "run-1",
-		Chain: []string{"cto", "swe"}, Origin: actor.Origin, Written: written}
+	want := tracker.Provenance{OperatorID: "tok-1", TurnID: "run-1",
+		Chain: []string{"cto", "swe"}, Origin: actor.Thread, Written: written}
 	if !reflect.DeepEqual(got.Provenance, want) {
 		t.Errorf("the provenance crossed as %+v, want %+v", got.Provenance, want)
 	}

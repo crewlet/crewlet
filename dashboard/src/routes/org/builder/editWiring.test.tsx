@@ -33,8 +33,8 @@ import { resolve } from "~/app/routes.ts";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store, storeToken } from "~/protocol/index.ts";
-import { company, Engine, InertWebSocket } from "./testkit.tsx";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import { company, EDITOR, Engine, InertWebSocket } from "./testkit.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -64,16 +64,15 @@ afterEach(() => {
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
-  // The builder reads the GUARDED configuration, so it needs an operator
-  // token before it will ask for anything at all.
-  storeToken("t");
   new Engine(company()).install();
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] }));
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
-    Promise.resolve(null);
+  // The builder reads the GUARDED configuration, so the reader holds the
+  // grants it is read and written under.
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(what === "viewer" ? EDITOR : null);
   const route = resolve(parseHash(hash).path);
   if (!route.resolved) throw new Error(`${hash} does not resolve`);
   return render(
@@ -150,7 +149,7 @@ test("a link that names a seat opens that seat's editor", async () => {
 });
 
 test("a link that names a unit opens that unit's editor", async () => {
-  mount("#/agents/edit?view=table&unit=Engineering");
+  mount("#/agents/edit?view=table&unit=engineering");
   expect(await screen.findByRole("dialog", { name: "Edit Engineering" })).toBeDefined();
 });
 
@@ -199,7 +198,7 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
 
 /* And with `unit=`, under that unit — the unit's own editor is not what was asked. */
 test("an add with a unit opens under that unit, not the unit's editor", async () => {
-  mount("#/agents/edit?view=table&unit=Engineering&add=human");
+  mount("#/agents/edit?view=table&unit=engineering&add=human");
   const dialog = await screen.findByRole("dialog", { name: "Add to Engineering" });
   expect(
     within(dialog).getByRole("radio", { name: "Human seat" }).getAttribute("aria-checked"),

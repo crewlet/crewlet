@@ -82,12 +82,15 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { ADMIN, KNOWLEDGE, accessNames, needsWords } from "~/lib/access.ts";
 import type {
   KnowledgeAnswer,
   KnowledgeHit,
+  LogRefusal,
   PageChange,
   PageDetail,
   PageStatus,
+  QueryRefusal,
 } from "~/protocol/index.ts";
 import {
   Face,
@@ -95,9 +98,9 @@ import {
   NewPageButton,
   PageGlyph,
   changeNote,
+  changedBy,
   PageTags,
   SpacesRow,
-  drawnBy,
   pagePath,
   usePeople,
   useSpaces,
@@ -198,6 +201,8 @@ function KnowledgeLanding() {
 /** What both tiles drawn from the one read of the feed know about that read. */
 interface FeedState {
   error: QueryErrorCode | null;
+  /** Why the read was refused, beside `error`: what `QueryState` names. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** No answer has arrived yet. */
   loading: boolean;
 }
@@ -222,7 +227,11 @@ function Tiles() {
   const runs = useMemo(() => foldRuns(feed.data?.changes ?? [], zone), [feed.data, zone]);
   const lead = leadOf(runs);
   const rest = useMemo(() => runs.filter((_, i) => i !== lead), [runs, lead]);
-  const state: FeedState = { error: feed.error, loading: feed.loading && !feed.data };
+  const state: FeedState = {
+    error: feed.error,
+    refusal: feed.refusal,
+    loading: feed.loading && !feed.data,
+  };
   return (
     <div className="knowledge-tiles">
       <Latest run={runs[lead]} state={state} />
@@ -257,6 +266,7 @@ function Latest({ run, state }: { run: Run | undefined; state: FeedState }) {
       ) : (
         <QueryState
           error={state.error}
+          refusal={state.refusal}
           loading={false}
           empty={
             run
@@ -279,7 +289,7 @@ function LatestChange({ run, detail }: { run: Run; detail: PageDetail | null }) 
   const now = useNow();
   const zone = useOrg()?.timezone;
   const change = run[0];
-  const by = drawnBy(change.actor, change.actor_seat);
+  const by = changedBy(change);
   return (
     <>
       <PageHead
@@ -439,7 +449,7 @@ function RecentlyWritten({ runs, led, state }: { runs: Run[]; led: boolean; stat
         </TileBody>
       ) : state.error ? (
         <TileBody>
-          <QueryState error={state.error} loading={false} />
+          <QueryState error={state.error} refusal={state.refusal} loading={false} />
         </TileBody>
       ) : days.length === 0 ? (
         <TileNote>
@@ -479,7 +489,7 @@ function WrittenRow({
   zone: string | undefined;
 }) {
   const change = run[0];
-  const by = drawnBy(change.actor, change.actor_seat);
+  const by = changedBy(change);
   const note = changeNote(change);
   return (
     <ListItem
@@ -570,7 +580,14 @@ function Pinned() {
   );
 }
 
-/** The pages this person follows: they are told when these change. */
+/**
+ * The pages this person follows: they are told when these change.
+ *
+ * ASKED BY THE SEAT THEY ACT AS (`ViewerState.handle`), which is the one name
+ * a watch is filed under: a wake reaches a seat, so a credential the directory
+ * binds to no seat subscribes nobody (`internal/pages` `Actor.subscriber`) and
+ * has no pages to list here.
+ */
 function Watching() {
   const viewer = useViewer();
   const who = usePeople();
@@ -583,11 +600,15 @@ function Watching() {
   const rows = watched.data?.pages ?? [];
   return (
     <Tile className="knowledge-watching" title="Watching" icon={<EyeGlyph size="sm" />}>
-      {viewer.handle === "" ? (
-        <TileNote>Bind your token to your seat to see pages you follow.</TileNote>
+      {viewer.unbound ? (
+        <TileNote>
+          A watch is kept under a seat. This credential has none, so it follows no page.
+        </TileNote>
+      ) : viewer.handle === "" ? (
+        <TileNote>Sign in to see pages you follow.</TileNote>
       ) : watched.error ? (
         <TileBody>
-          <QueryState error={watched.error} loading={false} />
+          <QueryState error={watched.error} refusal={watched.refusal} loading={false} />
         </TileBody>
       ) : rows.length === 0 ? (
         !watched.loading && <TileNote>Watch a page to follow it.</TileNote>
@@ -599,7 +620,7 @@ function Watching() {
               id={page.id}
               folder={page.folder}
               title={page.title}
-              meta={lastSaved(page.saved_at, drawnBy(page.saved_by, page.saved_by_seat), who, now)}
+              meta={lastSaved(page.saved_at, page.saved_by ?? "", who, now)}
             />
           ))}
         </TileRows>
@@ -616,7 +637,14 @@ function ForTheAgents() {
     { skills: true, status: "published", limit: 1 },
     { pollMs: LANDING_POLL_MS },
   );
-  const memory = useQuery("memory_overview", undefined, { pollMs: LANDING_POLL_MS });
+  // THE AGENTS' DIARIES ARE THEIR TRAIL, and Diaries is an admin's screen:
+  // the overview is asked only of an admin, and the row says what opens it to
+  // anybody else rather than counting the few seats a lead would be answered.
+  const viewer = useViewer();
+  const memory = useQuery("memory_overview", undefined, {
+    pollMs: LANDING_POLL_MS,
+    enabled: viewer.admin,
+  });
   const seats = memory.data?.seats ?? [];
   // THE NEWEST THING AN AGENT KEPT: the last reflection any seat wrote.
   const newest = seats
@@ -642,7 +670,9 @@ function ForTheAgents() {
           href={href(["knowledge", "diaries"])}
           leading={<BrainGlyph size="sm" />}
           trailing={
-            memory.data ? (
+            !viewer.loading && !viewer.admin ? (
+              <span className="knowledge-tile-meta">{`Needs ${accessNames([ADMIN])} access`}</span>
+            ) : memory.data ? (
               <span className="knowledge-tile-meta">
                 {plural(seats.length, "agent")}
                 {newest ? ` · newest ${relTime(newest, now)}` : ""}
@@ -728,7 +758,7 @@ function KeptPage({ id, label, gone }: { id: string; label: string; gone: string
       meta={
         page.error === "not_found"
           ? gone
-          : lastSaved(last?.created_at, drawnBy(last?.author, last?.author_seat), who, now)
+          : lastSaved(last?.created_at, last?.author ?? "", who, now)
       }
     />
   );
@@ -811,6 +841,15 @@ function PageHead({
  */
 export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
   const building = answer.reason === "building";
+  if (answer.reason === "no_access") {
+    // THE READER'S ACCESS, not the company's search: said in the words every
+    // lock uses, with nothing to configure.
+    return (
+      <Callout variant="neutral" icon={<BookOpenGlyph size="md" />}>
+        <span>{needsWords("Search", [KNOWLEDGE])}</span>
+      </Callout>
+    );
+  }
   return (
     <Callout
       variant={building ? "warning" : "neutral"}
@@ -943,7 +982,12 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
           )}
         </Callout>
       )}
-      <QueryState error={search.error} detail={search.detail} loading={search.loading && !data}>
+      <QueryState
+        error={search.error}
+        refusal={search.refusal}
+        detail={search.detail}
+        loading={search.loading && !data}
+      >
         {/* The list and its preview share the keys: j and k move the choice
             through the list, and the preview follows it. */}
         <div className="knowledge-results-split" onKeyDown={onKeyDown}>
@@ -1133,10 +1177,11 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
     );
   }
   if (page.loading && !detail) return <Skeleton variant="text" rows={8} label="Reading the page" />;
-  if (!detail?.page) return <QueryState error={page.error} loading={false} />;
+  if (!detail?.page)
+    return <QueryState error={page.error} refusal={page.refusal} loading={false} />;
   const last = detail.history?.[0];
-  const author = drawnBy(detail.page.author, detail.author_seat);
-  const saver = last ? drawnBy(last.author, last.author_seat) : author;
+  const author = detail.page.author ?? "";
+  const saver = last ? (last.author ?? "") : author;
   const body = withoutRepeatedTitle(detail.page.body ?? "", detail.page.title);
   return (
     <article className="knowledge-preview" aria-label={detail.page.title}>

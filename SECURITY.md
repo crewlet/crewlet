@@ -25,40 +25,358 @@ A few things worth knowing when deploying Crewlet:
   identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
-- **The API's read surface is open by default.** Writes and every `/config`
-  route require a token from `api.auth.tokens`; reads do not, so `/events`,
-  `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone
-  who can reach the port. That is a reasonable default for a laptop and a
-  decision to make deliberately anywhere else — set
-  `api.auth.allow_anonymous_read: false` to require a token for reads too, and
-  never expose the API publicly with a dev-literal token.
+- **Session cookies are signed with the Tier A keyring, and a node without
+  one does not start.** Every node needs a keyring (`crewlet validate`
+  refuses a file without one), and the engine refuses to build a session
+  signer from a keyring that cannot sign for the fleet rather than falling
+  back to a per-process key: with a fallback, every ingress node would accept
+  only cookies it minted itself, so a browser would be signed in on whichever
+  node its request happened to reach. The cookie is `HttpOnly`, `Secure`,
+  `SameSite=Lax` and carries the `__Host-` prefix on any deployment whose
+  `api.external_url` is not plain http, which is what stops a sibling
+  subdomain writing one. It carries no login, no address and no permissions —
+  only ids, two deadlines and a MAC — so a cookie recovered from a proxy log
+  discloses nothing and authenticates nothing. **Dropping a keyring entry ends
+  every session signed under it**; see the rotation runbook in
+  `docs/concepts/secret-store.md`.
+- **A sign-in endpoint discloses nothing about who exists.** The refusal is
+  one generic error for every arm — no such login, wrong password, wrong
+  second-factor code, code already spent — because telling a caller which one
+  applies tells an attacker the same, and the first of them is the company's
+  roster. Two mechanisms keep the timing from saying it instead: the
+  throttle is keyed on the subject as TYPED from the request's source, and
+  decides before anything is looked up (a throttle keyed on who the subject
+  resolved to is one only real people can trigger, so its delay becomes the
+  oracle); and a subject that does not exist is still verified against — one
+  dummy verifier at this build's cost, so a miss is the same argon2id
+  derivation under the same verify cap as a hit. What still separates the
+  arms is stated rather than hidden, and not padded: the directory read before
+  the derivation, and a stored verifier written at another cost than this
+  build's, until the next sign-in rewrites it.
+- **A failed sign-in costs a wait, never a lockout.** Each failure doubles the
+  wait before the next attempt on its key, one second to thirty, and a correct
+  credential after the wait always succeeds — a lockout is something an
+  outsider can cause, against any login they can type. A success clears only
+  its own (subject, source) pair, so holding one account never wipes the
+  record of guesses at another. A second-factor code is also decided on a
+  curve keyed on the person, reached only past their password, so somebody
+  holding it cannot spread their guesses at the code across addresses; the
+  wrong code that takes it to its ceiling is announced as
+  `iam_second_factor_throttled`, which means the password is known and should
+  be rotated. No address is ever refused on its own: a
+  curve on the source alone let any stranger at an office's or a proxy's
+  address hold every sign-in from it at `429`, so one password tried across
+  many names from one address is bounded by the password floor, the argon2id
+  cost and the verify cap instead, and shown in the audit trail's per-minute
+  failure count by source; an invitation link meets no curve at all, its secret's 256
+  bits being what bounds a walk. No curve
+  stands in front of a bearer — a Tier A token, a machine token or a session
+  cookie: a bearer names nobody until it is compared, so a curve there could
+  only be keyed on the address, and one was a way for any stranger at an
+  address to hold every token used from it at `429`. A bearer's protection is its length and randomness (a Tier A value is
+  refused under 26 characters), and every refused one is counted in the audit
+  trail's per-minute failure count by source. Behind a proxy, name it in
+  `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
+  guessing at somebody's login slows that person's own sign-in. The curve is
+  each node's own and is not shared through the coordination store, so on a
+  fleet of N nodes serving sign-ins a run a load balancer spreads across all
+  of them is admitted up to N times as often — still bounded by the
+  twelve-character floor, the blocklist, the argon2id cost and, for a person
+  who holds one, a second factor.
+- **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
+  minimum and no composition rules.** The parameters are in the stored
+  verifier, so raising the cost re-hashes each person's on their next
+  successful sign-in — the only instant a stronger digest can be computed,
+  because the plaintext is not stored. A re-hash only ever raises a cost: a
+  node still on an older build during a rolling upgrade leaves a verifier the
+  newer build wrote exactly as it is. Machine tokens and recovery codes are
+  SHA-256 rather than argon2id, deliberately: both are minted by this engine
+  from `crypto/rand`, so there is no dictionary to grind and the memory cost
+  would buy nothing while adding a hundred milliseconds to every request a CI
+  job makes.
+- **A second factor's seed is sealed, under the fleet keyring.** TOTP is
+  symmetric, so the seed is the one credential the identity estate has to keep
+  as a secret rather than a verifier — and that estate is replicated to every
+  node, snapshotted, backed up and donated to joining peers. The seed is sealed
+  when it is enrolled, bound to the person *and* the credential it was enrolled
+  as, and opened only to check a code; removing the person erases it from every
+  node's rows, as it does their name and address. **Builds before this change stored it in the clear**, so a
+  deployment running one holds every enrolled seed in its identity log, its
+  snapshots and every backup taken since. Treat those seeds as disclosed: a
+  seed stored in the clear no longer verifies (the node logs
+  `api_totp_seed_unopenable` naming the person and credential), so have each
+  such person sign in with a recovery code and enrol their app again, or reset
+  their second factor (`crewlet iam reset-mfa`, `POST
+  /iam/people/{id}/mfa/reset`) so they re-enrol at their next sign-in —
+  re-sealing the old value would leave the copies already written readable.
+- **An invitation link carries a secret, and the estate keeps only its hash.**
+  The invitation's id is the row's key — in its record, every snapshot and
+  backup, and every access log a request for it passed through — so it opens
+  nothing on its own. The link is `…/dashboard#/invite/<id>.<secret>`, the
+  secret after the `#`, which no browser sends to a server; the dashboard
+  presents it beside the id in a header or a body, never in a URL, and a wrong
+  one is refused exactly as an id nobody issued is. **Builds before this change
+  made the id itself the link**, so an invitation they issued is in every
+  backup as a working credential: such an invitation is now redeemable by
+  nobody, and the remedy is to issue it again.
+- **Whoever creates a person is shown that person's first password link.** An
+  administrator can create somebody directly on a vacant human seat (`POST
+  /iam/people`, `crewlet iam create`, or **Create person** on the seat in the
+  org chart) instead of inviting them, and the answer carries the person's
+  first password link, shown once, for the administrator to send on. Until it
+  is spent, or for its week, that link sets the password of an `active` person
+  who acts as the seat they hold — so holding `admin`, with a vacant
+  human seat to name, is enough to obtain a credential that will act as that
+  seat once its password is set. Two rules bound it: a create confers only
+  permissions its writer holds, exactly as an invitation does, so nobody creates a
+  person holding more than they could act with themselves; and the link signs
+  nobody in, so a second factor the company requires is enrolled at that
+  person's first sign-in. `admin` is already host access (below), so this
+  widens nothing an administrator could not reach another way; give it only to
+  the people you would trust to put somebody on any vacant seat, and treat a created person's link as you
+  would an invitation: send it over a channel only they read, and if it may
+  have been seen by anybody else, end it — issue a password reset link, or end
+  their sessions — before it is spent. The issue is an
+  `iam_password_reset_issued` event marked `first`, naming who created them.
+- **A first password link and an invitation link are derived, under the
+  company's blind key.** So that a retry of a create or an invitation whose
+  answer was lost hands back the same link rather than a second person or a
+  second invitation, each link's id and secret are MACs under the company's
+  blind-index key — an invitation's of its operation key, a first password
+  link's of the person the create's key derived — and the estate keeps only the
+  SHA-256 of the secret. Whoever holds that key can compute the secret of every link that
+  is still open. That adds no exposure beyond the keyring: the blind-index key
+  is itself sealed under the fleet keyring, and whoever holds the keyring can
+  already sign any state-log record, open every sealed name, address and
+  second-factor seed, and sign session cookies. Protect the keyring as the root
+  of trust it is, and a stolen copy of the identity log, a snapshot or a backup
+  without it computes no link.
+- **Every API route requires a credential, reads included.** `allow_anonymous_read`
+  is gone: it served `/events`, `/agents/{id}/memory` and `/ws/stream` — full
+  LLM transcripts, diary entries and the roster — without one, by default, and
+  it could not be closed durably because it was an `omitempty` bool whose safe
+  value was its zero, so `false` did not survive an export round trip. A
+  script that only reads what the company is doing holds a service account's
+  token with no permission at all. What stays reachable without one is a short fixed
+  list — the probes, the signed webhook edges, the per-run token paths, and the
+  dashboard shell, which ships no data — and it is a list of *exemptions*
+  rather than a posture anything can widen.
+
+  `api.auth.disabled`, which authenticated the *empty* credential into full
+  operator authority with no bind check anywhere, is gone with it.
+  `crewlet run -dev-principal <login>` is what replaces it for local work, and
+  it is a **flag rather than a config field** because a field reaches
+  production by being copied into an image. It is refused unless `api.host`
+  binds loopback *and* the binary is a development build, grants every app —
+  and `admin` only where `api.auth.admin` is `serve` — and logs a warning on
+  every boot that enables it.
+- **Everybody signed in sees the overview, and nobody without admin or the
+  seat's lead sees a transcript.** Every principal the request guard resolves
+  — a person handed no permission at all, a service account, a machine token —
+  reads the company's overview: the org chart with each human seat's holder by
+  name, what every agent is doing (its status), spend, budgets, schedules and
+  the tools list. That is deliberate: a company is a shared place, and a
+  colleague handed no app still sees what it is doing. What it never carries is
+  a *body* — a prompt, a response, a tool's arguments, a coding run's task or
+  question — which goes only to an administrator, to the seat's lead, and for a
+  coding run's question to the person it is put to; nor a credential, a login
+  of anybody else's, an external contact id or the company-wide trail, which
+  are `admin`'s. If the existence of a seat, an agent's current status or the
+  company's spend must not reach somebody, do not give them a credential
+  (`docs/concepts/identity-and-access.md#everybodys-overview`).
+- **Carrying a credential is not the same as being allowed to use it.** Every
+  route and every socket question declares who may ask it — everybody, one of
+  the [three permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+  (`admin`, `tracker`, `knowledge`), or a verb the answer decides record by
+  record — and both transports are decided by the same registry, so a question
+  cannot be reached by choosing a channel. A route registered without saying
+  so is a build failure rather than a route that answers to anyone.
+- **`admin` is host access: it runs code on every engine host.** It is
+  deliberately one permission over the whole company — its configuration, its
+  credentials, its people and its deployment — and the configuration
+  configuration runs code: a stdio `mcp_servers` entry is a `command` the
+  engine starts as its own user on every node that runs seats; a `cli-agent`
+  provider names a binary it runs, and a seat on one with `run_in: self` does
+  its code work inside it; a `run_in: direct` sandbox cell runs a coding agent,
+  and its setup steps, as that same user; and a seat's model chain,
+  credentials, sandbox cell and `mcp_env` are part of the same document.
+  Whoever holds it can therefore run anything on every
+  engine host and read whatever the engine's user can: the Tier A file, the
+  keyring that signs every session, and every credential the store holds. Give
+  it to the people and pipelines you would give a shell on those hosts. A
+  machine token can carry it — a deploy job applying configuration is what one
+  is for — so minting one with it hands that job the same reach. Two locks
+  keep such a token off what needs a person present: the authority table
+  refuses a request that presented a token on revealing a secret, every
+  directory write, ending everybody's sessions and changing how somebody proves
+  who they are, and the identity domain refuses every administrative record —
+  an enrolment, an invitation, a permission change, a suspension, a removal —
+  written
+  through a machine token, whatever it carries. Every write under it that can
+  start a process — the company document, connecting an integration — asks for
+  a recent step-up, so a stolen session cookie alone does not reach it.
+- **A child process is handed an allowlisted environment, never the
+  engine's.** The engine's environment is where Tier A's `${VAR}` references
+  resolve from — the keyring, every `api.auth.tokens` value, any credential
+  in an external `stream.url` — and
+  where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`),
+  often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`,
+  `MATTERMOST_ADMIN_TOKEN`); so no process the engine starts inherits it: a
+  stdio MCP server, a coding CLI, a local sandbox's coding agent and the
+  container runtime's own CLI each get `PATH`, locale, TLS trust and proxy
+  settings, the host user's home and temporary directories where they run
+  in no box of their own, and what their configuration declares. That keeps the
+  engine from *handing* its secrets to code that never asked for them. It is
+  not isolation: a child runs as the engine's user and can read what that user
+  can, `/proc/<engine pid>/environ` included. A tool server you do not trust
+  needs a different user or a container around it.
+- **A cross-site write is refused by its `Origin`.** CORS decides who may
+  *read* an answer; on a state change that is the part an attacker does not
+  need, so a separate check refuses a non-read whose `Origin` is not an address
+  this deployment is reached at. An absent `Origin` is allowed for a bearer
+  client — a cross-site page cannot make a bearer travel — and refused for a
+  cookie-authenticated request, which a browser would always have sent one on.
 - **Only the webhook and sandbox routes need to be public.** The routes
   outside parties call — `/webhooks/*` (vendor deliveries, verified by each
   vendor's signature or shared token) and the sandbox endpoints
   `/otlp/{token}` and `/mcp/{token}` (a signed, expiring per-run token in the
-  path) — hold no operator credential. Setting `api.public.port` serves them
-  on a listener of their own and nowhere else, and every other route,
-  `/config` and `/secrets` included, only on `api.port`, so a deployment can
-  publish the first and keep the second private without filtering paths in a
-  proxy. The public listener requires no operator token, and answers every
-  route it does not serve with the same `404` it gives a path nothing serves,
-  whatever credential is sent — so the published socket neither reveals the
-  admin routes behind it nor answers differently to a valid token
+  path) — hold no credential of a person's. Setting `api.public.port` serves
+  them on a listener of their own and nowhere else, and every other route —
+  `/config`, `/secrets`, `/iam` and the sign-in routes under `/auth` included —
+  only on `api.port`, so a deployment can publish the first and keep the
+  second private without filtering paths in a proxy. A vendor is handed the
+  public listener's own address, `api.public.external_url`, and a person
+  `api.external_url`, so no link anybody follows points at the published
+  socket. The public listener answers every route it does not serve with the
+  same `404` it gives a path nothing serves, whatever credential is sent — so
+  the published socket neither reveals the admin routes behind it nor answers
+  differently to a valid one
   (`docs/guides/deployment.md#exposing-webhooks-without-the-admin-api`).
 - **`api.auth.company_writers` prevents drift; it is not a privilege
-  boundary.** It refuses a change to a managed company document from any
-  token it does not list, but every token still writes the secret store and
-  can reload, so it can rewrite any value the document references through a
-  `${VAR}` — a model key, a webhook secret, an endpoint. Do not issue a token
-  to anyone you would not let change what the company does
+  boundary.** It refuses a change to a managed company document from every
+  credential but a listed Tier A token — a person's session, a machine token
+  and a lead editing their own team included — but every administrator still
+  writes the secret store and can reload (`POST /config/reload`), so they can
+  rewrite any value the document references through a `${VAR}` — a model key,
+  a webhook secret, an endpoint — and publish it. A value rewritten in the
+  secret store alone still takes effect at the next activation: a reload, the
+  managing system's next apply, or a restart. Do not grant `admin` to anyone
+  you would not let change what the company does
   (`docs/concepts/configuration.md#managed-configuration`).
-- **Config encryption at rest** is available and recommended when your
-  company config carries secrets — see
-  `docs/concepts/configuration.md#secrets`.
-- **Sandbox isolation.** Coding-agent runs execute inside an isolated sandbox
-  (E2B); the sandbox boundary — not the coding agent's own permission
-  prompts — is the isolation model. Treat anything you inject into a sandbox
-  (tokens in `role.sandbox.env`) as visible to the code that runs there.
+- **A node that cannot read identity answers `503`, never `401`.** The
+  principal a node could not check and the principal that presented nothing are
+  the same empty value, and reporting the first as the second tells everybody
+  holding a valid credential that theirs is invalid for the length of the
+  outage — which is how a company gets taught to reset working passwords during
+  one.
+- **`api.auth.admin` says whether a node serves admin, and it is required.** A
+  person's permissions live in the replicated store, which is not a tier this
+  deployment's operator controls. This is each node's statement, in the tier
+  that holds the keyring, of whether `admin` counts there at all: `serve`, or
+  `refuse`, which clamps admin away from every principal composed on the node
+  and keeps every app. A node published to the people who use the company,
+  where nobody should be able to administer it however their row reads, is a
+  `refuse` node. It is applied per node, per request, so it needs no write; each
+  node publishes its posture so a mixed fleet mid-rollout is visible rather
+  than silent.
+- **A Tier A token is a real credential and is checked as one.** Each entry
+  states its own `grants` — required and non-empty, naming only `admin`,
+  `tracker` and `knowledge`, and refused for `admin` on a node that refuses it
+  — and its value must clear
+  a 26-character floor on what the `${VAR}` *resolves to*, so a reference
+  cannot be the way around the rule. At least one is required on every node
+  that serves the API: a fresh deployment's identity estate is empty, so it is
+  what creates the first person, and on a running one it is the way back in
+  when an administrator has locked themselves out.
+- **The company configuration is always sealed at rest.** Every revision is
+  encrypted and authenticated under the Tier A keyring before it reaches the
+  store — there is no plaintext mode, and a node reads only sealed revisions —
+  so a copied store file, a backup or a volume snapshot carries ciphertext
+  alone. The keyring is the root of trust: keep it out of the store's backup
+  domain. See
+  [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
+- **The fleet's broker authenticates nothing itself, so what crosses it as an
+  instruction is signed.** A fleet's embedded members route to each other on
+  `stream.cluster.port`, and a node without `data` reaches them on
+  `stream.leaf.port`. Every state-log record is signed under the Tier A keyring
+  and verified before any node applies it, and so is every request one node
+  asks another to CARRY OUT, and every reply, on each of the three channels
+  that carry one: a node without `data` asking a data node's estate service to
+  write (the data node writes as the actor the request names), any node asking
+  a broker member to remove a voter from the metadata group (the member does it
+  through its own system account, changing the quorum every election runs on),
+  and a person's note to a running turn (the running node offers it as the
+  person it names). Unsigned, each would let anybody who reaches either port
+  write as anybody, change the broker's quorum past every check the operator's
+  route makes, or put words in front of a running agent under anybody's name.
+  Each request is bound to an id and a deadline inside its signature, so one
+  captured off the wire is not carried out twice. A frame under a key the
+  receiver does not hold is not applied, or not run; one that fails under a key
+  it holds is refused and logged. Signing authenticates and does not encrypt:
+  the records, the event stream and the coordination store are readable by
+  anything that reaches those ports, the coordination store's writes are
+  guarded by compare-and-set rather than a signature, and the scatters that
+  only READ — history, search, a seat's memory, a sandbox's tail — are not
+  signed. Keep both ports on a private network. The decision is
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md).
+- **Removing a person erases their values from every node's rows — and not
+  from the identity log or a backup until those let go of them.** A person's
+  name, address and second-factor seed are sealed under the fleet keyring,
+  bound to them, before any record carrying them is published. Removing them
+  deletes their rows and clears every sealed value of theirs from the rows that
+  outlive them — an invitation addressed to them, the audit trail's rows —
+  on every node, in the transaction that removes them. What it cannot rewrite:
+  **the identity log** keeps the records that wrote those values, sealed, until
+  the retention trim passes them (never before `min_age`, a week by default,
+  and later while a trim term holds the log); **every backup** holds what it
+  held when it was taken — the rows before the removal, the log's records
+  after it — until it is deleted or ages out (a fortnight on the
+  [tiered schedule](docs/guides/backup.md#where-to-put-it-and-how-often) the
+  backup guide suggests), and restoring one taken before the removal brings
+  the person back whole; a **raw copy of `stream.store_dir`** — the cold
+  runbook's copy, a filesystem snapshot — can carry trimmed records until the
+  broker rewrites the file holding them; and on a node that dials an external
+  NATS cluster, **that cluster's own backups** hold the log on that cluster's
+  retention. Every one of those copies is sealed under the keyring, so it is
+  readable by whoever holds the copy *and* the keyring — which the operator
+  does by design. When an erasure has to be complete, remove the person, let
+  the identity log's trim pass the removal, and delete or expire every backup
+  and raw copy taken before that. What outlives the removal on purpose: their
+  id, the tombstone (who removed them, when, and which claims they held — an
+  address as its blind, never its value), and the audit trail's rows naming
+  them, because a history whose authors evaporate is not an audit trail.
+  **Their login outlives it too, in the clear**: it is on the removal record in
+  the identity log (so in every backup and donated snapshot), in the
+  tombstone's `iam_removed.claims_json`, and in the trail's reasons
+  (`suspended by jane.doe`). A login is deliberately not sealed — it is
+  printed beside everything its holder does — and the one an invitation's form
+  or an administrator's create proposes is derived from the address (`jane.doe@example.com` proposes
+  `jane.doe`), so after a removal the address's local part is usually still
+  readable. If a person's login has to be erasable, do not derive it from a
+  personal address: give them one that names nothing about them. See
+  [Removing somebody erases what is theirs from every node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
+- **Personal data in configuration revisions.** Every node keeps its own copy
+  of every company-config revision it has ever met, in an append-only table
+  that is in every backup of that node. A human seat's `email` and `contact`
+  account ids are part of the org chart in that document, so they are
+  archived in every revision that carried them — and removing the seat does
+  not reach them, because the removal writes a *new* revision. The revision
+  table is swept: 400 days, plus the active revision and its parent chain
+  (see
+  `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`),
+  and backups hold what they held until you delete them, so apply your own
+  retention to those.
+- **Sandbox isolation depends on the cell a seat runs in.** A coding agent
+  runs fully permissioned — the sandbox boundary, not the agent's own
+  permission prompts, is the isolation model — so where it runs is the
+  security decision. `run_in: e2b` is a remote VM per run and `run_in:
+  container` a Docker or Podman container on the engine host; `run_in: direct`
+  is a process tree running **as the engine's own user on the engine host**,
+  which isolates each box's state and not the host — it can read what that
+  user can. Use `direct` on a workstation or a dedicated VM, never where the
+  work is untrusted. Treat anything you inject into a sandbox (tokens in
+  `role.sandbox.env`) as visible to the code that runs there. See
+  [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
   E2B boxes are created with secured access, so a box's in-box agent runs a
   command or serves a file only for a holder of that box's access token,
   which the engine reads from E2B and never stores

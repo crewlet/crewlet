@@ -55,8 +55,8 @@ func (t *taskActivity) Parameters() map[string]any {
 		"properties": map[string]any{
 			"task": map[string]any{
 				"type": "string",
-				"description": "One task's whole history, by key or id — " +
-					"including keys it used to have.",
+				"description": "One task's whole history, by any key it " +
+					"has had or by its id. " + itemRef,
 			},
 			"project": map[string]any{
 				"type":        "string",
@@ -65,7 +65,8 @@ func (t *taskActivity) Parameters() map[string]any {
 			"kinds": map[string]any{
 				"type": "string",
 				"description": "Comma-separated change kinds to keep, such as " +
-					"`status,assignee`. Omit for everything.",
+					"`status,assignee`, from: " + changeKindNames() +
+					". Omit for everything.",
 			},
 			"actor": map[string]any{
 				"type": "string",
@@ -121,6 +122,11 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Cursor:  strings.TrimSpace(argString(args, "cursor")),
 		Level:   seatReadLevel,
 	}
+	// A KIND IS PASSED AS IT CAME and the tracker's read refuses one it
+	// does not have, naming the set ([tracker.ErrBadQuery], which
+	// [readFailure] words as an argument to change): built from any string
+	// and never checked, a mistyped kind answered an empty feed that reads
+	// exactly like a project where nothing happened.
 	for _, kind := range strings.Split(argString(args, "kinds"), ",") {
 		if kind = strings.TrimSpace(kind); kind != "" {
 			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
@@ -152,9 +158,19 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer, err := reader.Activity(ctx, q, t.deps.now())
 	if err != nil {
-		return readFailure(tracker.TaskActivityTool, err), nil
+		return readFailure(ctx, tracker.TaskActivityTool, err), nil
 	}
 	return jsonResult(answer)
+}
+
+// changeKindNames is every change kind, for the schema that offers them: the
+// set a model picks from is the one the read refuses anything outside of.
+func changeKindNames() string {
+	names := make([]string, len(tracker.ChangeKinds))
+	for i, kind := range tracker.ChangeKinds {
+		names[i] = "`" + string(kind) + "`"
+	}
+	return strings.Join(names, ", ")
 }
 
 type myWork struct{ deps WorkDeps }
@@ -199,17 +215,15 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// they owe, handed to an agent nobody asked. The operator surface
 	// supplies its own identity the same way, through the actor seam.
 	//
-	// AND IT IS THE ACTOR'S OWN PARTY, which for a seat is its one handle
-	// and for a bound operator is the person their credential names plus
-	// the credential itself. Asked about the bare handle, a founder's
-	// assistant got the TOKEN's day: seven blocks over rows their
-	// colleagues had filed against `jane-founder` and none of them
-	// matched. The chart lookup is the surface's — see [Actor.Seat].
+	// AND IT IS THE ACTOR'S OWN RECORD, which is its handle: a person the
+	// identity directory binds to a seat writes AS that seat
+	// ([PrincipalActor]), so their day is the seat's and never the
+	// credential's.
 	out, err := reader.MyWork(ctx, tracker.MyWorkQuery{
-		Who: actor.Party(), Level: seatReadLevel,
+		Handle: actor.Handle, Level: seatReadLevel,
 	}, t.deps.now(), t.deps.zone())
 	if err != nil {
-		return readFailure(tracker.MyWorkTool, err), nil
+		return readFailure(ctx, tracker.MyWorkTool, err), nil
 	}
 	return jsonResult(out)
 }

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -99,6 +101,20 @@ import (
 // otherwise start a second copy of an agent a peer already runs. A pass
 // refused that way is retried like a failed start, and the release that
 // follows a lost lease cancels it.
+//
+// # A seat the company no longer declares keeps no child
+//
+// A revision that removes a role leaves its seat held here until placement
+// lets it go, and placement honours an apply's ask for a pass at most once per
+// sweep interval ([seat.Host.Resweep]), so that can be a whole interval. The
+// apply's pass retires the seat's children rather than leaving them for the
+// release, for the same reason as above: a child is the seat's identity at the
+// vendor, and one kept running would go on acting there for an agent the
+// company no longer has. A turn still running on the seat then finds those
+// tools gone and a call to one comes back as a tool error the model can read,
+// the same as when a revision drops one server from a seat it keeps. The seat
+// keeps a surface refiled from the current epoch until the release, so a turn
+// still runs with the builtins.
 //
 // # The release always wins
 //
@@ -269,6 +285,10 @@ func (e *Engine) claimSeatChildren(ctx context.Context, handle string) *seatChil
 // reconcileSeatServers brings every seat this node holds onto the epoch an
 // apply has just published.
 //
+// It is the `seat_tools` step of [Engine.followCompany], so a boot runs it as
+// well as every apply; at a boot this node holds no seat yet and it does
+// nothing, the claims that follow running their own first passes.
+//
 // TWO STEPS, and the apply waits for the first alone. Each seat's registry is
 // a clone of the epoch's surface, so it is REFILED at once against the new
 // one — its builtins and shared servers, with the seat's live catalogue on
@@ -425,14 +445,21 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren) bool {
 	if c == nil {
 		return false
 	}
-	var specs []mcp.Spec
-	var outcomes []mcpOutcome
+	var (
+		specs    []mcp.Spec
+		outcomes []mcpOutcome
+		id       uuid.UUID
+	)
 	if seat := c.Org.AgentSeatByHandle(s.handle); seat != nil {
 		// A SEAT THE EPOCH NO LONGER HAS declares nothing, so every child
 		// goes: the revision that removed the role is current, the sweep
 		// is about to release the seat, and a child left running until
 		// then is an identity the company no longer has.
 		specs, outcomes = seatSpecs(c, seat, e.resolver())
+		// THE SEAT'S ID rides every outcome, which is what the heartbeat
+		// names a failing instance by, as a lease names its seat. A seat
+		// the epoch no longer has declares nothing and so reports nothing.
+		id, _ = c.Org.AgentIDFor(seat)
 	}
 	retireUndeclared(ctx, s, specs)
 	started, retry := bringUp(ctx, s, specs)
@@ -456,7 +483,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren) bool {
 		e.seatTools[s.handle] = seatSurface(ctx, current, s)
 	}
 	for i := range outcomes {
-		outcomes[i].seat = s.handle
+		outcomes[i].seat = id
 	}
 	if e.mcpSeats == nil {
 		e.mcpSeats = make(map[string][]mcpOutcome)

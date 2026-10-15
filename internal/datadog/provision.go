@@ -10,7 +10,9 @@ import (
 )
 
 // SeatEnv is the mcp_env server whose credentials belong to Datadog.
-const SeatEnv = "datadog"
+//
+// FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
+const SeatEnv = org.MCPEnvDatadog
 
 // CredentialKeys are the spellings a seat's application key arrives under.
 //
@@ -107,9 +109,10 @@ func firstCredential(block map[string]string) (string, string) {
 // AccountEmail is the address one seat's service account is created with.
 //
 // DERIVED, so the pass that creates an account and the teardown that disables
-// it agree about which account is whose without storing a mapping. The handle
-// is the only part that varies, which is what makes the address a stable name
-// for a seat rather than a value somebody has to look up.
+// it agree about which account is whose without storing a mapping.
+//
+// FROM THE HANDLE, which is immutable (ADR-0013), so the address is stable for
+// the life of the seat: Datadog will not change an account's address at all.
 func AccountEmail(p *config.DatadogProvisioning, handle string) string {
 	domain := DefaultEmailDomain
 	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
@@ -126,6 +129,10 @@ func AccountEmail(p *config.DatadogProvisioning, handle string) string {
 
 // AccountName is the display name one seat's account carries, so a person
 // reading Datadog's user list can tell which agent it is.
+//
+// The handle is the FALLBACK LABEL only, for a seat whose role is unnamed —
+// the same string [AccountEmail] puts in the address, so the two columns of
+// Datadog's user list agree rather than naming a seat two ways.
 func AccountName(role, handle string) string {
 	if strings.TrimSpace(role) == "" {
 		return handle + " (Crewlet)"

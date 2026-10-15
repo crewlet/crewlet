@@ -29,13 +29,13 @@ func TestEveryRunsToolsSeeACallLogOfTheirOwn(t *testing.T) {
 	dispatched := mustDescribeTurn(t, &Engine{}, company, Request{
 		Handle: "swe", RunID: "run-1", WorkKey: "wk-1", WorkSince: began,
 	})
-	first := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
-	rerun := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
+	first := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""), nil)
+	rerun := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""), nil)
 	resumed := mustDescribeResume(t, &Engine{}, company, resumeInput{
 		Run: sandbox.PendingRun{TurnID: "run-1", WorkKey: "wk-1", WorkSince: began,
 			AgentHandle: "swe"},
 		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", WorkSince: began, Seat: seat},
-	}).runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
+	}).runnerTurn(company, 0, nil, "the task", turn.ToolReply(""), nil)
 
 	for name, got := range map[string]*turnctx.Turn{
 		"a dispatched run": first.Context, "a resumed run": resumed.Context,

@@ -18,15 +18,12 @@ type mintSink struct {
 	readErr  error
 	records  int
 	reads    int
-	cannot   bool
 	recorded map[string]string
 }
 
 func newMintSink() *mintSink {
 	return &mintSink{vals: map[string]string{}, recorded: map[string]string{}}
 }
-
-func (s *mintSink) Mints() bool { return !s.cannot }
 
 func (s *mintSink) Record(_ context.Context, name, value string) error {
 	s.mu.Lock()
@@ -185,29 +182,7 @@ func TestRecreateMintsOverWhatIsHeld(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT. An error here is a fault
-// the loop retries while telling an operator the engine is working on it —
-// and no pass will ever succeed until somebody sets secrets.keys.
-func TestANodeWithNoKeyringReportsRatherThanFaulting(t *testing.T) {
-	t.Parallel()
-	sink := newMintSink()
-	sink.cannot = true
-
-	got, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false, fixed("fresh"))
-	if err != nil {
-		t.Fatalf("a node with no keyring faulted: %v", err)
-	}
-	if !got.NoKeyring || got.Value != "" || got.Minted {
-		t.Errorf("MintSecret = %+v, want the keyring posture and no value", got)
-	}
-	if sink.records != 0 || sink.reads != 0 {
-		t.Errorf("a sink that cannot seal was asked anyway: %d read(s), %d record(s)",
-			sink.reads, sink.records)
-	}
-}
-
-// AND NO SINK AT ALL IS STILL A REFUSAL, which is the command line's case: a
+// NO SINK AT ALL IS A REFUSAL, which is the command line's case: a
 // run told to mint with nowhere to put the result would leave a live signing
 // secret at the third-party app and print none of it.
 func TestNoSinkIsRefused(t *testing.T) {

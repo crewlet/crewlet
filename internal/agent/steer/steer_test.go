@@ -51,7 +51,13 @@ func TestTheSteerTransitionTable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tc.box().Offer(note("new")); got != tc.want {
+			// THE PROBE ANSWERS WHAT THE OFFER WILL, and takes nothing:
+			// the offer that follows it is answered the same.
+			box := tc.box()
+			if got := box.Status(); got != tc.want {
+				t.Errorf("probe answered %s, want %s", got, tc.want)
+			}
+			if got := box.Offer(note("new")); got != tc.want {
 				t.Errorf("offer answered %s, want %s", got, tc.want)
 			}
 		})

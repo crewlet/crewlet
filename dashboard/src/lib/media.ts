@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from "react";
-import { PHONE_BREAKPOINT } from "~/app/layout.ts";
+import { PHONE_BREAKPOINT, TOUCH_MEDIA } from "~/app/layout.ts";
 
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
@@ -53,4 +53,14 @@ export function useMediaQuery(query: string): boolean {
 export function usePanelAlign(preferred: "start" | "end"): "start" | "end" {
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   return phone ? "start" : preferred;
+}
+
+/**
+ * Whether the frame draws its KEYCAP hints: everywhere but where the reader's
+ * primary input is touch (`app/layout.ts`'s [TOUCH_MEDIA]), where a keycap
+ * names a key the reader does not have. The keys still work for a reader who
+ * attaches a keyboard; only the hint is withheld.
+ */
+export function useKeyHints(): boolean {
+  return !useMediaQuery(TOUCH_MEDIA);
 }

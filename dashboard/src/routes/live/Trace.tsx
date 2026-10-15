@@ -6,6 +6,13 @@
  * `.length` on an object is `undefined`, which is falsy, which is the empty
  * state, always. Its own suite only ever exercised the span arranger on
  * hand-built arrays, so nothing caught it.
+ *
+ * AN ADMIN'S SCREEN, under an address that has no section of its own: a
+ * trace is every event a piece of work caused — what the seats said and ran —
+ * and the engine answers `trace` to an admin alone. Its address sits under
+ * Live's overview, which everybody reads, so the screen itself draws the lock
+ * (`GrantRequired`) for anybody else and asks nothing, as the frame does for
+ * a section.
  */
 
 import { useMemo } from "react";
@@ -20,6 +27,9 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { ADMIN } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import {
   fmtDateTime,
   fmtDuration,
@@ -135,9 +145,20 @@ export function arrange(events: readonly EventRecord[]): TraceRow[] {
 }
 
 export function TraceScreen({ traceId }: { traceId: string }) {
+  const viewer = useViewer();
+  // THE FIRST READING IS WAITED OUT, as the frame waits; a viewer read that
+  // FAILED mounts the screen, and the engine's own answer says what it finds.
+  if (viewer.asking) return <Skeleton variant="text" rows={6} label="Checking your access" />;
+  if (!viewer.loading && !viewer.admin) {
+    return <GrantRequired what="A trace" grants={[ADMIN]} reader={viewer.login} />;
+  }
+  return <Trace traceId={traceId} />;
+}
+
+function Trace({ traceId }: { traceId: string }) {
   const nav = useNavigator();
   const now = useNow();
-  const { data, loading, error } = useQuery("trace", { trace_id: traceId });
+  const { data, loading, error, refusal } = useQuery("trace", { trace_id: traceId });
 
   // `.events`, not the answer itself.
   const events = data?.events ?? [];
@@ -248,6 +269,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
       <CoverageNote coverage={[data?.coverage]} what="this trace" />
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           events.length

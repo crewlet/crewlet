@@ -38,16 +38,27 @@ providers:
 // the document is decoded.
 func TestTierAResolvesAtLoad(t *testing.T) {
 	t.Setenv("ACME_DB", "/srv/acme.db")
-	t.Setenv("ACME_TOKEN", "tok-123")
+	t.Setenv("ACME_TOKEN", "tok-123-long-enough-to-be-one")
+	t.Setenv("ACME_KEY_MATERIAL", TestKeyMaterial)
 	cfg, err := ParseBootstrap([]byte(`
 store:
   path: "${ACME_DB}"
+stream:
+  store_dir: /var/lib/crewlet/stream
 api:
   port: 8000
+  external_url: "https://acme.example.com"
   auth:
+    admin: serve
     tokens:
       - id: founder
         token: "${ACME_TOKEN}"
+        grants: [admin]
+secrets:
+  active_key_id: k1
+  keys:
+    - id: k1
+      material: "${ACME_KEY_MATERIAL}"
 `), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +66,7 @@ api:
 	if cfg.Store.Path != "/srv/acme.db" {
 		t.Fatalf("store path = %q", cfg.Store.Path)
 	}
-	if cfg.API.Auth.Tokens[0].Token != "tok-123" {
+	if cfg.API.Auth.Tokens[0].Token != "tok-123-long-enough-to-be-one" {
 		t.Fatalf("token = %q", cfg.API.Auth.Tokens[0].Token)
 	}
 }
@@ -160,7 +171,7 @@ func TestDocumentResolutionNeverTouchesKeys(t *testing.T) {
 // as a type error.
 func TestSubstitutedScalarStaysAString(t *testing.T) {
 	t.Setenv("ACME_STORE_NAME", "8080")
-	cfg, err := ParseBootstrap([]byte("store:\n  path: ${ACME_STORE_NAME}\n"), EnvOnly())
+	cfg, err := ParseRunnableBootstrap([]byte("store:\n  path: ${ACME_STORE_NAME}\n"), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,33 +232,6 @@ func TestMapResolutionReportsPerKey(t *testing.T) {
 	}
 }
 
-// A setup step's env is left VERBATIM: it is resolved exactly once, with
-// the rest of the sandbox env at launch. Resolving here too would
-// double-resolve a secret whose real value contains a literal ${...}.
-func TestSetupStepResolvesFilesAndCommandsOnly(t *testing.T) {
-	t.Setenv("ACME_STEP_TOKEN", "tok")
-	step := SandboxSetupStep{
-		Name:     "git-auth",
-		Files:    map[string]string{"/tmp/creds": "password=${ACME_STEP_TOKEN}"},
-		Commands: []string{"echo ${ACME_STEP_TOKEN}"},
-		Env:      map[string]string{"GITLAB_TOKEN": "${ACME_STEP_TOKEN}"},
-		Brief:    "use ${ACME_STEP_TOKEN}",
-	}
-	out, missing := step.Resolve("providers.sandbox.setup[0]", EnvOnly())
-	if len(missing) != 0 {
-		t.Fatalf("missing = %#v", missing)
-	}
-	if out.Files["/tmp/creds"] != "password=tok" || out.Commands[0] != "echo tok" {
-		t.Fatalf("files/commands not resolved: %+v", out)
-	}
-	if out.Env["GITLAB_TOKEN"] != "${ACME_STEP_TOKEN}" {
-		t.Fatalf("env must stay verbatim, got %q", out.Env["GITLAB_TOKEN"])
-	}
-	if out.Brief != "use ${ACME_STEP_TOKEN}" {
-		t.Fatalf("brief must stay verbatim, got %q", out.Brief)
-	}
-}
-
 // The pre-launch presence check tests the REFERENCES, not the resolved
 // value: an embedded "Bearer ${TOKEN}" with TOKEN unset resolves to a
 // non-empty "Bearer ", so a caller checking the result would miss exactly
@@ -285,10 +269,11 @@ func TestResolvableTestsTheReferencesNotTheValue(t *testing.T) {
 // it spells a number or YAML's null — the value is data, never syntax.
 func TestAReferenceIsReadAsTheFieldReadsALiteral(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap([]byte(`api:
+	cfg, err := ParseRunnableBootstrap([]byte(Served(`api:
   port: ${API_PORT}
 stream:
   debug: "${STREAM_DEBUG}"
+  store_dir: /var/lib/crewlet/stream
 node:
   max_concurrent: ${MAX}
 coordination:
@@ -297,7 +282,7 @@ store:
   path: ${STORE_NAME}
 logging:
   level: ${LEVEL}
-`), NewResolver(MapSource{
+`)), NewResolver(MapSource{
 		"API_PORT": "9090", "STREAM_DEBUG": "true", "MAX": "0x10",
 		"LEASE": "12.5", "STORE_NAME": "null", "LEVEL": "debug",
 	}))
@@ -331,8 +316,8 @@ logging:
 // value, and still refused.
 func TestATypedReferenceIsTrimmedAsTextIs(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap([]byte("api:\n  port: ${API_PORT}\nstream:\n  debug: ${STREAM_DEBUG}\n"+
-		"node:\n  max_concurrent: ${MAX}\nstore:\n  path: ${STORE}\n"),
+	cfg, err := ParseRunnableBootstrap([]byte(Served("api:\n  port: ${API_PORT}\nstream:\n  debug: ${STREAM_DEBUG}\n"+
+		"  store_dir: /var/lib/crewlet/stream\nnode:\n  max_concurrent: ${MAX}\nstore:\n  path: ${STORE}\n")),
 		NewResolver(MapSource{"API_PORT": "9090\n", "STREAM_DEBUG": " true\r\n", "MAX": "\t8 ",
 			"STORE": "/var/lib/crewlet/company.db\n"}))
 	if err != nil {
@@ -346,7 +331,7 @@ func TestATypedReferenceIsTrimmedAsTextIs(t *testing.T) {
 		t.Errorf("store.path = %q: the text field beside them must trim the same way", cfg.Store.Path)
 	}
 
-	_, err = ParseBootstrap([]byte("api:\n  port: ${API_PORT}\n"), NewResolver(MapSource{"API_PORT": "80 80"}))
+	_, err = ParseRunnableBootstrap([]byte("api:\n  port: ${API_PORT}\n"), NewResolver(MapSource{"API_PORT": "80 80"}))
 	if !errors.Is(err, ErrShape) {
 		t.Fatalf("api.port from %q: err = %v, want %v — only the space AROUND a value goes", "80 80", err, ErrShape)
 	}
@@ -372,11 +357,11 @@ func TestATypedFieldRefusesWhatItCannotRead(t *testing.T) {
 	}{
 		{"text around a number's reference", "api:\n  port: \"80${TAIL}\"\n",
 			MapSource{"TAIL": "80"}, ErrShape, "api.port"},
-		{"text around a switch's reference", "stream:\n  debug: \"y${TAIL}\"\n",
+		{"text around a switch's reference", "stream:\n  debug: \"y${TAIL}\"\n  store_dir: /var/js\n",
 			MapSource{"TAIL": "es"}, ErrShape, "stream.debug"},
 		{"a number's reference nothing answered", "api:\n  port: ${API_PORT}\n",
 			MapSource{}, ErrMissing, "api.port"},
-		{"a switch's reference set to nothing", "stream:\n  debug: ${STREAM_DEBUG}\n",
+		{"a switch's reference set to nothing", "stream:\n  debug: ${STREAM_DEBUG}\n  store_dir: /var/js\n",
 			MapSource{"STREAM_DEBUG": ""}, ErrMissing, "stream.debug"},
 		{"a number that is a word", "api:\n  port: ${API_PORT}\n",
 			MapSource{"API_PORT": "http"}, ErrShape, "api.port"},
@@ -389,7 +374,7 @@ func TestATypedFieldRefusesWhatItCannotRead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := ParseBootstrap([]byte(tc.yaml), NewResolver(tc.env))
+			_, err := ParseRunnableBootstrap([]byte(tc.yaml), NewResolver(tc.env))
 			if !errors.Is(err, tc.kind) {
 				t.Fatalf("err = %v, want %v", err, tc.kind)
 			}
@@ -402,7 +387,7 @@ func TestATypedFieldRefusesWhatItCannotRead(t *testing.T) {
 
 	// AND TEXT STILL SPLICES: a text field takes a reference anywhere in
 	// its value, which is what `edge-${ZONE}` as a node id needs.
-	cfg, err := ParseBootstrap([]byte("node:\n  id: \"edge-${ZONE}\"\n"), NewResolver(MapSource{"ZONE": "eu"}))
+	cfg, err := ParseRunnableBootstrap([]byte("node:\n  id: \"edge-${ZONE}\"\n"), NewResolver(MapSource{"ZONE": "eu"}))
 	if err != nil || cfg.Node.ID != "edge-eu" {
 		t.Fatalf("node.id = (%q, %v), want edge-eu", cfg.Node.ID, err)
 	}

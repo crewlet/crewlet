@@ -19,9 +19,9 @@ func containerLocal(t *testing.T) *Local {
 	t.Helper()
 	state := t.TempDir()
 	return &Local{
-		opts:    LocalOptions{Placement: Container, Image: "img"},
-		root:    state,
-		runtime: stubRuntime(t, state, true),
+		opts: LocalOptions{Placement: Container, Image: "img"},
+		root: state,
+		cli:  containerCLI{path: stubRuntime(t, state, true)},
 	}
 }
 

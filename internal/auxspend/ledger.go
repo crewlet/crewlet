@@ -52,8 +52,11 @@ type Seat struct {
 	Role    string
 
 	// Person and PersonRole name a person: the human seat's handle — the
-	// one their credential is bound to, or the one leading the unit — and
-	// its role. Set instead of the three above.
+	// one the asking principal acts as (iam.RecordOwner: the seat a person
+	// holds, or the one the directory binds a token to), or the one
+	// leading the unit — and its role. Set instead of the three above. A
+	// seat HANDLE and never an identity-estate person id, so a person's
+	// spend lands on the seat their work is charged to whoever holds it.
 	Person     string
 	PersonRole string
 }

@@ -1,0 +1,106 @@
+package iamdomain
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
+
+// SESSIONS: the rows that say who is signed in.
+
+// applySession dispatches the ops on [KindSession].
+//
+// TWO OPS AND NO MORE, which is what keeps this log's volume proportional to
+// SIGN-INS rather than to requests: a re-issue moves the idle deadline inside
+// the signed bearer and records nothing, so the busiest thing a signed-in
+// person does writes nothing here at all.
+func (a *Applier) applySession(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	switch at.record.Op {
+	case OpOpen:
+		return a.writeSessionOpen(ctx, tx, at)
+	case OpClose:
+		return a.writeSessionClose(ctx, tx, at)
+	}
+	return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a session, "+
+		"which this build has no case for", at.position, at.record.Op)
+}
+
+// writeSessionOpen records one session beginning.
+func (a *Applier) writeSessionOpen(ctx context.Context, tx *sql.Tx,
+	at applyContext) (int, error) {
+
+	session, err := DecodeSession(at.record.Mutation)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: the session record at %s: %w",
+			at.position, err)
+	}
+	if session.Person == "" {
+		return 0, fmt.Errorf("iamdomain: the session opened at %s names no "+
+			"person — a bearer minted against it would validate as nobody",
+			at.position)
+	}
+	document, err := EncodeSession(session)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: re-encode the session at %s: %w",
+			at.position, err)
+	}
+	// `start_position` IS THIS RECORD'S OWN, which is what a bearer
+	// carries so a node can tell a session opened before its own
+	// checkpoint from one it has simply not seen yet — the difference
+	// between a 401 and a 503, and the reason a stalled applier does not
+	// sign the whole company out.
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO iam_sessions
+			(lineage, person_id, epoch, start_position, absolute_expires_at,
+			 ended_at, ended_reason, bucket, created_at, version, document)
+		VALUES (?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)
+		ON CONFLICT(lineage) DO UPDATE SET
+			version  = excluded.version,
+			document = excluded.document
+		WHERE excluded.version > iam_sessions.version`,
+		at.record.Subject.ID, session.Person, int64(session.Epoch), at.packed,
+		millis(session.AbsoluteExpiresAt), at.bucket(), at.unix(), at.packed,
+		document)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: open session %s: %w",
+			at.record.Subject.ID, err)
+	}
+	written, _ := result.RowsAffected()
+	return int(written), nil
+}
+
+// writeSessionClose records one session ending, and keeps the row.
+//
+// THE ROW IS KEPT UNTIL THE SWEEP COLLECTS IT, rather than deleted, because
+// "this session was revoked, and why" is the sentence an investigation is
+// looking for — and a delete would leave the investigation with a session
+// that simply is not there, which reads as one that never existed.
+func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
+	at applyContext) (int, error) {
+
+	session, err := DecodeSession(at.record.Mutation)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: the session record at %s: %w",
+			at.position, err)
+	}
+	// ENDED_AT IS SET ONCE. The guard is the column rather than the
+	// version, for the redemption's reason: two requests closing one
+	// session is not a stale write to skip, it is a race whose loser must
+	// see the reason the winner recorded rather than overwrite it.
+	result, err := tx.ExecContext(ctx, `
+		UPDATE iam_sessions
+		SET ended_at = ?, ended_reason = ?, version = ?
+		WHERE lineage = ? AND ended_at = 0`,
+		at.unix(), session.EndedReason, at.packed, at.record.Subject.ID)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: close session %s: %w",
+			at.record.Subject.ID, err)
+	}
+	written, _ := result.RowsAffected()
+	if written > 0 {
+		// THE ONE SESSION, by its lineage: a sign-out ends what it names
+		// and no other credential the person holds.
+		a.moved.session(at.record.Subject.ID)
+	}
+	return int(written), nil
+}

@@ -32,6 +32,12 @@
 // recursion: a handler that publishes into the subscription it is draining
 // flags another pass instead of nesting one (see dispatch.go).
 //
+// What it models of an OUTAGE is the broker going away whole ([Broker.Fail]),
+// because that is the one a real broker's harness can produce too — stopping
+// its server — so the suite holds both backends to one answer for it. A
+// partition of one client from a broker its peers still reach is not
+// modelled: no case could certify it against the backend that ships.
+//
 // Redelivery matches the broker's shape: the budget counts redeliveries AFTER
 // the first delivery (so N+1 total attempts), an exhausted message moves to
 // the dead-letter subject rather than being destroyed, and EVERY return that
@@ -55,6 +61,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,6 +89,12 @@ var log = logging.Get("queue.memory")
 // A sentinel because callers branch on it: a boot-ordering mistake looks
 // exactly like a transport failure otherwise.
 var ErrNotStarted = fmt.Errorf("memory: event queue is not started: %w", queue.ErrNotLive)
+
+// ErrBrokerDown is what every verb that has to reach the broker answers once
+// [Broker.Fail] has taken it away: the contract's [queue.ErrUnavailable], so a
+// caller above the queue reads a broker this twin cannot reach exactly as it
+// reads a real broker's silence.
+var ErrBrokerDown = fmt.Errorf("memory: the broker is down: %w", queue.ErrUnavailable)
 
 // ErrNilHandler is returned when a subscription is registered with no handler.
 // Accepting one would attach a consumer that swallows a seat's mail and panics
@@ -167,6 +180,9 @@ type Broker struct {
 
 	history    []*events.Event
 	maxHistory int
+
+	// down is set by [Broker.Fail] and never cleared.
+	down bool
 }
 
 // NewBroker returns an empty broker with no clients.
@@ -202,6 +218,32 @@ func (b *Broker) Client(opts ...Option) *Queue {
 		opt(q)
 	}
 	return q
+}
+
+// Fail takes the broker away from under every client of it, for the rest of
+// its life — the twin of a broker that stopped, or of a partition between it
+// and everybody.
+//
+// From then on every verb that has to REACH the broker answers [ErrBrokerDown]
+// on every client: Publish, Subscribe, SubscribeBatch, EnsureSubscription,
+// DeleteSubscription, ListSubscriptions, SubscribeStream, Serve and Ask. The
+// verbs about a client's OWN attachments — Quiesce, Unquiesce, Detach,
+// PauseTopic, ResumeTopic — still answer, because on the broker this twin
+// stands for they are the client's own state and touch no server, and a node
+// that cannot prove it owns a seat quiesces it on exactly the outage this
+// models. Nothing is delivered, and no client is stopped by it: a queue whose
+// broker went away is still live, which is the difference between
+// [queue.ErrUnavailable] and [queue.ErrNotLive].
+//
+// ONE-WAY, because what it exists for is certifying that a caller is TOLD,
+// against a capability the real backend's harness can honour only by stopping
+// the broker's server — so a twin able to bring a broker back would model a
+// recovery no case can hold against the backend that ships.
+func (b *Broker) Fail() {
+	b.mu.Lock()
+	b.down = true
+	b.mu.Unlock()
+	log.Info("memory_broker_failed")
 }
 
 // subscription is a durable subscription: retained mail plus whoever is
@@ -347,6 +389,15 @@ type Queue struct {
 	pauses    map[subKey]map[string]struct{}
 	quiescing map[subKey]struct{}
 	listeners []queue.PublishListener
+
+	// subscriptionCreates counts the durable subscriptions this client
+	// has asked the broker to make. See [Queue.ConsumerProposals].
+	//
+	// Atomic rather than under broker.mu, because it is read by a test
+	// while another client of the same broker may be writing it, and a
+	// read that took the broker mutex would be a second reason to hold
+	// it that nothing in the contract needs.
+	subscriptionCreates atomic.Int64
 
 	// inFlight counts running handlers and is what a drain waits on.
 	//
@@ -515,6 +566,10 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		q.broker.mu.Unlock()
 		return ErrNotStarted
 	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return ErrBrokerDown
+	}
 	q.broker.recordHistoryLocked(&received)
 
 	// Every subscription on this topic gets its own copy — that is what a
@@ -656,6 +711,9 @@ func (q *Queue) attach(topic, group string, c *consumer) (*subscription, error) 
 	if !q.running {
 		return nil, ErrNotStarted
 	}
+	if q.broker.down {
+		return nil, ErrBrokerDown
+	}
 	// Attaching is an explicit statement of intent to consume, so it
 	// clears any quiesce on this key — the same reason Detach does.
 	// Without it a stale entry strands the subscription forever: a fenced
@@ -783,16 +841,41 @@ func (q *Queue) EnsureSubscription(_ context.Context, topic, group string) (bool
 		q.broker.mu.Unlock()
 		return false, ErrNotStarted
 	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return false, ErrBrokerDown
+	}
 	if _, ok := q.broker.subs[subKey{topic, group}]; ok {
 		q.broker.mu.Unlock()
+		// LOOKED UP AND LEFT ALONE, which is the half of this verb that
+		// is not about this backend at all: a durable subscription IS a
+		// seat's mailbox, so an "ensure" that re-created one would wipe
+		// the mail an unowned seat is holding. Counted as nothing,
+		// because nothing was created.
 		return false, nil
 	}
+	q.subscriptionCreates.Add(1)
 	q.broker.ensureLocked(topic, group)
 	q.broker.mu.Unlock()
 
 	log.Info("subscription_created", "topic", topic, "group", group)
 	return true, nil
 }
+
+// ConsumerProposals reports how many durable subscriptions THIS client has
+// asked the broker to create since it was minted.
+//
+// The twin's answer to the number the JetStream backend reports under the same
+// name, and the reason the conformance suite can certify "ensuring a mailbox
+// that exists proposes nothing" on both backends rather than on the one where
+// it is expensive. Here a create costs a map insert rather than a replicated
+// write, so the number is not about cost — it is about whether the second
+// ensure REACHED the create at all, which is the same question on both.
+//
+// DIAGNOSTIC, and deliberately not on [queue.EventQueue]: see the JetStream
+// backend's method for why a consensus-layer observable does not belong in a
+// contract two backends share.
+func (q *Queue) ConsumerProposals() int { return int(q.subscriptionCreates.Load()) }
 
 // DeleteSubscription destroys the subscription and its retained mail.
 //
@@ -804,9 +887,9 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	// the caller actually invoked rather than surfacing as a failure of a
 	// step it did not ask for.
 	q.broker.mu.Lock()
-	down := q.notStartedLocked()
+	stopped := q.notStartedLocked()
 	q.broker.mu.Unlock()
-	if down {
+	if stopped {
 		return false, ErrNotStarted
 	}
 	if _, err := q.Detach(ctx, topic, group); err != nil {
@@ -814,6 +897,18 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	}
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
+	if q.broker.down {
+		// AFTER THE DETACH, as on the backend that ships: the detach is
+		// this client's own state and reaches no broker, so it answers,
+		// and only the delete that follows has to reach one. What that
+		// leaves — the consumer gone, the mailbox standing — is the state
+		// every mailbox is in while no node holds its seat, and a retry
+		// finds the detach already done. Refused before the detach, the
+		// twin kept consuming a mailbox its caller had asked to destroy,
+		// which the real backend never does.
+		q.broker.mu.Unlock()
+		return false, ErrBrokerDown
+	}
 	sub, ok := q.broker.subs[key]
 	if !ok {
 		q.broker.mu.Unlock()
@@ -854,6 +949,10 @@ func (q *Queue) ListSubscriptions(_ context.Context, topicPattern string) ([]que
 		q.broker.mu.Unlock()
 		return nil, ErrNotStarted
 	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
+	}
 	out := make([]queue.Subscription, 0, len(q.broker.subs))
 	for key := range q.broker.subs {
 		// topics.Match, the same matcher SubscribeStream uses, so a pattern
@@ -893,6 +992,10 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return nil, ErrNotStarted
+	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
 	}
 	q.broker.streams = append(q.broker.streams, sub)
 	q.broker.mu.Unlock()

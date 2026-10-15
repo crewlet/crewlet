@@ -6,6 +6,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/authz"
 )
 
 // The named read routes — the public REST API.
@@ -17,7 +19,7 @@ import (
 // handshake snapshot. Two surfaces answering one question from two
 // implementations is how they end up disagreeing with nobody noticing, and
 // the registry exists so a route cannot read its own parameters and forget
-// the operator check on the way.
+// the grant check on the way.
 //
 // They were documented before they were built. docs/reference/api-endpoints.md
 // has listed this table since the engine shipped and thirteen of the reads
@@ -87,7 +89,6 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
-	{method: "GET", pattern: "/access", what: "access"},
 	// WHAT EACH MCP SERVER DID ON EACH NODE. Not under /config/mcp-servers,
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.
@@ -131,8 +132,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
 	// A PROJECT'S FILES. The listing is a question like every other here;
-	// one file's BYTES are not, and stream from their own route beside it
-	// (files.go), which the literal segment keeps apart from /work/{id}.
+	// one file's BYTES are not, and stream from the human write surface's
+	// own route beside it (internal/api/workapi's files.go), which the
+	// literal segment keeps apart from /work/{id}.
 	{method: "GET", pattern: "/work/files", what: "work_files"},
 	{method: "GET", pattern: "/work/views/saved", what: "work_saved_views"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
@@ -166,10 +168,22 @@ func (a *App) mountReads(mux httpjson.Router) {
 	// They are the CONFIG-DERIVED surfaces plus the whole bundle, and the
 	// socket builds them from these same functions for its handshake —
 	// so a browser that cannot upgrade sees what one that could sees.
-	mux.Handle("GET /agents", a.serveFrom(func() any { return a.stream.Roster() }))
-	mux.Handle("GET /org", a.serveFrom(func() any { return a.stream.Org() }))
-	mux.Handle("GET /tools", a.serveFrom(func() any { return a.stream.Tools() }))
-	mux.Handle("GET /stream/snapshot", a.serveFrom(func() any { return a.stream.Snapshot() }))
+	//
+	// EACH ONE IS DECIDED BY ITS PUSH KIND'S NEED AND SHAPED AS ITS PUSH
+	// IS, from the same tables the socket reads (stream's
+	// [stream.Audience]), so a fact is not reachable over REST by a caller
+	// the socket would withhold it from: all four are the overview and
+	// everybody's, and a seat's live call reaches a reader the seat's
+	// trail is not open to as its status alone, exactly as the push hands
+	// it to them.
+	mux.Handle("GET /agents", a.serveFrom(stream.KindAgents,
+		func(stream.Audience) any { return a.stream.Roster() }))
+	mux.Handle("GET /org", a.serveFrom(stream.KindOrg,
+		func(stream.Audience) any { return a.stream.Org() }))
+	mux.Handle("GET /tools", a.serveFrom(stream.KindTools,
+		func(stream.Audience) any { return a.stream.Tools() }))
+	mux.Handle("GET /stream/snapshot", a.serveFrom(stream.KindSnapshot,
+		func(audience stream.Audience) any { return a.stream.Snapshot(audience) }))
 }
 
 // serveNamed answers one registry question from a named route.
@@ -185,14 +199,43 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 	}
 }
 
-// serveFrom renders a value the stream service already knows how to build.
+// serveFrom renders a value the stream service already knows how to build,
+// for a caller whose audience receives a push of kind, in the shape that push
+// hands them.
 //
 // No registry entry, because there is no question to ask: these are the
 // sections of the handshake snapshot, and the socket reads the same functions
-// to assemble it. Guarded like every other read — the mux is wrapped whole.
-func (a *App) serveFrom(build func() any) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, build())
+// to assemble it. So they are decided by the same table the socket decides its
+// pushes by — see [stream.Audience] — over the audience the socket would open
+// with ([stream.Service.AudienceFor]), and what build returns is shaped for it
+// ([stream.ShapeFor]), so the whole bundle carries only what that caller may
+// read.
+func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.Caller(w, r)
+		if !ok {
+			return
+		}
+		if !principal.Stage.MayAct() {
+			// THE AUTHORITY TABLE'S FIRST CHECK, as every question's: a
+			// person whose stage may not act reads nothing, the overview
+			// included.
+			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				authz.RefusalDetail(authz.ReasonStage, nil))
+			return
+		}
+		audience := a.stream.AudienceFor(r.Context(), principal)
+		if !audience.Receives(kind) {
+			// THE SAME TWO FIELDS every refusal on authority carries,
+			// rather than a sentence naming the permission: a client
+			// reading `grants` off a refused question reads it off this
+			// too.
+			need, _ := stream.NeedOf(kind)
+			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				authz.RefusalDetail(authz.ReasonNoGrant, need.Grants()))
+			return
+		}
+		writeJSON(w, http.StatusOK, stream.ShapeFor(build(audience), audience))
 	}
 }
 
@@ -200,8 +243,11 @@ func (a *App) serveFrom(build func() any) http.HandlerFunc {
 // mapping so a named route and the generic form cannot answer one failure two
 // ways.
 func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, params queries.Params) {
-	operatorID, _ := auth.OperatorFrom(r.Context())
-	data, err := a.queries.AnswerWith(r.Context(), what, params, operatorID)
+	// THE PRINCIPAL TRAVELS IN THE CONTEXT and nothing is passed beside
+	// it: the registry reads [iam.From] for the grant and every personal
+	// question reads it for the caller, so there is no second, converted
+	// identity for the two to disagree about.
+	data, err := a.queries.AnswerWith(r.Context(), what, params)
 	if err != nil {
 		writeQueryError(w, what, err)
 		return

@@ -37,10 +37,13 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 	}
 	// AND THE SAME STANDING READ OFF THE LOG ITSELF ([statelog.EvictedOnLog]),
 	// which is how a node a peer re-anchored past sees an eviction its
-	// stopped applier never reaches.
+	// stopped applier never reaches — through the VERIFIED log, because what
+	// the broker holds at that sequence is the signed frame and the probe
+	// decodes a body.
 	onLog := func(want bool) {
 		t.Helper()
-		evicted, found, err := statelog.EvictedOnLog(t.Context(), pages.Domain{}, pages.Domain{}.Stream(), r.log, "node-b")
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), pages.Domain{},
+			pages.Domain{}.Stream(), statelog.StandingOf(r.log, r.verifier), "node-b")
 		if err != nil || !found || evicted != want {
 			t.Fatalf("node-b's standing read off the log = evicted %v, found %v (%v), "+
 				"want evicted %v", evicted, found, err, want)
@@ -103,7 +106,8 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 func TestAnEvictionNamingNothingIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	operator := pages.Actor{Kind: pages.AuthorOperator, OperatorID: "founder"}
+	operator := pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+		OperatorID: "founder"}
 	if _, err := r.store.EvictNode(t.Context(), operator, "op", ""); err == nil {
 		t.Fatal("an eviction naming no node was written")
 	}

@@ -79,6 +79,12 @@ export interface EngineHealth {
   /** The handles THIS node currently holds. */
   seats: string[];
   /**
+   * Each identity duty this node armed (the retention sweep) mapped to the
+   * interval it runs at, in seconds; `{}` on a node that armed none, which is
+   * how an operator tells a duty that never runs from one that finds nothing.
+   */
+  identity_duty_seconds: Record<string, number>;
+  /**
    * How far behind this node's watched duty is, in seconds, present only
    * while it is behind at all: once its last beat is older than the beat
    * interval it keeps (a second at the shipped lease TTL), which is a missed
@@ -93,6 +99,14 @@ export interface EngineHealth {
    * long it has been stranded in seconds — present only while one is.
    */
   unproven_seconds?: Record<string, number>;
+  /**
+   * Whether the company has its FIRST PERSON: `ready`, `unclaimed`, or
+   * `unknown` where this node cannot read its identity estate — never folded
+   * into `unclaimed`, which would tell an operator to invite a founder into a
+   * company that has one. Absent where the API was wired with no identity
+   * seam. A value a newer engine adds arrives as itself.
+   */
+  identity?: "ready" | "unclaimed" | "unknown" | (string & {});
   /**
    * How many nodes hold a presence lease — the fleet this node's fan-outs
    * divide their work by. ABSENT WHEN THE PRESENCE READ FAILED, never 0: say

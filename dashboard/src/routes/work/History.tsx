@@ -82,6 +82,8 @@ import {
   reapplySentence,
   type ChangeLine,
   type LabelContext,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
@@ -263,11 +265,12 @@ export function HistoryView({
     // it did not resolve falls through to itself rather than to a blank.
     taskKey: (id) => keys[id] ?? "",
     // WHO IS READING, so a sentence the engine addressed to the seat it woke
-    // is re-addressed to whoever is looking at the log. The SEAT HANDLE and not
-    // the operator id, because the records that carry such a sentence are a
-    // person's and a person subject is keyed on the handle — `lib/work.ts` says
-    // so where it compares them.
-    viewer: viewer.handle,
+    // is re-addressed to whoever is looking at the log. The reader's OWN
+    // RECORD's name — their seat when the directory binds them to one, their
+    // login when it does not — because the records that carry such a sentence
+    // are a person's, and a person subject is keyed on exactly that name
+    // (`lib/work.ts` says so where it compares them).
+    viewer: viewer.owner,
   };
 
   const bars: Bar[] = useMemo(
@@ -394,6 +397,7 @@ export function HistoryView({
 
       <QueryState
         error={state.error}
+        refusal={state.refusal}
         loading={state.loading}
         empty={
           records.length
@@ -422,7 +426,7 @@ export function HistoryView({
       {(more || paging || pageError || head) && (
         <footer className="panel-foot">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : (
             <>
               {more ? (
@@ -541,14 +545,14 @@ function FacetPicker({
 }
 
 /**
- * Who made a change, by the name the rest of the product uses: the PERSON an
- * operator token was bound to where there was one, the seat otherwise, and the
- * engine where nobody did.
+ * Who made a change, by the name the rest of the product uses: the seat's name
+ * where the author is a seat — an agent, or a person the identity directory
+ * binds to one, whom the engine records AS that seat (`iam.ActorFor`) — the
+ * login of anybody else, and the engine where nobody did.
  */
 export function actorName(record: WorkActivityRecord, chrome: LabelContext): string {
-  const who = record.actor_seat || record.actor;
-  if (!who) return "the engine";
-  return chrome.seatName?.(who) ?? who;
+  if (!record.actor) return "the engine";
+  return chrome.seatName?.(record.actor) ?? record.actor;
 }
 
 /** One change, as the delta it was. */
@@ -568,7 +572,7 @@ function HistoryRow({
       </span>
       <span className="work-log-key">
         {record.subject_key ? (
-          <a className="mono t-link" href={href(["work", record.subject_key])}>
+          <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
             {record.subject_key}
           </a>
         ) : (
@@ -589,15 +593,17 @@ function HistoryRow({
           wrapped delta grow rather than overflow. */}
       <span className="work-log-what">{describeChange(record, chrome)}</span>
       <span className="work-log-who">
-        {/* THE PERSON, NOT THE TOKEN: a change an operator token made names
-            the credential as `actor` — the audit trail — and the seat it was
-            bound to as `actor_seat`, which is who the row is about. Printed
-            as the token, the log said "founder" where every other screen
-            says Jane Founder; the token stays on the title. */}
+        {/* THE AUTHOR AS EVERY RECORD NAMES THEM (`iam.ActorFor`), and the
+            credential beside it on the title: `operator_id` is what the write
+            came through — a session, a machine token — which is the audit
+            trail's half and not a second name for the author. An agent's own
+            turn carries nothing a reader would ask about there. */}
         <span
           className="truncate"
           title={
-            record.actor_seat && record.actor ? `Through the token ${record.actor}` : undefined
+            record.operator_id && record.actor_kind !== "agent"
+              ? `Written through ${record.operator_id}`
+              : undefined
           }
         >
           {actorName(record, chrome)}

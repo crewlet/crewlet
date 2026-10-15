@@ -340,17 +340,23 @@ const alarm = (over: Partial<RetentionAlarm>): RetentionAlarm => ({
 const NOW = Date.parse("2031-04-02T03:14:00Z");
 const HELD_SINCE = "2031-03-31T05:14:00Z"; // 46h before NOW
 
+/** The engine's `trim_blocked` sentence for a log keeping `kept` records past its window. */
+const keeping = (kept: number) =>
+  `the trim has not advanced for 46h, and the log is keeping up to ${kept} record(s) older than its 24h replay window`;
+
 // ONE CAUSE IS ONE ALARM. A company with no backup was drawn as a banner per
 // log, a `trim_blocked` per log and a backup alarm: five problems for one.
 // The logs one term holds are one line under the alarm whose remedy covers
-// them, dated by the one held longest.
-test("an alarm is drawn once, with the logs it holds as one line", () => {
+// them, dated by the one held longest — and each still says what it keeps
+// past its window, which is why it is listed at all and which no date says.
+test("an alarm is drawn once, with the logs it holds as one line and each log's own count", () => {
+  const kept: Record<string, number> = { tracker: 1200, vectors: 40, pages: 7, usage: 310 };
   const { container } = render(
     <AlarmItem
       alarm={alarm({
-        domains: ["tracker", "vectors", "pages", "usage"].map((domain) => ({
+        domains: Object.entries(kept).map(([domain, n]) => ({
           domain,
-          detail: "the trim has not advanced for 46h",
+          detail: keeping(n),
           term: "backup_floor" as const,
           since: HELD_SINCE,
         })),
@@ -365,12 +371,59 @@ test("an alarm is drawn once, with the logs it holds as one line", () => {
   );
   expect(text.match(/Trim held by/g)).toHaveLength(1);
   expect(text).toContain("Trim held by the backup on tracker, vectors, pages and usage, for 46h.");
-  // EACH LOG IS A WAY TO ITS OWN PAGE.
-  expect(screen.getByRole("link", { name: "pages" }).getAttribute("href")).toContain(
-    "settings/backups/pages",
-  );
+  for (const [domain, n] of Object.entries(kept)) {
+    expect(text).toContain(`${domain}: ${keeping(n)}`);
+  }
+  // EACH LOG IS A WAY TO ITS OWN PAGE, wherever it is named.
+  const links = screen.getAllByRole("link", { name: "pages" });
+  expect(links.length).toBeGreaterThan(0);
+  for (const link of links) {
+    expect(link.getAttribute("href")).toContain("settings/backups/pages");
+  }
   // THE REMEDY IS THE ENGINE'S, with its command drawn as code.
   expect(screen.getByText("crewlet backup").tagName).toBe("CODE");
+});
+
+// A BLOCKED TRIM ON TWO LOGS LEADS WITH THE MORE PRESSING ONE, and the other
+// still says its own count: read off the headline alone, the second log was
+// keeping what the first one keeps.
+test("a trim blocked on two logs says each log's count, not only the lead's", () => {
+  const { container } = render(
+    <AlarmItem
+      alarm={alarm({
+        kind: "trim_blocked",
+        detail: keeping(1200),
+        domains: [
+          { domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE },
+          { domain: "pages", detail: keeping(7), term: "applied", since: HELD_SINCE },
+        ],
+      })}
+      now={NOW}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text).toContain("Trim held by");
+  expect(text).toContain(`pages: ${keeping(7)}`);
+  expect(text).toContain(`tracker: ${keeping(1200)}`);
+});
+
+// ONE HELD LOG WHOSE SENTENCE IS THE HEADLINE is not said twice: the line
+// keeps its term and its date, and the count is the headline's.
+test("a trim blocked on one log says its count once", () => {
+  const { container } = render(
+    <AlarmItem
+      alarm={alarm({
+        kind: "trim_blocked",
+        detail: keeping(1200),
+        domains: [{ domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE }],
+      })}
+      now={NOW}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text.match(/1200 record\(s\) older/g)).toHaveLength(1);
+  expect(text).toContain("Trim held by");
+  expect(text).toContain("for 46h.");
 });
 
 // A SINGLE LOG WHOSE MEASUREMENT IS THE ALARM'S IS FOLDED INTO IT, as the CLI

@@ -102,12 +102,12 @@ func TestNoRosterAdmitsEveryHandle(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{
+	if _, err := builtin.Register(reg, gated(builtin.Deps{
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as,
 			DefaultProject: func(string) string { return "ENG" },
 		},
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if got := callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
@@ -138,7 +138,7 @@ func rosterRegistry(t *testing.T, trk *fakeTracker) *tools.Registry {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
-		LeadsProject: leadAlways,
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)

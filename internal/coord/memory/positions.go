@@ -332,6 +332,7 @@ func cloneOperation(op coord.MaintenanceOperation) coord.MaintenanceOperation {
 	out := op
 	out.Participants = slices.Clone(op.Participants)
 	out.Excluded = slices.Clone(op.Excluded)
+	out.ExcludedBy = maps.Clone(op.ExcludedBy)
 	out.Journal = slices.Clone(op.Journal)
 	out.WriteIncarnations = maps.Clone(op.WriteIncarnations)
 	return out

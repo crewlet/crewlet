@@ -64,7 +64,8 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 			SandboxID: "sb-1", Status: sandbox.StatusAwaiting, Owner: "core-2",
 			TaskDescription: "Add retry to the webhook client\nand the rest of the brief",
 			Question:        "which ceiling?", Audience: "founder", WorkItem: item,
-			LaunchID: "l-1", Launch: sandbox.LaunchRecord{StartedAt: launched},
+			AudienceHandles: []string{"founder", "cto"},
+			LaunchID:        "l-1", Launch: sandbox.LaunchRecord{StartedAt: launched},
 			CreatedAt: created, UpdatedAt: written,
 		},
 		{TurnID: "tn-over", Role: "Coder", Status: sandbox.StatusResumed},
@@ -81,6 +82,20 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 	if e.Status != livestate.SandboxAwaiting || e.Owner != "core-2" || e.WorkItem == nil ||
 		e.WorkItem.Key != "ENG-1" || e.Question != "which ceiling?" || e.Audience != "founder" {
 		t.Errorf("entry = %+v, want the record's facts", e)
+	}
+	// WHO THE QUESTION IS PUT TO rides the entry, because the record is the
+	// only place it is kept and the panel shows the question to exactly
+	// those seats whatever their reach to the seat that asked — and it is
+	// the entry's own copy, so nothing the projection does to it reaches
+	// back into the run it was read from.
+	if !slices.Equal(e.AudienceHandles, []string{"founder", "cto"}) {
+		t.Errorf("the entry's question is put to %v, want the record's [founder cto]",
+			e.AudienceHandles)
+	} else {
+		e.AudienceHandles[0] = "rewritten"
+		if runs[0].AudienceHandles[0] != "founder" {
+			t.Error("the entry shares its audience with the run record it was read from")
+		}
 	}
 	if e.Task != "Add retry to the webhook client" {
 		t.Errorf("task = %q, want the first line, as the announcement cuts it", e.Task)

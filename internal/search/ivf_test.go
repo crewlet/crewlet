@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -699,6 +700,61 @@ func TestAnIndexFromALaterBuildIsJudgedByItsStructure(t *testing.T) {
 		if _, err := bad.Encode(); err == nil {
 			t.Errorf("an index record with %s encoded", name)
 		}
+	}
+}
+
+// THE WIDEST CENTROIDS RECORD THIS BUILD WRITES FITS ITS LOG'S DECLARED
+// LARGEST RECORD.
+//
+// The vector log declares the transport's own ceiling as its largest record
+// ([search.VectorMaxRecordBytes]), and the publisher refuses a record past it
+// before it is sent. Every other vector record is one embedding wide, so the
+// centroids record is the one that grows: [search.IVFMaxLists] codes at the
+// widest width a provider may configure ([config.MaxEmbeddingWidth]), beside a
+// rollout tiling every listed source. Past the ceiling, the training of the
+// largest corpus an index serves would be refused at its publish on every
+// attempt, and the corpus would scan in full for ever with nothing but a
+// duty log line to say why. The rollout here tiles a corpus of 2^20 sources —
+// about twice what one node searches through an index at its probe ceiling —
+// so a later raise of either knob meets this case before it meets a fleet.
+// Measured at about 1.5 MB against the 8 MiB transport's ceiling, so the
+// headroom is a little over five times the widest centroids.
+//
+// Mutation: write the centroids at six times the widest width, or declare the
+// log's largest record below a fifth of the transport's, and this goes red.
+func TestTheWidestCentroidsRecordFitsItsLog(t *testing.T) {
+	t.Parallel()
+	const model, corpus = "widest-embed", 1 << 20
+	dim, lists := config.MaxEmbeddingWidth, search.IVFMaxLists
+	record := indexRecordOver(model, dim)
+	record.Index.Lists, record.Index.Probes = lists, lists
+	record.Index.TrainedOn, record.Index.Largest = corpus, corpus
+	record.Index.Centroids = make([]byte, 8*search.CodeWords(dim)*lists)
+	rng := rand.New(rand.NewPCG(5, 5))
+	for i := range record.Index.Centroids {
+		record.Index.Centroids[i] = byte(rng.Uint32())
+	}
+	// EVERY ID THE WIDEST A SOURCE ID IS — a uuid — split over the sources,
+	// so every range carries both of its bounds at full length.
+	ids := map[search.Source][]string{}
+	for i := range corpus {
+		source := search.Sources[i%len(search.Sources)]
+		ids[source] = append(ids[source], fmt.Sprintf("%08x-0000-4000-8000-%012x", i, i))
+	}
+	for _, held := range ids {
+		slices.Sort(held)
+	}
+	record.Index.Rollout = search.RolloutRanges(ids, search.IVFReassignBatch)
+
+	body, err := record.Encode()
+	if err != nil {
+		t.Fatalf("encode the widest centroids record: %v", err)
+	}
+	limit := search.Domain{}.Stream().MaxRecordBytes
+	if got := int64(len(body)); got > limit {
+		t.Fatalf("the widest centroids record is %d bytes and the vector log "+
+			"refuses a record past %d — its training would be refused at every "+
+			"publish", got, limit)
 	}
 }
 

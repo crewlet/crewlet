@@ -101,16 +101,6 @@ var contract = []Entry{
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 
-	// access.ts
-	{"AccessAnswer", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"AccessAuth", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"AccessToken", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"AccessSeat", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"AccessPerson", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"AccessContact", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
-	{"TokenScope", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
-	{"AccessBinding", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
-
 	// credentials.ts
 	{"CredentialPoolAnswer", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
 	{"CredentialPoolRow", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
@@ -149,6 +139,8 @@ var contract = []Entry{
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
+	{"SeatHeldHolder", ReadInterface,
+		"internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
@@ -165,7 +157,21 @@ var contract = []Entry{
 	{"GATE_ACTIONS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryGateAction"},
 	{"GATE_ACTIONS_KEEPING_OPERATION", ReadLiteral,
 		"internal/api.TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes"},
-	{"GATE_REQUEST_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastTheGateBudget"},
+	{"GATE_REQUEST_TIMEOUT_MS", ReadScalar,
+		"internal/api.TestTheDashboardWaitsAsLongAsTheEngineSaysAClientShould"},
+
+	// retry.ts
+	{"UNAVAILABLE_RETRY_MS", ReadScalar, "internal/api.TestTheDashboardRetriesOnTheEnginesOwnHints"},
+	{"RETRY_AFTER_MAX_MS", ReadScalar, "internal/api.TestTheDashboardRetriesOnTheEnginesOwnHints"},
+
+	// positions.ts
+	{"GENERATION_STRIDE", ReadScalar,
+		"internal/api.TestTheDashboardUnpacksAPositionWithTheEnginesStride"},
+
+	// closecodes.ts
+	{"CLOSE_UNAUTHENTICATED", ReadScalar,
+		"internal/api/stream.TestTheDashboardClosesOnTheEnginesCloseCodes"},
+	{"CLOSE_FORBIDDEN", ReadScalar, "internal/api/stream.TestTheDashboardClosesOnTheEnginesCloseCodes"},
 
 	// retention.ts
 	{"RetentionTrimFloorState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
@@ -197,6 +203,28 @@ var contract = []Entry{
 	{"CounterpartySubject", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverview", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverviewSeat", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+
+	// identity.ts
+	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"APPS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"PERSON_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"MACHINE_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"CREDENTIAL_CLASSES", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"TOKEN_DEFAULT_DAYS", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+	{"TOKEN_MAX_DAYS", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+	{"FINDING_KINDS", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardWordsEveryFindingKindInTheEnginesOrder"},
+	{"HumanSeatsAnswer", ReadInterface,
+		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"HumanSeat", ReadInterface, "internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"SeatHolder", ReadInterface, "internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"SeatInvitation", ReadInterface,
+		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
+	{"ResetView", ReadInterface, "internal/api/authapi.TestTheResetScreenReadsWhatTheResetViewSends"},
 
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

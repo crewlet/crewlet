@@ -170,10 +170,11 @@ type Dispatcher struct {
 	// every seat-addressed event carries.
 	//
 	// FOR ONE RECORD ONLY: the guard breach a panic that escaped a turn's
-	// own frames publishes. The live projection keys a seat by ROLE, so a
-	// breach addressed by handle alone would reach no seat's failure, and the
-	// turn's own telemetry, which does know the role, is exactly what did
-	// not run.
+	// own frames publishes. The live projection keys a seat by its AGENT ID,
+	// so a breach addressed by handle alone would reach no seat's failure —
+	// which is why this answers the agent id beside the role name the store
+	// labels it by — and the turn's own telemetry, which does know both, is
+	// exactly what did not run.
 	//
 	// Nil publishes no breach, which is the honest answer for a dispatcher
 	// that cannot say which seat it is: the panic is still logged, the
@@ -867,7 +868,8 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 				continue
 			}
 			key := workkey.Derive([]string{ev.ID.String()})
-			if err := d.Completions.Record(ctx, handle, key, "", d.now()); err != nil {
+			if err := d.Completions.Record(ctx, handle, key, "",
+				d.now()); err != nil {
 				log.WarnContext(ctx, "abandoned_trigger_not_recorded", "seat", handle,
 					"error", err, "detail", "the trigger may be redelivered and "+
 						"repeat this turn's work")
@@ -896,7 +898,8 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 func (d *Dispatcher) stopped(ctx context.Context, handle string, req Request, cause error) queue.Result {
 	pause, _ := stopOf(cause)
 	log.InfoContext(ctx, "turn_stopped", "seat", handle, "run_id", req.RunID,
-		"work_key", req.WorkKey, "by", pause.By, "person", pause.Seat,
+		"work_key", req.WorkKey, "by", pause.By, "by_kind", string(pause.ByKind),
+		"operator_id", pause.OperatorID,
 		"detail", "a person paused this seat and asked for its running turn to stop; "+
 			"the trigger is recorded as worked rather than redelivered")
 	if d.Completions != nil {
@@ -932,7 +935,8 @@ func turnStoppedEvent(handle, role, agentID, turnID, workKey string,
 	rec := events.New(types.AgentTurnStopped{
 		Agent: agentID, AgentHandle: handle, RoleName: role,
 		TurnID: turnID, WorkKey: workKey,
-		StoppedBy: pause.By, StoppedBySeat: pause.Seat, Reason: pause.Reason,
+		StoppedBy: pause.By, StoppedByKind: string(pause.ByKind),
+		OperatorID: pause.OperatorID, Reason: pause.Reason,
 	}, trace)
 	// The seat's role, as every turn-scoped event's source is, so the feed
 	// attributes the row to the seat rather than to "system".
@@ -1585,6 +1589,9 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 // re-run or the same trigger files two entries into one conversation. One
 // value served both until a turn id stopped meaning the unit of work; see
 // ADR-0017.
+//
+// handle is the seat's handle — the delivery's, or a resumed run's — and the
+// entry is filed under it.
 func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 	runID, workKey, trigger string, res turn.Result, now time.Time,
 ) {

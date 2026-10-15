@@ -21,11 +21,12 @@ import type {
   CallVersions,
   FeedRow,
   EventEnvelope,
+  InboxChange,
   LiveCall,
   LiveCallAnswer,
   OrgBudget,
   OrgProjection,
-  Overlay,
+  OverlayRow,
   Rollup,
   SandboxEntry,
   ScheduleRow,
@@ -78,6 +79,13 @@ const NOTHING_HELD: Record<string, unknown> = {
 };
 
 /**
+ * The one heavy field that is STATUS — each round's timing and tokens — which
+ * a call whose body is withheld from this reader still carries and versions.
+ * Every other detail is the seat's BODY (`LiveCall.body_withheld`).
+ */
+const STATUS_DETAIL: ReadonlySet<keyof CallVersions> = new Set(["rounds"]);
+
+/**
  * One seat's live call as a push states it, merged onto the copy a tab holds —
  * and whether the push says the tab missed a change it no longer carries.
  *
@@ -90,6 +98,12 @@ const NOTHING_HELD: Record<string, unknown> = {
  * yet. A push naming a version newer than the one held, without the field, is
  * a tab that missed the push which carried it: `stale`, and the field stays
  * what is held until the call is fetched whole.
+ *
+ * A CALL WHOSE BODY IS WITHHELD (`body_withheld`) names every body version
+ * zero and carries no body field, so it is never `stale` for one — a status
+ * reader is never sent a body, and asking for the call whole would only fetch
+ * the same status again — and no body the tab held is kept: a reader who could
+ * read this seat's trail a moment ago and cannot now is shown none of it.
  */
 export function mergeLiveCall(
   held: LiveCall | null | undefined,
@@ -97,6 +111,7 @@ export function mergeLiveCall(
 ): { call: LiveCall | null; stale: boolean } {
   if (!next) return { call: null, stale: false };
   const same = !!held && sameCall(held, next);
+  const withheld = next.body_withheld === true;
   const merged: Record<string, unknown> = { ...next };
   const versions: Partial<CallVersions> = {};
   let stale = false;
@@ -104,6 +119,11 @@ export function mergeLiveCall(
     keyof CallVersions,
     readonly string[],
   ][]) {
+    if (withheld && !STATUS_DETAIL.has(detail)) {
+      for (const f of fields) delete merged[f];
+      versions[detail] = 0;
+      continue;
+    }
     const pushed = next.versions[detail];
     const have = same ? held.versions[detail] : 0;
     const carried = fields.every((f) => f in next);
@@ -145,6 +165,9 @@ function newerDetail(held: LiveCall, older: LiveCall): LiveCall | null {
     keyof CallVersions,
     readonly string[],
   ][]) {
+    // NO BODY ONTO A CALL HELD WITHOUT ONE: the newer pushes said this reader
+    // is no longer sent it, whatever an answer read before them carried.
+    if (held.body_withheld === true && !STATUS_DETAIL.has(detail)) continue;
     const version = older.versions[detail];
     if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
     merged ??= { ...held };
@@ -215,10 +238,32 @@ export interface StoreState {
   /**
    * Whether the engine REFUSED this browser, as opposed to being unreachable.
    * Distinct from `connected` because the repair differs and the reader cannot
-   * tell them apart: a stopped engine comes back on its own, a rejected token
-   * never does.
+   * tell them apart: a stopped engine comes back on its own, a session the
+   * engine refused never does — a sign-in is the repair.
    */
   authRejected: boolean;
+  /**
+   * Why the engine KNOWS who this browser is and will not serve it this
+   * surface, or null. Set by a `4403` close (the seat is gone from the chart,
+   * or the person's stage may no longer act) and by a `403` handshake — never
+   * for want of access, since the socket serves every principal the engine
+   * resolves and decides each push by what they hold; cleared when a socket
+   * opens or is dialled again. Distinct from `authRejected`, whose repair is
+   * a credential: signing in again reaches the same person with the same
+   * access, so the only repair is an administrator's.
+   */
+  accessRefused: string | null;
+  /**
+   * How many `inbox_changed` frames this socket has delivered, per seat.
+   *
+   * A COUNTER, NOT THE INBOX: the frame carries identifiers and a hint rather
+   * than the notices, so what a screen does with it is ask `work_inbox` again
+   * (see `useQuery`'s `refetchOnInboxOf`), and a count moving is the whole of
+   * what it needs to know. Only the seat this socket WATCHES is ever sent
+   * one. NOT part of what a snapshot replaces: a reconnect re-asks every query
+   * anyway, so there is nothing for a snapshot to restore.
+   */
+  inboxMoves: Record<string, number>;
 }
 
 export type Slice = keyof StoreState;
@@ -254,6 +299,8 @@ function emptyState(): StoreState {
     lostAt: null,
     everConnected: false,
     authRejected: false,
+    accessRefused: null,
+    inboxMoves: {},
   };
 }
 
@@ -341,23 +388,40 @@ export class Store {
   }
 
   /**
-   * Changed seat overlays, keyed by role — and the roles whose live call this
-   * tab now holds behind what the push describes, which the socket fetches
-   * whole (`mergeLiveCall`).
+   * Changed seat overlays, merged onto the roster rows by AGENT ID — and the
+   * agent ids whose live call this tab now holds behind what the push
+   * describes, which the socket fetches whole (`mergeLiveCall`).
+   *
+   * By the id and nothing else. They were merged by ROLE NAME, which is prose:
+   * two seats sharing a name both took every overlay either of them moved, so
+   * each card rendered whatever the other was last doing. The id is what the
+   * engine sends on an overlay, and it names exactly one seat.
+   *
+   * An overlay for a seat the roster does not carry is DROPPED rather than
+   * appended as a row of its own. A seat reaches this list through the roster
+   * (the snapshot, or a `seats` push after every published company), and the
+   * server merges its live overlay into that roster row before sending it —
+   * so nothing dropped here is lost, while an appended row would be a card
+   * with no name, no handle and no page, for a seat the server may already
+   * have removed.
    */
-  applyAgents(rows: (Overlay & { role: string })[] | unknown): string[] {
+  applyAgents(rows: OverlayRow[] | unknown): string[] {
     // `Array.isArray` is load-bearing. The server sent this as an object keyed
     // by role once; every push was silently discarded and seats rendered idle
     // for the whole of a turn, with both sides' own suites green. That is the
     // bug internal/e2e/golden_test.go exists to catch.
     if (!Array.isArray(rows) || rows.length === 0) return [];
+    const byID = new Map<string, OverlayRow>();
+    for (const row of rows as OverlayRow[]) {
+      if (row && typeof row.agent_id === "string" && row.agent_id !== "") {
+        byID.set(row.agent_id, row);
+      }
+    }
+    if (byID.size === 0) return [];
     const stale: string[] = [];
-    const merge = (
-      held: AgentRow | undefined,
-      patch: Overlay & { role: string },
-    ): Overlay & { role: string } => {
+    const merge = (held: AgentRow, patch: OverlayRow): OverlayRow => {
       if (!("live_call" in patch)) return patch;
-      const heldSeq = held?.live_call_seq ?? 0;
+      const heldSeq = held.live_call_seq ?? 0;
       const patchSeq = patch.live_call_seq;
       if (patchSeq !== undefined && patchSeq < heldSeq) {
         // This push's live_call is BEHIND one a `live_call` answer already
@@ -365,26 +429,16 @@ export class Store {
         // push generated earlier). Keep the held call and its sequence; the
         // push's other fields — status, turn — are ordered on the wire and
         // still apply.
-        return { ...patch, live_call: held?.live_call ?? null, live_call_seq: heldSeq };
+        return { ...patch, live_call: held.live_call ?? null, live_call_seq: heldSeq };
       }
-      const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
-      if (behind) stale.push(patch.role);
+      const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+      if (behind) stale.push(patch.agent_id);
       return { ...patch, live_call: call, live_call_seq: patchSeq ?? heldSeq };
     };
-    const byRole = new Map<string, Overlay & { role: string }>(
-      (rows as (Overlay & { role: string })[]).map((r) => [r.role, r]),
-    );
     this.state.agents = this.state.agents.map((a) => {
-      const patch = byRole.get(a.role);
-      if (!patch) return a;
-      byRole.delete(a.role);
-      return { ...a, ...merge(a, patch) };
+      const patch = byID.get(a.agent_id);
+      return patch ? { ...a, ...merge(a, patch) } : a;
     });
-    // A seat the roster does not carry yet (a role added by a live revision)
-    // still belongs on screen.
-    for (const row of byRole.values()) {
-      this.state.agents = [...this.state.agents, { id: row.role, ...merge(undefined, row) }];
-    }
     this.emit("agents");
     return stale;
   }
@@ -415,11 +469,11 @@ export class Store {
    * was behind while this answer was out (`LiveSocket.fetchCalls`).
    */
   applyLiveCall(answer: LiveCallAnswer | null | undefined): boolean {
-    if (!answer || typeof answer.role !== "string") return true;
+    if (!answer || typeof answer.agent_id !== "string" || answer.agent_id === "") return true;
     let moved = false;
     let current = true;
     this.state.agents = this.state.agents.map((a) => {
-      if (a.role !== answer.role) return a;
+      if (a.agent_id !== answer.agent_id) return a;
       const heldSeq = a.live_call_seq ?? 0;
       const seq = answer.live_call_seq;
       if (seq >= heldSeq) {
@@ -443,17 +497,18 @@ export class Store {
   /**
    * The complete seat list, replacing what is on screen.
    *
-   * Distinct from `applyAgents`, which merges changed overlays by role: a merge
-   * cannot express a deletion, so a revision that removes a role would leave
-   * its card rendered until the next reload.
+   * Distinct from `applyAgents`, which merges changed overlays: a merge cannot
+   * express a deletion, so a revision that removes a seat would leave its card
+   * rendered until the next reload.
    */
   applySeats(rows: AgentRow[] | unknown): void {
     if (!Array.isArray(rows)) return;
     // Keep the live overlay each seat already carries — the config payload is
-    // static config and knows nothing about what a seat is doing right now.
-    const live = new Map(this.state.agents.map((a) => [a.role, a]));
+    // static config and knows nothing about what a seat is doing right now —
+    // matched by AGENT ID, never by the name two seats may share.
+    const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
     this.state.agents = (rows as AgentRow[]).map((row) => {
-      const current = live.get(row.role);
+      const current = live.get(row.agent_id);
       return current ? { ...current, ...row } : row;
     });
     this.emit("agents");
@@ -524,6 +579,55 @@ export class Store {
     }
   }
 
+  /**
+   * One seat's inbox moved. The SEAT is read off the payload's own `handle`
+   * rather than trusted from anywhere else, and a frame without one moves
+   * nothing — a counter under "" would be a seat no screen asks about.
+   */
+  applyInboxChanged(change: Partial<InboxChange> | null | undefined): void {
+    const handle = change?.handle;
+    if (typeof handle !== "string" || handle === "") return;
+    this.state.inboxMoves = {
+      ...this.state.inboxMoves,
+      [handle]: (this.state.inboxMoves[handle] ?? 0) + 1,
+    };
+    this.emit("inboxMoves");
+  }
+
+  /**
+   * The engine knows this browser and will not serve it the company, or null.
+   *
+   * A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
+   * read the company, so what an earlier socket sent stops being shown the
+   * moment it lands: a tab whose seat was taken out of the chart went on
+   * naming the company, listing its agents and tools in the palette, from the
+   * snapshot it held — while a session refused at its first handshake, sent
+   * nothing, named and listed none of it. An outage keeps the last state on purpose ("showing the
+   * last state received"); a refusal is not an outage. `health` stays: it is
+   * the unguarded `/health`, not the company.
+   */
+  setAccessRefused(reason: string | null): void {
+    const next = reason === null ? null : reason || "refused";
+    if (this.state.accessRefused === next) return;
+    this.state.accessRefused = next;
+    if (next !== null) {
+      // The transport's own history (`lostAt`, `everConnected`) stays with
+      // it: a refusal says who may read the company, not whether the engine
+      // was reachable.
+      const { health, connected, lostAt, everConnected, authRejected } = this.state;
+      Object.assign(this.state, emptyState(), {
+        health,
+        connected,
+        lostAt,
+        everConnected,
+        authRejected,
+        accessRefused: next,
+      });
+      this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves");
+    }
+    this.emit("health");
+  }
+
   setAuthRejected(value: boolean): void {
     const next = !!value;
     if (this.state.authRejected === next) return;
@@ -565,35 +669,5 @@ export class Store {
   noteUnknownPush(kind: unknown): void {
     const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
     this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
-  }
-
-  // ---- reads -------------------------------------------------------------
-
-  agentById(id: string): AgentRow | null {
-    return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
-  }
-
-  /**
-   * Resolve a seat by whatever the URL carried.
-   *
-   * Seats are addressed by HANDLE — the canonical identity everywhere else in
-   * the system, and the one an operator can read off a chat mention. Runtime
-   * ids and role names still resolve, because links minted before the move
-   * used them and they are in people's history.
-   */
-  agentByKey(key: string | null | undefined): AgentRow | null {
-    if (!key) return null;
-    const wanted = String(key);
-    const lower = wanted.toLowerCase();
-    return (
-      this.state.agents.find(
-        (a) =>
-          a.handle === wanted ||
-          a.id === wanted ||
-          a.role === wanted ||
-          String(a.handle ?? "").toLowerCase() === lower ||
-          String(a.role ?? "").toLowerCase() === lower,
-      ) ?? null
-    );
   }
 }

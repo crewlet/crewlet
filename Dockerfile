@@ -83,15 +83,21 @@ COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
-# The node's one HTTP port, bound whenever Tier A's `api.port` is set — the
+# The node's HTTP port, bound whenever Tier A's `api.port` is set — the
 # operator's choice rather than the company's; `api.port: 0` serves no HTTP at
-# all. `node.roles` decides what it carries: with `ingress`, the whole API (the
-# dashboard, the REST API and every webhook route); without it, only the
-# /health and /ready probes, and a seats node's agent-mode tool bridge.
-# EXPOSE documents 8080, the port the container examples in the docs pass
-# (the Kubernetes probes in docs/guides/deployment.md among them); it binds
-# nothing by itself, and publishing it is the operator's call.
-EXPOSE 8080
+# all, so publishing it is a convenience, not a promise. `node.roles` decides
+# what it carries: with `ingress`, the whole API (the dashboard, the REST API
+# and every webhook route); without it, only the /health and /ready probes,
+# and a seats node's agent-mode tool bridge. A deployment that sets
+# `api.public.port` moves the webhook, OTLP and bridge routes to that second
+# listener, which is the operator's to publish beside this one.
+#
+# 8000 RATHER THAN 8080, because there were two numbers. The examples, the
+# quickstart and the configuration guide all bind 8000; this line and four
+# reference pages said 8080 — so a founder who followed the quickstart and
+# then ran the image published a port nothing was listening on. `internal/config`
+# names it once, as DefaultAPIPort, and everything quotes that.
+EXPOSE 8000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/crewlet"]
 CMD ["run"]

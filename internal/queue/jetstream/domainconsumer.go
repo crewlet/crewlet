@@ -292,6 +292,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// the stream it reads, so "no suitable peers" is transient here
 		// too and the budget above is worth nothing without the retry.
 		err = q.provisioning().Place(createCtx, func(ctx context.Context) error {
+			q.noteConsumerProposal()
 			var e error
 			cons, e = q.js.CreateConsumer(ctx, stream, config)
 			return e
@@ -507,6 +508,7 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	var cons jetstream.Consumer
 	err := c.q.provisioning().Place(createCtx,
 		func(ctx context.Context) error {
+			c.q.noteConsumerProposal()
 			var e error
 			cons, e = c.q.js.CreateConsumer(ctx, c.stream, config)
 			return e
@@ -554,6 +556,7 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	var cons jetstream.Consumer
 	err := c.q.provisioning().Place(createCtx,
 		func(ctx context.Context) error {
+			c.q.noteConsumerProposal()
 			var e error
 			cons, e = c.q.js.CreateConsumer(ctx, c.stream, c.want)
 			return e

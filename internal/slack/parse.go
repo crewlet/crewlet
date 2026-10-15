@@ -280,7 +280,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// reply should subscribe it to what comes back.
 	if p.isOwn(seat, w.Body, event) {
 		if thread != "" && p.threads != nil {
-			if err := p.threads.Participated(ctx, handle, channel, thread, p.now()); err != nil {
+			if err := p.threads.Participated(ctx, seat.Handle, channel, thread, p.now()); err != nil {
 				log.WarnContext(ctx, "slack_participation_not_recorded",
 					"handle", handle, "thread", thread, "error", err.Error())
 			}
@@ -300,7 +300,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	reach := notify.Delivery{Deliver: true}
 	if p.threads != nil {
 		var err error
-		reach, err = p.threads.Reaches(ctx, handle, seat.BotUserID, msg, p.now())
+		reach, err = p.threads.Reaches(ctx, seat.Handle, seat.BotUserID, msg, p.now())
 		if err != nil {
 			log.WarnContext(ctx, "slack_thread_follow_unreadable",
 				"handle", handle, "thread", thread, "error", err.Error())
@@ -314,7 +314,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// thread every reply carries — so a seat named in a channel hears the
 	// answers to what it was asked, without being named again.
 	if p.threads != nil && thread == "" && reach.Reason != "" {
-		if err := p.threads.Follow(ctx, handle, channel, ts, p.now()); err != nil {
+		if err := p.threads.Follow(ctx, seat.Handle, channel, ts, p.now()); err != nil {
 			log.WarnContext(ctx, "slack_follow_not_recorded",
 				"handle", handle, "thread", ts, "error", err.Error())
 		}

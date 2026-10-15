@@ -245,7 +245,7 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 		seen[subject] = true
 		profile, ok, err := f.src.Counterparties.Get(ctx, observer, subject)
 		if err != nil {
-			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", observer,
+			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", r.Seat.Handle(),
 				"error", err.Error())
 			continue
 		}

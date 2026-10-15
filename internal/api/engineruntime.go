@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -186,6 +187,10 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		ShuttingDown: r.ShuttingDown(),
 		// And the same seats the placement read adds to its listing.
 		Seats: r.Seats(),
+		// WHICH IDENTITY DUTIES THIS NODE ARMED, off the engine's own
+		// record of the loops it started — the same answer the arming
+		// decision produced, never a second derivation from the roles.
+		IdentityDuties: r.engine.IdentityDuties(),
 		// The seats this node could not prove it let go of, and for how
 		// long. The one fleet fault that is silent everywhere else: the
 		// lease is still ours, so no peer claims the seat, and the host
@@ -226,11 +231,11 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 // count with it.
 func (r engineRuntime) Fleet(ctx context.Context) FleetState {
 	var state FleetState
-	if kinds, evaluated := r.engine.Alarms(); evaluated {
-		state.Alarms = make([]string, 0, len(kinds))
-		for _, kind := range kinds {
-			state.Alarms = append(state.Alarms, string(kind))
-		}
+	if standing, evaluated := r.engine.Alarms(); evaluated {
+		// NON-NIL ONCE EVALUATED, even with nothing firing: an empty
+		// slice is the real claim that nothing holds, and nil is that no
+		// evaluation has run — see [FleetState.Alarms].
+		state.Alarms = append(make([]statelog.Kind, 0, len(standing)), standing...)
 	}
 	// THE FLEET'S SIZE, from the presence leases every fan-out on this node
 	// divides its work by, read live for the posture's reason. A failed or

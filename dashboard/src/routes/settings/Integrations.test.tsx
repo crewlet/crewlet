@@ -675,13 +675,15 @@ test("one unfinished surface makes the whole tool unfinished", () => {
 // Where this build answers no setup state for a tool and nothing refused the
 // read, there is no form a Connect could open, and the page that says how is
 // its documentation. Where the read was REFUSED, the form exists and the
-// reader lacks the token — so the action stays Connect, disabled with the
-// sentence that says why (a write control is never hidden).
+// reader lacks the grants — so the action stays Connect, disabled with the
+// sentence that names them (a write control is never hidden).
 test("a tool with no form behind it is learned about, not connected", () => {
   const nothing = entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use"));
   expect(kindOf(nothing, [], false, [], false)).toBe("learn");
   expect(kindOf(nothing, [], false, [], true)).toBe("connect");
-  expect(formBlocked([], true)).toMatch(/operator token/);
+  expect(formBlocked([], true)).toBe(
+    "Setting up integrations needs Admin access. An admin can give it to you.",
+  );
   expect(formBlocked([], false)).toMatch(/no form to open/);
   expect(formBlocked([{}], true)).toBeUndefined();
 });
@@ -1383,7 +1385,7 @@ test("a stale setup listing never contradicts the tag", () => {
 // --- an agent's own app, in the two acts a person performs ---------------- //
 
 import { waitFor } from "@testing-library/react";
-import { beforeEach, vi } from "vitest";
+import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
 
 const github = CATALOG.find((e) => e.key === "github")!;
@@ -1441,7 +1443,6 @@ function fieldsOf(form: HTMLFormElement): Record<string, string> {
   return Object.fromEntries([...form.querySelectorAll("input")].map((i) => [i.name, i.value]));
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -1628,11 +1629,11 @@ test("a step this build cannot perform draws no control", () => {
 // a button that quietly did nothing would leave them pressing it again.
 test("the engine's refusal is reported beside the agent it was refused for", async () => {
   const sent: Sent[] = [];
-  stubFetch(sent, { error: "no_public_url", hint: "set integrations.public_base_url first" }, 409);
+  stubFetch(sent, { error: "no_external_url", hint: "set api.external_url first" }, 409);
   roster(seatOf({ step: "create_app" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Create app on GitHub" }));
-  expect(await screen.findByText("set integrations.public_base_url first")).toBeTruthy();
+  expect(await screen.findByText("set api.external_url first")).toBeTruthy();
 });
 
 // --- the listing, and when it is worth reading again ---------------------- //

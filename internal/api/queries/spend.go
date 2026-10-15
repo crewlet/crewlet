@@ -32,11 +32,27 @@ type spendWindow struct {
 	Range   tokens.Range
 	Horizon tokens.Horizon
 
-	// Seat is the handle asked for, and AgentID the id every node derives
-	// from it — the key the usage rows are filed under.
-	Seat    string
+	// AgentID and Person are the one seat `seat=<handle>` narrows to, by
+	// the key its days are filed under — both empty for the whole company.
+	//
+	// An AGENT seat is its agent id, resolved through the chart to the id
+	// every node derives for it ([Sources.seatAgentID]); a HUMAN seat is
+	// its handle, the key a person's day is filed under (the usage domain's
+	// person kind), since a human seat has no agent id. A handle the chart
+	// no longer holds sets BOTH — the id derived from it and the handle —
+	// because the chart can no longer say which kind it was, and one
+	// handle names one seat, so at most one of the two finds anything.
 	AgentID string
+	Person  string
 }
+
+// seatOnly reports whether the window is narrowed to an agent seat the chart
+// names as one, which no person's day can belong to.
+func (w spendWindow) seatOnly() bool { return w.AgentID != "" && w.Person == "" }
+
+// personOnly reports whether the window is narrowed to a human seat the chart
+// names as one, which no agent seat's day can belong to.
+func (w spendWindow) personOnly() bool { return w.Person != "" && w.AgentID == "" }
 
 // DefaultSpendRangeDays is the window a named spend question covers when it
 // names none: the company's today, the one day the live projection's rolling
@@ -59,7 +75,9 @@ func namesAWindow(p Params) bool {
 // `days` (1..[tokens.MaxSpendRangeDays], the company days ending today) OR
 // `since` and `until` (two company-local dates, both INCLUSIVE — "1 June to
 // 8 June" is eight days); `previous` shifts either back by its own length;
-// `seat` is a handle. Every refusal names the parameter to change.
+// `seat` is a handle — an agent seat's, resolved to its agent id through the
+// chart, or a person's human seat ([Sources.spendSeat]). Every refusal names
+// the parameter to change.
 func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 	loc := s.zone()
 	now := s.clock()
@@ -120,38 +138,50 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 		w.Range = prev
 	}
 
-	if seat := strings.TrimSpace(p.String("seat")); seat != "" {
-		if !org.ValidHandle(seat) {
-			return w, fmt.Errorf("%w: seat=%q is not a handle — a seat is named by "+
-				"its handle (lowercase, as on its page)", ErrBadParams, seat)
-		}
-		w.Seat = seat
-		w.AgentID = s.derivedAgentID(seat)
+	if err := s.spendSeat(p, &w); err != nil {
+		return w, err
 	}
 	return w, nil
 }
 
-// derivedAgentID is the agent id a handle names — DERIVED, as every node
-// derives it, from the org's name and the handle, and never looked up in the
-// current chart: a seat since removed from it still names the rows its days
-// left behind, where [Sources.agentIDOf]'s lookup would pass the handle
-// through and match nothing. Empty before a company is running, which the
-// reader answers by matching the rows' own handle instead.
-func (s Sources) derivedAgentID(handle string) string {
-	organization := s.organization()
-	if organization == nil {
-		return ""
+// spendSeat narrows w to the seat `seat=<handle>` names — see
+// [spendWindow.AgentID].
+//
+// A PERSON'S SEAT NARROWS TO THEIR SPEND rather than being refused, unlike the
+// turn and phase questions ([Sources.seatAgentID]): a person takes no turn, but
+// what the operator surface's auxiliary model spent for them is filed under
+// their human seat's handle, so "what did this person cost" has an answer and
+// it is theirs alone.
+func (s Sources) spendSeat(p Params, w *spendWindow) error {
+	handle := strings.TrimSpace(p.String("seat"))
+	if handle == "" {
+		return nil
 	}
-	id, ok := org.DeriveAgentID(organization.Name, handle)
-	if !ok {
-		return ""
+	if organization := s.organization(); organization != nil && org.ValidHandle(handle) {
+		if role := organization.Role(handle); role != nil && role.IsHuman() {
+			w.Person = handle
+			return nil
+		}
 	}
-	return id.String()
+	agentID, err := s.seatAgentID(handle)
+	if err != nil {
+		return err
+	}
+	w.AgentID = agentID
+	if organization := s.organization(); organization != nil && organization.Role(handle) == nil {
+		w.Person = handle
+	}
+	return nil
 }
 
 // spendCells reads a window's company-day rows from the usage domain.
 func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, []tokens.SeatDay, error) {
 	q := usage.SpendQuery{From: w.Range.First.Label, To: w.Range.Last.Label, AgentID: w.AgentID}
+	if w.personOnly() {
+		// A PERSON'S WINDOW holds no agent seat's day, and an empty
+		// AgentID asks for every one.
+		return s.personCells(ctx, w, q, nil, nil)
+	}
 	rows, err := usage.Spend(ctx, s.Usage, q)
 	if err != nil {
 		return nil, nil, usageErr(err)
@@ -160,15 +190,8 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 	if err != nil {
 		return nil, nil, usageErr(err)
 	}
-	// NO COMPANY TO DERIVE AN ID FROM: the handle the day's record carried
-	// is the only name left to match on.
-	keep := func(handle string) bool { return w.Seat == "" || w.AgentID != "" || handle == w.Seat }
-
 	cells := make([]tokens.Cell, 0, len(rows))
 	for _, r := range rows {
-		if !keep(r.Handle) {
-			continue
-		}
 		cells = append(cells, tokens.Cell{
 			Day: r.Day, AgentID: r.AgentID, Handle: r.Handle, Role: r.Role,
 			Phase: r.Phase, Worker: r.Worker, Model: r.Model, ProviderKey: r.ProviderKey,
@@ -181,20 +204,28 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 	}
 	seats := make([]tokens.SeatDay, 0, len(turns))
 	for _, r := range turns {
-		if !keep(r.Handle) {
-			continue
-		}
 		seats = append(seats, tokens.SeatDay{
 			Day: r.Day, AgentID: r.AgentID, Handle: r.Handle, Role: r.Role,
 			Turns: int(r.Turns), Failed: int(r.Failed),
 		})
 	}
-	// AND EVERY PERSON'S, which no seat's row carries: what the auxiliary
-	// model spent for a human seat — a question on the operator surface —
-	// named by the seat's handle, so a window narrowed to that handle is
-	// the person's alone.
+	if w.seatOnly() {
+		// AN AGENT SEAT'S WINDOW holds no person's day, and an empty
+		// Person asks for every one.
+		return cells, seats, nil
+	}
+	return s.personCells(ctx, w, q, cells, seats)
+}
+
+// personCells adds to a window's cells EVERY PERSON'S, which no seat's row
+// carries: what the auxiliary model spent for a human seat — a question on the
+// operator surface — named by the seat's handle, so a window narrowed to that
+// handle is the person's alone.
+func (s Sources) personCells(ctx context.Context, w spendWindow, q usage.SpendQuery,
+	cells []tokens.Cell, seats []tokens.SeatDay) ([]tokens.Cell, []tokens.SeatDay, error) {
+
 	people, err := usage.PersonSpend(ctx, s.Usage, usage.PersonQuery{
-		From: q.From, To: q.To, Person: w.Seat,
+		From: q.From, To: q.To, Person: w.Person,
 	})
 	if err != nil {
 		return nil, nil, usageErr(err)
@@ -236,29 +267,42 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		// names the two instants it cut it at.
 		window := s.State.Spend()
 		return tokens.Aggregate(window.Records, tokens.Options{
-			Handles: s.RoleHandles(),
-			Since:   window.Since,
-			Until:   window.Until,
+			Seats:       s.Seats(),
+			Since:       window.Since,
+			Until:       window.Until,
+			RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
 		}), nil
 	}
 	w, err := s.spendWindowOf(p)
 	if err != nil {
 		return nil, err
 	}
-	opts := tokens.DailyOptions{Range: w.Range, Seat: w.Seat, Horizon: w.Horizon}
+	opts := tokens.DailyOptions{Range: w.Range, AgentID: w.AgentID, Seats: s.Seats(), Horizon: w.Horizon}
 	if s.Usage == nil {
 		// A registry wired without the usage domain (a caller asking only
 		// the projection's questions) cannot see this window. The honest
 		// answer is an EMPTY rollup labelled with the window asked for, not
 		// the live one relabelled, which would put a week's heading over a
 		// day's numbers.
-		return tokens.FoldDaily(nil, nil, opts), nil
+		return w.label(tokens.FoldDaily(nil, nil, opts)), nil
 	}
 	cells, seats, err := s.spendCells(ctx, w)
 	if err != nil {
 		return nil, err
 	}
-	return tokens.FoldDaily(cells, seats, opts), nil
+	return w.label(tokens.FoldDaily(cells, seats, opts)), nil
+}
+
+// label names the person a window was narrowed to on its rollup, which the
+// fold names only by an agent id ([tokens.Rollup.Seat] is the seat's handle
+// now, and a person's human seat has no agent id to look it up by). Its
+// AgentID stays absent: a person has none, and an id here would be a link to
+// a seat page no agent holds.
+func (w spendWindow) label(r tokens.Rollup) tokens.Rollup {
+	if w.personOnly() {
+		r.Seat = w.Person
+	}
+	return r
 }
 
 // tokenSeries answers the spend WITH A TIME AXIS.
@@ -304,60 +348,57 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	return tokens.BucketDaily(cells, tokens.SeriesOptions{
 		Group: group, Interval: interval, Range: w.Range,
 		Groups:  Clamp(p.Int("groups", 0), tokens.DefaultSeriesGroups, tokens.MaxSeriesGroups),
-		Units:   s.SeatUnits(),
-		Seat:    w.Seat,
+		Seats:   s.Seats(),
+		AgentID: w.AgentID,
 		Horizon: w.Horizon,
 	}), nil
 }
 
-// SeatUnits maps each seat's HANDLE to the unit holding it, for the per-unit
-// band of a series.
+// Seats is the running organisation as the spend rollups name seats: every
+// agent seat by its agent id and every human seat by its [tokens.PersonKey],
+// each with its handle, its name and the unit it sits in directly. Empty when
+// this node runs no company, which names and links nothing rather than
+// guessing.
 //
-// Only the DIRECT unit, not the chain: a band per nesting level would count
-// the same spend once for the team and again for the department above it, and
-// a stacked chart whose bands sum to more than the total is unreadable. A seat
-// at the root of the chart is absent, which [tokens.Group] places in its own
-// band. Keyed on the handle because that is what a usage row names a seat by;
-// a role name is what the seat is called this week.
-func (s Sources) SeatUnits() map[string]string {
-	out := map[string]string{}
+// KEYED BY AGENT ID, the one identifier a spend record and a usage row carry
+// that neither a rename nor a namesake can move. It was keyed by role name,
+// which two seats may share: both of their rows linked to whichever seat the
+// map was built from last, and a per-unit band keyed on a unit's NAME pooled
+// two teams that shared one.
+//
+// Exported because the live stream needs the same directory for the rollup it
+// pushes: two derivations of it is how a pushed row and a queried one come to
+// link to different pages.
+func (s Sources) Seats() tokens.Seats {
+	out := tokens.Seats{}
 	organization := s.organization()
 	if organization == nil {
 		return out
 	}
+	// EVERY SEAT THE COMPANY RUNS: a walk of the document's top-level
+	// list missed every seat inside a unit.
 	for role := range organization.AllRoles() {
+		seat := tokens.Seat{Handle: role.Handle(), Name: role.Name}
+		// Only the DIRECT unit, not the chain: a band per nesting level
+		// would count the same spend once for the team and again for the
+		// department above it, and a stacked chart whose bands sum to more
+		// than the total is unreadable.
 		if unit := organization.UnitFor(role); unit != nil {
-			out[role.Handle()] = unit.Name
+			seat.UnitKey, seat.UnitName = unit.Key(), unit.Name
 		}
-	}
-	return out
-}
-
-// RoleHandles maps each seat's role name to its handle, for the live rollup's
-// cross-links. Empty when no revision is active, which links to nothing rather
-// than guessing a handle.
-//
-// EVERY SEAT IN THE CHART, units included. This walked `company.Roles` — the
-// root seats only — so every seat inside a unit rolled up with an empty handle
-// and its row on the Spend screen linked nowhere. The org's own walk and the
-// org's own handle derivation, never a re-spelling of either: a handle that
-// differs from the seat's real one is a cross-link to a page that does not
-// exist.
-//
-// Exported because the live stream needs the same map for the rollup it
-// pushes: two derivations of "which handle is this role" is how a pushed row
-// and a queried one come to link to different pages.
-func (s Sources) RoleHandles() map[string]string {
-	out := map[string]string{}
-	organization := s.organization()
-	if organization == nil {
-		return out
-	}
-	for role := range organization.AllRoles() {
-		if role.Name == "" {
+		// A HUMAN SEAT UNDER ITS PERSON KEY: a person's spend names the
+		// human seat it was made for, and a human seat has no agent id —
+		// so without this row a person's spend printed under whatever
+		// name its newest day carried and never under the seat's own.
+		if role.IsHuman() {
+			out[tokens.PersonKey(role.Handle())] = seat
 			continue
 		}
-		out[role.Name] = role.Handle()
+		id, ok := organization.AgentIDFor(role)
+		if !ok {
+			continue
+		}
+		out[id.String()] = seat
 	}
 	return out
 }

@@ -2,12 +2,13 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -54,12 +55,11 @@ func (e *Engine) LookupSecret(name string) (string, bool) { return e.resolver().
 
 // resolver is the chain this node resolves ${VAR} through.
 //
-// Never nil: a node with no store, or no keyring, resolves from the
-// environment alone — which is the pre-store behaviour and a supported
-// deployment, not a degraded one.
+// Never nil: until a snapshot is installed — and on an engine holding no
+// store at all — it resolves from the environment alone.
 func (e *Engine) resolver() *config.Resolver {
-	if r := e.env.Load(); r != nil {
-		return r
+	if v := e.env.Load(); v != nil {
+		return v.resolver
 	}
 	return config.NewResolver(e.environment())
 }
@@ -83,6 +83,27 @@ func getenv(source config.Source) func(string) string {
 	}
 }
 
+// secretView is this node's ${VAR} resolver and the store snapshot it answers
+// from, published together — see [Engine.env].
+type secretView struct {
+	resolver *config.Resolver
+
+	// values is the store snapshot the resolver was built from, never nil:
+	// an engine with no store holds no view at all.
+	values map[string]string
+}
+
+// installSecrets publishes one snapshot as this node's resolver: THE STORE IN
+// FRONT OF THIS NODE'S ENVIRONMENT ([Engine.environment]), which is the chain
+// [config.WithStore] builds over the process's own. The caller holds
+// [Engine.secretsMu].
+func (e *Engine) installSecrets(values map[string]string) {
+	e.env.Store(&secretView{
+		resolver: config.NewResolver(config.MapSource(values), e.environment()),
+		values:   values,
+	})
+}
+
 // refreshSecrets rebuilds the resolver from the secret store.
 //
 // A SNAPSHOT, not a live query, because ${VAR} expansion happens deep inside
@@ -104,15 +125,19 @@ func getenv(source config.Source) func(string) string {
 // can tell "this node has no secret store" from "the store answered with
 // nothing in it", which the resolver renders identically.
 func (e *Engine) refreshSecrets(ctx context.Context) bool {
+	// SERIALISED WITH EVERY OTHER REFRESH: the store is read under the
+	// same lock the snapshot is installed under, so whichever of two runs
+	// later read the store later, and neither installs a snapshot older
+	// than the other's.
+	e.secretsMu.Lock()
+	defer e.secretsMu.Unlock()
 	values, err := e.secretSnapshot(ctx)
 	if err != nil {
-		if errors.Is(err, secrets.ErrNoKeyring) {
-			// No keyring is a supported deployment: secrets come from the
-			// environment and the store is simply not in use. Logged once
-			// at debug rather than warned on every apply.
-			log.DebugContext(ctx, "secret_store_unused", "reason", "this node has no keyring")
-			return false
-		}
+		// NO KEYRING IS NOT A QUIET CASE ANY MORE. It was a supported
+		// deployment, logged at debug; [openCipher] now refuses to build
+		// an engine without one, so meeting it here is a fault like any
+		// other unreadable store, and it keeps the previous snapshot for
+		// the same reason.
 		log.ErrorContext(ctx, "secret_store_unreadable", "error", err,
 			"detail", "the previous snapshot keeps serving; rotated secrets "+
 				"will not be picked up until the store is readable")
@@ -125,9 +150,7 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 		// line would conclude the store is wired when it is not.
 		return false
 	}
-	// THE STORE IN FRONT OF THIS NODE'S ENVIRONMENT, which is the chain
-	// [config.WithStore] builds over the process's own.
-	e.env.Store(config.NewResolver(config.MapSource(values), e.environment()))
+	e.installSecrets(values)
 	// NAMES ONLY. This is the one log line that could put a company's whole
 	// credential set into a file, so it counts them instead.
 	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))
@@ -171,9 +194,9 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 // was the last kind living somewhere only one node could see, so a rotation
 // reached the node an operator pointed the CLI at and nowhere else.
 //
-// Nil values with a nil error means "this node has no secret store at all",
-// which leaves the environment-only resolver in place — a supported
-// deployment, not a degraded one.
+// Nil values with a nil error means an Engine with no store at all — one
+// built by hand in a test, since [New] refuses a set of backends without
+// them — which leaves the environment-only resolver in place.
 func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) {
 	if e.backends == nil {
 		return nil, nil
@@ -197,7 +220,7 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 	merged := map[string]string{}
 	if local != nil {
 		values, err := local.SecretValues(cipher).All(ctx)
-		if err != nil && !errors.Is(err, secrets.ErrNoKeyring) {
+		if err != nil {
 			return nil, err
 		}
 		maps.Copy(merged, values)
@@ -217,20 +240,107 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 	return merged, nil
 }
 
-// openCipher builds this node's keyring cipher, or reports that it has none.
+// openCipher builds this node's keyring cipher, or refuses the boot.
 //
-// A NODE WITH NO KEYRING IS SUPPORTED, and gets nil rather than an error:
-// secrets then come from the environment and the store is simply not in use.
-// A keyring that is CONFIGURED but broken is a different thing entirely —
-// an operator asked for encryption and did not get it — so that fails the
-// boot rather than degrading quietly to plaintext resolution.
+// A NODE WITH NO KEYRING DOES NOT START. It used to be a supported posture —
+// secrets from the environment, the store unused, the company document read
+// in plaintext — and every node needs the keyring now: every state-log record
+// is signed and verified under it, and the document a peer fetches from the
+// coordination store is authenticated by its seal. Tier A refuses a file
+// without one ([config.Bootstrap.Validate]); this is the engine's own
+// refusal, for a Bootstrap that did not come through that door, and it runs
+// BEFORE anything opens, so a keyless node leaves no store file behind — the
+// unconfigured node included, which used to start no state log until it had a
+// company and so met no signer at all. A keyring that is configured but broken
+// fails here too, naming the key.
 func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
-	if boot == nil || len(boot.Secrets.Keys) == 0 {
-		return nil, nil
+	if boot == nil {
+		return nil, fmt.Errorf("engine: no bootstrap config, so no keyring")
 	}
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
 	}
 	return cipher, nil
+}
+
+// PersonSealer is what this node seals and opens a person's own values with:
+// their name, their address, an invitation's address and a second factor's
+// seed, all under the fleet keyring ([iamdomain.Sealer]).
+//
+// OVER THE ENGINE'S OWN CIPHER, the one that seals the company's secret store
+// and signs every state-log record, so a keyring rotation is one gesture for
+// all of them.
+//
+// NIL ONLY ON AN ENGINE WITH NO KEYRING — one built by hand in a test, since
+// [New] refuses a node without one — and every write that seals is then
+// refused BY NAME at the call, where a sealer over nothing would have written
+// cleartext.
+func (e *Engine) PersonSealer() *iamdomain.Sealer {
+	if e == nil || e.cipher == nil {
+		return nil
+	}
+	sealer, err := iamdomain.NewSealer(e.cipher)
+	if err != nil {
+		return nil
+	}
+	return sealer
+}
+
+// IdentityKeyring is the identity estate's half of a keyring rotation, or nil
+// on an engine with no core runtime — one a test built by hand, since every
+// engine [New] builds opens the identity estate at boot, company or none.
+//
+// ITS OWN HALF, because a store write cannot do it: the same keyring seals
+// every person's name, address and second factor, in rows derived from the
+// identity log — a node that rewrote its own would disagree with its peers, and
+// a replay would write the old ciphertext back — so a rekey moves them with a
+// RECORD per person, through the node's own writer ([iamdomain.Writer.Reseal]).
+// The node and not the caller, for the secret store's reason: a rekey re-seals
+// values it did not choose, and whoever rotated the keyring is the rotation's
+// own fact, which the rekey route logs.
+func (e *Engine) IdentityKeyring() *IdentityKeyring {
+	reader, writer := e.IAM(), e.IAMWriter()
+	if reader == nil || writer == nil {
+		return nil
+	}
+	return &IdentityKeyring{reader: reader, writer: writer}
+}
+
+// IdentityKeyring counts and moves what the keyring seals in the identity
+// estate — see [Engine.IdentityKeyring].
+type IdentityKeyring struct {
+	reader *iamdomain.Reader
+	writer *iamdomain.Writer
+}
+
+// SealedKeys counts the values this node's identity rows hold that anything
+// opens, by the keyring key each is sealed under, as of now.
+func (k *IdentityKeyring) SealedKeys(ctx context.Context) (iamdomain.SealedCount, error) {
+	return k.reader.SealedKeys(ctx, time.Now().UTC())
+}
+
+// Reseal moves every person's values onto this node's active keyring key.
+func (k *IdentityKeyring) Reseal(ctx context.Context) (iamdomain.ResealReport, error) {
+	return k.writer.Reseal(ctx, k.reader)
+}
+
+// PersonBlinder is where this node gets the company's address blind, or nil.
+//
+// A SOURCE, RESOLVED AT EACH USE, and the key it reads is MINTED by the first
+// node that needs one. This used to read the key once at boot and answer nil
+// when it was absent — and nothing anywhere minted it, so on every deployment
+// every enrolment with an address, every invitation and every sign-in by
+// address was refused for a key that did not exist.
+//
+// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
+// [New] refuses a node without a keyring or a fleet backend — and the writes
+// that need a blind are then refused BY NAME at the call. Returned as the
+// interface with an explicit nil, never a typed one, so a caller's nil check
+// means what it says.
+func (e *Engine) PersonBlinder() iamdomain.Blinds {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
+		return nil
+	}
+	return personBlindSource{e: e}
 }

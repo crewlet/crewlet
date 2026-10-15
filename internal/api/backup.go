@@ -6,16 +6,18 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	apiOperator "github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Taking a backup over HTTP.
 //
-// For the same reason the budget reset is a route rather than a command: what
-// has to be copied is only reachable from inside the running engine. The
+// A route rather than a command, because what has to be copied is only
+// reachable from inside the running engine. The
 // store is one file this process holds an exclusive lock on, and the
 // coordination estate is a broker embedded in this process that binds no
 // socket — so a CLI run while the engine is down cannot read the second, and
@@ -51,15 +53,21 @@ type backupTaker interface {
 func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":  "no_destination",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNoDestination, map[string]string{
 			"detail": "name an absolute directory with ?dir=",
 			"hint":   "it is created on the engine's host, not the caller's",
 		})
 		return
 	}
 
-	operator, _ := auth.OperatorFrom(r.Context())
+	if _, ok := auth.Caller(w, r); !ok {
+		return
+	}
+	// WHO ASKED, in the three halves every record names a caller by — the
+	// author, its kind and the credential — read through the one function
+	// every surface attributes a write with, so the audit row and the log
+	// line below cannot name two different people.
+	by := auth.AttributionOf(r.Context())
 	// WithoutCancel: a backup that has begun copying should finish and
 	// leave one coherent artifact rather than a directory abandoned
 	// halfway because the client hung up. The pieces already written are
@@ -78,13 +86,14 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	// Recorded, a mistyped path read as a failed backup in the history and
 	// in the failures a person counts, beside the field that said why.
 	if !errors.Is(err, backup.ErrBadDestination) {
-		a.auditBackup(r, operator, dir, manifest, err)
+		a.auditBackup(r, by, dir, manifest, err)
 	}
 	if err != nil {
 		// The reason goes to the LOG rather than the body, like every
 		// other route here — except the two an operator can actually act
 		// on, which are their own fault and are named.
-		log.Warn("api_backup_failed", "operator", operator, "dir", dir, "error", err)
+		log.Warn("api_backup_failed", "by", by.Name, "operator", by.OperatorID,
+			"dir", dir, "error", err)
 		// THE DETAIL IS RETURNED ONLY FOR THE CALLER'S OWN MISTAKE.
 		// Everywhere else on this surface the internal reason goes to
 		// the log alone, and that holds here: a copy that failed on the
@@ -93,24 +102,31 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// the thing to fix is in their command rather than in this
 		// process, and sending them to the engine's logs to find it
 		// would be the wrong instruction.
-		answer := map[string]string{"error": "backup_failed"}
 		status := backupStatus(err)
 		switch status {
-		case http.StatusBadRequest:
-			answer["detail"] = err.Error()
 		case http.StatusServiceUnavailable:
 			// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
 			// fixed hint, never the list of objects, which is the log's.
-			answer["error"] = "objects_unreachable"
-			answer["hint"] = "the company's files name objects the object store " +
-				"did not answer for; check that this node reaches the store " +
-				"store.objects names (the S3 bucket, or the data nodes' NATS " +
-				"bucket) and take the backup again"
+			// The wait is the broker's own election: the default object
+			// store is the data nodes' NATS bucket, which answers again
+			// no sooner than its group elects a leader, and an S3 bucket
+			// that did not answer is a blip of no longer scale.
+			httpjson.UnavailableWith(w, httpjson.CodeObjectsUnreachable,
+				httpjson.RetrySeconds(statelog.ElectionRetryHint), httpjson.Detail{
+					"hint": "the company's files name objects the object store " +
+						"did not answer for; check that this node reaches the " +
+						"store store.objects names (the S3 bucket, or the data " +
+						"nodes' NATS bucket) and take the backup again",
+				})
+		case http.StatusBadRequest:
+			httpjson.FailWith(w, status, httpjson.CodeBackupFailed,
+				map[string]string{"detail": err.Error()})
+		default:
+			httpjson.Fail(w, status, httpjson.CodeBackupFailed)
 		}
-		writeJSON(w, status, answer)
 		return
 	}
-	log.Info("backup_taken", "operator", operator, "dir", dir,
+	log.Info("backup_taken", "by", by.Name, "operator", by.OperatorID, "dir", dir,
 		"streams", len(manifest.Streams))
 	writeJSON(w, http.StatusOK, manifest)
 }
@@ -136,18 +152,23 @@ func backupStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-// auditBackup publishes the backup's runtime audit record: who asked, the
-// person their token is bound to, where, and whether it finished.
+// auditBackup publishes the backup's runtime audit record: who asked, through
+// which credential, where, and whether it finished.
 //
 // WHICH NODE'S DISK is the envelope's `node`, which the queue stamps on the
 // way out — and the queue this publishes through is this node's own, the node
 // that just took the copy. Naming it here as well would state one fact twice.
-func (a *App) auditBackup(r *http.Request, operatorID, dir string,
+//
+// THROUGH THE OPERATOR SURFACE'S [apiOperator.Audit], so the envelope's source
+// and the detached, logged-not-answered publish are decided once for every
+// runtime audit record rather than once per route.
+func (a *App) auditBackup(r *http.Request, by iam.Actor, dir string,
 	manifest backup.Manifest, err error) {
 
 	record := types.BackupRequested{
-		OperatorID: operatorID,
-		ActorSeat:  apiOperator.BoundSeat(a.chart, a.contacts, operatorID),
+		ActorName:  by.Name,
+		ActorKind:  string(by.Kind),
+		OperatorID: by.OperatorID,
 		Dir:        dir,
 		Outcome:    types.AuditApplied,
 		Streams:    len(manifest.Streams),
@@ -156,22 +177,4 @@ func (a *App) auditBackup(r *http.Request, operatorID, dir string,
 		record.Outcome, record.Streams = types.AuditFailed, 0
 	}
 	apiOperator.Audit(r.Context(), a.audit, types.NewBackupRequested(record))
-}
-
-// chart is the company chart of the current epoch, or nil before one is
-// active — which binds nobody, exactly as an unbound token reads.
-func (a *App) chart() *org.Organization {
-	c := a.company()
-	if c == nil {
-		return nil
-	}
-	// THE SAME DERIVATION the viewer question walks, so the person a
-	// backup names and the person the dashboard says is signed in cannot
-	// differ. A company that does not derive is a chart nobody is bound
-	// in, not a failed backup.
-	organization, err := c.Organization()
-	if err != nil {
-		return nil
-	}
-	return organization
 }

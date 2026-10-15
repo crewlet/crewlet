@@ -18,14 +18,14 @@ import (
 //
 // Holding is a fact about the node: a company that moved its tracker off the
 // native backend leaves a data node's file on disk with every row its log ever
-// derived. While the file was opened only by a running state log, such a node
-// held nothing open, and its backup wrote a manifest for its own file alone
-// and reported success. So a data node that runs no state log at all — this
-// one has no company — must hold the replicated estate open from boot, and a
-// backup built on the engine's answer must carry it.
+// derived. While the file was opened only by the native half's runtime, such a
+// node held nothing open, and its backup wrote a manifest for its own file
+// alone and reported success. So a data node that runs no native half at all —
+// this one has no company — must hold the replicated estate open from boot,
+// and a backup built on the engine's answer must carry it.
 func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	e, err := New(t.Context(), Options{Bootstrap: &b})
@@ -33,15 +33,15 @@ func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	if n := e.native.Load(); n != nil && n.log != nil {
-		t.Fatal("a node with no company runs a state log, so this case shows nothing")
+	if e.NativeStarted() {
+		t.Fatal("a node with no company runs the native half, so this case shows nothing")
 	}
 
 	if !HoldsEstate(&b) {
 		t.Fatal("a node running every role does not hold the replicated estate")
 	}
 	if !replicatedOpen(e.backends.Store) {
-		t.Error("a data node running no state log does not hold its replicated estate open")
+		t.Error("a data node running no native half does not hold its replicated estate open")
 	}
 
 	fleet := memory.NewFleet()
@@ -85,7 +85,7 @@ func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 func TestANodeKeepsItsEstateWhenItsStateLogStops(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	if n := e.native.Load(); n == nil || n.log == nil {
+	if c := e.core.Load(); c == nil || c.log == nil {
 		t.Fatal("the running node runs no state log, so there is nothing to stop")
 	}
 	e.Stop(context.Background())

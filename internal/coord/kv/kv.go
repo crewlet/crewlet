@@ -63,7 +63,7 @@
 // and lasts a minute; a bulk admission lasts twice the rows it projects. So
 // their TTLs run up to coord.MaxDutyTTL. One bucket cannot serve both. Its age
 // at the seat TTL refused every duty longer than 45 seconds, which is how the
-// retention sweep, the integration reconcile, the skill curator and every
+// retention sweep, the integration reconcile, the learning passes and every
 // integration pass never ran on any fleet — and, once the duties had moved
 // and the rest had not, every tracker walk claim, which is how every
 // cross-project move and merge failed on every fleet. Its age at the longest
@@ -195,7 +195,10 @@
 //
 // That Get is a DIRECT get, and a direct get is answered by whichever replica
 // the broker picks — the one on the caller's own member first — from its own
-// copy, which can be behind a write the quorum has acknowledged. The contract
+// copy, which can be behind a write the quorum has acknowledged: measured on
+// three members with the CPU saturated, 5 to 8 of every 100 reads made
+// straight after an acknowledged write returned the revision before it,
+// whichever member the reader was connected to. The contract
 // is that a backend serves its own writes per resource (coord.Backend), and
 // every lease answer rests on it: TryAcquire reads its own write back to learn
 // the store's deadline, and on the copy it read the claim's record was still
@@ -243,6 +246,20 @@
 // few percent of that ceiling. What a direct get would buy back is served by
 // nothing here, because every read in this package is one a caller acts on as
 // current — which is why none of them stays direct.
+//
+// # Every conditional write is DECIDED by the leader
+//
+// A compare-and-set here — a renew, a release, a claim's commit, an epoch's
+// advance, every create (createKey's conditional publish at zero or at a
+// marker's revision) and every fleet record's conditional update or removal —
+// can be answered three ways, not two: it lands; it is refused on a
+// comparison; or the leader declines to compare it at all because another
+// write to the subject is still in flight, which decides nothing, since the
+// write ahead may be this caller's own and already acknowledged. The client
+// maps the last two to one revision mismatch. So every bucket handle this
+// package holds is [settled]: its conditional writes are retried through
+// [jsinflight.Decide] until the leader decides them, and one still undecided
+// at its deadline is UNKNOWN rather than a race somebody else won (settle.go).
 package kv
 
 import (
@@ -485,7 +502,12 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		return nil, err
 	}
 
-	leases, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
+	// THE FACTS COME BACK WITH THE BUCKET, resolved once here where nothing
+	// is concurrent yet: openBucket reads every bucket back, so the age and
+	// the replica count in force are known without a second round trip. See
+	// lane.stream for why the stream is not read per call, and this
+	// function's doc for why the age is read back rather than assumed.
+	leases, leaseFacts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket:      cfg.BucketPrefix + leasesSuffix,
 		Description: "Crewlet seat and presence leases; the bucket TTL is the lease TTL and its expiry is the arbiter",
 		TTL:         cfg.TTL,
@@ -495,12 +517,12 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+leasesSuffix, err)
 	}
 
-	duties, err := openDuties(ctx, js, cfg)
+	duties, dutyFacts, err := openDuties(ctx, js, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	epochs, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
+	epochs, epochFacts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket: cfg.BucketPrefix + epochsSuffix,
 		Description: "Crewlet fencing epochs and placement hints; NO TTL, this must survive " +
 			"the lease key's expiry or the counter resets",
@@ -509,18 +531,14 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+epochsSuffix, err)
 	}
-
-	// Resolved once, here, where nothing is concurrent yet. See lane.stream
-	// for why the stream is not read per call, and this function's doc for
-	// why the age is read back rather than assumed.
-	leaseFacts, err := readBucket(ctx, leases)
-	if err != nil {
-		return nil, err
-	}
-	dutyFacts, err := readBucket(ctx, duties)
-	if err != nil {
-		return nil, err
-	}
+	// THE SHARPEST RETENTION IN THIS STORE, and until this line nothing
+	// compared it: an epoch bucket with an age at all is a fencing counter
+	// that resets, which hands the next owner of a resource a token a
+	// zombie from the previous tenure is still writing under. A peer that
+	// created it with one is reported here rather than refused, for
+	// [reportRetention]'s reason — a booting node does not rewrite a bucket
+	// — and the remedy it names is the one that fixes this.
+	reportRetention(ctx, epochs.Bucket(), 0, epochFacts)
 
 	// THE TTL IN FORCE, which is the bucket's and not this node's config
 	// whenever a peer created it first. Reported at WARN rather than
@@ -556,7 +574,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// bucket, so believing a number the bucket does not carry would
 		// accept deadlines it will not honour.
 		leases: &lane{
-			kv:         leases,
+			kv:         settled(js, leases),
 			read:       readers[0],
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
@@ -565,13 +583,13 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// The duty bucket's ceiling is the CONTRACT's, and its age only has
 		// to cover it; openDuties has just made sure it does.
 		duties: &lane{
-			kv:         duties,
+			kv:         settled(js, duties),
 			read:       readers[1],
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,
 			reapsAtMax: false,
 		},
-		epochs:    epochs,
+		epochs:    settled(js, epochs),
 		epochRead: readers[2],
 		ttl:       leaseFacts.age,
 	}
@@ -597,7 +615,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 // once. Raising it is safe in the only direction that matters, and it is ONLY
 // ever raised, because an age longer than a lease's TTL costs nothing: no
 // record here is judged by the age, every one carries its own deadline.
-func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstream.KeyValue, error) {
+func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstream.KeyValue, bucketFacts, error) {
 	name := cfg.BucketPrefix + dutiesSuffix
 	want := jetstream.KeyValueConfig{
 		Bucket: name,
@@ -607,11 +625,17 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 		TTL:      coord.MaxDutyTTL,
 		Replicas: cfg.Replicas,
 	}
-	bucket, err := openBucket(ctx, js, cfg.Clustered, want)
+	// NOTHING IS REPORTED BY [reportRetention] FOR THIS BUCKET, because an
+	// age ABOVE coord.MaxDutyTTL is its healthy adopted state — a peer on a
+	// build with a longer ceiling made it — and a warning on a healthy
+	// state is one nobody reads twice. What this bucket does with a
+	// difference is the exception the rest of the store does not have: it
+	// raises it, below.
+	bucket, facts, err := openBucket(ctx, js, cfg.Clustered, want)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
+		return nil, bucketFacts{}, fmt.Errorf("coord/kv: open %s: %w", name, err)
 	}
-	return raiseAge(ctx, js, cfg.Clustered, bucket, want, "duty lease")
+	return raiseAge(ctx, js, cfg.Clustered, bucket, facts, want, "duty lease")
 }
 
 // raiseAge raises a bucket's age to want.TTL when it is younger, and never
@@ -620,24 +644,23 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 // their own: the age is not a preference there but the CEILING on the
 // deadlines the bucket can honour (see [openDuties]), and an age longer than
 // any one record's deadline costs nothing, because no record is judged by the
-// age. `holds` names what the bucket keeps, for the error and the log.
+// age. `facts` are what [openBucket] read back as IN FORCE on the bucket, and
+// the facts answered are the ones in force once this returns. `holds` names
+// what the bucket keeps, for the error and the log.
 func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
-	bucket jetstream.KeyValue, want jetstream.KeyValueConfig, holds string) (jetstream.KeyValue, error) {
+	bucket jetstream.KeyValue, facts bucketFacts, want jetstream.KeyValueConfig,
+	holds string) (jetstream.KeyValue, bucketFacts, error) {
 
-	facts, err := readBucket(ctx, bucket)
-	if err != nil {
-		return nil, err
-	}
 	// An age of zero is no age at all, which already outlives every record:
 	// raising it would SHORTEN it.
 	if facts.age == 0 || facts.age >= want.TTL {
-		return bucket, nil
+		return bucket, facts, nil
 	}
 	// THE REPLICA COUNT IN FORCE, never this node's. openBucket has already
 	// refused a bucket replicated below what this node asked for, so the only
 	// difference left here is a bucket replicated ABOVE it, and an update
 	// carrying this node's number would shrink it, which is the durability
-	// loss observeReplicas exists to refuse.
+	// loss observeBucket exists to refuse.
 	want.Replicas = facts.replicas
 	// ITS OWN BUDGET AND ITS OWN RE-ASK, because this is a replicated
 	// stream-configuration write against the same metadata group as every
@@ -648,19 +671,23 @@ func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
 		jsprovision.Clustered(clustered).Budget())
 	defer cancelWrite()
 	var updated jetstream.KeyValue
-	err = jsprovision.Place(writeCtx, jsprovision.Clustered(clustered).AskTerm(),
+	err := jsprovision.Place(writeCtx, jsprovision.Clustered(clustered).AskTerm(),
 		func(ctx context.Context) error {
 			var e error
 			updated, e = js.UpdateKeyValue(ctx, want)
 			return e
 		}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it can hold a "+
-			"%s for its full TTL: %w", want.Bucket, facts.age, want.TTL, holds, err)
+		return nil, bucketFacts{}, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so "+
+			"it can hold a %s for its full TTL: %w", want.Bucket, facts.age, want.TTL, holds, err)
 	}
 	log.InfoContext(ctx, "coord_kv_bucket_age_raised", "bucket", want.Bucket,
 		"holds", holds, "from", facts.age, "to", want.TTL)
-	return updated, nil
+	// THE AGE IN FORCE IS NOW THE ONE JUST WRITTEN; the stream behind the
+	// bucket and its replica count are what they were, and the update
+	// carried both forward deliberately (see want.Replicas above).
+	facts.age = want.TTL
+	return updated, facts, nil
 }
 
 // bucketFacts is what one status read tells the boot path about a bucket:

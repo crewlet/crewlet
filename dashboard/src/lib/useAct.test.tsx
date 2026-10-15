@@ -24,9 +24,13 @@ vi.mock("./store-hooks.ts", () => ({ useClient: vi.fn(), useConnection: vi.fn() 
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const BOUND: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  login: "jane.founder",
+  grants: ["tracker"],
+  admin: false,
+  tracker: true,
+  knowledge: false,
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   acts: ["set_pins", "update_work_item"],
   project: "",
@@ -49,7 +53,7 @@ let sent: Sent[];
 beforeEach(() => {
   sent = [];
   vi.mocked(useViewer).mockReturnValue(BOUND);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useClient).mockReturnValue({
     socket: {
       query: vi.fn(async (kind: string, params: Record<string, unknown>) => {
@@ -66,13 +70,28 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** One press as the act route received it: its operation key, and its body. */
+interface Post {
+  /** The `Idempotency-Key` it carried — the write's identity. */
+  opId: string | null;
+  args: unknown;
+}
+
+/** What one request to the act route carried. */
+function received(init: RequestInit): Post {
+  return {
+    opId: new Headers(init.headers).get("Idempotency-Key"),
+    args: (JSON.parse(init.body as string) as { args: unknown }).args,
+  };
+}
+
 /** The engine's act route, answering every press with `answer`. */
 function engine(answer: () => Response) {
-  const posts: { request_id: string }[] = [];
+  const posts: Post[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
-      posts.push(JSON.parse(init.body as string) as { request_id: string });
+      posts.push(received(init));
       return answer();
     }),
   );
@@ -142,9 +161,9 @@ test("pending tells the person this node has not applied it, and the reads wait 
 });
 
 // UNKNOWN IS NEVER RETRIED ON ITS OWN, and a Retry the person presses sends
-// the SAME request id: the engine derives the same operations from it, so the
+// the SAME operation key: the engine takes it as the write's identity, so the
 // retry is the first attempt again rather than a second change.
-test("unknown stays on screen, and its Retry sends the same request id", async () => {
+test("unknown stays on screen, and its Retry sends the same operation key", async () => {
   const posts = engine(() => new Response("bad gateway", { status: 502 }));
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
@@ -155,12 +174,13 @@ test("unknown stays on screen, and its Retry sends the same request id", async (
   expect(posts).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(posts).toHaveLength(2));
-  expect(posts[1]!.request_id).toBe(posts[0]!.request_id);
+  expect(posts[0]!.opId).toBeTruthy();
+  expect(posts[1]!.opId).toBe(posts[0]!.opId);
 
-  // AND A NEW PRESS IS A NEW REQUEST.
+  // AND A NEW PRESS IS A NEW OPERATION.
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   await waitFor(() => expect(posts).toHaveLength(3));
-  expect(posts[2]!.request_id).not.toBe(posts[0]!.request_id);
+  expect(posts[2]!.opId).not.toBe(posts[0]!.opId);
 });
 
 /** Two presses of one control, each pinning a different view. */
@@ -186,7 +206,7 @@ function TwoPresses() {
 
 // A TOAST'S RETRY IS BOUND TO ITS OWN PRESS. The toast stays while the person
 // goes on working, so a Retry that read "the last press" when clicked sent
-// whatever was pressed since — another change, under another request id —
+// whatever was pressed since — another change, under another operation key —
 // and the press the toast was about was never retried at all.
 test("an unknown press's Retry sends that press, whatever was pressed since", async () => {
   const answers = [
@@ -196,11 +216,11 @@ test("an unknown press's Retry sends that press, whatever was pressed since", as
     () =>
       json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:951" }, 200),
   ];
-  const posts: { request_id: string; args: unknown }[] = [];
+  const posts: Post[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
-      posts.push(JSON.parse(init.body as string) as { request_id: string; args: unknown });
+      posts.push(received(init));
       return answers[posts.length - 1]!();
     }),
   );
@@ -237,9 +257,73 @@ test("a refusal is drawn beside the control and stays until the next press", asy
   expect(refusal()?.textContent).toContain("views: v9 is not a view");
 });
 
+/** A screen that pins a view and reads back the refusal its press came to. */
+function Refused({ onRefusal }: { onRefusal: (r: unknown) => void }) {
+  const pin = useAct("set_pins");
+  onRefusal(pin.refusal);
+  return (
+    <WriteButton
+      write={pin}
+      onPress={() => void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage" })}
+    >
+      Pin
+    </WriteButton>
+  );
+}
+
+// A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the grants the engine's
+// deciding rule would have admitted this person on travel from the act
+// transport's refused arm onto the hook's refusal, and the control draws
+// them. Dropped on the way, the person was told "you do not hold what this
+// change needs" and never what that was.
+test("a refusal on authority carries the grants the engine named, and draws them", async () => {
+  engine(() =>
+    json(
+      {
+        error: "unauthorized",
+        tool: "set_pins",
+        reason: "needs access this person does not hold",
+        grants: ["tracker"],
+      },
+      403,
+    ),
+  );
+  let seen: unknown = null;
+  render(
+    <ToastProvider>
+      <Refused onRefusal={(r) => (seen = r)} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  const refusal = () => document.querySelector(".write-refusal");
+  await waitFor(() => expect(refusal()).not.toBeNull());
+  expect(seen).toMatchObject({ grants: ["tracker"] });
+  expect(refusal()?.textContent).toContain(
+    "This needs Tracker access. An admin can give it to you.",
+  );
+});
+
+// AND A REFUSAL THAT IS NOT ON AUTHORITY NAMES NONE, rather than a grant
+// nobody asked for: the control's "Needs …" line is for authority alone.
+test("a refusal that is not on authority carries no grants", async () => {
+  engine(() =>
+    json({ error: "invalid", tool: "set_pins", detail: "views: v9 is not a view" }, 422),
+  );
+  let seen: unknown = null;
+  render(
+    <ToastProvider>
+      <Refused onRefusal={(r) => (seen = r)} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await waitFor(() => expect(document.querySelector(".write-refusal")).not.toBeNull());
+  expect(seen).toMatchObject({ grants: [] });
+  expect(document.querySelector(".write-refusal")?.textContent).not.toContain("Needs");
+});
+
 // OFFLINE IS DISABLED, NEVER QUEUED.
 test("offline, the press sends nothing and says why", async () => {
-  vi.mocked(useConnection).mockReturnValue({ connected: false } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: false, accessRefused: null } as never);
   const posts = engine(() => json({}, 200));
   mount();
   const button = screen.getByRole("button", { name: "Pin" });

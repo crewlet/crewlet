@@ -8,7 +8,7 @@
  * reader nobody bound shown an empty list that claims to have looked.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -21,6 +21,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest, pinZoneForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
@@ -34,9 +35,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
@@ -200,7 +202,7 @@ function mount({
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 3 }));
   store.applyOrg(ORG as never);
-  store.applyAgents(agents as never);
+  store.applySeats(agents as never);
   if (budget) store.applyBudget(budget as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -218,9 +220,11 @@ function mount({
     <ToastProvider>
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
-          <FrameReadings>
-            <Router>{page}</Router>
-          </FrameReadings>
+          <SessionReading>
+            <FrameReadings>
+              <Router>{page}</Router>
+            </FrameReadings>
+          </SessionReading>
         </ClientContext.Provider>
       </LayerHost>
     </ToastProvider>,
@@ -319,10 +323,10 @@ describe("the figures", () => {
     expect(card.textContent).not.toMatch(/[+−±]\d/);
   });
 
-  // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader who is not an
-  // operator gets the fact, not a link to a screen that would refuse them.
+  // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader without
+  // Admin gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, operator: false }, budget: UNCAPPED });
+    mount({ viewer: { ...JANE, grants: ["tracker"] }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
@@ -362,9 +366,9 @@ describe("the figures", () => {
   test("the crew is the engine's word for every seat", async () => {
     mount({
       agents: [
-        { role: "CTO", handle: "cto", activity: "working" },
-        { role: "SWE", handle: "swe", activity: "needs" },
-        { role: "DevRel", handle: "devrel", activity: "idle" },
+        { id: "cto", agent_id: "cto", role: "CTO", handle: "cto", activity: "working" },
+        { id: "swe", agent_id: "swe", role: "SWE", handle: "swe", activity: "needs" },
+        { id: "devrel", agent_id: "devrel", role: "DevRel", handle: "devrel", activity: "idle" },
       ],
     });
     await settle();
@@ -538,19 +542,89 @@ describe("the decisions", () => {
     expect(screen.getByText("answer posted to #releases")).toBeTruthy();
   });
 
-  test("a reader nobody bound is told why there is nothing to decide, and asked nothing", async () => {
-    mount({ viewer: { ...JANE, handle: "", name: "", acts: [] } });
+  test("a reader nobody signed in is told why there is nothing to decide, and asked nothing", async () => {
+    mount({
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] },
+    });
     await settle();
-    expect(screen.getByText(NOBODY_SENTENCE.unbound)).toBeTruthy();
-    expect(tile("Waiting on your decision").textContent).toContain("Not bound to a person");
+    expect(screen.getByText(NOBODY_SENTENCE)).toBeTruthy();
+    expect(tile("Waiting on your decision").textContent).toContain("Nobody is signed in");
     expect(tile("Waiting on your decision").textContent).toContain(EMPTY_VALUE);
     expect(asked.some((a) => a.kind === "decisions")).toBe(false);
+  });
+
+  // AN UNBOUND READER IS SOMEBODY: their record is their login, and a question
+  // put to them or a run waiting on them reaches it — so their decisions are
+  // asked for and counted like anybody's, never drawn as nobody's.
+  test("a reader the directory binds to no seat is asked what waits on them", async () => {
+    mount({
+      viewer: {
+        login: "ci.release",
+        grants: [],
+        handle: "",
+        owner: "ci.release",
+        name: "",
+        kind: "",
+        acts: [],
+      },
+      answers: {
+        decisions: { handle: "ci.release", items: [ask()], total: 1, capped: false },
+      },
+    });
+    await settle();
+    expect(asked.some((a) => a.kind === "decisions")).toBe(true);
+    expect(screen.queryByText(NOBODY_SENTENCE)).toBeNull();
+    expect(tile("Waiting on your decision").textContent).toContain("1");
+  });
+
+  // THE READER IS GREETED BY THEIR OWN NAME, which their row holds and the
+  // frame's `GET /auth/session` answered — bound or not — and NEVER BY THE
+  // SEAT'S: a person with no name of their own was greeted "Good afternoon,
+  // Founder", a role. ONE READ, the frame's: Home asked again for itself. The
+  // CONTROL is a bound reader whose row holds no name, greeted bare beside a
+  // seat named "Jane". Mutation: greet by the viewer's (the seat's) name and
+  // the control is greeted "Jane"; read the session in Home and it is asked
+  // twice.
+  test("a reader is greeted by their own name, never their seat's", async () => {
+    let name: string | undefined = "Bob Smith";
+    const sessions = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify({ person: "p-bob", name, login: "bob.smith", kind: "person" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", sessions);
+    mount({
+      viewer: {
+        login: "bob.smith",
+        grants: [],
+        handle: "",
+        owner: "bob.smith",
+        name: "",
+        kind: "",
+        acts: [],
+      },
+    });
+    expect(await screen.findByRole("heading", { name: /^Good \w+, Bob$/ })).toBeTruthy();
+    const reads = () =>
+      sessions.mock.calls.filter(([url]) => String(url).endsWith("/auth/session"));
+    expect(reads()).toHaveLength(1);
+    cleanup();
+    sessions.mockClear();
+    name = undefined;
+    mount();
+    await waitFor(() => expect(reads()).toHaveLength(1));
+    expect(await screen.findByRole("heading", { name: /^Good \w+$/ })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Jane/ })).toBeNull();
   });
 
   test("a seat stopped on its budget is a decision with both ways out", async () => {
     mount({
       agents: [
         {
+          id: "devrel",
+          agent_id: "devrel",
           role: "DevRel",
           handle: "devrel",
           activity: "stopped",
@@ -594,8 +668,17 @@ describe("the decisions", () => {
   // on them.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
-      viewer: { ...JANE, operator: false, acts: ["comment_on_work_item"] },
-      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
+      viewer: { ...JANE, grants: ["tracker"], acts: ["comment_on_work_item"] },
+      agents: [
+        {
+          id: "devrel",
+          agent_id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "budget",
+        },
+      ],
     });
     await settle();
     expect(screen.queryByText(/DevRel stopped/)).toBeNull();
@@ -687,6 +770,8 @@ describe("live now", () => {
     mount({
       agents: [
         {
+          id: "swe",
+          agent_id: "swe",
           role: "SWE",
           handle: "swe",
           activity: "working",
@@ -854,7 +939,16 @@ describe("the head", () => {
 
   test("a condition that needs a look links to where it is listed", async () => {
     mount({
-      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "paused" }],
+      agents: [
+        {
+          id: "devrel",
+          agent_id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "paused",
+        },
+      ],
     });
     await settle();
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");

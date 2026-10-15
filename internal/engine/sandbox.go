@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/seat"
+	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -168,15 +171,7 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 			Template: e2b.Template,
 		})
 	case config.PlacementDirect, config.PlacementContainer:
-		local := spec.Local
-		return sandbox.NewLocal(sandbox.LocalOptions{
-			Placement: sandbox.Placement(placement),
-			StateDir:  local.StateDir,
-			Image:     local.Image,
-			Runtime:   string(local.Runtime),
-			Network:   local.Network,
-			RunArgs:   local.RunArgs,
-		})
+		return sandbox.NewLocal(localOptions(spec.Local, env, placement))
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
 		// this switch are the same list.
@@ -188,12 +183,25 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 	}
 }
 
-// setupSteps maps the config shape onto the sandbox package's own.
+// localOptions maps the local block onto the backend's options for one cell.
 //
-// A translation rather than a shared type, so the sandbox package does not
-// import the config package: a setup step is a runtime instruction, and
-// keeping the two apart is what lets the sandbox layer be tested with a step
-// built in a test rather than a YAML document parsed into one.
+// runtime_env IS RESOLVED HERE, at the edge, exactly as an MCP server's `env:`
+// is ([serverSpec]): Tier B stores its references verbatim, so a backend handed
+// the block's map would put the literal "${SSH_AUTH_SOCK}" into the runtime's
+// environment, and the sandbox package must not be able to read the secret
+// store to do better.
+func localOptions(local *config.LocalSandbox, env *config.Resolver, placement config.Placement) sandbox.LocalOptions {
+	return sandbox.LocalOptions{
+		Placement:  sandbox.Placement(placement),
+		StateDir:   local.StateDir,
+		Image:      local.Image,
+		Runtime:    string(local.Runtime),
+		Network:    local.Network,
+		RunArgs:    local.RunArgs,
+		RuntimeEnv: resolveMap(env, local.RuntimeEnv),
+	}
+}
+
 // resolvedOr reads a config value through this node's chain, falling back to
 // the literal when there is no resolver.
 //
@@ -207,6 +215,15 @@ func resolvedOr(env *config.Resolver, value string) string {
 	return strings.TrimSpace(env.Value(value))
 }
 
+// setupSteps converts the PROVIDER-WIDE steps a `providers.sandbox` block
+// declares, which are settings and therefore config's.
+//
+// A translation rather than a shared type, so the sandbox package does not
+// import the config package: a setup step is a runtime instruction, and
+// keeping the two apart is what lets the sandbox layer be tested with a step
+// built in a test rather than a YAML document parsed into one. The values are
+// carried VERBATIM — what a step's file and env become is decided at launch,
+// by [Engine.boxSetup] and [Engine.sandboxEnv].
 func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 	if len(steps) == 0 {
 		return nil
@@ -219,6 +236,97 @@ func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 		})
 	}
 	return out
+}
+
+// seatSetupSteps converts a SEAT's own steps, which ride the org chart.
+//
+// TWO CONVERTERS BECAUSE THERE ARE TWO SOURCES, and only one thing about them
+// could drift — what an unset timeout means — which is why that rule is
+// [org.SetupTimeout] and neither of these states it. Everything else here is
+// field-for-field and the compiler checks it.
+func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]sandbox.SetupStep, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, sandbox.SetupStep{
+			Name: s.Name, Files: s.Files, Commands: s.Commands,
+			Env: s.Env, Brief: s.Brief,
+			TimeoutSeconds: org.SetupTimeout(s.TimeoutSeconds),
+		})
+	}
+	return out
+}
+
+// boxSetup is the provisioning one seat's box is given: the provider-wide
+// steps, then the seat's own, with every file's body read as the CONTENT it is
+// through this node's resolver ([setupFiles]).
+//
+// ONE PLACE FOR BOTH LAUNCH PATHS — the run_sandbox tool and an agent-mode
+// executor — because a file is read the same way whichever of them opens the
+// box. Nil-safe on the gate, since an agent-mode executor runs in a box
+// whether or not the seat has a sandbox block of its own.
+func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
+	gate *org.RoleSandbox) []sandbox.SetupStep {
+
+	setup := slices.Clone(defaults)
+	if gate != nil {
+		setup = append(setup, seatSetupSteps(gate.Setup)...)
+	}
+	read, missing := setupFiles(e.resolver(), setup)
+	if len(missing) > 0 {
+		// PATHS ONLY, never a body: a file is written into a box because
+		// it is a credential more often than not.
+		log.Warn("sandbox_setup_file_unresolved", "seat", seat, "files", missing,
+			"hint", "each of these files is exactly one ${VAR} reference "+
+				"that nothing answered for, so it is written empty; put the "+
+				"name in the secret store")
+	}
+	return read
+}
+
+// setupFiles is steps with every file's body read the way a content credential
+// is read where it is used ([secrets.ReadContent]): a body that is exactly one
+// `${VAR}` becomes that variable's value, byte for byte, and any other body is
+// written as it is. Missing names each file — `<step>:<path>` — whose whole
+// reference nothing answered for.
+//
+// # Why a file is not expanded like the env beside it
+//
+// The env is a SETTING: a `${VAR}` in it is the engine's, and the run
+// environment gets the value. A file is CONTENT, written into a box the engine
+// does not run: a `${HOME}` in a script and a `${NPM_TOKEN}` in an .npmrc are
+// the box's own, expanded there from the run environment the step's env just
+// filled. Expanded here they were substituted from the engine HOST's
+// environment, or by nothing — and a file whose body is one whole reference
+// has to become that value again before the box can read it.
+//
+// NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
+// shared by every launch on this node, and a body resolved into them would be
+// a credential cached past the snapshot it came from.
+func setupFiles(env *config.Resolver, steps []sandbox.SetupStep) (
+	[]sandbox.SetupStep, []string) {
+
+	var missing []string
+	out := make([]sandbox.SetupStep, len(steps))
+	for i, step := range steps {
+		out[i] = step
+		if len(step.Files) == 0 {
+			continue
+		}
+		files := make(map[string]string, len(step.Files))
+		for path, body := range step.Files {
+			read, unresolved := secrets.ReadContent(body, env.LookupOK)
+			if unresolved != "" {
+				missing = append(missing, step.Name+":"+path)
+			}
+			files[path] = read
+		}
+		out[i].Files = files
+	}
+	slices.Sort(missing)
+	return out, missing
 }
 
 func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
@@ -423,8 +531,7 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 // It publishes the unhandled-exception guard itself because the frame that
 // would have, the resumed turn's own telemetry, is what did not run: without
 // it the seat renders as whatever it was last doing rather than its failure. The run's
-// own row names the seat, and the live epoch is preferred where it still does,
-// so a seat renamed since the run detached is addressed as it is now.
+// own row names the seat.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
@@ -616,7 +723,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// ([turnTelemetry.budget]).
 	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), resumedReply)
+		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
 	// The runtime, and the note box it decides — see [steerBox].
 	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
 	box := steerBox(agentRun)
@@ -805,7 +912,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.senders))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -940,14 +1047,16 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // by a sole write, and it can only judge "exactly one" over the whole turn if
 // the half before the park travels with the conversation. So does what the
 // segments so far spent and charged to nothing (execstate.State.Uncharged),
-// for that same finishing segment to pay — see turnspend.go. And so does what
+// for that same finishing segment to pay — see turnspend.go — and what the
+// turn has measured of itself so far (execstate.State.SoFar), for the record
+// that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
 // completed-turn event carries and is woken by something else entirely — and
 // WHO asked it (execstate.State.Senders), which a refresh_memory call in any
 // later segment tells the memory filter, since no later segment has the
 // interactions to read them off.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written, uncharged *execstate.Uncharged, ask string,
+	written *turnctx.Written, charge segmentCharge, ask string,
 	senders []types.CanonicalIdentity,
 ) (bool, error) {
 	rt := e.sandbox.Load()
@@ -963,7 +1072,8 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	suspension.State.Written, suspension.State.WrittenMany = written.Items()
-	suspension.State.Uncharged = uncharged
+	suspension.State.Uncharged = charge.carry
+	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = ask
 	suspension.State.Senders = senders
 	blob, err := execstate.Encode(suspension.State)
@@ -1045,14 +1155,14 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 	company := e.Company()
-	gate := seatSandbox(company, seat.Name)
+	gate := seatSandbox(company, seat.Handle())
 	if gate == nil || !gate.Enabled {
 		// Belt and braces: the tool is only on a sandbox-enabled seat's
 		// surface, but the surface is built from a snapshot and a seat can
 		// lose its gate across an apply mid-turn.
 		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
 	}
-	if gate.RunIn == config.PlacementSelf {
+	if config.Placement(gate.RunIn) == config.PlacementSelf {
 		// `self` means this seat's code work rides its own executor run,
 		// which is a coding CLI in agent mode and already holds a shell,
 		// an editor and a checkout. A second box beside it would give the
@@ -1090,14 +1200,14 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		reuse = existing.SandboxID
 	}
 
-	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
+	setup := e.boxSetup(manager.DefaultSetup(), seat.Handle(), gate)
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work
 	// running somewhere else, and `llm` is what that work runs on — for the
 	// runner that will read them, resolved here as BuildSpec resolves it, so
 	// a pairing that runner cannot drive is refused before a box exists.
-	runner := string(gate.CodingAgent)
+	runner := gate.CodingAgent
 	if runner == "" {
 		runner = manager.DefaultCodingAgent()
 	}
@@ -1222,7 +1332,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// The conversation is where the resume reports and what admits a
 		// person's answer; the partition states the batch this run was
 		// launched from, which tells two runs parked on one direct message
-		// apart.
+		// apart ([sandbox.ConversationRef.Best]).
 		PartitionKey:    t.PartitionKey,
 		ConversationKey: t.ConversationKey,
 		// The delivery obligation, so the resumed turn knows whether
@@ -1275,7 +1385,7 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
-func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]sandbox.MCPServer {
+func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox) map[string]sandbox.MCPServer {
 	if len(gate.MCP.Servers) == 0 {
 		return nil
 	}
@@ -1314,7 +1424,7 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 // role.sandbox was ever written, and reading the override off a block that
 // does not exist panicked that seat's first launch — after the bridge session
 // was opened and before anything would have closed it.
-func pauseTTL(gate *config.RoleSandbox) *time.Duration {
+func pauseTTL(gate *org.RoleSandbox) *time.Duration {
 	if gate == nil || gate.PauseTTLSeconds == nil {
 		return nil
 	}
@@ -1323,34 +1433,41 @@ func pauseTTL(gate *config.RoleSandbox) *time.Duration {
 }
 
 // seatSandbox is a seat's sandbox gate, or nil.
-func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
-	if c == nil || c.Config == nil {
+//
+// KEYED ON THE HANDLE, which is what makes the answer single-valued. Two seats
+// may carry one display NAME — it is an admission rule, so a revision stored
+// before that rule runs with duplicates and a write merely cannot add one —
+// and a walk matching on it returned whichever came first. A seat with no
+// sandbox block would then be handed its namesake's, which is a coding run on
+// another seat's setup steps, its credentials and its box.
+//
+// A handle is unique by a RUNNABLE rule instead: a company carrying two is
+// refused outright, so there is no document on which this can be ambiguous.
+// ONE LOOKUP, NOT A WALK OF ITS OWN, because the seat is what carries the
+// block now.
+//
+// It used to walk the company DOCUMENT — first only the top-level `roles:`,
+// which answered nil for every seat in a unit and refused each of them with
+// "this seat's sandbox is not enabled" on a seat whose block said otherwise;
+// then every seat at any depth, breaking at the first match. Both were
+// walking the wrong thing: a stored revision carries no seats at all, so the
+// walk returned nil for EVERY seat and code work became silently unavailable
+// to the whole company.
+//
+// The seat's own [org.Role] holds it, so this asks the org the company is
+// running, through the one lookup every other layer resolves a handle with —
+// aliases and all. The "two seats with one handle" hazard the walk had to
+// reason about cannot arise there, because that lookup answers a live handle
+// before any retired one and a company carrying two live ones is refused.
+func seatSandbox(c *Company, handle string) *org.RoleSandbox {
+	if c == nil || c.Org == nil {
 		return nil
 	}
-	// EVERY SEAT, AT ANY DEPTH. This walked only the top-level `roles:`,
-	// so a seat declared under `units:` — which, in a company with an org
-	// chart, is most of them — always answered nil. The tool then refused
-	// it with "this seat's sandbox is not enabled" on a seat whose block
-	// says otherwise: code work was silently unavailable to every unit
-	// member, and the message pointed at the one thing that was correct.
-	//
-	// A SEPARATE found FLAG, not the block itself as a sentinel: a seat
-	// that exists and wrote no `sandbox:` block is a nil block, which is
-	// the same value a name nobody holds returns. Overloading the two
-	// meant the walk kept looking after it had its answer, and would have
-	// returned a LATER seat's block for an earlier one of the same name.
-	// THE FIRST MATCH, AND THEN STOP. The walk is an iterator precisely so
-	// this can break: a callback had no way to say "found it", so every
-	// launch ran the whole org chart to the end — and the only way to
-	// track the answer was the nil block itself, which cannot tell a seat
-	// that wrote none from a name nobody holds, so a later seat of the
-	// same name would have had its block returned for this one.
-	for role := range c.Config.EachRole() {
-		if role.Name == roleName {
-			return role.Sandbox
-		}
+	seat := c.Org.Role(handle)
+	if seat == nil {
+		return nil
 	}
-	return nil
+	return seat.Sandbox
 }
 
 // sandboxEnv assembles the run environment.
@@ -1365,7 +1482,7 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 // Precedence, later winning: identity, then the setup steps' contributions,
 // then the seat's own env — so an operator's explicit value always beats a
 // step's default.
-func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
+func (e *Engine) sandboxEnv(seat *org.Role, gate *org.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
 	env := map[string]string{}
 	if handle := seat.Handle(); handle != "" {
 		env["CREWLET_AGENT_HANDLE"] = handle
@@ -1719,19 +1836,40 @@ type seatHold struct{ engine *Engine }
 var _ sandbox.SeatHold = seatHold{}
 
 func (h seatHold) Hold(ctx context.Context, handle string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return err
 	}
 	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldSandbox))
 }
 
 func (h seatHold) Release(ctx context.Context, handle string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return err
 	}
 	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldSandbox))
+}
+
+// inboxOf is the inbox a hold on handle sits on, named by the seat's id — the
+// coordinator keeps its holds by handle, and the broker names every mailbox by
+// the id derived from it (ADR-0013).
+//
+// DERIVED rather than looked up in the roster ([Engine.seatID]), because a hold
+// outlives a revision: a run that ends after an apply removed its seat must
+// still release the hold it took, or a seat re-added under the same handle
+// would find its inbox held for a run nobody is running.
+func (h seatHold) inboxOf(handle string) (subject, group string, err error) {
+	c := h.engine.Company()
+	if c == nil || c.Org == nil {
+		return "", "", fmt.Errorf("engine: this node runs no company, so seat %q "+
+			"has no inbox to hold", handle)
+	}
+	id, ok := org.DeriveAgentID(c.Org.Name, handle)
+	if !ok {
+		return "", "", fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	}
+	return topics.AgentInbox(id), topics.AgentInboxGroup(id), nil
 }
 
 // holdSandboxSeat is the dispatcher's [Dispatcher.HoldSandbox]: it asks the
@@ -1957,7 +2095,8 @@ func waiterDutyTTL(interval time.Duration) time.Duration {
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
 // and start listening for their completions, BEFORE its mailbox opens.
-func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, owner string) error {
+func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string) error {
+	handle := seat.Handle
 	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
 	// that everything the first turn needs is ready before the mailbox
 	// opens. A seat that started consuming before its per-role children
@@ -1985,12 +2124,12 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	}
 	// AND WHAT IT HAS STILL TO LEARN: reflection runs where the seat is held,
 	// on the memory just hydrated.
-	if err := e.attachSeatReflection(ctx, handle); err != nil {
+	if err := e.attachSeatReflection(ctx, seat); err != nil {
 		return err
 	}
 
 	if rt := e.sandbox.Load(); rt != nil {
-		if err := e.prepareSeatSandbox(ctx, rt, handle, epoch, owner); err != nil {
+		if err := e.prepareSeatSandbox(ctx, rt, seat, epoch, owner); err != nil {
 			return err
 		}
 	}
@@ -2014,13 +2153,17 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 // deliver to it. Exactly once per holding, whichever path reaches it first —
 // the seat's own acquisition, or the apply that brought the runtime up while
 // the seat was already held; the caller holds the seat's lock either way.
-func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime, handle string,
-	epoch int64, owner string) error {
+//
+// THE CONTROL TOPIC IS NAMED BY THE SEAT'S ID, the agent id derived from its
+// handle (ADR-0013), as its inbox is.
+func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
+	seat placement.Seat, epoch int64, owner string) error {
 
+	handle := seat.Handle
 	if e.sandboxSeatAttached(handle) {
 		return nil
 	}
-	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
+	control, group := topics.AgentControl(seat.ID), topics.AgentControlGroup(seat.ID)
 	if control == "" {
 		return nil
 	}
@@ -2083,9 +2226,13 @@ func (e *Engine) markSandboxSeat(handle string, attached bool) {
 // in flight finishes — which is [seat.ReasonUnprepared].
 func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 	host := e.node.Host()
-	for _, handle := range host.Held() {
+	// THE SEATS THEMSELVES, as the host recorded them at the claim: the
+	// control topic is named by the seat's id, which the handle alone does
+	// not carry.
+	for _, held := range host.HeldSeats() {
+		handle := held.Handle
 		_, err := host.WithHeldSeat(handle, func(lease coord.Lease) error {
-			return e.prepareSeatSandbox(ctx, rt, handle, lease.Epoch, lease.Owner)
+			return e.prepareSeatSandbox(ctx, rt, held, lease.Epoch, lease.Owner)
 		})
 		if err == nil {
 			continue
@@ -2093,7 +2240,7 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 		log.ErrorContext(ctx, "sandbox_seat_unprepared", "seat", handle, "error", err,
 			"detail", "the seat is handed back so its next acquisition prepares it "+
 				"for code work whole")
-		host.Release(ctx, handle, seat.ReasonUnprepared)
+		host.Release(ctx, handle, seatpkg.ReasonUnprepared)
 	}
 }
 
@@ -2105,8 +2252,14 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 // is in [events.Category]'s map. What reads them is the live seat state, where
 // "this seat is running here now" is exactly the question.
 //
-// THE ROLE, NOT THE HANDLE, because every other event the projection keys on
-// carries the role name and a seat under two spellings is two rows.
+// THE SEAT'S AGENT ID under `agent_id`, because that is what every other
+// seat-level event carries there and what the projection keys a seat by. It
+// carried the HANDLE, so the one field the projection reads its key from meant
+// a different thing on these two types than on every other: a seat's arrival
+// and its first turn landed under two identities. Neither a handle nor a name
+// can stand in for the id — a name is prose two seats may share, and the
+// projection keys every other seat-level event on the id (ADR-0013). The
+// handle and the name ride along for a reader.
 func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	payload events.Payload) {
 
@@ -2114,20 +2267,22 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 		return
 	}
 	role := e.seatRole(handle)
-	if role == nil {
+	agentID := e.seatAgentID(role)
+	if role == nil || agentID == "" {
 		// A HANDLE THIS EPOCH NO LONGER HAS, which is the ordinary way a
 		// seat is released: the revision that removed it is already
-		// current. There is no role to key the row on, and inventing one
-		// from the handle would make a second row for the same seat.
+		// current. There is no seat to key the row on, and inventing an
+		// identity from the handle would make a second row for the same
+		// seat.
 		return
 	}
 	var ev *events.Event
 	switch p := payload.(type) {
 	case types.AgentSpawned:
-		p.RoleName, p.Agent = role.Name, handle
+		p.Agent, p.AgentHandle, p.RoleName = agentID, role.Handle(), role.Name
 		ev = events.New(p, tracing.TraceOf(ctx))
 	case types.AgentTerminated:
-		p.RoleName, p.Agent = role.Name, handle
+		p.Agent, p.AgentHandle, p.RoleName = agentID, role.Handle(), role.Name
 		ev = events.New(p, tracing.TraceOf(ctx))
 	default:
 		return
@@ -2151,7 +2306,8 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 // The control subscription is DETACHED, never deleted: a completion published
 // while the seat is between owners must be held for its successor, and the box
 // it refers to is still real.
-func (e *Engine) releaseSeat(ctx context.Context, handle string) {
+func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
+	handle := seat.Handle
 	// FIRST, while the queue is still reachable and before anything this
 	// release tears down: a seat that went away with no event left its
 	// last state standing on every dashboard — stuck "working" in a phase
@@ -2181,7 +2337,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// A budget park's alarm dies with the seat too. The detach that
 	// released the inbox already dropped the hold; the alarm would only
 	// fire into a seat a peer now serves.
-	e.forgetBudgetPark(handle)
+	e.forgetBudgetPark(seat.ID)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state
@@ -2201,7 +2357,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 
 	// REFLECTION FIRST, so nothing new writes the seat's memory here after
 	// the flush below.
-	e.detachSeatReflection(ctx, handle)
+	e.detachSeatReflection(ctx, seat)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last
@@ -2245,7 +2401,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// all; attaching again beside one that survived is a second competing
 	// consumer over the same coordinator, which settles each delivery once.
 	e.markSandboxSeat(handle, false)
-	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
+	control, group := topics.AgentControl(seat.ID), topics.AgentControlGroup(seat.ID)
 	if control == "" {
 		return
 	}

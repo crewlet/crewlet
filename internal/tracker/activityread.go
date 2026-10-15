@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -69,16 +70,6 @@ type ActivityRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
-	// ActorSeat is the chart seat an operator token was BOUND to when it
-	// made this change — the person behind the credential, which is who a
-	// screen draws. [ActivityRecord.Actor] stays the token, because a
-	// tracker whose author field is chosen by the writer is not an audit
-	// trail; this is the rendering the audit trail was missing.
-	//
-	// Empty for every writer that already IS a seat and for a token nobody
-	// bound — see the history row's `actor_seat` in `apply_history.go`.
-	ActorSeat string `json:"actor_seat,omitempty"`
-
 	SubjectKind ObjectKind `json:"subject_kind"`
 	SubjectID   string     `json:"subject_id"`
 
@@ -86,7 +77,17 @@ type ActivityRecord struct {
 	// resolved here because a feed of uuids is a feed nobody reads. Empty
 	// for a subject that has no key — a project, a view, a person.
 	SubjectKey string `json:"subject_key,omitempty"`
-	Project    string `json:"project,omitempty"`
+
+	// SubjectKeyCollision is the subject's [TaskRow.KeyCollision], read
+	// beside [ActivityRecord.SubjectKey] from the same row: the key is one
+	// another task claimed first, so a feed link built from it opens THAT
+	// task, and this row's subject is reached by [ActivityRecord.SubjectID]
+	// instead. See [ItemAddress]. A feed is where a duplicate's history
+	// is read, which is the one place opening its neighbour instead would
+	// go unnoticed longest.
+	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
+
+	Project string `json:"project,omitempty"`
 
 	Excerpt   string           `json:"excerpt,omitempty"`
 	Fields    map[string]Delta `json:"fields,omitempty"`
@@ -113,7 +114,12 @@ type ActivityRecord struct {
 	// be the actor, or may have left.
 	Notified bool `json:"notified"`
 
-	// Late marks a record the broker accepted well after it was authored.
+	// Late is the commit's [Notify.Late], copied by the applier: an
+	// announcement a REPAIR DUTY issued rather than the write it is about —
+	// the mirror of a one-sided dependency, or the "ready" an unblocked
+	// task's assignee never got — so a card read hours after the fact says
+	// why it arrived then. Its authored instant is the duty's, like any
+	// other commit's: it says nothing about when the broker accepted it.
 	Late bool `json:"late,omitempty"`
 }
 
@@ -253,7 +259,13 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 			"no level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	}
+	if err := activityFilters(q); err != nil {
+		return ActivityAnswer{}, err
+	}
 	if err := gateActivityQuery(q, now); err != nil {
+		return ActivityAnswer{}, err
+	}
+	if err := feedPositions(q.Cursor, q.Since); err != nil {
 		return ActivityAnswer{}, err
 	}
 	limit := q.Limit
@@ -305,6 +317,42 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 	return answer, nil
 }
 
+// activityFilters refuses a change kind or an author kind this build does not
+// have, naming the set.
+//
+// A FILTER THAT MATCHES NOTHING ANSWERS LIKE A QUIET COMPANY: a kind reached
+// the SQL as it came, matched no row, and the empty feed it answered is
+// indistinguishable from nothing having happened. The query surface refused a
+// mistyped one by name while a seat's `task_activity` built a kind from any
+// string it was handed, so a model asking for `status_changed` was told the
+// project had been still. Refused HERE, before the read, where every surface's
+// request passes — [ErrBadQuery], because the same filter is refused again on
+// every node however often it is sent.
+func activityFilters(q ActivityQuery) error {
+	for _, kind := range q.Kinds {
+		if !kind.Valid() {
+			return fmt.Errorf("%w: %q is not a change kind — the kinds are %s",
+				ErrBadQuery, kind, joinKinds(ChangeKinds))
+		}
+	}
+	for _, kind := range q.ActorKinds {
+		if !kind.Valid() {
+			return fmt.Errorf("%w: %q is not an author kind — the kinds are %s",
+				ErrBadQuery, kind, joinKinds(AuthorKinds))
+		}
+	}
+	return nil
+}
+
+// joinKinds spells a closed set of kinds for a refusal naming it.
+func joinKinds[K ~string](kinds []K) string {
+	out := make([]string, len(kinds))
+	for i, kind := range kinds {
+		out[i] = string(kind)
+	}
+	return strings.Join(out, ", ")
+}
+
 // gateActivityQuery refuses what this feed cannot serve.
 //
 // THE GATE IS ON WHAT THE QUERY WOULD SCAN, never on which keys were named.
@@ -322,23 +370,63 @@ func gateActivityQuery(q ActivityQuery, now time.Time) error {
 		return nil
 	}
 	if ProjectKey(q.Project) == "" {
-		return fmt.Errorf("tracker: searching the activity feed needs a "+
+		return fmt.Errorf("%w: searching the activity feed needs a "+
 			"subject or a container: pass `task`, or `container=project:<KEY>` "+
 			"with a `since` no further back than %d days — at company scope a "+
 			"text search reads every commit this company has ever made and "+
-			"times out rather than answering", ActivityQuerySpanDays)
+			"times out rather than answering", ErrBadQuery, ActivityQuerySpanDays)
 	}
 	span := activitySpan(q, now)
 	if span <= 0 {
-		return fmt.Errorf("tracker: searching a project's activity needs a "+
+		return fmt.Errorf("%w: searching a project's activity needs a "+
 			"`since` bound no further back than %d days — without one this "+
-			"reads the project's whole history", ActivityQuerySpanDays)
+			"reads the project's whole history", ErrBadQuery, ActivityQuerySpanDays)
 	}
 	if span > ActivityQuerySpanDays*24*time.Hour {
-		return fmt.Errorf("tracker: `since` reaches back %d days and a text "+
+		return fmt.Errorf("%w: `since` reaches back %d days and a text "+
 			"search over the activity feed covers at most %d — narrow the "+
 			"window, or drop `q` and filter by `kinds` and `actor`, which are "+
-			"indexed", int(span.Hours()/24), ActivityQuerySpanDays)
+			"indexed", ErrBadQuery, int(span.Hours()/24), ActivityQuerySpanDays)
+	}
+	return nil
+}
+
+// ErrBadQuery is a feed read whose REQUEST this package refused before reading
+// a row: a text search wider than the feed can scan, a cursor that is not a
+// log position, a cursor or a `since` bound on another log. The caller changes
+// what it asks — the same keys are refused the same on every node however
+// often they are sent.
+//
+// ITS OWN SENTINEL, because a surface must tell it from everything else a
+// read can fail with. The query surface answered every activity failure that
+// was not the state log's as a bad request, so a store this node could not
+// read was told to the caller as their mistake; and it answered a malformed
+// inbox cursor, parsed inside the read's transaction, as a fault of the node.
+// A seat's tool told a model holding a bad cursor that the tracker could not be
+// read "right now" and to try again, which it did with the same cursor.
+var ErrBadQuery = errors.New("tracker: this read's request cannot be run")
+
+// feedPositions holds the two positions a feed's caller names — the cursor it
+// resumes from and its `since` bound — to what they must be before a row is
+// read: a well-formed position, on THIS log ([statelog.Position.On]).
+//
+// ON THIS LOG, because both are compared against `log_seq`, a packed column
+// that carries no stream: a position from the knowledge base's log answered a
+// page of this feed chosen by a number from another, with nothing to say so.
+// And BEFORE THE READ, because a cursor parsed inside the transaction failed
+// as the read did — indistinguishable, to every surface, from a store fault.
+func feedPositions(cursor string, since statelog.Position) error {
+	if raw := strings.TrimSpace(cursor); raw != "" {
+		at, err := statelog.ParsePosition(raw)
+		if err != nil {
+			return fmt.Errorf("%w: cursor: %w", ErrBadQuery, err)
+		}
+		if err := at.On(trackerStream); err != nil {
+			return fmt.Errorf("%w: cursor: %w", ErrBadQuery, err)
+		}
+	}
+	if err := since.On(trackerStream); err != nil {
+		return fmt.Errorf("%w: since: %w", ErrBadQuery, err)
 	}
 	return nil
 }
@@ -406,11 +494,12 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	rows, err := tx.QueryContext(ctx, `
 		SELECT h.id, h.log_seq, h.log_stream, h.log_generation,
 		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
-		       h.operator_id, h.actor_seat, h.subject_kind, h.subject_id,
-		       h.project_key,
+		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
 		       h.excerpt, h.fields_json, h.comment_id, h.batch_id, h.turn_id,
 		       h.notified, h.late,
-		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id)
+		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
+		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
+		                 WHERE k.id = h.subject_id), 0)
 		FROM tracker_history h`+clause+`
 		ORDER BY h.log_seq DESC
 		LIMIT ?`, append(args, limit+1)...)
@@ -435,13 +524,13 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var kind, actorKind, subjectKind string
 		var fields string
 		var batch, key sql.NullString
-		var notified, late int
+		var notified, late, collision int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
-			&actorKind, &record.OperatorID, &record.ActorSeat, &subjectKind,
-			&record.SubjectID,
+			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
-			&batch, &record.TurnID, &notified, &late, &key); err != nil {
+			&batch, &record.TurnID, &notified, &late, &key,
+			&collision); err != nil {
 			return nil, "", fmt.Errorf("tracker: scan an activity row: %w", err)
 		}
 		record.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -452,6 +541,7 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		record.SubjectKind = ObjectKind(subjectKind)
 		record.BatchID = batch.String
 		record.SubjectKey = key.String
+		record.SubjectKeyCollision = collision == 1
 		record.Notified, record.Late = notified != 0, late != 0
 		if fields != "" && fields != "{}" {
 			if err := json.Unmarshal([]byte(fields), &record.Fields); err != nil {

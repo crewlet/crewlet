@@ -3,7 +3,10 @@ package coordtest
 import (
 	"reflect"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // nodeStatusCases certify [coord.NodeStatus] across a real store round trip.
@@ -17,10 +20,13 @@ import (
 var nodeStatusCases = []testCase{
 	{"a_node_status_round_trips_through_presence", func(h *harness) {
 		want := coord.NodeStatus{
-			InFlight: 2, Posture: "serve",
+			InFlight: 2, Posture: "serve", AdminPosture: iam.AdminRefuse,
 			MCP: []coord.MCPServerStatus{
 				{Server: "github", Shared: true, Started: 1, Tools: 12},
-				{Server: "jira", Started: 1, Failed: 1, Tools: 9, Error: "401", ErrorSeat: "pm"},
+				// The seat a failed instance was launched for travels by its
+				// ID, as a string a JSON round trip hands back as one.
+				{Server: "jira", Started: 1, Failed: 1, Tools: 9, Error: "401",
+					ErrorSeat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")},
 			},
 		}
 		h.present("n1", "n1:a", want.Meta())

@@ -112,12 +112,14 @@ describe("the latest change to each property", () => {
     expect(who.get("status")?.actor).toBe("ada");
   });
 
-  test("a bound token's change names the person, as the activity does", () => {
+  // A PERSON THE DIRECTORY BINDS TO A SEAT WRITES AS THE SEAT (`iam.ActorFor`),
+  // whichever credential they wrote through — that rides beside it.
+  test("a bound person's change names the seat they write as, as the activity does", () => {
     const who = attribution([
       change({
-        actor: "founder",
-        actor_kind: "operator",
-        actor_seat: "jane-founder",
+        actor: "jane-founder",
+        actor_kind: "human",
+        operator_id: "pat:t-1",
         fields: { priority: { from: "low", to: "high" } },
       }),
     ]);

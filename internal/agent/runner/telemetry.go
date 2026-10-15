@@ -263,9 +263,21 @@ type Spend struct {
 	Rounds int
 
 	// SentBack is how many reviews returned the work for another pass: the
-	// review phases that decided self_iterate. The same count the usage
-	// domain's per-seat `sent_back` is, taken from the same records.
+	// review phases that decided self_iterate.
 	SentBack int
+
+	// Reviews is how many review phases completed, and Unaccepted how many
+	// of them decided anything but done.
+	//
+	// With SentBack, what the record that ENDS the turn states about its
+	// reviews ([types.TurnTally]) — this segment's share of it, which a
+	// segment that parks hands on to the one that ends the turn. Counted
+	// here, off the phase records as they complete, because this is the one
+	// place every review of a segment passes: summed later from the records
+	// in a node's event log, a turn whose records two data nodes kept
+	// between them was counted short on one and not at all on the other.
+	Reviews    int
+	Unaccepted int
 
 	// Review is the notes of the NEWEST review that sent the work back —
 	// what the reviewer asked for on the pass that followed. The LAST one,
@@ -350,9 +362,15 @@ func (s *Spend) record(rec phaseRecord) {
 	if rec.Failed {
 		s.FailedIn = rec.Phase.String()
 	}
-	if rec.Phase == phase.Review && rec.Decision == string(phase.SelfIterate) {
-		s.SentBack++
-		s.Review = rec.Notes
+	if rec.Phase == phase.Review {
+		s.Reviews++
+		if rec.Decision != string(phase.Done) {
+			s.Unaccepted++
+		}
+		if rec.Decision == string(phase.SelfIterate) {
+			s.SentBack++
+			s.Review = rec.Notes
+		}
 	}
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
@@ -1396,7 +1414,8 @@ func (e emitter) steerEvent(n steer.Note, outcome types.SteerOutcome) types.Agen
 		Agent: e.turn.AgentID, AgentHandle: e.handle, RoleName: e.role,
 		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey,
 		NoteID: n.ID, Outcome: outcome, Note: n.Text,
-		SteeredBy: n.By, SteeredBySeat: n.BySeat, SentAt: utcOrZero(n.At),
+		SteeredBy: n.By, SteeredByKind: string(n.ByKind), OperatorID: n.OperatorID,
+		SentAt: utcOrZero(n.At),
 	}
 }
 

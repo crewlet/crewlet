@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -8,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
-
-	"gopkg.in/yaml.v3"
 )
 
 // readRepoFile reads a file shipped in this repository, and FAILS when it
@@ -84,6 +85,15 @@ func TestShippedCompanyExamplesLoad(t *testing.T) {
 			if agents == 0 || humans == 0 {
 				t.Fatalf("the example should model both kinds of seat: %d agents, %d humans",
 					agents, humans)
+			}
+
+			// A FILE PEOPLE COPY AND KEEP states every identity. One
+			// minted from a name is minted again from the corrected name
+			// on the next import, and that is a different seat — a new
+			// agent id, an empty mailbox, its memory left behind.
+			if missing := undeclaredIdentities(t, data); len(missing) > 0 {
+				t.Errorf("examples/%s leaves identities to be minted from names:\n  %s",
+					name, strings.Join(missing, "\n  "))
 			}
 
 			// Every credential in a committed example must be a
@@ -160,8 +170,13 @@ func TestQuickstartCompanyLoads(t *testing.T) {
 	if len(humans) != 1 {
 		t.Fatalf("the quickstart should model exactly one human seat, found %d", len(humans))
 	}
+	// VALIDATION NO LONGER ASKS FOR A CONTACT, so this is what keeps the page
+	// teaching a founder the company's agents can actually @-mention: the
+	// quickstart wires Mattermost further down, and a founder seat with no
+	// identity there is one every escalation reaches and nobody reads.
 	if humans[0].Contact.IsEmpty() {
-		t.Fatal("a human seat with no contact identity is unreachable")
+		t.Fatal("the quickstart's founder seat carries no contact identity, " +
+			"so no agent can @-mention them on the chat the page connects")
 	}
 	if len(humans[0].Manages) == 0 {
 		t.Fatal("the founder seat should manage the top agent")
@@ -182,14 +197,45 @@ func TestQuickstartCompanyLoads(t *testing.T) {
 		t.Fatal("no seat carries an enabled schedule, so nothing would ever run")
 	}
 
-	// The page tells the reader handles are effectively permanent and to
-	// set them explicitly; the example has to model that rather than rely
-	// on derivation from a name they may rename.
-	for r := range o.AllRoles() {
-		if r.IsAgent() && r.DeclaredHandle == "" {
-			t.Fatalf("agent seat %q has no explicit handle", r.Name)
+	// The page tells the reader handles are permanent and to set them; the
+	// block has to model that rather than rely on derivation from a name
+	// they are about to replace with their own.
+	if missing := undeclaredIdentities(t, []byte(block)); len(missing) > 0 {
+		t.Errorf("the quickstart's company leaves identities to be minted "+
+			"from names, which a re-import of an edited file mints again:\n  %s",
+			strings.Join(missing, "\n  "))
+	}
+}
+
+// undeclaredIdentities names every seat in a company FILE that declares no
+// `handle:` and every unit that declares no `id:`, read as the file is
+// written.
+//
+// NOT FROM THE PARSED COMPANY: [ParseCompany] writes both in where they are
+// missing ([MintIdentities]), so a check of what it returns can never see one
+// missing — this case asked the parsed seats for one and passed whatever the
+// page said. And the file is what matters: an edit of the STORED document
+// keeps the identity minted for it, but a file is minted afresh from its names
+// on every import, so a seat renamed in a file that left its handle out comes
+// back as a different seat.
+func undeclaredIdentities(t *testing.T, data []byte) []string {
+	t.Helper()
+	var written Company
+	if err := yaml.Unmarshal(data, &written); err != nil {
+		t.Fatalf("decode the company as written: %v", err)
+	}
+	var missing []string
+	for role, at := range written.EachRole() {
+		if strings.TrimSpace(role.Handle) == "" {
+			missing = append(missing, fmt.Sprintf("seat %q (%s) declares no handle", role.Name, at))
 		}
 	}
+	for unit, at := range written.EachUnit() {
+		if strings.TrimSpace(unit.ID) == "" {
+			missing = append(missing, fmt.Sprintf("unit %q (%s) declares no id", unit.Name, at))
+		}
+	}
+	return missing
 }
 
 // A reader follows the page top to bottom, so every ${VAR} the config
@@ -206,9 +252,10 @@ func TestQuickstartExportsEveryVariableItReferences(t *testing.T) {
 	for _, m := range regexp.MustCompile(`export\s+([A-Za-z_][A-Za-z0-9_]*)=`).FindAllStringSubmatch(page, -1) {
 		exported[m[1]] = true
 	}
-	for _, name := range ReferencedNames(cfg) {
-		if !exported[name] {
-			t.Fatalf("the quickstart config references ${%s} but the page never exports it", name)
+	for _, ref := range References(cfg) {
+		if !exported[ref.Name] {
+			t.Fatalf("the quickstart config references ${%s} at %s but the page never "+
+				"exports it", ref.Name, ref.Path)
 		}
 	}
 }
@@ -237,7 +284,33 @@ func bootstrapExampleLoads(t *testing.T, name string) {
 	// example.
 	answers := MapSource{}
 	for _, name := range envref.Names(string(data)) {
-		answers[name] = "set-for-this-test"
+		// LONG ENOUGH TO BE A CREDENTIAL, because one of these
+		// variables is one: `api.auth.tokens[].token` is checked on
+		// the RESOLVED value against the 26-character floor, which is
+		// the whole point of checking it there. A placeholder shorter
+		// than that would make every shipped example fail on the
+		// stand-in rather than on its own shape.
+		answers[name] = "set-for-this-test-and-long-enough"
+	}
+	// AND A KEY WHERE A KEY GOES. Key material is checked on what its
+	// reference RESOLVES to, as the cipher a node boots with reads it, so
+	// the stand-in above is refused as a key — which says nothing about
+	// the example's shape. The variables the keyring's material names are
+	// read off the file itself rather than off a naming convention.
+	var keyring struct {
+		Secrets struct {
+			Keys []struct {
+				Material string `yaml:"material"`
+			} `yaml:"keys"`
+		} `yaml:"secrets"`
+	}
+	if err := yaml.Unmarshal(data, &keyring); err != nil {
+		t.Fatalf("read the example's keyring: %v", err)
+	}
+	for _, key := range keyring.Secrets.Keys {
+		for _, name := range envref.Names(key.Material) {
+			answers[name] = TestKeyMaterial
+		}
 	}
 	cfg, err := ParseBootstrap(data, NewResolver(answers))
 	if err != nil {
@@ -286,10 +359,13 @@ coordination:
 api:
   host: "0.0.0.0"
   port: 8000
+  external_url: "https://crewlet.example.com"
   auth:
+    admin: serve
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
+        grants: [admin]
 
 secrets:
   active_key_id: "2026-01"
@@ -298,8 +374,8 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 `), NewResolver(MapSource{
 		"CREWLET_NODE_ID":             "node-eu-1",
-		"CREWLET_API_TOKEN_FOUNDER":   "tok",
-		"CREWLET_SECRET_KEY_2026_01":  "bWF0ZXJpYWw=",
+		"CREWLET_API_TOKEN_FOUNDER":   "a-token-long-enough-to-pass",
+		"CREWLET_SECRET_KEY_2026_01":  TestKeyMaterial,
 		"CREWLET_STORE_UNUSED_MARKER": "",
 	}))
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -19,11 +20,11 @@ type fakeTool struct {
 	params map[string]any
 	out    string
 	failed bool
-	// refusal is the class a failed call carries, as a first-party tool
-	// sets it.
-	refusal tools.Refusal
-	err     error
-	seen    []map[string]any
+	// cause is why a failed call failed, as a first-party tool states it —
+	// its class outright, or beneath the error that decided it.
+	cause error
+	err   error
+	seen  []map[string]any
 }
 
 func (f *fakeTool) Name() string               { return f.name }
@@ -34,7 +35,7 @@ func (f *fakeTool) Call(_ context.Context, args map[string]any) (tools.Result, e
 	if f.err != nil {
 		return tools.Result{}, f.err
 	}
-	return tools.Result{Output: f.out, Failed: f.failed, Refusal: f.refusal}, nil
+	return tools.Result{Output: f.out, Failed: f.failed, Cause: f.cause}, nil
 }
 
 func tool(name string) *fakeTool { return &fakeTool{name: name, out: "ok"} }
@@ -450,14 +451,19 @@ func TestTheSurfaceClassesItsOwnRefusalsAndPassesAToolsThrough(t *testing.T) {
 	// here, a guard's refusal. Unclassified, those reached such a caller as
 	// a failure it could only render with a status it made up. Each class
 	// has to arrive on BOTH records: the result the caller acts on and the
-	// call the ledger keeps.
+	// call the ledger keeps — and both READ it out of the one cause, so an
+	// unknown outcome a tool stated is unknown on both as well.
 	r := tools.NewRegistry()
 	refuses := tool("refuses")
-	refuses.failed, refuses.out, refuses.refusal = true, "no such item", tools.RefusalNotFound
+	refuses.failed, refuses.out, refuses.cause = true, "no such item", tools.RefusalNotFound
 	mustRegister(t, r, refuses, tools.OriginBuiltin)
+	lost := tool("lost")
+	lost.failed, lost.out = true, "whether it landed is unknown"
+	lost.cause = fmt.Errorf("operation 0190: %w", tools.ErrOutcomeUnknown)
+	mustRegister(t, r, lost, tools.OriginBuiltin)
 	mustRegister(t, r, tool("registered"), tools.OriginBuiltin)
 	mustRegister(t, r, tool("guarded"), tools.OriginBuiltin)
-	open := tools.NewSurface("execute", r.Snapshot(), []string{"refuses"})
+	open := tools.NewSurface("execute", r.Snapshot(), []string{"refuses", "lost"})
 	guarded := tools.NewSurface("execute", r.Snapshot(), []string{"guarded"}).WithGuard(denyAll{})
 
 	for _, c := range []struct {
@@ -465,25 +471,28 @@ func TestTheSurfaceClassesItsOwnRefusalsAndPassesAToolsThrough(t *testing.T) {
 		surface *tools.Surface
 		call    string
 		want    tools.Refusal
+		unknown bool
 	}{
-		{"a name nothing registered", open, "ghost", tools.RefusalNotFound},
-		{"a registered tool not offered here", open, "registered", tools.RefusalForbidden},
-		{"a call the guard refuses", guarded, "guarded", tools.RefusalForbidden},
-		{"a first-party tool's own class", open, "refuses", tools.RefusalNotFound},
+		{"a name nothing registered", open, "ghost", tools.RefusalNotFound, false},
+		{"a registered tool not offered here", open, "registered", tools.RefusalForbidden, false},
+		{"a call the guard refuses", guarded, "guarded", tools.RefusalForbidden, false},
+		{"a first-party tool's own class", open, "refuses", tools.RefusalNotFound, false},
+		{"a write nobody can vouch for", open, "lost", tools.RefusalUnavailable, true},
 	} {
 		res, err := c.surface.Execute(context.Background(), llm.ToolCall{Name: c.call})
 		if err != nil {
 			t.Fatalf("%s: Execute: %v", c.name, err)
 		}
-		if !res.Failed || res.Refusal != c.want {
-			t.Errorf("%s: result failed %v class %q, want %q",
-				c.name, res.Failed, res.Refusal, c.want)
+		if !res.Failed || res.Refusal() != c.want || res.Unknown() != c.unknown {
+			t.Errorf("%s: result failed %v class %q unknown %v, want %q unknown %v",
+				c.name, res.Failed, res.Refusal(), res.Unknown(), c.want, c.unknown)
 		}
 		calls := c.surface.Calls()
 		last := calls[len(calls)-1]
-		if last.Name != c.call || !last.Failed || last.Refusal != c.want {
-			t.Errorf("%s: recorded %+v, want a failed call classed %q",
-				c.name, last, c.want)
+		if last.Name != c.call || !last.Failed || last.Refusal() != c.want ||
+			last.Unknown() != c.unknown {
+			t.Errorf("%s: recorded %+v, want a failed call classed %q unknown %v",
+				c.name, last, c.want, c.unknown)
 		}
 	}
 }

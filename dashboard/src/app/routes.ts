@@ -17,6 +17,16 @@
  * and everything else asks this function. It imports nothing but `nav.ts`,
  * which is what lets `lib/` and a Node test call it.
  *
+ * # The sign-in screens resolve too, and to no workspace
+ *
+ * Signing in, redeeming an invitation, spending a password reset link and
+ * enrolling a second factor are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), and they are resolved FIRST,
+ * before any workspace is asked: their heads are reserved for them, and a
+ * `#/login?next=…` link is a link to a page like any other, which the link
+ * gates hold. What they lack is a workspace — `workspace` is `""` — because
+ * nothing in the frame draws them, so a recent, a star or a breadcrumb never
+ * names one.
+ *
  * # What decides a segment
  *
  * Its POSITION and its SHAPE, never a lookup: a route resolves before any
@@ -29,7 +39,13 @@
  * party's string and `servers` is a legal one.
  */
 
-import { RESERVED_SEGMENTS, workspaceOf, type Workspace } from "./nav.ts";
+import {
+  framelessOf,
+  RESERVED_SEGMENTS,
+  workspaceOf,
+  type FramelessRoute,
+  type Workspace,
+} from "./nav.ts";
 
 /** A project or container key: uppercase, as the engine mints it. */
 export const KEY_SHAPE = /^[A-Z][A-Z0-9_]*$/;
@@ -71,8 +87,21 @@ const ME_SECTIONS: readonly MeSection[] = [
   "checklist",
 ];
 
-/** Every screen the dashboard draws, with what its path names. */
-export type Screen =
+/**
+ * The screens drawn outside the frame. An invitation's and a reset link's one
+ * segment is `<id>.<secret>`, kept whole: the screen itself says when that is
+ * not a whole link — a link cut short by a mail client is the ordinary way it
+ * arrives wrong, and "no such screen" would send the person looking for a
+ * different page rather than for the rest of this one.
+ */
+export type SignInScreen =
+  | { screen: "login" }
+  | { screen: "enrol" }
+  | { screen: "invite"; link: string }
+  | { screen: "reset"; link: string };
+
+/** Every screen the frame draws, with what its path names. */
+export type FramedScreen =
   | { screen: "home" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
@@ -117,7 +146,11 @@ export type Screen =
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
   | { screen: "audit" }
+  | { screen: "account" }
   | { screen: "appearance" };
+
+/** Every screen the dashboard draws. */
+export type Screen = FramedScreen | SignInScreen;
 
 export type ScreenName = Screen["screen"];
 
@@ -128,7 +161,9 @@ export type ScreenName = Screen["screen"];
  * overwrite — `#/settings/integrations/github` would resolve to an
  * integration called "screen".
  */
-export type Resolved = Screen & { resolved: true; workspace: Workspace };
+export type Resolved =
+  | (FramedScreen & { resolved: true; workspace: Workspace })
+  | (SignInScreen & { resolved: true; workspace: "" });
 
 /** A path the product has no page for, and a sentence saying which. */
 export interface Unresolved {
@@ -161,8 +196,10 @@ export function resolve(path: string[]): Route {
   // opening this wants to know first is whether anything needs them, and Home
   // answers that for the company as well as for them.
   if (head === undefined) return { resolved: true, workspace: "home", screen: "home" };
+  const outside = framelessOf(path);
+  if (outside !== null) return signIn(outside, rest);
   const under = (label: string) => `“${rest.join("/")}” under ${label}`;
-  const screen = (s: Screen): Resolved => ({
+  const screen = (s: FramedScreen): Resolved => ({
     ...s,
     resolved: true,
     workspace: workspaceOf(path) as Workspace,
@@ -198,12 +235,36 @@ export function resolve(path: string[]): Route {
       return missing("spend", under("Spend"));
     case "settings":
       return settings(rest, screen, under);
+    case "account":
+      return rest.length ? missing("account", under("Account")) : screen({ screen: "account" });
     default:
       return missing("", `the screen “${head}”`);
   }
 }
 
-type Make = (s: Screen) => Resolved;
+type Make = (s: FramedScreen) => Resolved;
+
+/**
+ * A sign-in screen: exactly the tail its address has, and anything longer is
+ * an address the product does not have — except an invitation and a reset
+ * link, whose screens answer a link that is not whole.
+ */
+function signIn(route: FramelessRoute, rest: string[]): Route {
+  const make = (s: SignInScreen): Resolved => ({ ...s, resolved: true, workspace: "" });
+  switch (route) {
+    case "login":
+      return rest.length
+        ? missing("", `“${rest.join("/")}” under sign-in`)
+        : make({ screen: "login" });
+    case "enrol":
+      return rest.length
+        ? missing("", `“${rest.join("/")}” under enrolment`)
+        : make({ screen: "enrol" });
+    case "invite":
+    case "reset":
+      return make({ screen: route, link: rest.length === 1 ? (rest[0] ?? "") : "" });
+  }
+}
 type Under = (label: string) => string;
 
 function work(rest: string[], screen: Make, under: Under): Route {

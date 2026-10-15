@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -174,8 +176,8 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 // was never configured — the one row an operator opening the settings screen
 // is looking for.
 type mcpOutcome struct {
-	server string // the config's own name, never an instance name
-	seat   string // the seat handle, empty for a shared server
+	server string    // the config's own name, never an instance name
+	seat   uuid.UUID // the seat's agent id, uuid.Nil for a shared server
 	tools  int
 	err    error
 }
@@ -183,8 +185,9 @@ type mcpOutcome struct {
 // mcpStatus is this node's MCP servers as the heartbeat publishes them: one
 // row per configured server, its instances counted.
 //
-// Sorted by server, and a server's reported error is its first failure by
-// seat handle, so a beat that re-sends the same facts sends the same bytes.
+// Sorted by server, and a server's reported error is its first failure by the
+// seat's agent id, so a beat that re-sends the same facts sends the same
+// bytes.
 func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 	e.mcpMu.Lock()
 	all := slices.Clone(e.mcpShared)
@@ -193,12 +196,12 @@ func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 	}
 	e.mcpMu.Unlock()
 	slices.SortFunc(all, func(a, b mcpOutcome) int {
-		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat, b.seat))
+		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat.String(), b.seat.String()))
 	})
 	var out []coord.MCPServerStatus
 	for _, o := range all {
 		if n := len(out); n == 0 || out[n-1].Server != o.server {
-			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == ""})
+			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == uuid.Nil})
 		}
 		row := &out[len(out)-1]
 		if o.err != nil {

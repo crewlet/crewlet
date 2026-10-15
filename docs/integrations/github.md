@@ -245,13 +245,13 @@ sequenceDiagram
     participant GH as GitHub
 
     Op->>CL: POST /setup/integrations/github/app {"seat": "senior-engineer"}
-    CL-->>Op: manifest, action URL, signed state
+    CL-->>Op: manifest, action URL, sealed state (the seat, and who began it)
     Op->>GH: form POST of the manifest (operator's own session)
     GH-->>Op: confirm the app, then redirect
     GH->>CL: GET /webhooks/github-app?code=...&state=...
     CL->>GH: POST /app-manifests/{code}/conversions
     GH-->>CL: app id, slug, private key, webhook secret (once only)
-    CL->>CL: seal the key and the webhook secret, record the app on the seat
+    CL->>CL: seal the key and the webhook secret, record the app on the seat, both as whoever began it
     CL-->>Op: "App created", then follows the install link after 5 seconds
     Op->>GH: install the app on the organization
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
@@ -272,15 +272,18 @@ Together the card is normally correct by the time you switch back to it. If it i
 
 ### What has to be in place first
 
-- **`integrations.public_base_url`.** Three addresses are baked into an app at
-  creation: where its deliveries go, where the browser returns after the
-  creation, and where it returns after the install. Only a person at GitHub can
-  change them afterwards, so the engine refuses to begin without a public base
-  (`409 no_public_url`) rather than create an app that would have to be created
-  again. The reconcile loop reports the same gap for the org- and
-  repository-level hooks: with no public base there is no address for GitHub to
-  deliver to, so the integration is reported **degraded** naming that field
-  rather than **ready** with nothing registered anywhere.
+- **The webhook address** — `api.public.external_url` when the deployment has
+  a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
+  (`api.public`), and `api.external_url` otherwise. Three addresses are baked
+  into an app at creation: where its deliveries go, where the browser returns
+  after the creation, and where it returns after the install. Only a person at
+  GitHub can change them afterwards, so the engine refuses to begin without a
+  public base (`409 no_external_url`, naming the key in `config_path`) rather
+  than create an app that would have to be created again. The reconcile loop
+  reports the same gap for the org- and repository-level hooks: with no public
+  base there is no address for GitHub to deliver to, so the integration is
+  reported **degraded** naming that key rather than **ready** with nothing
+  registered anywhere.
 - **`integrations.github.provisioning.org`.** It names the account the app is
   registered under, and the account matters: an app registered under a person's
   own account cannot be installed on the organization that owns the
@@ -296,11 +299,16 @@ Together the card is normally correct by the time you switch back to it. If it i
 | `name` | The company name and the seat's role name, joined and cut to 34 runes |
 | `url` | `https://crewlet.ai` |
 | `public` | `false`. The app is the company's own |
-| `hook_attributes.url` | `<public_base_url>/webhooks/github/<handle>` |
-| `redirect_url` | `<public_base_url>/webhooks/github-app` |
-| `setup_url` | `<public_base_url>/webhooks/github-app?installed=<handle>` |
+| `hook_attributes.url` | `<webhook address>/webhooks/github/<handle>` |
+| `redirect_url` | `<webhook address>/webhooks/github-app` |
+| `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
 | `default_permissions` | The seat's tier, below |
+
+`<webhook address>` is the one above: the public listener's
+`api.public.external_url` where `api.public` is set — the return and the
+deliveries are served only there, and `api.external_url` answers `404` for
+them — and `api.external_url` otherwise.
 
 **The events are named, never `*`.** An app with a delivery address and no
 events subscribes to nothing, receives nothing, and reports itself healthy
@@ -442,8 +450,8 @@ verify against, and it answers `503` rather than accepting the delivery.
 
 | Route | Called by | What it does |
 |---|---|---|
-| `POST /setup/integrations/github/app` | The dashboard, authenticated | Answers with one seat's manifest, the address to POST it to, and a signed state |
-| `GET /webhooks/github-app` | GitHub's redirect, unauthenticated | Converts the one-time code, seals the key, records the app; also the page an install returns to |
+| `POST /setup/integrations/github/app` | The dashboard, authenticated | Answers with one seat's manifest, the address to POST it to, and a state sealed under the fleet keyring naming the seat and who began the creation |
+| `GET /webhooks/github-app` | GitHub's redirect, unauthenticated | Converts the one-time code, seals the key, records the app — each written as whoever began the creation; also the page an install returns to |
 
 Creating an app and installing it are two clicks at GitHub, and an operator who
 has just done the first is already going to do the second, so the created-app
@@ -453,16 +461,20 @@ scripting off: the countdown is hidden until the script owns it, so the page
 never promises a redirect it cannot make.
 
 The callback carries no engine credential, because a browser redirect from
-GitHub has none to carry. What stands in its place is the **state**: a signed
-token naming the seat, minted by the begin route, valid for 15 minutes, and
-validated before anything else happens. It is scoped to this flow, so a token
-minted for another signed URL this engine issues cannot be replayed here.
+GitHub has none to carry. What stands in its place is the **state**: a token
+naming the seat and whoever began the creation, minted by the begin route,
+valid for 15 minutes, and opened before anything else happens. The key, the
+webhook secret and the seat's record are all written as that person, with the
+credential they began through beside them. It is scoped to this flow, so
+nothing else the keyring seals — a sign-in's flight, a stored secret — opens
+as one.
 
-Across a fleet the state signer is keyed from the Tier A keyring
-(`secrets.keys`), so a creation begun on one node can be finished on another. A
-deployment with no keys configured falls back to a per-process key, which is
-correct for a single node and cannot work across two; the engine says so at
-startup with `github_app_state_key_is_per_process`.
+It is **sealed** under the Tier A keyring (`secrets.keys`) rather than signed,
+because it travels through GitHub, the browser's history and every ingress log,
+and who began a creation is this company's business rather than theirs. Every
+node holds the keyring — the API is not served without one — so a creation
+begun on one node can be finished on another, including one that has already
+made the next key active during a rotation.
 
 Request and response shapes are in
 [API Endpoints](../reference/api-endpoints.md#one-agents-own-github-app).
@@ -795,10 +807,7 @@ snapshot taken at apply time, so in the window between a pass sealing a secret
 and something rebuilding that snapshot the resolver answers empty for a
 variable the fleet already holds — and without the read-back the loop minted
 again on every tick, rotating the key GitHub signs with until the snapshot
-caught up. On a node with **no keyring** at all (`secrets.keys` unset) nothing
-is minted and no hook is registered: the surface reports `ingress_blocked`
-against `integrations.github.webhook_secret`, naming `secrets.keys`, rather
-than failing every pass as though the engine were working on it.
+caught up.
 
 **A repository that cannot be hooked is reported, not raised.** A company's
 list will contain one that was renamed, archived, or made private to a team
@@ -914,12 +923,13 @@ mcp_servers:
 
 units:
   - name: Backend
+    id: backend                 # the unit's key; `name` above is display
     type: team
-    lead: Tech Lead
+    lead: tech-lead             # the lead seat's handle
     roles:
       - name: Tech Lead
         goal: "Ship backend features on time with high quality"
-        manages: ["Senior Engineer", "Junior Engineer"]
+        manages: [senior-engineer, junior-engineer]   # handles, not display names
       - name: Senior Engineer
         mcp_env:
           github: { Authorization: "Bearer ${GITHUB_TOKEN_SENIOR}" }

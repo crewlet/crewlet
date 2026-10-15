@@ -38,13 +38,30 @@
 //
 // # The reserved containers
 //
-// Two, and both are excluded from search and from routing. The SKILLS
-// container holds tool-skill pages: machinery, and a seat told to read one
-// would follow an instruction written for a different phase of a different
-// turn. The ROOT container holds the organisation's own pages, starting with
-// the Onboarding page every seat reads first. Both are refused as a unit's
-// own space by the config loader, and both are named there rather than here
-// so an operator can move either.
+// Two, and they are reserved for different reasons. The SKILLS container
+// holds tool-skill pages: machinery, excluded from search and from routing,
+// and a seat told to read one would follow an instruction written for a
+// different phase of a different turn — so an AGENT writes nothing there. The
+// ROOT container holds the organisation's own pages, starting with the
+// Onboarding page every seat reads first; it is searched and routed like any
+// other, and what an agent may not do there is ADD a page, because a new page
+// at the top of the company is a person's decision. [Reserved] states both,
+// and the store enforces them on every write path. Both are refused as a
+// unit's own space by the config loader, and both are named there rather than
+// here so an operator can move either.
+//
+// # The declared spaces
+//
+// A page is CREATED only in a container the company declares — a unit's or a
+// seat's `space:`, the root or the skills container ([Reserved.Declared]) —
+// and that, unlike the two rules above, binds a person exactly as it binds an
+// agent. A key nothing declares is no space at all: no lead tidies what is
+// filed there, no routing reaches it, and a typo of a real key splits a team's
+// knowledge in two with nothing to say so. It is the rule a task's create
+// holds an undeclared project to. Only a create asks, because every other
+// write is to a page already inside a space that was declared when it was
+// made; and a store that declares nothing creates nothing, so a surface wired
+// without the seam cannot file pages under keys nobody named.
 //
 // # The two-key sequences this no longer has
 //
@@ -110,11 +127,12 @@ const (
 	// Five hundred and twelve kibibytes, sixteen times a work item's, because
 	// a runbook or a design document genuinely is that long. A record
 	// carries a page's body once, and JSON escapes a byte into at most six,
-	// so a page at this size is at most 3 MiB on the wire — inside the
-	// transport's 8 MiB message ceiling ([queue.MaxPayloadBytes]). Nothing
-	// here checks the broker: every node, knowledge base or not, refuses
-	// at connect an external NATS server configured below that ceiling
-	// (nats-server's own default is 1 MiB).
+	// so a page at this size is at most 3 MiB on the wire — inside this
+	// log's declared largest record ([PagesMaxRecordBytes]), and so inside
+	// the transport's 8 MiB message ceiling. Nothing here checks the broker:
+	// every node, knowledge base or not, refuses at connect an external NATS
+	// server configured below that ceiling (nats-server's own default is
+	// 1 MiB; internal/queue/jetstream).
 	MaxBody = 512 << 10
 
 	// MaxComment bounds one comment on a page.
@@ -230,6 +248,23 @@ const OnboardingTitle = "Onboarding"
 // a coin flip. The DISPLAYED title keeps whatever the author typed.
 func NormalizeTitle(title string) string {
 	return strings.ToLower(strings.Join(strings.Fields(title), " "))
+}
+
+// ContainerKey is the canonical form of a container key, for comparison, for
+// every query argument and for the subject a record arbitrates on.
+//
+// UPPER-CASE AND TRIMMED, because a container key is an ADDRESS a person
+// types — in a unit's `space:`, in a tool argument, in a URL — and a company
+// whose `ENG` and `eng` are two containers is one where every page is filed
+// in whichever the author happened to type.
+//
+// ONE FUNCTION because it was eleven copies and they had ALREADY DRIFTED: six
+// upper-cased without trimming and five trimmed first, so a filter built from
+// a key with a trailing space matched nothing while the lookup beside it,
+// built from the same string, matched the container — a page that was plainly
+// there and could not be listed.
+func ContainerKey(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
 }
 
 // nowUTC is the default clock.

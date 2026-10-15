@@ -169,6 +169,26 @@ type State struct {
 	// item its dispatch named.
 	Uncharged *Uncharged `json:"uncharged,omitempty"`
 
+	// SoFar is what the turn's segments before this one MEASURED — their
+	// spans and their reviews — for the record that ENDS the turn to state
+	// the whole of it ([types.TurnCompleted.Turn]).
+	//
+	// HERE for the reason Written is: the segment that ends a turn is often
+	// in another process, and the turn's earlier records are in the event
+	// log of whichever node the earlier segments ran on — or of whichever
+	// data node kept their custody batch. Summed from those records, every
+	// node counted the turn from the part it held. Carried on every park,
+	// charged or not, since it is a measurement rather than a charge — a
+	// zero one as `{}`, never omitted.
+	//
+	// NIL ON A RESUMED TURN MEANS ITS PAST IS UNMEASURED: the park was made
+	// by a build before this field, so what the segments before it ran is
+	// unknown rather than zero. The resumed turn then hands none on at a
+	// park of its own and its ending record states no tally
+	// ([types.TurnCompleted.Turn]), which the usage reader sums from the
+	// turn's records instead.
+	SoFar *TurnSoFar `json:"so_far,omitempty"`
+
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
 	// re-entry.
@@ -266,6 +286,21 @@ type Uncharged struct {
 	WallMs     int `json:"wall_ms,omitempty"`
 	Workers    int `json:"workers,omitempty"`
 	SentBack   int `json:"sent_back,omitempty"`
+}
+
+// TurnSoFar is a turn's own measurement carried across a park, in the terms
+// the record that ends it states (types.TurnTally, which it mirrors but for
+// whether the turn failed — a parked turn has not ended either way).
+type TurnSoFar struct {
+	// DurationMS is the earlier segments' spans summed, each from its start
+	// to its end.
+	DurationMS int `json:"duration_ms,omitempty"`
+	// Reviews, SentBack and Unaccepted are the review phases the earlier
+	// segments completed, those that sent the work back, and those that
+	// decided anything but done.
+	Reviews    int `json:"reviews,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
+	Unaccepted int `json:"unaccepted,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

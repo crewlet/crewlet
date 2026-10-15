@@ -52,9 +52,20 @@ GO ?= go
 # a different toolchain than `make GO=/path/to/go` selected, or none at all.
 export CREWLET_GO = $(GO)
 
-# ./crewlet is where `go build ./cmd/crewlet` drops the binary, and — with
-# goreleaser's dist/ — the only build output .gitignore already knows about.
-# Nothing here writes anywhere else, so `make clean` has nothing to guess at.
+# gofmt is the one that ships WITH the toolchain go.mod pins, never whichever
+# gofmt is first on PATH. `GOTOOLCHAIN=auto` fetches go.mod's Go for `go`
+# itself and leaves PATH's gofmt alone, and gofmt's output moves between
+# releases: a host whose PATH still held an older Go reformatted three test
+# files into a layout the pinned gofmt — the one ci.yml's setup-go puts on
+# PATH — then refused. Asking the toolchain for its GOROOT is what makes `make
+# fmt` and `make fmt-check` agree with CI on any host.
+GOFMT = $(shell $(GO) env GOROOT)/bin/gofmt
+
+# ./crewlet is where `go build ./cmd/crewlet` drops the binary; dist/ is
+# goreleaser's, and build/ holds what its before hook generates and the image
+# context `make image-context` stages. Those three are the build output
+# .gitignore knows about and `make clean` removes; nothing here writes
+# anywhere else, so `make clean` has nothing to guess at.
 BIN := crewlet
 
 # -count=1 bypasses the test cache: a cached PASS recorded before the change
@@ -247,7 +258,7 @@ install: ## go install the engine onto your PATH
 
 fmt: ## rewrite everything gofmt would change
 	@files="$$($(GOFILES))" || exit 1; \
-	gofmt -w $$files
+	$(GOFMT) -w $$files
 
 tidy: ## tidy go.mod / go.sum
 	$(GO) mod tidy
@@ -375,7 +386,7 @@ check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
 	@files="$$($(GOFILES))" || exit 1; \
-	unformatted="$$(gofmt -l $$files)" || exit 1; \
+	unformatted="$$($(GOFMT) -l $$files)" || exit 1; \
 	if [ -n "$$unformatted" ]; then \
 	  { echo "gofmt needed:"; \
 	    echo "$$unformatted"; \

@@ -18,7 +18,7 @@ import (
 func TestTheIndexDutyReadsANodeThatAppliedTheLogAsCurrent(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	duty := &embedDuty{engine: e, log: s.Domain(search.Domain{}.Name())}
 	standing, err := duty.standing(t.Context())
 	if err != nil {

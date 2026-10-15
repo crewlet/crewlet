@@ -77,9 +77,8 @@ func TestAFreshNodeDoesNotAskTheFleetForASnapshot(t *testing.T) {
 	asks := tapSnapshotAsks(t, backends)
 
 	e := newEngine(t, engine.Options{Bootstrap: boot, Company: company, Backends: backends})
-	if e.Tracker() == nil || e.TrackerWriter() == nil {
-		t.Fatal("a default company got no tracker, so no state log ran and " +
-			"there was no join to decline")
+	if len(e.StateLogStatus(t.Context())) == 0 {
+		t.Fatal("the node runs no state log, so there was no join to decline")
 	}
 	if got := asks.drain(t); len(got) != 0 {
 		t.Errorf("a fresh node asked the fleet for a snapshot %d time(s) during "+
@@ -142,8 +141,19 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
+	// SIGNED UNDER THE FLEET'S KEYRING, as a peer's record is: an unsigned
+	// one is a stranger's, which the applier refuses rather than applies.
+	ring := statelog.Keyring{ActiveID: boot.Secrets.ActiveKeyID}
+	for _, key := range boot.Secrets.Keys {
+		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
+	}
+	signer, err := statelog.NewSigner(tracker.Domain{}.Name(), ring)
+	if err != nil {
+		t.Fatalf("the peer's signer: %v", err)
+	}
 	if seq, _, err := peerLog.Append(t.Context(),
-		spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body); err != nil || seq != 1 {
+		spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil,
+		signer.Seal(body)); err != nil || seq != 1 {
 		t.Fatalf("a peer's first record landed at (%d, %v), want 1", seq, err)
 	}
 	asks := tapSnapshotAsks(t, backends)
@@ -305,7 +315,7 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
 
-	rows := e.NativeStatus(t.Context())
+	rows := e.StateLogStatus(t.Context())
 	byName := map[string]engine.ReplicationStatus{}
 	for _, row := range rows {
 		if _, twice := byName[row.Name]; twice {

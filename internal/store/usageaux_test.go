@@ -23,7 +23,7 @@ func TestAnAuxiliaryRecordIsPartOfItsSeatsDay(t *testing.T) {
 	db := open(t)
 	log := db.Events()
 	day := time.Now().UTC().Truncate(24 * time.Hour)
-	w := store.UsageWindow{Start: day, End: day.Add(24 * time.Hour)}
+	w := usageDayOf(day, day.Add(24*time.Hour))
 
 	phase, err := json.Marshal(map[string]any{
 		"agent_id": "seat-1", "role": "Dev", "phase": "execute", "model": "opus",
@@ -104,7 +104,7 @@ func TestAPersonsAuxiliarySpendIsTheirDayNotASeats(t *testing.T) {
 	db := open(t)
 	log := db.Events()
 	day := time.Now().UTC().Truncate(24 * time.Hour)
-	w := store.UsageWindow{Start: day, End: day.Add(24 * time.Hour)}
+	w := usageDayOf(day, day.Add(24*time.Hour))
 	for i, rec := range []types.AuxiliarySpend{
 		{ActorSeat: "maya", ActorRole: "Founder", Stage: types.AuxStageOperator,
 			Purpose: types.AuxAnswerKnowledge, Model: "haiku", ProviderKey: "cheap",

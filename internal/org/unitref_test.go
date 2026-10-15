@@ -116,21 +116,24 @@ func TestUnitByRefFoldsAsTheDuplicateKeyRuleDoes(t *testing.T) {
 	}
 }
 
-// THE DOCUMENT'S OWN RESOLVER STAYS EXACT. A `lead:`, a `manages:` entry and
-// a root seat's `unit:` are admitted and reported under the exact string, so
-// widening [Organization.Unit] would change which references dangle.
+// THE DOCUMENT'S OWN RESOLVER STAYS EXACT, AND IT RESOLVES A KEY. A `lead:`,
+// a `manages:` entry and a root seat's `unit:` name a unit by its KEY — an
+// address chosen once — and are admitted and reported under the exact string,
+// so widening [Organization.Unit] to a fold or a name would change which
+// references dangle. A name is prose two units may share, and is resolved
+// only by [Organization.UnitByRef], and only where one unit carries it.
 func TestUnitResolvesADocumentReferenceExactly(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{Name: "T", Units: []*Unit{
 		{Name: "Engineering", ID: "eng", Roles: []*Role{{Name: "Dev"}}},
 	}})
-	if o.Unit("engineering") != nil {
-		t.Error("Unit() matched a name in another case")
+	if o.Unit("eng") == nil {
+		t.Error("Unit() did not match the unit's key as written")
 	}
-	if o.Unit("eng") != nil {
-		t.Error("Unit() matched a unit's id, which no document reference names")
+	if o.Unit("ENG") != nil {
+		t.Error("Unit() matched a key in another case")
 	}
-	if o.Unit("Engineering") == nil {
-		t.Error("Unit() did not match the name as written")
+	if o.Unit("Engineering") != nil {
+		t.Error("Unit() matched a unit's name, which no document reference names")
 	}
 }

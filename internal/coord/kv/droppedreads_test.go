@@ -53,7 +53,7 @@ func TestADroppedBucketLookupIsAskedAgainAfterAReadsTerm(t *testing.T) {
 	js := &droppingLookups{JetStream: jsOf(nc)}
 
 	started := time.Now()
-	bucket, err := openBucket(t.Context(), js, true, cfg)
+	bucket, _, err := openBucket(t.Context(), js, true, cfg)
 	elapsed := time.Since(started)
 
 	if err != nil {
@@ -115,7 +115,7 @@ func TestADroppedReplicaReadIsAskedAgainRatherThanFailingTheBoot(t *testing.T) {
 	bucket := &droppingStatus{KeyValue: made}
 	cfg.Replicas = 3
 
-	err = observeReplicas(t.Context(), bucket, cfg)
+	_, _, err = observeBucket(t.Context(), bucket, cfg)
 	if err == nil {
 		t.Fatal("a bucket replicated 1x was accepted by a node configured for 3x")
 	}

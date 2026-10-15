@@ -47,7 +47,11 @@ func TestEveryRecordNamesItsWriterAndTheGenerationItWasDecidedIn(t *testing.T) {
 			"the generation of the checkpoint its snapshot read", handed, want)
 	}
 
-	_, payload, _, ok, err := h.log.At(t.Context(), res.Position.Seq)
+	// OPENED LIKE EVERY READER OF THE LOG opens it: what the broker holds is
+	// the signed frame, and the stamp is inside the body.
+	_, payload, _, ok, err := statelog.VerifiedLog{
+		Log: h.log, Verifier: testVerifier(t, probeDomain{}),
+	}.At(t.Context(), res.Position.Seq)
 	if err != nil || !ok {
 		t.Fatalf("read the record back at %s: ok %v, err %v", res.Position, ok, err)
 	}

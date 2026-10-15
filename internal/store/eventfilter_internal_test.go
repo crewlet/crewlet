@@ -256,7 +256,8 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 //
 // Mutation: join the log first in [unsettledSQL] or [keptSQL], and the plan
 // starts from the log — a seek of the count's own index, or a scan of every
-// row.
+// row; drop [keptRowSQL] from [keptSQL], and the kept rows no longer probe the
+// in-flight key.
 func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
 	t.Parallel()
 	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
@@ -328,6 +329,21 @@ func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
 		}
 		if !strings.Contains(plan, "SEARCH e ") {
 			t.Errorf("%s: the plan is %q — it never seeks the log", r.name, plan)
+		}
+	}
+
+	// THE KEPT ROWS PROBE THE IN-FLIGHT KEY FROM EACH ROW NAMED, never read
+	// the in-flight table whole: a coordination outage leaves tens of
+	// thousands of identities there, and every fleet read asks this.
+	plan := planOf(t, db, kept, keptArgs)
+	if !strings.Contains(plan, "SEARCH u USING COVERING INDEX") {
+		t.Errorf("the kept rows: the plan is %q — it does not probe the in-flight key "+
+			"from the rows named", plan)
+	}
+	for _, step := range strings.Split(plan, "\n") {
+		if strings.HasPrefix(step, "SCAN u") || strings.HasPrefix(step, "SCAN custody_unsettled_rows") {
+			t.Errorf("the kept rows: the plan is %q — step %q reads the in-flight table "+
+				"whole", plan, step)
 		}
 	}
 }

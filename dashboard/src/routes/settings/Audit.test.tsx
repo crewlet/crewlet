@@ -19,13 +19,13 @@
  *     screen silent about that is claiming those rows do not exist.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName } from "~/protocol/index.ts";
+import { QueryError, type QueryName } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -34,26 +34,64 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
 });
 
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
+/**
+ * The engine's two REST reads this screen makes — the credential listing and
+ * the identity trail — each answered as told, every read recorded by its path.
+ */
+let restAnswers: {
+  secrets: () => Response;
+  identity: () => Response | Promise<Response>;
+};
+let restReads: { path: string; query: URLSearchParams }[] = [];
+
+/** The reads made of one REST path, in order. */
+const readsOf = (path: string) => restReads.filter((r) => r.path === path);
+
 beforeEach(() => {
   location.hash = "#/settings/audit";
+  restReads = [];
+  restAnswers = {
+    secrets: () => json({ secrets: [] }),
+    identity: () => json({ events: [], next: 0, position: "CREWLET_IAM_LOG@1:1" }),
+  };
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
-    value: vi.fn(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ secrets: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    ),
+    value: vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://engine.test");
+      restReads.push({ path: url.pathname, query: url.searchParams });
+      if (url.pathname === "/iam/audit") return restAnswers.identity();
+      if (url.pathname === "/secrets") return restAnswers.secrets();
+      return json({});
+    }),
   });
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  // The tab's visibility goes back to jsdom's own, which stops the clock.
+  delete (document as { visibilityState?: unknown }).visibilityState;
   location.hash = "";
 });
+
+/**
+ * A clock the test moves, started half way through a minute — so a few
+ * seconds passing cross no minute, and a poll a minute on comes after one —
+ * in a tab that is VISIBLE, which jsdom's is not and the shared clock ticks
+ * only in.
+ */
+function clockMidMinute() {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(Math.ceil(Date.now() / 60_000) * 60_000 + 30_000);
+}
 
 /** An instant inside every window this screen offers. */
 const RECENTLY = new Date(Date.now() - 60_000).toISOString();
@@ -78,10 +116,15 @@ function commit(over: Record<string, unknown> = {}) {
   };
 }
 
+/** The socket's answers, one per question; an Error is the question refused. */
 function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  const query = vi.fn(async (what: string) => {
+    const answer = answers[what as QueryName];
+    if (answer instanceof Error) throw answer;
+    return answer ?? {};
+  });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -250,15 +293,17 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
       source: "config",
       kind: "dashboard",
       actor: "founder",
-      actorKind: "operator",
+      actorKind: "human",
+      through: "pat:0192f00d",
       subject: "rev-1",
       detail: 'turn on Slack, and say "done"',
     },
   ]);
   const [header, row] = csv.split("\r\n");
   expect(header).toBe(
-    '"at","where","who","who_kind","who_seat","what","to","detail","node","failed"',
+    '"at","where","who","who_kind","through","what","to","detail","node","failed"',
   );
+  expect(row).toContain('"pat:0192f00d"');
   expect(row).toContain('"turn on Slack, and say ""done"""');
   // Ten columns, whatever the detail held.
   expect(row?.match(/","/g)?.length).toBe(9);
@@ -275,7 +320,8 @@ test("the export opens a formula-looking cell as text", () => {
       source: "config",
       kind: "dashboard",
       actor: "founder",
-      actorKind: "operator",
+      actorKind: "human",
+      through: "",
       subject: "rev-2",
       detail: '=HYPERLINK("https://example.com","click")',
     },
@@ -283,21 +329,29 @@ test("the export opens a formula-looking cell as text", () => {
   expect(csv.split("\r\n")[1]).toContain(`"'=HYPERLINK(""https://example.com"",""click"")"`);
 });
 
-// AN OPERATOR IS A PERSON, AND A TOKEN IS NOT A SEAT.
+// A PERSON BOUND TO A SEAT WRITES AS THE SEAT, AND A LOGIN IS NOT A SEAT.
 //
-// An `operator` write carries the token's name, which no chart holds — so the
-// cell fell to the chart's default and drew every operator as an agent's
-// squircle, linking "maya" to a seat page that does not exist.
-test("an operator is drawn as a person: their seat when the token is bound, plain text when not", async () => {
+// A bound person's write names their seat, kind `human`, and draws that seat
+// as a person, linked. A credential bound to none writes under its whole login,
+// kind `operator`, which no chart holds — so the cell fell to the chart's
+// default and drew it as an agent's squircle, linking to a seat page that does
+// not exist.
+test("a bound person is drawn as their seat, and a login as plain text", async () => {
   serving({
     work_activity: {
       records: [
-        commit({ id: "h-1", actor: "maya", actor_kind: "operator", excerpt: "unbound write" }),
+        commit({ id: "h-1", actor: "maya.lee", actor_kind: "operator", excerpt: "unbound write" }),
         commit({
           id: "h-2",
-          actor: "U0FOUNDER",
+          actor: "token:deploy",
           actor_kind: "operator",
-          actor_seat: "jane",
+          excerpt: "a Tier A token's write",
+        }),
+        commit({
+          id: "h-3",
+          actor: "jane",
+          actor_kind: "human",
+          operator_id: "pat:0192f00d",
           excerpt: "bound write",
         }),
       ],
@@ -307,52 +361,64 @@ test("an operator is drawn as a person: their seat when the token is bound, plai
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("unbound write")).toBeTruthy());
 
-  // UNBOUND: the human circle and the token's name, with nothing to follow.
-  expect(screen.getByText("maya")).toBeTruthy();
+  // UNBOUND: the human circle and the login, with nothing to follow.
+  expect(screen.getByText("maya.lee")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /maya/ })).toBeNull();
-  // BOUND: the person's seat, by its name, linked — the token stays in the
-  // tooltip, since it is the audit trail.
+  expect(screen.getByText("token:deploy")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /token:deploy/ })).toBeNull();
+  // BOUND: the seat, by its name, linked — and the credential it came through
+  // in its own column.
   const bound = screen.getByRole("link", { name: /Jane Founder/ });
   expect(bound.getAttribute("href")).toBe("#/agents/seats/jane");
-  expect(bound.getAttribute("title")).toContain("U0FOUNDER");
-  // BOTH ARE CIRCLES: the kit's outline for a person.
-  const circles = container.querySelectorAll(".crewlet-avatar--human");
-  expect(circles.length).toBe(2);
+  expect(screen.getByText("pat:0192f00d")).toBeTruthy();
+  // ALL THREE ARE CIRCLES: the kit's outline for a person.
+  expect(container.querySelectorAll(".crewlet-avatar--human").length).toBe(3);
   expect(container.querySelectorAll(".crewlet-avatar--agent").length).toBe(0);
-  // No row links to a seat named after a token.
+  // No row links to a seat named after a login.
   for (const link of container.querySelectorAll("a[href^='#/agents/seats/']")) {
-    expect(link.getAttribute("href")).not.toMatch(/maya|U0FOUNDER/);
+    expect(link.getAttribute("href")).not.toMatch(/maya|token/);
   }
 });
 
-test("writerOf: the kind an operator is drawn with is a person's", () => {
-  const who = (handle: string) =>
-    handle === "cto" ? { name: "CTO", kind: "agent" as const } : { name: handle };
-  expect(writerOf({ actor: "maya", actorKind: "operator" }, who)).toEqual({
-    as: "token",
-    name: "maya",
+test("writerOf: a login is a person's, a seat is the chart's, and the engine is named", () => {
+  const seatOf = (handle: string) =>
+    handle === "cto" ? { name: "CTO", kind: "agent" as const } : null;
+  expect(writerOf({ actor: "maya.lee", actorKind: "operator" }, seatOf)).toEqual({
+    as: "login",
+    name: "maya.lee",
   });
-  expect(writerOf({ actor: "tok", actorKind: "operator", actorSeat: "jane" }, who)).toEqual({
-    as: "seat",
-    handle: "jane",
-    name: "jane",
-    kind: "human",
-    token: "tok",
-  });
-  // A seat the chart holds keeps the chart's word; one it no longer holds
+  // A SEAT THE CHART HOLDS keeps the chart's word; one it no longer holds
   // takes the kind its write was recorded under.
-  expect(writerOf({ actor: "cto", actorKind: "human" }, who)).toMatchObject({ kind: "agent" });
-  expect(writerOf({ actor: "gone", actorKind: "human" }, who)).toMatchObject({ kind: "human" });
-  expect(writerOf({ actor: "trim", actorKind: "system" }, who)).toEqual({
-    as: "system",
-    name: "trim",
+  expect(writerOf({ actor: "cto", actorKind: "human" }, seatOf)).toMatchObject({
+    as: "seat",
+    kind: "agent",
   });
-  expect(writerOf({ actor: "", actorKind: "" }, who)).toEqual({ as: "engine" });
-  // A NODE IS THE ENGINE, NAMED — never a seat to look up.
-  expect(writerOf({ actor: "node-a", actorKind: "node" }, who)).toEqual({
+  expect(writerOf({ actor: "gone", actorKind: "human" }, seatOf)).toMatchObject({
+    as: "seat",
+    kind: "human",
+  });
+  // THE ENGINE, NAMED: a node's seed and a loop both write as `system`.
+  expect(writerOf({ actor: "node-a", actorKind: "system" }, seatOf)).toEqual({
     as: "system",
     name: "node-a",
   });
+  expect(writerOf({ actor: "", actorKind: "" }, seatOf)).toEqual({ as: "engine" });
+  // THE IDENTITY TRAIL'S PRINCIPAL KINDS read the same way: a machine is a
+  // login, the engine the system, and a person their seat only where the
+  // chart holds one by that address.
+  expect(writerOf({ actor: "ci:release", actorKind: "machine" }, seatOf)).toEqual({
+    as: "login",
+    name: "ci:release",
+  });
+  expect(writerOf({ actor: "sweep", actorKind: "engine" }, seatOf)).toEqual({
+    as: "system",
+    name: "sweep",
+  });
+  expect(writerOf({ actor: "jane.doe", actorKind: "person" }, seatOf)).toEqual({
+    as: "login",
+    name: "jane.doe",
+  });
+  expect(writerOf({ actor: "cto", actorKind: "person" }, seatOf)).toMatchObject({ as: "seat" });
 });
 
 // A CONFIG REVISION SAYS WHAT WROTE IT, AND THE ROW BELIEVES IT.
@@ -368,7 +434,7 @@ test("a config revision is labelled with the kind it recorded, not with operator
         summary: "seeded from company.yaml",
         source: "file",
         created_by: "node-a",
-        created_by_kind: "node",
+        created_by_kind: "system",
         created_at: RECENTLY,
       },
       {
@@ -376,7 +442,7 @@ test("a config revision is labelled with the kind it recorded, not with operator
         summary: "reload after provisioning sealed a credential",
         source: "api",
         created_by: "reconcile loop",
-        created_by_kind: "node",
+        created_by_kind: "system",
         created_at: RECENTLY,
       },
     ],
@@ -385,7 +451,7 @@ test("a config revision is labelled with the kind it recorded, not with operator
   await waitFor(() => expect(screen.getByText("seeded from company.yaml")).toBeTruthy());
   expect(screen.getByText("node-a")).toBeTruthy();
   expect(screen.getByText("reconcile loop")).toBeTruthy();
-  expect(screen.getAllByText("node")).toHaveLength(2);
+  expect(screen.getAllByText("system")).toHaveLength(2);
   // NO ROW IS AN OPERATOR'S: none of these was a person's write.
   expect(screen.queryByText("operator")).toBeNull();
   expect(screen.queryByText("the engine")).toBeNull();
@@ -399,15 +465,20 @@ function runtimeEvent(over: Record<string, unknown> = {}) {
     type: "operator_acted",
     timestamp: RECENTLY,
     source: "operator",
-    actor: "U0FOUNDER",
-    summary: "U0FOUNDER (jane) ran update_work_item: refused (conflict)",
+    actor: "jane",
+    summary: "jane ran update_work_item: refused (conflict)",
     category: "lifecycle",
     trace_id: "",
     span_id: "",
     parent_span_id: "",
     topic: "",
     failed: true,
-    tags: { node: "node-b", actor_seat: "jane", tool: "update_work_item" },
+    tags: {
+      node: "node-b",
+      actor_kind: "human",
+      operator_id: "session:0192f00e",
+      tool: "update_work_item",
+    },
     ...over,
   };
 }
@@ -417,7 +488,7 @@ function runtimeEvent(over: Record<string, unknown> = {}) {
 // A refused tool call and a backup change no tracker or wiki record, so the
 // four histories hold nothing about either. The runtime audit does, and it is
 // asked for by the source the engine stamps on it, over the same window.
-test("runtime calls are merged in, drawn as the person, and narrowed by Where", async () => {
+test("runtime calls are merged in, drawn as their author, and narrowed by Where", async () => {
   const query = serving({
     work_activity: { records: [commit()], complete: true },
     events: {
@@ -427,8 +498,13 @@ test("runtime calls are merged in, drawn as the person, and narrowed by Where", 
           id: "ev-2",
           type: "backup_requested",
           failed: false,
-          summary: "U0FOUNDER (jane) backed up to /var/backups/one (12 streams)",
-          tags: { node: "node-a", actor_seat: "jane", dir: "/var/backups/one" },
+          summary: "jane backed up to /var/backups/one (12 streams)",
+          tags: {
+            node: "node-a",
+            actor_kind: "human",
+            operator_id: "session:0192f00e",
+            dir: "/var/backups/one",
+          },
         }),
       ],
       next: null,
@@ -453,8 +529,10 @@ test("runtime calls are merged in, drawn as the person, and narrowed by Where", 
   expect(dirLink.getAttribute("title")).toBe("/var/backups/one");
   expect(dirLink.classList.contains("truncate")).toBe(true);
   expect(screen.getByText("Not recorded")).toBeTruthy();
-  // WHO: the person the token is bound to, never a seat named after it.
+  // WHO: the seat the person wrote as, with the KIND and the CREDENTIAL the
+  // engine recorded on the row — never "operator" for a bound person's call.
   expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBe(2);
+  expect(screen.getAllByText("session:0192f00e").length).toBe(2);
   expect(screen.getByText("took it off the board")).toBeTruthy();
 
   // AND `kind=runtime` IS THE RUNTIME ROWS ALONE.
@@ -549,4 +627,189 @@ test("an empty To cell says why in the row's own terms", async () => {
   await waitFor(() => expect(screen.getByText(/backed up to \/var\/backups\/two/)).toBeTruthy());
   expect(screen.getByText("No directory recorded")).toBeTruthy();
   expect(screen.queryByText("Not recorded")).toBeNull();
+});
+
+/** One entry of the identity trail, as `GET /iam/audit` answers it. */
+function identityEntry(over: Record<string, unknown> = {}) {
+  return {
+    id: "ih-1",
+    class: "change",
+    object_kind: "person",
+    object_id: "0198f0a0-0000-7000-8000-0000000000e5",
+    person: "0198f0a0-0000-7000-8000-0000000000e5",
+    op: "invite",
+    actor: "jane",
+    actor_kind: "person",
+    operator_id: "session:0192f00e",
+    summary: "invited sam.okafor",
+    at: RECENTLY,
+    position: 41,
+    ...over,
+  };
+}
+
+// THE SIXTH SOURCE: WHO CAN REACH THE COMPANY, AND WHO CHANGED IT.
+//
+// An invitation, a grant edit and a revoked token change no tracker or wiki
+// record either. The identity estate keeps its own trail, which the route
+// pages by POSITION — so the window's start is handed over as an instant for
+// the route to resolve.
+test("the identity trail is merged in, asked from the window's start", async () => {
+  restAnswers.identity = () =>
+    json({ events: [identityEntry()], next: 0, position: "CREWLET_IAM_LOG@1:41" });
+  serving({ work_activity: { records: [commit()], complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("invited sam.okafor")).toBeTruthy());
+  const read = readsOf("/iam/audit")[0]!;
+  expect(Date.parse(read.query.get("at") ?? "")).toBeLessThan(Date.now() - 6 * 86_400_000);
+  expect(read.query.get("limit")).toBe("200");
+  // ITS AUTHOR drawn as the seat the chart holds by that address, and the
+  // credential it came through beside it.
+  expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("session:0192f00e").length).toBeGreaterThan(0);
+  // AND THE REST STAND beside it.
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+});
+
+// AN IDENTITY ENTRY NAMES WHOSE IT IS by the login the engine joins in, where
+// a page of id prefixes said whose session opened to nobody. The CONTROL is an
+// entry about somebody removed, which has no login and keeps its short id.
+// Mutation: name every subject by its id and the logins are nowhere.
+test("an identity entry names whose it is by their login", async () => {
+  restAnswers.identity = () =>
+    json({
+      events: [
+        identityEntry({ login: "sam.okafor", summary: "invited sam" }),
+        identityEntry({
+          id: "ih-2",
+          class: "session",
+          object_kind: "session",
+          object_id: "01a10f3d-0000-7000-8000-000000000001",
+          op: "open",
+          login: "sam.okafor",
+          summary: "signed in",
+          position: 42,
+        }),
+        identityEntry({ id: "ih-3", summary: "removed", position: 43 }),
+      ],
+      next: 0,
+      position: "CREWLET_IAM_LOG@1:43",
+    });
+  serving({});
+  mount();
+  await waitFor(() => expect(screen.getByText("sam.okafor's session")).toBeTruthy());
+  expect(screen.getAllByText("sam.okafor").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("person 0198f0a0").length).toBeGreaterThan(0);
+});
+
+// A REFUSED TRAIL IS SAID, AND THE REST STAND: the directory's trail is
+// Admin's, and a reader refused it keeps every other source.
+test("a refused identity trail names the grant, and the other sources stand", async () => {
+  restAnswers.identity = () =>
+    json({ error: "unauthorized", reason: "no_grant", grants: ["admin"] }, 403);
+  serving({ work_activity: { records: [commit()], complete: true } });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText(/Reading the identity trail needs Admin/)).toBeTruthy(),
+  );
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+});
+
+// A SOURCE REFUSED ON AUTHORITY IS WITHHELD, AND THE REST STAND.
+//
+// The section opens on Admin, and so do the configuration's revisions. A node
+// that refuses one source anyway, and only that source, still shows the
+// sources it answered rather than the refusal banner alone, which hid every
+// row of the sources the reader may read.
+test("a source refused on authority names its grant, and the other sources stand", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    config_audit: new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] }),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
+  expect(screen.queryByText(/You may not read this/)).toBeNull();
+});
+
+// AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken
+// away are not drawn under the sentence saying they are withheld.
+test("a source refused after it answered takes its rows off the grid", async () => {
+  clockMidMinute();
+  const query = serving();
+  let asked = 0;
+  query.mockImplementation(async (what: string) => {
+    if (what !== "config_audit") return {};
+    if (asked++ > 0) {
+      throw new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] });
+    }
+    return [
+      {
+        revision_id: "rev-seed0001",
+        summary: "seeded from company.yaml",
+        source: "file",
+        created_by: "node-a",
+        created_by_kind: "system",
+        created_at: RECENTLY,
+      },
+    ];
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("seeded from company.yaml")).toBeTruthy());
+  for (let second = 0; second < 61; second++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
+  expect(screen.queryByText("seeded from company.yaml")).toBeNull();
+});
+
+// THE WINDOW IS NOT THE SECOND HAND.
+//
+// The windowed questions were keyed on edges read off the one-second clock,
+// so each was asked again every tick — the fleet-wide event read among them,
+// whose answer can take two seconds and was dropped for the next tick's.
+test("a second passing asks the windowed sources nothing again", async () => {
+  clockMidMinute();
+  const query = serving({ work_activity: { records: [], complete: true } });
+  mount();
+  const asks = (what: QueryName) => query.mock.calls.filter(([name]) => name === what).length;
+  await waitFor(() => expect(asks("events")).toBeGreaterThan(0));
+  const before = { work: asks("work_activity"), events: asks("events") };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  expect(asks("work_activity")).toBe(before.work);
+  expect(asks("events")).toBe(before.events);
+});
+
+// A RE-READ OF THE TRAIL IS QUIET, AND STILL MOVES THE WINDOW.
+//
+// A REST read whose key changes shows nothing until it answers. Keyed on the
+// window's start, the trail's rows left the grid every time the window moved,
+// and a read slower than that was aborted by the next and never answered.
+test("the identity trail stays on screen while its poll asks from the moved start", async () => {
+  clockMidMinute();
+  let answered = 0;
+  restAnswers.identity = () =>
+    answered++ === 0
+      ? json({ events: [identityEntry()], next: 0, position: "CREWLET_IAM_LOG@1:41" })
+      : new Promise<Response>(() => {});
+  serving({ work_activity: { records: [], complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("invited sam.okafor")).toBeTruthy());
+
+  // A SECOND AT A TIME, as the clock ticks: one jump of a minute would be
+  // sixty ticks rendered inside one update.
+  for (let second = 0; second < 61; second++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  const [first, second] = readsOf("/iam/audit");
+  expect(second).toBeTruthy();
+  expect(Date.parse(second!.query.get("at")!)).toBeGreaterThan(Date.parse(first!.query.get("at")!));
+  // THE SECOND READ HAS NOT ANSWERED, and the first one's rows are still drawn.
+  expect(screen.getByText("invited sam.okafor")).toBeTruthy();
 });

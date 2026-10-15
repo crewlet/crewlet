@@ -25,13 +25,19 @@ func Subject(nodeID string) string {
 	return SubjectPrefix + "." + coord.DocumentKey(nodeID)
 }
 
-// Actor is who a write is attributed to, as it crosses the wire.
+// Actor is who a write is attributed to, as it crosses the wire: the author
+// (Handle), what sort of author it is (Kind), and in its provenance the
+// CREDENTIAL the write was made through ([tracker.Provenance.OperatorID]) —
+// the triple every record carries, as [iam.ActorFor] writes it — beside the
+// turn and chain that produced it.
 //
 // The tracker's rule is that a writer acts as exactly one party, derived from
-// an identity the caller cannot choose per call. On a stateless node that
-// identity is the seat its tool surface bound; the serving node derives its
-// writer from what arrives here and from nothing else, so the history row
-// names the same author either node would have written.
+// an identity the caller cannot choose per call: the seat bound into a turn,
+// or the principal a request resolved to. The serving node derives its writer
+// from what arrives here and from nothing else, so the history row names the
+// same author either node would have written — and what arrives is the actor
+// inside a request the fleet SIGNED ([Envelopes]), so no party on the broker
+// can name one.
 type Actor struct {
 	Handle     string             `json:"handle"`
 	Kind       tracker.AuthorKind `json:"kind"`
@@ -72,8 +78,14 @@ const (
 	opOnceWrite
 )
 
-// request is one operation, as the asking node sends it.
+// request is one operation, as the asking node sends it — signed whole
+// ([Envelopes]), so every field below is one the fleet wrote.
 type request struct {
+	// ID is this request's own: minted per ask, so the same operation asked
+	// of two nodes is two requests. A serving node takes an id once
+	// ([signedask.Guard]) and its reply names it ([reply.Request]).
+	ID string `json:"id"`
+
 	Op    string          `json:"op"`
 	Args  json.RawMessage `json:"args,omitempty"`
 	Actor *Actor          `json:"actor,omitempty"`
@@ -84,8 +96,10 @@ type request struct {
 	Floors []statelog.Position `json:"floors,omitempty"`
 
 	// Deadline is the asker's, so the serving node stops working on an
-	// answer nobody is waiting for.
-	Deadline time.Time `json:"deadline,omitzero"`
+	// answer nobody is waiting for — and REQUIRED, because it is also how
+	// long a serving node remembers [request.ID]: a request that arrives
+	// after it is refused unrun, so a replay of it is refused either way.
+	Deadline time.Time `json:"deadline"`
 
 	// From is the asking node, for the serving node's log.
 	From string `json:"from,omitempty"`
@@ -96,6 +110,10 @@ type request struct {
 	// and to the read's own level, which are what make its answer sound.
 	AcceptLagging bool `json:"accept_lagging,omitempty"`
 }
+
+// Binding is the request's id and deadline, as its envelope binds them
+// ([signedask.Request]).
+func (r request) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
 // unservedReason is why a node answered without running an operation.
 type unservedReason string
@@ -126,12 +144,28 @@ const (
 	// the copy recovers, while its own seats read the estate from the other
 	// data nodes ([LocalBackends.For]).
 	unservedOutOfService unservedReason = "out_of_service"
+
+	// unservedUnauthenticated: the request's envelope does not verify on
+	// this node — signed under a key it does not hold, or not signed by
+	// the fleet at all ([Envelopes]) — so nothing in it was believed and
+	// nothing ran. A node that holds the key is asked next.
+	unservedUnauthenticated unservedReason = "unauthenticated"
+
+	// unservedStale: the request is not one this node may take now — it
+	// names no id or no deadline, its deadline had passed when it arrived,
+	// or this node has already taken its id ([signedask.Guard]). Nothing ran.
+	unservedStale unservedReason = "stale"
 )
 
-// reply is what a serving node answers.
+// reply is what a serving node answers — signed whole, like the request.
 type reply struct {
 	// Node is who answered.
 	Node string `json:"node"`
+
+	// Request is the id of the request this answers ([request.ID]), so an
+	// asker believes a reply only to the question it asked. Empty only
+	// where the request could not be read at all.
+	Request string `json:"request,omitempty"`
 
 	// Unserved is set when the node did NOT run the operation, and says
 	// why. Nothing was executed, so every class may move on.
@@ -155,6 +189,9 @@ type reply struct {
 	// or not a later one failed.
 	Written []types.WorkItem `json:"written,omitempty"`
 }
+
+// Answers is the id of the request this reply answers ([signedask.Reply]).
+func (r reply) Answers() string { return r.Request }
 
 // opSpec is one operation's declaration: what it is called, how a failover
 // treats it, which log its floor is on, and its server half.
@@ -268,14 +305,16 @@ func (o op[A, R]) ungated() op[A, R] {
 }
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
-// arguments say so: a page write that carries the caller's own key
-// ([pages.CallKey]) derives its operation id — and a create its page's id —
-// from that key rather than minting one per call, so a repeat under it is the
-// same operation and the ledger answers it with the first copy's outcome. Such
-// a call fails over as an [opIdempotentWrite] does; one without a key is still
-// never repeated ([opOnceWrite]). A property of the ASKING side, since the
-// class is what the asker may do with an unanswered request, and the server
-// runs the operation the same way either way.
+// arguments say so: a page write whose actor carries the caller's own
+// operation key ([pages.Actor.OpKey]) — or a comment carrying its turn's
+// ([pages.NewComment.TurnKey]) — derives its operation id, and a create its
+// page's id, from that key and what the write says rather than minting one per
+// call, so a repeat under it is the same operation and the ledger answers it
+// with the first copy's outcome. Such a call fails over as an
+// [opIdempotentWrite] does; one without a key is still never repeated
+// ([opOnceWrite]). A property of the ASKING side, since the class is what the
+// asker may do with an unanswered request, and the server runs the operation
+// the same way either way.
 func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
 	if o.spec.class != opOnceWrite {
 		panic(fmt.Sprintf("estate: %s is not a once-write, so nothing about its "+

@@ -12,8 +12,8 @@ import (
 //
 // # Why a pin at all
 //
-// The pool is small on purpose (see defaultReaderConns), and every reader on
-// this node draws from it: the dashboard's queries, the coverage probes, a
+// The pool is bounded on purpose (see [defaultReaderConns]), and every reader
+// on this node draws from it: the dashboard's queries, the coverage probes, a
 // seat's tool reads. A writer that takes a pooled connection per transaction
 // competes with them for one — and the competition has a direction that makes
 // it worse than fair sharing. The readers are usually waiting on state THIS
@@ -26,6 +26,35 @@ import (
 // connection for the handle's life, which is why the count of logs is
 // declared by the caller ([DB.OpenReplicated]) and added to the pool rather
 // than taken out of it.
+//
+// # The pool's arithmetic, and the second thing that is not the readers'
+//
+// The whole bound is [Options.poolSize]:
+//
+//	pool = readers + identityReserve + pins
+//
+// with the pins held by their writers, [identityReserve] held by the handle
+// itself ([DB.reserve]), and the readers what is left — each of the last two
+// ADDED to the readers rather than taken out of them.
+//
+// [identityReserve] is a pin's SIBLING INVARIANT: one connection that ordinary
+// work may not occupy, kept for the lookups that answer "who is acting". It is
+// HELD for the same reason a pin is — database/sql hands connections out
+// first-come-first-served, so a spare one nobody holds is taken by the first
+// read burst that wants it, and adding one to the bound alone would buy
+// nothing at all.
+//
+// THE OTHER DESIGN, an admission semaphore in front of the pool, breaks
+// something a pin does not: it would bound ordinary work BELOW the pool, so
+// database/sql would never reach its own limit, `sql.DBStats.WaitCount` would
+// stop counting, and the `pool_starved` alarm — whose entire input is that
+// counter — would go quiet for good. Holding a connection moves no queue.
+// Ordinary work still waits exactly where it waited before.
+//
+// The failure it stops has the same shape as the one a pin stops, one layer
+// up. A socket storm — N dashboards, four concurrent queries each, every one a
+// scan — takes every connection; the identity read that would let those very
+// requests be decided queues behind all of them; and the queue feeds itself.
 //
 // # It is not a second transaction implementation
 //
@@ -109,7 +138,7 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // ONCE, so anything with an effect outside the transaction belongs after Tx
 // returns rather than inside it.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryTransient(ctx, budget(w.db.busy), func() (err error) {
+	return retryTransient(ctx, budget(w.db.busy, w.db.pool), func() (err error) {
 		conn, err := w.pinned(ctx)
 		if err != nil {
 			return err
@@ -255,14 +284,27 @@ func (w *Writer) Close() error {
 // dashboard would be reporting the store's internals as the answer.
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	// BEFORE `d.busy`, which is the whole of this bug. The guard lived in
-	// [DB.txOpts] alone, and `budget(d.busy)` below is an argument — evaluated
-	// first, dereferencing the nil handle the guard was put there to refuse.
+	// [DB.txOpts] alone, and `budget(d.busy, d.pool)` below is an argument —
+	// evaluated first, dereferencing the nil handle the guard was put there
+	// to refuse.
 	// See [ErrNoEstate]: this is the second time a maintenance tick racing a
 	// shutdown has taken the engine down through this exact path.
 	if !d.isOpen() {
 		return ErrNoEstate
 	}
-	return retryTransient(ctx, budget(d.busy), func() (err error) {
+	// IDENTITY WORK GOES TO THE RESERVED CONNECTION. This is the read path
+	// a socket storm arrives on, and the reserve is what keeps one
+	// connection out of that competition — see [Identity] and [DB.reserve].
+	if isIdentity(ctx) {
+		if err := d.readReserved(ctx, fn); !errors.Is(err, errNoReserve) {
+			return err
+		}
+		// A reserve that could not be drawn just now serves identity work
+		// from the pool like everybody else. It is where those reads were
+		// before the reserve existed, and it is better than refusing a
+		// question this handle can answer.
+	}
+	return retryTransient(ctx, budget(d.busy, d.pool), func() (err error) {
 		conn, err := d.conn(ctx)
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
@@ -276,6 +318,59 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		retire := retireSwitch(conn)
 		fit := false
 		defer func() { giveBack(conn, retire, fit) }()
+		fit, err = txOn(ctx, conn.BeginTx, readTx, fn)
+		return err
+	})
+}
+
+// errNoReserve is [DB.readReserved] reporting that there is no reserved
+// connection to run on, so the caller should fall through to the pool.
+//
+// IT MEANS THE RESERVED CONNECTION COULD NOT BE DRAWN JUST NOW — at the open,
+// or after the last one was retired — which is no reason to refuse a question
+// this handle can answer from the pool, where these reads were before the
+// reserve existed. Every handle holds a reserve: it is added to the pool
+// rather than taken out of it ([Options.poolSize]), so no bound is too small
+// to keep one.
+//
+// Unexported and never returned to a caller: it is a control answer between
+// two functions in this file, and a sentinel rather than a second return value
+// because every other path here already answers with an error.
+var errNoReserve = errors.New("store: this handle holds no identity reserve")
+
+// readReserved runs a read transaction on the connection [DB.reserve] holds.
+//
+// SERIALISED, because it is ONE connection: concurrent identity reads take
+// their turn rather than competing with the readers the reserve exists to
+// protect them from. That is what "one connection's worth" means, and it is
+// enough because an identity read is a keyed lookup rather than a scan.
+//
+// The connection is REPLACED rather than given back when a transaction leaves
+// it unfit, exactly as [Writer.Tx] replaces a pinned writer's: this connection
+// is held for the handle's life, so one left carrying an open transaction
+// would refuse every later identity read for good.
+func (d *DB) readReserved(ctx context.Context, fn func(*sql.Tx) error) error {
+	d.reserve.mu.Lock()
+	defer d.reserve.mu.Unlock()
+	return retryTransient(ctx, budget(d.busy, d.pool), func() (err error) {
+		// A HANDLE CLOSED UNDER THE CALLER answers as one that was never
+		// open, exactly as [DB.conn] does for the pool: Close may have
+		// released the reserve between [DB.Read]'s guard and this lock.
+		if d.closed.Load() {
+			return fmt.Errorf("%w: %s was closed while this call was in flight",
+				ErrNoEstate, d.path)
+		}
+		conn := d.identityConn(ctx)
+		if conn == nil {
+			return errNoReserve
+		}
+		fit := false
+		defer func() {
+			if !fit {
+				giveBack(conn, d.reserve.retire, false)
+				d.reserve.conn, d.reserve.retire = nil, nil
+			}
+		}()
 		fit, err = txOn(ctx, conn.BeginTx, readTx, fn)
 		return err
 	})

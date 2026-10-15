@@ -128,7 +128,7 @@ func TestAStopOnAnEndedContextGivesItsLeasesBack(t *testing.T) {
 	cancel()
 	h.Stop(ended)
 	for _, resource := range []string{
-		coord.SeatResource("ceo"), coord.SeatResource("eng"), coord.NodeResource("node-a"),
+		seatResource("ceo"), seatResource("eng"), coord.NodeResource("node-a"),
 	} {
 		if lease := f.leaseOf(resource); lease != nil {
 			t.Errorf("%s is still held by %s after a stop on an ended context: "+

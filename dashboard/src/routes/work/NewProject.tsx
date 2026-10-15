@@ -13,10 +13,25 @@
  *
  * # Who can own one
  *
- * Teams without a project, and seats above every team without one: a seat in
- * a team files its work under the team's project. Both are read from the
- * company document, which an operator credential opens, and New project is
- * held, with that reason, for a viewer without one.
+ * Teams without a project, and agent seats above every team without one: a
+ * seat in a team files its work under the team's project, and a person owns
+ * no project at all — the engine refuses a human seat one
+ * (`org.Role.humanForbidden`), since nothing files work for a person by it.
+ * Each is offered by its
+ * IDENTITY — a team by its key, a seat by its handle — which is what Edit org
+ * opens an editor at, since two teams may share a name.
+ *
+ * # Who may make one
+ *
+ * Whoever may change the company's configuration ([useConfigWriteAccess]:
+ * Admin, on a document the deployment does not manage for
+ * somebody else). Not a lead on their own team: a project key is one of the
+ * KEYS another system finds a team by, and it outlives the team that declared
+ * it, so the engine refuses a lead every write that sets one
+ * (`config.DiffOrg`'s keyed fields, `routes/org/builder/model/scope.ts`). A
+ * dialog that offered a lead their team would hand them to a Project field
+ * Edit org draws locked. So for anybody the gate refuses, this says the
+ * gate's own sentence and reads nothing.
  *
  * # The key is checked as the engine will
  *
@@ -36,12 +51,13 @@ import {
   Text,
   type SelectOption,
 } from "@crewlethq/ui";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { KEY_SHAPE } from "~/app/routes.ts";
 import { documentUnits } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
-import { apiToken } from "~/protocol/authToken.ts";
+import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
 
 /** The longest key the field takes. */
@@ -63,26 +79,31 @@ export interface ProjectOwner {
 }
 
 /**
- * Every node that could own a new project: teams that name none, then seats
- * above every team that name none and are not moved into a team.
+ * Every node that could own a new project: teams that name none, then agent
+ * seats above every team that name none and are not moved into a team.
+ *
+ * BY ITS IDENTITY, never its name: a team by its key and a seat by its handle,
+ * which every write of the document mints and which is what Edit org's
+ * `unit=` and `seat=` find a node by. A node the document holds no identity
+ * for has no address to continue at, so it is not offered.
  */
 export function ownersOf(doc: CompanyDocument | null | undefined): ProjectOwner[] {
   const teams = documentUnits(doc)
-    .filter((unit) => !unit.project)
+    .filter((unit) => !unit.project && !!unit.id)
     .map((unit): ProjectOwner => ({
-      id: `unit:${unit.name}`,
-      name: unit.name,
+      id: `unit:${unit.id}`,
+      name: unit.name || unit.id!,
       kind: "team",
       ...(unit.type ? { type: unit.type } : {}),
-      query: { unit: unit.name },
+      query: { unit: unit.id! },
     }));
   const seats = (doc?.roles ?? [])
-    .filter((role) => !role.project && !role.unit)
+    .filter((role) => role.kind !== "human" && !role.project && !role.unit && !!role.handle)
     .map((role): ProjectOwner => ({
-      id: `seat:${role.handle || role.name}`,
-      name: role.name,
+      id: `seat:${role.handle}`,
+      name: role.name || role.handle!,
       kind: "seat",
-      query: { seat: role.handle || role.name },
+      query: { seat: role.handle! },
     }));
   return [...teams, ...seats];
 }
@@ -133,10 +154,11 @@ export function keyVerdict(
 
 export function NewProjectDialog({ onClose }: { onClose: () => void }) {
   const nav = useNavigator();
-  // THE GUARDED DOCUMENT, read only with a credential: New project is held
-  // without one, so a reader here has one, and a browser that lost it since is
-  // told by the refusal below rather than by a request it could not win.
-  const config = useQuery("config", undefined, { enabled: apiToken() !== "" });
+  // THE GUARDED DOCUMENT, read only by a reader the gate admits: anybody else
+  // is told the gate's own sentence below rather than handed a refusal from a
+  // read they could not win, or a list of owners they could not give a key.
+  const access = useConfigWriteAccess();
+  const config = useQuery("config", undefined, { enabled: access.can });
   const doc = config.error ? null : (config.data ?? null);
   const owners = useMemo(() => ownersOf(doc), [doc]);
   const taken = useMemo(() => keysIn(doc), [doc]);
@@ -182,14 +204,16 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
     group: o.kind === "team" ? "Teams" : "Seats",
   }));
 
-  const blocked = !owner
-    ? "Every team and seat in the org already has a project."
-    : !verdict.ok
-      ? verdict.message
-      : undefined;
+  const blocked = !access.can
+    ? access.reason
+    : !owner
+      ? "Every team and seat in the org already has a project."
+      : !verdict.ok
+        ? verdict.message
+        : undefined;
 
   const go = () => {
-    if (!owner || !verdict.ok) return;
+    if (!access.can || !owner || !verdict.ok) return;
     onClose();
     nav.to(["agents", "edit"], { ...owner.query, project: key });
   };
@@ -213,7 +237,12 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      {config.error ? (
+      {!access.can ? (
+        <Text as="p" role="alert" className="row gap-2">
+          {access.block === "no_grant" && <KeyGlyph size="xs" aria-hidden="true" />}
+          {access.reason}
+        </Text>
+      ) : config.error ? (
         <Text as="p" role="alert">
           Couldn’t load the org. Close this and try again.
         </Text>
@@ -261,6 +290,12 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
             <Text>{owner?.name ?? ""}</Text>
           </div>
         </>
+      )}
+      {access.can && (
+        <Text as="p" variant="caption" className="row gap-2">
+          <KeyGlyph size="xs" aria-hidden="true" />
+          Saving the key takes Admin access, since a project outlives its team.
+        </Text>
       )}
     </Modal>
   );

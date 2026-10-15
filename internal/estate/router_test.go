@@ -43,7 +43,7 @@ type fakeNode struct {
 	opIDs     []string
 	patches   []tracker.TaskPatch
 	turns     []tracker.TurnRecord
-	keys      []pages.CallKey
+	keys      []string
 	queries   []knowledge.Query
 	units     tracker.Units
 	notReady  bool
@@ -74,6 +74,10 @@ type fakeNode struct {
 	// says "answer anyway" included: a server that does not honour the
 	// request's say-so, which the router must still not circle.
 	refusesLagging bool
+
+	// directory is the node's identity directory, nil for a node whose core
+	// runtime is not up.
+	directory IdentityReader
 
 	// hang, when set, is a node that takes a request and never answers it
 	// until hang is closed — a wedged node, as the broker's own ask sees
@@ -154,10 +158,16 @@ func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
 	return tracker.WriteResult{}, nil
 }
 
-func (f *fakeNode) Comment(_ context.Context, _ pages.Actor, _ string,
+func (f *fakeNode) Comment(_ context.Context, actor pages.Actor, _ string,
 	in pages.NewComment) (pages.Comment, pages.Written, error) {
 	f.note("comment")
-	f.keyed(in.CallKey)
+	// THE TURN'S KEY FIRST, the order the pages store derives a comment's
+	// id in.
+	if in.TurnKey != "" {
+		f.keyed(in.TurnKey)
+	} else {
+		f.keyed(actor.OpKey)
+	}
 	return pages.Comment{Body: in.Body}, pages.Written{}, nil
 }
 
@@ -178,7 +188,7 @@ func (f *fakeNode) Building(context.Context) bool { return false }
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
 	return Backend{
-		Tracker: f, PageWriter: f, Knowledge: f,
+		Tracker: f, PageWriter: f, Knowledge: f, Identity: f.directory,
 		Writer: func(a Actor) TrackerWriter {
 			f.mu.Lock()
 			f.actors = append(f.actors, a)
@@ -294,8 +304,9 @@ func newFleet(t *testing.T, names ...string) *fleet {
 	for _, name := range names {
 		node := &fakeNode{name: name, units: chartOf(name)}
 		f.nodes[name] = node
-		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, name, node,
-			node.seams())
+		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{
+			Self: name, Local: node, Seams: node.seams(), Envelopes: fleetEnvelopes,
+		})
 		if err != nil {
 			t.Fatalf("serve %s: %v", name, err)
 		}
@@ -321,7 +332,7 @@ func (f *fleet) start(t *testing.T) *memory.Queue {
 func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 	t.Helper()
 	opts := RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement,
-		Session: NewSession()}
+		Session: NewSession(), Envelopes: fleetEnvelopes}
 	if local != nil {
 		opts.Local, opts.Seams = local, local.seams()
 	}
@@ -346,9 +357,15 @@ func (s silencer) Serve(ctx context.Context, subject string, h queue.AnswerFunc)
 		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
 		s.node.mu.Unlock()
 		if refusesLagging {
+			// A REFUSAL THE FLEET SIGNED, bound to the request it
+			// answers, as a node of this fleet sends one.
 			s.node.note("lagging")
-			return json.Marshal(reply{Node: s.node.name, Unserved: unservedLagging,
-				Detail: s.node.name + "'s copy lags its logs"})
+			req := opened(raw)
+			if req.ID == "" {
+				return nil, errors.New("a request that does not open as the fleet's")
+			}
+			return fleetEnvelopes.sealReply(reply{Node: s.node.name, Request: req.ID,
+				Unserved: unservedLagging, Detail: s.node.name + "'s copy lags its logs"}), nil
 		}
 		if hang != nil {
 			s.node.note("hung")
@@ -594,20 +611,16 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	}
 	// AND THE SERVER HOLDS TO IT TOO, whatever an asker sends: a tracker
 	// read carrying a floor on the pages log does not wait for it.
-	raw, _ := json.Marshal(request{Op: opTasks.spec.name,
+	rep := askSigned(t, f.start(t), "data-a", request{Op: opTasks.spec.name,
 		Floors: []statelog.Position{{Stream: pagesStream, Generation: 1, Seq: 9}}})
-	replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
-	var rep reply
-	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil ||
-		rep.Unserved != "" || rep.Err != nil {
-		t.Fatalf("a tracker read with a pages floor = (%+v, %v), want it answered",
-			rep, err)
+	if rep.Unserved != "" || rep.Err != nil {
+		t.Fatalf("a tracker read with a pages floor = %+v, want it answered", rep)
 	}
 
 	// LONGER THAN THE HOLDER'S FLOOR WAIT, so it says it is behind before
 	// the asker stops listening.
 	f.client.writeBudget = statelog.ReadBudget + time.Second
-	_, _, err = f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
+	_, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
 		node.askedFor("comment") {
@@ -1178,15 +1191,7 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 		t.Fatalf("the serving node ran %v, want [op-9]", got)
 	}
 
-	raw, err := json.Marshal(request{Op: opTasks.spec.name})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replies, err := f.start(t).Ask(t.Context(), Subject(first.name), raw, 1)
-	var rep reply
-	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil {
-		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
-	}
+	rep := askSigned(t, f.start(t), first.name, request{Op: opTasks.spec.name})
 	if rep.Unserved != unservedOutOfService || rep.Result != nil || rep.Err != nil {
 		t.Fatalf("a copy out of service answered %+v, want %q and nothing run",
 			rep, unservedOutOfService)
@@ -1292,22 +1297,11 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	for name, envelope := range map[string]map[string]any{
-		"empty arguments": {"op": "estate.ping", "args": struct{}{}},
-		"no arguments":    {"op": "estate.ping"},
+	for name, args := range map[string]json.RawMessage{
+		"empty arguments": json.RawMessage(`{}`),
+		"no arguments":    nil,
 	} {
-		raw, err := json.Marshal(envelope)
-		if err != nil {
-			t.Fatal(err)
-		}
-		replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
-		if err != nil || len(replies) != 1 {
-			t.Fatalf("%s: ask = (%d replies, %v)", name, len(replies), err)
-		}
-		var rep reply
-		if err := json.Unmarshal(replies[0], &rep); err != nil {
-			t.Fatal(err)
-		}
+		rep := askSigned(t, f.start(t), "data-a", request{Op: "estate.ping", Args: args})
 		var answer served
 		if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
 			!answer.Tracker {

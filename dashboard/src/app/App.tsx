@@ -16,6 +16,24 @@
  * drawing a skeleton while the chunk loads, and an error boundary that takes
  * down only the screen when it throws or its chunk never arrives.
  *
+ * # And a level above both: in the frame, or outside it
+ *
+ * Signing in, redeeming an invitation, spending a password reset link and
+ * enrolling a required second factor are drawn OUTSIDE the frame (`FRAMELESS`
+ * in `nav.ts`), because a browser on one of them holds no session the frame
+ * could use. They are also where the
+ * transports send a browser that lost its session — `FollowSessionNeed`,
+ * mounted once here beside both, is what reads that and moves. The step-up
+ * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
+ * refusal that asks for a fresher proof arrives on either side. So is the
+ * live region the design system's controls speak into (`announcer.tsx`),
+ * which a region inside the frame would lose on every sign-in. Those three
+ * are EAGER: a browser that has lost its session must reach the sign-in without
+ * waiting on a chunk. The sign-in screens themselves are not — they are a
+ * chunk of their own (`signin` in `lazyScreen.ts`), which a reader who is
+ * signed in never downloads, and `resolve` names them like any other screen
+ * so a link to `#/login` is a link to a page.
+ *
  * # Keyed on the subject, every screen that has one
  *
  * A hash change re-renders this switch rather than remounting it, so
@@ -25,14 +43,20 @@
  * refusal left on screen are all the same bug waiting for somebody to notice.
  */
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { Skeleton, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
-import { LayerHost, Skeleton, ToastProvider } from "@crewlethq/ui";
-import { useRoute } from "./router.tsx";
-import { resolve, type Resolved } from "./routes.ts";
-import { sectionOf } from "./nav.ts";
-import { OperatorRequired } from "./frame/OperatorRequired.tsx";
-import { useViewer } from "~/lib/viewer.ts";
+import { StepUpHost } from "./StepUp.tsx";
+import { AppAnnouncer } from "./announcer.tsx";
+import { parseHash, useNavigator, useRoute } from "./router.tsx";
+import { resolve, type Resolved, type Route } from "./routes.ts";
+import { closedBy, framelessOf, guardedPath, personalPath } from "./nav.ts";
+import { AccessRefused } from "./frame/AccessRefused.tsx";
+import { GrantRequired } from "./frame/GrantRequired.tsx";
+import { useConnection } from "~/lib/store-hooks.ts";
+import { useHeldReading, useViewer } from "~/lib/viewer.ts";
+import { safeNext, signInHash } from "~/lib/session.ts";
+import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
 import { lazyScreen, prefetchOnIdle } from "./lazyScreen.ts";
 import { ScreenBoundary } from "./boundaries.tsx";
@@ -84,11 +108,24 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const Audit = lazyScreen("settings", (m) => m.Audit);
+const Account = lazyScreen("account", (m) => m.Account);
+const SignIn = lazyScreen("signin", (m) => m.SignIn);
+const Invite = lazyScreen("signin", (m) => m.Invite);
+const Reset = lazyScreen("signin", (m) => m.Reset);
+const Enrol = lazyScreen("signin", (m) => m.Enrol);
 const Appearance = lazyScreen("settings", (m) => m.Appearance);
 
 /** One resolved screen, drawn. */
 export function screenFor(route: Resolved): ReactNode {
   switch (route.screen) {
+    case "login":
+      return <SignIn />;
+    case "enrol":
+      return <Enrol />;
+    case "invite":
+      return <Invite key={route.link} link={route.link} />;
+    case "reset":
+      return <Reset key={route.link} link={route.link} />;
     case "home":
       return <Home />;
     case "inbox":
@@ -189,37 +226,124 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "audit":
       return <Audit />;
+    case "account":
+      return <Account />;
     case "appearance":
       return <Appearance />;
   }
 }
 
-function Screen() {
+/**
+ * Follows what the transports say the session needs.
+ *
+ * A `401` anywhere — the socket's refusal probe, any REST call — means this
+ * browser holds nothing the engine accepts, and the answer is the sign-in
+ * screen, carrying the address the reader was on as `next`. A session that
+ * may only enrol a second factor goes to the enrolment instead. Both REPLACE
+ * the entry: the screen the reader was on cannot be drawn for them, and Back
+ * from the sign-in must not land on it again.
+ *
+ * THE SIGN-IN SCREENS THEMSELVES ARE LEFT ALONE: they answer their own
+ * refusals, and a sign-in form routed to itself would lose what was typed.
+ * An enrolment that loses its session goes to sign in, carrying its own
+ * `next` rather than itself (`signInHash`).
+ */
+function FollowSessionNeed() {
+  const need = useSyncExternalStore(onSessionNeed, currentSessionNeed);
   const route = useRoute();
-  const viewer = useViewer();
+  const nav = useNavigator();
+  useEffect(() => {
+    if (need === null) return;
+    const at = framelessOf(route.path);
+    if (need === "sign_in") {
+      if (at === "login" || at === "invite" || at === "reset") return;
+      const target = parseHash(signInHash(route.hash));
+      nav.replace(target.path, target.query);
+      return;
+    }
+    if (at !== null) return;
+    nav.replace(["enrol"], { next: safeNext(route.hash) });
+  }, [need, route, nav]);
+  return null;
+}
+
+/**
+ * The frame and its screen, or a screen drawn outside it.
+ *
+ * DECIDED ON THE HEAD, before anything resolves: every address under a
+ * frameless head is drawn outside the frame, a malformed one included. A
+ * `#/login/x` drawn inside it would mount the sidebar, the state bar and the
+ * screen's reads for a browser that holds no session, and every one of them
+ * would be refused.
+ */
+function Frame() {
+  const route = useRoute();
   const where = resolve(route.path);
+  const resetKey = route.path.join("/");
+  if (framelessOf(route.path) !== null) {
+    if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
+    return <ScreenBoundary resetKey={resetKey}>{screenFor(where)}</ScreenBoundary>;
+  }
+  return (
+    <Shell>
+      <ScreenBoundary resetKey={resetKey}>
+        <Screen where={where} path={route.path} />
+      </ScreenBoundary>
+    </Shell>
+  );
+}
+
+function Screen({ where, path }: { where: Route; path: string[] }) {
+  const viewer = useViewer();
+  const held = useHeldReading();
+  const { accessRefused } = useConnection();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-  // A GUARDED SECTION FOR A VIEWER THE ENGINE HAS SAID CANNOT READ IT is its
-  // refusal and nothing else — see `OperatorRequired`. Only on an ANSWER, and
-  // the first one is waited for: until it is in, the section asks nothing it
+  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE — a refused handshake, never
+  // a want of access — is told so in place of every screen but the reader's
+  // own: their Account and Settings › Appearance, which read no socket
+  // (`personalPath`, the rule the sidebar's locks are drawn by). See
+  // `AccessRefused`.
+  if (accessRefused !== null && !personalPath(path)) {
+    return <AccessRefused reason={accessRefused} />;
+  }
+  // AN ITEM SOMEBODY WAS ASKED ABOUT IS OPEN TO THEM, Tracker or not: the
+  // engine answers the person an open ask names with the item and takes their
+  // answer on it, so the link in their inbox notice or chat message has to
+  // open — and its own read decides, refusing anybody it names no ask to in
+  // the same words it refuses an item that does not exist.
+  if (where.screen === "item") return screenFor(where);
+  // A WORKSPACE OR SECTION CLOSED TO THE READER is its refusal and nothing
+  // else — see `GrantRequired` — decided by the rule every lock the
+  // navigation draws is decided by (`nav.ts`'s `closedBy`, over
+  // `sectionOpen`): the workspace's access first (Work is the tracker's), then
+  // the section's (Live › Turns is admin's). Over the frame's one reading of
+  // who the reader is and what they hold (`useHeldReading`): the viewer's
+  // answer, or the session's where the viewer has not answered — and the
+  // refusal names the reader from that same reading. Only on an ANSWER, and
+  // the first one is waited for: until it is in, the screen asks nothing it
   // may be refused (a cold load of #/settings/secrets sent its guarded reads,
   // was refused, and drew the refusal, a frame before the frame knew to). A
-  // viewer read that FAILED is no answer and does not hold the section: the
-  // screen mounts, and its own reads say what they find.
-  const section = sectionOf(route.path);
-  if (section?.guarded && !section.answersRefusal) {
-    if (viewer.asking) {
-      return (
-        <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
-      );
+  // read that FAILED is no answer and does not hold the screen: it mounts, and
+  // its own reads say what they find.
+  if (guardedPath(path)) {
+    if (held === null) {
+      if (viewer.asking) {
+        // NAMED BY WHAT WOULD CLOSE IT to somebody holding nothing — the
+        // workspace's label where the workspace is gated, else the section's.
+        const what = closedBy(path, [])?.what ?? "this page";
+        return <Skeleton variant="text" rows={4} label={`Checking your access to ${what}`} />;
+      }
+    } else {
+      const closed = closedBy(path, held.grants);
+      if (closed !== null) {
+        return <GrantRequired what={closed.what} grants={closed.needs} reader={held.login} />;
+      }
     }
-    if (!viewer.loading && !viewer.operator) return <OperatorRequired what={section.label} />;
   }
   return screenFor(where);
 }
 
 export function App() {
-  const route = useRoute();
   // EVERY OTHER WORKSPACE, FETCHED WHILE NOBODY IS WAITING — see
   // `prefetchOnIdle`. Once per tab: the effect has no dependency to re-run on.
   useEffect(() => prefetchOnIdle(), []);
@@ -227,22 +351,32 @@ export function App() {
     // The toast host wraps the shell rather than sitting inside a screen: an
     // outcome has to survive the navigation the write causes, and a provider
     // mounted per screen is unmounted by exactly that.
+    //
+    // AND NO `LayerHost` AROUND THE FRAME. Every overlay the kit draws — a
+    // Modal, a Select's listbox, a Popover, the palette, a toast — asks
+    // `useLayerContainer()` where to go, and with no host that answers
+    // `document.body`, where each one's z-index is its DEPTH on the one layer
+    // stack in the ROOT stacking context. The narrow layout's drawer is on that
+    // stack too, but it is the sidebar itself and cannot be portalled: it is
+    // painted in place at its own depth plus one. A host here made a stacking
+    // context of its own at the bottom of the band, so every overlay was capped
+    // beneath the open drawer whatever its depth — on a phone the Account
+    // popover and the palette opened from the drawer drew UNDER it, and their
+    // Account link, sign-outs and results could not be tapped. The kit names a
+    // host for a FULLSCREEN container only (the org builder keeps its own),
+    // since a fullscreen element paints nothing outside itself.
     <ToastProvider>
-      {/* THE ONE PORTAL TARGET, DECLARED RATHER THAN FALLEN BACK TO. Every
-          overlay the kit draws — a Modal, a Select's listbox, a Popover, and
-          the palette — asks `useLayerContainer()` where to go, and with no
-          host mounted that answers `document.body`. The host is one
-          absolutely-positioned box covering the shell, inert until something
-          is drawn in it, holding the whole layer band in a stacking context of
-          its own. INSIDE THE TOAST PROVIDER, so a toast reporting what a write
-          inside a dialog did is readable over the dialog that caused it. */}
-      <LayerHost>
-        <Shell>
-          <ScreenBoundary resetKey={route.path.join("/")}>
-            <Screen />
-          </ScreenBoundary>
-        </Shell>
-      </LayerHost>
+      {/* EAGER, AND OUTSIDE THE FRAME: the session's routing, the step-up
+          ceremony and the one live region are what a sign-in screen and a
+          framed one both need, so none may tear them down and none of them
+          waits on a chunk. */}
+      <FollowSessionNeed />
+      <StepUpHost />
+      {/* THE ONE LIVE REGION the design system's controls speak into,
+          beside the frame so a sign-in does not tear it down. See
+          `announcer.tsx`. */}
+      <AppAnnouncer />
+      <Frame />
     </ToastProvider>
   );
 }

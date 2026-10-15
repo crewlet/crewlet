@@ -28,10 +28,10 @@ func audienceChart(t *testing.T) *org.Organization {
 	o := &org.Organization{
 		Name: "Nimbus",
 		Roles: []*org.Role{
-			{Name: "Founder", DeclaredHandle: "founder", Kind: org.KindHuman, Manages: []string{"CTO"}},
+			{Name: "Founder", DeclaredHandle: "founder", Kind: org.KindHuman, Manages: []string{"cto"}},
 		},
 		Units: []*org.Unit{{
-			Name: "Platform", Lead: "CTO",
+			Name: "Platform", Lead: "cto",
 			Roles: []*org.Role{
 				{Name: "CTO", DeclaredHandle: "cto"},
 				{Name: "SWE", DeclaredHandle: "swe"},
@@ -80,7 +80,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 			t.Parallel()
 			r := run
 			r.Requester = tc.requester
-			got := resolveAudience(o, nil, r, tc.label)
+			got := resolveAudience(o, nil, nil, r, tc.label)
 			if !slices.Equal(got.Handles, tc.want) || got.Fallback != tc.fallback {
 				t.Errorf("%q resolved to %v (fallback %v), want %v (fallback %v)",
 					tc.label, got.Handles, got.Fallback, tc.want, tc.fallback)
@@ -93,7 +93,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 // never to a guess.
 func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	t.Parallel()
-	got := resolveAudience(audienceChart(t), nil,
+	got := resolveAudience(audienceChart(t), nil, nil,
 		sandbox.PendingRun{TurnID: "t1", AgentHandle: "left-the-company"}, "manager")
 	if len(got.Handles) != 0 || !got.Fallback {
 		t.Fatalf("resolved to %v (fallback %v), want nobody as a fallback", got.Handles, got.Fallback)
@@ -116,7 +116,7 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 		t.Fatalf("the brief does not name the seat's teammates and manager by handle:\n%s", brief)
 	}
 	for _, name := range []string{"cto", "ada", "qa"} {
-		if got := resolveAudience(o, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
+		if got := resolveAudience(o, nil, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
 			t.Errorf("a --to %q copied from the brief fell back", name)
 		}
 	}
@@ -176,5 +176,27 @@ func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
 	if err != nil || disposition != sandbox.AnswerNotMine {
 		t.Fatalf("an answer to a run with no record = %q, %v, want the coordinator's not_mine",
 			disposition, err)
+	}
+}
+
+// THE REQUESTER IS KEPT BY ITS SEAT'S HANDLE, and a sender the org does not
+// hold is nobody: a seat the company does not have is nobody to put a question
+// to, and the run's "requester" then resolves to nobody rather than to a name.
+func TestTheRequesterIsKeptByItsSeatsHandle(t *testing.T) {
+	t.Parallel()
+	o := audienceChart(t)
+	company := &Company{Org: o}
+
+	if got := requesterIdentity(company, "ada"); got != "ada" {
+		t.Fatalf("the requester was recorded as %q, want ada", got)
+	}
+	if got := requesterIdentity(company, "nobody-we-know"); got != "" {
+		t.Errorf("a sender the org does not hold was recorded as %q, want nobody", got)
+	}
+	got := resolveAudience(o, nil, nil, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
+		Requester: "ada"}, "requester")
+	if !slices.Equal(got.Handles, []string{"ada"}) || got.Fallback {
+		t.Errorf("the requester resolved to %v (fallback %v), want ada",
+			got.Handles, got.Fallback)
 	}
 }

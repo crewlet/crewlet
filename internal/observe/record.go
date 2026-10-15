@@ -125,6 +125,9 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	// ENCODED ONCE, and the seat and the channel read off those bytes by
+	// the store's own rule ([store.ExtractTags]) rather than a second
+	// reading of the payload.
 	raw := encode(ev)
 	tags := store.ExtractTags(raw)
 	filed, topic, payload := ev.Type, topics.Event(ev.Type), payloadOf(raw)
@@ -154,7 +157,8 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		// THE STORE'S RULE, not a second reading of the payload: the row a
 		// restarted process seeds from the store carries the column this
 		// fills, and the two halves of one feed must name one seat alike —
-		// and one A2A channel alike, which the event log narrows by too.
+		// by its agent id, never its name — and one A2A channel alike,
+		// which the event log narrows by too.
 		AgentID:   tags["agent_id"],
 		ChannelID: tags["channel_id"],
 	}, true
@@ -241,8 +245,10 @@ func FeedRow(rec store.EventRecord) livestate.FeedRow {
 		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary,
 		Category: rec.Category, TraceID: rec.TraceID, SpanID: rec.SpanID,
 		ParentSpanID: rec.ParentSpanID, Topic: topic,
-		Failed:    rec.Failed,
-		AgentID:   rec.Tags["agent_id"],
+		Failed: rec.Failed,
+		// The row's own copy of the promoted column, which is the same
+		// value [Envelope] reads off the tag.
+		AgentID:   rec.AgentID,
 		ChannelID: rec.Tags["channel_id"],
 	}
 }

@@ -159,6 +159,48 @@ const CATEGORIES = ["task", "system"] as const;
 	}
 }
 
+// A GENERIC FUNCTION'S TYPE PARAMETERS ARE NOT AN ELEMENT.
+//
+// A `.tsx` file may write a generic function TYPE as `<M>() => Promise<M>` —
+// a type position holds no JSX — and a call's type arguments may name a
+// module's type (`importOriginal<typeof import("…")>()`). The first was read
+// as an element `<M>` whose children ran into the second, which ended as
+// "unexpected '(' inside a JSX tag", and every gate in the engine refused the
+// whole tree over the test helper that wraps a mocked module. A `<b>` whose
+// text merely opens with a parenthesis is still an element: its apostrophe,
+// read as code, would open a string that never closes.
+func TestAGenericFunctionTypeIsNotAnElement(t *testing.T) {
+	t.Parallel()
+	for name, source := range map[string]string{
+		"an annotated parameter": `export async function countingGrid(
+  importOriginal: <M>() => Promise<M>,
+): Promise<typeof import("~/app/frame/DataGrid.tsx")> {
+  return importOriginal();
+}
+`,
+		"a call's type arguments": `export async function load(importOriginal: Loader) {
+  const real = await importOriginal<typeof import("~/app/frame/DataGrid.tsx")>();
+  return real;
+}
+`,
+		"a type alias": "type Load = <M>(at: string, why: \")\") => M;\n" +
+			"type Spaced = < M >\n  (\n    at: string,\n  ) =>\n  M;\n",
+		"an element whose text opens with a parenthesis": `export function Note(): ReactNode {
+  return <b>(it's optional)</b>;
+}
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := literalStrings(t, "test/rowsDrawn.tsx",
+				source+"const CATEGORIES = [\"task\", \"system\"] as const;\n")
+			if !slices.Equal(got, []string{"task", "system"}) {
+				t.Errorf("strings = %q, want the one declaration after the function", got)
+			}
+		})
+	}
+}
+
 // TWO DECLARATIONS IN ONE FILE ARE TWO.
 //
 // The walk once matched once per FILE and appended one entry for each, so it

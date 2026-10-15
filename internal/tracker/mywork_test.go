@@ -16,7 +16,7 @@ import (
 func (r *roundTrip) myWork(handle string) tracker.MyWork {
 	r.t.Helper()
 	out, err := r.reader.MyWork(r.t.Context(), tracker.MyWorkQuery{
-		Who: tracker.PartyOf(handle), Level: statelog.ReadStale,
+		Handle: handle, Level: statelog.ReadStale,
 	}, wednesday, time.UTC)
 	if err != nil {
 		r.t.Fatalf("MyWork(%s): %v", handle, err)
@@ -194,7 +194,7 @@ func TestMyWorkNamesSomebody(t *testing.T) {
 		t.Error("my_work with no handle answered")
 	}
 	if _, err := r.reader.MyWork(t.Context(), tracker.MyWorkQuery{
-		Who: tracker.PartyOf("ana"),
+		Handle: "ana",
 	}, wednesday, time.UTC); err == nil {
 		t.Error("my_work with no read level answered — a level a surface did " +
 			"not resolve is a label rather than a guarantee")

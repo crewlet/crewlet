@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -53,12 +56,12 @@ type secretsClient struct {
 // destination means nothing at all. They resolve to loopback here, because
 // this command runs on the node whose config it just read — and `-api` is
 // there for the case where it does not.
-func newSecretsClient(boot *config.Bootstrap, override string) (*secretsClient, error) {
+func newSecretsClient(environ config.Source, boot *config.Bootstrap, override string) (*secretsClient, error) {
 	base, err := nodeBaseURL(boot, override, "the fleet's secret store")
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken(boot, "/secrets")
+	token, err := nodeAPIToken(environ, "/secrets")
 	if err != nil {
 		return nil, err
 	}
@@ -74,11 +77,13 @@ func (c *secretsClient) Describe() string {
 func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 	var body struct {
 		Secrets []struct {
-			Name      string `json:"name"`
-			KeyID     string `json:"key_id"`
-			UpdatedAt string `json:"updated_at"`
-			UpdatedBy string `json:"updated_by"`
-			Source    string `json:"source"`
+			Name          string `json:"name"`
+			KeyID         string `json:"key_id"`
+			UpdatedAt     string `json:"updated_at"`
+			UpdatedBy     string `json:"updated_by"`
+			UpdatedByKind string `json:"updated_by_kind"`
+			OperatorID    string `json:"operator_id"`
+			Source        string `json:"source"`
 		} `json:"secrets"`
 	}
 	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
@@ -93,23 +98,36 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 		at, _ := time.Parse(time.RFC3339Nano, row.UpdatedAt)
 		out = append(out, secrets.Record{
 			Name: row.Name, KeyID: row.KeyID, UpdatedAt: at,
-			UpdatedBy: row.UpdatedBy, Source: row.Source,
+			UpdatedBy: row.UpdatedBy, UpdatedByKind: row.UpdatedByKind,
+			OperatorID: row.OperatorID, Source: row.Source,
 		})
 	}
 	return out, nil
 }
 
-// Set stores or rotates one value.
+// Set stores or rotates one value, and reports the author the node recorded.
 //
-// `by` is DELIBERATELY not sent. The node stamps the operator id its own
-// guard authenticated, which is the only attribution that means anything on
-// this path — a client-supplied author would be a field the caller chooses.
-func (c *secretsClient) Set(ctx context.Context, name, value, _, source string, _ time.Time) error {
+// `by` is DELIBERATELY not sent. The node stamps the party its own guard
+// authenticated, which is the only attribution that means anything on this
+// path — a client-supplied author would be a field the caller chooses — and
+// it answers with what it stamped, which is what the command prints.
+func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
+	source string, _ time.Time) (secrets.Author, error) {
+
 	path := "/secrets/" + url.PathEscape(name)
 	if source != "" {
 		path += "?source=" + url.QueryEscape(source)
 	}
-	return c.call(ctx, http.MethodPut, path, []byte(value), nil)
+	var body struct {
+		UpdatedBy     string `json:"updated_by"`
+		UpdatedByKind string `json:"updated_by_kind"`
+		OperatorID    string `json:"operator_id"`
+	}
+	if err := c.call(ctx, http.MethodPut, path, []byte(value), &body); err != nil {
+		return secrets.Author{}, err
+	}
+	return secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
+		OperatorID: body.OperatorID}, nil
 }
 
 // Get reads one value back. Break-glass, and the node logs it by name.
@@ -143,16 +161,35 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 // names a different active key than the node's is an operator rekeying onto a
 // key the fleet will not be sealing with — silent success there would report
 // a completed rotation over rows sealed under something else.
-func (c *secretsClient) Rekey(ctx context.Context, activeKeyID, _ string, _ time.Time) ([]string, error) {
+func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
 	var body struct {
-		Moved []string `json:"moved"`
+		Moved      []string                     `json:"moved"`
+		EngineKeys int                          `json:"engine_keys_moved"`
+		Identity   *secretsapi.IdentityResealed `json:"identity"`
 	}
 	err := c.call(ctx, http.MethodPost,
 		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body)
 	if err != nil {
-		return nil, err
+		return rotation{}, err
 	}
-	return body.Moved, nil
+	return rotation{
+		Rekeyed:  fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys},
+		Identity: body.Identity,
+	}, nil
+}
+
+// EngineKeys reads the counts the node's listing carries beside the operator's
+// names: the engine's own keys and the identity estate's values, per keyring
+// key, none of them named.
+func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
+	var body struct {
+		EngineKeys secrets.EngineKeys     `json:"engine_keys"`
+		Identity   *iamdomain.SealedCount `json:"identity_values"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+		return engineHeld{}, err
+	}
+	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity}, nil
 }
 
 // call performs one request and decodes the answer, or explains the refusal.
@@ -237,9 +274,16 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
 	case status == http.StatusNotFound:
 		return missingSurface(c.base, "/secrets", body.Error)
-	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
+	case status == http.StatusForbidden && body.Error == "reserved_name":
+		// THE SENTINEL again, for the same reason: the name is the
+		// engine's own, which no grant changes — a caller that read this
+		// as a missing grant would go and ask for one.
+		return fmt.Errorf("%w: %s", secrets.ErrReservedName,
+			withRefusalDetail(strings.TrimPrefix(
+				strings.SplitN(path, "?", 2)[0], "/secrets/"), "", body.Hint))
+	}
+	if msg, ok := credentialRefusal(status, raw, true); ok {
+		return fmt.Errorf("%s: %s", c.base, msg)
 	}
 	msg := body.Error
 	if msg == "" {

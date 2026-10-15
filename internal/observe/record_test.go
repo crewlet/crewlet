@@ -164,3 +164,39 @@ func TestTheConversationTagNeverHoldsAPartition(t *testing.T) {
 			"record has a batch to name", got)
 	}
 }
+
+// A ROW NAMES THE SEAT IT IS ABOUT, BY AGENT ID, whichever way it arrived.
+//
+// A feed narrowed to one seat merges live rows into rows the store filtered,
+// and filters the live ones itself. It filtered them on the actor — the seat's
+// NAME, which a namesake shares — because neither row carried anything else.
+// The live envelope and the stored row now name the seat the same way, from
+// the same field the store's promoted column is read from.
+func TestAFeedRowNamesItsSeatByAgentIDLiveAndStored(t *testing.T) {
+	t.Parallel()
+	ev := events.New(types.AgentTurnCompleted{
+		Agent: "agent-7", RoleName: "Engineer", TurnID: "turn-7",
+	}, events.TraceContext{})
+
+	env, ok := observe.Envelope(ev)
+	if !ok {
+		t.Fatal("a turn completion reaches no live envelope")
+	}
+	if env.AgentID != "agent-7" {
+		t.Errorf("live envelope names agent %q, want agent-7", env.AgentID)
+	}
+	rec, ok := observe.Record(ev)
+	if !ok {
+		t.Fatal("a turn completion is not persisted")
+	}
+	// The stored row's field is derived from this tag when a listing is
+	// scanned (store's own suite pins that half), so the tag is what the
+	// write path owes it.
+	if rec.Tags["agent_id"] != "agent-7" {
+		t.Fatalf("agent_id tag = %q", rec.Tags["agent_id"])
+	}
+	rec.AgentID = rec.Tags["agent_id"]
+	if row := observe.FeedRow(rec); row.AgentID != "agent-7" {
+		t.Errorf("stored row names agent %q, want agent-7", row.AgentID)
+	}
+}

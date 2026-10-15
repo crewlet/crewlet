@@ -59,6 +59,7 @@ const (
 const (
 	UnitMilliseconds = "ms"
 	UnitBytes        = "By"
+	UnitBytesPerDay  = "By/d"
 	UnitSeconds      = "s"
 	UnitCount        = "1"
 )
@@ -138,13 +139,19 @@ func Catalogue() []Instrument {
 			Shows: "Writes refused before or instead of an append, by `reason`, and " +
 				"EVERY value it carries is here, each with its remedy. The node: " +
 				"`evicted` (this node is removed from the fleet — run the write " +
-				"on another), `deferred` (it holds a record it cannot decode — a " +
+				"on another), `eviction_unknown` (its own eviction state could " +
+				"not be read — clears when it is read again), `deferred` (it " +
+				"holds a record it cannot decode — a " +
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
 				"meanwhile), `floor_unknown` (the floor or the log's ends could " +
 				"not be read — clears when coordination answers). The log: " +
 				"`log_full` (at its ceiling — raise it or unblock the trim), " +
+				"`record_too_large` (the record is larger than the broker takes " +
+				"in one message — split the change; the detail names which " +
+				"limit refused it), `broker_refused` (a refusal this build has " +
+				"no remedy for — the detail carries the broker's own words), " +
 				"`skew` (a store and a stream restored out of step — restore " +
 				"both from one backup), `wrong_stream` (not the log this node's " +
 				"rows came from: rebuilt, ending below its checkpoint, holding " +
@@ -223,7 +230,7 @@ func Catalogue() []Instrument {
 			Name: StatelogBarriersApplied, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "stream"},
 			Shows: "Barrier records applied from each log — every node's " +
-				"linearizable reads on it, since every node applies every " +
+				"linearizable reads on it, since every data node applies every " +
 				"record. It is the rate `census_drift` holds against the " +
 				"census, per log: a node's own appends are only its share of " +
 				"the fleet's reads, and on a fleet of several serving nodes " +
@@ -331,6 +338,23 @@ func Catalogue() []Instrument {
 				"only place anyone would see that it happened.",
 		},
 		{
+			Name: StatelogRecordsTampered, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Records whose signature failed under a key this node " +
+				"holds, which means something that is not this fleet wrote " +
+				"to the broker. The applier stops on the first one, so this " +
+				"counts at most one per domain per stop, and any value above " +
+				"zero is an incident rather than a rate.",
+		},
+		{
+			Name: StatelogRecordsUnverifiable, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Records signed under a key this node does not hold, " +
+				"retained until it does. Expected and transient during a " +
+				"keyring rotation; sustained, it means a key reached one " +
+				"node's secrets.keys and not this one's.",
+		},
+		{
 			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "The applier's observed drain, which every retry hint " +
@@ -393,6 +417,19 @@ func Catalogue() []Instrument {
 			Shows:      "What the log actually holds, against its ceiling below.",
 		},
 		{
+			Name: StatelogLogBytesPerDay, Kind: KindGauge, Unit: UnitBytesPerDay,
+			Attributes: []string{"domain"},
+			Shows: "What the log took in over the trailing day, measured from " +
+				"its own records at each trim tick. The ceiling has to hold " +
+				"`min_age` of this, because the trim never removes a record " +
+				"younger than that — a log whose ceiling is smaller fills with " +
+				"every trim term satisfied, which is what `log_ceiling_short` " +
+				"fires on. Absent for a compacted log and for one in its first " +
+				"two days, whose trailing day would contain the day it was " +
+				"imported into; a log that could not be read keeps its last " +
+				"measurement, as the report does.",
+		},
+		{
 			Name: StatelogLogMaxBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"domain"},
 			Shows: "The ceiling, read from the running stream rather than " +
@@ -403,8 +440,9 @@ func Catalogue() []Instrument {
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
-				"left — on the tracker and pages logs, the ceiling less the " +
-				"gate reserve kept above it for evictions. At zero the log " +
+				"left — on every log that claims identity (the tracker, the " +
+				"pages and the identity estate), the ceiling " +
+				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
 				"number worth alarming on long before it is small.",
@@ -522,7 +560,9 @@ func Catalogue() []Instrument {
 			Attributes: nil,
 			Shows: "The fraction of sources carrying a current vector. It is " +
 				"how a stalled embedding backlog is reported, since it never " +
-				"drops a seat.",
+				"drops a seat. Absent where the company configures no " +
+				"embeddings and while the corpus cannot be measured — an " +
+				"unreadable corpus is neither covered nor uncovered.",
 		},
 
 		// ---- the change feed ------------------------------------------
@@ -560,14 +600,35 @@ func Catalogue() []Instrument {
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
 		},
+		// ---- authentication -------------------------------------------
+		{
+			Name: AuthAttemptsFailed, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"method", "outcome"},
+			Shows: "Every failed attempt to prove an identity, as it happens: " +
+				"a sign-in, a step-up, an invitation or password reset " +
+				"link that did not prove itself, or a bearer presented " +
+				"to a route that " +
+				"needs one and refused — a credential an unguarded route " +
+				"verifies itself, such as a webhook relay's own JWT, is " +
+				"never counted (`method`), and whether the attempt was " +
+				"verified and wrong or answered 429 by the throttle's " +
+				"curve (`outcome`). It is " +
+				"the ONLY per-attempt record there is, by design: an " +
+				"unauthenticated caller authors this rate, so the event log " +
+				"gets one `iam_login_failures` row per node per minute, " +
+				"counting each source, and the rate itself lives here, where " +
+				"a guessing run costs a counter increment rather than a row " +
+				"in every backup.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"kind"},
-			Shows: "Whether each named alarm is firing right now, 0 or 1. It " +
-				"is the same table the operator record renders and the CLI " +
-				"exits non-zero on, so a collector and a person see one " +
-				"answer.",
+			Shows: "Whether each named alarm is firing right now, 0 or 1 — " +
+				"for one that stands on several logs, whether it stands on " +
+				"any; its `domains` and its log lines say which. It is the same table " +
+				"the operator record renders and the CLI exits non-zero on, " +
+				"so a collector and a person see one answer.",
 		},
 	}
 }

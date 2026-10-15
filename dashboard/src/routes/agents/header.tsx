@@ -1,7 +1,10 @@
 /**
  * What every Agents section carries in the page bar: a way to find a seat, the
- * way into the builder, and the one write the org chart invites — adding a
- * seat — plus the section tabs' figures.
+ * way into the builder, and the one write the bar offers — adding a seat —
+ * plus the section tabs' figures. The chart's other writes are a seat's own
+ * and live on it: a vacant human seat's card, peek and page offer Invite and
+ * Create to an admin (`components/people.tsx`), since
+ * a person comes from the seat they will hold.
  *
  * # One header for every section
  *
@@ -37,16 +40,15 @@ import { usePeekControls, usePeek } from "~/app/frame/DetailRail.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { useSchedules } from "~/lib/store-hooks.ts";
+import { CONFIG_WRITE_GRANT, useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useLeadScope } from "~/lib/leadScope.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useManagedConfig } from "~/lib/useWriteAccess.ts";
+import { holds } from "~/lib/access.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
 
 /** How many matches the finder lists: a screenful, never the company. */
 const FIND_LIMIT = 8;
-
-/** The reason Add seat cannot be pressed by somebody who may not change the org. */
-export const ADD_SEAT_REASON = "Needs an operator token";
 
 /**
  * The seats a finder term matches, best first: a name or handle that STARTS
@@ -110,21 +112,26 @@ export function AgentsHeader({
   onFound?: (seat: Seat) => void;
   filter?: SeatFilter;
 }) {
-  const viewer = useViewer();
-  const managed = useManagedConfig();
   const nav = useNavigator();
-  // WHY ADD SEAT CANNOT BE PRESSED, or null: it opens the builder to add, so
-  // it is held exactly where the builder would open read-only — no operator
-  // credential, or a managed document this token is not a writer of
-  // (ADR-0030), with the sentence that names who manages it.
-  const held = viewer.loading
-    ? "Checking your access"
-    : !viewer.operator
-      ? ADD_SEAT_REASON
-      : managed;
+  // ADDING A SEAT IS A STRUCTURAL CHART WRITE, decided by ADMIN — or, inside
+  // a unit the reader leads, by that lead — and never by a credential's kind
+  // or a seat binding, so the control asks the one gate every org chart write
+  // asks (`useOrgWriteAccess`), and a reader who cannot press it is told which
+  // of offline, still being read, signed out, missing Admin, or a document
+  // another system manages (ADR-0030) is why. A lead
+  // adds to the first unit they lead, since nothing at the company's top level
+  // is theirs.
+  const access = useOrgWriteAccess("anywhere");
+  const viewer = useViewer();
+  const scope = useLeadScope();
+  const lead = !holds(viewer.grants, CONFIG_WRITE_GRANT) ? scope.tops[0] : undefined;
+  const addHref = href(
+    ["agents", "edit"],
+    lead ? { unit: lead.key, add: "agent" } : { add: "agent" },
+  );
   // ON A PHONE, Edit org FOLDS INTO "More": the bar keeps the finder and the
-  // one action the chart invites in view, where the three side by side put
-  // Add seat past the window's edge.
+  // one action the bar offers in view, where the three side by side put Add
+  // seat past the window's edge.
   usePageMenu([
     {
       key: "edit-org",
@@ -146,13 +153,13 @@ export function AgentsHeader({
           Edit org
         </ButtonLink>
       </span>
-      {/* NEVER HIDDEN: a reader without the credential sees the control and
+      {/* NEVER HIDDEN: a reader who may not add a seat sees the control and
           the reason, rather than a product with no way to grow its company. */}
-      {held === null ? (
+      {access.can ? (
         <ButtonLink
           size="small"
           variant="primary"
-          href={href(["agents", "edit"], { add: "agent" })}
+          href={addHref}
           leadingIcon={<PlusGlyph size="sm" />}
         >
           Add seat
@@ -162,8 +169,8 @@ export function AgentsHeader({
           size="small"
           variant="primary"
           leadingIcon={<PlusGlyph size="sm" />}
-          disabledReason={held}
-          title={held}
+          disabledReason={access.reason}
+          title={access.reason}
         >
           Add seat
         </Button>

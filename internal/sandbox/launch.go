@@ -8,10 +8,46 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
+
+// controlSubject is a seat's sandbox-control subject from the id a run's row
+// carries, or empty when the row names no routable seat.
+//
+// ONE PARSE, in one place. The id rides these rows as TEXT — the record is a
+// JSON blob on the node estate and the framework that carries it never
+// decodes it — so the three publishers that need this subject would otherwise
+// each have their own idea of what an unparseable value means. Here it means
+// exactly what a nil id means: not routable, say so, and do not publish to a
+// subject named after nothing.
+func controlSubject(agentID string) string {
+	return topics.AgentControl(seatOf(agentID))
+}
+
+// inboxSubject is a seat's inbox from the id a run's row carries, or empty when
+// the row names no routable seat: where an answer by turn is delivered
+// ([AnswerDesk.Deliver]) and a reply the run did not take is handed back
+// ([Coordinator.deliverHandBack]). The same one parse as [controlSubject], so
+// the two subjects a run is reached on can never disagree about whether its
+// row names a seat.
+func inboxSubject(agentID string) string {
+	return topics.AgentInbox(seatOf(agentID))
+}
+
+// seatOf is the one parse both subjects take: a row's text id as a seat id,
+// with an unparseable value read as [uuid.Nil], which every topics builder
+// answers with an empty subject.
+func seatOf(agentID string) uuid.UUID {
+	id, err := uuid.Parse(agentID)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
+}
 
 // TurnRef identifies the turn a detached run belongs to.
 //
@@ -41,8 +77,8 @@ type TurnRef struct {
 	// ConversationKey the durable conversation it belongs to. BOTH travel,
 	// and both are written onto the row: the conversation is what matches a
 	// person's answer back to this run and where the resumed turn reports,
-	// the partition tells two runs parked on one direct message apart. See
-	// [PendingRun].
+	// the partition tells two runs parked on one direct message apart
+	// ([ConversationRef.Best]). See [PendingRun].
 	//
 	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is
 	// where both values come from and the two launch sites copy them across
@@ -75,9 +111,9 @@ type TurnRef struct {
 	// trigger to resolve it from — see [PendingRun.WorkItem].
 	WorkItem *types.WorkItem
 
-	// Requester is the seat whose wake started the turn, "" for none —
-	// what a question addressed to "requester" is put to. See
-	// [PendingRun.Requester].
+	// Requester is the seat whose wake started the turn, by its handle,
+	// "" for none — what a question addressed to
+	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
 }
 
@@ -318,7 +354,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		log.WarnContext(ctx, "sandbox_started_publish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
-	if control := topics.AgentControl(req.Turn.AgentHandle); control != "" {
+	if control := controlSubject(req.Turn.AgentID); control != "" {
 		if err := q.Publish(ctx, control, ev); err != nil {
 			log.WarnContext(ctx, "sandbox_started_control_failed",
 				"turn_id", req.Turn.TurnID, "error", err.Error())

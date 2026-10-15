@@ -79,10 +79,17 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 // one every deferred record concerns, and the honest answer to "is this
 // complete" is then "no".
 //
+// THE CONTAINER IS CANONICALISED HERE ([ContainerKey]), because a record's
+// scope is written under the canonical key and every read's SQL compares
+// against it too: handed `eng` as a caller typed it, the rows were ENG's while
+// the scope named a container no record is ever filed under, so a listing of
+// a space holding a record this node cannot decode claimed to be complete.
+// Canonical at the one place the scope is formed, no caller can pass it raw.
+//
 // A POINT read is not formed here: one page is filed under the space its rows
 // say, which the reference does not — see [pageReadScope].
 func ReadScope(container string) statelog.ScopeSet {
-	if container != "" {
+	if container = ContainerKey(container); container != "" {
 		return statelog.ScopeSet{Paths: []string{
 			ScopeTerm{Kind: TermContainer, ID: container}.Path(),
 		}}
@@ -192,8 +199,14 @@ func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 // GatedAt reports whether a record at p applies nowhere, and the gate that
 // answers for it, by the rule [statelog.Gates] states — which the tracker's
 // reader keeps too, and statelogtest.RunGates certifies for both.
+//
+// The record's body is not read, although it is handed one for its own
+// operation: the deletion gate is keyed on the SUBJECT, by [gatedPage], which
+// the applier asks too — a page-subject record names its page there, and a
+// title-subject record (a create, a rename) is gated on nothing, its apply
+// refusing a head for a purged page instead.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
-	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
+	writer, opID string, p statelog.Position, _ []byte) (statelog.Reason, bool, error) {
 
 	if g == nil || g.db.IsZero() {
 		return "", false, nil

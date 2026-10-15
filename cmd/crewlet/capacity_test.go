@@ -233,6 +233,49 @@ func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 	}
 }
 
+// THE STATUS NAMES WHO EXCLUDED A NODE AND WHO ABANDONED THE WINDOW.
+//
+// An exclusion is the one fact the seal takes on somebody's word, and it
+// printed as "excluded by an operator" whoever it was; an abandonment printed
+// nothing at all, while the window named whoever OPENED it. A window nobody
+// abandoned prints no abandonment. Mutation: print the participant line without
+// its party and the first want goes red.
+func TestMaintenanceStatusNamesWhoExcludedAndWhoAbandoned(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "sealing"
+	op["excluded"] = []string{"node-2"}
+	op["excluded_by"] = map[string]any{"node-2": map[string]any{
+		"by": "dana.sre", "operator_id": "session:0192f00d-0000-7000-8000-0000000000dd"}}
+	op["abandoned_by"] = map[string]any{"by": "ana.admin",
+		"operator_id": "pat:0192f00d-0000-7000-8000-00000000000a"}
+	node.operation = op
+	stdout, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	for _, want := range []string{
+		"excluded by dana.sre (through session:0192f00d-0000-7000-8000-0000000000dd)",
+		"by ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the status never says %q:\n%s", want, stdout)
+		}
+	}
+
+	// AND A WINDOW NOBODY ABANDONED SAYS NOTHING ABOUT AN ABANDONMENT.
+	delete(op, "abandoned_by")
+	stdout, _, err = cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	if strings.Contains(stdout, "ABANDONED") {
+		t.Errorf("a window nobody abandoned printed an abandonment:\n%s", stdout)
+	}
+}
+
 // TestMaintenanceStatusOnAFleetWithNoOperationSaysSo: "no window" and "a
 // window in phase opened" are different facts with different next steps.
 func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
@@ -554,7 +597,7 @@ func TestAnOperatorCallIsGivenTenSeconds(t *testing.T) {
 		t.Errorf("reanchorRequestTimeout = %v, which does not outlast the ordinary %v",
 			reanchorRequestTimeout, nodeRequestTimeout)
 	}
-	client, err := nodeClientFor([]string{"-url", "http://127.0.0.1:1", "-token", "t"},
+	client, err := nodeClientFor(noEnviron, []string{"-url", "http://127.0.0.1:1"},
 		"retention reanchor", io.Discard, nil)
 	if err != nil {
 		t.Fatalf("nodeClientFor: %v", err)

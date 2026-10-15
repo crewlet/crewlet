@@ -40,6 +40,8 @@ import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
+import { pick } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -61,15 +63,14 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: EVERY_TOOL,
 };
-/** A token no seat is bound to: it may read, and every write says why not. */
-const UNBOUND = { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] };
 
 const ORG = {
   name: "Acme",
@@ -211,7 +212,7 @@ function mount(
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ kind: what, params: params ?? {} });
@@ -1202,10 +1203,9 @@ test("the Woke panel spends no accent, and 'asks' is its own mark", async () => 
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
   ],
-  ["an unbound token", UNBOUND, WRITE_REASONS.unbound],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
 ])("%s sees disabled controls with the reason", async (_who, viewer, reason) => {
   mount(<WorkItemPage id="ENG-42" />, { viewer });
@@ -1359,6 +1359,84 @@ test("a reply sent closes the banner that said who it answers", async () => {
     },
   ]);
   expect(screen.queryByText(/^Replying to/)).toBeNull();
+});
+
+// AN ASKED PERSON OPENS THE ITEM AND ANSWERS WITHOUT TRACKER. The engine
+// answers the person an open ask names with the item AND its thread (the
+// detail's `comments`) and takes their answer on it, so the page asks the
+// tracker nothing else — no project, no subtasks, no paged history it would
+// refuse — draws the thread it was handed, and offers the answer where the
+// question was put to them. The CONTROL is an ask put to somebody else on the
+// same page, which offers nothing. Mutation: ask the paged histories whatever
+// the reader holds, or offer the answer only to a Tracker holder, and a line
+// here goes red.
+test("an asked person opens the item and answers without Tracker", async () => {
+  const ask = (id: string, to: string, question: string) => ({
+    id,
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent" as const,
+    body: question,
+    created_at: "2031-04-12T09:00:00Z",
+    ask: to,
+    decision: {
+      question,
+      options: [
+        { id: "eu", label: "EU first" },
+        { id: "us", label: "US first" },
+      ],
+      recommended: "eu",
+      role: "approver" as const,
+    },
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    viewer: {
+      login: "sam.ito",
+      grants: ["knowledge"],
+      handle: "sam",
+      owner: "sam",
+      name: "Sam Ito",
+      kind: "human",
+      acts: ["comment_on_work_item"],
+    },
+    answers: {
+      work_item: detail({
+        comments: [
+          ask("c-1", "sam", "Which region do we ship first?"),
+          ask("c-2", "jane", "Who signs the release off?"),
+        ],
+      }),
+    },
+  });
+  await settle();
+  for (const kind of [
+    "work_project",
+    "work_items",
+    "work_activity",
+    "work_comments",
+    "work_item_turns",
+  ]) {
+    expect(
+      asked.some((a) => a.kind === kind),
+      kind,
+    ).toBe(false);
+  }
+  expect(
+    screen.getByText(/You can read this task and answer what you were asked on it\./),
+  ).toBeTruthy();
+  // THE THREAD IT WAS HANDED, both asks drawn — and the answer offered on the
+  // one put to them alone.
+  const mine = screen.getAllByText("Which region do we ship first?")[0]!.closest("article")!;
+  const theirs = screen.getAllByText("Who signs the release off?")[0]!.closest("article")!;
+  expect(within(theirs).queryByRole("button", { name: "Accept" })).toBeNull();
+  // NO REPLY BOX AND NO COMPOSER: the one write they may make is the answer.
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Comment on ENG-42" })).toBeNull();
+  fireEvent.click(within(mine).getByRole("button", { name: "Accept" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "comment_on_work_item", args: { item: "ENG-42", answers: "c-1", choice: "eu" } },
+  ]);
 });
 
 // AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was
@@ -1530,25 +1608,23 @@ test("an operator reporter is drawn with a person's circle", async () => {
   expect(chip!.querySelector(".crewlet-avatar--human")).not.toBeNull();
 });
 
-// ONE PERSON, ONE NAME ON ONE PAGE. A task a bound token filed names the
-// credential as its reporter; the rail draws the seat the engine names beside
-// it (`reporter_seat`) and every set-by line the seat the history row names
-// (`actor_seat`) — the same resolution the activity column makes, so the rail
-// can no longer say "founder" where the feed says Jane Founder. And the create
-// itself draws no set-by line: the Reporter row already says who filed it.
-test("an operator-authored task names the person in the reporter and set-by lines", async () => {
+// ONE PERSON, ONE NAME ON ONE PAGE. A person the directory binds to a seat
+// files AS that seat (`iam.ActorFor`): the reporter and every set-by line name
+// the seat the record names, and the credential they wrote through rides
+// beside it rather than standing in for them. And the create itself draws no
+// set-by line: the Reporter row already says who filed it.
+test("a task a bound person filed names them in the reporter and set-by lines", async () => {
   const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
     answers: {
       work_item: detail({
-        task: task({ reporter: "founder", priority: "high", assignee: "ada" }),
-        reporter_seat: "jane",
+        task: task({ reporter: "jane", priority: "high", assignee: "ada" }),
         history: [
           {
             id: "h-2",
             kind: "fields",
-            actor: "founder",
-            actor_kind: "operator",
-            actor_seat: "jane",
+            actor: "jane",
+            actor_kind: "human",
+            operator_id: "session:s-1",
             at: "2031-04-16T10:00:00Z",
             log_seq: 2,
             fields: { priority: { from: "normal", to: "high" } },
@@ -1556,12 +1632,12 @@ test("an operator-authored task names the person in the reporter and set-by line
           {
             id: "h-1",
             kind: "created",
-            actor: "founder",
-            actor_kind: "operator",
-            actor_seat: "jane",
+            actor: "jane",
+            actor_kind: "human",
+            operator_id: "session:s-1",
             at: "2031-04-16T09:00:00Z",
             log_seq: 1,
-            fields: { assignee: { from: "", to: "ada" }, reporter: { from: "", to: "founder" } },
+            fields: { assignee: { from: "", to: "ada" }, reporter: { from: "", to: "jane" } },
           },
         ],
       }),
@@ -1570,7 +1646,7 @@ test("an operator-authored task names the person in the reporter and set-by line
   await settle();
   const reporter = rowValue("Reporter");
   expect(reporter.textContent).toContain("Jane Founder");
-  expect(reporter.textContent).not.toContain("founder");
+  expect(reporter.textContent).not.toContain("session:s-1");
   const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("set by Jane Founder");
@@ -1661,4 +1737,155 @@ test("a task removed alongside its parent names the parent", () => {
     />,
   );
   expect(screen.getByText("ENG-1")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// A task whose key another task claimed first
+// ---------------------------------------------------------------------------
+
+/**
+ * The duplicate of a pair holding one key, as its own page reads it: opened at
+ * its id, flagged `key_collision` on the answer, and drawn under the key.
+ */
+const duplicate = () =>
+  detail({
+    task: task({
+      id: DUPLICATE,
+      key: SHARED_KEY,
+      title: DUPLICATE_TITLE,
+      assignee: "ada",
+      checklists: [
+        {
+          id: "l-1",
+          name: "Done when",
+          items: [{ id: "i-2", name: "An integration test covers it" }],
+        },
+      ],
+    }),
+    key_collision: true,
+  });
+
+// A DUPLICATE'S PAGE CHANGES THE DUPLICATE. Two tasks hold `ENG-7`, and the
+// engine opens that key on the one that claimed it first. The page is opened
+// at the duplicate's id and draws the duplicate, but every write on it went by
+// the key: a tick, a watch, a comment and a hand-off landed on the claimant, a
+// conditional edit was refused against the claimant's version, and the turns
+// it listed were the claimant's. The KEY is still what every sentence says.
+test("a duplicate's page writes and reads by its id, and names it by its key", async () => {
+  mount(<WorkItemPage id={DUPLICATE} />, { answers: { work_item: duplicate() } });
+  await settle();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "An integration test covers it" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`Status of ${SHARED_KEY}`) }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "In review" })
+      .catch(() => screen.findByRole("menuitem", { name: "In review" })),
+  );
+  await settle();
+  fireEvent.change(screen.getByRole("combobox", { name: `Comment on ${SHARED_KEY}` }), {
+    target: { value: "Seen on the duplicate." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain(`Assign ${SHARED_KEY}`);
+  pick(within(dialog).getByLabelText("Assignee"), /^SWE/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Assign" }));
+  await settle();
+
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: DUPLICATE, checklist: { op: "set_done", item: "i-2", done: true } },
+    },
+    { tool: "update_work_item", args: { item: DUPLICATE, watch: true } },
+    { tool: "update_work_item", args: { item: DUPLICATE, if_match: 7, status: "in_review" } },
+    { tool: "comment_on_work_item", args: { item: DUPLICATE, body: "Seen on the duplicate." } },
+    { tool: "update_work_item", args: { item: DUPLICATE, assignee: "swe", if_match: 7 } },
+  ]);
+  // AND ITS TURNS ARE ITS OWN, asked by the id the way its history and its
+  // comments are.
+  const turns = asked.filter((q) => q.kind === "work_item_turns").map((q) => q.params.id);
+  expect(turns.length).toBeGreaterThan(0);
+  expect(new Set(turns)).toEqual(new Set([DUPLICATE]));
+});
+
+// A LOST RACE ON THE DUPLICATE NAMES WHO CHANGED THE DUPLICATE. The note asks
+// the task's newest history entry; asked by the key, it named whoever last
+// changed the claimant.
+test("a race lost on a duplicate's page reads the duplicate's history", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(JSON.stringify({ error: "stale_version", tool, detail: "" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  mount(<WorkItemPage id={DUPLICATE} />, {
+    answers: {
+      work_item: duplicate(),
+      work_activity: async (params: Record<string, unknown>) => ({
+        records:
+          params.task === DUPLICATE
+            ? [{ id: "h-9", kind: "status_changed", actor: "ada", actor_kind: "agent" }]
+            : [{ id: "h-1", kind: "status_changed", actor: "swe", actor_kind: "agent" }],
+        complete: true,
+      }),
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`Status of ${SHARED_KEY}`) }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "Done" })
+      .catch(() => screen.findByRole("menuitem", { name: "Done" })),
+  );
+  await settle();
+  expect(posted.map((p) => p.args.item)).toEqual([DUPLICATE]);
+  expect(
+    await screen.findByText(
+      `${SHARED_KEY} was changed by Ada Okonkwo since you opened it. Look again, then retry.`,
+    ),
+  ).toBeTruthy();
+  expect(asked).toContainEqual({
+    kind: "work_activity",
+    params: expect.objectContaining({ task: DUPLICATE, limit: 1 }),
+  });
+  expect(asked.filter((q) => q.kind === "work_activity").map((q) => q.params.task)).not.toContain(
+    SHARED_KEY,
+  );
+});
+
+// LINKING ONE OF A PAIR LINKS THAT ONE. A search finds both tasks under one
+// key; keyed on the key they were one radio, and the duplicate was linked by
+// a key that names the claimant.
+test("linking a task under a shared key links the one chosen", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_search: { hits: collidingHits(), available: true } },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Link a task" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Find a task"), { target: { value: "ENG-7" } });
+  await settle();
+  const radios = within(dialog).getAllByRole("radio");
+  expect(radios).toHaveLength(2);
+  fireEvent.click(radios[1]!);
+  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(radios[0]!.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", linked: { add: [DUPLICATE] } } },
+  ]);
 });

@@ -111,7 +111,7 @@ func TestTheActiveCountIsExactAcrossMoveRemoveRestoreAndPurge(t *testing.T) {
 	check("removing it", tracker.TaskCounts{Todo: 1, Done: 1}, tracker.TaskCounts{})
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "a", "OPS",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("restore a: %v", err)
 	}
 	r.drain()
@@ -200,8 +200,8 @@ func TestATargetDateIsTheLeadsOrAPersons(t *testing.T) {
 		authority tracker.ProjectAuthority
 		target    string
 	}{
-		{"the lead", tracker.ProjectAuthority{Lead: true}, "2026-12-18"},
-		{"a person", tracker.ProjectAuthority{Operator: true}, "2027-01-29"},
+		{"the lead", tracker.ProjectAuthority{Policy: true}, "2026-12-18"},
+		{"an admin", tracker.ProjectAuthority{Policy: true, Archive: true}, "2027-01-29"},
 	} {
 		if _, err := r.writer.WriteProject(t.Context(), "op-"+c.target, "ENG",
 			tracker.ProjectEdit{TargetDate: day(c.target)}, c.authority); err != nil {
@@ -216,7 +216,7 @@ func TestATargetDateIsTheLeadsOrAPersons(t *testing.T) {
 	// THE EMPTY STRING CLEARS IT — "no target" is a setting.
 	if _, err := r.writer.WriteProject(t.Context(), "op-clear", "ENG",
 		tracker.ProjectEdit{TargetDate: day("")},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 		t.Fatalf("clear the target: %v", err)
 	}
 	r.drain()
@@ -238,7 +238,7 @@ func TestATargetDateIsCoercedOnTheCompanysClock(t *testing.T) {
 	r.writer.Zone = func() *time.Location { return tokyo }
 	instant := "2026-12-18T20:00:00Z" // the morning of the 19th in Tokyo
 	result, err := r.writer.WriteProject(t.Context(), "op-instant", "ENG",
-		tracker.ProjectEdit{TargetDate: &instant}, tracker.ProjectAuthority{Lead: true})
+		tracker.ProjectEdit{TargetDate: &instant}, tracker.ProjectAuthority{Policy: true})
 	if err != nil {
 		t.Fatalf("an instant target: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestATargetDateIsCoercedOnTheCompanysClock(t *testing.T) {
 
 	nonsense := "end of the quarter"
 	_, err = r.writer.WriteProject(t.Context(), "op-nonsense", "ENG",
-		tracker.ProjectEdit{TargetDate: &nonsense}, tracker.ProjectAuthority{Lead: true})
+		tracker.ProjectEdit{TargetDate: &nonsense}, tracker.ProjectAuthority{Policy: true})
 	if !errors.Is(err, tracker.ErrInvalid) || !strings.Contains(err.Error(), nonsense) {
 		t.Errorf("a target that is no date answered %v, want an invalid refusal "+
 			"quoting it", err)
@@ -270,11 +270,11 @@ func TestAChartApplyCarriesTheTargetThrough(t *testing.T) {
 	r := newRoundTrip(t)
 	target := "2026-12-18"
 	if _, err := r.writer.WriteProject(t.Context(), "op-target", "ENG",
-		tracker.ProjectEdit{TargetDate: &target}, tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectEdit{TargetDate: &target}, tracker.ProjectAuthority{Policy: true}); err != nil {
 		t.Fatalf("set the target: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{{
 		Key: "ENG", Name: "Engineering, renamed",
 	}}); err != nil {
 		t.Fatalf("apply a chart: %v", err)

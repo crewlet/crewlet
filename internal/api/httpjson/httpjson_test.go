@@ -3,13 +3,23 @@ package httpjson_test
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A JSON SURFACE ANSWERS AS JSON, headers included.
@@ -117,14 +127,19 @@ func TestABodyWithinTheCapIsReadWhole(t *testing.T) {
 	}
 }
 
-// FailWith carries a route's extras, and `error` always survives them: a
-// caller that branches on it must never find it missing because a route's
-// extra map happened to use the same key.
+// FailWith carries a route's detail, and the two RESERVED KEYS always survive
+// it: a caller that branches on `error` must never find it missing because a
+// route's detail happened to use the same key, and a person must never be
+// shown a sentence a route wrote over the vocabulary's own.
 func TestExtraFieldsNeverDisplaceTheErrorCode(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	httpjson.FailWith(rec, http.StatusConflict, httpjson.CodeInvalidBody,
-		map[string]string{"field": "roles[0].llm", "error": "hijacked"})
+		map[string]string{
+			"field":   "roles[0].llm",
+			"error":   "hijacked",
+			"message": "whatever this route felt like saying",
+		})
 
 	var body map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -133,8 +148,79 @@ func TestExtraFieldsNeverDisplaceTheErrorCode(t *testing.T) {
 	if body["error"] != string(httpjson.CodeInvalidBody) {
 		t.Errorf("error = %q, want the code rather than the extra", body["error"])
 	}
+	if body["message"] != httpjson.CodeInvalidBody.Message() {
+		t.Errorf("message = %q, want the code's own sentence: the copy a person "+
+			"reads belongs to the vocabulary, not to the call site", body["message"])
+	}
 	if body["field"] != "roles[0].llm" {
-		t.Errorf("field = %q, want the route's extra to survive", body["field"])
+		t.Errorf("field = %q, want the route's detail to survive", body["field"])
+	}
+}
+
+// THE DETAIL IS STRUCTURED JSON, not a sentence and not a bag of strings.
+//
+// It is the half a client BRANCHES on — `retry_after_ms` is waited on,
+// `missing_grant` is rendered beside the permission it names, `problems` is
+// put field by field beside the inputs — and every one of those needs the
+// value's own type. The old shape was flat text: a number arrived as "4000"
+// for the client to parse back, and anything with structure arrived as prose
+// for it to read.
+//
+// THE CONTROL IS THE SECOND HALF: the same fact through the text form comes
+// back as a string. Route [httpjson.FailWithFields] through a
+// map[string]string — which is what "detail is a flat string" meant — and the
+// first half of this test goes red.
+func TestDetailSurvivesAsStructuredJson(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	httpjson.FailWithFields(rec, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+		httpjson.Detail{
+			"retry_after_ms": 4000,
+			"missing_grant":  "secrets.reveal",
+			"problems": []map[string]any{
+				{"path": "roles[0].llm", "segments": []any{"roles", 0, "llm"}},
+			},
+		})
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body)
+	}
+	if body["error"] != string(httpjson.CodeUnavailable) ||
+		body["message"] != httpjson.CodeUnavailable.Message() {
+		t.Errorf("the envelope lost its own two keys: %v", body)
+	}
+	if got, isNumber := body["retry_after_ms"].(float64); !isNumber || got != 4000 {
+		t.Errorf("retry_after_ms = %#v, want the number 4000: a client that has "+
+			"to parse it out of a string is reading prose", body["retry_after_ms"])
+	}
+	if body["missing_grant"] != "secrets.reveal" {
+		t.Errorf("missing_grant = %#v", body["missing_grant"])
+	}
+	problems, ok := body["problems"].([]any)
+	if !ok || len(problems) != 1 {
+		t.Fatalf("problems = %#v, want the list as it was given", body["problems"])
+	}
+	first, _ := problems[0].(map[string]any)
+	segments, _ := first["segments"].([]any)
+	if first["path"] != "roles[0].llm" || len(segments) != 3 || segments[1] != float64(0) {
+		t.Errorf("problems[0] = %#v, want its shape intact", first)
+	}
+
+	// The control. The text form is still there for the detail that
+	// genuinely is text — a field path, a hint — and this is what it does
+	// to a number, which is the shape this test exists to keep out of the
+	// structured one.
+	flat := httptest.NewRecorder()
+	httpjson.FailWith(flat, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+		map[string]string{"retry_after_ms": "4000"})
+	var text map[string]any
+	if err := json.Unmarshal(flat.Body.Bytes(), &text); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if _, isNumber := text["retry_after_ms"].(float64); isNumber {
+		t.Error("the text form produced a number, so this control proves nothing " +
+			"about the structured one")
 	}
 }
 
@@ -174,23 +260,119 @@ func TestStructuredFieldsKeepTheirShapeAndNeverDisplaceTheErrorCode(t *testing.T
 	}
 }
 
+// declared is every `Code` constant this package's source declares, read off
+// the source itself.
+//
+// IT WAS A HAND-KEPT LIST, which said a count below would catch a constant
+// missing from it. There was no count, and the list held twenty of the
+// thirty-four codes: every identity code, the CSRF refusal, `forbidden`,
+// `stale` and `refused` were declared, rendered verbatim by the dashboard, and
+// read by no copy review at all. Walking the declarations is what makes "every
+// code" mean every code.
+func declared(t *testing.T) []httpjson.Code {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "httpjson.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse httpjson.go: %v", err)
+	}
+	var out []httpjson.Code
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok || value.Type == nil {
+				continue
+			}
+			if ident, ok := value.Type.(*ast.Ident); !ok || ident.Name != "Code" {
+				continue
+			}
+			for _, v := range value.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("a Code constant is not a string literal: %#v", v)
+				}
+				raw, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", lit.Value, err)
+				}
+				out = append(out, httpjson.Code(raw))
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the walk found no Code constants, so every case over it certifies nothing")
+	}
+	return out
+}
+
+// EVERY DECLARED CODE IS ON THE TABLE, AND EVERY CODE ON THE TABLE IS DECLARED.
+//
+// Both directions, because each fails silently: a constant missing from the
+// table answers with no sentence, and a table entry no constant names is a
+// code no route can spell except by writing the string out.
+func TestTheDeclarationsAndTheTableAgree(t *testing.T) {
+	t.Parallel()
+	names := declared(t)
+	slices.Sort(names)
+	if table := httpjson.Codes(); !slices.Equal(names, table) {
+		t.Errorf("declared %v\ntable    %v", names, table)
+	}
+}
+
 // Every declared code is Valid, and an invented one is not — the guard that
 // keeps a fifth spelling of "too large" from appearing.
 func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 	t.Parallel()
-	for _, code := range []httpjson.Code{
-		httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
-		httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
-		httpjson.CodeInvalidQuery, httpjson.CodeInternalError,
-		httpjson.CodeDraining, httpjson.CodeNoRoute,
-		httpjson.CodeMethodNotAllowed, httpjson.CodeInvalidToken,
-	} {
+	for _, code := range declared(t) {
 		if !code.Valid() {
 			t.Errorf("%q is declared but not Valid", code)
 		}
 	}
 	if httpjson.Code("value_too_large").Valid() {
 		t.Error("a spelling this package does not define reported Valid")
+	}
+	if httpjson.Code("").Valid() {
+		t.Error("the zero Code reported Valid, so a refusal that named no code " +
+			"at all would read as a member of the vocabulary")
+	}
+}
+
+// EVERY CODE CARRIES A SENTENCE A PERSON READS, because the dashboard renders
+// it verbatim: whatever is written here is product copy, shown to an operator
+// in a toast or beside a form.
+//
+// So this is shaped like copy review rather than like a type check. A message
+// that reads as a log line — a bare code, a snake_case token, a fragment with
+// no full stop — fails, because the alternative is that one of them reaches a
+// screen and nobody notices until a person is confused by it.
+func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
+	t.Parallel()
+	for _, code := range declared(t) {
+		message := code.Message()
+		switch {
+		case message == "":
+			t.Errorf("%q has no message: a refusal a person is shown nothing for",
+				code)
+			continue
+		case !strings.Contains(message, " "):
+			t.Errorf("%q says %q, which is a token rather than a sentence",
+				code, message)
+		case !strings.HasSuffix(message, "."):
+			t.Errorf("%q says %q, which is a fragment: it ends up mid-sentence "+
+				"on a screen", code, message)
+		case strings.Contains(message, "_"):
+			t.Errorf("%q says %q — a snake_case token in the copy means a code "+
+				"or a field name leaked into the half a person reads", code, message)
+		case message[0] < 'A' || message[0] > 'Z':
+			t.Errorf("%q says %q, which does not begin as a sentence", code, message)
+		}
+	}
+	if httpjson.Code("not_on_the_table").Message() != "" {
+		t.Error("a code outside the vocabulary answered a message, so Valid and " +
+			"Message are reading two different tables")
 	}
 }
 
@@ -277,5 +459,249 @@ func TestAWriterWithNoDeadlineStillReads(t *testing.T) {
 	}
 	if string(got) != `{"a":1}` {
 		t.Errorf("read %q, want the whole body", got)
+	}
+}
+
+// A KNOWN CALLER REFUSED IS TOLD ABOUT THEIR ACCESS, NOT A TOKEN.
+//
+// `unauthorized` said "that query needs an operator token", which was true
+// while an operator token was the only credential and authority one yes-or-no.
+// It is the sentence the dashboard renders verbatim to a person signed in with
+// a session and refused one permission — who has no token to find, and whose
+// credential is fine. The remedy the sentence names is the one the code means:
+// access, and EVERY PERMISSION THIS BUILD KNOWS by name, so a person reading it
+// knows what to ask an admin for — a permission added to the vocabulary and
+// left out of the sentence fails here.
+func TestAKnownCallerIsToldAboutTheGrantNotAToken(t *testing.T) {
+	t.Parallel()
+	message := httpjson.CodeUnauthorized.Message()
+	if !strings.Contains(message, "access") || strings.Contains(message, "token") {
+		t.Errorf("unauthorized says %q: a caller this node knows is refused "+
+			"for their access, and a sentence about a token sends them to "+
+			"replace a credential that works", message)
+	}
+	for _, g := range iam.AllGrants {
+		if !strings.Contains(strings.ToLower(message), string(g)) {
+			t.Errorf("unauthorized says %q, which never names %s: a person "+
+				"refused cannot tell what to ask an admin for", message, g)
+		}
+	}
+}
+
+// A 503 CARRYING A DETAIL STILL CARRIES ITS RETRY-AFTER.
+//
+// The detail-carrying form exists for the write whose outcome could not be
+// established: the answer has to name the operation id a retry must carry,
+// AND say when to come back. Two writers would be two chances for one of them
+// to drop the header. Mutation: set the header only in Unavailable and the
+// first assertion fails.
+func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	httpjson.UnavailableWith(rec, httpjson.CodeUnavailable, 2,
+		httpjson.Detail{"op_id": "close:0192", "error": "not-the-code"})
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "2" {
+		t.Fatalf("answered %d with Retry-After %q, want 503 carrying 2",
+			rec.Code, rec.Header().Get("Retry-After"))
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body["op_id"] != "close:0192" || body["error"] != string(httpjson.CodeUnavailable) {
+		t.Errorf("body = %v, want the op id beside the envelope's own code", body)
+	}
+
+	// THE CONTROL: the bare form answers the same header with no detail.
+	bare := httptest.NewRecorder()
+	httpjson.Unavailable(bare, httpjson.CodeIdentityUnavailable, 2)
+	if bare.Code != http.StatusServiceUnavailable || bare.Header().Get("Retry-After") != "2" {
+		t.Errorf("the bare form answered %d with Retry-After %q",
+			bare.Code, bare.Header().Get("Retry-After"))
+	}
+}
+
+// A WRITE THAT MAY HAVE LANDED SAYS SO AS A FIELD, NOT A SENTENCE.
+//
+// An unknown outcome and a refusal are both 503s and send a client opposite
+// ways — the first is retried under the same operation, the second wrote
+// nothing — and each surface wrote the unknown for itself: `/iam` said it
+// only in prose, so a client that branched on `outcome` (the CLI's
+// purge does) read a write that may have destroyed an item as one that wrote
+// nothing. The three keys are the writer's and win over a route's detail; an
+// unvouched unknown carries no Retry-After whatever the caller passed, since
+// the same request on this node answers the same way until the change reaches
+// it.
+//
+// Mutation: drop the `outcome` key, let the detail's `op_id` or `outcome`
+// win, or keep the caller's Retry-After on an unvouched one, and a case goes
+// red.
+func TestAnUnknownOutcomeSaysSoAsAField(t *testing.T) {
+	t.Parallel()
+	if httpjson.OutcomeUnknown != string(statelog.OutcomeUnknown) {
+		t.Fatalf("httpjson's unknown is %q and the state log's is %q — a client "+
+			"branching on one never sees the other", httpjson.OutcomeUnknown,
+			statelog.OutcomeUnknown)
+	}
+	for _, c := range []struct {
+		name      string
+		unvouched bool
+		retry     string
+	}{
+		{"a lost acknowledgement", false, "2"},
+		{"an unvouched unknown", true, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			httpjson.UnknownOutcome(rec, 2, "0192-op", c.unvouched, httpjson.Detail{
+				"outcome": "applied", "op_id": "not-the-key", "unvouched": true,
+				"item": "ENG-1", "error": "not-the-code",
+			})
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("answered %d, want 503", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != c.retry {
+				t.Errorf("Retry-After is %q, want %q", got, c.retry)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("body is not JSON: %v", err)
+			}
+			if body["outcome"] != httpjson.OutcomeUnknown || body["op_id"] != "0192-op" ||
+				body["error"] != string(httpjson.CodeUnavailable) || body["item"] != "ENG-1" {
+				t.Errorf("body = %v, want outcome unknown and the key over the "+
+					"route's own, beside the route's other detail", body)
+			}
+			if _, said := body["unvouched"]; said != c.unvouched {
+				t.Errorf("unvouched present = %v, want %v: body %v", said,
+					c.unvouched, body)
+			}
+		})
+	}
+}
+
+// A 429 ALWAYS SAYS WHEN TO COME BACK, rounded up and never below a second.
+//
+// A throttled answer with no Retry-After is refused and not told when it may
+// try again, so a client retries at once and is refused again, and a person at
+// a form reads a lockout where there is a wait of seconds. Rounded to the
+// nearest second, a 6.2s wait went out as 6 and the client came back before
+// the curve could admit it; and zero is "do not retry", which a curve never
+// means.
+func TestAThrottledAnswerAlwaysSaysWhenToComeBack(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		wait time.Duration
+		want string
+	}{
+		{0, "1"},
+		{200 * time.Millisecond, "1"},
+		{time.Second, "1"},
+		{6200 * time.Millisecond, "7"},
+		{30 * time.Second, "30"},
+	} {
+		rec := httptest.NewRecorder()
+		httpjson.Throttled(rec, tc.wait)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Errorf("a %s wait answered %d, want 429", tc.wait, rec.Code)
+		}
+		if got := rec.Header().Get("Retry-After"); got != tc.want {
+			t.Errorf("a %s wait carried Retry-After %q, want %q", tc.wait, got, tc.want)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil ||
+			body["error"] != string(httpjson.CodeThrottled) {
+			t.Errorf("a %s wait answered %s (%v), want the throttled envelope",
+				tc.wait, rec.Body, err)
+		}
+	}
+}
+
+// EVERY 429 ON THE API IS WRITTEN BY [httpjson.Throttled], because nothing
+// else spells one.
+//
+// The Retry-After above is only as good as the number of writers that carry
+// it, and the sign-in surface answered `throttled` with no header at all while
+// its one writer was a Fail anybody could call. A behavioural case per route
+// says nothing about the next route, so the gate is over the source: outside
+// this package, no file under internal/api names the status or the code.
+func TestNothingButThrottledAnswersA429(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	checked := 0
+	err := sourcetree.Walk(filepath.Join(sourcetree.Root(t), "internal", "api"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") ||
+			filepath.Base(filepath.Dir(path)) == "httpjson" {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		checked++
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.SelectorExpr:
+				pkg, ok := n.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				if (pkg.Name == "http" && n.Sel.Name == "StatusTooManyRequests") ||
+					(pkg.Name == "httpjson" && n.Sel.Name == "CodeThrottled") {
+					t.Errorf("%s spells a 429 itself; answer it with "+
+						"httpjson.Throttled, which carries the Retry-After",
+						fset.Position(n.Pos()))
+				}
+			case *ast.BasicLit:
+				if n.Kind == token.INT && n.Value == "429" {
+					t.Errorf("%s spells a 429 as a literal", fset.Position(n.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THE CONTROL: a walk that found nothing would pass every rule.
+	if checked < 50 {
+		t.Fatalf("checked %d source files, which is not internal/api", checked)
+	}
+}
+
+// A CODE MORE THAN ONE SURFACE ANSWERS WITH SPEAKS FOR ALL OF THEM.
+//
+// `no_external_url` is answered by the setup surface's writing pass and by
+// the directory's invitation route, and its message is the one sentence a
+// person is shown. It was worded for the pass, so somebody sending an
+// invitation from a deployment with no address was told that no webhook could
+// be registered and to run the pass again. What each surface needed the
+// address for is its own `detail`; the message names neither gesture.
+func TestTheNoExternalURLMessageNamesNoOneSurface(t *testing.T) {
+	t.Parallel()
+	message := strings.ToLower(httpjson.CodeNoExternalURL.Message())
+	if message == "" {
+		t.Fatal("no_external_url has no message, so this case asserts nothing")
+	}
+	for _, surface := range []string{"webhook", "pass", "invitation", "invite"} {
+		if strings.Contains(message, surface) {
+			t.Errorf("the no_external_url message %q speaks of %q, and the "+
+				"code is answered by more than that one surface", message, surface)
+		}
+	}
+	if !strings.Contains(message, "external url") {
+		t.Errorf("the no_external_url message %q does not name the setting "+
+			"that fixes it", message)
 	}
 }

@@ -5,8 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
+
+// tenureSeat is the seat these cases hold, by its id as a seat lease names it.
+var tenureSeat = coord.SeatResource(uuid.MustParse("3d0f6a52-1c7e-5b94-a8e2-6f4b9c1d7e20"))
 
 // TestTheTenureStartIsTheWinningWritesOwnTimestamp pins WHERE the stamp comes
 // from: the store's timestamp on the record the claim won, persisted in the
@@ -16,7 +21,7 @@ func TestTheTenureStartIsTheWinningWritesOwnTimestamp(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, embeddedNATS(t), time.Minute)
-	seat := coord.SeatResource("ceo")
+	seat := tenureSeat
 
 	lease, _, err := s.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "new:1", TTL: time.Minute})
 	if err != nil || lease == nil {
@@ -25,7 +30,9 @@ func TestTheTenureStartIsTheWinningWritesOwnTimestamp(t *testing.T) {
 	if got := rawLease(ctx, t, s.leases, seat).AcquiredAt; !got.Equal(lease.AcquiredAt) {
 		t.Fatalf("the stored record says %v, the claim answered %v", got, lease.AcquiredAt)
 	}
-	kve, err := s.leases.kv.Get(ctx, encodeResource(seat))
+	// The LEADER's copy, as every read in this package is: a direct get
+	// may be a replica's, behind the commit it is meant to read.
+	kve, err := s.leases.read.last(ctx, encodeResource(seat))
 	if err != nil {
 		t.Fatalf("read the committed record: %v", err)
 	}

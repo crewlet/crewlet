@@ -1323,10 +1323,8 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.Count != 2 || rec.AgentHandle != "ceo" {
 		t.Errorf("record = %+v", rec)
 	}
-	// THE PARTITION, on the field that says so. The record's subject is the
-	// batch that merged, and it rode `conversation_key` until that made the
-	// promoted tag of that name mean the identity on every other event and
-	// the batch on this one.
+	// THE PARTITION, on the field that says so: the record's subject is the
+	// batch that merged, and `conversation_key` is the identity's tag.
 	if rec.PartitionKey != "slack:C1/T1" {
 		t.Errorf("partition = %q", rec.PartitionKey)
 	}
@@ -2804,7 +2802,8 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 func answerGiven(turnID string) *events.Event {
 	return events.New(types.SandboxAnswerGiven{
 		TurnID: turnID, AgentHandle: "ceo", Answer: "use main",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder", LaunchID: "launch-" + turnID,
+		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
+		LaunchID: "launch-" + turnID,
 	}, events.TraceContext{})
 }
 

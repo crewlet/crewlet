@@ -9,17 +9,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/api/setupapi"
-	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// managedSetup is a node whose Tier A names `operator` as the company
-// document's only writer, with the fixture company imported by that writer.
+// tierA is the principal the guard composes for the Tier A token id: its own
+// credential, under its whole login, holding every grant and fresh for a
+// step-up as every Tier A bearer is.
+func tierA(id string) iam.Principal {
+	return iam.Principal{
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte(id)), Login: iam.TokenLogin(id),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: iam.AllGrants,
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+}
+
+// managedSetup is a node whose Tier A names the token `operator` as the
+// company document's only writer, with the fixture company imported by that
+// writer.
 func managedSetup(t *testing.T) *surface {
 	t.Helper()
-	s := newManagedSurface(t, nil, "operator")
-	res := s.doAs(t, "operator", http.MethodPut, "/config", companyDoc,
+	s := newManagedSurface(t, nil, fixtureWebhookBase, "operator")
+	res := s.doAs(t, tierA("operator"), http.MethodPut, "/config", companyDoc,
 		map[string]string{"X-Summary": "first import"})
 	if res.Code != http.StatusCreated {
 		t.Fatalf("import = %d: %s", res.Code, res.Body)
@@ -52,30 +66,30 @@ func TestAManagedDocumentRefusesAConnectBeforeSealing(t *testing.T) {
 	t.Parallel()
 	s := managedSetup(t)
 
-	res := s.doAs(t, "alice", http.MethodPost, "/setup/integrations/datadog/inputs", connectDatadog, nil)
+	res := s.doAs(t, tierA("alice"), http.MethodPost, "/setup/integrations/datadog/inputs", connectDatadog, nil)
 	refusedAsManaged(t, res, res.Body.String())
 	if _, sealed := s.vault.get("DATADOG_WEBHOOK_TOKEN"); sealed {
 		t.Error("a refused connect sealed a credential nothing points at")
 	}
 
-	res = s.doAs(t, "operator", http.MethodPost, "/setup/integrations/datadog/inputs", connectDatadog, nil)
+	res = s.doAs(t, tierA("operator"), http.MethodPost, "/setup/integrations/datadog/inputs", connectDatadog, nil)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("the writer's connect = %d: %s", res.Code, res.Body)
 	}
 }
 
-// AND A ROTATION IS OPEN TO EVERY CREDENTIAL: the pointer is already in the
-// document, so the submission seals the new value and reloads the revision
-// unchanged — the break-glass a person keeps when a key leaks and the system
-// that manages the document cannot know.
+// AND A ROTATION IS OPEN TO EVERY CREDENTIAL the authority table admits: the
+// pointer is already in the document, so the submission seals the new value
+// and reloads the revision unchanged — the break-glass a person keeps when a
+// key leaks and the system that manages the document cannot know.
 func TestARotationOnAManagedDocumentIsOpen(t *testing.T) {
 	t.Parallel()
 	s := managedSetup(t)
-	if res := s.doAs(t, "operator", http.MethodPost, "/setup/integrations/datadog/inputs",
+	if res := s.doAs(t, tierA("operator"), http.MethodPost, "/setup/integrations/datadog/inputs",
 		connectDatadog, nil); res.Code != http.StatusCreated {
 		t.Fatalf("the writer's connect = %d: %s", res.Code, res.Body)
 	}
-	res := s.doAs(t, "alice", http.MethodPost, "/setup/integrations/datadog/inputs",
+	res := s.doAs(t, tierA("alice"), http.MethodPost, "/setup/integrations/datadog/inputs",
 		`{"values": {"api_key": "dd-api-rotated"}}`, nil)
 	if res.Code/100 != 2 {
 		t.Fatalf("alice's rotation = %d: %s", res.Code, res.Body)
@@ -93,18 +107,18 @@ func TestARotationOnAManagedDocumentIsOpen(t *testing.T) {
 func TestAManagedDocumentRefusesADisconnect(t *testing.T) {
 	t.Parallel()
 	s := managedSetup(t)
-	if res := s.doAs(t, "operator", http.MethodPost, "/setup/integrations/datadog/inputs",
+	if res := s.doAs(t, tierA("operator"), http.MethodPost, "/setup/integrations/datadog/inputs",
 		connectDatadog, nil); res.Code != http.StatusCreated {
 		t.Fatalf("the writer's connect = %d: %s", res.Code, res.Body)
 	}
 	for _, body := range []string{``, `{"force": true}`} {
-		res := s.doAs(t, "alice", http.MethodDelete, "/setup/integrations/datadog", body, nil)
+		res := s.doAs(t, tierA("alice"), http.MethodDelete, "/setup/integrations/datadog", body, nil)
 		refusedAsManaged(t, res, res.Body.String())
 	}
 	if rows, err := s.status.LoadIntegrations(t.Context()); err != nil || len(rows) != 0 {
 		t.Errorf("a refused disconnect recorded a status row: %v, %v", rows, err)
 	}
-	res := s.doAs(t, "operator", http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`, nil)
+	res := s.doAs(t, tierA("operator"), http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("the writer's forced disconnect = %d: %s", res.Code, res.Body)
 	}
@@ -116,12 +130,12 @@ func TestAManagedDocumentRefusesADisconnect(t *testing.T) {
 // begun by a credential this node does not let write.
 func TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked(t *testing.T) {
 	t.Parallel()
-	s := newManagedSurface(t, nil, "operator")
-	if res := s.doAs(t, "operator", http.MethodPut, "/config", githubAppsDoc,
+	s := newManagedSurface(t, nil, fixtureWebhookBase, "operator")
+	if res := s.doAs(t, tierA("operator"), http.MethodPut, "/config", githubAppsDoc,
 		map[string]string{"X-Summary": "a company mid-rollout"}); res.Code != http.StatusCreated {
 		t.Fatalf("import = %d: %s", res.Code, res.Body)
 	}
-	res := s.doAs(t, "alice", http.MethodPost, "/setup/integrations/github/app", `{"seat":"sre-lead"}`, nil)
+	res := s.doAs(t, tierA("alice"), http.MethodPost, "/setup/integrations/github/app", `{"seat":"sre-lead"}`, nil)
 	refusedAsManaged(t, res, res.Body.String())
 	if strings.Contains(res.Body.String(), `"state"`) {
 		t.Error("a refused begin minted a state")
@@ -133,18 +147,20 @@ func TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked(t *testing.T) {
 		http.Error(w, "this fake answers nothing", http.StatusTeapot)
 	}))
 	t.Cleanup(server.Close)
-	if res := s.doAs(t, "operator", http.MethodPatch, "/config",
+	if res := s.doAs(t, tierA("operator"), http.MethodPatch, "/config",
 		`{"integrations":{"github":{"enabled":true,"url":"`+server.URL+`","webhook_secret":"org",`+
 			`"provisioning":{"org":"acme"}}}}`,
 		map[string]string{"Content-Type": "application/merge-patch+json", "X-Summary": "github"},
 	); res.Code != http.StatusCreated {
 		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
 	}
-	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"test-material"}),
-		Now: func() time.Time { return pinned },
-	}).Mint(setupapi.StateSubject("sre-lead", "alice"), 15*time.Minute)
-	_, err := s.setup.AppFlow().Complete(t.Context(), "one-time-code", state)
+	// A STATE SEALED FOR A CREDENTIAL THE LIST DOES NOT NAME — begun on a
+	// node whose Tier A said otherwise, or before a restart that changed it.
+	state, err := s.setup.AppFlow().MintState("sre-lead", iam.ActorFor(tierA("alice")))
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	_, err = s.setup.AppFlow().Complete(t.Context(), "one-time-code", state)
 	var managed *configapi.ManagedError
 	if !errors.As(err, &managed) {
 		t.Fatalf("a callback begun by alice = %v, want the managed refusal", err)
@@ -154,13 +170,15 @@ func TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked(t *testing.T) {
 	}
 }
 
-// THE APP IS RECORDED AS WRITTEN BY WHOEVER BEGAN IT, carried in the signed
-// state, so the history names the credential rather than a label no token
-// carries — and the listed writer's own creation lands on a managed document.
+// THE LISTED WRITER'S OWN APP LANDS ON A MANAGED DOCUMENT, recorded as written
+// by the credential that began it, which the sealed state carries — the
+// callback carries none of its own, and the managed check at the callback is
+// asked of that party.
 func TestAGitHubAppIsRecordedAsTheOperatorWhoBeganIt(t *testing.T) {
 	t.Parallel()
-	s := newManagedSurface(t, nil, "operator")
-	if res := s.doAs(t, "operator", http.MethodPut, "/config", githubAppsDoc,
+	s := newManagedSurface(t, nil, fixtureWebhookBase, "operator")
+	writer := tierA("operator")
+	if res := s.doAs(t, writer, http.MethodPut, "/config", githubAppsDoc,
 		map[string]string{"X-Summary": "a company mid-rollout"}); res.Code != http.StatusCreated {
 		t.Fatalf("import = %d: %s", res.Code, res.Body)
 	}
@@ -168,15 +186,14 @@ func TestAGitHubAppIsRecordedAsTheOperatorWhoBeganIt(t *testing.T) {
 		"id": 91, "slug": "acme-sre-lead", "name": "Acme sre-lead",
 		"pem": "-----BEGIN RSA PRIVATE KEY-----\nk\n-----END RSA PRIVATE KEY-----",
 	})
-	if res := s.doAs(t, "operator", http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",`+
-			`"github":{"enabled":true,"url":"`+server.URL+`","webhook_secret":"org",`+
+	if res := s.doAs(t, writer, http.MethodPatch, "/config",
+		`{"integrations":{"github":{"enabled":true,"url":"`+server.URL+`","webhook_secret":"org",`+
 			`"provisioning":{"org":"acme"}}}}`,
 		map[string]string{"Content-Type": "application/merge-patch+json", "X-Summary": "github"},
 	); res.Code != http.StatusCreated {
 		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
 	}
-	begin := decode(t, s.doAs(t, "operator", http.MethodPost, "/setup/integrations/github/app",
+	begin := decode(t, s.doAs(t, writer, http.MethodPost, "/setup/integrations/github/app",
 		`{"seat":"sre-lead"}`, nil))
 	state, _ := begin["state"].(string)
 	if state == "" {
@@ -189,8 +206,10 @@ func TestAGitHubAppIsRecordedAsTheOperatorWhoBeganIt(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("active: %v %v", found, err)
 	}
-	if active.CreatedBy != "operator" || !strings.Contains(active.Summary, "GitHub App") {
-		t.Errorf("the app's revision is by %q (%q), want the operator who began it",
-			active.CreatedBy, active.Summary)
+	by := iam.ActorFor(writer)
+	if active.CreatedBy != by.Name || active.OperatorID != by.OperatorID ||
+		!strings.Contains(active.Summary, "GitHub App") {
+		t.Errorf("the app's revision is by %q through %q (%q), want %+v, who began it",
+			active.CreatedBy, active.OperatorID, active.Summary, by)
 	}
 }

@@ -19,18 +19,28 @@ under [Editing a node](#editing-a-node), field by field.
 
 ## Opening the builder
 
-The configuration is guarded, reads included, so the builder needs what any
-other configuration client needs: an operator token the engine accepts
-(unless the node runs with `api.auth.disabled`). What the builder shows is
-decided from what the engine answers, never from whether the browser holds a
-token:
+The builder reads and writes the company document, so it needs what any other
+client of it needs: `admin`, to read it — credentials masked — and to save it,
+a removal included, since it is one more change to the same document. A save
+may ask you to confirm your password first, as every configuration write does.
+Without `admin`, the lead of a unit edits the units they lead instead
+([Editing as a unit lead](#editing-as-a-unit-lead)).
+
+The credential is a person signed in holding `admin`, or an API token that
+carries it, exchanged for a session on the dashboard's sign-in screen.
+There is no posture in which it is not needed — `api.auth.disabled` is
+retired, and `crewlet run -dev-principal` is a flag on a node reached over
+loopback rather than a configuration a browser can meet. What the builder
+shows is decided from what the engine answers, never from whether somebody is
+signed in:
 
 | The engine answers `GET /config` with | The builder shows |
 |---|---|
 | the active revision | the organization, ready to edit |
 | `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
 | `404 no_active_revision`, while the organization names a company | "This node is still catching up". Try again once the node has applied the fleet's revision, or use another node |
-| `401` or `403` | a request for a token, with **Set token** |
+| `401` or `403`, to somebody signed in | "Reading the configuration needs Admin access.", with **Sign in as somebody else** |
+| `401` or `403`, to nobody signed in | "Editing the organization needs you to sign in.", with **Sign in**, which comes back to the builder |
 | a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
 
@@ -41,7 +51,14 @@ refused.
 A node that is draining refuses every check and save with `503 draining`,
 and the builder treats it as a node it could not reach: the draft is kept,
 and the check retries until a peer or the restarted node answers. Nothing is
-written by a refused save, so there is nothing to settle afterwards.
+written by a refused write, so there is nothing to settle afterwards.
+
+Signing in as somebody else — in another tab, since the session cookie is the
+browser's — while a draft is open keeps the draft on screen. The builder reads
+the company again and checks the draft as the new reader, and forgets the
+copy it kept for the last one; if the engine refuses it, editing pauses until
+somebody who may edit it — an administrator, or its lead — signs in. Signing out empties the
+tab's kept draft too.
 
 When another system [manages the company
 document](../concepts/configuration.md#managed-configuration) — Tier A names
@@ -54,41 +71,54 @@ same sentence. A writer's token edits as usual.
 ### Arriving from a link
 
 Every way into Edit org from another screen asks to change one thing, and the
-builder opens on it. The address says what:
+builder opens on it. The address says what, naming a node by its address — a
+seat by its handle and a unit by its key, never by a name, since two units or
+two seats may share one:
 
 | The link carries | The builder opens |
 |---|---|
 | `seat=<handle>` | that seat's editor (a seat's **Edit** beside its setup on its profile, **Edit in org** in its menu) |
-| `unit=<name>` | that unit's editor |
+| `unit=<key>` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
-| `unit=<name>` and `add=…` | the Add under that unit |
+| `unit=<key>` and `add=…` | the Add under that unit |
+| `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
 
 It happens once, on arrival, and only when the builder can edit: once the
-draft is loaded and the engine has described it (a link names a seat by the
-handle it runs under), and not while a kept draft waits for **Keep** or
-**Discard**, a save's outcome is unknown or the configuration changed under
-the draft. The request waits through each of those and opens once they are
-settled. `add=` is then taken out of the address, so a reload or a copied link
-does not ask for a second node; `seat=` and `unit=` stay, because they are
-also the selection (see [Selecting a node](#selecting-a-node)). Selecting
-another node inside the builder, or a Back to an earlier selection while you
-stay in it, opens nothing. But because the selection is part of the address,
-ANY arrival that carries one is read the same way as a link: a reload with a
-node selected, or a Back into Edit org from another screen (a seat's profile
-reached from the node's **Open seat**, say), opens that node's editor, since
-the builder cannot tell that address from a link somebody sent you. A link
-naming a node the draft does not hold selects nothing and opens nothing.
-
-Changing the operator token while a draft is open keeps the draft. The
-builder reads the configuration again and checks the draft under the new
-token; if the engine refuses it, editing pauses until a token it accepts is
-set.
+draft is loaded, and not while a kept draft waits for **Keep** or
+**Discard**, a save's outcome is unknown or the company changed under the
+draft. The request waits through each of those
+and opens once they are settled. `add=` and `project=` are then taken out of
+the address, so a reload or a copied link does not ask a second time; `seat=` and `unit=`
+stay, because they are also the selection (see
+[Selecting a node](#selecting-a-node)). Selecting another node inside the
+builder, or a Back to an earlier selection while you stay in it, opens
+nothing. But because the selection is part of the address, ANY arrival that
+carries one is read the same way as a link: a reload with a node selected, or
+a Back into Edit org from another screen (a seat's profile reached from the
+node's **Open seat**, say), opens that node's editor, since the builder cannot
+tell that address from a link somebody sent you. A link naming an address the
+draft does not hold selects nothing and opens nothing.
 
 ## Creating the company
 
 On an engine with no active configuration the builder opens on a form: the
-company's name and mission, a shape to start from, and optionally a seat for
-yourself.
+company's name and mission, a shape to start from, and a seat for yourself —
+**Add a seat for yourself**, ticked from the start and named "Founder" (rename
+it for the role; the seat outlives whoever holds it), with an optional contact
+identity for it.
+
+**Leave that seat ticked unless agents alone will run the company.** Every
+person holds exactly one human seat for as long as they exist, and is put on
+it by an invitation or an administrator's create that names it — so the seat
+you add here is the one you put yourself on once the company exists: sign in
+with the deployment's API token, open **Agents › Org chart** and press
+**Invite** or **Create person** on it (see [How the first person
+exists](../concepts/identity-and-access.md#how-the-first-person-exists)). A
+company that declares no human seat can admit nobody, the operator included,
+until one is added, and its check warns about that at `roles`. Unticking the
+box is still a legitimate answer: a company its agents run alone, administered
+through the deployment's Tier A tokens, which act as themselves and need no
+seat.
 
 | Start from | What it writes |
 |---|---|
@@ -98,9 +128,12 @@ yourself.
 
 The Established company template asks whether unit leads are **agents** (seats
 the engine runs) or **people** (human seats). A template never invents a
-contact identity, so human leads are created without one and the review lists
-each seat that still needs one; the only identity written is the one you type
-for your own seat.
+contact identity, so human leads are created without one, and the only identity
+written is the one you type for your own seat — which is optional too: leave it
+empty if you will work only through the dashboard. A human seat with no contact
+identity is legitimate, but no agent can @-mention that person, so the review
+names each one and the configuration keeps warning about it at the seat's
+`contact` until an identity is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
@@ -135,9 +168,9 @@ Both views draw the draft as it stands, and take everything the engine
 derives from its last check of it: where a seat declared at the top level
 with a unit reference is placed, the lead a unit inherits, and who each seat
 reports to. A derived value is shown only while the draft still holds what
-the check saw, so just after a change a node can read "Handle after the
-check", "Lead after the check" or "Manager after the check" for a moment
-rather than show an answer the engine has not given.
+the check saw, so just after a change a node can read "Lead after the
+check" or "Manager after the check" for a moment rather than show an answer
+the engine has not given.
 
 The builder draws the organization the way the console's org chart does. An
 agent seat is its own Crewlet character on a card toned in its own colour,
@@ -237,7 +270,8 @@ last one.
 
 The table is the structure as a tree of rows, in the order the chart draws
 it, with the columns **Name** (the node's kind or type under its name, and a
-saved agent seat's live state beside it), **Handle**, **Lead or reports to**
+saved agent seat's live state beside it), **Handle or key** (a seat's handle,
+a unit's key), **Lead or reports to**
 (a unit's lead chip, or a seat's primary manager), **Problems** and the row's
 actions. It has no sort and no column settings: an organization has one order
 its rows mean anything in. A row takes the same keys as a node on the chart,
@@ -249,8 +283,8 @@ widths the table scrolls sideways in its own box, never the page.
 Each row ends in its controls: on the company's row and a unit's, the **Add**
 that splits into **Add unit**, **Add agent seat** and **Add human seat**;
 **Edit** and **Delete** on every row but the company's, which cannot be
-deleted; and a menu of the rest (**Open seat**, **Edit reports**, **Change
-kind**, **Move to** and the two moves among the siblings). Where the builder
+deleted; and a menu of the rest (**Open seat**, **Edit reports**, **Move
+to** and the two moves among the siblings). Where the builder
 cannot write, the controls are disabled with the reason, never hidden.
 
 **Alt+Up** and **Alt+Down** move a row among its siblings of the same kind (a
@@ -263,20 +297,21 @@ now reports to someone else, the builder says so.
 
 ### Selecting a node
 
-Selecting a unit or a seat names it in the URL (`unit=` and `seat=`), and the
-toolbar carries that node's own actions: the same menu as its card and its
-row, so every action is reachable from the keyboard. **Open seat** is offered
-only for a seat the saved company has: a seat added in the draft has no
-screen until it is saved. A rename rewrites the name in the URL rather than
-leaving a link pointing at something that no longer exists. A link that
-arrives naming a node opens its editor as well (see
-[Arriving from a link](#arriving-from-a-link)); selecting a node inside the
-builder never does. Selecting the
-company itself carries the charter's **Edit** and the same **Add** menu; it
-names no filter, because the builder is already about that company. Where the
-builder cannot write (a guarded or read-only posture, or a draft waiting to be
-updated) the actions stay in the menu and are marked unavailable, so what the
-builder does is still legible.
+Selecting a unit or a seat names it in the URL by its address — `unit=` with
+the unit's key and `seat=` with the seat's handle, never a name, since two
+units may share one — and the toolbar carries that node's own actions: the
+same menu as its node and its row, so every action is reachable from the
+keyboard. **Open seat** is offered only for a seat the saved company has: a
+seat added in the draft has no screen until it is saved. A new address
+rewrites the URL rather than leaving a link pointing at something that no
+longer answers to it. A link that arrives naming a node opens its editor as
+well (see [Arriving from a link](#arriving-from-a-link)); selecting a node
+inside the builder never does. Selecting the company itself carries the
+charter's **Edit** and the same **Add** menu; it names no filter, because the
+builder is already about that company. Where the builder cannot write (a
+guarded or read-only posture, or a draft waiting to be updated) the actions
+stay in the menu and are marked unavailable, so what the builder does is still
+legible.
 
 A click on empty space puts the selection down: on the chart's field, in the
 space round the table, or on the page under either. The node's card or row
@@ -296,10 +331,11 @@ current draft:
 | No problems | the engine would accept the draft as it stands |
 | *N problems* | the engine would refuse it; each problem is marked on the unit or seat it names, and problems about the whole document are listed above the chart |
 | Could not reach the engine to check | the dry run got no answer; the builder retries with an increasing wait |
-| Read-only here | this process cannot write the configuration |
 | The configuration changed | another revision was activated after this draft was started |
-| The engine refused the token | set a token the engine accepts to continue |
-| Needs an operator token | the engine asks for a token and none is set; set one to continue |
+| Needs Admin access | the session was accepted and does not carry `admin`; sign in as somebody who holds it |
+| Needs confirmation | the write asks you to confirm your password first and the confirmation was declined; **Check again** asks again |
+| Refused | the engine refused the check for another reason, which the banner under the toolbar gives |
+| Needs sign-in | nobody is signed in, or the session ended; sign in |
 
 A change is checked about a third of a second after it is made, so a burst of
 changes (a held key, several undos) is checked once.
@@ -318,22 +354,43 @@ Add one with `crewlet config import` or `PATCH /config`
 
 **Add unit**, **Add agent seat** and **Add human seat** on the company or a
 unit (the **Add** on its branch or its row, its menu, or the toolbar) add the
-new node at the end of that unit, or at the top level of the company. On the
-structure chart the form is drawn IN the chart, in the place the new node will
-take: the chart makes room in that rank, draws the branch to it and eases onto
-it, so what you are adding to stays in view while you name it. On the table
-and on the reporting chart, which have no place to draw it, the same form
-opens as a dialog. Seat names are unique, because a lead or a `manages` entry
-names exactly one seat, and so are unit names, because a `manages` entry or a
-unit reference names exactly one unit. The dialog starts with a name nobody
-holds, and when you type a name that is taken it offers the next free one,
-such as "Software Engineer 2". A human seat needs one contact identity before
-the company can be saved; the dialog asks for it, and it can also be added
-later in the seat's editor. An agent seat is added with a profile icon: the
-dialog suggests the first Crewlet character no agent in the draft wears yet
-and the next colour round the six, so a company growing one agent at a time is
-told apart before anybody has chosen, and you can pick another character and
-colour before adding it.
+new node at the end of that unit, or at the top level of the company. On the structure
+chart the form is drawn IN the chart, in the place the new node will take: the
+chart makes room in that rank, draws the branch to it and eases onto it, so
+what you are adding to stays in view while you name it. On the table and on
+the reporting chart, which have no place to draw it, the same form opens as a
+dialog. A name is prose, and two seats or two units may share one: every
+reference names a seat by its **handle** and a unit by its **key**, and the
+form asks for that address beside the name. It follows the name until you
+type one (lowercase letters, digits and hyphens for a handle; a unit's key
+starts with a letter and may hold underscores; at most 64 characters), and it
+is never an address a seat or unit of the saved company or the draft holds —
+one this draft removes included, because a new seat under a removed seat's
+handle would be that seat again, its memory and mailbox included. A lead's
+draft avoids the rest of the company's addresses too, though it holds only
+their unit. The address
+is fixed once the draft is saved. A human seat's contact identity is optional:
+the form offers it, it can be added later in the seat's editor, and without
+one the person is reached through the dashboard only. An agent seat is added
+with a profile icon: the form suggests the first Crewlet character no agent in
+the draft wears yet and the next colour round the six, so a company growing
+one agent at a time is told apart before anybody has chosen, and you can pick
+another character and colour before adding it.
+
+**A new human seat is vacant until somebody is put on it**, which no save
+does: who holds a seat is the identity directory's, not the company
+document's. Once the save is applied, the seat's card in **Agents › Org
+chart** reads **Vacant** — to everybody, since who holds a seat is the
+overview's — and an administrator invites somebody onto it or creates a person on
+it from there, its peek, its page or the **Person** section of its editor's
+**Profile** tab — see [Putting a person in the
+seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat). That
+section shows who holds the seat, by name, to everybody, with **Invite**,
+**Create person** and **Cancel invitation** for an administrator alone. Those gestures write the identity directory at
+once, about the seat the running company holds, so the draft's **Apply** and
+**Undo** reach none of them — and a seat added in the draft is filled only
+once it is saved, since the directory knows only the seats a saved revision
+declares.
 
 ## Editing a node
 
@@ -350,8 +407,8 @@ parts:
 | Node | Tabs |
 |---|---|
 | Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
-| Human seat | **Profile**, **Contact** (contact identities and availability), **Work** (manages, and Delete) |
-| Unit | **Profile** (name, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
+| Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
+| Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
 The charter is short enough for one panel. A tab carries one marker, the most
 urgent: the number of problems in it, else a warning, else a dot for changes
@@ -401,44 +458,38 @@ not a field somebody sets.
 
 | You can change | Notes |
 |---|---|
-| Name | Unit names are unique. Renaming an existing unit re-keys what is attached to its name: agent seats in it and in its units onboard again, onboarding pages are looked up under the new name, and its schedules get a new identity, so a run due that minute may fire again. |
+| Name | Prose; two units may share a name. Renaming a unit re-onboards the agent seats in it and in its units, because onboarding pages are looked up under the new name. |
+| Key | The address every `manages` entry and seat placement names the unit by, and the unit's identity: its schedules and work are filed under it. Editable on a unit this draft added; shown and not edited on a saved one, since another key is another unit (remove it and add a new one). |
 | Type | A row of chips, one per type the engine knows (division, department, group, team, squad, pod, guild, chapter, unit), and **Custom**, which opens a box in the row for any other name. It is informational; a unit that names no type is a `team`, so Team shows as chosen. |
 | Purpose, goals | |
 | Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
 | Channel | An empty channel inherits the one above it. |
 | References | The unit's `knowledge` list: free-text references, not a read scope. |
-| Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). |
+| Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes and where it files its own. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). Changing either takes `admin`, because a lead's authority is derived from them — and a `space` is where pages may be created at all. |
 | Schedules: enabled | Each schedule can be switched on or off. |
 
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
 unit's tool credentials as server and variable names. Schedules and tool
 credentials are written in the configuration document.
 
-**Renaming a unit that holds literal credentials.** The engine never sends a
-credential to the dashboard: a literal value arrives masked, and a save that
-carries the mask back is restored from the stored unit of the same name. A
-renamed unit has no stored unit of its new name, so the engine refuses the
-save. Before you rename such a unit, the editor lists the paths of its masked
-credentials. Move each one to the secret store (**Secrets**) and reference it
-as `${NAME}` first; a reference is a name, so it survives the rename.
-
 ### A seat
 
 | You can change | Notes |
 |---|---|
-| Name | Seat names are unique. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
-| Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle once a check has seen the seat under the name it has now. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
+| Name | Prose; two seats may share a name. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
+| Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and thread history) are keyed on it. Editable on a seat this draft added, and shown and not edited on a saved one, where **Replace this seat…** gives the role another handle (see [Replacing a seat](#replacing-a-seat)). |
 | Kind | Never. A seat keeps the kind it was added with; see [A seat keeps its kind](#a-seat-keeps-its-kind). |
 | Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the original Crewlet in purple, and changing only one of the two writes only that one. |
-| Email, goal, backstory, responsibilities | |
+| Email | The address inbound Jira and GitHub payloads identify the seat by, written as typed. |
+| Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
-| Contact identities, availability | Human seats. A human seat needs at least one contact identity. |
+| Contact identities, availability | Human seats. Contact identities are optional: a seat with none is reached through the dashboard only, and the configuration warns about it at the seat's `contact`. |
 | Providers, in order | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order shown; each chip moves earlier or later in place. A seat with no providers runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
 | Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
-| Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. |
+| Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `admin`. |
 
 Shown with the reason they are not changed here: per-phase models
 (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
@@ -447,7 +498,28 @@ seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
 each depend on a company-level block the builder does not edit.
 
 **Delete seat** is on the editor's last tab (**Advanced** for an agent seat,
-**Work** for a person) and opens the same dialog as the chart's Delete.
+**Work** for a human seat) and opens the same dialog as the chart's Delete.
+
+#### Replacing a seat
+
+A saved seat's handle never changes, because a seat with another handle is
+another seat: a new mailbox, new memory and a new agent id. **Replace this
+seat…**, beside the handle in the editor, gives the role a new handle by doing
+exactly that, and says so before it records anything. The new seat takes the
+old one's place and fields, and every unit lead, `manages` entry, Datadog
+fallback and GitLab access level that named the old handle moves to the new
+one. A credential the old seat holds as a value rather than a `${NAME}`
+reference does not come along: the engine fills a masked value back in by the
+seat's handle, which the new seat does not share, and the builder never holds
+the value to copy it, so the replacement names each one it leaves behind and
+the review lists them again. A reference carries over as written. The old
+seat's work, memory and history stay with its handle, and its
+mailbox is retired like any removed seat's
+([Deleting a node](#deleting-a-node)). The replacement is one step: one undo
+puts the old seat back. It waits while the editor holds changes of its own;
+apply or discard them first. A seat this draft added has nothing to replace:
+its handle is edited in place until the save.
+
 
 A seat has no skills to edit. A skill is a knowledge base page the engine
 admits and injects per phase, and the learning subsystem drafts new ones from
@@ -479,15 +551,14 @@ tools the company does not use are one line under the cards, with a link to
   stays editable. Empty means the provisioning username prefix and the seat's
   handle, lowercased.
 - **GitLab:** the access level (developer or maintainer) the seat's account
-  joins with, when GitLab provisioning is set up. Access levels are kept by
-  handle, so a seat added in this draft can have one once a check has
-  reported its handle, and renaming it waits for the next check: the engine
-  derives the handle from the name.
+  joins with, when GitLab provisioning is set up. Access levels are kept in
+  the settings by handle, so a new handle carries its level with it.
 
-Not in the builder: per-seat allow or block lists for GitLab, Atlassian,
-Datadog or Mattermost (the engine provisions every agent seat), a per-seat
-Datadog role, GitLab tiers beyond developer and maintainer, and flags that
-grant access to everything (an empty repository list already does).
+Not in the builder: a seat's own Slack channel, per-seat allow or block lists
+for GitLab, Atlassian, Datadog or Mattermost (the engine provisions every
+agent seat), a per-seat Datadog role, GitLab tiers beyond developer and
+maintainer, and flags that grant access to everything (an empty repository
+list already does).
 
 Two more things the builder deliberately does not have. A colour nobody
 chose: an agent seat is drawn in the colour its profile icon names and a
@@ -519,7 +590,7 @@ so rather than reading an older answer:
 
 The next check confirms the result, and the review lists it before you save.
 
-A unit's lead is a seat's name, so a seat that leads a unit **stays its lead**
+A unit's lead is a seat's handle, so a seat that leads a unit **stays its lead**
 wherever it moves. The dialog says so and offers **Clear lead** to remove it as
 part of the move. A seat placed in a unit by its `unit:` reference is written
 into the destination and the reference is removed.
@@ -543,6 +614,27 @@ Root seats declared at the top level with a `unit:` reference to the unit being
 deleted are drawn inside it, so the dialog asks whether to delete them too or
 keep them at the top level with the reference cleared.
 
+A human seat that something holds cannot be removed while it does — a
+person on it at any stage short of removal (a suspended or retired person
+keeps their seat), a service account bound to it, or an open invitation that
+names it. The engine refuses the save with `409 seat_held`, naming the one
+thing holding each such seat, and the builder places that refusal on the seat
+with the remedy for that holder, then keeps the draft:
+
+| What holds the seat | The builder says |
+|---|---|
+| A person | "@pat is held by pat.doe: move them to another human seat (`crewlet iam bind <person id> SEAT`) or remove them (`crewlet iam remove <person id>`) first, then save again" |
+| A service account | "@pat is held by the service account ci:release: unbind it first (`crewlet iam unbind <person id>`), then save again" |
+| An open invitation | "@pat is held by the open invitation <id>: cancel it first (`crewlet iam cancel-invite <id>`), then save again" — never the invitee's address, since the editor may be a unit's lead with no grant over the directory |
+
+A person is never unbound: they hold a human seat for as long as they exist,
+so the engine refuses an unbind of a person, and moving them or removing them
+is what frees it. Each remedy is an administrator's to make, and there
+is nothing to retry until it has landed; the seat's page in the org chart says
+what holds it. The same refusal meets a held seat replaced
+([Replacing a seat](#replacing-a-seat)), and a document written outside the
+builder that makes a held human seat an agent's.
+
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.
 
@@ -560,14 +652,14 @@ seat goes:
   that is switched off wakes nobody and requires no fallback, so its
   `route_to` asks nothing of a removal.
 - **A GitLab access level.** The per-handle override is removed with the seat,
-  because an entry left behind would grant its level to the next seat that
-  derives the same handle.
+  because an entry left behind would grant its level to the next seat added
+  under the same handle.
 - **Vendor identities and sealed credentials.** The seat's GitHub App, Slack
   app and Mattermost bot, the GitLab, Datadog and Atlassian accounts it is
   enrolled for (it holds a credential for that tool's `mcp_env` server, or its
   unit does), and the secret store entries its config references, stay until
   you decommission them. They are listed by name, never by value, with links to
-  **Integrations** and **Secrets**. A seat added in this draft was never saved,
+  **Settings › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
   so nothing exists for it outside the chart.
 - **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
@@ -581,13 +673,16 @@ seat goes:
 The builder does not change a seat from an agent to a person or back. The two
 kinds share almost nothing: the engine refuses a human seat every runtime field
 (models, sandbox, token budget, workers, learning, schedules, placement, chat
-app blocks, tool credentials, behavioral guidelines, its own GitHub App and its
-profile icon) and refuses an agent seat `contact` and `availability`, and an
-agent seat's memory, mailbox and vendor accounts belong to the agent it was.
-The editor shows the kind as a locked row. To make a seat the other kind,
-delete it and add a new seat of the kind you want; the delete dialog lists
-what the removal leaves behind, and a seat added later under the same handle
-reattaches to its memory.
+app blocks, the project and space it owns, tool credentials, behavioral
+guidelines, its own GitHub App and its profile icon) and refuses an agent seat
+`contact` and `availability`, and an agent seat's memory, mailbox and vendor
+accounts belong to the agent it was. The editor shows the kind as a locked row.
+To make a seat the other kind, delete it and add a new seat of the kind you
+want; the delete dialog lists what the removal leaves behind. A draft never
+gives a new seat an address it removes, so the new seat takes another handle,
+or the same one in a later draft, where it reattaches to the memory the handle
+kept. A human seat somebody holds is deleted only once nothing holds it
+([Deleting a node](#deleting-a-node)).
 
 ## Reviewing and saving
 
@@ -598,16 +693,17 @@ would do before it does it:
   edited, and the charter fields.
 - **What follows:** the consequences the engine attaches to those changes,
   computed from the hierarchy it derives for the base and for the draft:
-  seats that onboard again (and why), handle changes, reporting lines and
-  leads that move (including a reorder that only changes which manager comes
-  first), channels, where unrouted Jira and Confluence work goes, the tool
-  credentials a seat gains or loses (names only), references a removal clears, the Datadog fallback seat and GitLab
-  access levels, and a new seat that takes a removed seat's handle and with it
-  its memory.
+  a replaced seat (listed as the old seat removed and the new one added,
+  since the new seat carries none of the old one's memory or mail), seats
+  that onboard again (and why), reporting lines and leads that move
+  (including a reorder that only changes which manager comes first),
+  channels, where unrouted work goes, the tool credentials a seat gains or
+  loses (names only), credentials a replaced seat leaves behind, references a removal clears, the Datadog fallback seat
+  and GitLab access levels.
 - **Warnings** the engine gave for exactly this save.
 
-A company rename, a handle change, a change of tool
-credentials and removing more than half of the seats each need an
+A company rename, a change of tool credentials (a credential a replacement
+leaves behind included) and removing more than half of the seats each need an
 acknowledgement before **Save** enables. While the engine reports problems
 the review opens so you can read it, with Save disabled until they are fixed.
 While a check is out, Save waits for it. If the engine could not be reached to
@@ -618,7 +714,9 @@ revision, followed by a write id such as
 `(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`. A save is the
 same request as its checks: a `PATCH /config` merge patch of what changed,
 with `If-Match` naming the revision the draft was started from, so a newer
-revision is refused (and offered as an update) rather than overwritten.
+revision is refused (and offered as an update) rather than overwritten. A
+unit's lead saves that unit whole instead, with `PUT /config/units/{key}` under
+the same `If-Match` ([Editing as a unit lead](#editing-as-a-unit-lead)).
 
 ### When the answer does not arrive
 
@@ -667,6 +765,8 @@ since a first revision has nothing to differ from), and **Copy as YAML**,
 which reads the active company as YAML (credentials redacted, as every
 configuration read is) so a `company.yaml` kept in a repository can be
 brought back in step. `crewlet config import company.yaml` writes it back.
+Both read the company document, so a lead without `admin` is offered
+neither.
 
 ### Keeping a company file in sync
 
@@ -683,11 +783,14 @@ decides which one wins a restart
   the file last changed.
 
 So after a save, **Copy as YAML** and commit it to the file, and the next
-import writes back what the builder wrote rather than undoing it. Credentials
+import writes back what the builder wrote rather than undoing it. Keep every
+seat's `handle` and every unit's `id` in it: the stored company holds the ones
+it minted, while a file that leaves them out is minted afresh from its names
+on every import, so a name corrected there would replace that seat or unit. Credentials
 in the copy read as `__redacted__` (a whole `${NAME}` reference is shown as it
 is). Importing the file over the running company restores each masked value
 from the active revision by the identity of what holds it (a seat by its
-handle, a unit by its name); a store with no active revision has nothing to
+handle, a unit by its key); a store with no active revision has nothing to
 restore from, which is one more reason a file kept in a repository should
 hold `${NAME}` references rather than values.
 
@@ -695,8 +798,11 @@ hold `${NAME}` references rather than values.
 
 The builder keeps the draft's list of changes (never the document itself,
 which holds contact identities and policies) in the tab's session storage, so
-a reload or a trip to another screen does not lose the work. When the builder
-opens and finds a kept draft:
+a reload or a trip to another screen does not lose the work. The list holds
+what you typed into it, so the storage belongs to the tab and is emptied when
+you sign out — or when somebody else signs in here after your session ended —
+and a kept draft is only ever offered back to the person it was kept for.
+When the builder opens and finds a kept draft:
 
 - **Made against the revision that is still active:** a banner offers **Keep
   the draft** or **Discard it**, and nothing can be edited until you choose.
@@ -706,9 +812,13 @@ opens and finds a kept draft:
   update described below, and **Discard the kept draft** removes it instead.
 - **Made for creating a company, where a company now exists** (or the other
   way around): it is discarded, and the builder says so.
+- **Made of a unit you no longer lead** (a lead's draft): it is discarded,
+  and the builder says so. While you still lead it, the builder opens that
+  unit for it, whichever unit a link names, so a reload never loses a draft
+  of your second unit.
 
-The kept draft is removed when you save, when you discard, when the operator
-token changes, and when the engine refuses the token, because each of those
+The kept draft is removed when you save, when you discard, when the reader
+changes, and when the engine refuses the credential, because each of those
 may mean the tab has changed hands. Session storage does not outlive the tab,
 so while the draft holds changes the browser asks before the tab closes. It
 asks on a reload too, because a browser cannot tell the two apart; the draft
@@ -726,7 +836,8 @@ revision saved by somebody else (another operator, `crewlet config import`, a
 setup flow in Settings › Integrations) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
-draft was started from) and **Update my draft**. A builder with no changes on
+draft was started from — to a reader who may read the company document) and
+**Update my draft**. A builder with no changes on
 it has nothing to update: it moves onto the newer revision by itself and goes
 on. An editor you have open keeps what you typed in it, and the selected unit
 or seat stays selected, so an edit you had not applied yet applies to the
@@ -747,11 +858,11 @@ now, and sorts every change into one of three outcomes:
   credential is never shown, only that a literal value is set.
 
 "The same seat" means what it means to the engine: a seat is its handle and a
-unit is its name, because those are what its memory, mailbox, schedules and
+unit is its key, because those are what its memory, mailbox, schedules and
 credentials attach to. A seat removed and created again with a different
 handle is a different seat, and a change made to the original is dropped
 rather than applied to it. One created again under the same handle, or a unit
-under the same name, is the same one to the engine, so a change made to it is
+under the same key, is the same one to the engine, so a change made to it is
 held to the values it recorded like any other: a field somebody set
 differently is a conflict for you to decide.
 
@@ -759,6 +870,62 @@ If this node still serves the older revision (it has not applied the newer one
 yet, or a load balancer sent the read to a node that has not), the update
 waits: "Still catching up. Try again shortly." If the configuration the draft
 edits is no longer active at all, the banner offers **Discard and reload**.
+
+## Editing as a unit lead
+
+The lead of a unit edits that unit and everything inside it without
+`admin`: its own fields, its seats, the units inside it and theirs,
+seats added, moved between its teams, reordered or removed. A lead is the seat a unit
+names as its lead, or inherits from the unit above it when it names none, so
+leading a unit is leading every unit inside it, a sub-unit with a lead of its
+own included. The person leads through the human seat they hold — every
+person holds one — and needs no permission for it; an administrator edits the
+whole company as above, units they lead included.
+
+Such a person opening Edit org is shown the unit they lead rather than the
+company, and the toolbar says so: **Editing *unit* as its lead**. Somebody who
+leads several units that are not inside one another edits one of them per
+draft, and that label is a menu of the others; another unit opens only while
+the draft has no changes. A link that names a seat or a unit opens the unit
+holding it.
+
+The draft is that unit, whole, read with `GET /config/units/{key}` and
+checked and saved with `PUT /config/units/{key}` under `If-Match`, so the rest
+of the company is never sent and a newer revision refuses the save exactly as
+it refuses a whole-company one. An unchanged unit is checked too, so its
+managers and inherited leads are drawn before anything is edited: the engine
+refuses a lead only the save of a unit as it was, which would re-publish the
+company. The engine judges every write
+part by part and refuses what reaches outside the units the caller leads,
+naming each part, and the builder marks each on the seat or unit it is about:
+
+- the company's charter, its settings and its top level, and the unit's own
+  lead and place (a move or a deletion), which decide who leads it. The
+  builder draws these controls disabled with the reason, and the Lead of a
+  unit inside it stays the lead's to change;
+- a lead or a `manages` entry naming a seat outside the units the caller leads;
+- a value another system finds a seat or a unit by — a project, a knowledge
+  space, a channel, an email address, a contact identity — on any seat or
+  unit, one the draft adds included, and every credential, a `${VAR}`
+  anywhere and a tool server's `mcp_env` block included. These take
+  `admin`. The builder draws the first kind disabled with the reason,
+  asks for no contact identity when a lead adds a human seat, and refuses to
+  replace a seat that holds one.
+
+A lead reads no revision history, which takes `admin`. A save whose
+answer is lost is settled by reading the unit back: still on the base
+revision, it did not land; at a newer one holding exactly the unit as sent,
+it did; anything else is a newer company, which the draft is updated onto as
+in [When somebody else saves first](#when-somebody-else-saves-first), finding
+the changes the save landed already there. **Show what changed**, **View
+changes** and **Copy as YAML** read the company document and are not offered.
+
+The same rule reaches a lead outside the builder, for the seats in the units
+they lead: a seat's profile shows its settings, read through
+`GET /config/roles/{handle}` and its unit's own fields, and its token ceilings
+are changed in Spend › Budgets and with **Raise budget** where a decision about
+a stopped seat offers it, through `PUT /config/roles/{handle}`. The company's
+own ceilings stay `admin`'s.
 
 ## Undo, redo and the keyboard
 

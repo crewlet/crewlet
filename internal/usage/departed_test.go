@@ -65,11 +65,14 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if !found {
 		checkpoint.At.Generation = 1
 	}
-	// THE DOMAIN'S OWN STREAM, as the engine runs it.
+	// THE DOMAIN'S OWN STREAM, as the engine runs it — and its records are
+	// SIGNED, as every state log's are (ADR-0031): the runner verifies each
+	// frame under the fleet's keyring before the applier sees it, and the
+	// write authority below signs under the same one.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: usage.Domain{}, Spec: spec,
 		Applier: usage.NewApplier(), Fetch: consumer,
-		Log: log, Node: db, DB: db.Replicated(),
+		Verifier: testVerifier(t), Log: log, Node: db, DB: db.Replicated(),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: id,
 	})
@@ -82,8 +85,9 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	}
 	// ON THE SAME LOG, which the publisher writes and the runner applies.
 	authority, err := statelog.NewPublisher(statelog.Deps{
-		Domain: usage.Domain{}, Spec: spec,
-		Log: log, Records: log, Rows: rows, Fence: usage.NewFence(),
+		Domain: usage.Domain{}, Spec: spec, Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: testVerifier(t)},
+		Signer:  testSigner(t), Rows: rows, Fence: usage.NewFence(),
 		Gates: usage.NewGates(), Waiter: runner, Voids: runner, Identity: runner, NodeID: id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
 		ResolveBudget: 5 * time.Second,
@@ -92,9 +96,10 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 		t.Fatalf("%s: build the write authority: %v", id, err)
 	}
 	publisher, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: db, Log: authority, NodeID: id,
-		Zone: func() *time.Location { return santiago },
-		Now:  func() time.Time { return now },
+		Store: db, Log: authority, Estate: db.Replicated().Reader(), NodeID: id, Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return now },
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		t.Fatalf("%s: build the publisher: %v", id, err)
@@ -151,7 +156,7 @@ func (n *fleetNode) spendOf(t *testing.T, day string, want int) []usage.SpendRow
 
 // A DEPARTED NODE'S SPEND IS STILL ANSWERED.
 //
-// This is the decision adr/0020 records, and the reason the domain exists: a
+// This is the decision ADR-0020 records, and the reason the domain exists: a
 // node's day was a question only that node's own audit log could answer, so a
 // node that left took its history with it and every spend window after it
 // under-reported the company by exactly its share. Here the day is replicated
@@ -167,7 +172,8 @@ func TestADepartedNodesSpendIsStillAnswered(t *testing.T) {
 	// the size is not what is under test.
 	if err := c.Client(t, 0).EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
-		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		MaxPerSubject:   spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
@@ -227,4 +233,30 @@ func TestADepartedNodesSpendIsStillAnswered(t *testing.T) {
 		t.Fatalf("a node that joined after node-a left answers %+v, and the fleet "+
 			"answered %+v", after, before)
 	}
+}
+
+// testSigner is this suite's record signer.
+//
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED (ADR-0031), so a write authority
+// built without one is refused at construction rather than producing records
+// the fleet would refuse one at a time, on every node, for ever. The key is a
+// fixture: what these cases are about is what the domain writes, and the
+// signature's own rules are certified in [statelog].
+func testSigner(t *testing.T) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(usage.Domain{}.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t *testing.T) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(usage.Domain{}.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
 }

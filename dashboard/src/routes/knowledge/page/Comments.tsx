@@ -7,9 +7,10 @@
  * on does not wake a hundred seats when somebody fixes a heading. The composer
  * says who is told instead: the page's watchers, and anybody mentioned.
  *
- * A comment a person wrote through their own token is RECORDED under the
- * token and DRAWN as the person (`comment_seats`), as every other row of a
- * page is ([drawnBy]).
+ * A comment is drawn as WHOEVER THE RECORD NAMES (`iam.ActorFor`), as every
+ * other row of a page is: a person comments AS their seat, so the author is
+ * the seat's handle, and a credential bound to no seat comments under its
+ * login. A comment with no author is the engine's.
  */
 
 import { useId, useState } from "react";
@@ -21,21 +22,18 @@ import { useAct } from "~/lib/useAct.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import type { PageComment } from "~/protocol/index.ts";
-import { drawnBy, type Who } from "../parts.tsx";
+import type { Who } from "../parts.tsx";
 
 export function PageComments({
   pageID,
   title,
   comments,
-  seats,
   who,
   now,
 }: {
   pageID: string;
   title: string;
   comments: PageComment[];
-  /** The person behind each comment an operator's token wrote, by comment id. */
-  seats?: Record<string, string> | undefined;
   who: Who;
   now: number;
 }) {
@@ -46,7 +44,7 @@ export function PageComments({
   const headingID = useId();
   const byID = new Map(comments.map((c) => [c.id, c]));
   const body = draft.trim();
-  const person = (c: PageComment) => drawnBy(c.author, seats?.[c.id]);
+  const person = (c: PageComment) => c.author;
 
   const send = async () => {
     const result = await write.run(

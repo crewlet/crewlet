@@ -217,7 +217,8 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 
 // decidePlace reads the gap inside the order's own snapshot and decides the
 // placements — see [PlaceInGap].
-func decidePlace(ctx context.Context, tx *sql.Tx, place Place, ifMatch uint64) ([]Placement, error) {
+func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
+	ifMatch uint64) ([]Placement, error) {
 	current, held, err := readTask(ctx, tx, place.Task)
 	switch {
 	case err != nil:
@@ -226,7 +227,8 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place, ifMatch uint64) (
 		return nil, missingTask(ctx, tx, place.Task, "it cannot be placed")
 	case current.Removed != nil:
 		return nil, invalid("task %s was removed by %s at %s; "+
-			"restore it first", place.Task, current.Removed.By,
+			"restore it first", place.Task,
+			current.Removed.By,
 			current.Removed.At.Format(time.RFC3339))
 	case ifMatch != 0 && current.Version != ifMatch:
 		return nil, fmt.Errorf("%w: task %s is at version %d and the drop "+

@@ -71,13 +71,16 @@ type fakeTracker struct {
 	searched  []string
 	ranked    []tracker.Ranked
 	searchErr error
-	// searchModes is every mode a search asked for, and partialSearch
-	// makes the fake answer over part of the corpus.
-	searchModes   []knowledge.Mode
-	partialSearch bool
-	patched       []tracker.TaskPatch
-	ifMatch       []uint64
-	notified      []*tracker.Notify
+	// searchModes is every mode a search asked for, partialSearch makes
+	// the fake answer over part of the corpus, and searchDegraded makes it
+	// answer as a company with nothing to rank by meaning does: a hybrid
+	// search served by the words, a semantic one served nothing.
+	searchModes    []knowledge.Mode
+	partialSearch  bool
+	searchDegraded knowledge.Degradation
+	patched        []tracker.TaskPatch
+	ifMatch        []uint64
+	notified       []*tracker.Notify
 
 	// kinds is what each write said it WAS, which is a different fact
 	// from whether it notified anybody — see [tracker.MutationRecord.Kind].
@@ -124,7 +127,6 @@ type fakeTracker struct {
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
-	viewQuery    tracker.ViewQuery
 	detailQuery  tracker.ProjectDetailQuery
 	project      tracker.ProjectDetail
 
@@ -133,20 +135,21 @@ type fakeTracker struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	// viewQuery is the last strip the view listing asked for, so a case
+	// can assert WHOSE strip a caller was shown.
+	viewQuery tracker.ViewQuery
 	// myWorkZone is the clock the last day was cut on, which is the half
 	// of that read a tool decides rather than the tracker.
 	myWorkZone *time.Location
 
 	// viewer is who the last list was expanded FOR, which is the half of a
 	// personal filter — `preset=my_queue`, `assignee=me` — that decides
-	// whether a founder's assistant is answered about them or about the
-	// credential in their hand.
+	// whose queue a caller is answered about.
 	viewer tracker.Viewer
 
 	// personQuery and inboxQuery are the last personal reads this fake was
-	// asked, so a case can assert WHO a tool resolved the question to —
-	// which is the half of these two verbs that decides whether a founder
-	// is shown their own day or a credential's.
+	// asked, so a case can assert WHOSE record a tool resolved the question
+	// to.
 	personQuery tracker.PersonQuery
 	inboxQuery  tracker.InboxQuery
 
@@ -262,11 +265,13 @@ func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 	return tracker.CatalogueAnswer{}, nil
 }
 
+// Person answers an empty record under the handle it was ASKED for, so a case
+// can assert whose record a name resolved to rather than only that it read one.
 func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery,
 	_ time.Time) (tracker.PersonState, error) {
 
 	f.personQuery = q
-	return tracker.PersonState{Handle: q.Who.Handle}, nil
+	return tracker.PersonState{Handle: q.Handle}, nil
 }
 
 // Thread answers what the fake was TOLD to answer, and records the query.
@@ -354,9 +359,18 @@ func (f *fakeTracker) Search(_ context.Context,
 		return tracker.SearchAnswer{}, f.searchErr
 	}
 	answer := tracker.SearchAnswer{}
+	answer.ServedMode = q.Mode.Resolved()
 	answer.Coverage.Complete = true
 	if f.partialSearch {
 		answer.Coverage = knowledge.Coverage{BucketsMissing: 21}
+	}
+	if f.searchDegraded != knowledge.NotDegraded {
+		answer.Degraded = f.searchDegraded
+		answer.ServedMode = knowledge.ModeKeyword
+		if q.Mode.Resolved() == knowledge.ModeSemantic {
+			answer.ServedMode = ""
+			return answer, nil
+		}
 	}
 	if q.Limit <= 0 || q.Limit > len(f.ranked) {
 		answer.Hits = f.ranked
@@ -578,7 +592,7 @@ func (f fakeMentions) Mentions(string) []string { return f }
 func workRegistry(t *testing.T, deps builtin.WorkDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Work: deps}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Work: deps})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -600,6 +614,19 @@ func workTurn(t *testing.T) *turnctx.Turn {
 
 func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]any) tools.Result {
 	t.Helper()
+	return callWorkAs(everyGrant(), t, reg, name, args)
+}
+
+// callWorkAs is [callWork] for a case that is about WHO is calling.
+//
+// A CASE ABOUT AUTHORITY MUST NOT USE [everyGrant], which carries
+// admin — the permission every relation class checks BEFORE the chart, so
+// a fixture holding it is allowed by a chart that refuses everything and the
+// case asserts nothing.
+func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
+	name string, args map[string]any) tools.Result {
+
+	t.Helper()
 	entry, ok := reg.Lookup(name)
 	if !ok {
 		t.Fatalf("%s is not registered", name)
@@ -608,7 +635,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 	if !ok {
 		t.Fatalf("%s is not seat-callable", name)
 	}
-	got, err := seatCallable.CallForTurn(t.Context(), workTurn(t), args)
+	got, err := seatCallable.CallForTurn(ctx, workTurn(t), args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -650,15 +677,35 @@ func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 
 // IDENTITY COMES FROM THE TURN, NEVER FROM ARGUMENTS. A model that could name
 // its own actor could file work as anybody.
+//
+// AND A MODEL THAT TRIES IS TOLD, rather than filing under the turn's seat as
+// though it had asked for that: an argument the tool does not read is refused
+// by name, so the forged call writes nothing at all.
 func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+	forged := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "new work", "project": "ENG",
 		// A model trying to act as somebody else.
 		"actor": "ceo", "reporter": "ceo", "handle": "ceo",
+	})
+	if !forged.Failed || !errors.Is(forged.Cause, builtin.ErrUndeclaredArgument) {
+		t.Fatalf("a create naming its own actor answered %q (cause %v), want "+
+			"the arguments refused by name", forged.Output, forged.Cause)
+	}
+	for _, named := range []string{`"actor"`, `"reporter"`, `"handle"`} {
+		if !strings.Contains(forged.Output, named) {
+			t.Errorf("the refusal does not name %s: %s", named, forged.Output)
+		}
+	}
+	if len(trk.actors) != 0 {
+		t.Fatalf("the forged create wrote as %v", trk.actors)
+	}
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "new work", "project": "ENG",
 	})
 	if got.Failed {
 		t.Fatalf("create failed: %s", got.Output)
@@ -683,8 +730,9 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 }
 
 // A TASK FILED BY A TURN A CHAT MESSAGE WOKE SAYS WHERE IT CAME FROM — the
-// surface and the conversation, off the turn and never off an argument — and
-// one filed by a turn nothing on a chat surface woke says nothing.
+// surface and the conversation, off the turn and never off an argument (the
+// tool declares none, and an undeclared one is refused by name before the tool
+// runs) — and one filed by a turn nothing on a chat surface woke says nothing.
 func TestAWriteCarriesTheChatSurfaceTheTurnWasWokenOn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -700,12 +748,11 @@ func TestAWriteCarriesTheChatSurfaceTheTurnWasWokenOn(t *testing.T) {
 		turn.Transport, turn.ConversationKey = tc.transport, "slack:C1:171.2"
 		entry, _ := reg.Lookup(builtin.CreateWorkItemTool)
 		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(t.Context(), turn,
-			map[string]any{"title": "from the thread", "project": "ENG",
-				"origin": map[string]any{"surface": "forged"}})
+			map[string]any{"title": "from the thread", "project": "ENG"})
 		if err != nil || got.Failed {
 			t.Fatalf("create: %v %s", err, got.Output)
 		}
-		origin := trk.actors[0].Origin
+		origin := trk.actors[0].Thread
 		if (origin == nil) != (tc.want == nil) ||
 			(origin != nil && *origin != *tc.want) {
 			t.Errorf("a turn woken on %q filed with origin %+v, want %+v",
@@ -764,7 +811,8 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", name)
 		}
-		got, err := entry.Tool.Call(t.Context(), map[string]any{"item": "ENG-1", "title": "x", "body": "y"})
+		got, err := entry.Tool.Call(everyGrant(), declaredOf(entry.Tool,
+			map[string]any{"item": "ENG-1", "title": "x", "body": "y"}))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -871,7 +919,12 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	for _, name := range []string{builtin.ListWorkItemsTool, builtin.GetWorkItemTool} {
-		got := callWork(t, reg, name, map[string]any{"item": "ENG-1"})
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		got := callWork(t, reg, name, declaredOf(entry.Tool,
+			map[string]any{"item": "ENG-1"}))
 		if !got.Failed {
 			t.Errorf("%s reported success on a failed read", name)
 		}
@@ -881,19 +934,70 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 	}
 }
 
+// A READ REFUSED FOR WHAT IT ASKED IS NOT "TRY AGAIN".
+//
+// A feed's cursor that is not a position, a cursor or `since` from another
+// log, a text search wider than the feed scans, a floor on another log: each
+// is refused the same on every attempt, so the sentence that told a model the
+// tracker could not be read "right now" sent it round with the same arguments.
+// The refusal says the arguments are what has to change. The control is the
+// case above, where the store itself failed and trying again is right.
+func TestARequestTheTrackerRefusedIsNotToldToTryAgain(t *testing.T) {
+	t.Parallel()
+	for _, refusal := range []error{
+		fmt.Errorf("%w: cursor: \"42\" is not a log position", tracker.ErrBadQuery),
+		fmt.Errorf("this read's floor: %w", statelog.ErrForeignPosition),
+	} {
+		trk := newFakeTracker()
+		trk.readErr = refusal
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		for _, name := range []string{builtin.ListWorkItemsTool, builtin.GetWorkItemTool} {
+			entry, ok := reg.Lookup(name)
+			if !ok {
+				t.Fatalf("%s is not registered", name)
+			}
+			got := callWork(t, reg, name, declaredOf(entry.Tool,
+				map[string]any{"item": "ENG-1"}))
+			if !got.Failed {
+				t.Errorf("%s reported success on a refused read", name)
+			}
+			if strings.Contains(got.Output, "Try again") ||
+				!strings.Contains(got.Output, "change the arguments") {
+				t.Errorf("%s on %v says: %s — want it to name the arguments as "+
+					"what changes, never to try again", name, refusal, got.Output)
+			}
+		}
+	}
+}
+
 // A FAILED WRITE SAYS THE CHANGE WAS NOT MADE, or the model reports work it
-// did not do.
+// did not do — and one that met a FAULT of the node says it was not done
+// without claiming either way, and keeps the fault's own words out of the
+// sentence: those are a store's, and go to the log.
 func TestAFailedWriteSaysSo(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.writeErr = errors.New("the broker is unreachable")
+	trk.writeErr = &statelog.Unavailable{Reason: statelog.ReasonLogFull,
+		Detail: "the broker refused to store the record"}
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "status": "done",
 	})
-	if !got.Failed || !strings.Contains(got.Output, "NOT made") {
-		t.Errorf("a failed write gave %q", got.Output)
+	if !got.Failed || !strings.Contains(got.Output, "NOT made") ||
+		tools.RefusalOf(got) != tools.RefusalUnavailable {
+		t.Errorf("a refused write gave %q (%s)", got.Output, tools.RefusalOf(got))
+	}
+
+	trk.writeErr = errors.New("tracker: read the re-spread window: open " +
+		"/var/lib/crewlet/replicated.db: disk I/O error")
+	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInternalError ||
+		!strings.Contains(got.Output, "Do not report it as done") ||
+		strings.Contains(got.Output, "/var/lib") || strings.Contains(got.Output, "Try again") {
+		t.Errorf("a write that met a fault gave %q (%s)", got.Output, tools.RefusalOf(got))
 	}
 
 	// AND THE HAND-OFF BUDGET TELLS IT WHAT TO DO INSTEAD, rather than
@@ -1079,6 +1183,38 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}
 }
 
+// A SUBTASK FILES INTO ITS PARENT'S PROJECT when the call names none.
+//
+// The default was the CALLER's team, so a seat breaking down a colleague's
+// item filed every piece of it in its own project — on neither project's
+// board, and refused by the tracker now that a subtask has to live in its
+// parent's project. A plain item still takes the caller's team.
+func TestASubtaskFilesIntoItsParentsProjectByDefault(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		DefaultProject: func(string) string { return "OPS" },
+	})
+	if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "one piece of it", "parent": "ENG-1",
+	}); got.Failed {
+		t.Fatalf("the subtask failed: %s", got.Output)
+	}
+	if got := trk.created[0].Project; got != "ENG" {
+		t.Errorf("a subtask of ENG-1 was filed under %q, want ENG — its "+
+			"parent's project, not the caller's team", got)
+	}
+	if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "something else",
+	}); got.Failed {
+		t.Fatalf("the plain item failed: %s", got.Output)
+	}
+	if got := trk.created[1].Project; got != "OPS" {
+		t.Errorf("a plain item was filed under %q, want the caller's team OPS", got)
+	}
+}
+
 // EVERY INERT EDGE ONE CALL STATES TRAVELS IN ONE GESTURE.
 //
 // A patch carries exactly one relation gesture and the writer resolves it
@@ -1156,8 +1292,8 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 	// AND IT SAYS SO TO A READER THAT IS NOT A MODEL: the class is what a
 	// person's surface re-reads and re-offers on, where a lost race is
 	// retried as it stands.
-	if got.Refusal != tools.RefusalStaleVersion {
-		t.Errorf("a stale edit is classed %q, want %q", got.Refusal,
+	if class := tools.RefusalOf(got); class != tools.RefusalStaleVersion {
+		t.Errorf("a stale edit is classed %q, want %q", class,
 			tools.RefusalStaleVersion)
 	}
 }
@@ -1310,6 +1446,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		operator[tool.Name()] = true
 	}
@@ -1410,7 +1547,12 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 		},
 	}
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Work: work}) {
+	// AN AUTHORIZER THAT ADMITS, because a nil one refuses every call before
+	// the tool runs — and a refusal is not the turn prelude this is about, so
+	// without one the case passed having reached nothing.
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: work, Authorize: builtin.Decide(chartLeads),
+	}) {
 		// THE READS ONLY. A write called with no arguments refuses on
 		// its own missing arguments, which is correct and says nothing
 		// about the turn; what this case is about is the prelude that
@@ -1419,9 +1561,14 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 			!strings.HasPrefix(tool.Name(), "get_") {
 			continue
 		}
-		result, err := tool.Call(t.Context(), map[string]any{})
+		result, err := tool.Call(everyGrant(), map[string]any{})
 		if err != nil {
 			t.Fatalf("%s: %v", tool.Name(), err)
+		}
+		if errors.Is(result.Cause, builtin.ErrNoAuthorizer) ||
+			errors.Is(result.Cause, builtin.ErrRefused) {
+			t.Fatalf("%s was refused before it ran (%s), so this case reached "+
+				"nothing", tool.Name(), result.Output)
 		}
 		if strings.Contains(result.Output, "can only be called during a turn") {
 			t.Errorf("%s refuses outside a turn even though the surface "+
@@ -1431,11 +1578,6 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 	}
 }
 
-// Depend records the dependency change the tool composed.
-//
-// THE COMPOSITION IS THE HALF THAT CAN BE WRONG HERE: the tool turns keys into
-// ids and a `{set}` gesture into the adds and removes a two-ended write needs,
-// and the sequence itself is certified against a real store elsewhere.
 // Inbox answers one notice, which is all the placement test needs: what it is
 // about is whether the surface SERVES the verb, never what the verb returns.
 func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
@@ -1443,7 +1585,7 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 
 	f.inboxQuery = q
 	return tracker.InboxAnswer{
-		Handle:         q.Who.Handle,
+		Handle:         q.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
 		Notices: []tracker.InboxNotice{{
 			RecordID: "rec-1", SubjectID: "i1", SubjectKey: "ENG-1",
@@ -1453,6 +1595,11 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	}, nil
 }
 
+// Depend records the dependency change the tool composed.
+//
+// THE COMPOSITION IS THE HALF THAT CAN BE WRONG HERE: the tool turns keys into
+// ids and a `{set}` gesture into the adds and removes a two-ended write needs,
+// and the sequence itself is certified against a real store elsewhere.
 func (f *fakeTracker) Depend(_ context.Context, _ string,
 	change tracker.DependencyChange, _ tracker.Leads) (tracker.DependencyResult, error) {
 
@@ -1585,7 +1732,7 @@ func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 			// THE RE-ROUTE IS THE LEAD'S DECISION, so the registry
 			// carries one — otherwise that case would be refused for
 			// a reason unrelated to what it is asserting.
-			reg := projectRegistry(t, trk, leadAlways)
+			reg := projectRegistry(t, trk, chartLeads)
 			got := callWork(t, reg, builtin.UpdateWorkItemTool, args)
 			if got.Failed {
 				t.Fatalf("the update failed: %s", got.Output)
@@ -2129,4 +2276,130 @@ func TestASceduleEditReachesTheNotification(t *testing.T) {
 	if got := notify.Fields["estimate"]; got.From != "30m" || got.To != "90m" {
 		t.Errorf("estimate delta = %+v, want 30m → 90m", got)
 	}
+}
+
+// A CREATE ASKED TWICE UNDER ONE SEED FILES ONE ITEM.
+//
+// The operation a create is published under names the new item's id, so an
+// id minted fresh per call made every retry a fresh OPERATION: a redelivered
+// turn filed its item twice, and so did an HTTP create retried under its
+// Idempotency-Key after an `unknown`. The ledger that exists to recognise the
+// second arrival never saw one.
+//
+// The controls are the two things one seed must still tell apart: a
+// different item asked for in the same run, and a call with no seed at all.
+func TestACreateRetriedUnderOneSeedFilesOnce(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	create := func(title string) {
+		t.Helper()
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+			"title": title, "project": "ENG",
+		}); got.Failed {
+			t.Fatalf("create %q: %s", title, got.Output)
+		}
+	}
+	create("rotate the signing key")
+	create("rotate the signing key")
+	create("audit the access log")
+	if len(trk.created) != 3 {
+		t.Fatalf("filed %d creates, want three calls recorded", len(trk.created))
+	}
+	if trk.created[0].ID != trk.created[1].ID || trk.opIDs[0] != trk.opIDs[1] {
+		t.Errorf("one item asked for twice under one seed was two operations: "+
+			"%s/%s and %s/%s", trk.created[0].ID, trk.opIDs[0],
+			trk.created[1].ID, trk.opIDs[1])
+	}
+	if trk.created[2].ID == trk.created[0].ID {
+		t.Error("two different items in one run were given one id")
+	}
+
+	// AND WITH NO SEED there is nothing to be idempotent against, so two
+	// calls are two items — an operator filing the same title twice meant
+	// it twice.
+	plain := newFakeTracker()
+	operator := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return builtin.Actor{Handle: "token:ops", Kind: tracker.AuthorOperator}, nil
+	}
+	tools := builtin.OperatorTools(builtin.OperatorDeps{
+		Work:      builtin.WorkDeps{Reader: plain, Writer: plain.as, Actor: operator},
+		Authorize: builtin.Decide(chartLeads),
+	})
+	for _, tool := range tools {
+		if tool.Name() != builtin.CreateWorkItemTool {
+			continue
+		}
+		for range 2 {
+			got, err := tool.Call(everyGrant(), map[string]any{
+				"title": "rotate the signing key", "project": "ENG",
+			})
+			if err != nil || got.Failed {
+				t.Fatalf("operator create: %v %s", err, got.Output)
+			}
+		}
+	}
+	if len(plain.created) != 2 || plain.created[0].ID == plain.created[1].ID {
+		t.Errorf("two unseeded creates were given one id: %+v", plain.created)
+	}
+}
+
+// A CREATE THAT NAMES NO PROJECT IS ONE OPERATION WHEREVER ITS DEFAULT POINTS.
+//
+// The default is read from the chart when the call runs, so it can move
+// between a turn and its re-run — the seat moved to another team, or the
+// parent a subtask defaults to moved to another project. The operation was
+// named for the project the default resolved to, so the re-run derived a
+// second operation and filed a second item for one request. The call is what
+// the operation is; the project it NAMES stays part of it, as the control
+// shows.
+func TestACreateRerunAfterItsDefaultMovedFilesOnce(t *testing.T) {
+	t.Parallel()
+	file := func(home string, args map[string]any) (string, string) {
+		t.Helper()
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{
+			Reader: trk, Writer: trk.as,
+			DefaultProject: func(string) string { return home },
+		})
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); got.Failed {
+			t.Fatalf("create in %s: %s", home, got.Output)
+		}
+		if len(trk.created) != 1 || trk.created[0].Project != home &&
+			args["project"] == nil {
+
+			t.Fatalf("the create in %s filed %+v", home, trk.created)
+		}
+		return trk.created[0].ID, trk.opIDs[0]
+	}
+	unnamed := map[string]any{"title": "rotate the signing key"}
+	firstID, firstOp := file("ENG", unnamed)
+	rerunID, rerunOp := file("OPS", unnamed)
+	if firstID != rerunID || firstOp != rerunOp {
+		t.Errorf("a re-run whose default moved was another operation: %s/%s "+
+			"then %s/%s — a second item for one request",
+			firstID, firstOp, rerunID, rerunOp)
+	}
+
+	// THE CONTROL: a project the call NAMES is part of the call.
+	engID, _ := file("ENG", map[string]any{"title": "rotate the signing key", "project": "ENG"})
+	opsID, _ := file("ENG", map[string]any{"title": "rotate the signing key", "project": "OPS"})
+	if engID == opsID {
+		t.Error("two creates naming two projects were given one id")
+	}
+}
+
+// declaredOf is args cut to the ones tool declares, for a case that calls
+// every tool with one set of arguments and is about something other than
+// what an undeclared one is answered — which the gate refuses by name before
+// anything else is decided.
+func declaredOf(tool tools.Callable, args map[string]any) map[string]any {
+	properties, _ := tool.Parameters()["properties"].(map[string]any)
+	out := map[string]any{}
+	for name, value := range args {
+		if _, held := properties[name]; held {
+			out[name] = value
+		}
+	}
+	return out
 }

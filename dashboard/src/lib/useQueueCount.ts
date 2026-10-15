@@ -104,7 +104,10 @@ const Reading = createContext<QueueCount | null>(null);
  * asks for, for the reason [InboxCountsProvider] is.
  */
 export function QueueCountProvider({ children }: { children: ReactNode }) {
-  const claim = useQueueCountRead(useViewer().handle);
+  // THE TRACKER'S QUESTION, asked only of a reader holding it — the sidebar
+  // draws My work locked for anybody else.
+  const viewer = useViewer();
+  const claim = useQueueCountRead(viewer.handle, viewer.tracker);
   const value = useMemo(() => ({ claim }), [claim]);
   return createElement(Reading.Provider, { value }, children);
 }

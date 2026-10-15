@@ -74,10 +74,33 @@ describe("folding the feed into rows", () => {
     expect(runs).toHaveLength(2);
   });
 
-  test("the person behind a token is one writer with the token's other saves", () => {
-    const by = { actor: "founder", actor_seat: "jane" };
+  // ONE NAME PER WRITER, the one the record carries: a credential bound to no
+  // seat writes under its login, which is a writer of its own beside any
+  // seat, and the engine's own saves are one writer whatever name they carry.
+  test("a credential's saves under its login are one writer, apart from a seat's", () => {
+    const login = { actor: "ci.docs", actor_kind: "operator" };
+    const saves = foldRuns(
+      [change("c-2", "2026-10-11T06:10:00Z", login), change("c-1", "2026-10-11T05:00:00Z", login)],
+      TOKYO,
+    );
+    expect(saves).toHaveLength(1);
+    const beside = foldRuns(
+      [
+        change("c-2", "2026-10-11T06:10:00Z", login),
+        change("c-1", "2026-10-11T05:00:00Z", { actor_kind: "human" }),
+      ],
+      TOKYO,
+    );
+    expect(beside).toHaveLength(2);
+  });
+
+  test("the engine's own saves are one writer", () => {
+    const engine = { actor: "crewlet", actor_kind: "system" };
     const runs = foldRuns(
-      [change("c-2", "2026-10-11T06:10:00Z", by), change("c-1", "2026-10-11T05:00:00Z", by)],
+      [
+        change("c-2", "2026-10-11T06:10:00Z", engine),
+        change("c-1", "2026-10-11T05:00:00Z", engine),
+      ],
       TOKYO,
     );
     expect(runs).toHaveLength(1);

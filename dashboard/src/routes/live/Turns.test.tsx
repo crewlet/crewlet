@@ -118,7 +118,7 @@ function mount(turns: TurnRow[], agents: unknown[] = []) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
-  if (agents.length) store.applyAgents(agents);
+  if (agents.length) store.applySeats(agents);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(
@@ -162,7 +162,16 @@ test("a parked turn is marked parked, and an open one running or not settled by 
       row("t-live", "the running one", {}),
       row("t-dead", "the stopped one", {}),
     ],
-    [{ role: "CEO", activity: "working", turn: { turn_id: "t-live", stage: "phase" } }],
+    [
+      {
+        id: "ceo",
+        agent_id: "ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "working",
+        turn: { turn_id: "t-live", stage: "phase" },
+      },
+    ],
   );
   await screen.findByText("the parked one");
 
@@ -434,13 +443,18 @@ test("the seat menu offers every agent in every unit, by name", async () => {
     ],
     units: [
       {
+        id: "executives",
         name: "Executives",
         roles: [
           { name: "Agent CEO", handle: "agent-ceo", kind: "agent" },
           { name: "Agent CTO", handle: "agent-cto", kind: "agent" },
         ],
         children: [
-          { name: "Core", roles: [{ name: "Agent SWE", handle: "agent-swe", kind: "agent" }] },
+          {
+            id: "core",
+            name: "Core",
+            roles: [{ name: "Agent SWE", handle: "agent-swe", kind: "agent" }],
+          },
         ],
       },
     ],

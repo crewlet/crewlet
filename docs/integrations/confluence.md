@@ -92,9 +92,10 @@ A unit declares the Confluence space it **owns** under `space`. This is *integra
 ```yaml
 units:
   - name: Engineering
+    id: engineering   # the unit's key; `name` above is display
     type: department
-    lead: CTO
-    space: "ENG"   # unit identity: routing + write home (NOT read scope)
+    lead: cto         # the lead seat's handle
+    space: "ENG"      # unit identity: routing + write home (NOT read scope)
     roles:
       - name: CTO
         mcp_env:
@@ -104,8 +105,9 @@ units:
           atlassian: { CONFLUENCE_API_TOKEN: "${ARCHITECT_CONFLUENCE_TOKEN}" }
 
   - name: Product
+    id: product
     type: department
-    lead: VP Product
+    lead: vp-product
     space: "PROD"
     roles:
       - name: VP Product
@@ -137,7 +139,7 @@ What was measured, and what it decides:
 
 That makes the Cloud token exactly what [Datadog's](datadog.md) is: **a shared token doing a signing key's job with none of the guarantees.** A replayed delivery is indistinguishable from a fresh one, and anyone holding the token can forge a page event. Treat `webhook_token` as a signing key, rotate it the same way (`-recreate-webhooks` re-registers every hook with a fresh one), and keep it a `${VAR}`. The engine never logs the query string on this route.
 
-**A value this deployment already sealed is reused, not reminted.** Both halves take the same rule: a `${VAR}` that already resolves is used as it is, and one that resolves to nothing is minted into — **unless** the fleet already holds a value under that name, which is read back instead. That read-back matters to the reconcile loop rather than to the command: a `${VAR}` resolves from a snapshot taken at apply time, so in the window between a pass sealing a value and something rebuilding that snapshot the resolver answers empty for one the fleet already holds, and without it the loop minted again on every tick — re-registering every hook with a token the running engine does not hold, which on Cloud is the entire authentication. On a node with **no keyring** at all (`secrets.keys` unset) nothing is minted and no hook is registered: the surface reports `ingress_blocked` against `integrations.confluence.webhook_token` on Cloud or `integrations.confluence.webhook_secret` on Data Center, naming `secrets.keys`. A Cloud hook registered with no token would be an open endpoint anybody could drive a turn through, so registering one anyway is not an option.
+**A value this deployment already sealed is reused, not reminted.** Both halves take the same rule: a `${VAR}` that already resolves is used as it is, and one that resolves to nothing is minted into — **unless** the fleet already holds a value under that name, which is read back instead. That read-back matters to the reconcile loop rather than to the command: a `${VAR}` resolves from a snapshot taken at apply time, so in the window between a pass sealing a value and something rebuilding that snapshot the resolver answers empty for one the fleet already holds, and without it the loop minted again on every tick — re-registering every hook with a token the running engine does not hold, which on Cloud is the entire authentication. Every node holds the keyring a minted value is sealed under, so a pass never registers a hook it has nothing to authenticate: a Cloud hook with no token would be an open endpoint anybody could drive a turn through.
 
 Because the token is the entire check, its length is the entire strength, so **Crewlet refuses one shorter than 26 characters** — the length `crewlet confluence provision` and the dashboard's Generate button both mint (130 bits of base32). `crewlet validate` and `PATCH /config` reject a short literal, and the route answers 503 for a short **resolved** value, so a `${VAR}` pointing at a weak token is refused exactly where the weak token itself would be.
 
@@ -312,7 +314,7 @@ flowchart TD
     E --> F["confluence.Parser.Parse<br/>one Routed per recipient"]
     F --> G["Route:<br/>subscribers ∪ @mentions,<br/>else the space lead"]
     G --> H["Prompt.Build renders the<br/>tool-agnostic task description"]
-    H --> I["crewlet.agent.{handle}.inbox"]
+    H --> I["crewlet.agent.{seat-id}.inbox"]
     I --> J["The seat wakes, reads the page<br/>through its own MCP tools, acts"]
 ```
 
@@ -366,6 +368,8 @@ on the coordination store — a seat subscribed by a mention one node handled
 has to be found by whichever node handles the next event. Membership is asked
 as a single question per event ("which of my seats is subscribed to this
 page?"), so the cost does not grow with a page's history.
+
+A seat is on the list by its handle, and it is woken under it.
 
 The list is bounded by the **coordination bucket's retention** rather than a
 per-page expiry: a page nobody has touched inside that window drops its

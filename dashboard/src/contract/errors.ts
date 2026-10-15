@@ -33,12 +33,17 @@ export type QueryErrorCode =
  *
  * EXACTLY THE ENGINE'S TWO SETS, held both ways by `internal/api/operator`'s
  * `TestTheDashboardKnowsExactlyTheActRefusals`: the transport's own codes
- * (`operator.ActTransportCodes` — a token, a body, a drain) and the tool
- * refusal classes (`mcp.Refusals` — what the tool itself refused). One union
- * because a caller branching on `error` must never need to know which half a
- * code came from, and the engine keeps them disjoint for that reason. A code
- * missing here is a refusal rendered as "something went wrong"; one listed
- * that nothing sends is a sentence nobody will ever read.
+ * (`operator.ActTransportCodes` — the request guard's, the authority table's,
+ * the operation key's, a body, a drain) and the tool refusal classes
+ * (`mcp.Refusals` — what the tool itself refused, or a fault of the node it
+ * met). One union because a caller branching on `error` must never need to
+ * know which half a code came from, and the engine keeps them disjoint for
+ * that reason. A code missing here is a refusal rendered as "something went
+ * wrong"; one listed that nothing sends is a sentence nobody will ever read.
+ *
+ * NO SENTENCE MENTIONS A TOKEN. The dashboard holds no credential a script can
+ * read — the browser's session cookie is the whole of it — so a person is
+ * told to sign in again, never to set anything.
  *
  * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
  * which means "show the tool's own `detail`". Those are the two classes whose
@@ -48,21 +53,37 @@ export type QueryErrorCode =
  * `if_match` and record ids.
  */
 export const ACT_ERRORS = {
+  // Who is asking — the request guard's, before any tool is named.
+  invalid_token: "Your sign-in has ended. Sign in again, then make the change.",
+  identity_unavailable:
+    "This node cannot confirm who you are just now. Try again in a moment; your sign-in is fine.",
+  seat_unavailable:
+    "The seat you act as is no longer in the org chart, so nothing can be made in its name.",
+  second_factor_enrolment_required:
+    "This deployment requires a second factor. Enrol one before you make changes.",
+  csrf_origin:
+    "The engine refused a change sent from another site. Make it from this page's own address.",
+  // The authority table's, through the one refusal mapping.
+  unauthorized: "You do not hold what this change needs.",
+  step_up_required: "This change needs you to confirm who you are first.",
   // The transport's own.
-  invalid_token: "The engine refused your API token. Set it again to make changes.",
-  unbound: "This token is not bound to a person, so there is nobody to record the change under.",
   unknown_tool:
     "This engine does not support that change. It may be running a different version. Reload the page.",
   read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
   unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
-  invalid_request_id: "The dashboard sent the change without a usable request id.",
+  op_id_invalid:
+    "The dashboard sent the change without a usable operation key. Reload; if it persists, it is a bug.",
+  invalid_input:
+    "What this change was about moved since you opened it. Look again, then make the change.",
   invalid_body: "The dashboard sent a change the engine could not read.",
   body_too_large: "The change is larger than the engine accepts in one request.",
   unreadable_body: "The change could not be read in full by the engine.",
+  no_active_revision:
+    "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
   draining: "This node is shutting down and takes no changes now. Try again in a moment.",
-  internal_error:
-    "The change failed inside the engine. Its log has the reason; nothing was refused on purpose.",
-  // The tool's own refusal classes.
+  // The tool's own refusal classes. `internal_error` is one of them — a fault
+  // of the node, which no retry clears — and is also what a failure that
+  // carried no class at all is answered with.
   invalid: null,
   not_found: "It is not there any more. Somebody may have removed or moved it.",
   forbidden: null,
@@ -78,4 +99,6 @@ export const ACT_ERRORS = {
   budget_exhausted:
     "The token budget for this window is spent. Raise it, or wait for the window to reset.",
   unavailable: "This node could not make the change just now. Try again in a moment.",
+  internal_error:
+    "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose.",
 } as const;

@@ -32,7 +32,7 @@ afterEach(() => {
 function serving(answers: Partial<Record<QueryName, unknown>>) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",

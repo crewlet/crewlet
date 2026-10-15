@@ -232,7 +232,11 @@ export function Turns({
         >
           <Card.Title as="h3">Where its tokens go</Card.Title>
         </Card.Header>
-        <QueryState error={spend.error} loading={spend.loading && !spend.data}>
+        <QueryState
+          error={spend.error}
+          refusal={spend.refusal}
+          loading={spend.loading && !spend.data}
+        >
           <div className="prof-spend">
             <section aria-label="By phase">
               <h4 className="t-label">By phase</h4>
@@ -279,7 +283,11 @@ export function Turns({
         >
           <Card.Title as="h3">Turns</Card.Title>
         </Card.Header>
-        <QueryState error={list.error} loading={list.loading && list.answers.length === 0}>
+        <QueryState
+          error={list.error}
+          refusal={list.refusal}
+          loading={list.loading && list.answers.length === 0}
+        >
           <DataGrid
             name="prof-turns"
             rows={list.items}
@@ -383,7 +391,7 @@ export function Turns({
         {(list.more || list.paging || list.pageError) && (
           <footer className="panel-foot">
             {list.pageError ? (
-              <QueryState error={list.pageError} loading={false} />
+              <QueryState error={list.pageError} refusal={null} loading={false} />
             ) : (
               <Button size="small" variant="secondary" onClick={list.older} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
@@ -409,7 +417,9 @@ export function Turns({
             THEM: only the settled half comes from it, and the running half is
             pushed — so a failed or slow read must not hide the turn happening
             right now. */}
-        {history.error && <QueryState error={history.error} loading={history.loading} />}
+        {history.error && (
+          <QueryState error={history.error} refusal={history.refusal} loading={history.loading} />
+        )}
         {!history.loading && !history.error && !turns.length && (
           <EmptyState
             size="compact"

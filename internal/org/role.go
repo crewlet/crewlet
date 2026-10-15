@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -44,46 +44,21 @@ const (
 	TransportConfluence Transport = "confluence"
 	TransportGitHub     Transport = "github"
 	TransportGitLab     Transport = "gitlab"
-
-	// TransportCrewlet is the engine's OWN surface — the API, the
-	// dashboard and the operator tool server — where a person is
-	// identified by the bearer token they hold rather than by an account
-	// on somebody else's platform.
-	//
-	// It is a transport for the same reason the others are: a human seat
-	// acts here, and everything that acts has to be attributable. What it
-	// is NOT is a delivery channel — the engine never sends as itself, so
-	// nothing is ever "delivered" to this identity. It is read in one
-	// direction only: a write arriving with this token is attributed to
-	// this seat, so the item that seat files carries their name and the
-	// notifications it raises reach their colleagues by the identities
-	// above.
-	TransportCrewlet Transport = "crewlet"
 )
 
-// Reachable reports whether an agent can address a person over this
-// transport.
-//
-// Every transport but [TransportCrewlet] is a place a message can be sent.
-// The engine's own surface is not: it never sends as itself, so an operator
-// id is an attribution and never an address. Anything RENDERING a person's
-// contact details — a roster, a colleague card — asks this first, because
-// listing an operator id under "how to reach them" tells an agent to mention
-// a name no platform will resolve.
-func (t Transport) Reachable() bool { return t != TransportCrewlet }
-
-// handlePattern is the canonical handle shape. Slugify output always
-// conforms; an explicit handle is checked against it at validation.
-var handlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-
 // ValidHandle reports whether s is a registry-safe seat handle: lowercase
-// alphanumerics and hyphens, starting with an alphanumeric.
+// alphanumerics and hyphens, starting with an alphanumeric, at most
+// [iam.MaxLogin] bytes.
 //
-// This is the ONE definition of the shape, exported because the party
-// registry enforces it again at registration time — a second regex there
-// that disagreed by one character would accept a handle at config time and
-// reject the same seat during engine start.
-func ValidHandle(s string) bool { return handlePattern.MatchString(s) }
+// IT IS [iam.ValidSeatHandle], and deliberately not a regex of its own: the
+// identity leaf is what keeps a seat handle, a person's login and a machine's
+// handle from ever colliding, and a second definition here would be a second
+// rule that could let `jane.doe` through as a seat. One definition in the leaf
+// every one of them imports is what makes a document and the party registry
+// refuse exactly the same names.
+// Slugify output always conforms but for its length, which [Role.Validate]
+// checks.
+func ValidHandle(s string) bool { return iam.ValidSeatHandle(s) }
 
 // EnvLookup resolves an environment variable, reporting whether it is set.
 // It matches os.LookupEnv, which is what a nil lookup falls back to.
@@ -132,47 +107,7 @@ type HumanContact struct {
 	// GitLabUsername is a GitLab username — assignment, review requests and
 	// sender attribution. Lowercased for the same reason as GitHubLogin.
 	GitLabUsername string `yaml:"gitlab_username,omitempty" json:"gitlab_username,omitempty"`
-
-	// CrewletOperatorID binds one of Tier A's api.auth.tokens ids to this
-	// seat, so a person acting through the dashboard, the REST API or the
-	// operator tool server acts AS THEMSELVES rather than as a credential.
-	//
-	// # Why the binding is written here and not on the token
-	//
-	// Tier A is the root of trust and may never read Tier B — it holds the
-	// keys to the secret store — so a `seat:` field on the token would have
-	// the trusted tier depending on the untrusted one. Naming the token id
-	// from the company document inverts that: Tier A keeps a bare list of
-	// credentials, and the org chart says which of them is a person.
-	//
-	// Unbound is an ORDINARY state, not a misconfiguration. An operator
-	// who is not in the org chart, a pipeline, an automation: each writes
-	// under its token's own id as the author, with author kind `operator`,
-	// and is never refused for it.
-	//
-	// Lower-cased like the code-host logins, because the guard compares
-	// what an operator typed here against what they typed in Tier A and
-	// two files are two chances to disagree about case. Tier A's token ids
-	// are lowercase by validation, so the lowercased value names exactly
-	// one credential.
-	CrewletOperatorID string `yaml:"crewlet_operator_id,omitempty" json:"crewlet_operator_id,omitempty"`
 }
-
-// ReservedOperatorID is the attribution stamped on every request a DISABLED
-// auth guard serves: nobody presented a credential, so nobody is named.
-//
-// # Why it lives in org
-//
-// Three rules read it and must never disagree about which id it is. Tier A
-// refuses it as an `api.auth.tokens[].id`, so no real credential's writes are
-// confused in an audit row with the ones made while the guard was off; the API
-// stamps it on a disabled-mode request; and the chart refuses it as a
-// `contact.crewlet_operator_id`, so a disabled guard's caller is never a
-// PERSON. The last rule is the one that forces the home: config imports org,
-// so org is the lowest package all three can reach, and a second copy of the
-// string is how the reservation would stop covering what is actually stamped —
-// silently, because each side would stay self-consistent.
-const ReservedOperatorID = "anonymous"
 
 // contactField describes one identity field: what an operator writes, how
 // its literal values are normalised, and where the value lives.
@@ -195,9 +130,6 @@ type contactField struct {
 	//     every save (NormalizeUsername), admits only lowercase characters
 	//     in one, and finds one by `Username = lower(?)` — so "Jane" and
 	//     "jane" are one person there and the duplicate check must say so.
-	//   - crewlet_operator_id: lowercase by Tier A's own rule, which refuses
-	//     a token id with an upper-case letter; it is matched against that
-	//     id lowercased (SeatByOperatorID).
 	//
 	// A ${VAR} reference is exempt and is lowercased after resolution
 	// instead.
@@ -222,7 +154,6 @@ const (
 	fieldAtlassianAccountID
 	fieldGitHubLogin
 	fieldGitLabUsername
-	fieldCrewletOperatorID
 )
 
 // contactFields is every identity a contact can carry, in config order.
@@ -233,7 +164,6 @@ var contactFields = []contactField{
 	{key: "atlassian_account_id", value: func(c *HumanContact) *string { return &c.AtlassianAccountID }},
 	{key: "github_login", lowercase: true, value: func(c *HumanContact) *string { return &c.GitHubLogin }},
 	{key: "gitlab_username", lowercase: true, value: func(c *HumanContact) *string { return &c.GitLabUsername }},
-	{key: "crewlet_operator_id", lowercase: true, value: func(c *HumanContact) *string { return &c.CrewletOperatorID }},
 }
 
 // contactTransports is THE transport-to-field table: which field carries a
@@ -252,7 +182,6 @@ var contactTransports = []struct {
 	{TransportConfluence, fieldAtlassianAccountID},
 	{TransportGitHub, fieldGitHubLogin},
 	{TransportGitLab, fieldGitLabUsername},
-	{TransportCrewlet, fieldCrewletOperatorID},
 }
 
 // Identity is one external account a human seat can be reached at.
@@ -264,11 +193,11 @@ type Identity struct {
 // Clone returns a copy the caller may normalise without touching the original,
 // or nil for nil.
 //
-// A seat is BUILT from the authored config on every read of the org — each
-// apply, and each placement read the dashboard makes on its five-second tick —
-// and [Organization.Normalize] then rewrites the contact in place. Shared, that
-// rewrote the stored revision's own contact, from several goroutines at once:
-// a data race, and a stored document silently changed by being read.
+// A seat is BUILT from an authored document by the config layer, whose
+// document a reader may hold across many builds, and [Organization.Normalize]
+// then rewrites the contact in place. Shared, that rewrote the source's own
+// contact, from several goroutines at once: a data race, and a document
+// silently changed by being read.
 func (c *HumanContact) Clone() *HumanContact {
 	if c == nil {
 		return nil
@@ -324,23 +253,6 @@ func (c *HumanContact) faults() []fieldError {
 		return nil
 	}
 	var out []fieldError
-	// A LITERAL binding of the reserved id. Folded because the lookup folds:
-	// Normalize has usually lowercased it already, but Validate is exported
-	// and a caller need not have normalised first, and "Anonymous" binds
-	// exactly what "anonymous" does. A ${VAR} is not caught here — its value
-	// lives in an environment validation may not be able to see — and is
-	// dropped where it is resolved instead (see [HumanContact.ResolvedIdentities]).
-	if v := strings.TrimSpace(c.CrewletOperatorID); strings.EqualFold(v, ReservedOperatorID) {
-		out = append(out, fieldError{
-			field: []any{"contact", "crewlet_operator_id"},
-			err: fmt.Errorf("contact.crewlet_operator_id: %w: %q is the attribution "+
-				"a disabled api.auth guard stamps on every caller, so binding it "+
-				"makes everybody who reaches the engine with the guard off this "+
-				"person, and files every disabled-mode write under their name. "+
-				"Bind one of api.auth.tokens[].id instead",
-				ErrReservedOperatorID, v),
-		})
-	}
 	for _, f := range contactFields {
 		v := strings.TrimSpace(*f.value(c))
 		if !strings.Contains(v, "${") {
@@ -413,132 +325,28 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	}
 	var out []Identity
 	for _, t := range contactTransports {
-		resolved, ok := resolveContactField(t.field, c, lookup)
-		if !ok {
-			continue
-		}
-		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
-	}
-	return out
-}
-
-// resolveContactField is one field's consumable value — every rule
-// [HumanContact.ResolvedIdentities] states, for one field — or false when it
-// has none: unset, an unset or empty variable, or the reserved operator id.
-//
-// ONE COPY, because two readers need it: the identities the engine consumes and
-// the per-field account [HumanContact.Fields] gives a screen. Two copies of the
-// `${VAR}` handling are two chances for a person's contact to read as
-// resolving on the screen that shows it and as absent to the engine that uses
-// it.
-func resolveContactField(field int, c *HumanContact, lookup EnvLookup) (string, bool) {
-	f := contactFields[field]
-	raw := strings.TrimSpace(*f.value(c))
-	if raw == "" {
-		return "", false
-	}
-	resolved := raw
-	if name, isRef := envref.Whole(raw); isRef {
-		v, ok := lookup(name)
-		if !ok {
-			return "", false
-		}
-		resolved = strings.TrimSpace(v)
-		if resolved == "" {
-			return "", false
-		}
-	}
-	if f.lowercase {
-		resolved = strings.ToLower(resolved)
-	}
-	// A REFERENCE THAT RESOLVES TO THE RESERVED ID BINDS NOBODY. Validation
-	// refuses the literal, but a ${VAR}'s value lives in an environment it
-	// cannot always see, so the refusal has to be repeated where the value
-	// is known. Omitted, like an unset variable, rather than returned:
-	// every consumer of this identity — the seat a credential resolves to,
-	// the alias a personal read matches, the registry — would otherwise
-	// make a disabled guard's caller this person.
-	if field == fieldCrewletOperatorID && resolved == ReservedOperatorID {
-		return "", false
-	}
-	return resolved, true
-}
-
-// ContactField is one identity field of a contact AS CONFIGURED, beside
-// whether it resolves — what a screen shows an operator about a person.
-//
-// PER FIELD, not per transport: [HumanContact.Identities] lists Jira and
-// Confluence as two identities over one Atlassian field, which is right for
-// routing and reads as a duplicate to a person checking what they wrote.
-type ContactField struct {
-	// Key is the config key the value is written under: `slack_user_id`.
-	Key string
-	// Value is the field VERBATIM — a literal id or a `${VAR}` reference,
-	// never the variable's value. An account id is not a secret, but a
-	// reference's value lives in a process environment, and a screen that
-	// printed environment values would be one somebody extends to a
-	// variable that is.
-	Value string
-	// Reference reports that Value is a whole `${VAR}`.
-	Reference bool
-	// Resolves reports that the engine can use the field: a literal
-	// always, a reference whose variable is set here and non-empty — and
-	// never a binding that resolves to the reserved operator id.
-	Resolves bool
-}
-
-// Fields returns every declared field in config order, through the same
-// resolution the engine consumes identities by. A nil lookup reads the process
-// environment.
-func (c *HumanContact) Fields(lookup EnvLookup) []ContactField {
-	if c == nil {
-		return nil
-	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	var out []ContactField
-	for i, f := range contactFields {
+		f := contactFields[t.field]
 		raw := strings.TrimSpace(*f.value(c))
 		if raw == "" {
 			continue
 		}
-		_, isRef := envref.Whole(raw)
-		_, resolves := resolveContactField(i, c, lookup)
-		out = append(out, ContactField{Key: f.key, Value: raw, Reference: isRef, Resolves: resolves})
+		resolved := raw
+		if name, isRef := envref.Whole(raw); isRef {
+			v, ok := lookup(name)
+			if !ok {
+				continue
+			}
+			resolved = strings.TrimSpace(v)
+			if resolved == "" {
+				continue
+			}
+		}
+		if f.lowercase {
+			resolved = strings.ToLower(resolved)
+		}
+		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
 	}
 	return out
-}
-
-// ResolvedOperatorID is the `api.auth.tokens[].id` this seat is bound to, or
-// "" for a seat that names none.
-//
-// THE OTHER DIRECTION OF [Organization.SeatByOperatorID], and it exists
-// because both directions are now walked: that one answers "whose seat is this
-// credential", and this one answers "which credential does this person also
-// write under" — the question every personal READ has to ask, since a write
-// made through a token is attributed to the token's own name and the seat's
-// own blocks would otherwise never match it.
-//
-// IT IS THE RESOLVED VALUE, through [HumanContact.ResolvedIdentities], which
-// is what makes the two directions agree by construction rather than by two
-// copies of the same `${VAR}` handling: a company writing
-// `crewlet_operator_id: ${FOUNDER_ID}` gets the variable's value from both, an
-// unset variable matches nothing from both, and neither can ever be the raw
-// `${VAR}` text that no token could present.
-//
-// A nil lookup reads the process environment, matching every other consumer of
-// this field.
-func (r *Role) ResolvedOperatorID(lookup EnvLookup) string {
-	if r == nil {
-		return ""
-	}
-	for _, id := range r.Contact.ResolvedIdentities(lookup) {
-		if id.Transport == TransportCrewlet {
-			return id.ExternalID
-		}
-	}
-	return ""
 }
 
 // SlackIdentity is a seat's own Slack app: the signing secret its transport
@@ -560,6 +368,58 @@ type SlackIdentity struct {
 
 // IsZero reports an unconfigured Slack identity.
 func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
+
+// GitHubApp is a seat's own GitHub App, as the running company holds it.
+//
+// ONE APP PER AGENT, and there is no other way to have one: a GitHub App has
+// exactly one bot identity, derived from its slug, and no token, header or
+// manifest field varies the author. So agents sharing an app would all act as
+// the same account, and two seats resolving to one login means an @mention can
+// no longer say which agent is meant.
+//
+// EVERYTHING HERE EXCEPT THE TIER AND THE REPOSITORIES IS WRITTEN BY THE
+// ENGINE. An app is created from a manifest the engine builds, and GitHub
+// returns its id, slug, key and webhook secret exactly once, at conversion
+// time. What a person does is click through the creation and the install.
+type GitHubApp struct {
+	// Tier is how much of a repository this seat may do. Empty is the
+	// least this engine hands out, which is the right answer for a seat
+	// nobody has thought about yet.
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
+
+	// Repos are the repositories this seat works in, as owner/name. Empty
+	// means every repository the installation covers, which is what the
+	// operator chose when they installed the app.
+	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty"`
+
+	// AppID and AppSlug are the app GitHub created. The SLUG is what the
+	// bot's login derives from, so it is what an @mention resolves through.
+	AppID   int64  `yaml:"app_id,omitempty" json:"app_id,omitempty"`
+	AppSlug string `yaml:"app_slug,omitempty" json:"app_slug,omitempty"`
+
+	// InstallationID is the installation of that app on the organization.
+	// SEPARATE FROM THE APP, because creating one and installing it are two
+	// acts by a person and the second can be a day after the first.
+	InstallationID int64 `yaml:"installation_id,omitempty" json:"installation_id,omitempty"`
+
+	// PrivateKey and WebhookSecret are `${VAR}` POINTERS at the company's
+	// secret store, never values. GitHub returns each once and reissues neither.
+	//
+	// THE WEBHOOK SECRET IS THE APP'S OWN, which is why it is here rather
+	// than read off `integrations.github`: that one belongs to a different
+	// app, or to no app at all in a company that only ever created
+	// per-agent ones, and verifying against it refused every delivery from
+	// every agent while GitHub's own hook page showed the app healthy.
+	PrivateKey    string `yaml:"private_key,omitempty" json:"private_key,omitempty"`
+	WebhookSecret string `yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty"`
+}
+
+// Held reports a seat whose app exists and is installed, which is the only
+// state its credentials can be minted from.
+func (g *GitHubApp) Held() bool {
+	return g != nil && g.AppID != 0 && g.InstallationID != 0 &&
+		strings.TrimSpace(g.PrivateKey) != ""
+}
 
 // MattermostIdentity is a seat's Mattermost bot. One credential covers
 // everything on this backend: the inbound websocket, the outbound REST
@@ -586,6 +446,71 @@ func (m MattermostIdentity) IsZero() bool { return m == MattermostIdentity{} }
 // given.
 type RoleSandboxMCP struct {
 	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty"`
+}
+
+// SandboxSetupStep is one provisioning step as the running seat holds it.
+//
+// THE VALUES ARE VERBATIM, `${VAR}` references included, and each is read
+// where it is used, at LAUNCH: the env is expanded with the rest of the
+// sandbox environment, and a file's body is read as CONTENT
+// ([secrets.ReadContent]) — the value a whole `${VAR}` names, or the body as
+// written. Resolving them here as well would double-resolve and silently
+// mangle any secret whose real value contains a literal `${...}`. Commands and
+// Brief are never resolved by the engine: a command runs through the box's own
+// shell, which expands its `$VAR`s from the run environment, and a brief is
+// agent-facing prose, into which substituting engine-host environment would
+// be surprising at best.
+type SandboxSetupStep struct {
+	// Name identifies the step in logs and in setup-failure errors.
+	Name string `yaml:"name" json:"name"`
+
+	// Files are written into the box before Commands run.
+	//
+	// CONTENT, not a setting: a body is read whole at launch
+	// ([secrets.ReadContent]), because a `${…}` inside a script or an
+	// .npmrc is that file's own syntax and nothing on the way to the box
+	// ever expands it.
+	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
+
+	// Commands run in order after the files land. A non-zero exit fails
+	// the whole acquisition — the coding agent's brief promises this
+	// environment, so a partially provisioned box must never reach a run.
+	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
+
+	// Env is merged into the coding agent's run environment.
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+
+	// Brief is the paragraph handed to the coding agent: what this step
+	// made TRUE about its box.
+	Brief string `yaml:"brief,omitempty" json:"brief,omitempty"`
+
+	// TimeoutSeconds is how long each of this step's commands may run.
+	// Provisioning is not a control-plane call: without its own budget
+	// these inherit a timeout sized for a mkdir, and any real step is
+	// killed and fails the acquisition. Unset takes
+	// [DefaultSetupTimeoutSeconds] — see [SetupTimeout].
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+}
+
+// DefaultSetupTimeoutSeconds gives a provisioning command room for a
+// dependency install or a cold image pull, which is what these steps
+// actually do.
+const DefaultSetupTimeoutSeconds = 300.0
+
+// SetupTimeout is how long a provisioning command may run, given what the
+// document said.
+//
+// ONE HOME FOR THE RULE, here rather than on either step type, because BOTH
+// kinds of setup step answer it — the provider-wide ones a `providers.sandbox`
+// block declares and the per-seat ones a seat's own sandbox block does — and the
+// validator that refuses a negative value quotes the same number. Written
+// once per type it is three copies of "unset means five minutes", which is
+// exactly the shape that drifts.
+func SetupTimeout(declared float64) float64 {
+	if declared <= 0 {
+		return DefaultSetupTimeoutSeconds
+	}
+	return declared
 }
 
 // RoleSandbox is the per-seat code-runtime gate. Absent means the seat
@@ -620,6 +545,31 @@ type RoleSandbox struct {
 	// agent asked a question.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty"`
 
+	// Setup is this seat's OWN provisioning, applied after the engine-wide
+	// steps: files written into the box, commands run over them, the env
+	// they contribute and the paragraph the coding agent is told about
+	// what they made true.
+	//
+	// HERE FOR THE REASON MaxTurns IS: read off the document beside the
+	// running seat, a seat's own provisioning is one walk away from being
+	// skipped — and a box that silently skipped its setup is one whose
+	// coding agent was promised an environment it does not have.
+	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty"`
+
+	// MaxTurns caps the agentic ROUNDS one of this seat's coding runs may
+	// take. Unset inherits the provider default; ZERO IS UNCAPPED, which
+	// is why it is a pointer — a seat that deliberately runs without a
+	// round cap and a seat that said nothing are different settings, and
+	// a plain int cannot tell them apart.
+	//
+	// It was in NEITHER half until this conversion carried it: the config
+	// type declared it, the runtime seat did not, and the engine read it
+	// off the document — so the moment a stored revision stopped carrying
+	// seats, every seat's cap silently became the provider default. That
+	// is the exact failure the seat partition gate exists to make loud,
+	// one layer up from where the gate can see.
+	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 
 	// Env is injected into this seat's sandbox run. External service
@@ -642,11 +592,21 @@ type RoleSandbox struct {
 // callers compare seats by identity, so a copy would be a different seat
 // that looks the same.
 type Role struct {
+	// Name is DISPLAY, plus the source of the derived handle when the seat
+	// declares none. Nothing in the document resolves a seat by it — a
+	// unit's `lead:` and every `manages:` entry are handles — so renaming a
+	// seat moves nothing that points at it. What still reads it is prose: a
+	// roster row, and a colleague a model addresses by the name it
+	// remembers.
 	Name string   `yaml:"name" json:"name"`
 	Kind RoleKind `yaml:"kind,omitempty" json:"kind,omitempty"`
 
 	// Contact is the external identities of a HUMAN seat. Nil on an agent
-	// seat; a human seat needs at least one identity in it.
+	// seat, and OPTIONAL on a human one: a person reached only through the
+	// dashboard is bound to the seat in the identity directory and has no
+	// chat account to name here. A human seat with none is a legitimate
+	// seat nobody can @-mention, which the company's warnings report rather
+	// than validation refusing it.
 	Contact *HumanContact `yaml:"contact,omitempty" json:"contact,omitempty"`
 
 	// Availability is a free-text note for a human seat, rendered into
@@ -659,30 +619,35 @@ type Role struct {
 	// this field is the config, not the identity.
 	DeclaredHandle string `yaml:"handle,omitempty" json:"handle,omitempty"`
 
+	// Email is the seat's address AS WRITTEN in the company document: a
+	// literal, or a `${VAR}` reference to one. Anything that MATCHES on it
+	// reads [Role.ResolvedEmail].
 	Email string `yaml:"email,omitempty" json:"email,omitempty"`
 
-	// UnitRef is a SOFT reference to the unit this seat belongs to, used
-	// when the seat is declared at the org root rather than nested inside
-	// the unit — which is how the per-entity config API adds one.
-	// [Organization.Normalize] moves such a seat into the named unit so
-	// that everything downstream can treat it as unit-scoped; without the
-	// move it would miss the unit's MCP inheritance and be invisible to the
-	// unit lead. Empty for a genuinely org-wide seat.
+	// UnitRef is a SOFT reference, by unit KEY ([Unit.Key]), to the unit
+	// this seat belongs to, used when the seat is declared at the org root
+	// rather than nested inside the unit — which is how the per-entity
+	// config API adds one. [Organization.Normalize] moves such a seat into
+	// the keyed unit so that everything downstream can treat it as
+	// unit-scoped; without the move it would miss the unit's MCP
+	// inheritance and be invisible to the unit lead. Empty for a genuinely
+	// org-wide seat.
 	UnitRef string `yaml:"unit,omitempty" json:"unit,omitempty"`
 
 	Goal             string   `yaml:"goal,omitempty" json:"goal,omitempty"`
 	Backstory        string   `yaml:"backstory,omitempty" json:"backstory,omitempty"`
 	Responsibilities []string `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty"`
 
-	// Manages is the seats this one manages. An entry naming a UNIT
-	// expands to every seat in it, descendants included, except this seat
-	// itself (see [Organization.Normalize]). Read after normalisation,
-	// every entry is a seat name bar one that named neither a seat nor a
-	// unit: that entry is kept verbatim, because the seat it names may not
-	// have been added yet, and [Organization.DanglingRefs] reports it.
+	// Manages is the HANDLES of the seats this one manages. An entry that is
+	// a UNIT KEY expands to every seat handle in it, descendants included,
+	// except this seat itself (see [Organization.Normalize]). Read after
+	// normalisation, every entry is a seat handle bar one that was neither a
+	// handle nor a unit key: that entry is kept verbatim, because the seat
+	// it names may not have been added yet, and
+	// [Organization.DanglingRefs] reports it.
 	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty"`
 
-	// AutoManaged is the seats [Organization.Normalize] added to Manages
+	// AutoManaged is the handles [Organization.Normalize] added to Manages
 	// because this seat leads their unit and nobody else in it manages them,
 	// in the order they were added. Every one of them is also in Manages.
 	//
@@ -756,6 +721,26 @@ type Role struct {
 	Slack      SlackIdentity      `yaml:"slack,omitempty" json:"slack,omitzero"`
 	Mattermost MattermostIdentity `yaml:"mattermost,omitempty" json:"mattermost,omitzero"`
 
+	// GitHub is this seat's own GitHub App, beside the two chat
+	// identities and for the same reason: an agent acts as ITSELF at the
+	// code host, and which account that is comes from the app.
+	//
+	// # Why it is on the runtime seat at all
+	//
+	// It was not, and the walks that needed it read the company DOCUMENT
+	// instead — which stopped carrying seats at all when the org chart
+	// became a log. A seat is rows plus this document now, so a fact about
+	// a seat that lives anywhere else is a fact the running company cannot
+	// see: the bot-login registry, the missing-app report and the webhook
+	// secret index each walked an empty list and reported a company with
+	// no apps in it.
+	//
+	// A POINTER, because an absent block and a block holding nothing are
+	// different states an operator can be in: a seat nobody has created an
+	// app for yet is nil, and a seat whose app exists but is not installed
+	// is a real, reportable half-built record. See [GitHubApp.Held].
+	GitHub *GitHubApp `yaml:"github,omitempty" json:"github,omitempty"`
+
 	// Project and Space are this seat's tracker and knowledge IDENTITY:
 	// where inbound activity with no better recipient routes, and where the
 	// seat files its work. Meaningful for a root-level seat; for a
@@ -777,6 +762,26 @@ type Role struct {
 // IsHuman reports whether a human holds this seat.
 func (r *Role) IsHuman() bool { return r.Kind == KindHuman }
 
+// EffectiveKind is this seat's kind with the document's default resolved.
+//
+// AN EMPTY KIND IS AN AGENT SEAT, which is what makes `kind:` optional in a
+// file: a company writes `kind: human` for the people and nothing for the
+// agents. Every reader here already knows that — [Role.IsHuman] is the whole
+// of it — so the zero value never had to be resolved.
+//
+// A STORED ROW IS DIFFERENT, and that is what this is for. A seat's kind
+// stored in a row is a closed set, so a row carrying "" would be a value
+// nothing recognises rather than a default nobody wrote: the difference
+// between "agent, unstated" and "unknown" is invisible in a file and load
+// bearing in a table. Whatever writes a row resolves it here rather than
+// deciding for itself.
+func (r *Role) EffectiveKind() RoleKind {
+	if r == nil || r.Kind == "" {
+		return KindAgent
+	}
+	return r.Kind
+}
+
 // IsAgent reports whether an AI agent holds this seat — the case an unset
 // kind means. Validate rejects any other kind, so these two are total.
 func (r *Role) IsAgent() bool { return !r.IsHuman() }
@@ -788,11 +793,49 @@ func (r *Role) IsAgent() bool { return !r.IsHuman() }
 // inbox topics, plus-addressed email, external-id registration, the derived
 // agent id — so a caller reading the raw field would be identifying a
 // different seat from the one the engine runs.
+//
+// IT IS IMMUTABLE in the company document (ADR-0013): every stored seat
+// carries it ([config.MintIdentities]), and a document that changes it has
+// removed one seat and created another — a new agent id, an empty mailbox
+// and an empty memory.
 func (r *Role) Handle() string {
 	if r.DeclaredHandle != "" {
 		return r.DeclaredHandle
 	}
 	return Slugify(r.Name)
+}
+
+// ResolvedEmail is the address this seat declares, ready to match on: a whole
+// `${VAR}` reference resolved through lookup, a literal trimmed, and "" when
+// the seat has none or its reference does not resolve. A nil lookup reads the
+// process environment, as [HumanContact.ResolvedIdentities] does.
+//
+// A REFERENCE IS AN ORDINARY CASE rather than an exotic one: a company that
+// keeps its people's addresses out of its document writes one for every seat
+// that has an address. Used as written, it is a string no vendor payload can ever carry, which is the
+// failure [HumanContact.ResolvedIdentities] names for a contact id — a seat
+// whose address never matches, read as a colleague the vendor does not know.
+//
+// NOT FOLDED. The form an address is compared in is [iam.NormalizeEmail]'s,
+// and a caller that compares folds both sides with it; this is the value a
+// person would read back.
+func (r *Role) ResolvedEmail(lookup EnvLookup) string {
+	if r == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(r.Email)
+	name, isRef := envref.Whole(raw)
+	if !isRef {
+		return raw
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	v, ok := lookup(name)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 // humanForbidden is the runtime-only surface a human seat must not carry,
@@ -812,8 +855,12 @@ func (r *Role) Handle() string {
 // `integrations.confluence` sent an operator to the company's own vendor
 // blocks.
 //
-// A seat's own GitHub App is refused on a human seat too, by the config
-// layer: this model carries no code-host identity for a seat to check.
+// A seat's own GitHub App ([Role.GitHub]) is refused on a human seat too,
+// but by the config layer, as an ADMISSION rule rather than one of these
+// runnable ones: nothing about running depends on the block, since every
+// path that creates, installs or reconciles an app skips a human seat, so a
+// stored revision carrying one runs as it did. Listing it here as well would
+// report one mistake twice.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string
@@ -881,21 +928,39 @@ func (r *Role) Validate() error {
 	case name != "" && r.Handle() == "":
 		// A name of nothing but punctuation slugifies to nothing, and a
 		// seat with no handle derives no agent id and owns no inbox — it
-		// would sit in the chart looking fine and never receive anything.
+		// would sit in the org looking fine and never receive anything.
 		// Reported at the name, which is what yields nothing.
 		add([]any{"name"}, fmt.Errorf(
 			"role %q: %w: the name yields no handle, so set one explicitly",
 			name, ErrInvalidHandle))
+	case name != "" && r.DeclaredHandle == "" && !ValidHandle(r.Handle()):
+		// A HANDLE DERIVED FROM A LONG NAME is the one way a slug fails the
+		// grammar: it is past the width every handle shares. Reported at the
+		// name, which is what the author typed, rather than at a handle
+		// nobody did.
+		add([]any{"name"}, fmt.Errorf(
+			"role %q: %w: the name yields the handle %q, which is %d bytes "+
+				"and the limit is %d — set a shorter handle explicitly",
+			name, ErrInvalidHandle, r.Handle(), len(r.Handle()), iam.MaxLogin))
 	}
 
+	errs = append(errs, r.fieldFaults(name)...)
+	return errors.Join(errs...)
+}
+
+// fieldFaults is every rule about what the seat carries beside its name and
+// handle: the fields a seat of the other kind may not carry, the contact's own,
+// the schedules' and the token ceilings'.
+func (r *Role) fieldFaults(name string) []error {
+	var errs []error
+	add := func(field []any, err error) {
+		errs = append(errs, &SeatError{Seat: r, Field: field, Err: err})
+	}
 	if r.IsHuman() {
 		if offending := r.humanForbidden(); len(offending) > 0 {
 			add(fieldOf(offending), fmt.Errorf(
 				"role %q: %w: %s",
 				name, ErrHumanSeatField, strings.Join(offending, ", ")))
-		}
-		if r.Contact.IsEmpty() {
-			add([]any{"contact"}, fmt.Errorf("role %q: %w", name, ErrNoContact))
 		}
 	} else {
 		var humanOnly []string
@@ -910,6 +975,13 @@ func (r *Role) Validate() error {
 				"role %q: %w: %s (did you mean kind: human?)",
 				name, ErrAgentSeatField, strings.Join(humanOnly, ", ")))
 		}
+		// EVERY CEILING IS ONE, at the key to change. An agent seat only:
+		// a human seat's whole `token_budget` is refused above, and a
+		// fault inside a key that has to go anyway is advice nobody needs.
+		for _, f := range r.TokenBudget.Faults() {
+			add([]any{"token_budget", string(f.Window)},
+				fmt.Errorf("role %q: %w", name, f))
+		}
 	}
 
 	for _, f := range r.Contact.faults() {
@@ -918,7 +990,7 @@ func (r *Role) Validate() error {
 	for _, f := range validateSchedules(fmt.Sprintf("role %q", name), r.Schedules) {
 		add(f.field, f.err)
 	}
-	return errors.Join(errs...)
+	return errs
 }
 
 // fieldOf is where a rule about these authored fields is reported: at the

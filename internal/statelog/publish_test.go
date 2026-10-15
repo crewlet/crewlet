@@ -1,15 +1,21 @@
 package statelog_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -99,6 +105,18 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 		if refusal.CopyWriter != "" {
 			t.Errorf("a refusal of this node's own record names %q as the copy's "+
 				"writer — the reason is this node's standing", refusal.CopyWriter)
+		}
+		// THE GATE READER IS HANDED THE BODY THIS CALL APPENDED — the
+		// decision's own bytes, not the signed frame — which is what lets a
+		// reader whose gate is keyed on what the payload names (the
+		// identity estate's claims, about a person their subject does not
+		// name) say which gate dropped the record.
+		h.gates.mu.Lock()
+		bodies := h.gates.bodies
+		h.gates.mu.Unlock()
+		if len(bodies) == 0 || !bytes.Contains(bodies[len(bodies)-1], []byte("hello")) {
+			t.Fatalf("the gate reader was handed %q, want the body this call appended",
+				bodies)
 		}
 	})
 
@@ -217,17 +235,34 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 	// AND AN EVICTION THAT CANNOT BE READ BLOCKS. It is the third value:
 	// an eviction nobody can read is not an eviction that did not happen,
 	// and publishing under it produces durable records every node drops.
-	t.Run("an unreadable eviction blocks", func(t *testing.T) {
+	//
+	// BUT IT IS NOT AN EVICTION, and the refusal says so: an eviction is
+	// permanent until an operator readmits the node, and a coordination
+	// blip is gone in seconds. Answered as `evicted`, every write during
+	// the blip was a 503 with no Retry-After — "waiting cannot clear
+	// this" — which is the signal a client gives up on.
+	t.Run("an unreadable eviction blocks and says to come back", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		h.fence.evictErr = errors.New("coordination unreachable")
+		h.fence.evictErr = errors.New("open /var/lib/crewlet/replicated.db: database is locked")
 		_, err := h.write(probeSubject("a"), "op-1", "hello")
 		var refusal *statelog.Unavailable
-		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted {
-			t.Fatalf("write = %v, want an evicted refusal", err)
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvictionUnknown {
+			t.Fatalf("write = %v, want an eviction_unknown refusal", err)
+		}
+		// IN THIS PACKAGE'S WORDS: every surface sends a refusal's detail
+		// to the caller, and the fence's error is the store's own — a
+		// database path here — which belongs in the log.
+		if strings.Contains(err.Error(), "/var/lib") {
+			t.Errorf("the refusal carries the store's own words to the caller: %q", err)
 		}
 		if got := h.appends.appends.Load(); got != 0 {
 			t.Fatalf("appended %d time(s) under an unreadable eviction", got)
+		}
+		if got := statelog.RetryAfter(err, 2*time.Second); got == 0 {
+			t.Error("a write refused on an eviction state nobody could read " +
+				"carries no Retry-After, which tells a client waiting cannot " +
+				"clear a refusal the next read clears")
 		}
 	})
 }
@@ -324,7 +359,7 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 				defer h.fence.mu.Unlock()
 				h.fence.evictErr = errors.New("coordination unreachable")
 			},
-			require: requireEvicted,
+			require: requireEvictionUnknown,
 		},
 	}
 	patterns := map[string]statelog.Pattern{
@@ -400,6 +435,17 @@ func requireEvicted(t *testing.T, err error) {
 	var refusal *statelog.Unavailable
 	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted {
 		t.Fatalf("write = %v, want a %s refusal", err, statelog.ReasonEvicted)
+	}
+}
+
+// requireEvictionUnknown is an eviction state that could not be read: its own
+// reason, which clears when the state is read again, rather than `evicted`,
+// which tells the caller to give up on this node.
+func requireEvictionUnknown(t *testing.T, err error) {
+	t.Helper()
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvictionUnknown {
+		t.Fatalf("write = %v, want a %s refusal", err, statelog.ReasonEvictionUnknown)
 	}
 }
 
@@ -681,7 +727,8 @@ func TestALostRaceWaitsForTheWinnerBeforeItRedecides(t *testing.T) {
 	// A peer writes the object. This node has applied nothing, so its
 	// anchor for the subject is empty while the subject is not — which
 	// is exactly the state a lost race leaves behind.
-	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -712,7 +759,8 @@ func TestALostRaceWaitsForTheWinnerBeforeItRedecides(t *testing.T) {
 func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -889,7 +937,8 @@ func (unreachable) LastSeq(context.Context, string) (uint64, bool, error) {
 func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -937,6 +986,516 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 		t.Fatalf("the write waited %s before refusing, and the budget is %s — "+
 			"an unbounded wait blocks the caller for as long as this node "+
 			"stays behind", waited, 250*time.Millisecond)
+	}
+}
+
+// A NO-WAIT WRITE ANSWERS PENDING WITHOUT ENTERING THE WAIT AT ALL.
+//
+// The difference from the ordinary pending above is not the outcome — both are
+// durable at a position and unresolved here — it is that this one never asked.
+// A sign-in is what it exists for: the cookie minted from the record carries
+// its position, every node validates the bearer against its own applier, and
+// the row this node would be waiting for is a row nothing in the answer reads.
+func TestAFlaggedWriteAnswersPendingWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// THE APPLIER IS LEFT RUNNING, deliberately. Stopping it would make
+	// this pass for the ordinary reason — a wait that timed out — and the
+	// claim is that no wait happened, which is only visible while a wait
+	// WOULD have succeeded.
+	res, err := h.writeNoWait(probeSubject("a"), "op-1", "hello")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if res.Outcome != statelog.OutcomePending {
+		t.Fatalf("outcome = %q, want pending", res.Outcome)
+	}
+	if res.Position.Seq == 0 {
+		t.Error("a no-wait write has no position, so its caller has nothing " +
+			"to carry to whoever reads next")
+	}
+	if res.Waited {
+		t.Error("the write reports that it waited; a caller reading this as " +
+			"a node falling behind would go and investigate a skip somebody " +
+			"asked for")
+	}
+
+	// THE CONTROL, and it is the whole case: the same write without the
+	// flag resolves as applied, against the same running applier. Without
+	// it the assertions above would pass on a harness whose applier was
+	// simply never going to arrive.
+	ordinary, err := h.write(probeSubject("b"), "op-2", "hello")
+	if err != nil {
+		t.Fatalf("the ordinary write: %v", err)
+	}
+	if ordinary.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the unflagged write resolved %q, want applied: this node's "+
+			"applier is not arriving, so the case above proves nothing",
+			ordinary.Outcome)
+	}
+	if !ordinary.Waited {
+		t.Error("an ordinary write reports that it did not wait")
+	}
+}
+
+// AND THE PENDING THAT DID WAIT SAYS SO, which is the other half: the two are
+// one outcome and opposite facts about this node, and reported as one a
+// deliberate skip reads to an operator as a node falling behind under load.
+func TestThePendingThatWaitedIsDistinguishable(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.applier.mu.Lock()
+	h.applier.auto = false
+	h.applier.mu.Unlock()
+
+	res, err := h.write(probeSubject("a"), "op-1", "hello")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if res.Outcome != statelog.OutcomePending {
+		t.Fatalf("outcome = %q, want pending", res.Outcome)
+	}
+	if !res.Waited {
+		t.Error("a write whose apply wait timed out reports that it did not " +
+			"wait, so a node that is genuinely behind is indistinguishable " +
+			"from a caller that declined to find out")
+	}
+}
+
+// THE FLAG DOES NOT REACH THE SESSION WAIT, which is the one it must never
+// skip.
+//
+// The two waits sit at opposite ends of one write and answer opposite
+// questions: the session wait is "may I decide yet" and the apply wait is "may
+// I report what my decision produced". Skipping the first makes a two-step
+// gesture decide from a state below its own previous write — which is a
+// correctness property, not a latency one, and collapsing them would trade the
+// first away for the second.
+func TestTheSessionWaitIsNeverSkipped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// STALLED rather than merely not auto-applying, because the session
+	// wait is what `stalled` stops: a node that has stopped catching up,
+	// which is the state the wait exists to refuse a decision in.
+	h.applier.mu.Lock()
+	h.applier.stalled = true
+	h.applier.mu.Unlock()
+
+	// A session mark this node's applier will never reach. The write must
+	// refuse rather than decide from a state below it — flag or no flag.
+	ahead := statelog.Position{
+		Stream: probeStream, Generation: h.gen.Load(), Seq: 9999,
+	}
+	_, err := h.pub.Publish(context.Background(), statelog.Request{
+		Subject: probeSubject("a"),
+		Scope:   statelog.ScopeSet{Paths: []string{probeSubject("a").String()}},
+		OpID:    "op-1",
+		Pattern: statelog.PatternArbitrated,
+		Session: ahead,
+		NoWait:  true,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "hello"), Version: 1}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("a no-wait write decided from a state below its caller's own " +
+			"previous write")
+	}
+	var unavailable *statelog.Unavailable
+	if !errors.As(err, &unavailable) || unavailable.Reason != statelog.ReasonBehind {
+		t.Errorf("the refusal is not the session wait's: %v", err)
+	}
+}
+
+// A PUBLISHER MISSING A SEAM IS REFUSED AT CONSTRUCTION, NAMING IT.
+//
+// Every seam is on the write path: the rows are the snapshot a decision is
+// taken in, the fence is the eviction check every append makes, and the gates
+// are what a create's permanent deletion marker is read through. Built without
+// one, the write authority would fail at its first append — or, for a fence
+// nothing asked, collect acknowledgements for records every node drops — so
+// [statelog.NewPublisher] refuses the set, and the refusal names the missing
+// field because it is read by whoever wired a new domain's register entry.
+//
+// The complete set is the control: a refusal that fired whatever was passed
+// would satisfy every row below.
+func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	complete := func() statelog.Deps {
+		a := newApplier()
+		return statelog.Deps{
+			Domain: probeDomain{},
+			Spec:   specOf(probeDomain{}),
+			Log:    refusingAppender{err: errors.New("never asked")},
+			Signer: testSigner(t, probeDomain{}),
+			Records: statelog.VerifiedLog{Log: struct{ statelog.LogReader }{},
+				Verifier: testVerifier(t, probeDomain{})},
+			Rows:       &fakeRows{applier: a},
+			Fence:      &fakeFence{},
+			Gates:      &fakeGates{},
+			Waiter:     a,
+			Voids:      a,
+			Identity:   a,
+			Admission:  noCeiling(t),
+			NodeID:     "node-a",
+			Generation: func() uint32 { return 1 },
+		}
+	}
+	if _, err := statelog.NewPublisher(complete()); err != nil {
+		t.Fatalf("a complete dependency set is refused: %v", err)
+	}
+	for _, c := range []struct {
+		field string
+		drop  func(*statelog.Deps)
+		names string
+	}{
+		{"Domain", func(d *statelog.Deps) { d.Domain = nil }, "no domain"},
+		{"Spec", func(d *statelog.Deps) { d.Spec = statelog.StreamSpec{} }, "stream spec has no name"},
+		{"Log", func(d *statelog.Deps) { d.Log = nil }, "no appender"},
+		{"Signer", func(d *statelog.Deps) { d.Signer = nil }, "no signer"},
+		{"Records", func(d *statelog.Deps) { d.Records = nil }, "no reader of its log"},
+		{"Rows", func(d *statelog.Deps) { d.Rows = nil }, "no rows"},
+		{"Fence", func(d *statelog.Deps) { d.Fence = nil }, "no fence"},
+		{"Gates", func(d *statelog.Deps) { d.Gates = nil }, "no gates"},
+		{"Waiter", func(d *statelog.Deps) { d.Waiter = nil }, "no waiter"},
+		{"Voids", func(d *statelog.Deps) { d.Voids = nil }, "no reanchor rules"},
+		{"Identity", func(d *statelog.Deps) { d.Identity = nil }, "no stream identity"},
+		{"Admission", func(d *statelog.Deps) { d.Admission = nil }, "no admission"},
+		{"Generation", func(d *statelog.Deps) { d.Generation = nil }, "no generation source"},
+		{"NodeID", func(d *statelog.Deps) { d.NodeID = "" }, "no node id"},
+	} {
+		t.Run(c.field, func(t *testing.T) {
+			t.Parallel()
+			deps := complete()
+			c.drop(&deps)
+			_, err := statelog.NewPublisher(deps)
+			if err == nil {
+				t.Fatalf("a publisher with no %s was built — it fails at its "+
+					"first append instead of at the boot", c.field)
+			}
+			if !strings.Contains(err.Error(), c.names) {
+				t.Errorf("the refusal of a publisher with no %s says %q, which does "+
+					"not name what is missing (%q)", c.field, err, c.names)
+			}
+		})
+	}
+}
+
+// A RECORD TOO LARGE AND A LOG AT ITS CEILING ARE TWO REFUSALS, with two
+// remedies — and both are decided at round one.
+//
+// Neither changes between rounds, so neither may be retried. But the remedies
+// are different people's: a full log is the operator's retention (raise the
+// ceiling, unblock the trim), and a record too large is the writer's change,
+// with a log that has room to spare. Both were `log_full`, so a record too
+// large told whoever read it to raise a ceiling nothing was near.
+//
+// Both are staged on a REAL broker: a record past its domain's declared
+// largest is refused before anything is sent, naming the declaration, and a
+// log created at a few kilobytes fills after a handful of records.
+func TestATooLargeRecordAndAFullLogAreRefusedApart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a record too large", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		body := strings.Repeat("x", 8<<20+1)
+		res, err := h.write(probeSubject("big"), "op-big", body)
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonRecordTooLarge {
+			t.Fatalf("an oversized record = %v, want a %s refusal", err,
+				statelog.ReasonRecordTooLarge)
+		}
+		if res.Rounds != 1 || h.appends.appends.Load() != 0 {
+			t.Errorf("an oversized record took %d round(s) and %d append(s), want "+
+				"one round and no append — this node refuses it before the "+
+				"broker is asked, and nothing a retry does makes it smaller",
+				res.Rounds, h.appends.appends.Load())
+		}
+		// WHAT TO CHANGE: the limit that refused it, which is the
+		// domain's own declaration, and the writer's remedy. Never the
+		// ceiling or the trim, which is the remedy this refusal used to
+		// carry.
+		for _, want := range []string{strconv.Itoa(probeMaxRecord),
+			"declared largest record", "split the change"} {
+			if !strings.Contains(refusal.Detail, want) {
+				t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
+			}
+		}
+		if !errors.Is(err, queue.ErrTooLarge) {
+			t.Errorf("an oversized record = %v, which does not answer "+
+				"errors.Is(queue.ErrTooLarge)", err)
+		}
+		for _, wrong := range []string{"byte ceiling", "trim"} {
+			if strings.Contains(refusal.Detail, wrong) {
+				t.Errorf("the refusal of a record too large names %q, a full "+
+					"log's remedy: %s", wrong, refusal.Detail)
+			}
+		}
+		if got := statelog.RetryAfter(err, 2*time.Second); got != 0 {
+			t.Errorf("a record too large says come back in %s — it is refused "+
+				"the same on every attempt and every node", got)
+		}
+	})
+
+	t.Run("a log at its byte ceiling", func(t *testing.T) {
+		t.Parallel()
+		h := newHarnessFor(t, tinyLogDomain{})
+		body := strings.Repeat("x", 4<<10)
+		var (
+			res statelog.Result
+			err error
+		)
+		for i := range 64 {
+			res, err = h.write(probeSubject(fmt.Sprintf("o%d", i)),
+				fmt.Sprintf("op-%d", i), body)
+			if err != nil {
+				break
+			}
+		}
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonLogFull {
+			t.Fatalf("a write to a log at its ceiling = %v, want a %s refusal", err,
+				statelog.ReasonLogFull)
+		}
+		if res.Rounds != 1 {
+			t.Errorf("a full log's refusal took %d rounds, want one", res.Rounds)
+		}
+		for _, want := range []string{"byte ceiling", "crewlet retention status"} {
+			if !strings.Contains(refusal.Detail, want) {
+				t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
+			}
+		}
+	})
+}
+
+// tinyLogDomain is the probe domain on a log whose ceiling a handful of
+// records fills.
+type tinyLogDomain struct{ probeDomain }
+
+func (tinyLogDomain) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.MaxBytes = 32 << 10
+	return spec
+}
+
+// AN EVICTION THAT LANDS WHILE A WRITE IS IN FLIGHT REFUSES IT AT THE NEXT
+// APPEND, as an eviction.
+//
+// Fence 0 runs before the first snapshot and again before every append,
+// because a write that has spent rounds losing races has run for as long as
+// they took and the eviction may have landed inside that window. The second
+// check's refusal went through the append's error classification, which read
+// it as an append nobody answered: it asked the broker for the subject's last
+// sequence, found nothing of its own there, re-decided — and met the same
+// refusal every round until the budget ran out, when the caller was told the
+// rows kept changing under the write. A node that KNEW it had been removed
+// reported contention.
+//
+// The fence here answers "not evicted" to the check before the snapshot and
+// the other answer to the one before the append.
+func TestAnEvictionLandingMidWriteRefusesAsAnEviction(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		answer func() (bool, error)
+		want   statelog.Reason
+	}{
+		{"evicted", func() (bool, error) { return true, nil }, statelog.ReasonEvicted},
+		{"unreadable", func() (bool, error) {
+			return false, errors.New("coordination unreachable")
+		}, statelog.ReasonEvictionUnknown},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			fence := &laterFence{fakeFence: h.fence, after: 1, answer: c.answer}
+			deps := h.deps
+			deps.Fence = fence
+			pub, err := statelog.NewPublisher(deps)
+			if err != nil {
+				t.Fatalf("NewPublisher: %v", err)
+			}
+			res, err := pub.Publish(t.Context(), statelog.Request{
+				Subject: probeSubject("a"),
+				Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+				OpID:    "op-1",
+				Pattern: statelog.PatternArbitrated,
+				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
+				},
+			})
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != c.want {
+				t.Fatalf("a write whose fence answered %s at the append = %v "+
+					"after %d round(s), want a %s refusal", c.name, err,
+					res.Rounds, c.want)
+			}
+			if res.Rounds != 1 || h.appends.appends.Load() != 0 {
+				t.Errorf("the refusal took %d round(s) and %d append(s), want one "+
+					"round and no append", res.Rounds, h.appends.appends.Load())
+			}
+		})
+	}
+}
+
+// laterFence answers "not evicted" for its first `after` questions and
+// answer's value from then on.
+type laterFence struct {
+	*fakeFence
+	after  int64
+	calls  atomic.Int64
+	answer func() (bool, error)
+}
+
+func (f *laterFence) Evicted(ctx context.Context) (bool, error) {
+	if f.calls.Add(1) <= f.after {
+		return f.fakeFence.Evicted(ctx)
+	}
+	return f.answer()
+}
+
+// AN APPEND THE BROKER SAYS MAY YET LAND IS NEVER A REFUSAL, AND NEVER A
+// RETAKE.
+//
+// A clustered leader stages a record's message id when it PROPOSES it, and a
+// second append under the same id before that proposal applies is answered
+// 10158, "duplicate message id is in process". The id is the op id, so the
+// second append is this write's own: an earlier round's append went unanswered
+// while its commit was slow, or a caller retried an `unknown` under the same
+// operation. A leader whose store closes under an entry raft already committed
+// answers 10077 "store is closed" for a record every member then applies.
+//
+// Both were `broker_refused` — "asking again changes nothing" — about a record
+// that applied a moment later, and a caller that re-filed under a fresh op id
+// wrote the change twice. What the probe cannot settle is `unknown` with the
+// op id, and nothing is re-decided: a fresh snapshot would decide against a
+// state about to hold this very write.
+//
+// The rows are the server's own answers, built by its constructors; the
+// append either never reaches the stream (the proposal is still in flight) or
+// lands with its answer lost.
+func TestAnAppendTheBrokerSaysMayYetLandIsNeverRefused(t *testing.T) {
+	t.Parallel()
+	wire := func(e *server.ApiError) error {
+		return fmt.Errorf("nats: %w", &jetstream.APIError{
+			Code: e.Code, ErrorCode: jetstream.ErrorCode(e.ErrCode),
+			Description: e.Description,
+		})
+	}
+	inFlight := wire(server.NewJSStreamDuplicateMessageConflictError())
+	closed := wire(server.NewJSStreamStoreFailedError(server.ErrStoreClosed,
+		server.Unless(server.ErrStoreClosed)))
+	for _, c := range []struct {
+		name   string
+		err    error
+		landed bool
+		want   statelog.Outcome
+	}{
+		{"its own record in flight, not yet visible", inFlight, false,
+			statelog.OutcomeUnknown},
+		{"a store closed under it, not yet visible", closed, false,
+			statelog.OutcomeUnknown},
+		// RESOLVED WHEN IT CAN BE: the record is on the stream and this
+		// node applied it, so the ledger answers for it.
+		{"its own record in flight, already visible", inFlight, true,
+			statelog.OutcomeApplied},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			first, err := h.write(probeSubject("a"), "op-0", "one")
+			if err != nil {
+				t.Fatalf("the first write: %v", err)
+			}
+			h.anchorAt(probeSubject("a"), first.Position.Seq)
+			appends, snapshots := h.appends.appends.Load(), h.rows.snapshots()
+
+			h.appends.fail(c.err, !c.landed)
+			res, err := h.write(probeSubject("a"), "op-1", "two")
+			if err != nil {
+				t.Fatalf("a write the broker answered %v = %v, want outcome %q — "+
+					"the record may yet land, so no refusal is true of it",
+					c.err, err, c.want)
+			}
+			if res.Outcome != c.want {
+				t.Fatalf("outcome = %q, want %q", res.Outcome, c.want)
+			}
+			if res.OpID != "op-1" {
+				t.Errorf("op id = %q, want op-1 — the same op id is the only safe "+
+					"retry, and it is what gets the broker's duplicate "+
+					"acknowledgement once the record lands", res.OpID)
+			}
+			if got := h.appends.appends.Load() - appends; res.Rounds != 1 || got != 1 {
+				t.Errorf("the write took %d round(s) and %d append(s), want one of "+
+					"each", res.Rounds, got)
+			}
+			if got := h.rows.snapshots() - snapshots; got != 1 {
+				t.Errorf("the write took %d snapshots, want one — a retake decides "+
+					"against a state about to hold this very write", got)
+			}
+		})
+	}
+}
+
+// A REFUSAL THE BROKER NAMED AND THIS BUILD HAS NO REMEDY FOR IS FINAL, AND
+// CARRIES THE BROKER'S WORDS.
+//
+// A sealed stream, a JetStream store out of resources: they were `log_full`,
+// whose detail sends an operator to a ceiling and a trim neither involves, and
+// are now `broker_refused` with the broker's code and description as the
+// remedy. What this pins is the PUBLISHER's arm rather than the classification
+// beneath it — that it refuses at round one after one append, keeps the
+// broker's code and words, and tells nobody to come back: the arm could
+// return `log_full`, drop the words or fall through to the lost-race path and
+// retry for the whole round budget with every classification test still
+// green. The control is a full log answered through the same fake, which
+// stays `log_full`.
+func TestABrokerRefusalIsFinalAndCarriesItsWords(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want statelog.Reason
+		says []string
+	}{
+		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
+			Description: "invalid operation on sealed stream"},
+			statelog.ReasonBrokerRefused,
+			[]string{"code 10109", "invalid operation on sealed stream"}},
+		{"a full log, the control", &jetstream.APIError{Code: 503, ErrorCode: 10077,
+			Description: "maximum bytes exceeded"},
+			statelog.ReasonLogFull,
+			[]string{"maximum bytes exceeded", "byte ceiling"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.appends.fail(fmt.Errorf("nats: %w", c.err), true)
+			res, err := h.write(probeSubject("a"), "op-1", "hello")
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != c.want {
+				t.Fatalf("a write the broker answered %v = %v, want a %s refusal",
+					c.err, err, c.want)
+			}
+			if got := h.appends.appends.Load(); res.Rounds != 1 || got != 1 {
+				t.Errorf("the refusal took %d round(s) and %d append(s), want one "+
+					"of each — the broker will answer the next append the same",
+					res.Rounds, got)
+			}
+			for _, want := range c.says {
+				if !strings.Contains(refusal.Detail, want) {
+					t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
+				}
+			}
+			if refusal.OpID != "op-1" {
+				t.Errorf("the refusal carries op id %q, want op-1", refusal.OpID)
+			}
+			if got := statelog.RetryAfter(err, 2*time.Second); got != 0 {
+				t.Errorf("a %s refusal says come back in %s — waiting changes "+
+					"nothing about it", c.want, got)
+			}
+		})
 	}
 }
 

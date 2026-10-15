@@ -24,11 +24,13 @@ import (
 // this package's source, read from the source so a new kind is covered the
 // moment it is declared rather than when somebody remembers to list it here.
 //
-// The engine used to have a fourth spelling of four of these: the config-apply
-// hook in cmd/crewlet broadcast the roster, the org tree, the tool catalogue
-// and the schedules under string literals. Kind is a named type now and those
-// call sites name the constants, so the set this reads is every kind a frame
-// can carry.
+// `inbox_changed` was the kind that drifted first: the engine declared and
+// routed it before anything published it, and the union never named it. And
+// the engine used to have a fourth spelling of four of these: the
+// company-publish hook in cmd/crewlet broadcast the roster, the org tree, the
+// tool catalogue and the schedules under string literals. Kind is a named type
+// now and the one method that re-sends them ([stream.Service.CompanyPublished])
+// names the constants, so the set this reads is every kind a frame can carry.
 func TestTheDashboardKnowsExactlyThePushKindsTheEngineSends(t *testing.T) {
 	t.Parallel()
 	engine := engineKinds(t)

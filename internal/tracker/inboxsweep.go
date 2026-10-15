@@ -47,9 +47,21 @@ import (
 // db: the zero handle is a node with no tracker to sweep, which contributes no
 // job rather than one that fails every tick.
 //
-// retention is ASKED AT EVERY SWEEP, because the horizon is the company's
+// # retention is ASKED AT EVERY SWEEP, and never held as a value
+//
+// The applier declines to write an inbox row for a record older than the
+// horizon, reading it off the epoch at every batch, and [purgeInbox] deletes
+// exactly the rows a replay would decline to write — the two must hold ONE
+// horizon, or an inbox grows back on every reanchor by the width of their
+// disagreement. The horizon is the company's
 // `tracker.native.inbox_retention_days` and an apply moves it under a running
-// node — see [maintenance.Horizon] for what reading it once cost.
+// node; the applier follows an activation from its next batch, so the sweep
+// follows it from its next tick — handed a value, it kept the horizon the
+// node's first company stated for the life of the process while the applier
+// moved on. So it is the job's [maintenance.Job.Horizon], which the worker
+// asks afresh on every sweep and derives the cutoff from — and a horizon of
+// zero or less is refused there rather than read as "retain nothing", which
+// would empty every inbox. See [maintenance.Horizon].
 func InboxJobs(db store.ReplicatedHandle, retention maintenance.Horizon) []maintenance.Job {
 	if db.IsZero() {
 		return nil

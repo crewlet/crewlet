@@ -43,17 +43,12 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
-import {
-  PriorityMark,
-  StatusBadge,
-  StatusMark,
-  TypeIcon,
-  type RowChrome,
-} from "~/components/work.tsx";
+import { PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { KNOWLEDGE, accessNames } from "~/lib/access.ts";
 import {
   fmtCount,
   fmtDate,
@@ -72,6 +67,10 @@ import {
   fmtMinutes,
   statusLabel,
   typeName,
+  itemPath,
+  linkedItem,
+  detailItem,
+  itemAddress,
 } from "~/lib/work.ts";
 import type {
   WorkFieldDef,
@@ -119,13 +118,18 @@ export function ItemRail({
   compact?: boolean;
 }) {
   const item = detail.task;
+  // WHAT A HAND-OFF NAMES THE TASK BY: its key, or its id where another task
+  // claimed the key first and the key would hand off the claimant.
+  const address = itemAddress(detailItem(detail));
   const edits = useItemEdits();
   const can = Boolean(edits?.can);
   const seatName = chrome.seatName ?? ((h: string) => h);
   const seatKind = chrome.seatKind ?? (() => undefined);
   const seatAvatar = chrome.seatAvatar ?? (() => undefined);
   const setBy = useMemo(() => attribution(detail.history), [detail.history]);
-  const reporter = detail.reporter_seat || item.reporter;
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity
+  // directory binds to a seat files AS that seat, so the reporter is them.
+  const reporter = item.reporter;
   // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE: the change log carries a
   // handle, and a line reading `agent-ceo · 21h ago` under a Reporter row
   // saying "Agent CEO" is one person with two names on one screen.
@@ -225,7 +229,8 @@ export function ItemRail({
                   reaches nobody, and the page offers Restore instead. */}
               {!item.removed && (
                 <AssignButton
-                  item={item.key}
+                  item={address}
+                  label={item.key}
                   version={item.version}
                   assignee={item.assignee ?? ""}
                 />
@@ -236,10 +241,6 @@ export function ItemRail({
         },
         {
           label: "Reporter",
-          // THE PERSON, NOT THE TOKEN: a task an operator token filed names
-          // the credential as its reporter — the audit trail — and the seat
-          // it was bound to beside it, which is who the activity says filed
-          // it. One person, one name on one page.
           value: reporter ? (
             <SeatChip
               name={seatName(reporter)}
@@ -858,7 +859,10 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
     <section className="task-rail-section" aria-label="Relations">
       <div className="task-lbl">Relations</div>
       {(parent || detail.task.parent) && (
-        <a className="task-rail-link" href={href(["work", parent?.key || detail.task.parent!])}>
+        <a
+          className="task-rail-link"
+          href={href(parent ? itemPath(parent) : ["work", detail.task.parent!])}
+        >
           <ArrowUpRightGlyph size="xs" />
           <span className="muted">Part of</span>
           <span className="work-key mono">{parent?.key || detail.task.parent}</span>
@@ -867,7 +871,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
       )}
       {links.map((link) => (
         <div key={`${link.kind}:${link.other}`} className="task-rail-link-row">
-          <a className="task-rail-link" href={href(["work", link.key || link.other])}>
+          <a className="task-rail-link" href={href(itemPath(linkedItem(link)))}>
             <LinkGlyph size="xs" />
             <span className="muted">{linkHeading(link)}</span>
             <span className="work-key mono">{link.key || link.other}</span>
@@ -922,12 +926,19 @@ function PageLinks({ links }: { links: WorkLink[] }) {
 }
 
 function PageLink({ id }: { id: string }) {
-  const page = useQuery("page", { id }, { pollMs: 300_000 });
+  // A PAGE IS THE KNOWLEDGE BASE'S, so its title is asked only of a reader
+  // holding Knowledge; anybody else is told what would name it, rather than
+  // a refusal drawn as a page this node cannot read.
+  const { knowledge, loading } = useViewer();
+  const page = useQuery("page", { id }, { pollMs: 300_000, enabled: knowledge });
+  const locked = !loading && !knowledge;
   return (
     <a className="task-rail-link" href={href(pathOf({ kind: "page", id }))}>
       <FileTextGlyph size="xs" />
       <span className="truncate">
-        {page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
+        {locked
+          ? `A page · needs ${accessNames([KNOWLEDGE])} access`
+          : page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
       </span>
     </a>
   );
@@ -996,8 +1007,12 @@ function Watching({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrom
   const viewer = useViewer();
   const watchers = item.watchers ?? [];
   const muted = new Set(item.muted ?? []);
-  const mine =
-    viewer.handle !== "" && watchers.includes(viewer.handle) && !muted.has(viewer.handle);
+  // UNDER THE NAME A WATCH IS WRITTEN UNDER (`iam.ActorFor`): a person the
+  // directory binds to a seat follows AS the seat, anybody bound to none under
+  // their login — so an unbound reader who follows the task reads as following
+  // it, where by the seat they hold none of they never did.
+  const me = viewer.owner;
+  const mine = me !== "" && watchers.includes(me) && !muted.has(me);
   const seatName = chrome.seatName ?? ((h: string) => h);
   return (
     <section className="task-rail-section task-watching" aria-label="Watching">

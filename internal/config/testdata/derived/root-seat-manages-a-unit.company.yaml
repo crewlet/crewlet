@@ -1,15 +1,16 @@
 # The shield is the unit's own direct members' manages, never the whole
-# company's. A root seat managing a unit by name lists every seat in it, and
+# company's. A root seat managing a unit by key lists every seat in it, and
 # the unit's lead still auto-manages its members: a member reached both ways
 # has two managers, and the root seat is the primary one because root seats
 # come first in engine order.
 name: Acme
 roles:
   - name: Chief Executive
-    manages: [Backend]
+    manages: [backend]
 units:
   - name: Backend
-    lead: Backend Lead
+    id: backend
+    lead: backend-lead
     roles:
       - name: Backend Lead
       - name: Developer

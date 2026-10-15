@@ -8,8 +8,11 @@
 // "## Personal memory" / "## Relevant knowledge" prefetch blocks.
 //
 //   - Executor — identity + role profile + unit context + org mission/vision +
-//     full policies + roster (with team-member profiles for leads) +
-//     tool-skills catalogue + tool catalogue + the executor's contract.
+//     full policies + roster (team-member profiles for leads, for as many
+//     reports as the ONE roster allowance pays for; then names; then a line
+//     naming the tool that finds the rest — see rosterAllowanceTokens, the
+//     only budget in this package the prompt itself enforces) + tool-skills
+//     catalogue + tool catalogue + the executor's contract.
 //   - Review — one-line identity + the round's evidence + the decision enum.
 //     No policies, no roster, no catalogue: the reviewer judges one round's
 //     record and needs nothing else.
@@ -105,6 +108,21 @@ type Seat struct {
 	// ambient read so a test can render a roster without touching the
 	// environment every other test in the binary shares.
 	Env org.EnvLookup
+
+	// Withheld reports whether a human seat's contact identities are
+	// withheld — its holder suspended, retired or removed — by the same
+	// reading of the identity directory the party registry was built from
+	// (see turnctx.Turn.Withheld). A withheld seat renders no identity: an
+	// inbound message from that person already resolves to an outside
+	// party, and a roster that still printed their Slack id would have an
+	// agent DMing somebody the company has off-boarded. Nil withholds
+	// nothing.
+	Withheld func(handle string) bool
+}
+
+// withholds is [Seat.Withheld], nil-safe.
+func (s Seat) withholds(handle string) bool {
+	return s.Withheld != nil && s.Withheld(handle)
 }
 
 // ok reports whether this seat can render identity at all.

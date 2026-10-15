@@ -27,7 +27,7 @@ import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
-import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
+import { workingNote } from "./nodeFacts.ts";
 import {
   Callout,
   CharacterPicker,
@@ -164,16 +164,6 @@ export function ScreenLink({
   );
 }
 
-/** What a field for a tool nobody connected says instead of the field. */
-export function NotConnected({ tool }: { tool: Tool }) {
-  return (
-    <p className="builder-note muted">
-      {TOOL_NAMES[tool]} is not connected.{" "}
-      <ScreenLink to="integrations">Connect it from Integrations</ScreenLink>
-    </p>
-  );
-}
-
 /**
  * A value the builder shows and does not edit, with why and where it is
  * edited instead.
@@ -213,16 +203,33 @@ export function ReadOnlyFact({
 }
 
 /**
- * Why a name has to be free, said where one is typed.
+ * What a name is, said where one is typed.
  *
- * WHAT NAMES WHAT. A unit's lead and a `manages` entry name a seat, so a seat
- * name must pick out one seat; a `manages` entry and a root seat's `unit:`
- * reference name a unit, so a unit name must pick out one unit. A lead never
- * names a unit, so it is no reason for a unit's name to be unique.
+ * PROSE, NOT AN ADDRESS. A lead and a `manages` entry name a seat by its
+ * handle and a unit by its key (`model/identity.ts`), so two seats or two
+ * units may share a name, and renaming one moves nothing that points at it.
  */
-export const UNIQUE_NAME_HELP = {
-  seat: "Seat names must be unique.",
-  unit: "Unit names must be unique.",
+export const NAME_HELP = {
+  seat: "Shown to people, and may repeat: everything that names this seat uses its handle.",
+  unit: "Shown to people, and may repeat: everything that names this unit uses its key.",
+} as const;
+
+/**
+ * What a handle or a key is, said where one is chosen and where one is shown.
+ *
+ * AN IDENTITY, CHOSEN ONCE. A seat's agent id, mailbox and memory derive from
+ * its handle, and a unit's schedules and work are filed under its key, so
+ * neither changes after a save: a seat given another handle is another seat.
+ */
+export const IDENTITY_HELP = {
+  seat: "The seat's identity: its mailbox, memory and agent id, and what every lead and manages entry names. It cannot change once saved.",
+  unit: "The unit's identity: what its schedules and work are filed under, and what every manages entry and seat placement names. It cannot change once saved.",
+} as const;
+
+/** Why an existing node's identity is shown and not edited. */
+export const IDENTITY_FIXED = {
+  seat: "A seat’s handle can’t change: its mailbox, memory and agent id hang on it. To use another, replace the seat. Its work stays with this handle.",
+  unit: "A unit's key is its identity: what its schedules and work are filed under. To use another key, remove this unit and add a new one.",
 } as const;
 
 /**
@@ -236,12 +243,11 @@ export const UNIQUE_NAME_HELP = {
  * (`org.DeriveAgentID`): the diary and the onboarding marker are keyed by
  * that id, while the mailbox (`topics.AgentInbox`) and the episodes are keyed
  * by the handle. So a company rename orphans the first two and keeps the
- * rest, and a handle change loses all of them.
+ * rest. A handle never changes: a seat given another one is another seat.
  */
 export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   company_rename:
     "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
-  handle_change: "Its memory, inbox and onboarding start over.",
   credential_servers: "The tool credentials the seats listed above receive will change.",
   mass_removal: "This removes more than half of the company's seats.",
 };

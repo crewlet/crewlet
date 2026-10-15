@@ -515,6 +515,52 @@ type TurnCompleted struct {
 	// ConversationKey is empty when the trigger has no conversation a later
 	// message could reproduce.
 	ConversationKey string `json:"conversation_key"`
+	// Turn is the WHOLE TURN, stated by the record that ends it — on the
+	// one completion that is not a suspension, and absent from every
+	// segment that parked. See [TurnTally].
+	//
+	// ABSENT ON AN END TOO where the turn cannot state itself: one ended by
+	// a build before the tally, and one resumed from a park such a build
+	// made, whose earlier segments nobody measured. Absent is "not stated",
+	// never zero — the usage reader then sums the turn from its records
+	// (internal/store's usage day).
+	Turn *TurnTally `json:"turn,omitempty"`
+}
+
+// TurnTally is a turn's own account of itself, every segment included, as the
+// record that ENDS it states it — the figures the usage domain's turn
+// statistics are read off (internal/store's usage day).
+//
+// ON THE ENDING RECORD rather than summed from the turn's records, because a
+// turn's records are not all on one node: a node without `data` hands its
+// events to the data nodes in custody batches a second apart, each kept by
+// whichever node won its claim, and a turn resumed on another node leaves the
+// segment before the park in the first node's log. Summed per node from what
+// each node held, the node holding the end counted the turn's reviews, its
+// send-backs and its duration short, and the node holding the rest counted
+// them nowhere. The turn itself knows them: each segment counts what it ran,
+// and a segment that parks hands its count on with the suspended conversation
+// (internal/agent/execstate), so the segment that ends the turn states it
+// whole.
+type TurnTally struct {
+	// DurationMS is every segment's own span summed — each from its start
+	// to its end, the time it held a seat — and so not the wall clock from
+	// the first start to the last end, which would count the coding run's
+	// park as work.
+	DurationMS int `json:"duration_ms"`
+	// Failed is whether the turn failed: an error, or a failed decision,
+	// and never a person's stop — the rule [AgentTurnCompleted.Failed]
+	// states, read once for both records.
+	Failed bool `json:"failed,omitempty"`
+	// Reviews is how many reviews the turn's review phases ran, SentBack
+	// how many of them sent the work back for another pass, and Unaccepted
+	// how many decided anything but done — so a turn whose every review
+	// accepted, which since an acceptance ends the loop is one accepted by
+	// its first, has Reviews > 0 and Unaccepted 0. Counted off the review
+	// phases' own records ([AgentPhaseCompleted]) as each segment ran them.
+	Reviews    int `json:"reviews,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
+	Unaccepted int `json:"unaccepted,omitempty"`
 }
 
 // EventType is the "turn_completed" wire type, the learning subsystem's

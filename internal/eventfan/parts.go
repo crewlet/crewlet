@@ -361,6 +361,9 @@ func (p turnsPart) keep(n int) any {
 	return turnsPart{Turns: p.Turns[:n], Full: true, Listed: p.Listed, Unsettled: names}
 }
 
+// turnsPartOf reads one node's page of turn partials — or, on the second
+// scatter, its share of the named turns — floored at q.At, the instant the
+// asker cut the window from, never this node's own clock.
 func turnsPartOf(ctx context.Context, log *store.EventLog, q store.TurnQuery) (turnsPart, error) {
 	if len(q.IDs) > 0 {
 		// THE SECOND SCATTER: this node's share of the named turns, which
@@ -430,6 +433,8 @@ func (p spendPart) keep(n int) any {
 	return spendPart{Records: p.Records[:n], Full: true}
 }
 
+// spendPartOf reads one node's spend records of a window, floored at q.At —
+// the asker's instant, for [turnsPartOf]'s reason.
 func spendPartOf(ctx context.Context, log *store.EventLog, q store.PhaseTokenQuery) (spendPart, error) {
 	records, err := log.PhaseTokens(ctx, q)
 	if err != nil {

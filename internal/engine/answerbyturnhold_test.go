@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -84,7 +83,7 @@ func TestAnAnswerByTurnHeldBehindItsRunsNextJobDoesNotAnswerItsNextQuestion(t *t
 		},
 		NoteDeferred: func(string) {},
 	}
-	if err := q.Subscribe(ctx, topics.AgentInbox("swe"), topics.AgentInboxGroup("swe"),
+	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
 		func(ctx context.Context, ev *events.Event) queue.Result {
 			return d.Dispatch(ctx, "swe", []*events.Event{ev})
 		}); err != nil {
@@ -107,7 +106,7 @@ func TestAnAnswerByTurnHeldBehindItsRunsNextJobDoesNotAnswerItsNextQuestion(t *t
 
 	// THE FIRST ANSWER RESUMES IT, and the resumed turn starts another job.
 	first, late := answerAgainst(q1, "use the release branch"), answerAgainst(q1, "use main")
-	if err := q.Publish(ctx, topics.AgentInbox("swe"), first); err != nil {
+	if err := q.Publish(ctx, fixtureInbox("swe"), first); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	eventually(t, "the first answer to resume the run", func() bool { return resumer.count() == 1 })
@@ -116,7 +115,7 @@ func TestAnAnswerByTurnHeldBehindItsRunsNextJobDoesNotAnswerItsNextQuestion(t *t
 	}
 
 	// THE SECOND ANSWER TO Q1 WAITS BEHIND THE JOB.
-	if err := q.Publish(ctx, topics.AgentInbox("swe"), late); err != nil {
+	if err := q.Publish(ctx, fixtureInbox("swe"), late); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	settle()
@@ -157,7 +156,7 @@ type relaunchingResumer struct {
 
 func (r *relaunchingResumer) launch(turnID string) sandbox.LaunchRequest {
 	return sandbox.LaunchRequest{
-		Turn:  sandbox.TurnRef{TurnID: turnID, AgentID: "a-1", AgentHandle: "swe", Role: "SWE"},
+		Turn:  sandbox.TurnRef{TurnID: turnID, AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
 		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
 	}
@@ -189,8 +188,9 @@ func (r *relaunchingResumer) count() int {
 // answer_run puts it on the seat's inbox.
 func answerAgainst(run sandbox.PendingRun, answer string) *events.Event {
 	ev := events.New(types.SandboxAnswerGiven{
-		TurnID: run.TurnID, AgentHandle: run.AgentHandle, Answer: answer,
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,
+		Answer:     answer,
+		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 		LaunchID: run.LaunchID,
 	}, events.TraceContext{})
 	ev.Source = types.OperatorSource

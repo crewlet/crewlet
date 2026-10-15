@@ -62,7 +62,7 @@ func TestDueBandsCutAtCompanyMidnight(t *testing.T) {
 	markedOverdue := func(loc *time.Location) bool {
 		t.Helper()
 		day, err := h.reader.MyWork(t.Context(), tracker.MyWorkQuery{
-			Who: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+			Handle: "ana", Level: statelog.ReadStale,
 		}, now, loc)
 		if err != nil {
 			t.Fatalf("MyWork: %v", err)

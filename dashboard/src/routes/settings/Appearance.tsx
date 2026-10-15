@@ -4,8 +4,9 @@
  * # The reader's own, and nobody else's
  *
  * Mode, density and theme are kept per browser (`lib/prefs.ts`) and change
- * nothing of the company's, so this section is under Personal at the foot of
- * the column, is never guarded, and asks the engine for nothing. The
+ * nothing of the company's, so this section is in the You group at the head
+ * of the column, beside the reader's Account, takes no grant, and asks the
+ * engine for nothing. The
  * preferences popover beside the reader's name offers the same three in less
  * room; both read and write one store, so the two never disagree.
  *

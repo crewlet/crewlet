@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // ABSENT IS NOT ZERO. A node that publishes no status (its status hook overran
@@ -33,12 +36,14 @@ func TestANodeThatPublishesNoStatusIsNotReadAsIdle(t *testing.T) {
 func TestAPublishedStatusRoundTrips(t *testing.T) {
 	t.Parallel()
 	started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	pm := uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
+		AdminPosture: iam.AdminServe,
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Shared: true, Started: 1, Tools: 12},
 			{Server: "jira", Started: 2, Failed: 1, Tools: 9,
-				Error: "exec: jira-mcp: not found", ErrorSeat: "pm"},
+				Error: "exec: jira-mcp: not found", ErrorSeat: pm},
 		},
 	}
 	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: want.Meta()})
@@ -139,5 +144,80 @@ func TestAnUnsetPostureIsNotPublished(t *testing.T) {
 	}
 	if _, present := meta["draining"]; !present {
 		t.Error("draining was omitted, so a node that is not draining says nothing")
+	}
+}
+
+// THE ADMIN POSTURE IS ABSENT RATHER THAN EMPTY on a node that declares none.
+//
+// It is the same rule as the posture above and it matters more here, because
+// what an empty cell would mean is the opposite of the truth: a worker node
+// binds no API and therefore has no admin posture to state, while an empty
+// string on the wire reads as a peer whose posture differs from every other
+// node's — a disagreement drawn across a fleet that has none, on exactly the
+// signal an operator is meant to trust. And each posture survives the JSON
+// round trip the lease store does, under the key `/query/fleet` reads.
+// Mutation: publish the field whatever its value and the first assertion
+// goes red.
+func TestANodeWithNoAdminPosturePublishesNone(t *testing.T) {
+	t.Parallel()
+	meta := coord.NodeStatus{InFlight: 1}.Meta()
+	if _, present := meta["admin"]; present {
+		t.Errorf("a node with no posture published one: %+v", meta)
+	}
+	for _, posture := range iam.AdminPostures {
+		raw, err := json.Marshal(map[string]any{
+			coord.StatusKey: coord.NodeStatus{AdminPosture: posture}.Meta(),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"admin":"`+string(posture)+`"`) {
+			t.Errorf("the wire carries %s, want the posture under \"admin\"", raw)
+		}
+		var round map[string]any
+		if err := json.Unmarshal(raw, &round); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		got, ok := coord.StatusFromMeta(round)
+		if !ok {
+			t.Fatal("a published status read as absent")
+		}
+		if got.AdminPosture != posture {
+			t.Errorf("admin posture = %q, want %q carried across the round trip",
+				got.AdminPosture, posture)
+		}
+	}
+}
+
+// AN MCP FAILURE NAMES ITS SEAT BY ID, and a value that is not one names no
+// seat. The row is read by every peer against its own chart, which keys a seat
+// by its id, so a value no build of this one wrote — a handle, a mis-cased id
+// — is decoded as "did not say" rather than as a seat a reader would then go
+// looking for.
+func TestAnMCPFailureNamesItsSeatByIDOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	seat := uuid.MustParse("0b6f2c1e-9a4d-5c3b-8e7f-1a2b3c4d5e6f")
+	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{
+		{Server: "jira", Failed: 1, Error: "401", ErrorSeat: seat},
+	}}
+	meta := status.Meta()
+	rows, _ := meta["mcp"].([]map[string]any)
+	if len(rows) != 1 || rows[0]["error_seat"] != seat.String() {
+		t.Fatalf("published %+v, want the seat's id on the row", meta["mcp"])
+	}
+	for name, wire := range map[string]any{
+		"a handle":          "pm",
+		"an upper-cased id": strings.ToUpper(seat.String()),
+		"not a string":      42,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: map[string]any{
+				"mcp": []any{map[string]any{"server": "jira", "failed": 1, "error_seat": wire}},
+			}})
+			if len(got.MCP) != 1 || got.MCP[0].ErrorSeat != uuid.Nil {
+				t.Errorf("decoded %+v from %v, want the row with no seat named", got.MCP, wire)
+			}
+		})
 	}
 }

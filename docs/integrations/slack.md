@@ -73,8 +73,9 @@ mcp_servers:
 
 units:
   - name: Core
+    id: core                                              # the unit's key; `name` above is display
     type: team
-    lead: Engineer
+    lead: engineer                                        # the lead seat's handle
     roles:
       - name: Engineer
         integrations:                                     # per-agent transport identity
@@ -94,7 +95,7 @@ units:
             SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_DESIGNER}"
 ```
 
-The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it — and belongs on `role.integrations.slack`. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md) on the org chart, which the executor prompt renders as the team channel for whichever chat backend the company runs.
+The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it. Both live on `role.integrations.slack`, in the file and through the API alike. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md), which the executor prompt renders as the team channel for whichever chat backend the company runs.
 
 Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation's only opinion on it is that a `bot_token` is one or the other — never a reference inside other text (`xoxb-${REST}`), which the transport, resolving the token only when it is one whole `${VAR}`, would send as written: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
 
@@ -142,7 +143,7 @@ The run exchanges it for a 12-hour access token and **records both in the ledger
 Run the API server **before** provisioning, publicly reachable at `-public-url`:
 
 ```bash
-crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8080   # unconfigured is fine
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000   # unconfigured is fine
 ```
 
 Slack verifies each app's events **Request URL** with a `url_verification` challenge, and the API answers it unconditionally — no engine, company config or credentials needed. That exemption is deliberate and safe: the response is a pure echo of the caller's own challenge, and it has to work because during provisioning the signing secret does not exist yet, so a verified handshake would be impossible and the app could never be installed. If an app's Request URL still shows *unverified* in its settings page, click **Verify** there.
@@ -315,10 +316,10 @@ identity.
 2. Slack sends webhook to `https://your-server.com/webhooks/slack/{handle}`
 3. The API verifies the `X-Slack-Signature` v0 HMAC **at the edge**, against that handle's own signing secret, before the payload is persisted, streamed to a dashboard or published. The timestamp is part of the signed string and is checked against a replay window, which is what stops a captured request from working for ever. This is the **only** verification: nothing downstream checks again, which is why the route is exempt from the API's bearer token and why the check has to be here.
    - No signing secret for **any** seat → `503`. "Cannot verify" is not "nothing to verify": a node with no secrets loaded must not accept an unsigned POST addressed at any handle.
-   - A secret map that is populated but does not name this handle → `401`. That is a delivery for a seat with no Slack app, not a node that cannot check.
+   - A secret map that is populated but does not name this handle → `401 invalid_signature`. That is a delivery for a seat with no Slack app, not a node that cannot check — and it is answered exactly as a wrong signature on a real seat is, after the same signature check, so a request from outside cannot tell which handles have an app. The engine's log names it `slack_webhook_unknown_handle`.
 4. The delivery is claimed fleet-wide on Slack's own `event_id`, which is stable across its retries — so a redelivery, or a message that arrives twice because the app subscribes to both `message.*` and `app_mention`, wakes the seat once.
 5. The API publishes to `crewlet.notifications.inbound` on the EventQueue.
-6. The notification service resolves the handle to its seat and publishes to `crewlet.agent.{handle}.inbox`.
+6. The notification service resolves the handle to its seat and publishes to that seat's own mailbox, `crewlet.agent.{seat-id}.inbox`.
 7. The agent's handler fires.
 
 #### Which events wake an agent

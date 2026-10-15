@@ -1,19 +1,29 @@
 package secretsapi_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -34,19 +44,41 @@ func cipherFor(t *testing.T, ids ...string) secrets.Cipher {
 }
 
 // surface builds the routes over a memory fleet, with an operator attached
-// the way the guard attaches one.
+// the way the guard attaches one — carrying every grant, so a case about what
+// the store does is not a case about authority.
 func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, coord.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
-	svc := newService(t, secretsapi.Options{
+	return mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipher, ActiveKeyID: keyID,
 		Now: func() time.Time { return clock },
+	}, iam.AllGrants...), fleet
+}
+
+// mounted builds the surface and serves it as the operator `ops` carrying
+// exactly these grants.
+func mounted(t *testing.T, opts secretsapi.Options, grants ...iam.Grant) http.Handler {
+	t.Helper()
+	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+	// token, so a case here is decided on its grants alone.
+	return mountedAs(t, opts, iam.Principal{
+		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants,
+		ReauthAt: time.Now().Add(time.Hour),
 	})
+}
+
+// mountedAs builds the surface and serves it as caller.
+func mountedAs(t *testing.T, opts secretsapi.Options, caller iam.Principal) http.Handler {
+	t.Helper()
 	mux := http.NewServeMux()
-	svc.Routes(mux)
+	if err := newService(t, opts).Routes(mux); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	}), fleet
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), caller)))
+	})
 }
 
 // newService builds the surface, failing the test on a wiring mistake.
@@ -118,7 +150,7 @@ func TestAPlainReadCarriesNoValue(t *testing.T) {
 	if strings.Contains(body, `"value"`) {
 		t.Fatalf("a plain read has a value field at all: %s", body)
 	}
-	for _, want := range []string{`"key_id":"k1"`, `"updated_by":"ops"`} {
+	for _, want := range []string{`"key_id":"k1"`, `"updated_by":"token:ops"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the answer omits %s: %s", want, body)
 		}
@@ -202,18 +234,79 @@ func TestAnAbsentNameIsAnswerableAsNotFound(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING REFUSES RATHER THAN STORING PLAINTEXT, and says what
-// to run. A store that could hold unencrypted secrets is a footgun with no
-// upside.
-func TestWithoutAKeyringEveryWriteIsRefusedWithTheRemedy(t *testing.T) {
+// WITHOUT A KEYRING THERE IS NO SURFACE, and the refusal names the field.
+//
+// Built with no keyring, this surface used to answer every route 503
+// no_keyring and tell the caller to run `crewlet secrets keygen` — a posture
+// for a node with no keyring, which cannot exist: validation refuses a Tier A
+// file without secrets.keys and the engine refuses to start. So a nil cipher,
+// or a keyring with no active key to rekey onto, is the wiring mistake a nil
+// fleet is, and it fails the boot by name.
+func TestWithoutAKeyringTheSurfaceIsRefused(t *testing.T) {
 	t.Parallel()
-	h, _ := surface(t, nil, "")
-	code, body := call(t, h, http.MethodPut, "/secrets/A", "v")
-	if code != http.StatusServiceUnavailable {
-		t.Fatalf("PUT = %d %s, want 503", code, body)
+	for _, c := range []struct {
+		name  string
+		opts  secretsapi.Options
+		field string
+	}{
+		{"no keyring", secretsapi.Options{Fleet: coordmem.NewFleet(),
+			ActiveKeyID: "k1"}, "Options.Cipher"},
+		{"no active key", secretsapi.Options{Fleet: coordmem.NewFleet(),
+			Cipher: cipherFor(t, "k1")}, "Options.ActiveKeyID"},
+	} {
+		svc, err := secretsapi.New(c.opts)
+		if err == nil {
+			t.Errorf("%s: built a secrets surface: %v", c.name, svc)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.field) {
+			t.Errorf("%s: the refusal does not name %s: %v", c.name, c.field, err)
+		}
 	}
-	if !strings.Contains(body, "keygen") {
-		t.Errorf("the refusal does not say how to get a keyring: %s", body)
+}
+
+// EVERY REFUSAL HERE CARRIES ITS SENTENCE, AND NONE OF THEM SAYS WHEN.
+//
+// This surface built its own `{"error": code}` bodies, so the credential
+// screen rendered a code and no line a person could act on. And none of these
+// clears by waiting — a name is refused for its shape and a rekey for naming
+// another key — so a Retry-After on one would teach a client to repeat it.
+func TestARefusalCarriesItsSentenceAndNoRetryAfter(t *testing.T) {
+	t.Parallel()
+	keyed, _ := surface(t, cipherFor(t, "k1"), "k1")
+	for _, c := range []struct {
+		name         string
+		h            http.Handler
+		method, path string
+		status       int
+		code         httpjson.Code
+	}{
+		{"a name no reference can name", keyed, http.MethodPut, "/secrets/not-a-name",
+			http.StatusBadRequest, httpjson.CodeInvalidName},
+		{"a rekey onto a key this node does not seal with", keyed, http.MethodPost,
+			"/secrets/rekey?key_id=k9", http.StatusConflict, httpjson.CodeKeyIDMismatch},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			c.h.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, strings.NewReader("v")))
+			if rec.Code != c.status {
+				t.Fatalf("answered %d, want %d: %s", rec.Code, c.status, rec.Body)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v: %s", err, rec.Body)
+			}
+			if body["error"] != string(c.code) {
+				t.Errorf("error = %v, want %s", body["error"], c.code)
+			}
+			if body["message"] != c.code.Message() {
+				t.Errorf("message = %v, want the code's own sentence", body["message"])
+			}
+			if got := rec.Header().Get("Retry-After"); got != "" {
+				t.Errorf("Retry-After = %q over a refusal no wait clears", got)
+			}
+		})
 	}
 }
 
@@ -233,24 +326,16 @@ func TestAnOversizedValueIsRefused(t *testing.T) {
 func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
-	mux := http.NewServeMux()
-	newService(t, secretsapi.Options{
+	old := mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
 		Now: func() time.Time { return clock },
-	}).Routes(mux)
-	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	})
+	}, iam.AllGrants...)
 	call(t, old, http.MethodPut, "/secrets/A", "one")
 
-	rotated := http.NewServeMux()
-	newService(t, secretsapi.Options{
+	h := mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k2", "k1"), ActiveKeyID: "k2",
 		Now: func() time.Time { return clock },
-	}).Routes(rotated)
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rotated.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	})
+	}, iam.AllGrants...)
 
 	code, body := call(t, h, http.MethodPost, "/secrets/rekey", "")
 	if code != http.StatusOK || !strings.Contains(body, `"moved":["A"]`) {
@@ -258,6 +343,155 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	}
 	if code, body = call(t, h, http.MethodGet, "/secrets/A", ""); !strings.Contains(body, `"key_id":"k2"`) {
 		t.Fatalf("after the rekey A reads %d %s, want key-2", code, body)
+	}
+}
+
+// THE ENGINE'S OWN KEYS ARE UNREACHABLE HERE, whatever the caller holds.
+//
+// The directory's blind-index key lives in the same bucket as the operator's
+// credentials. When it carried an operator name, this surface listed it and a
+// DELETE orphaned every address in the directory. Every route that takes a name
+// now refuses one BY NAME — including a caller carrying every grant — the
+// listing counts them without naming any, and a rekey moves and counts them.
+func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
+	t.Parallel()
+	const key = "iam/blind-index-key"
+	fleet := coordmem.NewFleet()
+	if created, err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Create(
+		t.Context(), key, "the-engine-key", secrets.Author{Name: "node-a",
+			Kind: string(iam.ActorSystem)}, "iam", clock); err != nil || !created {
+		t.Fatalf("seed the engine key: (%v, %v)", created, err)
+	}
+	h := mounted(t, secretsapi.Options{
+		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	call(t, h, http.MethodPut, "/secrets/GITLAB_TOKEN", "glpat")
+
+	path := "/secrets/" + url.PathEscape(key)
+	for _, tc := range []struct{ name, method, path, body string }{
+		{"a metadata read", http.MethodGet, path, ""},
+		{"a reveal", http.MethodGet, path + "?reveal=true", ""},
+		{"an overwrite", http.MethodPut, path, "overwritten"},
+		{"a delete", http.MethodDelete, path, ""},
+	} {
+		code, body := call(t, h, tc.method, tc.path, tc.body)
+		if code != http.StatusForbidden || !strings.Contains(body, `"reserved_name"`) {
+			t.Errorf("%s of an engine key answered %d %s, want 403 reserved_name",
+				tc.name, code, body)
+		}
+		if strings.Contains(body, "the-engine-key") {
+			t.Errorf("%s of an engine key carried its value: %s", tc.name, body)
+		}
+	}
+	if got, err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Get(
+		t.Context(), key); err != nil || got != "the-engine-key" {
+		t.Fatalf("after every refused gesture the engine key reads %q (%v)", got, err)
+	}
+
+	code, body := call(t, h, http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || strings.Contains(body, key) ||
+		!strings.Contains(body, `"engine_keys":{"total":1,"by_key":{"k1":1}}`) {
+		t.Errorf("the listing = %d %s, want the operator row named and the "+
+			"engine key counted", code, body)
+	}
+
+	rotated := mounted(t, secretsapi.Options{
+		Fleet: fleet, Cipher: cipherFor(t, "k2", "k1"), ActiveKeyID: "k2",
+		Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	code, body = call(t, rotated, http.MethodPost, "/secrets/rekey", "")
+	if code != http.StatusOK || !strings.Contains(body, `"engine_keys_moved":1`) ||
+		strings.Contains(body, key) {
+		t.Errorf("rekey = %d %s, want the engine key moved and counted", code, body)
+	}
+}
+
+// fakeIdentity is the identity estate's half of a rotation, as the rekey and
+// the listing ask it.
+type fakeIdentity struct {
+	count    iamdomain.SealedCount
+	report   iamdomain.ResealReport
+	err      error
+	resealed int
+}
+
+func (f *fakeIdentity) SealedKeys(context.Context) (iamdomain.SealedCount, error) {
+	return f.count, nil
+}
+
+func (f *fakeIdentity) Reseal(context.Context) (iamdomain.ResealReport, error) {
+	f.resealed++
+	return f.report, f.err
+}
+
+// A REKEY IS THE WHOLE ROTATION, THE IDENTITY ESTATE INCLUDED.
+//
+// The keyring that seals the store also seals every person's name, address and
+// second factor, in rows only a record can change — so a rekey that moved the
+// store alone reported a finished rotation while every person's values were
+// still under the key the operator was about to drop. The rekey now moves both
+// and counts both, the listing counts both, and a node that runs no identity
+// estate SAYS so (`null`) rather than reading as an estate with nothing to
+// move. An outcome nobody could confirm is `rekey_incomplete`, because the old
+// key is dropped on the strength of this answer.
+//
+// Mutation: drop the call to Reseal and the first case fails.
+func TestARekeyMovesTheIdentityEstateToo(t *testing.T) {
+	t.Parallel()
+	opts := func(identity secretsapi.Identity) secretsapi.Options {
+		return secretsapi.Options{
+			Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"),
+			ActiveKeyID: "k1", Identity: identity,
+			Now: func() time.Time { return clock },
+		}
+	}
+
+	moved := &fakeIdentity{
+		count: iamdomain.SealedCount{People: map[string]int{"k0": 3},
+			Invitations: map[string]int{"k0": 1}},
+		report: iamdomain.ResealReport{People: []string{"p1", "p2"}, Values: 5},
+	}
+	h := mounted(t, opts(moved), iam.AllGrants...)
+	code, body := call(t, h, http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || !strings.Contains(body,
+		`"identity_values":{"people":{"k0":3},"invitations":{"k0":1}}`) {
+		t.Errorf("the listing = %d %s, want the identity estate's values counted "+
+			"by key", code, body)
+	}
+	code, body = call(t, h, http.MethodPost, "/secrets/rekey", "")
+	if code != http.StatusOK || moved.resealed != 1 ||
+		!strings.Contains(body, `"identity":{"people":2,"values":5}`) ||
+		strings.Contains(body, "p1") {
+		t.Errorf("rekey = %d %s (re-sealed %d times), want the identity estate "+
+			"moved once and counted, naming nobody", code, body, moved.resealed)
+	}
+
+	absent := mounted(t, opts(nil), iam.AllGrants...)
+	if code, body := call(t, absent, http.MethodGet, "/secrets", ""); code !=
+		http.StatusOK || !strings.Contains(body, `"identity_values":null`) {
+		t.Errorf("a node with no identity estate listed %d %s, want it said", code, body)
+	}
+	if code, body := call(t, absent, http.MethodPost, "/secrets/rekey", ""); code !=
+		http.StatusOK || !strings.Contains(body, `"identity":null`) {
+		t.Errorf("a node with no identity estate rekeyed %d %s, want it said", code, body)
+	}
+
+	for name, identity := range map[string]*fakeIdentity{
+		"an outcome nobody could confirm": {report: iamdomain.ResealReport{
+			People: []string{"p1"}, Values: 2, Unknown: []string{"p2"}}},
+		"a person whose values would not open": {
+			report: iamdomain.ResealReport{People: []string{"p1"}, Values: 2},
+			err:    errors.New("open p2's name: secret could not be decrypted")},
+	} {
+		h := mounted(t, opts(identity), iam.AllGrants...)
+		code, body := call(t, h, http.MethodPost, "/secrets/rekey", "")
+		if code != http.StatusInternalServerError ||
+			!strings.Contains(body, `"rekey_incomplete"`) ||
+			!strings.Contains(body, `"identity":{"people":1,"values":2}`) {
+			t.Errorf("%s: rekey = %d %s, want rekey_incomplete carrying what "+
+				"did move", name, code, body)
+		}
 	}
 }
 
@@ -318,9 +552,46 @@ func TestTheAuthenticatedOperatorIsRecordedAsTheAuthor(t *testing.T) {
 	call(t, h, http.MethodPut, "/secrets/A?source=gitlab-provision", "v")
 
 	_, body := call(t, h, http.MethodGet, "/secrets/A", "")
-	for _, want := range []string{`"updated_by":"ops"`, `"source":"gitlab-provision"`} {
+	for _, want := range []string{`"updated_by":"token:ops"`,
+		`"updated_by_kind":"operator"`, `"operator_id":"token:ops"`,
+		`"source":"gitlab-provision"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the row omits %s: %s", want, body)
+		}
+	}
+}
+
+// A PERSON'S TOKEN RECORDS THE PERSON AS THE AUTHOR, AND THE TOKEN BESIDE THEM.
+//
+// The row had room for one name and took the credential: `pat:<id>`, whose own
+// row — the one thing saying whose it was — the identity sweep deletes a week
+// after it lapses. So a credential in the store named, a month on, nobody. The
+// write's answer says the same thing the row does, because it is the only
+// confirmation a client that could not choose the author gets. Mutation:
+// record the credential as the author and every assertion here fails.
+func TestAPersonsTokenIsRecordedBesideThePerson(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	h := mountedAs(t, secretsapi.Options{
+		Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock },
+	}, iam.Principal{
+		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+		ReauthAt: time.Now().Add(time.Hour),
+	})
+	code, written := call(t, h, http.MethodPut, "/secrets/A", "v")
+	if code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", code, written)
+	}
+	_, row := call(t, h, http.MethodGet, "/secrets/A", "")
+	for name, body := range map[string]string{"the write's answer": written,
+		"the row": row} {
+		for _, want := range []string{`"updated_by":"jane.doe"`,
+			`"updated_by_kind":"operator"`, `"operator_id":"` + pat + `"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s omits %s: %s", name, want, body)
+			}
 		}
 	}
 }
@@ -377,5 +648,170 @@ func TestANameTheWritePathWouldRefuseNamesNoSecret(t *testing.T) {
 	code, body := call(t, h, http.MethodDelete, "/secrets/gitlab-token", "")
 	if code != http.StatusOK || !strings.Contains(body, `"removed":false`) {
 		t.Fatalf("DELETE = %d %s, want 200 with removed:false", code, body)
+	}
+}
+
+// EVERY ROUTE IS ADMIN'S, the value included.
+//
+// These routes decided nothing: the guard in front of them answers only
+// whether somebody resolved, which meant "the operator" while an operator
+// token was the only credential this engine had. A person signed in holding a
+// read-only permission alone could then list, reveal, overwrite and delete the
+// company's credentials. So each route is stated against a caller holding
+// admin, and against one holding EVERY APP — the most a caller can carry
+// without admin, and still refused, which is what makes the refusal about the
+// rule (ADR-0033: a listing of the company's credentials is not part of
+// anybody's overview, and no app opens it). A refusal names admin and nothing
+// else — the minimal grant that would admit.
+func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name         string
+		method, path string
+		body         string
+	}{
+		{"the listing", http.MethodGet, "/secrets", ""},
+		{"one row's metadata", http.MethodGet, "/secrets/A", ""},
+		// THE VALUE IS ITS OWN VERB, `secrets.reveal`, asked on top of the
+		// route's once the flag is read: admin as the listing is, so a
+		// caller holding every app is refused it naming admin too.
+		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", ""},
+		{"a write", http.MethodPut, "/secrets/B", "two"},
+		{"a delete", http.MethodDelete, "/secrets/A", ""},
+		{"a rekey", http.MethodPost, "/secrets/rekey", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			build := func(grants ...iam.Grant) http.Handler {
+				fleet := coordmem.NewFleet()
+				opts := secretsapi.Options{Fleet: fleet, Cipher: cipherFor(t, "k1"),
+					ActiveKeyID: "k1", Now: func() time.Time { return clock }}
+				seed := mounted(t, opts, iam.AllGrants...)
+				if code, body := call(t, seed, http.MethodPut, "/secrets/A", "one"); code != http.StatusOK {
+					t.Fatalf("seed = %d %s", code, body)
+				}
+				return mounted(t, opts, grants...)
+			}
+			if code, body := call(t, build(iam.GrantAdmin), c.method, c.path, c.body); code >= 400 {
+				t.Errorf("holding admin: %d %s, want it admitted", code, body)
+			}
+			code, body := call(t, build(iam.Apps...), c.method, c.path, c.body)
+			if code != http.StatusForbidden {
+				t.Fatalf("holding every app and not admin: %d %s, want 403",
+					code, body)
+			}
+			var refusal map[string]any
+			if err := json.Unmarshal([]byte(body), &refusal); err != nil {
+				t.Fatalf("decode %s: %v", body, err)
+			}
+			grants, _ := refusal[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+				t.Errorf("refused naming %v, want [admin]", refusal[authz.DetailGrants])
+			}
+		})
+	}
+}
+
+// AND A REFUSED REVEAL NEVER OPENS THE VALUE: `secrets.reveal` is asked before
+// the store is read, so a caller the listing admits and the reveal does not
+// cannot learn even whether the value would have decrypted — the answer is the
+// same 403 for a name that exists and one that does not.
+//
+// Admin opens both verbs, so what tells them apart is the reveal row's own
+// lock: a person present and a recent proof. An admin acting through a machine
+// token, and an admin whose sign-in is a day old, may each list and are each
+// refused the value — before the name is looked up.
+func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
+	t.Parallel()
+	opts := secretsapi.Options{Fleet: coordmem.NewFleet(),
+		Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock }}
+	if code, body := call(t, mounted(t, opts, iam.AllGrants...),
+		http.MethodPut, "/secrets/A", "one"); code != http.StatusOK {
+		t.Fatalf("seed = %d %s", code, body)
+	}
+	for name, caller := range map[string]iam.Principal{
+		"an admin acting through a machine token": {
+			ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Grants: iam.AllGrants,
+			Via:      "pat:0192f00d-0000-7000-8000-00000000000b",
+			ReauthAt: time.Now().Add(time.Hour),
+		},
+		"an admin whose proof is stale": {
+			ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Grants: iam.AllGrants,
+			ReauthAt: time.Now().Add(-time.Hour),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := mountedAs(t, opts, caller)
+			if code, body := call(t, h, http.MethodGet, "/secrets/A", ""); code != http.StatusOK {
+				t.Fatalf("the metadata = %d %s, want 200: the case is about "+
+					"the reveal's own row, not the listing's", code, body)
+			}
+			present, presentBody := call(t, h, http.MethodGet, "/secrets/A?reveal=true", "")
+			absent, absentBody := call(t, h, http.MethodGet, "/secrets/NOWHERE?reveal=true", "")
+			if present != http.StatusForbidden || absent != http.StatusForbidden {
+				t.Errorf("revealing a name that exists = %d, one that does not "+
+					"= %d, want both 403: a 404 would tell a caller the reveal "+
+					"refuses which names exist", present, absent)
+			}
+			// THE SAME BYTES, which is what says the value was never read:
+			// a refusal that had opened it could not match one for a name
+			// with nothing under it.
+			if presentBody != absentBody {
+				t.Errorf("the two refusals differ:\n%s\n%s", presentBody, absentBody)
+			}
+		})
+	}
+}
+
+// EVERY REFUSAL ON THIS SURFACE IS THE ENGINE'S ENVELOPE.
+//
+// The surface wrote its own `{"error": ...}` maps: a code the rest of the API
+// has no sentence for, so the dashboard — which renders the envelope's
+// `message` verbatim — showed nothing, and a code the vocabulary does not
+// declare is one nothing holds against its spelling. Each refusal is walked
+// here, and each must carry its code AND the vocabulary's sentence for it.
+func TestEveryRefusalHereIsTheEnginesEnvelope(t *testing.T) {
+	t.Parallel()
+	sealed := mounted(t, secretsapi.Options{
+		Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	for _, tc := range []struct {
+		name         string
+		h            http.Handler
+		method, path string
+		body         string
+		status       int
+		code         httpjson.Code
+	}{
+		{"a reserved name", sealed, http.MethodGet,
+			"/secrets/" + url.PathEscape("iam/blind-index-key"), "",
+			http.StatusForbidden, httpjson.CodeReservedName},
+		{"a name no reference can hold", sealed, http.MethodPut,
+			"/secrets/gitlab-token", "v", http.StatusBadRequest,
+			httpjson.CodeInvalidName},
+		{"an absent name", sealed, http.MethodGet, "/secrets/NOT_HERE", "",
+			http.StatusNotFound, httpjson.CodeNotFound},
+		{"a rekey onto another key", sealed, http.MethodPost,
+			"/secrets/rekey?key_id=k9", "", http.StatusConflict,
+			httpjson.CodeKeyIDMismatch},
+	} {
+		code, raw := call(t, tc.h, tc.method, tc.path, tc.body)
+		var body map[string]any
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			t.Errorf("%s: the refusal is not JSON: %s", tc.name, raw)
+			continue
+		}
+		if code != tc.status || body["error"] != string(tc.code) {
+			t.Errorf("%s answered %d %v, want %d %s", tc.name, code,
+				body["error"], tc.status, tc.code)
+		}
+		if body["message"] != tc.code.Message() || tc.code.Message() == "" {
+			t.Errorf("%s carries message %q, want the vocabulary's sentence "+
+				"for %s", tc.name, body["message"], tc.code)
+		}
 	}
 }

@@ -1,6 +1,8 @@
 package jetstream
 
 import (
+	"context"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -8,8 +10,46 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
+
+// unpairedConsumer creates a durable consumer with a subscription's name and
+// filter and no pair in its metadata — one something other than this backend
+// made.
+func unpairedConsumer(ctx context.Context, t *testing.T, q *Queue, topic, group string) {
+	t.Helper()
+	stream, err := q.streamFor(ctx, topic)
+	if err != nil {
+		t.Fatalf("streamFor(%s): %v", topic, err)
+	}
+	if _, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+		Durable:       consumerName(topic, group),
+		FilterSubject: topic,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+	}); err != nil {
+		t.Fatalf("create the unpaired consumer for %s/%s: %v", topic, group, err)
+	}
+}
+
+// A consumer whose metadata names no pair is left out, and does not cost the
+// rest of the listing: one unreadable consumer must not hide every mailbox
+// beside it.
+func TestAnUnpairedConsumerIsLeftOutAndTheRestAreListed(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	q := openForTest(t, Config{})
+	unpairedConsumer(ctx, t, q, "odd.topic", "grp")
+	if _, err := q.EnsureSubscription(ctx, "odd.other", "grp"); err != nil {
+		t.Fatalf("EnsureSubscription: %v", err)
+	}
+	got, err := q.ListSubscriptions(ctx, "odd.>")
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v", err)
+	}
+	if want := []queue.Subscription{{Topic: "odd.other", Group: "grp"}}; !slices.Equal(got, want) {
+		t.Fatalf("ListSubscriptions = %v, want only the paired %v", got, want)
+	}
+}
 
 // A PAIR IS LISTED ONLY WHEN IT ADDRESSES THE CONSUMER IT WAS READ FROM.
 //
@@ -27,7 +67,7 @@ func TestPairOfListsOnlyAPairThatAddressesTheConsumer(t *testing.T) {
 		}}
 	}
 	ephemeral := &jetstream.ConsumerInfo{Config: jetstream.ConsumerConfig{
-		Name: "Xy12ab", FilterSubject: topics.AgentInbox("alice"),
+		Name: "Xy12ab", FilterSubject: seatInbox("alice"),
 	}}
 	for _, tc := range []struct {
 		name    string
@@ -41,7 +81,7 @@ func TestPairOfListsOnlyAPairThatAddressesTheConsumer(t *testing.T) {
 			consumer(consumerName("t.x", "h.i"), "t.x", subscriptionMetadata("t.x", "h.i")),
 			queue.Subscription{Topic: "t.x", Group: "h.i"}, pairListed},
 		{"metadata naming another pair",
-			consumer(consumerName("t.x", "g"), "t.x", subscriptionMetadata("t.victim", "grp")),
+			consumer(consumerName("t.x", "h.i"), "t.x", subscriptionMetadata("t.victim", "grp")),
 			queue.Subscription{}, pairUnprovable},
 		{"metadata naming half a pair",
 			consumer(consumerName("t.x", "g"), "t.x", map[string]string{metaTopic: "t.x"}),

@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -72,12 +74,14 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 	}
 	search, tracker := rows[0], rows[1]
 	if search.Server != "search" || !search.Shared || search.Failed != 1 || search.Started != 0 ||
-		search.Error == "" || search.ErrorSeat != "" {
+		search.Error == "" || search.ErrorSeat != uuid.Nil {
 		t.Errorf("shared row = %+v, want search, shared, one failure with its reason", search)
 	}
+	ceo, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
 	if tracker.Server != "tracker" || tracker.Shared || tracker.Failed != 1 ||
-		tracker.Error == "" || tracker.ErrorSeat != "ceo" {
-		t.Errorf("per-role row = %+v, want tracker, per-role, one failure on ceo", tracker)
+		tracker.Error == "" || tracker.ErrorSeat != ceo || ceo == uuid.Nil {
+		t.Errorf("per-role row = %+v, want tracker, per-role, one failure on ceo's id %s",
+			tracker, ceo)
 	}
 
 	e.stopSeatServers(ctx, "ceo")
@@ -94,25 +98,32 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 // ONE ROW PER SERVER, its instances counted. A per-role template has a child
 // per seat this node holds, and a row per child would put the company's seat
 // count on a payload re-sent every heartbeat. The reported failure is the
-// first by seat handle, so two beats with the same facts send the same bytes.
+// first by the seat's agent id, so two beats with the same facts send the same
+// bytes.
 func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 	t.Parallel()
+	// Ids ordered swe < pm, the reverse of their handles, so a first
+	// failure picked by handle would name the other seat.
+	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
+	pm := uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	ceo := uuid.MustParse("00000000-0000-7000-8000-000000000003")
+	cto := uuid.MustParse("00000000-0000-7000-8000-000000000004")
 	e := &Engine{
 		mcpShared: []mcpOutcome{{server: "search", tools: 3}},
 		mcpSeats: map[string][]mcpOutcome{
-			"swe": {{server: "tracker", seat: "swe", err: errors.New("401 from swe's token")}},
-			"ceo": {{server: "tracker", seat: "ceo", tools: 7}},
+			"swe": {{server: "tracker", seat: swe, err: errors.New("401 from swe's token")}},
+			"ceo": {{server: "tracker", seat: ceo, tools: 7}},
 			"cto": {
-				{server: "tracker", seat: "cto", tools: 9},
-				{server: "chat", seat: "cto", err: errors.New("exec: not found")},
+				{server: "tracker", seat: cto, tools: 9},
+				{server: "chat", seat: cto, err: errors.New("exec: not found")},
 			},
-			"pm": {{server: "tracker", seat: "pm", err: errors.New("401 from pm's token")}},
+			"pm": {{server: "tracker", seat: pm, err: errors.New("401 from pm's token")}},
 		},
 	}
 	want := []coord.MCPServerStatus{
-		{Server: "chat", Failed: 1, Error: "exec: not found", ErrorSeat: "cto"},
+		{Server: "chat", Failed: 1, Error: "exec: not found", ErrorSeat: cto},
 		{Server: "search", Shared: true, Started: 1, Tools: 3},
-		{Server: "tracker", Started: 2, Failed: 2, Tools: 9, Error: "401 from pm's token", ErrorSeat: "pm"},
+		{Server: "tracker", Started: 2, Failed: 2, Tools: 9, Error: "401 from swe's token", ErrorSeat: swe},
 	}
 	for range 5 { // map order must not reach the payload
 		if got := e.mcpStatus(); !reflect.DeepEqual(got, want) {

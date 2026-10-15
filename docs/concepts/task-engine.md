@@ -15,7 +15,7 @@ same question, and each is coherent on its own terms.
 ## `native` — the engine is the tracker
 
 Every change to the company's work is one **record on an ordered log the whole
-fleet shares**, and every node derives the same SQL tables from that log — see
+fleet shares**, and every data node derives the same SQL tables from that log — see
 [the log and the copies](#the-log-and-the-copies). There is a board on the
 dashboard, tools a seat calls, and an
 [MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
@@ -47,6 +47,65 @@ hides a field from a role, and no setup form standing between a
 founder and their first task.
 
 The whole surface is in **[The Work Tracker](../guides/work-tracker.md)**.
+
+### Who may change what
+
+There is no permission scheme to configure, and there is still an answer to
+"may this caller do that": **one authority table**, fixed in the engine, that
+every surface asks — a seat's own tools and the operator's assistant decide a
+call through the same function over the same chart. The inputs are the ones
+a company already has: the permissions a caller carries — `admin`, and the
+`tracker` app — and the relations the org chart and the work itself draw.
+
+```mermaid
+flowchart LR
+    CALL["a tool call<br/>(a seat's turn, or the operator's assistant)"]
+    TABLE["<b>the authority table</b><br/>one rule per verb"]
+    GRANT["the caller's permissions<br/>tracker · admin"]
+    CHART["the relations<br/>who leads this project, unit or person;<br/>who reported this item; who was asked"]
+    YES["allowed"]
+    NO["refused, naming the rule"]
+    UNK["cannot tell<br/>(this node cannot read its chart)"]
+    CALL --> TABLE
+    GRANT --> TABLE
+    CHART --> TABLE
+    TABLE --> YES
+    TABLE --> NO
+    TABLE --> UNK
+```
+
+What it says about the work, in short:
+
+- **Reading the board, filing, updating, commenting and declaring a tag** are
+  anybody's who uses the tracker — the `tracker` app, which every agent seat
+  holds. Somebody a colleague put a question to on an item reads that item and
+  posts their answer to it **without** the app, and nothing more.
+- **A project's policy** — its field declarations, its default assignee,
+  renaming or archiving a tag — and **re-routing a task** at another team are
+  the project **lead's**, because each decides something for everybody who
+  files work there.
+- **Archiving a project** is the lead's as well, and **never an agent's**: a
+  project nobody can file into again is a company decision, whatever the seat
+  asking leads.
+- **Saved views** follow what the view is. A personal view is its owner's; a
+  shared one is its container's lead's — a project's, a unit's, or the person
+  whose page it sits on.
+- **Removing an item and restoring it** are its project lead's — and its
+  **reporter's**: whoever filed a duplicate takes it out again. Moving it to
+  another project stays the lead's, and a purge stays an administrator's.
+- **The workspace catalogue** — task types and workspace fields — takes
+  `admin`, because it is the company's configuration rather than any
+  container's.
+- **Somebody's queue** is theirs and their lead's; their inbox and pins are
+  theirs alone.
+
+`admin` overrides every relation, and no seat carries it; every relation on a
+tracker verb also asks for the `tracker` app. A node that cannot read its chart answers **cannot tell** rather
+than no, so a lead is never told they lead nothing because a node was behind.
+The full table is in [The Work Tracker § Who may do
+what](../guides/work-tracker.md#who-may-do-what), and the rules beyond the
+tracker in [Identity and
+Access](identity-and-access.md#the-authority-table-one-function-decides).
 
 ### Why the engine grew one
 
@@ -95,11 +154,11 @@ On the native backend a write does not go to a node's database. It is
 **published as a record** onto the domain's own log, on the subject of the
 object it changes — one task, one project, one saved view — and the broker
 arbitrates: two writers racing on one task contend there and exactly one wins,
-while two writers on different tasks never contend at all. Every node then
+while two writers on different tasks never contend at all. Every data node then
 consumes that log in order and applies the same records into its own SQL
 tables, committing **the rows and its position on the log in one
 transaction**. There is no node whose copy is the real one and no leader, and
-every node arrives at the same rows because they all replay the same order.
+every data node arrives at the same rows because they all replay the same order.
 
 What that shape buys is that a copy can say exactly how far along it is, which
 a cache cannot:
@@ -121,7 +180,7 @@ a cache cannot:
   `unknown` rather than applying it twice (see
   [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
   A gesture that writes **several** records in order — a cross-project move, a
-  merge, a promotion, a dependency change, a subtree's removal or restore, a
+  merge, a dependency change, a subtree's removal or restore, a
   write that declares its labels first (`labels_create_missing`), an update
   that changes the item and its dependencies — stops at the first one whose
   outcome is `unknown` rather than carrying on over it: nothing after that
@@ -167,7 +226,7 @@ starts anyway, on the history it has, and says what it cannot account for.
 Retention is the one asymmetry worth knowing: tasks, comments and pages are
 kept **for ever** — a tracker that forgot would stop answering the question it
 exists for — while a domain's log keeps only the replay window, which is
-bounded by durability rather than by age: a record is trimmed once every node
+bounded by durability rather than by age: a record is trimmed once every data node
 has applied past it, a complete backup covers it, and it is at least a week
 old. A company that never backs up never trims, deliberately.
 
@@ -208,7 +267,7 @@ Task assignment is **not** an algorithmic strategy: it is a **team lead agent's 
 - **`native`** — the lead calls `update_work_item` with an `assignee` (or files the item already assigned, with `create_work_item`), and may add a one-line `reason` that the new assignee is woken with and the item's history shows beside the hand-off. The committed record is what wakes the assignee: the wake is derived from the log, so there is no webhook to wait for and none to miss. An agent moving the assignee spends one of the task's **8 hand-offs**, and any touch by a person or an operator returns them all — see [Hand-offs are bounded on the task](../guides/work-tracker.md#hand-offs-are-bounded-on-the-task).
 - **`jira`** — the lead sets the assignee in Jira through its own MCP tools, and the assignment webhook wakes the assigned agent.
 
-A human can also assign directly — on `native` from the dashboard, which writes as the person their token is bound to ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)), or through their own assistant over the [operator MCP](../reference/api-endpoints.md#operatormcp--your-own-assistant); on `jira` in Jira itself — and the same agent wakes up. For **top-level tasks** (no team lead above), the founder assigns directly, or a C-level agent role acts as the top-level assigner.
+A human can also assign directly — on `native` from the dashboard, which writes as the principal the session resolves to — a person as the seat they hold, and a credential bound to no seat under its own login ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)), or through their own assistant over the [operator MCP](../reference/api-endpoints.md#operatormcp--your-own-assistant); on `jira` in Jira itself — and the same agent wakes up. For **top-level tasks** (no team lead above), the founder assigns directly, or a C-level agent role acts as the top-level assigner.
 
 ---
 

@@ -28,11 +28,11 @@ func roleNames(seats []*Role) []string {
 	return out
 }
 
-func sortedManages(t *testing.T, o *Organization, name string) []string {
+func sortedManages(t *testing.T, o *Organization, handle string) []string {
 	t.Helper()
-	r := o.Role(name)
+	r := o.Role(handle)
 	if r == nil {
-		t.Fatalf("no seat named %q", name)
+		t.Fatalf("no seat with handle %q", handle)
 	}
 	out := slices.Clone(r.Manages)
 	slices.Sort(out)
@@ -46,7 +46,7 @@ func TestLeadCascadesThroughEveryLevel(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "BigCorp",
 		Units: []*Unit{{
-			Name: "Technology", Type: UnitTypeDivision, Lead: "CTO",
+			Name: "Technology", Type: UnitTypeDivision, Lead: "cto",
 			Channel: "C_TECH",
 			Roles:   []*Role{{Name: "CTO"}},
 			Children: []*Unit{{
@@ -63,8 +63,8 @@ func TestLeadCascadesThroughEveryLevel(t *testing.T) {
 		if u == nil {
 			t.Fatalf("no unit named %q", unit)
 		}
-		if u.Lead != "CTO" {
-			t.Errorf("unit %q lead = %q, want CTO", unit, u.Lead)
+		if u.Lead != "cto" {
+			t.Errorf("unit %q lead = %q, want cto", unit, u.Lead)
 		}
 		// The team channel rides the same cascade: a child that names none
 		// talks where its parent talks.
@@ -79,18 +79,18 @@ func TestExplicitLeadIsNeverOverwritten(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Units: []*Unit{{
-			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+			Name: "Engineering", Lead: "vp-eng", Roles: []*Role{{Name: "VP Eng"}},
 			Children: []*Unit{
-				{Name: "Backend", Lead: "Tech Lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
+				{Name: "Backend", Lead: "tech-lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
 				{Name: "Frontend", Roles: []*Role{{Name: "Dev C"}}},
 			},
 		}},
 	})
-	if got := o.Unit("Backend").Lead; got != "Tech Lead" {
-		t.Errorf("Backend lead = %q, want Tech Lead", got)
+	if got := o.Unit("Backend").Lead; got != "tech-lead" {
+		t.Errorf("Backend lead = %q, want tech-lead", got)
 	}
-	if got := o.Unit("Frontend").Lead; got != "VP Eng" {
-		t.Errorf("Frontend lead = %q, want the inherited VP Eng", got)
+	if got := o.Unit("Frontend").Lead; got != "vp-eng" {
+		t.Errorf("Frontend lead = %q, want the inherited vp-eng", got)
 	}
 	// An explicit lead also stops the cascade for its own descendants.
 	if got := o.Unit("Backend").LeadRole(); got == nil || got.Name != "Tech Lead" {
@@ -105,9 +105,9 @@ func TestUnresolvedLeadIsKeptAndReported(t *testing.T) {
 	// warning, not a rejection.
 	o := normalized(&Organization{
 		Name:  "T",
-		Units: []*Unit{{Name: "Engineering", Lead: "Ghost", Roles: []*Role{{Name: "Dev"}}}},
+		Units: []*Unit{{Name: "Engineering", Lead: "ghost", Roles: []*Role{{Name: "Dev"}}}},
 	})
-	if got := o.Unit("Engineering").Lead; got != "Ghost" {
+	if got := o.Unit("Engineering").Lead; got != "ghost" {
 		t.Errorf("lead = %q, want the reference kept verbatim", got)
 	}
 	if o.EffectiveLead(o.Unit("Engineering")) != nil {
@@ -118,7 +118,7 @@ func TestUnresolvedLeadIsKeptAndReported(t *testing.T) {
 	}
 	// The unit carrying the reference is the entity itself, which is what
 	// a caller placing it in a document locates it by.
-	want := []DanglingRef{{Kind: RefLead, From: "Engineering", To: "Ghost", Unit: o.Unit("Engineering")}}
+	want := []DanglingRef{{Kind: RefLead, From: "Engineering", To: "ghost", Unit: o.Unit("Engineering")}}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
 	}
@@ -135,27 +135,27 @@ func TestNestedUnitsReportAnInheritedDanglingLeadOnce(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Units: []*Unit{{
-			Name: "Engineering", Lead: "Ghost", Roles: []*Role{{Name: "VP Eng"}},
+			Name: "Engineering", Lead: "ghost", Roles: []*Role{{Name: "VP Eng"}},
 			Children: []*Unit{
 				{
 					Name: "Backend", Roles: []*Role{{Name: "Dev A"}},
 					Children: []*Unit{{Name: "Storage", Roles: []*Role{{Name: "Dev S"}}}},
 				},
 				{Name: "Infra", Roles: []*Role{{Name: "Dev I"}}},
-				{Name: "Security", Lead: "Ghost", Roles: []*Role{{Name: "Dev X"}}},
+				{Name: "Security", Lead: "ghost", Roles: []*Role{{Name: "Dev X"}}},
 			},
 		}},
 	})
 	// The inheritance itself is unchanged: every descendant still carries
 	// the reference, and every reader still treats it as no lead.
 	for _, name := range []string{"Backend", "Storage", "Infra"} {
-		if got := o.Unit(name).Lead; got != "Ghost" {
-			t.Errorf("unit %q lead = %q, want the inherited Ghost", name, got)
+		if got := o.Unit(name).Lead; got != "ghost" {
+			t.Errorf("unit %q lead = %q, want the inherited ghost", name, got)
 		}
 	}
 	want := []DanglingRef{
-		{Kind: RefLead, From: "Engineering", To: "Ghost", Unit: o.Unit("Engineering")},
-		{Kind: RefLead, From: "Security", To: "Ghost", Unit: o.Unit("Security")},
+		{Kind: RefLead, From: "Engineering", To: "ghost", Unit: o.Unit("Engineering")},
+		{Kind: RefLead, From: "Security", To: "ghost", Unit: o.Unit("Security")},
 	}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
@@ -171,13 +171,13 @@ func TestNormalizeRecordsWhatEachUnitDeclared(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Units: []*Unit{{
-			Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
+			Name: "Engineering", Lead: "vp-eng", Channel: "C_ENG",
 			Roles: []*Role{{Name: "VP Eng"}},
 			Children: []*Unit{
 				{Name: "Backend", Roles: []*Role{{Name: "Dev A"}}},
 				// Names the same seat and channel as its parent. Declared,
 				// not inherited: changing the parent must not move it.
-				{Name: "Platform", Lead: "VP Eng", Channel: "C_ENG", Roles: []*Role{{Name: "Dev P"}}},
+				{Name: "Platform", Lead: "vp-eng", Channel: "C_ENG", Roles: []*Role{{Name: "Dev P"}}},
 				{Name: "Frontend", Channel: "C_WEB", Roles: []*Role{{Name: "Dev F"}}},
 			},
 		}},
@@ -189,10 +189,10 @@ func TestNormalizeRecordsWhatEachUnitDeclared(t *testing.T) {
 		lead, declaredLead       string
 		channel, declaredChannel string
 	}{
-		{unit: "Engineering", lead: "VP Eng", declaredLead: "VP Eng", channel: "C_ENG", declaredChannel: "C_ENG"},
-		{unit: "Backend", lead: "VP Eng", declaredLead: "", channel: "C_ENG", declaredChannel: ""},
-		{unit: "Platform", lead: "VP Eng", declaredLead: "VP Eng", channel: "C_ENG", declaredChannel: "C_ENG"},
-		{unit: "Frontend", lead: "VP Eng", declaredLead: "", channel: "C_WEB", declaredChannel: "C_WEB"},
+		{unit: "Engineering", lead: "vp-eng", declaredLead: "vp-eng", channel: "C_ENG", declaredChannel: "C_ENG"},
+		{unit: "Backend", lead: "vp-eng", declaredLead: "", channel: "C_ENG", declaredChannel: ""},
+		{unit: "Platform", lead: "vp-eng", declaredLead: "vp-eng", channel: "C_ENG", declaredChannel: "C_ENG"},
+		{unit: "Frontend", lead: "vp-eng", declaredLead: "", channel: "C_WEB", declaredChannel: "C_WEB"},
 	} {
 		u := o.Unit(tc.unit)
 		if u.Lead != tc.lead || u.DeclaredLead != tc.declaredLead {
@@ -214,18 +214,18 @@ func TestADanglingManagesEntryIsReported(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Roles: []*Role{
-			{Name: "CEO", Manages: []string{"CTO", "Engineering", "Hiring", "Ghost"}},
+			{Name: "CEO", Manages: []string{"cto", "Engineering", "Hiring", "ghost"}},
 			{Name: "CTO"},
-			human(func(r *Role) { r.Manages = []string{"CEO", "Nobody"} }),
+			human(func(r *Role) { r.Manages = []string{"ceo", "nobody"} }),
 		},
 		Units: []*Unit{
-			{Name: "Engineering", Lead: "Tech Lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
+			{Name: "Engineering", Lead: "tech-lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
 			{Name: "Hiring"},
 		},
 	})
 	want := []DanglingRef{
-		{Kind: RefManages, From: "CEO", To: "Ghost", Seat: o.Role("CEO")},
-		{Kind: RefManages, From: "Sarah Chen", To: "Nobody", Seat: o.Role("Sarah Chen")},
+		{Kind: RefManages, From: "CEO", To: "ghost", Seat: o.Role("ceo")},
+		{Kind: RefManages, From: "Sarah Chen", To: "nobody", Seat: o.Role("sarah-chen")},
 	}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
@@ -268,42 +268,42 @@ func TestLeadAutoManagesOnlyUnmanagedMembers(t *testing.T) {
 	}{
 		{
 			name: "flat unit",
-			unit: &Unit{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			unit: &Unit{Name: "Backend", Lead: "lead", Roles: []*Role{
 				{Name: "Lead"}, {Name: "Dev A"}, {Name: "Dev B"},
 			}},
-			lead: "Lead", want: []string{"Dev A", "Dev B"},
+			lead: "lead", want: []string{"dev-a", "dev-b"},
 		},
 		{
 			// The VP gets the tech lead, not the tech lead's reports:
 			// claiming them would flatten a chart the operator drew.
 			name: "skips members another member manages",
-			unit: &Unit{Name: "Backend", Lead: "VP", Roles: []*Role{
-				{Name: "VP"}, {Name: "Tech Lead", Manages: []string{"Dev A", "Dev B"}},
+			unit: &Unit{Name: "Backend", Lead: "vp", Roles: []*Role{
+				{Name: "VP"}, {Name: "Tech Lead", Manages: []string{"dev-a", "dev-b"}},
 				{Name: "Dev A"}, {Name: "Dev B"},
 			}},
-			lead: "VP", want: []string{"Tech Lead"},
+			lead: "vp", want: []string{"tech-lead"},
 		},
 		{
 			name: "explicit entries are kept and extended",
-			unit: &Unit{Name: "Backend", Lead: "Lead", Roles: []*Role{
-				{Name: "Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}, {Name: "Dev B"},
+			unit: &Unit{Name: "Backend", Lead: "lead", Roles: []*Role{
+				{Name: "Lead", Manages: []string{"dev-a"}}, {Name: "Dev A"}, {Name: "Dev B"},
 			}},
-			lead: "Lead", want: []string{"Dev A", "Dev B"},
+			lead: "lead", want: []string{"dev-a", "dev-b"},
 		},
 		{
 			name: "a unit of one has nobody to manage",
-			unit: &Unit{Name: "Solo", Lead: "PM", Roles: []*Role{{Name: "PM"}}},
-			lead: "PM", want: nil,
+			unit: &Unit{Name: "Solo", Lead: "pm", Roles: []*Role{{Name: "PM"}}},
+			lead: "pm", want: nil,
 		},
 		{
 			// A tech lead who manages the VP that leads their unit is an
 			// ordinary chart; auto-managing back would make it a cycle.
 			name: "never claims a member that manages the lead",
-			unit: &Unit{Name: "Backend", Lead: "Senior Engineer A", Roles: []*Role{
-				{Name: "Tech Lead", Manages: []string{"Senior Engineer A"}},
+			unit: &Unit{Name: "Backend", Lead: "senior-engineer-a", Roles: []*Role{
+				{Name: "Tech Lead", Manages: []string{"senior-engineer-a"}},
 				{Name: "Senior Engineer A"},
 			}},
-			lead: "Senior Engineer A", want: nil,
+			lead: "senior-engineer-a", want: nil,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -321,18 +321,18 @@ func TestInheritedLeadAutoManagesTheChildUnit(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Units: []*Unit{{
-			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+			Name: "Engineering", Lead: "vp-eng", Roles: []*Role{{Name: "VP Eng"}},
 			Children: []*Unit{{Name: "Backend", Roles: []*Role{
-				{Name: "Tech Lead", Manages: []string{"Dev A"}},
+				{Name: "Tech Lead", Manages: []string{"dev-a"}},
 				{Name: "Dev A"},
 				{Name: "Dev B"},
 			}}},
 		}},
 	})
 	// Dev A already has a manager; the VP inherits the unit, not its people.
-	want := []string{"Dev B", "Tech Lead"}
-	if got := sortedManages(t, o, "VP Eng"); !slices.Equal(got, want) {
-		t.Errorf("VP Eng manages %v, want %v", got, want)
+	want := []string{"dev-b", "tech-lead"}
+	if got := sortedManages(t, o, "vp-eng"); !slices.Equal(got, want) {
+		t.Errorf("vp-eng manages %v, want %v", got, want)
 	}
 }
 
@@ -374,7 +374,7 @@ func TestAUnitReferenceShieldsTheMembersItReaches(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Units: []*Unit{{
-			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+			Name: "Engineering", Lead: "vp-eng", Roles: []*Role{{Name: "VP Eng"}},
 			Children: []*Unit{{Name: "Backend", Roles: []*Role{
 				{Name: "Tech Lead", Manages: []string{"Backend"}},
 				{Name: "Dev A"},
@@ -382,38 +382,39 @@ func TestAUnitReferenceShieldsTheMembersItReaches(t *testing.T) {
 			}}},
 		}},
 	})
-	if got, want := sortedManages(t, o, "VP Eng"), []string{"Tech Lead"}; !slices.Equal(got, want) {
-		t.Errorf("VP Eng manages %v, want %v: the unit reference shields its members", got, want)
+	if got, want := sortedManages(t, o, "vp-eng"), []string{"tech-lead"}; !slices.Equal(got, want) {
+		t.Errorf("vp-eng manages %v, want %v: the unit reference shields its members", got, want)
 	}
-	if got, want := sortedManages(t, o, "Tech Lead"), []string{"Dev A", "Dev B"}; !slices.Equal(got, want) {
-		t.Errorf("Tech Lead manages %v, want %v", got, want)
+	if got, want := sortedManages(t, o, "tech-lead"), []string{"dev-a", "dev-b"}; !slices.Equal(got, want) {
+		t.Errorf("tech-lead manages %v, want %v", got, want)
 	}
-	for _, dev := range []string{"Dev A", "Dev B"} {
+	for _, dev := range []string{"dev-a", "dev-b"} {
 		if m := o.Manager(o.Role(dev)); m == nil || m.Name != "Tech Lead" {
 			t.Errorf("Manager(%s) = %v, want Tech Lead", dev, m)
 		}
 	}
 }
 
-// A name that is both a seat and a unit is the SEAT in the shield exactly as
-// it is in the expansion, because the shield is only honest while it reads
-// manages the way the expansion will leave it.
-func TestTheShieldReadsASeatNameAsTheSeat(t *testing.T) {
+// A token that answers as both a seat handle and a unit key is the SEAT in
+// the shield exactly as it is in the expansion, because the shield is only
+// honest while it reads manages the way the expansion will leave it.
+func TestTheShieldReadsASeatHandleAsTheSeat(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
-		Name:  "T",
-		Roles: []*Role{{Name: "Backend", Goal: "Cross-cutting backend advisor"}},
-		Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+		Name: "T",
+		Roles: []*Role{{Name: "Backend Advisor", DeclaredHandle: "backend",
+			Goal: "Cross-cutting backend advisor"}},
+		Units: []*Unit{{Name: "Backend", ID: "backend", Lead: "lead", Roles: []*Role{
 			{Name: "Lead"},
-			{Name: "Mentor", Manages: []string{"Backend"}},
+			{Name: "Mentor", Manages: []string{"backend"}},
 			{Name: "Dev A"},
 		}}},
 	})
-	if got, want := sortedManages(t, o, "Mentor"), []string{"Backend"}; !slices.Equal(got, want) {
-		t.Errorf("Mentor manages %v, want %v (the seat, not the unit)", got, want)
+	if got, want := sortedManages(t, o, "mentor"), []string{"backend"}; !slices.Equal(got, want) {
+		t.Errorf("mentor manages %v, want %v (the seat, not the unit)", got, want)
 	}
-	if got, want := sortedManages(t, o, "Lead"), []string{"Dev A", "Mentor"}; !slices.Equal(got, want) {
-		t.Errorf("Lead manages %v, want %v: nothing in the unit is shielded", got, want)
+	if got, want := sortedManages(t, o, "lead"), []string{"dev-a", "mentor"}; !slices.Equal(got, want) {
+		t.Errorf("lead manages %v, want %v: nothing in the unit is shielded", got, want)
 	}
 }
 
@@ -426,7 +427,7 @@ func TestAMemberManagingItsOwnUnitIsNeverClaimedByItsLead(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name: "T",
-		Units: []*Unit{{Name: "Backend", Lead: "Backend Lead", Roles: []*Role{
+		Units: []*Unit{{Name: "Backend", Lead: "backend-lead", Roles: []*Role{
 			{Name: "Backend Lead"},
 			{Name: "Engineering Manager", Manages: []string{"Backend"}},
 			{Name: "Dev A"},
@@ -434,13 +435,13 @@ func TestAMemberManagingItsOwnUnitIsNeverClaimedByItsLead(t *testing.T) {
 	})
 	if seat := managementCycle(o); seat != "" {
 		t.Fatalf("seat %q manages itself through its reports: Backend Lead manages %v, Engineering Manager manages %v",
-			seat, o.Role("Backend Lead").Manages, o.Role("Engineering Manager").Manages)
+			seat, o.Role("backend-lead").Manages, o.Role("engineering-manager").Manages)
 	}
-	if got := sortedManages(t, o, "Backend Lead"); len(got) != 0 {
-		t.Errorf("Backend Lead manages %v, want nobody: every member is already managed", got)
+	if got := sortedManages(t, o, "backend-lead"); len(got) != 0 {
+		t.Errorf("backend-lead manages %v, want nobody: every member is already managed", got)
 	}
-	if got, want := sortedManages(t, o, "Engineering Manager"), []string{"Backend Lead", "Dev A"}; !slices.Equal(got, want) {
-		t.Errorf("Engineering Manager manages %v, want %v", got, want)
+	if got, want := sortedManages(t, o, "engineering-manager"), []string{"backend-lead", "dev-a"}; !slices.Equal(got, want) {
+		t.Errorf("engineering-manager manages %v, want %v", got, want)
 	}
 }
 
@@ -456,17 +457,17 @@ func TestARootSeatManagingAUnitGivesItsMembersASecondManager(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "CEO", Manages: []string{"Backend"}}},
-		Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+		Units: []*Unit{{Name: "Backend", Lead: "lead", Roles: []*Role{
 			{Name: "Lead"}, {Name: "Dev A"},
 		}}},
 	})
-	if got, want := sortedManages(t, o, "CEO"), []string{"Dev A", "Lead"}; !slices.Equal(got, want) {
-		t.Errorf("CEO manages %v, want %v", got, want)
+	if got, want := sortedManages(t, o, "ceo"), []string{"dev-a", "lead"}; !slices.Equal(got, want) {
+		t.Errorf("ceo manages %v, want %v", got, want)
 	}
-	if got, want := sortedManages(t, o, "Lead"), []string{"Dev A"}; !slices.Equal(got, want) {
-		t.Errorf("Lead manages %v, want %v: an outside manager does not shield a unit's members", got, want)
+	if got, want := sortedManages(t, o, "lead"), []string{"dev-a"}; !slices.Equal(got, want) {
+		t.Errorf("lead manages %v, want %v: an outside manager does not shield a unit's members", got, want)
 	}
-	if m := o.Manager(o.Role("Dev A")); m == nil || m.Name != "CEO" {
+	if m := o.Manager(o.Role("dev-a")); m == nil || m.Name != "CEO" {
 		t.Errorf("Manager(Dev A) = %v, want CEO (root seats walk first)", m)
 	}
 	if seat := managementCycle(o); seat != "" {
@@ -482,15 +483,15 @@ func TestHumanLeadAutoManagesAgentMembers(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "Acme",
 		Units: []*Unit{{
-			Name: "Core", Lead: "Sarah Chen",
+			Name: "Core", Lead: "sarah-chen",
 			Roles: []*Role{human(), {Name: "Dev A"}, {Name: "Dev B"}},
 		}},
 	})
-	want := []string{"Dev A", "Dev B"}
-	if got := sortedManages(t, o, "Sarah Chen"); !slices.Equal(got, want) {
-		t.Errorf("Sarah Chen manages %v, want %v", got, want)
+	want := []string{"dev-a", "dev-b"}
+	if got := sortedManages(t, o, "sarah-chen"); !slices.Equal(got, want) {
+		t.Errorf("sarah-chen manages %v, want %v", got, want)
 	}
-	dev := o.Role("Dev A")
+	dev := o.Role("dev-a")
 	manager := o.Manager(dev)
 	if manager == nil || !manager.IsHuman() {
 		t.Errorf("Manager(Dev A) = %v, want the human lead", manager)
@@ -512,11 +513,11 @@ func TestManagesExpansion(t *testing.T) {
 			org: &Organization{
 				Name:  "T",
 				Roles: []*Role{{Name: "CEO", Manages: []string{"Backend"}}},
-				Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
-					{Name: "Lead", Manages: []string{"Dev A", "Dev B"}}, {Name: "Dev A"}, {Name: "Dev B"},
+				Units: []*Unit{{Name: "Backend", Lead: "lead", Roles: []*Role{
+					{Name: "Lead", Manages: []string{"dev-a", "dev-b"}}, {Name: "Dev A"}, {Name: "Dev B"},
 				}}},
 			},
-			seat: "CEO", want: []string{"Dev A", "Dev B", "Lead"},
+			seat: "ceo", want: []string{"dev-a", "dev-b", "lead"},
 		},
 		{
 			name: "expansion reaches descendants",
@@ -525,10 +526,10 @@ func TestManagesExpansion(t *testing.T) {
 				Roles: []*Role{{Name: "CTO", Manages: []string{"Engineering"}}},
 				Units: []*Unit{{
 					Name: "Engineering", Roles: []*Role{{Name: "VP Eng"}},
-					Children: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+					Children: []*Unit{{Name: "Backend", Lead: "dev", Roles: []*Role{{Name: "Dev"}}}},
 				}},
 			},
-			seat: "CTO", want: []string{"Dev", "VP Eng"},
+			seat: "cto", want: []string{"dev", "vp-eng"},
 		},
 		{
 			name: "a seat inside the unit it manages does not manage itself",
@@ -538,21 +539,25 @@ func TestManagesExpansion(t *testing.T) {
 					{Name: "Lead", Manages: []string{"Team"}}, {Name: "Dev A"}, {Name: "Dev B"},
 				}}},
 			},
-			seat: "Lead", want: []string{"Dev A", "Dev B"},
+			seat: "lead", want: []string{"dev-a", "dev-b"},
 		},
 		{
 			// The seat is the more specific reading, and an operator who
-			// named a person meant that person.
-			name: "a name that is both a seat and a unit stays the seat",
+			// named a person meant that person. A seat's handle and a
+			// unit's key are two grammars over one alphabet, so one
+			// string can genuinely answer for both.
+			name: "a token that is both a seat handle and a unit key stays the seat",
 			org: &Organization{
 				Name: "T",
 				Roles: []*Role{
-					{Name: "Backend", Goal: "Cross-cutting backend advisor"},
-					{Name: "CEO", Manages: []string{"Backend"}},
+					{Name: "Backend Advisor", DeclaredHandle: "backend",
+						Goal: "Cross-cutting backend advisor"},
+					{Name: "CEO", Manages: []string{"backend"}},
 				},
-				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+				Units: []*Unit{{Name: "Backend", ID: "backend", Lead: "dev",
+					Roles: []*Role{{Name: "Dev"}}}},
 			},
-			seat: "CEO", want: []string{"Backend"},
+			seat: "ceo", want: []string{"backend"},
 		},
 		{
 			// Dropping it would quietly rewrite the chart during the
@@ -560,20 +565,20 @@ func TestManagesExpansion(t *testing.T) {
 			name: "an unknown name is kept verbatim",
 			org: &Organization{
 				Name:  "T",
-				Roles: []*Role{{Name: "CEO", Manages: []string{"Ghost"}}},
+				Roles: []*Role{{Name: "CEO", Manages: []string{"ghost"}}},
 			},
-			seat: "CEO", want: []string{"Ghost"},
+			seat: "ceo", want: []string{"ghost"},
 		},
 		{
 			name: "a seat listed explicitly is not duplicated by expansion",
 			org: &Organization{
 				Name:  "T",
-				Roles: []*Role{{Name: "CEO", Manages: []string{"Dev", "Backend"}}},
-				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{
-					{Name: "Dev", Manages: []string{"Junior"}}, {Name: "Junior"},
+				Roles: []*Role{{Name: "CEO", Manages: []string{"dev", "Backend"}}},
+				Units: []*Unit{{Name: "Backend", Lead: "dev", Roles: []*Role{
+					{Name: "Dev", Manages: []string{"junior"}}, {Name: "Junior"},
 				}}},
 			},
-			seat: "CEO", want: []string{"Dev", "Junior"},
+			seat: "ceo", want: []string{"dev", "junior"},
 		},
 		{
 			// The same pair in the other order. The expansion used to
@@ -582,17 +587,17 @@ func TestManagesExpansion(t *testing.T) {
 			name: "a seat listed after a unit that reaches it is not duplicated",
 			org: &Organization{
 				Name:  "T",
-				Roles: []*Role{{Name: "CEO", Manages: []string{"Backend", "Dev"}}},
-				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{
-					{Name: "Dev", Manages: []string{"Junior"}}, {Name: "Junior"},
+				Roles: []*Role{{Name: "CEO", Manages: []string{"Backend", "dev"}}},
+				Units: []*Unit{{Name: "Backend", Lead: "dev", Roles: []*Role{
+					{Name: "Dev", Manages: []string{"junior"}}, {Name: "Junior"},
 				}}},
 			},
-			seat: "CEO", want: []string{"Dev", "Junior"},
+			seat: "ceo", want: []string{"dev", "junior"},
 		},
 		{
-			// Organization.Unit answers with the first unit of a name, and
-			// so must the expansion: an applied revision can still hold two.
-			name: "a duplicated unit name expands to the first unit",
+			// Organization.Unit answers with the first unit on a key, and
+			// so must the expansion: a stored revision can still hold two.
+			name: "a duplicated unit key expands to the first unit",
 			org: &Organization{
 				Name:  "T",
 				Roles: []*Role{{Name: "CEO", Manages: []string{"Core"}}},
@@ -601,7 +606,7 @@ func TestManagesExpansion(t *testing.T) {
 					{Name: "Core", Roles: []*Role{{Name: "Second"}}},
 				},
 			},
-			seat: "CEO", want: []string{"First"},
+			seat: "ceo", want: []string{"first"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -619,19 +624,19 @@ func TestManagesKeepsExplicitEntriesFirst(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Roles: []*Role{
-			{Name: "CEO", Manages: []string{"CTO", "Product"}},
+			{Name: "CEO", Manages: []string{"cto", "Product"}},
 			{Name: "CTO"},
 		},
-		Units: []*Unit{{Name: "Product", Lead: "PM", Roles: []*Role{{Name: "PM"}, {Name: "Designer"}}}},
+		Units: []*Unit{{Name: "Product", Lead: "pm", Roles: []*Role{{Name: "PM"}, {Name: "Designer"}}}},
 	})
-	got := o.Role("CEO").Manages
-	if len(got) == 0 || got[0] != "CTO" {
-		t.Fatalf("CEO manages %v, want the explicit seat first", got)
+	got := o.Role("ceo").Manages
+	if len(got) == 0 || got[0] != "cto" {
+		t.Fatalf("ceo manages %v, want the explicit seat first", got)
 	}
 	rest := slices.Clone(got[1:])
 	slices.Sort(rest)
-	if !slices.Equal(rest, []string{"Designer", "PM"}) {
-		t.Errorf("CEO manages %v, want the unit expanded after CTO", got)
+	if !slices.Equal(rest, []string{"designer", "pm"}) {
+		t.Errorf("ceo manages %v, want the unit expanded after cto", got)
 	}
 }
 
@@ -653,18 +658,18 @@ func TestMCPEnvInheritanceAndOverride(t *testing.T) {
 			Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev"}}}},
 		}},
 	})
-	vp := o.Role("VP Eng").MCPEnv["atlassian"]
+	vp := o.Role("vp-eng").MCPEnv["atlassian"]
 	if vp["JIRA_URL"] != "https://acme.example.com" || vp["JIRA_API_TOKEN"] != "${TEAM}" {
 		t.Errorf("VP Eng inherited %v", vp)
 	}
-	lead := o.Role("Tech Lead").MCPEnv["atlassian"]
+	lead := o.Role("tech-lead").MCPEnv["atlassian"]
 	if lead["JIRA_API_TOKEN"] != "${MINE}" {
 		t.Errorf("Tech Lead token = %q, want its own", lead["JIRA_API_TOKEN"])
 	}
 	if lead["JIRA_URL"] != "https://acme.example.com" {
 		t.Errorf("Tech Lead lost the variable it did not override: %v", lead)
 	}
-	if got := o.Role("Dev").MCPEnv; len(got) != 0 {
+	if got := o.Role("dev").MCPEnv; len(got) != 0 {
 		t.Errorf("a child unit's seat inherited %v from the parent unit", got)
 	}
 }
@@ -679,7 +684,7 @@ func TestHumanMembersInheritNoToolCredentials(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "T",
 		Units: []*Unit{{
-			Name: "Engineering", Lead: "Sarah Chen",
+			Name: "Engineering", Lead: "sarah-chen",
 			MCPEnv: MCPEnv{"tracker": {"TOKEN": "${TRACKER_TOKEN}"}},
 			Roles:  []*Role{human(), {Name: "Dev"}},
 		}},
@@ -687,10 +692,10 @@ func TestHumanMembersInheritNoToolCredentials(t *testing.T) {
 	if err := o.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil: the human seat authored no mcp_env", err)
 	}
-	if got := o.Role("Sarah Chen").MCPEnv; len(got) != 0 {
+	if got := o.Role("sarah-chen").MCPEnv; len(got) != 0 {
 		t.Errorf("the human seat inherited %v", got)
 	}
-	if got := o.Role("Dev").MCPEnv["tracker"]["TOKEN"]; got != "${TRACKER_TOKEN}" {
+	if got := o.Role("dev").MCPEnv["tracker"]["TOKEN"]; got != "${TRACKER_TOKEN}" {
 		t.Errorf("the agent member inherited %q, want the unit credential", got)
 	}
 
@@ -719,25 +724,25 @@ func TestRootSeatMovesIntoItsNamedUnit(t *testing.T) {
 		Name:  "T",
 		Roles: []*Role{{Name: "Dev", UnitRef: "Backend"}, {Name: "CEO"}},
 		Units: []*Unit{{
-			Name: "Backend", Lead: "Lead",
+			Name: "Backend", Lead: "lead",
 			MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 			Roles:  []*Role{{Name: "Lead"}},
 		}},
 	})
 	backend := o.Unit("Backend")
-	if backend.Role("Dev") == nil {
+	if backend.Role("dev") == nil {
 		t.Fatal("the seat did not move into its unit")
 	}
 	if got := roleNames(o.Roles); !slices.Equal(got, []string{"CEO"}) {
 		t.Errorf("root seats = %v, want only CEO", got)
 	}
-	if got := o.Role("Dev").MCPEnv["atlassian"]["JIRA_API_TOKEN"]; got != "${TEAM}" {
+	if got := o.Role("dev").MCPEnv["atlassian"]["JIRA_API_TOKEN"]; got != "${TEAM}" {
 		t.Errorf("moved seat inherited %q, want the unit credential", got)
 	}
-	if !slices.Contains(o.Role("Lead").Manages, "Dev") {
-		t.Errorf("the unit lead does not manage the moved seat: %v", o.Role("Lead").Manages)
+	if !slices.Contains(o.Role("lead").Manages, "dev") {
+		t.Errorf("the unit lead does not manage the moved seat: %v", o.Role("lead").Manages)
 	}
-	if o.UnitFor(o.Role("Dev")) != backend {
+	if o.UnitFor(o.Role("dev")) != backend {
 		t.Error("the moved seat does not resolve to its unit")
 	}
 }
@@ -752,7 +757,7 @@ func TestUnresolvedUnitRefKeepsTheSeatAtRoot(t *testing.T) {
 	if got := roleNames(o.Roles); !slices.Equal(got, []string{"Dev"}) {
 		t.Errorf("root seats = %v, want the seat kept", got)
 	}
-	want := []DanglingRef{{Kind: RefUnit, From: "Dev", To: "Nowhere", Seat: o.Role("Dev")}}
+	want := []DanglingRef{{Kind: RefUnit, From: "Dev", To: "Nowhere", Seat: o.Role("dev")}}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
 	}
@@ -770,19 +775,19 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 			Name:  "Acme",
 			Roles: []*Role{{Name: "CEO", Manages: []string{"Engineering"}}, {Name: "Dev C", UnitRef: "Backend"}},
 			Units: []*Unit{{
-				Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
+				Name: "Engineering", Lead: "vp-eng", Channel: "C_ENG",
 				MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 				Roles:  []*Role{{Name: "VP Eng"}, {Name: "Analyst"}},
 				Children: []*Unit{
 					{
 						Name:  "Backend",
-						Roles: []*Role{{Name: "Tech Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}},
+						Roles: []*Role{{Name: "Tech Lead", Manages: []string{"dev-a"}}, {Name: "Dev A"}},
 					},
 					{
 						// A unit reference that shields its members: a
 						// second pass reads the expanded names and must
 						// reach the same roster.
-						Name: "Frontend", Lead: "Frontend Lead",
+						Name: "Frontend", Lead: "frontend-lead",
 						Roles: []*Role{
 							{Name: "Frontend Lead"},
 							{Name: "Frontend Manager", Manages: []string{"Frontend"}},
@@ -833,9 +838,9 @@ func identityOrg() *Organization {
 		Name:  "TestCo",
 		Roles: []*Role{{Name: "Founder Bot", Goal: "oversee"}},
 		Units: []*Unit{{
-			Name: "eng", Lead: "Tech Lead",
+			Name: "eng", Lead: "tech-lead",
 			Roles: []*Role{
-				{Name: "Tech Lead", Manages: []string{"Developer"}},
+				{Name: "Tech Lead", Manages: []string{"developer"}},
 				{Name: "Developer"},
 				human(),
 			},
@@ -846,7 +851,7 @@ func identityOrg() *Organization {
 func TestAgentIDHasNoProcessLocalInput(t *testing.T) {
 	t.Parallel()
 	o := identityOrg()
-	got, ok := o.AgentIDFor(o.Role("Developer"))
+	got, ok := o.AgentIDFor(o.Role("developer"))
 	if !ok {
 		t.Fatal("no id for an agent seat")
 	}
@@ -857,7 +862,7 @@ func TestAgentIDHasNoProcessLocalInput(t *testing.T) {
 	// The org name is in the digest, so two companies sharing one store can
 	// both have a developer.
 	other := normalized(&Organization{Name: "Globex", Roles: []*Role{{Name: "Developer"}}})
-	if otherID, _ := other.AgentIDFor(other.Role("Developer")); otherID == got {
+	if otherID, _ := other.AgentIDFor(other.Role("developer")); otherID == got {
 		t.Error("the same handle in two orgs derived one id")
 	}
 }
@@ -867,14 +872,14 @@ func TestAgentIDRefusesSeatsThatHaveNone(t *testing.T) {
 	o := identityOrg()
 	// A human seat is addressable but never spawned: it has no agent id at
 	// all, and uuid.Nil would be an id every human shares.
-	if id, ok := o.AgentIDFor(o.Role("Sarah Chen")); ok {
+	if id, ok := o.AgentIDFor(o.Role("sarah-chen")); ok {
 		t.Errorf("a human seat derived id %s", id)
 	}
 	if _, ok := o.AgentIDFor(nil); ok {
 		t.Error("a nil seat derived an id")
 	}
 	unnamed := normalized(&Organization{Roles: []*Role{{Name: "Developer"}}})
-	if _, ok := unnamed.AgentIDFor(unnamed.Role("Developer")); ok {
+	if _, ok := unnamed.AgentIDFor(unnamed.Role("developer")); ok {
 		t.Error("an unnamed org derived an id")
 	}
 }
@@ -882,10 +887,10 @@ func TestAgentIDRefusesSeatsThatHaveNone(t *testing.T) {
 func TestSeatLookupByHandle(t *testing.T) {
 	t.Parallel()
 	o := identityOrg()
-	if got := o.AgentSeatByHandle("developer"); got != o.Role("Developer") {
+	if got := o.AgentSeatByHandle("developer"); got != o.Role("developer") {
 		t.Error("a unit seat is not reachable by handle")
 	}
-	if got := o.AgentSeatByHandle("founder-bot"); got != o.Role("Founder Bot") {
+	if got := o.AgentSeatByHandle("founder-bot"); got != o.Role("founder-bot") {
 		t.Error("a root seat is not reachable by handle")
 	}
 	// Handles are unique across kinds, but this lookup's callers publish to
@@ -929,7 +934,10 @@ func TestExplicitHandleDrivesIdentityEverywhere(t *testing.T) {
 		Name:  "TestCo",
 		Roles: []*Role{{Name: "Senior Backend Engineer", DeclaredHandle: "sbe"}},
 	})
-	seat := o.Role("Senior Backend Engineer")
+	seat := o.Role("sbe")
+	if seat == nil {
+		t.Fatal("the explicit handle is how the seat is named, and it resolved to nothing")
+	}
 	want, _ := DeriveAgentID("TestCo", "sbe")
 	got, ok := o.AgentIDFor(seat)
 	if !ok || got != want {
@@ -938,7 +946,7 @@ func TestExplicitHandleDrivesIdentityEverywhere(t *testing.T) {
 	if o.AgentSeatByHandle("sbe") != seat {
 		t.Error("the explicit handle does not resolve")
 	}
-	if o.AgentSeatByHandle("senior-backend-engineer") != nil {
+	if o.Role("senior-backend-engineer") != nil {
 		t.Error("the slugified name still resolves after an override")
 	}
 	if o.AgentSeatByID(got) != seat {
@@ -994,7 +1002,7 @@ func TestLeadScheduleUnderAHumanLeadIsRejected(t *testing.T) {
 	t.Run("direct human lead", func(t *testing.T) {
 		t.Parallel()
 		o := normalized(&Organization{Name: "T", Units: []*Unit{{
-			Name: "Team", Lead: "Sarah Chen",
+			Name: "Team", Lead: "sarah-chen",
 			Roles:     []*Role{human(), {Name: "Dev"}},
 			Schedules: []Schedule{report},
 		}}})
@@ -1008,7 +1016,7 @@ func TestLeadScheduleUnderAHumanLeadIsRejected(t *testing.T) {
 		// The inheritance is what makes this worth checking at org level:
 		// the unit naming the schedule names no lead at all.
 		o := normalized(&Organization{Name: "T", Units: []*Unit{{
-			Name: "Dept", Lead: "Sarah Chen", Roles: []*Role{human()},
+			Name: "Dept", Lead: "sarah-chen", Roles: []*Role{human()},
 			Children: []*Unit{{
 				Name: "Team", Roles: []*Role{{Name: "Dev"}}, Schedules: []Schedule{report},
 			}},
@@ -1027,7 +1035,7 @@ func TestLeadScheduleUnderAHumanLeadIsRejected(t *testing.T) {
 		held := report
 		held.Enabled = Off()
 		o := normalized(&Organization{Name: "T", Units: []*Unit{{
-			Name: "Team", Lead: "Sarah Chen",
+			Name: "Team", Lead: "sarah-chen",
 			Roles:     []*Role{human(), {Name: "Dev"}},
 			Schedules: []Schedule{held},
 		}}})
@@ -1058,9 +1066,9 @@ func TestAWellFormedOrgValidates(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name: "Acme AI", Mission: "Build the best widgets",
-		Roles: []*Role{human(func(r *Role) { r.Name = "Jane Founder"; r.Manages = []string{"CEO"} })},
+		Roles: []*Role{human(func(r *Role) { r.Name = "Jane Founder"; r.Manages = []string{"ceo"} })},
 		Units: []*Unit{{
-			Name: "Engineering", Type: UnitTypeDepartment, Lead: "CEO",
+			Name: "Engineering", Type: UnitTypeDepartment, Lead: "ceo",
 			Roles:     []*Role{{Name: "CEO"}, {Name: "Engineer", LLM: ProviderKeys{"claude-sonnet", "gpt-4o"}}},
 			Schedules: []Schedule{{Name: "standup", Cron: "0 9 * * 1-5", Task: "post standup", Timezone: "UTC"}},
 		}},
@@ -1085,18 +1093,19 @@ scope: [ENG, PRODUCT]
 roles:
   - name: Jane Founder
     kind: human
-    manages: [CEO]
+    manages: [chief]
     availability: CET business hours
     contact:
       slack_user_id: U0FOUNDER
       github_login: JaneDoe
       gitlab_username: "${GL_FOUNDER_USERNAME}"
   - name: Dev C
-    unit: Backend
+    unit: backend
 units:
   - name: Engineering
+    id: engineering
     type: department
-    lead: CEO
+    lead: chief
     channel: C_ENG
     mcp_env:
       atlassian:
@@ -1119,6 +1128,7 @@ units:
             GITHUB_TOKEN: "${GITHUB_TOKEN_CEO}"
     children:
       - name: Backend
+        id: backend
         schedules:
           - name: standup
             cron: "0 9 * * 1-5"
@@ -1135,7 +1145,7 @@ units:
 		t.Fatalf("Validate() = %v, want nil", err)
 	}
 
-	ceo := o.Role("CEO")
+	ceo := o.Role("chief")
 	if ceo == nil {
 		t.Fatal("no CEO")
 	}
@@ -1159,7 +1169,7 @@ units:
 		t.Errorf("inherited credential = %q", got)
 	}
 
-	founder := o.Role("Jane Founder")
+	founder := o.Role("jane-founder")
 	if founder == nil || !founder.IsHuman() {
 		t.Fatalf("founder = %v", founder)
 	}
@@ -1169,13 +1179,13 @@ units:
 	if got := founder.Contact.GitLabUsername; got != "${GL_FOUNDER_USERNAME}" {
 		t.Errorf("gitlab_username = %q, want the reference verbatim", got)
 	}
-	if o.Unit("Backend").Role("Dev C") == nil {
+	if o.Unit("backend").Role("dev-c") == nil {
 		t.Error("the unit: reference did not move the seat")
 	}
-	if got := o.Unit("Backend").Channel; got != "C_ENG" {
+	if got := o.Unit("backend").Channel; got != "C_ENG" {
 		t.Errorf("child channel = %q, want the inherited C_ENG", got)
 	}
-	if got := o.Unit("Backend").Schedules[0]; got.IsEnabled() || got.Timeout() != DefaultScheduleTimeout {
+	if got := o.Unit("backend").Schedules[0]; got.IsEnabled() || got.Timeout() != DefaultScheduleTimeout {
 		t.Errorf("schedule = %+v", got)
 	}
 	if !slices.Equal(o.KnowledgeScope, []string{"ENG", "PRODUCT"}) {
@@ -1190,7 +1200,7 @@ func TestTraversalCoversRootAndUnits(t *testing.T) {
 		Roles: []*Role{{Name: "CEO"}, {Name: "CTO"}},
 		Units: []*Unit{{
 			Name: "Engineering", Roles: []*Role{{Name: "VP Eng"}},
-			Children: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+			Children: []*Unit{{Name: "Backend", Lead: "dev", Roles: []*Role{{Name: "Dev"}}}},
 		}},
 	})
 	if got := roleNames(slices.Collect(o.AllRoles())); !slices.Equal(got, []string{"CEO", "CTO", "VP Eng", "Dev"}) {
@@ -1212,7 +1222,7 @@ func TestTraversalCoversRootAndUnits(t *testing.T) {
 	if seen != 1 {
 		t.Errorf("breaking out of AllRoles visited %d seats", seen)
 	}
-	if o.Role("Nobody") != nil || o.Unit("Nowhere") != nil {
+	if o.Role("nobody") != nil || o.Unit("Nowhere") != nil {
 		t.Error("a missing name resolved to something")
 	}
 }
@@ -1224,23 +1234,23 @@ func TestTraversalCoversRootAndUnits(t *testing.T) {
 func TestAutoManagementRecordsWhatItAdded(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{Name: "T", Units: []*Unit{{
-		Name: "Backend", Lead: "Lead",
+		Name: "Backend", Lead: "lead",
 		Roles: []*Role{
-			{Name: "Lead", Manages: []string{"Written"}},
+			{Name: "Lead", Manages: []string{"written"}},
 			{Name: "Written"},
 			{Name: "Derived A"},
 			{Name: "Derived B"},
 		},
 	}}})
-	lead := o.Role("Lead")
-	if want := []string{"Written", "Derived A", "Derived B"}; !slices.Equal(lead.Manages, want) {
+	lead := o.Role("lead")
+	if want := []string{"written", "derived-a", "derived-b"}; !slices.Equal(lead.Manages, want) {
 		t.Errorf("Manages = %v, want %v", lead.Manages, want)
 	}
-	if want := []string{"Derived A", "Derived B"}; !slices.Equal(lead.AutoManaged, want) {
+	if want := []string{"derived-a", "derived-b"}; !slices.Equal(lead.AutoManaged, want) {
 		t.Errorf("AutoManaged = %v, want %v", lead.AutoManaged, want)
 	}
 	o.Normalize()
-	if want := []string{"Derived A", "Derived B"}; !slices.Equal(lead.AutoManaged, want) {
+	if want := []string{"derived-a", "derived-b"}; !slices.Equal(lead.AutoManaged, want) {
 		t.Errorf("after a second pass AutoManaged = %v, want %v", lead.AutoManaged, want)
 	}
 }

@@ -50,10 +50,11 @@ type DomainPosition struct {
 	// stream read as one caught up on the live one, and no node of a
 	// fleet could ever re-anchor.
 	//
-	// ZERO IS UNKNOWN, never "no stream": this build always publishes it (a
-	// node whose broker reports no creation instant does not run the
-	// domain), so a zero is only the type's zero value — a row nothing can
-	// place on a stream, which a reader never counts as on its own.
+	// ZERO IS UNKNOWN, never "no stream": this build always publishes it — a
+	// runner is always keyed to a stream ([statelog.Runner.KeyedTo]), and a
+	// node whose broker reports no creation instant does not run the domain
+	// — so a zero is only the type's zero value, a row nothing can place on
+	// a stream, which a reader never counts as on its own.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// CheckpointStoredAt is the broker's instant for the record at this

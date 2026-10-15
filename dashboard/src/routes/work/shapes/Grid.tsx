@@ -100,7 +100,7 @@ import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
 import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
-import { type Shape } from "~/lib/work.ts";
+import { type Shape, itemAddress } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { RestoreButton } from "~/components/writes.tsx";
@@ -743,7 +743,7 @@ export function WorkGrid({
       rows={bands ? undefined : rows}
       bands={bands}
       columns={columns}
-      rowKey={(row) => row.key}
+      rowKey={(row) => row.id}
       rowHref={hrefOf}
       // THROUGH `peekRow`, which is the one thing that calls `preventDefault`.
       // A bare handler beside a `rowHref` opened the peek and then let the
@@ -754,7 +754,7 @@ export function WorkGrid({
       // card, the embedded compact row and the Projects directory all go
       // through it; the collapsed grid was the one that did not.
       onRowActivate={peekRow<WorkSummary>((row) => onOpen(row))}
-      isSelected={(row) => row.key === selected}
+      isSelected={(row) => itemAddress(row) === selected}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
       serverSorted
@@ -864,9 +864,10 @@ function trashColumns(
         const record = removals.get(row.id);
         if (!record?.actor)
           return <EmptyValue label="Its removal is older than the loaded history" />;
-        // THE PERSON, NOT THE TOKEN — `actor_seat` where an operator token
-        // bound to a seat removed it, as the change log names the same row.
-        const who = record.actor_seat || record.actor;
+        // THE PERSON: a person the directory binds to a seat writes AS that
+        // seat (`iam.ActorFor`), so the author is who removed it, named as the
+        // change log names the same row.
+        const who = record.actor;
         return (
           <span className="row gap-1">
             <SeatCell
@@ -897,9 +898,9 @@ function trashColumns(
     {
       key: "restore",
       header: "",
-      label: "Restore",
+      action: true,
       shrink: true,
-      cell: (row) => <RestoreButton item={row.key} />,
+      cell: (row) => <RestoreButton item={itemAddress(row)} label={row.key} />,
     },
   ];
 }

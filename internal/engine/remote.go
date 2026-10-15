@@ -177,7 +177,9 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	stop, err := estate.Serve(ctx, e.backends.Queue, e.id, e.local, e.serverSeams())
+	stop, err := estate.Serve(ctx, e.backends.Queue, estate.ServerOptions{
+		Self: e.id, Local: e.local, Seams: e.serverSeams(), Envelopes: e.envelopes,
+	})
 	if err != nil {
 		return fmt.Errorf("engine: serve the estate: %w", err)
 	}
@@ -215,12 +217,18 @@ func (e *Engine) takeCustody(ctx context.Context) error {
 	return nil
 }
 
-// stopKeeper ends the keeper's settling pass. Nil-safe.
-func (e *Engine) stopKeeper() {
+// stopKeeper takes this data node out of the custody group and ends the
+// keeper's settling pass ([observe.Keeper.Stop]). Nil-safe.
+//
+// ON A CONTEXT OF ITS OWN, the caller's cancellation removed: a stop is
+// routinely driven by the signal it is cleaning up after, and a leave that
+// inherited it would quiesce and detach nothing. The keeper bounds its own
+// wait for a batch in hand.
+func (e *Engine) stopKeeper(ctx context.Context) {
 	if e.keeper == nil {
 		return
 	}
-	e.keeper.Stop()
+	e.keeper.Stop(context.WithoutCancel(ctx))
 	e.keeper = nil
 }
 

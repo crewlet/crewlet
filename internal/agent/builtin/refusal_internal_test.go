@@ -11,7 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -54,6 +56,26 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		{"lease unreadable", fmt.Errorf("x: %w", coord.ErrUnavailable),
 			tools.RefusalUnavailable},
 		{"timed out", fmt.Errorf("x: %w", context.DeadlineExceeded), tools.RefusalUnavailable},
+		// AN ESTATE HELD CLOSED while a peer's snapshot is adopted opens
+		// again on its own: a condition, not a fault.
+		{"estate closed for an adoption", fmt.Errorf("x: %w", store.ErrNoEstate),
+			tools.RefusalUnavailable},
+		// A WRITE LOCK THE WRITERS AHEAD HELD past the wait clears when
+		// they commit, and the store marks exactly that give-up: wrapped
+		// beside the driver's words, the way retryTransient wraps it.
+		{"store busy with other writes", fmt.Errorf("x: %w", fmt.Errorf("%w: %w",
+			store.ErrBusy, errors.New("turso: error: database is locked"))),
+			tools.RefusalUnavailable},
+		// A BROKER THIS NODE COULD NOT REACH — a reconnect, a leader that
+		// did not answer — is the queue contract's condition, marked
+		// beside the client's own error the way the backend marks it.
+		{"event broker unreachable", fmt.Errorf("publish x: %w", fmt.Errorf("%w: %w",
+			queue.ErrUnavailable, errors.New("nats: no responders available for request"))),
+			tools.RefusalUnavailable},
+		// AND A QUEUE WHOSE CONNECTION IS CLOSED FOR GOOD is not live: the
+		// node is stopping, which is a condition too.
+		{"event queue not live", fmt.Errorf("x: %w", queue.ErrNotLive),
+			tools.RefusalUnavailable},
 		// THE WRITER'S OWN REFUSAL ON CONTENT, marked, which names what
 		// it refused: offering a retry for it would be a retry that
 		// never lands.
@@ -72,24 +94,46 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
 		// written part of what it asked for, so it is never a refusal of
 		// what was asked: it is the class an interrupted call answers,
-		// the node's and not the request's — see [unknownOutcome].
+		// the node's and not the request's — see [writeCause].
 		{"a step whose outcome is unknown", fmt.Errorf("x: %w",
 			tracker.ErrStepUnresolved), tools.RefusalUnavailable},
 		{"a step this node cannot vouch for", fmt.Errorf("x: %w",
 			tracker.ErrStepUnvouched), tools.RefusalUnavailable},
-		// AN UNMARKED FAILURE IS THE NODE'S. These arrive raw from the
-		// publisher and the writer's own reads — telling a person to fix
-		// their input over a disk error is the lie this row pins.
+		// AN UNMARKED FAILURE IS THE NODE'S, AND A FAULT. These arrive raw
+		// from the publisher and the writer's own reads — telling a person
+		// to fix their input over a disk error is one lie these rows pin,
+		// and telling them to come back in two seconds, for ever, is the
+		// other.
 		{"ledger unreadable", errors.New("statelog: read the operation " +
-			"ledger: disk I/O"), tools.RefusalUnavailable},
+			"ledger: disk I/O"), tools.RefusalInternalError},
+		// THE WORDS ARE NOT THE MARK: "database is locked" a store did not
+		// mark busy, and "no responders" a queue did not mark unavailable,
+		// stay faults — the marks are what their own packages decided, and
+		// a classifier reading text would call any error naming a lock a
+		// wait.
 		{"re-spread unreadable", errors.New("tracker: read the re-spread " +
-			"window in ENG: database is locked"), tools.RefusalUnavailable},
+			"window in ENG: database is locked"), tools.RefusalInternalError},
+		{"broker words with no mark", errors.New("publish x: nats: no " +
+			"responders available for request"), tools.RefusalInternalError},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := writeFailure(Actor{}, "update_work_item", c.err)
-			if !got.Failed || got.Refusal != c.want {
+			got := writeFailure(t.Context(), Actor{}, "update_work_item", c.err)
+			if !got.Failed || tools.RefusalOf(got) != c.want {
 				t.Fatalf("writeFailure(%v) = failed %v class %q, want %q",
-					c.err, got.Failed, got.Refusal, c.want)
+					c.err, got.Failed, tools.RefusalOf(got), c.want)
+			}
+			// THE ERROR IS BENEATH THE CLASS, never instead of it: a
+			// caller branching on the writer's sentinel reads the same
+			// cause the class was read from.
+			if !errors.Is(got.Cause, c.err) {
+				t.Errorf("the cause %v does not carry %v", got.Cause, c.err)
+			}
+			// AND ONLY A STOPPED STEP IS AN UNKNOWN: a refusal read as one
+			// tells a surface the write may have landed when nothing did.
+			wantUnknown := errors.Is(c.err, tracker.ErrStepUnresolved)
+			if tools.UnknownOf(got) != wantUnknown {
+				t.Errorf("UnknownOf(writeFailure(%v)) = %v, want %v", c.err,
+					tools.UnknownOf(got), wantUnknown)
 			}
 		})
 	}
@@ -102,14 +146,26 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 func TestAReusedOperationIsTheCallersToChange(t *testing.T) {
 	t.Parallel()
 	reused := fmt.Errorf("x: %w", &statelog.Unavailable{Reason: statelog.ReasonOpReused})
-	named := writeFailure(Actor{Operation: "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b.update_work_item.00"},
+	named := writeFailure(t.Context(), Actor{Operation: "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b.update_work_item.00"},
 		UpdateWorkItemTool, reused)
-	if named.Refusal != tools.RefusalInvalid || !strings.Contains(named.Output, "new write") {
+	if tools.RefusalOf(named) != tools.RefusalInvalid || !strings.Contains(named.Output, "new write") {
 		t.Errorf("a reused operation the caller named answered %+v, want an invalid "+
 			"refusal saying to make it as a new write", named)
 	}
-	if seat := writeFailure(Actor{WorkKey: "wk-1"}, UpdateWorkItemTool, reused); seat.Refusal != tools.RefusalUnavailable {
+	if seat := writeFailure(t.Context(), Actor{TurnID: "run-1", WorkKey: "wk-1"}, UpdateWorkItemTool,
+		reused); tools.RefusalOf(seat) != tools.RefusalUnavailable {
 		t.Errorf("a seat's reused operation answered %+v, want the log's own class", seat)
+	}
+	// A REQUEST NAMED ITS OPERATION TOO — by the key its transport carries —
+	// so it is the caller's to change, in its own terms: a new request under
+	// a new key, never an `op_id` it has no way to leave out.
+	request := writeFailure(t.Context(), Actor{WorkKey: "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b"},
+		UpdateWorkItemTool, reused)
+	if tools.RefusalOf(request) != tools.RefusalInvalid ||
+		!strings.Contains(request.Output, "new request") ||
+		strings.Contains(request.Output, "op_id") {
+		t.Errorf("a request's reused operation answered %+v, want an invalid "+
+			"refusal saying to send it as a new request", request)
 	}
 }
 
@@ -140,9 +196,9 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 			[]string{"a decision has 0 option(s)"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := writeFailure(Actor{}, CreateWorkItemTool, c.err)
-			if got.Refusal != tools.RefusalInvalid {
-				t.Fatalf("classed %q, want invalid", got.Refusal)
+			got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, c.err)
+			if tools.RefusalOf(got) != tools.RefusalInvalid {
+				t.Fatalf("classed %q, want invalid", tools.RefusalOf(got))
 			}
 			for _, want := range c.names {
 				if !strings.Contains(got.Output, want) {
@@ -162,7 +218,7 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 		})
 	}
 	// THE TEXT CAP IS COMPOSED FROM ITS FIELDS, never the writer's Go error.
-	got := writeFailure(Actor{}, CreateWorkItemTool, &tracker.TextCapError{
+	got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, &tracker.TextCapError{
 		Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle})
 	for _, never := range []string{"tracker:", CreateWorkItemTool} {
 		if strings.Contains(got.Output, never) {
@@ -184,35 +240,41 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		{fmt.Errorf("x: %w", pages.ErrStaleVersion), tools.RefusalStaleVersion},
 		{fmt.Errorf("x: %w", pages.ErrConflict), tools.RefusalConflict},
 		{fmt.Errorf("x: %w", pages.ErrNotFound), tools.RefusalNotFound},
-		{errors.New("pages: read the container ENG: disk I/O"), tools.RefusalUnavailable},
+		{&statelog.Unavailable{Reason: statelog.ReasonLogFull}, tools.RefusalUnavailable},
+		{errors.New("pages: read the container ENG: disk I/O"), tools.RefusalInternalError},
 	} {
-		if got := pageWriteFailure("save_page", c.err); !got.Failed || got.Refusal != c.want {
+		if got := pageWriteFailure(t.Context(), "save_page", c.err); !got.Failed || tools.RefusalOf(got) != c.want {
 			t.Errorf("pageWriteFailure(%v) = failed %v class %q, want %q",
-				c.err, got.Failed, got.Refusal, c.want)
+				c.err, got.Failed, tools.RefusalOf(got), c.want)
 		}
 	}
 }
 
 // THE SHARED REFUSALS ARE NEVER "NOT FOUND". A read this node could not serve
 // and a backend this company does not run both say nothing about whether the
-// object exists, and a surface told not-found would render it as gone.
+// object exists, and a surface told not-found would render it as gone. And a
+// read this node could not serve is ONE OF TWO: a condition waiting clears is
+// unavailable, and a store that broke is a fault.
 func TestTheSharedRefusalsCarryTheirClass(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("disk I/O")
+	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession}
 	for name, c := range map[string]struct {
 		got  tools.Result
 		want tools.Refusal
 	}{
-		"outside a turn":    {notInATurn("update_work_item"), tools.RefusalForbidden},
-		"no tracker":        {unconfigured("update_work_item"), tools.RefusalUnavailable},
-		"no knowledge base": {unconfiguredKB("save_page"), tools.RefusalUnavailable},
-		"tracker read":      {readFailure("get_work_item", boom), tools.RefusalUnavailable},
-		"page read":         {pageReadFailure("get_page", boom), tools.RefusalUnavailable},
-		"bare failed":       {failed("needs an `item`"), tools.RefusalInvalid},
+		"outside a turn":        {notInATurn("update_work_item"), tools.RefusalForbidden},
+		"no tracker":            {unconfigured("update_work_item"), tools.RefusalUnavailable},
+		"no knowledge base":     {unconfiguredKB("save_page"), tools.RefusalUnavailable},
+		"tracker read, behind":  {readFailure(t.Context(), "get_work_item", behind), tools.RefusalUnavailable},
+		"page read, behind":     {pageReadFailure(t.Context(), "get_page", behind), tools.RefusalUnavailable},
+		"tracker read, a fault": {readFailure(t.Context(), "get_work_item", boom), tools.RefusalInternalError},
+		"page read, a fault":    {pageReadFailure(t.Context(), "get_page", boom), tools.RefusalInternalError},
+		"bare failed":           {failed("needs an `item`"), tools.RefusalInvalid},
 	} {
-		if !c.got.Failed || c.got.Refusal != c.want {
+		if !c.got.Failed || tools.RefusalOf(c.got) != c.want {
 			t.Errorf("%s: failed %v class %q, want %q", name, c.got.Failed,
-				c.got.Refusal, c.want)
+				tools.RefusalOf(c.got), c.want)
 		}
 	}
 }
@@ -237,9 +299,9 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 		{"not a question", fmt.Errorf("x: %w", tracker.ErrInvalid), tools.RefusalInvalid},
 	} {
 		got, ok := answerRefusal(c.err)
-		if !ok || !got.Failed || got.Refusal != c.want {
+		if !ok || !got.Failed || tools.RefusalOf(got) != c.want {
 			t.Errorf("%s: answerRefusal = %v failed %v class %q, want %q",
-				c.name, ok, got.Failed, got.Refusal, c.want)
+				c.name, ok, got.Failed, tools.RefusalOf(got), c.want)
 		}
 	}
 	if _, ok := answerRefusal(errors.New("tracker: read the ask c1: disk I/O")); ok {

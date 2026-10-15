@@ -22,7 +22,7 @@ func describeOrg() *org.Organization {
 			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *", Task: "rotate"}},
 		}},
 		Units: []*org.Unit{{
-			Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
+			Name: "Quality", Type: org.UnitTypeTeam, Lead: "qa-lead",
 			Roles: []*org.Role{
 				{Name: "QA Lead", DeclaredHandle: "qa-lead"},
 				{Name: "QA Dev", DeclaredHandle: "qa-dev"},
@@ -60,8 +60,15 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 	byName := rowsByName(t, rows)
 
 	nightly := byName["nightly"]
-	if nightly.ScopeType != types.ScheduleScopeRole || nightly.ScopeID != "ops" {
-		t.Errorf("nightly scope = %s/%s, want role/ops", nightly.ScopeType, nightly.ScopeID)
+	// THE NAME IS WHAT A SCREEN READS; the id is the identity the fire
+	// ledger keys on, and for a role scope it is the seat's agent id rather
+	// than its handle.
+	if nightly.ScopeType != types.ScheduleScopeRole || nightly.ScopeName != "ops" {
+		t.Errorf("nightly scope = %s/%s, want role/ops", nightly.ScopeType, nightly.ScopeName)
+	}
+	if want, _ := describeOrg().AgentIDFor(describeOrg().AgentSeatByHandle("ops")); nightly.ScopeID != want.String() {
+		t.Errorf("nightly scope id = %q, want the seat's own id %s",
+			nightly.ScopeID, want)
 	}
 	// A role schedule's target is not "each" — it is meaningless, and
 	// reporting a default would invite a reader to change it and expect
@@ -250,7 +257,7 @@ func TestDescribeAndTheTickResolveRunnersIdentically(t *testing.T) {
 func TestEachRunnersExcludeHumanSeats(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "qa-lead",
 		Roles: []*org.Role{
 			{Name: "QA Lead", DeclaredHandle: "qa-lead"},
 			{Name: "Sarah Chen", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0HUMAN"}},
@@ -272,7 +279,7 @@ func TestLeadRunnerIsEmptyWhenTheEffectiveLeadIsHuman(t *testing.T) {
 	// filter is what keeps a fire from being addressed to an inbox nothing
 	// consumes.
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "Sarah Chen",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "sarah-chen",
 		Roles: []*org.Role{
 			{Name: "Sarah Chen", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0HUMAN"}},
 			{Name: "QA Dev", DeclaredHandle: "qa-dev"},
@@ -296,7 +303,7 @@ func TestALeadInheritedFromAnAncestorStillResolves(t *testing.T) {
 	// The reason `lead` survives as a target at all: it is DYNAMIC, and an
 	// inherited lead lives outside the unit's own subtree.
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "VP Eng",
+		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "vp-eng",
 		Roles: []*org.Role{{Name: "VP Eng", DeclaredHandle: "vp-eng"}},
 		Children: []*org.Unit{{
 			Name:  "Quality",
@@ -324,7 +331,7 @@ func TestEachResolvesDirectMembersOnly(t *testing.T) {
 	// the whole company. Schedules are not inherited downward either, which
 	// is the same rule seen from the other end.
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "VP Eng",
+		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "vp-eng",
 		Roles: []*org.Role{{Name: "VP Eng", DeclaredHandle: "vp-eng"}},
 		Schedules: []org.Schedule{{
 			Name: "sync", Cron: "0 9 * * *", Task: "sync", Target: org.TargetEach,
@@ -395,10 +402,35 @@ func TestSortRowsIsTotalAndStable(t *testing.T) {
 	schedule.SortRows(rows)
 	var got []string
 	for _, r := range rows {
-		got = append(got, string(r.ScopeType)+"/"+r.ScopeID+"/"+r.Name)
+		got = append(got, string(r.ScopeType)+"/"+r.ScopeName+"/"+r.Name)
 	}
+	// BY THE NAME, because the order is one a person reads: sorting by the
+	// id would put role rows in uuid order, which follows nothing.
 	want := []string{"role/ops/nightly", "unit/Quality/report", "unit/Quality/standup"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sorted rows = %v, want %v", got, want)
+	}
+}
+
+// TWO UNITS OF ONE NAME ARE TWO SCOPES.
+//
+// A unit's display name is prose the document lets any two units share, and
+// while the fire key was that name, one team's standup claimed the other's
+// minute and the other never fired at all.
+func TestTwoUnitsOfOneNameDoNotShareAFireKey(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{
+		{Name: "Platform", ID: "platform-eu",
+			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}},
+		{Name: "Platform", ID: "platform-us",
+			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}},
+	}}
+	entries := schedule.Entries(o)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want one per unit", len(entries))
+	}
+	if entries[0].ScopeID == entries[1].ScopeID {
+		t.Errorf("both teams' standups are keyed on %q, so one of them claims "+
+			"the other's minute and the other never fires", entries[0].ScopeID)
 	}
 }

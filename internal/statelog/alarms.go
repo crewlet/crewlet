@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/eventfan"
 )
 
 // The thresholds an alarm fires at.
@@ -39,12 +38,54 @@ import (
 // So an alarm fires at the threshold that MATTERS, and where the constant
 // belongs to another package it is taken from there.
 const (
+	// PositionHeartbeat is how often a node running a state log republishes
+	// its row in the fleet's position register — the engine's position
+	// heartbeat, which the trim, the snapshot gate and a joiner's donor
+	// count all read.
+	//
+	// TEN SECONDS, taken from what the readers need rather than from what
+	// the writer can afford. The trim runs on a horizon of days and is
+	// conservative with a stale row; the snapshot gate's question — is
+	// there anybody else — changes when a node joins or leaves, which an
+	// operator expects to see reflected in seconds rather than minutes. Ten
+	// is well inside that and is a single small write per node per interval
+	// against a bucket with no age.
+	//
+	// DECLARED HERE rather than beside the loop that ticks on it, for
+	// [TrimInterval]'s reason: it is also the cadence of everything this
+	// package derives from the register — [AlarmInterval] IS it — so the
+	// one number lives where both of its readers can name it.
+	PositionHeartbeat = 10 * time.Second
+
 	// StallGrace is how far behind a node may be before its lag is worth
-	// a person's attention. Sixty seconds, which is four heartbeats: long
+	// a person's attention. Sixty seconds, which is four of the fleet's
+	// coordination heartbeats ([coord.ReconcileInterval]): long
 	// enough that a rolling restart or one oversized record passes
 	// through it, short enough that a node that has actually stopped is
 	// named within a minute.
 	StallGrace = 60 * time.Second
+
+	// AlarmInterval is how often a node running a state log — every data
+	// node — evaluates the table: on its [PositionHeartbeat], and it IS that
+	// constant rather than a second spelling of its number. The two were
+	// once one declaration in the engine, then two literals in two packages
+	// that agreed only because nobody had retuned either — and the first
+	// retune of the heartbeat would have left the table evaluating at a
+	// cadence its inputs are not published at, with nothing to say so.
+	//
+	// THE HEARTBEAT, and never the trim's quarter-hour: the table ran on
+	// that once, so `apply_lag` — which fires at the one-minute
+	// [StallGrace] and whose remedy promises a stopped node is named
+	// within a minute — was named up to sixteen minutes after it stopped,
+	// and every surface fed by the evaluation lagged the condition by the
+	// same quarter hour. An evaluation paced by anything slower silently
+	// raises every threshold to its own period. FASTER BUYS NOTHING: the
+	// fastest input, this node's lag behind the log, is measured against
+	// positions the heartbeat publishes, so a tighter loop would
+	// re-evaluate the same facts. At the heartbeat's ten seconds
+	// [StallGrace] is six evaluations, so a condition that has held past
+	// it is named within one more.
+	AlarmInterval = PositionHeartbeat
 
 	// DeferralGrace is how long a node may hold records it could not
 	// apply before it stops serving its copy of the estate — its seats
@@ -74,10 +115,11 @@ const (
 	// raising a ceiling needs a maintenance window, and a tenth of a
 	// 29 GiB log is days of writing at this engine's rate.
 	//
-	// OF THE CEILING ORDINARY WRITES ARE HELD TO ([Headroom]), which on a
-	// log that keeps a gate reserve is [GateReserve] below the broker's:
-	// that is where writes start being refused, so it is what "full"
-	// means to everybody but an eviction.
+	// OF THE CEILING ORDINARY WRITES ARE HELD TO
+	// ([Reservation.Headroom]), which on a log that keeps a gate reserve
+	// is [Reservation.Bytes] below the broker's: that is where writes
+	// start being refused, so it is what "full" means to everybody but an
+	// eviction.
 	HeadroomAlarmFraction = 0.10
 
 	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
@@ -211,6 +253,7 @@ const (
 	KindReadRefusals        Kind = "read_refusals"
 	KindBarrierSlow         Kind = "barrier_slow"
 	KindLogHeadroom         Kind = "log_headroom"
+	KindLogCeilingShort     Kind = "log_ceiling_short"
 	KindBackupAge           Kind = "backup_age"
 	KindTrimBlocked         Kind = "trim_blocked"
 	KindDeferredOld         Kind = "deferred_old"
@@ -235,10 +278,11 @@ const (
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
 //
 // ONE STRUCT rather than a callback per condition, because the whole table is
-// evaluated together on ticks that already run — the trim's fifteen minutes
-// and the heartbeat's fifteen seconds — and a condition that fetched its own
-// input would make the cost of the table a function of how many alarms are
-// defined rather than of how many facts it reads.
+// evaluated together on ticks that already run — every [AlarmInterval], and
+// again straight after the trim's quarter-hour measurements land — and a
+// condition that fetched its own input would make the cost of the table a
+// function of how many alarms are defined rather than of how many facts it
+// reads.
 //
 // A field this node cannot measure is left at its zero value, and every
 // condition is written so that a zero reads as "nothing to report" rather than
@@ -257,7 +301,7 @@ type Reading struct {
 	BarrierP95 time.Duration
 
 	// HeadroomFraction is how much of the byte ceiling the log's ordinary
-	// writes are held to is unused, as a fraction ([Headroom]).
+	// writes are held to is unused, as a fraction ([Reservation.Headroom]).
 	//
 	// A POINTER, because zero is a real value here and it is the worst
 	// one: a full log and a node that has not measured its log are
@@ -283,16 +327,64 @@ type Reading struct {
 	BackupMaxAge time.Duration
 
 	// TrimBlockedFor is how long the trim has been unable to advance, and
-	// TrimBlockedBy names the term holding it.
+	// TrimBlockedBy names the term holding it. Per DOMAIN, like
+	// HeadroomFraction.
 	TrimBlockedFor time.Duration
 	TrimBlockedBy  string
 
-	// DeferredAge is how old the oldest record this node could not apply
-	// is.
-	DeferredAge time.Duration
+	// TrimPastWindow is how many of the log's SEQUENCES lie below the age
+	// term — the records older than ReplayWindow that the age term alone
+	// would release, and which a blocked trim is therefore keeping. Per
+	// DOMAIN. Exactly that many records on a strict log, whose sequences are
+	// dense above its first; AT MOST that many on a compacted one, whose
+	// superseded records are already gone from the span, which is why the
+	// detail says "up to".
+	//
+	// MEASURED, from the age term's own sequence against the log's first,
+	// rather than assumed from how long the block has lasted, because the
+	// two come apart in exactly the cases a healthy fleet is in: a log
+	// nobody has written to is blocked for ever (every node sits at
+	// position zero) and holds nothing, and a log whose first record
+	// arrived yesterday under a block a month old holds nothing past the
+	// window either. ZERO IS THE BENIGN END and so is unmeasured — a stream
+	// this node could not read — so it needs no pointer: both say the block
+	// is keeping nothing anybody knows of.
+	TrimPastWindow uint64
 
-	// FloorUnknownFor is how long the trim floor has been unreadable.
-	FloorUnknownFor time.Duration
+	// DeferredAge is how long this node has held the oldest record it
+	// could not apply on one log — from the position heartbeat's first
+	// sighting of it, the instant [Health.Healthy] measures the grace that
+	// takes this node's copy out of service from, through
+	// [DeferredSince.Age] — and DeferredRecord which record that is, in the
+	// words an operator upgrades by: its position and the record version it
+	// was written at against the one this build reads. Per DOMAIN, like
+	// HeadroomFraction, and filled by the report from [DomainInputs] rather
+	// than by a node-wide caller.
+	//
+	// DeferredJudgesCopy is whether that log is a [Domain.ReadinessInput] —
+	// the tracker's and the knowledge base's are; the identity estate's,
+	// the vectors' and the usage domain's are not — which is whether the
+	// grace is ALSO when this node stops serving its copy of the estate
+	// (its seats stay, and read it from the other data nodes). The alarm
+	// fires at the grace either way, because an upgrade is the remedy
+	// either way; what it may not do is tell an operator a node's copy was
+	// taken out of service over a log that judges none — or that it was
+	// not, over the one log among several that took it out, which is why
+	// the three are a LOG's rather than the node's oldest.
+	DeferredAge        time.Duration
+	DeferredRecord     string
+	DeferredJudgesCopy bool
+
+	// FloorUnknownFor is how long one log's trim floor has been unreadable
+	// on this node — from the first alarm heartbeat that could not read it
+	// to the latest, never a persistence nobody observed — and
+	// FloorUnknownCause what the latest read said: an unreachable
+	// coordination store and a floor published at a generation this node
+	// has not reached are one refusal with two remedies. Per DOMAIN too:
+	// the refusal is that log's, and one alarm naming the node's
+	// longest-unreadable floor hid every other log re-anchored beside it.
+	FloorUnknownFor   time.Duration
+	FloorUnknownCause string
 
 	// PrefetchP95 and SearchP95 are the two latencies a turn waits on.
 	PrefetchP95, SearchP95 time.Duration
@@ -303,9 +395,22 @@ type Reading struct {
 	SearchDegradedFraction, SearchScopedFraction float64
 
 	// HistoryPartialFraction is the fraction of this node's fleet history
-	// reads answered without every live node — one did not answer inside
-	// [eventfan.FleetReadBudget].
+	// reads answered without every live node, and HistoryReadBudget the
+	// budget those reads waited on for the other nodes — internal/eventfan's
+	// FleetReadBudget, which a node that did not answer inside is what makes
+	// an answer partial.
+	//
+	// THE BUDGET TRAVELS WITH THE READING rather than being imported here,
+	// because the scatter that owns it is a layer ABOVE this framework: it
+	// reads every node's own event log, and the framework every replicated
+	// domain is built on depending on the fleet's history reader for one
+	// constant would put that reader under every domain's build. The node
+	// that counted the reads is the one that knows what they waited on, and
+	// it states it in the same breath as the fraction, so the detail still
+	// names the number the scatter waits on rather than a second opinion of
+	// it (ADR-0015).
 	HistoryPartialFraction float64
+	HistoryReadBudget      time.Duration
 
 	// SemanticCoverage is the fraction of the corpus with current vectors.
 	// A POINTER for the reason HeadroomFraction is one: a company with no
@@ -363,12 +468,31 @@ type Reading struct {
 	// LinearizableReads and LinearizableReadsExpected are one log's
 	// observed and designed-for daily read rates — the barrier records
 	// committed to the log in the last day, from every node, and its census
-	// ([Census.Expected]) — and CensusLog names that log: of every log this
-	// node applies, the one furthest past its census, since the reading
-	// describes one node and a log over its census is over it however quiet
-	// the others are.
+	// ([Census.Expected]). Per DOMAIN, like HeadroomFraction, and filled by
+	// the report from [DomainInputs]: a log over its census is over it
+	// however quiet the others are, and one reading naming only the log
+	// furthest past its census said nothing of a second log past its own
+	// until the first came back under.
 	LinearizableReads, LinearizableReadsExpected int
-	CensusLog                                    string
+
+	// LogBytesPerDay is what one log took in over the trailing day,
+	// LogMaxBytes the ceiling its broker enforces and ReplayWindow the
+	// `min_age` the trim keeps — the window the log has to be able to
+	// hold. Per DOMAIN, like HeadroomFraction, and evaluated per domain
+	// by the report.
+	//
+	// A POINTER, and here zero is the BENIGN end rather than the alarming
+	// one, which is exactly why it needs one: a log that took in nothing
+	// yesterday is a measurement — it can hold any window — while a node
+	// that has not measured, or a log in its first two days (whose
+	// trailing day would contain its import), knows nothing. Given the zero's representation,
+	// the unmeasured log would be reported as idle on every screen, and
+	// any form of the rule that divides by the rate — how long the ceiling
+	// holds — reads it as a ceiling that holds nothing and fires on every
+	// boot.
+	LogBytesPerDay *uint64
+	LogMaxBytes    uint64
+	ReplayWindow   time.Duration
 
 	// ObjectsMissing is how many files' bytes the object store does not
 	// hold, or holds wrong — at another size, or under another digest — as
@@ -402,7 +526,9 @@ type Alarm struct {
 
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
-	// and "this node is 4m12s behind" is a fact.
+	// and "this node is 4m12s behind" is a fact. For a per-log condition
+	// it is the most pressing log's measurement; each log in [Alarm.Domains]
+	// carries its own.
 	Detail string `json:"detail"`
 
 	// Remedy is what to do about it. Carried on the alarm rather than
@@ -412,19 +538,29 @@ type Alarm struct {
 	Remedy string `json:"remedy"`
 
 	// Domains is every log this alarm stands on, for a condition that is a
-	// property of a log rather than of the node: the logs nearing their
-	// ceiling, the logs whose trim is held, and under [KindBackupAge] the
-	// logs whose trim the missing or stale backup is holding. Empty for a
+	// property of a log rather than of the node ([PerLogKinds]): the logs
+	// nearing or short of their ceiling, the logs whose trim is held, the
+	// logs holding a record past the deferral grace, the logs whose floor
+	// cannot be read and the logs past their census — and under
+	// [KindBackupAge] the logs whose [KindTrimBlocked] the missing or stale
+	// backup absorbs: held past their replay window and keeping records
+	// older than it. A younger hold is listed under no alarm. Empty for a
 	// node-wide condition.
 	//
 	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
-	// The kind is the alarm's identity on every other surface: the gauge
-	// carries one series per kind, and the log writes one line when a kind
-	// starts and one when it clears. A report that raised `trim_blocked`
-	// once per log told the health count four while the gauge and the log
-	// said one, and drew one cause as four problems on the operator's
-	// screen. Detail is the most pressing log's measurement; each entry here
-	// carries its own.
+	// The kind is the alarm's identity on the count, the gauge and every
+	// screen: the gauge carries one series per kind, and a report that
+	// raised `trim_blocked` once per log told the health count four while
+	// the gauge said one, and drew one cause as four problems on the
+	// operator's screen. Detail is the most pressing log's measurement;
+	// each entry here carries its own.
+	//
+	// THE LOG LINES ARE STILL PER LOG. The [Tracker] forms one instance per
+	// (kind, log) from this list, so a second log joining a kind that is
+	// already up writes its own `alarm_raised`, and the first log leaving it
+	// writes its own `alarm_cleared` with its own start and detail: two
+	// things an operator has to be told started and ended, which a line per
+	// kind folded into one.
 	Domains []AlarmDomain `json:"domains,omitempty"`
 }
 
@@ -457,6 +593,15 @@ type rule struct {
 	fires func(Reading) (string, bool)
 	// remedy is what an operator does about it.
 	remedy string
+	// perLog marks a condition that is a property of ONE LOG rather than
+	// of the node, which the report evaluates once per log from that log's
+	// own inputs and lists under the kind's one alarm ([Alarm.Domains]), and
+	// whose log lines the [Tracker] writes per log. DECLARED on the
+	// row so the published reference can say which they are, and held
+	// against what the report actually raises per log by a test in both
+	// directions — a flag nothing checked would be the second opinion the
+	// table exists to prevent.
+	perLog bool
 }
 
 // table is every alarm this engine can raise, in the order they are reported.
@@ -504,7 +649,8 @@ var table = []rule{
 			"latency and this node's apply drain before looking anywhere else.",
 	},
 	{
-		kind: KindLogHeadroom,
+		kind:   KindLogHeadroom,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.HeadroomFraction == nil {
 				return "", false
@@ -520,6 +666,43 @@ var table = []rule{
 			"that claims identity the top of the ceiling is kept for gate " +
 			"records, so if the term is a node that is gone, `crewlet " +
 			"retention evict` still lands and unpins the trim.",
+	},
+	{
+		// THE FORWARD-LOOKING HALF OF THE HEADROOM ALARM, and the one
+		// that names a different remedy. Headroom says the log is nearly
+		// full; this says it WILL be, with a trim that is working
+		// perfectly — the trim never removes a record younger than
+		// `min_age`, so a log whose ceiling is smaller than `min_age` of
+		// its own writing fills and refuses appends with every term
+		// satisfied. Unblocking a term cannot fix that; only the ceiling
+		// or the window can.
+		//
+		// NO THRESHOLD OF ITS OWN (ADR-0015): the two numbers compared
+		// are the ceiling the operator set and the window they set, and
+		// the alarm fires at the point where the second no longer fits
+		// in the first.
+		kind:   KindLogCeilingShort,
+		perLog: true,
+		fires: func(r Reading) (string, bool) {
+			if r.LogBytesPerDay == nil || r.LogMaxBytes == 0 || r.ReplayWindow <= 0 {
+				return "", false
+			}
+			rate := float64(*r.LogBytesPerDay)
+			need := rate * r.ReplayWindow.Hours() / 24
+			if need <= float64(r.LogMaxBytes) {
+				return "", false
+			}
+			holds := time.Duration(float64(r.LogMaxBytes) / rate * float64(24*time.Hour))
+			return fmt.Sprintf("at the %s a day this log took in over the last "+
+				"day, its %s ceiling holds %s of records, and the trim keeps %s",
+				bytesHuman(int64(*r.LogBytesPerDay)), bytesHuman(int64(r.LogMaxBytes)),
+				spoken(holds), spoken(r.ReplayWindow)), true
+		},
+		remedy: "Raise the log's ceiling with `crewlet retention set-capacity` " +
+			"during a maintenance window, to at least the window's worth at this " +
+			"rate, or shorten `stream.tracker_retention.min_age` if the " +
+			"deployment does not need that window. Unblocking the trim cannot " +
+			"help: it never removes a record younger than min_age.",
 	},
 	{
 		// ONE THRESHOLD. The form this replaces set a blocked flag once
@@ -556,45 +739,98 @@ var table = []rule{
 			"advance at all until there is one.",
 	},
 	{
+		// A BLOCKED TRIM IS AN ORDINARY STATE until it has cost something,
+		// and every fresh deployment is in it: blocked on its first backup,
+		// on its first snapshot donors, on a log nobody has written to. The
+		// form this replaced fired on the block itself, so every young fleet
+		// raised it within one heartbeat and held it for days, and `crewlet
+		// retention status` exited non-zero on a fleet with nothing wrong.
+		//
+		// AT THE REPLAY WINDOW PLUS ONE TICK (ADR-0015), because `min_age`
+		// is the number the configuration already holds every SANCTIONED
+		// block under: a node joining inside its rejoin window (whose ceiling
+		// is the window's floor), a young fleet waiting for its donors (the
+		// cross-field rule keeps `snapshot_interval` × (kept + 1) below it),
+		// a trim waiting for its first backup (which `backup_age` raises on
+		// its own: from the first reading where none has been taken, at the
+		// policy's age where one has gone stale). The tick is the block's
+		// resolution (`blocked_since` moves only when the trim does), so a
+		// block that cleared at the window is seen to clear up to one tick
+		// later.
+		//
+		// AND ONLY WHILE THE LOG HOLDS A RECORD PAST THE WINDOW, which is
+		// the half that is measured rather than borrowed: a block that keeps
+		// nothing the age term would release has cost nothing, however long
+		// it has lasted. A knowledge base nobody writes to is blocked for
+		// the life of the deployment.
+		//
 		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
 		// alarm stands on ([AlarmDomain.Term]), because one alarm carries
 		// every held log and two of them can be held by different terms.
-		kind: KindTrimBlocked,
+		kind:   KindTrimBlocked,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
-			if r.TrimBlockedBy == "" {
+			if r.TrimBlockedBy == "" || r.ReplayWindow <= 0 || r.TrimPastWindow == 0 {
 				return "", false
 			}
-			// A BLOCK SEEN FIRST ON THIS TICK has no duration to report,
-			// and "for 0ms" reads as a measurement of nothing.
-			if r.TrimBlockedFor < time.Second {
-				return "the trim stopped advancing on this evaluation", true
-			}
-			return fmt.Sprintf("the trim has not advanced for %s", spoken(r.TrimBlockedFor)), true
+			return fmt.Sprintf("the trim has not advanced for %s, and the log is "+
+					"keeping up to %d record(s) older than its %s replay window",
+					spoken(r.TrimBlockedFor), r.TrimPastWindow, spoken(r.ReplayWindow)),
+				r.TrimBlockedFor > r.ReplayWindow+TrimInterval
 		},
 		remedy: "The term holding each log names what to fix, and `crewlet " +
-			"retention status` prints it with its detail. Until it is fixed " +
-			"the log grows toward its ceiling.",
+			"retention status` prints it with what it has and what it wants. " +
+			"Until it is fixed the log grows toward its ceiling by a day of " +
+			"records every day.",
 	},
 	{
-		kind: KindDeferredOld,
+		// PER LOG, like the headroom, the ceiling and the blocked trim: the
+		// report evaluates it once for each log this node holds a record on,
+		// because what the grace does is the log's — see
+		// [Reading.DeferredJudgesCopy].
+		kind:   KindDeferredOld,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the oldest record this node cannot apply is %s old, "+
-					"and it stops serving its copy of the estate at %s", spoken(r.DeferredAge),
-					spoken(DeferralGrace)),
+			what := "the oldest record on this log that this node cannot apply"
+			if r.DeferredRecord != "" {
+				what += " (" + r.DeferredRecord + ")"
+			}
+			consequence := fmt.Sprintf("past the %s deferral grace, at which "+
+				"this node stops serving its copy of the estate", spoken(DeferralGrace))
+			if !r.DeferredJudgesCopy {
+				consequence = fmt.Sprintf("past the %s deferral grace; this log "+
+					"does not judge this node's copy of the estate, so nothing is "+
+					"taken out of service", spoken(DeferralGrace))
+			}
+			return fmt.Sprintf("%s has been held for %s, %s", what,
+					spoken(r.DeferredAge), consequence),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
-			"are writing. Upgrade it; it has already stopped serving its copy of " +
-			"the estate, and its seats read the estate from the other data nodes.",
+			"are writing. Upgrade it. Where the record's log judges this node's copy " +
+			"of the estate (the detail says), the node has already stopped serving " +
+			"its copy, and its seats read the estate from the other data nodes.",
 	},
 	{
-		kind: KindFloorUnknown,
+		// PER LOG, for the same reason: a read of one log refuses on that
+		// log's floor, and a floor published ahead of this node is one
+		// log's re-anchor.
+		kind:   KindFloorUnknown,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the trim floor has been unreadable for %s",
-				spoken(r.FloorUnknownFor)), r.FloorUnknownFor > FloorCacheStale
+			detail := fmt.Sprintf("this log's trim floor has been unreadable here "+
+				"for %s", spoken(r.FloorUnknownFor))
+			if r.FloorUnknownCause != "" {
+				detail += ": " + r.FloorUnknownCause
+			}
+			return detail, r.FloorUnknownFor > FloorCacheStale
 		},
-		remedy: "Coordination cannot be reached from this node. Every read is " +
-			"refused until it can be.",
+		remedy: "Read the cause. An unreachable coordination store clears when " +
+			"coordination does, and every log on this node says so at once; a floor " +
+			"published at a later generation than this node's means that log was " +
+			"re-anchored and this node was not (see re-anchoring in " +
+			"docs/guides/retention.md). Every read of the log on this node is " +
+			"refused until its floor can be read.",
 	},
 	{
 		kind: KindPrefetchSlow,
@@ -644,12 +880,19 @@ var table = []rule{
 		// THE BUDGET IS BORROWED (ADR-0015): what makes a history answer
 		// partial is a node that did not answer inside the fleet read
 		// budget, so that budget is the threshold — named in the detail
-		// from the constant the scatter waits on, never restated.
+		// from the value the reading carries, which is the constant the
+		// scatter waits on ([Reading.HistoryReadBudget]), never restated.
+		// PROCESS-WIDE rather than per log: the reads are of each node's
+		// own event log, which is no state log at all.
 		kind: KindHistoryPartial,
 		fires: func(r Reading) (string, bool) {
+			budget := "the fleet read budget"
+			if r.HistoryReadBudget > 0 {
+				budget = "the " + spoken(r.HistoryReadBudget) + " fleet read budget"
+			}
 			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
-					"every node, because one did not answer inside the %s fleet read budget",
-					r.HistoryPartialFraction*100, spoken(eventfan.FleetReadBudget)),
+					"every node, because one did not answer inside %s",
+					r.HistoryPartialFraction*100, budget),
 				r.HistoryPartialFraction > 0
 		},
 		remedy: "Turn-level history lives only on the node that published it, so " +
@@ -790,10 +1033,17 @@ var table = []rule{
 		// decision under this framework — the log's ceiling, the trim's
 		// cadence, a joining node's transfer — was derived from a read
 		// rate. At twice it, they are describing a different company.
-		kind: KindCensusDrift,
+		//
+		// PER LOG, like the headroom: each log was sized for its own
+		// census and is past it on its own, so the report evaluates it once
+		// per log and lists every log past its census under the one alarm
+		// ([Alarm.Domains]). A reading naming only the log furthest past its
+		// census hid every other log past its own.
+		kind:   KindCensusDrift,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d linearizable reads a day on %s against the %d "+
-					"this deployment was sized for", r.LinearizableReads, r.CensusLog,
+			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
+					"log was sized for", r.LinearizableReads,
 					r.LinearizableReadsExpected),
 				r.LinearizableReadsExpected > 0 &&
 					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
@@ -834,6 +1084,38 @@ func Evaluate(r Reading) []Alarm {
 // Frac is a measured fraction, for the two Reading fields whose zero value is
 // a real and alarming measurement rather than an absent one.
 func Frac(v float64) *float64 { return &v }
+
+// PerDay is a measured daily byte count, for the one Reading field whose zero
+// is a real and BENIGN measurement rather than an absent one — see
+// [Reading.LogBytesPerDay].
+func PerDay(v uint64) *uint64 { return &v }
+
+// PerLogKinds is every alarm evaluated once per log rather than once per node,
+// in the table's own order: the six a reader of the reference has to know list
+// the logs they stand on ([Alarm.Domains]) and write a pair of log lines for
+// each of those logs ([Tracker]), while counting once on the health envelope
+// and the gauge.
+func PerLogKinds() []Kind {
+	var out []Kind
+	for _, rule := range table {
+		if rule.perLog {
+			out = append(out, rule.kind)
+		}
+	}
+	return out
+}
+
+// perLogKind reports whether kind is one of [PerLogKinds]: a condition whose
+// log lines the [Tracker] writes once per log it stands on. A kind the table
+// does not hold is not one.
+func perLogKind(kind Kind) bool {
+	for _, rule := range table {
+		if rule.kind == kind {
+			return rule.perLog
+		}
+	}
+	return false
+}
 
 // Age is a measured age, for the Reading field whose zero value is a real and
 // REASSURING measurement — a backup verified this second — rather than an

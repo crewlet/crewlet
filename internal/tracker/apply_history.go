@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -90,20 +89,17 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		fields = jsonOf(applied)
 	}
 
-	// THE SEAT BEHIND THE TOKEN, stored whenever the record carries one —
-	// every change written through an operator's token that a seat claims.
-	actorSeat := c.record.ActorSeat
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_history
 			(id, subject_kind, subject_id, project_key, kind, actor, actor_kind,
-			 operator_id, actor_seat, comment_id, batch_id, excerpt, fields_json,
-			 turn_id, notified, late, log_seq, log_stream, log_generation,
-			 created_at, broker_at, effective_at, skew_ms, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 operator_id, comment_id, batch_id, excerpt, fields_json, turn_id,
+			 notified, late, log_seq, log_stream, log_generation, created_at,
+			 broker_at, effective_at, skew_ms, document)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
 		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
 		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
-		actorSeat, commentID, batchOf(c.record), excerpt, fields, c.record.TurnID,
+		commentID, batchOf(c.record), excerpt, fields, c.record.TurnID,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
 		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation))
@@ -387,14 +383,15 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // # BUT NEVER THE PERSON WHO MADE THE CHANGE
 //
 // Except under the one reason that is news to them ([Reason.WakesActor]):
-// the same step [Route] takes, over the same [MutationRecord.ActorParty], so
-// under EITHER of their names. It needs no registry — who wrote the record is
-// on the record — so it belongs here rather than only in the routing, and
-// here is the only place it can be kept: this table is what `work_inbox`
-// reads, and a row written for the actor is a notice in their own inbox
-// about what they just did. A founder who commented on her own task through
-// her assistant found it in her inbox, unread, as "assigned to you", and
-// every such row inflated her unread count. It is also what
+// the same step [Route] takes, over the record's actor — the seat's identity
+// whenever a person writes as their seat ([iam.ActorFor]), the spelling a
+// candidate is in. It needs no registry — who wrote the record is on the
+// record — so it belongs here rather than only in the routing, and here is
+// the only place it can be kept: this table is what `work_inbox` reads, and a
+// row written for the actor is a notice in their own inbox about what they
+// just did. A founder who commented on her own task through her assistant
+// found it in her inbox, unread, as "assigned to you", and every such row
+// inflated her unread count. It is also what
 // `work_routing`'s `nobody` has always claimed of this table: "every
 // candidate was the actor" — which was true of the wake and false of the
 // rows.
@@ -425,21 +422,33 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		}
 	}
 	candidates := Candidates(notify, c.record.Batched())
-	own := c.record.ActorParty().Handles()
+	// THE TASK THE NOTICE IS ABOUT, beside the subject it was written on.
+	// For a task commit they are one task; for a lead's priorities write
+	// the subject is the PERSON and the key stored beside it is the TASK's,
+	// so without the id a reader has a key and nothing to say whether that
+	// key opens the task the wake meant — which it does not, once another
+	// task claimed it first. See [InboxNotice.Task].
+	task := notify.Snapshot.TaskID(c.subject())
 	written := 0
 	for _, candidate := range candidates {
-		if slices.Contains(own, candidate.Handle) && !candidate.Reason.WakesActor() {
+		// THE CHANGE'S OWN AUTHOR GETS NO NOTICE OF IT, unless the reason
+		// is one that wakes the actor too ([Reason.WakesActor]). The actor
+		// is the seat's identity whenever a person writes AS their seat
+		// ([iam.ActorFor]), which is the same spelling a candidate's
+		// handle is in, so one comparison covers a seat, a person at the
+		// dashboard and their own assistant alike.
+		if candidate.Handle == c.record.Actor && !candidate.Reason.WakesActor() {
 			continue
 		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_notifications
-				(record_id, recipient, subject_id, subject_key, kind, reason,
-				 addressed, fallback_only, fallback_rank, excerpt, created_at,
-				 log_seq, log_stream, log_generation)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				(record_id, recipient, subject_id, subject_key, task_id, kind,
+				 reason, addressed, fallback_only, fallback_rank, excerpt,
+				 created_at, log_seq, log_stream, log_generation)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
 			historyID(c), candidate.Handle, c.subject().ID,
-			inboxSubjectKey(subjectKey, notify),
+			inboxSubjectKey(subjectKey, notify), task,
 			string(notify.Kind), string(candidate.Reason),
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,
@@ -452,6 +461,16 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		n, err := affected(res)
 		if err != nil {
 			return 0, err
+		}
+		if n > 0 {
+			// A ROW THIS TRANSACTION WROTE, and only then: a redelivery
+			// wrote nothing, so it moved nobody's inbox. See
+			// inboxmove.go for what the movement is for.
+			a.noteInbox(inboxNote{
+				record: historyID(c), handle: candidate.Handle,
+				subject: c.subject().ID, reason: candidate.Reason,
+				position: c.packed,
+			})
 		}
 		written += n
 	}

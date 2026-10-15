@@ -94,8 +94,8 @@ func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
 // A TASK'S CHARGE COUNTS THE REVIEWS THAT SENT ITS WORK BACK.
 //
 // The count is taken from the review phases' own records — the decision each
-// one published — so it is the same number the usage domain's per-seat
-// `sent_back` is. Rounds and the phases that ran ride the same tally, because
+// one published — as the count of reviews and of those that did not accept
+// is, which the record ending the turn states for the usage domain. Rounds and the phases that ran ride the same tally, because
 // a task's charge reads all three from it.
 func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 	t.Parallel()
@@ -116,6 +116,13 @@ func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 	if spend.SentBack != 2 {
 		t.Errorf("sent back = %d over a turn whose reviewer returned the work "+
 			"twice and accepted it once, want 2", spend.SentBack)
+	}
+	// AND THE REVIEWS THEMSELVES, which the record that ends the turn states
+	// whole (types.TurnTally): three ran, and two did not accept — so the
+	// turn was not accepted by its first.
+	if spend.Reviews != 3 || spend.Unaccepted != 2 {
+		t.Errorf("reviews = %d, unaccepted = %d over three reviews of which two sent the "+
+			"work back, want 3 and 2", spend.Reviews, spend.Unaccepted)
 	}
 	if spend.Rounds < 3 {
 		t.Errorf("rounds = %d over three review phases, want at least one each", spend.Rounds)

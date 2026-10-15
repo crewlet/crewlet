@@ -50,6 +50,22 @@ markdown: with their own assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 on the native backend, or `crewlet confluence import` on Confluence (see below).
 
+**On the native backend the container is a person's to write, never an
+agent's.** The skills container is one of the two [reserved
+containers](knowledge-system.md#who-may-write-where), and the knowledge base's
+store refuses a seat every write into it — creating a page, saving one,
+renaming one, and adding, editing or removing a comment — whichever tool asked.
+A seat cannot see that a page there is machinery rather than knowledge, and one
+it wrote would be excluded from every search — and, declaring a `trigger:`,
+injected into every seat's phase as an instruction. A person publishing through
+their own assistant is not refused by that rule — putting skills there on
+purpose is what the container is for — but writing one is a configuration
+change, so it takes **`admin`** rather than the `knowledge` app: creating,
+saving, renaming, trashing, restoring or purging a skill page is decided as
+`pages.skill.write` ([who may write
+where](knowledge-system.md#who-may-write-where)). On Confluence the same
+question is Confluence's own page permissions.
+
 **One skill sync per node, reading the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). A walk and a single-page read apply the same **admission test** (`skills.AdmitPage`): the page lives in the configured container *and* its leading YAML frontmatter declares a `trigger:`. A page with no frontmatter, or frontmatter with no trigger, is an ordinary page and is skipped quietly; a page that declares a trigger and does not parse is reported (`skill_page_undecodable`) and skipped. A previously admitted page that stops passing the test (deleted, moved out, or edited into a non-skill) is **dropped**, never left serving its last-good body.
 
 **A page is the registry's identity, and a key is what a model asks for.** Every change names a page, so the registry records what each page holds and derives the key-addressed catalogue from that. A page whose key was edited leaves nothing behind under the old key, and reading the one page that changed ends exactly where a walk of the whole container would. Two pages declaring one key are an authoring error: the page with the lower id (on Confluence, the older page) is served on every node, the other is logged as `skill_key_duplicated`, and it takes the key the moment the first page gives it up.
@@ -191,7 +207,7 @@ The engine substitutes the variables at **render time**, everywhere a skill's `s
 
 `skill_variables` is **company-wide** and hot-reloadable: changing a value on `PUT /config` re-renders every skill on the next turn.
 
-**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard, from [`integrations.dashboard_base_url`](../getting-started/configuration.md#integrations) resolved like any `${VAR}`, so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `integrations.public_base_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. With no dashboard address set it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
+**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard — Tier A's [`api.external_url`](configuration.md#what-tier-a-must-state-once-the-api-is-served), the address every link a person follows is built on — so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `api.public.external_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. Where the node's Tier A states no `api.external_url` — a node that serves no API need not — it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
 
 ---
 

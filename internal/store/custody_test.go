@@ -9,12 +9,14 @@ import (
 )
 
 // custodyBatch is a batch of two of a stateless node's events, each naming a
-// party so a release can be seen to take the party index with it.
+// party — the agent id of the seat it is about — so a release can be seen to
+// take the party index with it.
 func custodyBatch(id string, at time.Time) store.CustodyBatch {
 	rec := func(n string) store.EventRecord {
 		return store.EventRecord{
 			ID: id + "-" + n, Type: "agent_phase_completed", Source: "engine",
 			Category: "agent", Time: at, Actor: "swe-on-stateless",
+			Tags:    map[string]string{"agent_id": "id-swe-on-stateless"},
 			Payload: []byte(`{}`),
 		}
 	}
@@ -36,7 +38,7 @@ func holds(t *testing.T, log *store.EventLog, id string) bool {
 
 func related(t *testing.T, log *store.EventLog) int {
 	t.Helper()
-	rows, err := log.List(t.Context(), store.ListQuery{RelatedAgent: "swe-on-stateless", Limit: 10})
+	rows, err := log.List(t.Context(), store.ListQuery{RelatedAgent: "id-swe-on-stateless", Limit: 10})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

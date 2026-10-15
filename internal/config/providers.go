@@ -21,12 +21,14 @@ import (
 //
 // The Tier A infrastructure — store, stream, coordination — is deliberately
 // not here: it cannot be changed without a restart, and mixing the two
-// tiers in one block is how an operator comes to believe a DSN is
-// live-editable.
+// tiers in one block is how an operator comes to believe the broker's
+// address is live-editable.
 type Providers struct {
 	// LLM is the named provider chain seats select from by key. A seat
-	// naming a key that is not here has no model at all, so the keys are
-	// the company's model vocabulary.
+	// naming a key that is not here falls back to `default`, else the first
+	// provider declared — a model nobody chose for it — so the keys are the
+	// company's model vocabulary, and a company naming one is refused at
+	// Validate.
 	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named LLM providers; seats select one by key."`
 
 	// LLMOrder is the order the providers were DECLARED in, preserved

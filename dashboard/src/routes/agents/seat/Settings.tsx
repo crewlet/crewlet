@@ -61,7 +61,7 @@ export function credentialState(value: string | undefined): string {
 /**
  * What each contact identity is called, as a person names it — `contact`'s
  * keys are the config's own (`internal/org/role.go`), and printed with their
- * underscores swapped for spaces they read "crewlet operator id".
+ * underscores swapped for spaces they read "github login".
  */
 const CONTACT_LABELS: Readonly<Record<string, string>> = {
   slack_user_id: "Slack member id",
@@ -69,7 +69,6 @@ const CONTACT_LABELS: Readonly<Record<string, string>> = {
   atlassian_account_id: "Atlassian account id",
   github_login: "GitHub login",
   gitlab_username: "GitLab username",
-  crewlet_operator_id: "Operator id",
 };
 
 /** A contact key's label: the table's, or the key in sentence case for one a newer engine added. */
@@ -104,7 +103,9 @@ export function Settings({
   const company = useOrg()?.token_budget;
   const state = (children: ReactNode) => (
     <SettingsState
+      reading={reading}
       error={config.error}
+      refusal={config.refusal}
       loading={config.loading}
       doc={config.doc}
       settings={settings}
@@ -149,8 +150,14 @@ export function Settings({
         {state(
           <div className="col gap-3">
             <PropertiesRail groups={[{ properties: identity }]} />
+            {/* A CONTACT IS OPTIONAL — the engine admits a human seat with
+                none and warns at its `contact` — so this says what follows
+                rather than that one is required. */}
             {human && Object.keys(role?.contact ?? {}).length === 0 && (
-              <Callout variant="warning">Add a contact identity in Edit org.</Callout>
+              <Callout variant="warning">
+                Reached only through the dashboard: their Slack, GitHub or tracker activity is not
+                attributed to them. Add a contact identity in Edit org.
+              </Callout>
             )}
           </div>,
         )}

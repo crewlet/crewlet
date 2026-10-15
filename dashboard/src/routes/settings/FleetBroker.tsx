@@ -54,8 +54,16 @@ import {
 import { ServerGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, TagsCell } from "~/app/frame/cells.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { BROKER_REMOVE_TIMEOUT_MS, rest, RestError } from "~/protocol/index.ts";
-import type { BrokerRemoved, FleetBrokerAnswer, MetaGroup, MetaPeer } from "~/protocol/index.ts";
+import type {
+  BrokerRemoved,
+  FleetBrokerAnswer,
+  LogRefusal,
+  MetaGroup,
+  MetaPeer,
+  QueryRefusal,
+} from "~/protocol/index.ts";
 import { fmtDuration } from "~/lib/format.ts";
 
 /** One row of the panel: a live node, a voter no live node is, or both. */
@@ -143,22 +151,30 @@ const FINDING_TITLE: Record<string, string> = {
 export function BrokerMembership({
   answer,
   error,
+  refusal = null,
   onChanged,
 }: {
   answer?: FleetBrokerAnswer;
   /** The last poll's failure, when there was one. */
   error?: string | null;
+  /**
+   * Why that poll was refused — `useQuery`'s own `refusal` — so a reader the
+   * engine turned away is told which access would admit them (Admin)
+   * rather than that the membership "could not be read".
+   */
+  refusal?: QueryRefusal | LogRefusal | null;
   /** Called after a removal, so the screen re-reads the group. */
   onChanged?: () => void;
 }) {
   const [removing, setRemoving] = useState<RemovalTarget | null>(null);
   if (!answer) {
+    // NO READING EVER TAKEN: the failure is all there is to draw, said by
+    // QueryState like every other read's, so an authority refusal names its
+    // grants and a state-log one says that waiting will not clear it.
     return error ? (
       <Card>
         <Card.Header icon={<ServerGlyph size="sm" />}>Broker members</Card.Header>
-        <Callout variant="warning" role="alert">
-          <span>The broker&apos;s membership could not be read ({error}).</span>
-        </Callout>
+        <QueryState error={error} refusal={refusal} loading={false} />
       </Card>
     ) : null;
   }

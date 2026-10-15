@@ -6,6 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -762,7 +764,9 @@ type PendingRun struct {
 	// Requester is the seat whose message, notice or ask woke the turn
 	// that launched this run — the person a question addressed to
 	// "requester" means — and empty when nothing a seat said woke it (a
-	// schedule, a sender this company's chart does not know).
+	// schedule, a sender this company's org does not know). By the seat's
+	// handle, which is immutable (ADR-0013), so the row names the same
+	// seat for as long as the run is parked.
 	//
 	// ON THE ROW because the park that resolves the audience is not the
 	// frame that saw the trigger: it runs when the job finishes, possibly
@@ -1220,8 +1224,27 @@ type PendingStore interface {
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)
 
-	// ListActiveForSeat is the "is this seat busy?" read.
+	// ListActiveForSeat is the "is this seat busy?" read, by the HANDLE the
+	// seat runs under: the key this node's own per-seat bookkeeping counts
+	// by, which every caller of it — a node running the seat, recovering it
+	// or matching a reply to it — already holds.
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
+
+	// ListActiveForSeatID is the same seat's unfinished runs selected by its
+	// ID ([PendingRun.AgentID], read through the one parse its subjects
+	// take), for the reader that holds nothing else: a mailbox retirement.
+	//
+	// The retirement acts on what the mailbox is named by, and a mailbox
+	// the broker's listing alone found carries no handle — nothing the
+	// fleet still holds can say what the departed seat was called. Selected
+	// by a handle it holds none of, every run of such a seat was missed,
+	// and its subscriptions were deleted with its boxes still billed and no
+	// completion, answer or resume able to reach them again. The id is also
+	// the only exact answer: the same handle under a renamed organisation
+	// is another seat (ADR-0013), whose runs a handle would hand to the
+	// retirement of this one. [uuid.Nil] names no seat and is an error
+	// rather than the runs whose row names none.
+	ListActiveForSeatID(ctx context.Context, seat uuid.UUID) ([]PendingRun, error)
 
 	// RecordAnswer records a person's reply as the answer to the question a
 	// run is parked on, flipping it to [StatusAnswered], and hands back the
@@ -1407,9 +1430,8 @@ type ConversationRef struct {
 //
 // AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
 // tick or an A2A wake stored no conversation, and a wake that could not name
-// one carries none — so the one explicit check below is the one place two
-// absences would otherwise compare equal and make every such delivery the
-// answer to every such run.
+// one carries none — so two absences comparing equal would make every such
+// delivery the answer to every such run.
 func (c ConversationRef) Answers(run PendingRun) bool {
 	return run.ConversationKey != "" && run.ConversationKey == c.Identity
 }
@@ -1527,13 +1549,19 @@ type RecordedAnswer struct {
 	// the seat as an answer the run no longer takes.
 	Via types.AnswerVia `json:"via"`
 
-	// By is who gave it: the chat sender as the delivery's envelope names
-	// them, or the operator credential an answer by turn was given under.
-	By string `json:"by,omitempty"`
-
-	// BySeat is the person an answer by turn's credential is bound to, empty
-	// for a chat reply and for a credential nobody bound.
-	BySeat string `json:"by_seat,omitempty"`
+	// By, ByKind and OperatorID are who gave it, in the three halves
+	// iam.ActorFor makes of a principal — the author, what sort of author
+	// that is, and the credential the answer came through — exactly as the
+	// answer's own record states them ([types.SandboxRunAnswered]). For a
+	// chat reply, the sender as the delivery's envelope names them, a
+	// person, and no credential: the chat surface vouched for the sender and
+	// nothing of this engine's was presented ([chatAnswerer]). For an answer
+	// by turn, the author is the seat of a principal the identity directory
+	// binds to one and the login of anybody else, and the credential is the
+	// one the answer was given under.
+	By         string `json:"by,omitempty"`
+	ByKind     string `json:"by_kind,omitempty"`
+	OperatorID string `json:"operator_id,omitempty"`
 
 	// EventIDs are the deliveries the answer was made of. A copy of one of
 	// them reaching the seat again is the same answer, already recorded —
@@ -1605,18 +1633,21 @@ type RecordedAnswer struct {
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
 
-// attribution is who the resumed turn is told gave this answer: the person an
-// answer by turn names — or its credential, where nobody is bound to it — and
-// nobody for a chat reply, whose sender is already in the conversation the
-// resumed turn reports back to.
+// attribution is who the resumed turn is told gave this answer: the author an
+// answer by turn names — the seat of a bound principal, the login of anybody
+// else, as iam.ActorFor named them — and nobody for a chat reply, whose sender
+// is already in the conversation the resumed turn reports back to.
 func (a RecordedAnswer) attribution() string {
 	if a.Via != types.AnswerViaOperator {
 		return ""
 	}
-	if a.BySeat != "" {
-		return a.BySeat
-	}
 	return a.By
+}
+
+// answerer is who gave this answer, as its record announces them
+// ([Coordinator.announceAnswered]).
+func (a RecordedAnswer) answerer() answerer {
+	return answerer{by: a.By, kind: a.ByKind, operatorID: a.OperatorID}
 }
 
 // HandedBack is one copy of a declined answer's delivery, owed to the seat's

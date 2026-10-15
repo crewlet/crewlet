@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/queuetest"
@@ -20,8 +22,9 @@ func TestConformance(t *testing.T) {
 	queuetest.RunWith(t, newConformanceQueue, capabilities())
 }
 
-// TestInspectionClientsEndWithTheirTest pins that the inspection registry
-// holds a queue only while the test that opened it runs. Each entry holds a
+// TestInspectionClientsEndWithTheirTest pins that the inspection registry, and
+// the BrokerDown registry beside it, hold a queue only while the test that
+// opened it runs. Each entry holds a
 // whole broker, so one that outlives its test is a broker the binary keeps
 // until it exits — which is how a -count=20 run of this package reached
 // 12 GB and was killed.
@@ -37,9 +40,13 @@ func TestInspectionClientsEndWithTheirTest(t *testing.T) {
 
 	adminMu.Lock()
 	_, held := admins[q]
+	_, stoppable := servers[q]
 	adminMu.Unlock()
 	if held {
 		t.Fatal("the inspection registry still holds a queue whose test has ended, and through it the queue's whole broker")
+	}
+	if stoppable {
+		t.Fatal("the BrokerDown registry still holds a queue whose test has ended, and through it the queue's whole broker")
 	}
 }
 
@@ -62,13 +69,32 @@ func newConformanceQueue(t *testing.T, opts ...queue.Option) queue.EventQueue {
 // the node also took the broker down.
 func openForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
-	cfg = testTimings(cfg)
+	srv := startTestServer(t, testTimings(cfg))
+	return clientUnderTest(t, srv, srv.Server, opts...)
+}
+
+// testServer is a broker a TEST owns, beside the one stop its cleanup and the
+// BrokerDown capability both take.
+type testServer struct {
+	*Server
+	// stop shuts the server down ONCE, because the BrokerDown capability
+	// may stop it before the cleanup does, and [Server.Shutdown] is
+	// idempotent only when the two calls cannot overlap.
+	stop func()
+}
+
+// startTestServer starts a broker the test owns and stops it when the test
+// ends.
+func startTestServer(t *testing.T, cfg Config) testServer {
+	t.Helper()
 	srv, err := StartServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("StartServer: %v", err)
 	}
-	t.Cleanup(srv.Shutdown)
-	return clientUnderTest(t, srv, srv, opts...)
+	var shutdown sync.Once
+	stop := func() { shutdown.Do(srv.Shutdown) }
+	t.Cleanup(stop)
+	return testServer{Server: srv, stop: stop}
 }
 
 // testTimings shortens the timings a suite would otherwise wait out.
@@ -102,8 +128,9 @@ func testTimings(cfg Config) Config {
 }
 
 // clientUnderTest is a client of srv, built with opts, with an inspection
-// client of inspect registered beside it.
-func clientUnderTest(t *testing.T, srv, inspect *Server, opts ...queue.Option) *Queue {
+// client of inspect registered beside it — and srv's stop registered as the
+// way the BrokerDown capability takes the client's broker away.
+func clientUnderTest(t *testing.T, srv testServer, inspect *Server, opts ...queue.Option) *Queue {
 	t.Helper()
 	q, err := srv.Client(t.Context(), opts...)
 	if err != nil {
@@ -125,6 +152,7 @@ func clientUnderTest(t *testing.T, srv, inspect *Server, opts ...queue.Option) *
 	t.Cleanup(func() { _ = admin.Stop(context.WithoutCancel(t.Context())) })
 	adminMu.Lock()
 	admins[q] = admin
+	servers[q] = srv.stop
 	adminMu.Unlock()
 	// Registered after both Stops so it runs before them, and after every
 	// cleanup the case itself registers — those may still read through the
@@ -132,16 +160,19 @@ func clientUnderTest(t *testing.T, srv, inspect *Server, opts ...queue.Option) *
 	t.Cleanup(func() {
 		adminMu.Lock()
 		delete(admins, q)
+		delete(servers, q)
 		adminMu.Unlock()
 	})
 
 	return q
 }
 
-// admins maps a queue under test to the inspection client for its broker,
-// for as long as the test that opened the queue runs.
+// admins maps a queue under test to the inspection client for its broker, and
+// servers to what stops the broker it is a client of — the BrokerDown
+// capability's one way of taking a broker away — each for as long as the test
+// that opened the queue runs.
 //
-// THE ENTRY GOES WITH THE TEST, because both keys hold the whole broker: a
+// THE ENTRIES GO WITH THE TEST, because both keys hold the whole broker: a
 // Queue keeps its embeddedServer, and with it the nats-server and every
 // stream, buffer and subscription list it allocated. A package-level map that
 // is never pruned keeps every broker the package ever started — about 50 MB
@@ -150,7 +181,38 @@ func clientUnderTest(t *testing.T, srv, inspect *Server, opts ...queue.Option) *
 var (
 	adminMu sync.Mutex
 	admins  = map[*Queue]*Queue{}
+	servers = map[*Queue]func(){}
 )
+
+// takeBrokerDown stops the server q is a client of and returns once q's
+// connection has noticed, so the verb sent next meets a connection that is
+// down rather than racing the client's discovery of it.
+//
+// STOPPED, NOT PARTITIONED, because stopping is the one outage the harness can
+// produce exactly: the connection goes into the reconnect loop every
+// connection to a broker that went away goes into, and stays there for the
+// reconnect budget — far longer than any case takes to send its verbs.
+func takeBrokerDown(t *testing.T, q queue.EventQueue) {
+	t.Helper()
+	jq, ok := q.(*Queue)
+	if !ok {
+		t.Fatalf("BrokerDown called with a %T", q)
+	}
+	adminMu.Lock()
+	stop := servers[jq]
+	adminMu.Unlock()
+	if stop == nil {
+		t.Fatalf("BrokerDown called with a queue clientUnderTest did not open")
+	}
+	stop()
+	deadline := time.Now().Add(10 * time.Second)
+	for jq.nc.Status() == nats.CONNECTED {
+		if time.Now().After(deadline) {
+			t.Fatalf("the connection still reads CONNECTED 10s after its server stopped")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 // inspector returns the client to run a capability read through: the
 // long-lived admin client when there is one, else the queue itself.
@@ -232,6 +294,17 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 		Quiescing: func(q queue.EventQueue, topic, group string) bool {
 			return q.(*Queue).Quiescing(topic, group)
 		},
+
+		// THE QUEUE UNDER TEST, never the inspector: this counts what the
+		// client being certified asked the broker for, and the admin
+		// connection asked for none of it. Reading it through inspector()
+		// the way the two mail reads do would report zero for ever and
+		// pass the case vacuously.
+		ConsumerProposals: func(q queue.EventQueue) int {
+			return q.(*Queue).ConsumerProposals()
+		},
+
+		BrokerDown: takeBrokerDown,
 
 		// Deliberately NOT declared, each for a measured reason:
 		//

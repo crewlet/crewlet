@@ -12,7 +12,7 @@ import (
 // retentionBoot is a valid Tier A with a retention block to vary.
 func retentionBoot(t *testing.T, r config.TrackerRetention) config.Bootstrap {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.TrackerRetention = r
 	return b
 }
@@ -146,7 +146,7 @@ func TestAnAbsentRetentionBlockIsTheDefaults(t *testing.T) {
 	// AND THE DEFAULTS THEMSELVES SATISFY THE CROSS-FIELD RULE. A shipped
 	// default set that its own validator refuses is a deployment nobody
 	// can start.
-	shipped := config.DefaultBootstrap()
+	shipped := config.RunnableBootstrap()
 	if err := shipped.Validate(); err != nil {
 		t.Fatalf("the shipped defaults do not validate: %v", err)
 	}
@@ -241,6 +241,64 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 	}
 }
 
+// A LOG THAT GROWS WITH NO CORPUS TAKES A FLOOR WELL UNDER ONE THAT DOES, and
+// that is a decision rather than an accident.
+//
+// # What a ceiling costs before a byte is written
+//
+// The broker grants a stream its WHOLE ceiling when it creates it, so a
+// domain's floor is free space a node must have before it can boot at all. The
+// identity log grows with headcount and sign-ins and the usage log with a
+// census of seats and schedules — neither with a corpus the operator's volume
+// has anything to say about — and a ten-person company writes a few megabytes
+// to either. Held to the gibibyte the corpus-sized logs take, each would raise
+// the disk the smallest deployment needs by a gibibyte for a log it will never
+// fill.
+//
+// The floor the corpus-sized logs take belongs to them: a mutation log under a
+// gibibyte really is a window that refuses appends within a week of a company
+// starting work.
+//
+// SO THE ASSERTION IS THE RELATION, not the number: these floors must stay well
+// under the corpus floor, because that is the property that keeps adding a
+// domain from raising what a deployment needs. The margin is deliberately
+// loose — what would be wrong is either creeping back up to the others' floor,
+// not its exact value.
+func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
+	t.Parallel()
+
+	// THE THREE CORPUS-SIZED FLOORS, read through a map rather than
+	// compared as constants: they are equal today, and `go vet` reads a
+	// constant comparison that cannot be false as a mistake.
+	corpus := map[string]int64{
+		"tracker_log_max_bytes":     config.TrackerLogMaxBytesFloor,
+		"pages_log_max_bytes":       config.PagesLogMaxBytesFloor,
+		"tracker_vectors_max_bytes": config.TrackerVectorsMaxBytesFloor,
+	}
+	corpusFloor := config.TrackerLogMaxBytesFloor
+	for name, floor := range corpus {
+		if floor != corpusFloor {
+			t.Fatalf("%s's floor is %d and the others take %d, so the "+
+				"corpus-sized logs no longer share one floor and this "+
+				"comparison has nothing to hold the others against",
+				name, floor, corpusFloor)
+		}
+	}
+	for name, floor := range map[string]int64{
+		"iam_log_max_bytes":   config.IamLogMaxBytesFloor,
+		"usage_log_max_bytes": config.UsageLogMaxBytesFloor,
+	} {
+		if floor*4 > corpusFloor {
+			t.Errorf("%s's floor is %d bytes and a corpus-sized log's is %d.\n"+
+				"A ceiling is granted in full at create time, so a floor is "+
+				"free space every node must have before it boots — and this "+
+				"log grows with no corpus. Keep it well under the floor the "+
+				"corpus logs take, or the smallest deployment pays a "+
+				"gibibyte for a log it never fills.", name, floor, corpusFloor)
+		}
+	}
+}
+
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, FROM THE VOLUME.
 //
 // The peak is a model change republishing every source at once — the whole
@@ -304,7 +362,7 @@ func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 			"the peak of 10 000 seats in their fifth year (%d)",
 			config.TrackerVectorsMaxBytesCeiling, int64(2*largest))
 	}
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.TrackerVectorsMaxBytes = 2 * largest
 	if err := b.Validate(); err != nil {
 		t.Errorf("a vector changelog sized for 10 000 seats in their fifth year "+
@@ -317,6 +375,7 @@ func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 func TestTheByteCeilingsAreBounded(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
+	const mib = int64(1) << 20
 	for name, tc := range map[string]struct {
 		mutate func(*config.Bootstrap)
 		accept bool
@@ -333,9 +392,22 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
 		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		// THE IDENTITY LOG AND THE USAGE LOG TAKE A FLOOR OF THEIR OWN,
+		// well under the gibibyte the corpus-sized logs take: neither
+		// grows with a corpus, and a floor is free space every node must
+		// have before it boots. See
+		// TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes.
+		"identity below its floor": {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = mib*64 - 1 }, false, "iam_log_max_bytes"},
+		"identity at its floor":    {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = mib * 64 }, true, ""},
+		"identity at 16 GiB":       {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = 16 * gib }, true, ""},
+		"identity past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = 16*gib + 1 }, false, "iam_log_max_bytes"},
+		"usage below its floor":    {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = mib*64 - 1 }, false, "usage_log_max_bytes"},
+		"usage at its floor":       {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = mib * 64 }, true, ""},
+		"usage at 64 GiB":          {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64 * gib }, true, ""},
+		"usage past 64 GiB":        {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64*gib + 1 }, false, "usage_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			tc.mutate(&b)
 			err := b.Validate()
 			if tc.accept {
@@ -395,18 +467,51 @@ func TestTheSnapshotDirectoryResolvesAgainstTheStore(t *testing.T) {
 func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
+	const mib = int64(1) << 20
 	for name, tc := range map[string]struct {
 		mutate func(*config.Bootstrap)
 		accept bool
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// FIVE: four state logs at their one-gibibyte floor, and one for
-		// every stream that reserves nothing. Four was the floor with three.
-		"below five gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5*gib - 1 }, false, "store_max_bytes"},
-		"at five gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5 * gib }, true, ""},
-		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
-		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// SIX: what five state logs reserve at their smallest unset
+		// ceilings (4.5 GiB), and about 1.5 GiB for every stream that
+		// reserves nothing.
+		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
+		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
+		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// THE FLOOR IS WHY THE FLOOR MOVED. Five state-log domains at the
+		// ceilings they take unset come to 4.5 GiB, which fits the old
+		// five-gibibyte limit — and the cross-field rule below refuses
+		// only a sum GREATER than the limit, so at five this document
+		// validated and the node was left half a gibibyte for every
+		// mailbox, the event stream and every coordination bucket. The
+		// floor is what moves that refusal forward to `crewlet validate`.
+		"every domain at its unset size inside the floor": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 6 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
+			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
+			b.Stream.IamLogMaxBytes = 512 * mib
+		}, true, ""},
+		"every domain at its unset size inside the old limit": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 5 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
+			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
+			b.Stream.IamLogMaxBytes = 512 * mib
+		}, false, "store_max_bytes"},
+		// EACH OF THE FIVE IS IN THE SUM: ceilings that fit exactly, and
+		// the one log that tips them past the limit.
+		"tipped past it by the knowledge base's log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 16 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 8*gib, 4*gib
+			b.Stream.PagesLogMaxBytes = 4*gib + 1
+		}, false, "pages_log_max_bytes"},
+		"tipped past it by the identity log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.IamLogMaxBytes = 64 * mib
+		}, false, "iam_log_max_bytes"},
 		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
 		// case whose document has a second problem passes on whichever
 		// of the two fires, which would leave this rule uncovered.
@@ -427,8 +532,6 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 		}, false, "store_max_bytes"},
-		// THE USAGE LOG IS IN THE SUM: three ceilings that fit exactly, and a
-		// fourth that tips them past the limit.
 		"tipped past it by the usage log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 48 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
@@ -436,7 +539,7 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		}, false, "usage_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			tc.mutate(&b)
 			err := b.Validate()
 			if tc.accept {
@@ -455,37 +558,26 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 	}
 }
 
-// A STORE LIMIT ON A BROKER WITH NO STORE BOUNDS NOTHING, and says so.
+// A STORE LIMIT ON A BROKER WITH NO STORE IS REFUSED WITH THE BROKER.
 //
 // An embedded server with no `store_dir` holds its streams in MEMORY, where a
 // ceiling is reserved against the memory allowance rather than against this
-// number. The configuration is valid — a test, an ingress-only node — so it is
-// a warning; what it must not be is silent, because the pair reads exactly
-// like "I have bounded this node's broker".
-func TestAStoreLimitWithNoStoreDirectoryIsCalledOut(t *testing.T) {
+// number, so the pair reads exactly like "I have bounded this node's broker"
+// and bounds nothing. That was a warning while such a node was valid; every
+// node keeps its state logs on the stream from boot now, so the missing
+// directory is refused ([config.Stream.Durable]) and the limit goes with it —
+// no deployment is left standing for a warning to describe.
+func TestAStoreLimitWithNoStoreDirectoryIsRefusedWithIt(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.StoreDir, b.Stream.StoreMaxBytes = "", 16<<30
-	if err := b.Validate(); err != nil {
-		t.Fatalf("refused a valid document: %v", err)
+	err := b.Validate()
+	if err == nil || !strings.Contains(err.Error(), "stream.store_dir") {
+		t.Fatalf("Validate = %v, want the missing store directory refused", err)
 	}
 
-	var found bool
-	for _, w := range b.Warnings() {
-		if strings.Contains(w.Path, "store_max_bytes") {
-			found = true
-			if !strings.Contains(w.Message, "memory") {
-				t.Errorf("the warning does not say what does bound those "+
-					"streams: %q", w.Message)
-			}
-		}
-	}
-	if !found {
-		t.Error("a store limit on an in-memory broker was not mentioned at all")
-	}
-
-	// AND IT IS NOT RAISED ON A BROKER THAT HAS A STORE, or it is noise on
-	// every deployment that configured the field correctly.
+	// AND A LIMIT BESIDE A STORE DIRECTORY IS NOT WARNED ABOUT, or it is
+	// noise on every deployment that configured the field correctly.
 	b.Stream.StoreDir = t.TempDir()
 	for _, w := range b.Warnings() {
 		if strings.Contains(w.Path, "store_max_bytes") {

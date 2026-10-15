@@ -5,7 +5,7 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a model is a `providers.llm`
  * entry, so the write is the entity PUT at `/config/llm-providers/{id}`
- * through `protocol/configWrite.ts`, guarded by the operator credential
+ * through `protocol/configWrite.ts`, guarded by Admin
  * (`useConfigWriteAccess`). It states the revision it was read from, so a
  * colleague's save in between is a conflict to re-read rather than an
  * overwrite.
@@ -53,7 +53,8 @@ import {
   type ModelForm,
 } from "~/lib/models.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -87,7 +88,7 @@ type SaveState =
 function refusalWords(refusal: ConfigRefusal, id: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so nothing was changed.";
+      return configGuardedReason(refusal.code);
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":
@@ -113,6 +114,7 @@ export function EditModelDialog({
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useConfigWriteAccess();
   const { names: secrets, refresh } = useSecretNames();
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
@@ -262,7 +264,7 @@ export function EditModelDialog({
     : loaded.kind !== "entity"
       ? "The model has not been read."
       : busy
-        ? "Waiting for the engine to answer."
+        ? waiting.reason
         : unchanged
           ? "Nothing has changed."
           : undefined;

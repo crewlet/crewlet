@@ -19,8 +19,8 @@ import (
 // # Without it the vector domain is a log nobody writes to
 //
 // Everything downstream of a vector existed and was certified: the domain is
-// registered, its applier writes `kb_vectors` on every node, the two-stage
-// retrieval reads them and the fusion ranks them. What did not exist was the
+// registered, its applier writes `kb_vectors` on every data node, the
+// two-stage retrieval reads them and the fusion ranks them. What did not exist was the
 // only thing that ever PUBLISHES a vector record — so a company's semantic
 // search returned nothing, for ever, while every surface reported a healthy
 // domain applying a log that happened to be empty. That is the worst shape a
@@ -33,8 +33,8 @@ import (
 // needs the same vector. Run per node it would be N bills for one value, and
 // N nodes racing to publish records whose subject is the source's own identity
 // — which the broker would arbitrate correctly and charge for anyway. So one
-// node holds a named lease, publishes, and every node's applier writes the
-// rows. This file is where that lands for the same reason the trim's is:
+// node holds a named lease, publishes, and every data node's applier writes
+// the rows. This file is where that lands for the same reason the trim's is:
 // `engine` is the entanglement point, the one package that holds the company's
 // provider, the state log's publisher and the fleet's leases at once.
 //

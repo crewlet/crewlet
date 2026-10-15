@@ -15,6 +15,11 @@ import (
 )
 
 // Conversations is what this seat already said in one thread, issue or channel.
+//
+// EVERY `handle` HERE IS THE SEAT'S HANDLE, which is what
+// `conversation_sessions.agent_handle` holds, and memory replication carries
+// the row between peers by that column's name. See internal/learning's
+// package doc for the rule every memory table follows.
 type Conversations interface {
 	// Append records one turn's entry.
 	//

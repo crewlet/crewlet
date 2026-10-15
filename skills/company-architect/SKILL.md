@@ -63,7 +63,8 @@ one of `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`,
 the problem is about a seat, a unit, or a line the parser pointed at. Two
 seats sharing a name are one problem beside each seat. A **warning** never
 fails validation, but it is a reference that resolves to nothing (a `lead`,
-a `unit:`, a `manages` entry, a GitLab access level): fix every one before you
+a `unit:`, a `manages` entry, a GitLab access level — each a handle or a
+key that matches nothing): fix every one before you
 report the company finished, since nothing else will ever point at it.
 
 **2. No `crewlet`, but you can run code** (catches nearly everything):
@@ -95,14 +96,18 @@ you didn't run.
 These survive a clean schema pass, so check them yourself on every
 config — rungs 2 and 3 especially:
 
-- **`lead` names a role that exists.** A unit whose `lead` doesn't match
-  any role name silently gets no lead (it's only a warning even in
-  `crewlet validate`, because roles can be added incrementally).
-- **Every `manages` entry names a real role or unit.** Same class of
-  silent miss.
-- **Every human seat has at least one `contact` identity** — it is how
-  an inbound message finds the person, and the schema cannot say "at
-  least one of these keys".
+- **`lead` is the HANDLE of a seat that exists.** A unit whose `lead`
+  doesn't match any seat's handle silently gets no lead (it's only a
+  warning even in `crewlet validate`, because roles can be added
+  incrementally). A display name there resolves to nobody.
+- **Every `manages` entry is a real seat handle or unit key.** Same class
+  of silent miss.
+- **A human seat with no `contact` identity is legal and worth a look.** It
+  passes the schema and `crewlet validate` alike — a person who works only
+  through the dashboard has no chat account to declare — but `crewlet
+  validate` prints an advisory, because nothing addressed to that seat on a
+  chat surface reaches anybody. Give it one for the surface the company runs
+  unless that is the intent.
 - **Every `knowledge.*` scope list names a backend the config actually
   configures.** A scope for a backend with no integration block narrows
   nothing, and `crewlet validate` refuses it.
@@ -136,7 +141,11 @@ live-editable, so the first version does not need to be the last.
    who leads what, who reports to whom. Names, one-line goals, and a
    sentence of backstory each. This is 90% of the config.
 3. **Where does the founder sit?** They should be *in* the chart — see
-   the founder seat under invariants.
+   the founder seat under invariants. And who else will sign in? Every
+   person who uses the dashboard holds a `kind: human` seat of their own,
+   from the moment they join until they are removed — they are invited or
+   created *onto* it — so each human teammate needs one too, and a
+   company with no human seat can admit nobody.
 4. **What surfaces does the work live on?** Chat and the code host are
    the ones to ask about; the tracker and the knowledge base **ship with
    the engine and are on by default**, so a founder needs a positive
@@ -150,7 +159,10 @@ live-editable, so the first version does not need to be the last.
 
    Give each unit a `project` and a `space` in the first pass regardless:
    on the default backends that is the whole setup, and it is what gives
-   a team somewhere to file work and write things down.
+   a team somewhere to file work and write things down — the native
+   knowledge base creates a page only in a declared space (a unit's or a
+   seat's `space`, `knowledge.root_space`, or the tool-skills container),
+   exactly as the tracker files work only in a declared project.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Ask whether they want a cost ceiling, and on which window:
    `token_budget` is a mapping of `day`, `week` and `month` ceilings on the
@@ -209,29 +221,52 @@ reinvent them:
 Get these wrong and the fix is expensive or lossy. The schema cannot
 catch most of them.
 
-**Handles are permanent.** An agent's durable id is
-`uuid5(ns, f"{org.name}:{handle}")`. Changing a seat's `handle` — or the
-company `name` — mints a new id and orphans that agent's diary,
-onboarding markers, and counterparty profiles. Its memory is gone.
-Settle `name` and each `handle` before the company runs, and warn the
-founder explicitly if they later ask to rename either.
+**The company `name` and every handle are permanent.** An agent's durable
+id is `uuid5(ns, f"{org.name}:{handle}")`, and a document that gives a seat
+a different handle removes that seat and adds a new one with an empty
+mailbox and no memory. Every write stores the handle a seat leaves out —
+derived from its name — so correcting a seat's `name` by editing the STORED
+company (the org builder, `PATCH /config`, the per-entity routes) keeps its
+handle, its mailbox, its lease, its diary, its onboarding markers and its
+scheduled work. A FILE is minted afresh on every import: correct a `name` in
+a file that leaves the `handle` out, import it, and the seat is replaced —
+an agent seat with no warning. So every file you write declares `handle`
+on every seat and `id` on every unit. Changing the company `name` mints a
+new id for every agent and orphans every one of those things — settle it
+before the company runs, and warn the founder explicitly if they later ask
+to change it.
 
-**Seat names and unit names are unique across the whole company.** A
-`lead` and a `manages` entry name a seat, a `manages` entry and a root
-seat's `unit:` name a unit, and each resolves to the first match anywhere
-in the tree. Two teams called `Platform` under different departments, or
-two seats called `Software Engineer` with different handles, are refused by
-`crewlet validate` and by every config write. Give each its own name
-(`Payments Platform`, `Software Engineer 2`).
+**Nothing is referenced by a display name.** A `lead` and a `manages`
+entry name a seat by its **handle**; a `manages` entry and a root seat's
+`unit:` name a unit by its **key** (its `id`, or its name where it
+declares none). A `name` on a seat or a unit is prose a founder edits, so
+writing one into a reference is how a chart comes apart on the first
+rename. Write handles and keys, and set both explicitly.
 
-**Set a unit `id` when the team's name may be rewritten.** A unit's name is
-prose and gets renamed; `id` (lowercase, starting with a letter, e.g.
-`id: eng`) is chosen once and read by nobody, and it is what work filed into
-that team is keyed on — so a rename moves nothing. It is optional, and a unit
-without one is keyed by its name, which is why adding one later is safe:
-filters match a team by its id *or* its name, so work filed under either is
-still found. An `id` must not collide with another unit's name — that pair is
-refused as one key, exactly like two units of the same name.
+**Every unit needs an `id`, and it is minted from the name if you leave
+it out — afresh on every import of a file.** The id is the unit's key —
+lowercase letters, digits, `-` and `_`, starting with a letter — chosen
+once and read by nobody, so it can be short and dull (`engineering`,
+`platform`). Write it yourself, on every unit, so renaming a team in the
+file moves nothing.
+
+**Handles and unit keys are unique across the whole company; names are
+not.** Each reference resolves to the first match anywhere in the tree, so
+two units answering to one key silently share one team's work, routing and
+pages, and two seats on one handle share one inbox — `crewlet validate`
+refuses both, and so does every write. A `name` is prose and may repeat:
+two seats called `Software Engineer` are fine on two handles, but two that
+declare no `handle` derive the same one and are refused for that. Prefer
+names a reader can tell apart anyway (`Software Engineer 2`), since a
+colleague asked for by a shared name is offered every seat that carries it,
+and give every seat an explicit `handle` and every unit its own `id`.
+
+**A unit's `id` is what work filed into that team is keyed on.** A unit's
+name is prose and gets renamed; its `id` (lowercase, starting with a letter,
+e.g. `id: eng`) is chosen once and read by nobody, so renaming the team moves
+nothing while the `id` stays. Two units on one key are refused, a minted key
+included: a unit that leaves `id` out collides with any unit whose `id` is
+the key its name mints.
 
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
@@ -282,29 +317,36 @@ env vars for `stdio` servers, HTTP headers for `http` ones. A unit's
 `mcp_env` is inherited by its direct agent roles, with the role's own value
 winning per key. Human seats inherit none and may not declare one.
 
-**`manages` accepts unit names as well as role names.** A unit name
-expands to every role in it and its descendants. If a name matches both,
-the role wins. A unit lead auto-manages every direct member that no other
-direct member of that unit already manages (a unit name in a member's
-`manages` counts for every seat it reaches), and a child unit with no
-`lead` inherits its parent's.
+**`manages` accepts unit keys as well as seat handles.** A unit key
+expands to every seat in it and its descendants. If one token is both a
+handle and a key, the seat wins. A unit lead auto-manages every direct
+member that no other direct member of that unit already manages (a unit
+key in a member's `manages` counts for every seat it reaches), and a
+child unit with no `lead` inherits its parent's.
 
 **Put the founder in the chart.** A human seat at the root, above the
 top agent, so escalation terminates at a person and agents recognise
-their activity in chat / the tracker / the code host:
+their activity in chat / the tracker / the code host. It is not optional:
+it is also the seat the founder **joins on**, since every person who signs
+in holds exactly one human seat and is put onto it rather than given one
+later:
 
 ```yaml
 roles:
   - name: Jane Founder
+    handle: jane-founder    # declared: an import mints a missing one from the name
     kind: human
-    manages: [CEO]
+    manages: [ceo]          # the CEO seat's handle, never its display name
     contact: { mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}" }
 ```
 
 `kind: human` seats are addressable but never spawned: no runtime, no
-inbox, no LLM. They require at least one `contact` identity and reject
-the runtime-only fields. Scope their `manages` to the top roles — a
-founder managing every seat floods them. See
+inbox, no LLM. They reject the runtime-only fields, and `contact` is
+optional: a person with none works through the dashboard only, agents
+cannot @-mention them, and `crewlet validate` warns about the seat at its
+`contact`. Scope their `manages` to the top roles — a
+founder managing every seat floods them. Give every other person who will
+sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and
@@ -394,6 +436,20 @@ crewlet validate company.yaml
 crewlet run crewlet.yaml -company company.yaml
 # dashboard on the configured api.port
 ```
+
+5. How they join it. Nobody holds a password until they are put on a
+   seat, and the API token is what puts the first person on theirs — so
+   its `grants` must list `admin` (`grants: [admin]`), which runs the
+   company and includes both apps, and the node's `api.auth.admin` must be
+   `serve`. Sign in at the dashboard with the API token, open **Agents › Org
+   chart**, open the founder's seat (drawn **Vacant**) and press
+   **Invite**, then open the link it shows once and choose a login and a
+   password — or, from a shell, `crewlet iam invite <address> -seat
+   jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
+   after them is invited or created from their own vacant seat the same
+   way, by an administrator — with both apps (Tracker, Knowledge) ticked by
+   default, and Admin only for the people who run the company. See [How the first person
+   exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:
 [Configuration](https://docs.crewlet.ai/engine/latest/getting-started/configuration/). Two-tier

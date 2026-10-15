@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -27,7 +29,7 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
-		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
 		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
 		Requester: "ada",
 	}, Fence{}); err != nil {
@@ -61,8 +63,8 @@ func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 // question — which no answer this build delivers does.
 func givenFor(turnID string) (types.SandboxAnswerGiven, *events.Event) {
 	given := types.SandboxAnswerGiven{
-		TurnID: turnID, AgentHandle: "swe", Answer: "use the release branch",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+		TurnID: turnID, Agent: sweID, AgentHandle: "swe", Answer: "use the release branch",
+		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 	}
 	return given, events.New(given, events.TraceContext{})
 }
@@ -164,9 +166,9 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 		t.Fatalf("published %d sandbox_run_answered, want one", len(records))
 	}
 	want := types.SandboxRunAnswered{
-		Agent: "a-1", AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
+		Agent: sweID, AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
 		Via: types.AnswerViaOperator, Outcome: types.AnswerResumed,
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 	}
 	if got := records[0]; got != want {
 		t.Errorf("sandbox_run_answered = %+v, want %+v", got, want)
@@ -351,12 +353,15 @@ func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 }
 
 // THE DESK WILL NOT DELIVER ONE: an answer naming no question would only be
-// spent by the node holding the seat, so it is refused before anything is put
-// on the seat's inbox.
+// spent by the node holding the seat, so it is refused before anything is read
+// or put on the seat's inbox. The run exists, so the answer naming its question
+// afterwards is delivered — the desk reads the row for the seat it addresses.
 func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
+	launchScheduled(t, rig, "t1")
+	store := &refusingStore{inner: rig.pending}
+	desk := AnswerDesk{Pending: store, Queue: rig.queue}
 	given, _ := givenFor("t1")
 	before := rig.queue.count()
 	if err := desk.Deliver(t.Context(), given); err == nil {
@@ -364,6 +369,10 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 	}
 	if rig.queue.count() != before {
 		t.Fatal("the desk published an answer it refused")
+	}
+	if calls := store.calls(); len(calls) != 0 {
+		t.Fatalf("the store was asked %v: an answer naming no question is refused before "+
+			"the run is read", calls)
 	}
 	given.LaunchID = "launch-1"
 	if err := desk.Deliver(t.Context(), given); err != nil {
@@ -440,7 +449,8 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 	}
 	got := rig.get("t1")
 	if got.Status != StatusAnswered || got.Answer == nil || got.Answer.Via != types.AnswerViaOperator ||
-		got.Answer.By != "founder-token" || got.Answer.BySeat != "founder" ||
+		got.Answer.By != "founder" || got.Answer.ByKind != "human" ||
+		got.Answer.OperatorID != "pat:founder-token" ||
 		!slices.Equal(got.Answer.EventIDs, []string{ev.ID.String()}) {
 		t.Fatalf("run %q answer %+v, want the answer by turn recorded on it, owed its resume",
 			got.Status, got.Answer)
@@ -460,7 +470,8 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 	rig.finished("t1")
 	records := rig.answeredRecords()
 	if len(records) != 1 || records[0].Via != types.AnswerViaOperator || records[0].Outcome != types.AnswerResumed ||
-		records[0].AnsweredBy != "founder-token" || records[0].AnsweredBySeat != "founder" {
+		records[0].AnsweredBy != "founder" || records[0].AnsweredByKind != "human" ||
+		records[0].OperatorID != "pat:founder-token" {
 		t.Fatalf("announced %+v, want one operator answer that resumed the run", records)
 	}
 }
@@ -524,7 +535,7 @@ func (r *coordRig) lastInboxEvent(t *testing.T) *events.Event {
 	r.queue.mu.Lock()
 	defer r.queue.mu.Unlock()
 	for i := len(r.queue.published) - 1; i >= 0; i-- {
-		if p := r.queue.published[i]; p.topic == topics.AgentInbox("swe") {
+		if p := r.queue.published[i]; p.topic == sweInbox() {
 			return p.event
 		}
 	}
@@ -558,6 +569,10 @@ func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
 		got.TurnID != "t1" || got.AnsweredBy != reply.Actor() || got.AnsweredBy == "" {
 		t.Fatalf("recorded %+v, want a chat resume answered by %q", got, reply.Actor())
 	}
+	if got.AnsweredByKind != "human" || got.OperatorID != "" {
+		t.Errorf("a chat answer is recorded as kind %q via %q, want a person and no "+
+			"credential: the chat surface vouched for the sender", got.AnsweredByKind, got.OperatorID)
+	}
 	if got.WorkItem == nil || *got.WorkItem != rigItem {
 		t.Errorf("the record names item %v, want the run's %v", got.WorkItem, rigItem)
 	}
@@ -580,6 +595,91 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 	}
 	if records := rig.answeredRecords(); len(records) != 0 {
 		t.Fatalf("a message that answered nothing was recorded as %+v", records)
+	}
+}
+
+// AN ANSWER IS ROUTED BY THE SEAT'S ID. One that reaches a seat that does not
+// hold the run is dropped — resuming it would re-enter another seat's
+// conversation as this one.
+func TestAnAnswerByTurnIsMatchedToItsRunBySeatID(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launchScheduled(t, rig, "t1")
+	parksOnAQuestion(t, rig, "t1")
+
+	// Against the question the run waits on, so the seat is the one thing
+	// wrong with it: an answer naming no question is spent before the run
+	// is read at all.
+	given, _ := givenAgainst(t, rig, "t1")
+	given.Agent = "0198f3a4-0000-7000-8000-000000000002"
+	ev := events.New(given, events.TraceContext{})
+	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
+	if err != nil || disposition != AnswerNotMine {
+		t.Fatalf("AnswerByTurn = %q, %v, want not_mine", disposition, err)
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Fatalf("an answer addressed to another seat resumed the run %d times", n)
+	}
+	if records := rig.answeredRecords(); len(records) != 0 {
+		t.Fatalf("a misrouted answer was recorded as %+v, want nothing", records)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Errorf("the run is %q, want it still waiting for its own answer", got.Status)
+	}
+}
+
+// THE DESK ADDRESSES THE RUN'S OWN SEAT. Whatever the caller's copy of the run
+// said, the answer goes to the inbox of the seat ID on the row, stamped with
+// it, so the dispatcher's own check against the row passes on the holder and
+// nowhere else — and the question it answers stays the one the caller named,
+// never the one the desk's own read finds.
+func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	seat := uuid.MustParse("0198f3a4-1c2b-7d3e-8f40-5a6b7c8d9e0f")
+	opened, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+		TurnID: "t9", AgentHandle: "swe", AgentID: seat.String(), Role: "SWE",
+		CodingAgent: "claude-code", CreatedAt: rig.now,
+	}, Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
+
+	given := types.SandboxAnswerGiven{
+		TurnID: "t9", Agent: "a-stale", AgentHandle: "old-handle", Answer: "use main",
+		AnsweredBy: "founder", AnsweredByKind: "human", LaunchID: "the-question-the-person-read",
+	}
+	if err := desk.Deliver(t.Context(), given); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	var delivered []publication
+	for _, p := range rig.queue.published {
+		if _, ok := p.event.Data.(*types.SandboxAnswerGiven); ok {
+			delivered = append(delivered, p)
+		}
+	}
+	if len(delivered) != 1 {
+		t.Fatalf("published %d answers, want one", len(delivered))
+	}
+	if want := topics.AgentInbox(seat); delivered[0].topic != want {
+		t.Errorf("the answer went to %q, want the run's seat inbox %q", delivered[0].topic, want)
+	}
+	got := delivered[0].event.Data.(*types.SandboxAnswerGiven)
+	if got.Agent != seat.String() {
+		t.Errorf("the answer is stamped for seat %q, want the row's %q", got.Agent, seat)
+	}
+	if got.LaunchID != given.LaunchID || got.LaunchID == opened.LaunchID {
+		t.Errorf("the answer names question %q, want the caller's %q and never the row's "+
+			"current %q", got.LaunchID, given.LaunchID, opened.LaunchID)
+	}
+
+	if err := desk.Deliver(t.Context(), types.SandboxAnswerGiven{
+		TurnID: "gone", Answer: "x", LaunchID: "x",
+	}); err == nil {
+		t.Error("an answer to a run that has no row was delivered somewhere")
 	}
 }
 
@@ -615,13 +715,14 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 
 	next := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	revivedUnder(t, rig, 2, 1)
-	if got := rig.get("t1").Answer; got.Via != types.AnswerViaOperator || got.BySeat != given.AnsweredBySeat {
-		t.Fatalf("revived answer %+v, want the answer by turn with the person it names", got)
+	if got := rig.get("t1").Answer; got.Via != types.AnswerViaOperator || got.By != given.AnsweredBy ||
+		got.ByKind != given.AnsweredByKind || got.OperatorID != given.OperatorID {
+		t.Fatalf("revived answer %+v, want the answer by turn with who gave it", got)
 	}
 	next.fireRetries()
 	resumedOnceWith(t, rig, next, given.Answer)
-	if calls := next.resumer.calls(); !strings.Contains(calls[0].Answer, given.AnsweredBySeat) {
-		t.Fatalf("resumed with %q, want the answer attributed to %q", calls[0].Answer, given.AnsweredBySeat)
+	if calls := next.resumer.calls(); !strings.Contains(calls[0].Answer, given.AnsweredBy) {
+		t.Fatalf("resumed with %q, want the answer attributed to %q", calls[0].Answer, given.AnsweredBy)
 	}
 }
 

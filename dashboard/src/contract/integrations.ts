@@ -149,7 +149,10 @@ export interface IntegrationRow {
   reconcile?: ReconcileStatus | null;
   /**
    * The public base URL this surface's registration at the third-party app
-   * points at, and whether it is still the one in force.
+   * points at, and whether it is still the one in force — compared with the
+   * address vendors reach this deployment at (the setup listing's
+   * `external_url`: the public listener's where one is configured), never
+   * with the address people reach the dashboard at.
    *
    * `endpoint_current` is three-valued: null is "nothing has recorded an
    * address for this surface", which is not the same claim as "the address

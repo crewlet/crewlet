@@ -90,6 +90,7 @@ export function Diaries() {
       />
       <QueryState
         error={overview.error}
+        refusal={overview.refusal}
         loading={overview.loading && !overview.data}
         empty={
           overview.data && rows.length === 0
@@ -111,7 +112,7 @@ export function Diaries() {
           <DataGrid<MemoryOverviewSeat>
             name="diaries"
             rows={rows}
-            rowKey={(r) => r.handle}
+            rowKey={(r) => r.agent_id}
             defaultSort="agent"
             rowHref={(r) => href(["knowledge", "diaries", r.handle])}
             columns={[
@@ -248,7 +249,7 @@ export function Diary({ handle }: { handle: string }) {
           left under that handle.
         </Callout>
       )}
-      <QueryState error={memory.error} loading={memory.loading && !data}>
+      <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
         {data?.held_by === "none" ? (
           <EmptyState
             icon={<BrainGlyph size="xl" />}

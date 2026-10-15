@@ -44,7 +44,7 @@ type answerBoard struct {
 func (b *answerBoard) Publish(_ context.Context, topic string, ev *events.Event) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if topic == topics.AgentInbox("swe") {
+	if topic == fixtureInbox("swe") {
 		b.inbox = append(b.inbox, ev)
 		return nil
 	}
@@ -137,7 +137,7 @@ func (w *spentWorld) parked(t *testing.T, h *spentHolder) sandbox.PendingRun {
 	t.Helper()
 	ctx := t.Context()
 	if _, err := h.coordinator.Launch(ctx, w.manager, sandbox.LaunchRequest{
-		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: "a-1", AgentHandle: "swe", Role: "SWE"},
+		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
 		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
@@ -170,8 +170,9 @@ func (w *spentWorld) claimedBy(t *testing.T, run sandbox.PendingRun, given *even
 	}
 	if _, ok, err := w.store.RecordAnswer(ctx, "t1", run.LaunchID, sandbox.RecordedAnswer{
 		Text: payload.Answer, Via: types.AnswerViaOperator, By: payload.AnsweredBy,
-		BySeat: payload.AnsweredBySeat, EventIDs: []string{given.ID.String()},
-		Events: []json.RawMessage{raw}, PostedAt: given.Timestamp, RecordedAt: time.Now().UTC(),
+		ByKind: payload.AnsweredByKind, OperatorID: payload.OperatorID,
+		EventIDs: []string{given.ID.String()},
+		Events:   []json.RawMessage{raw}, PostedAt: given.Timestamp, RecordedAt: time.Now().UTC(),
 	}, lease); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}

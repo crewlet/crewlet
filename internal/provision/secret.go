@@ -8,8 +8,8 @@ import (
 
 // Secret is what [MintSecret] settled on for one company-level credential.
 type Secret struct {
-	// Value is what the caller should register with. Empty only where
-	// NoKeyring is set or an error was returned.
+	// Value is what the caller should register with. Empty only where an
+	// error was returned.
 	Value string
 
 	// Minted is whether a FRESH value was created on this run.
@@ -27,13 +27,6 @@ type Secret struct {
 	// this process made — gitlab's HookDigest puts a digest of the key in
 	// the hook's description for exactly that reason.
 	Minted bool
-
-	// NoKeyring is a run that had to mint and had nowhere to seal the
-	// result. It is a POSTURE TO REPORT, not an error: no pass will ever
-	// succeed until somebody sets secrets.keys, so raising it makes the
-	// loop retry for ever while telling an operator the engine is working
-	// on it. See [ReadOnly].
-	NoKeyring bool
 }
 
 // MintSecret settles what a run should register a webhook with, and mints one
@@ -73,9 +66,8 @@ type Secret struct {
 //
 // # One implementation, because it was four and they disagreed
 //
-// jira asked the sink and reported the keyring; gitlab asked neither;
-// confluence and github asked neither and faulted for ever on a node with no
-// keyring. Three copies of one rule, each missing a different half of it.
+// jira asked the sink; gitlab, confluence and github did not. Four copies of
+// one rule, three of them missing its first half.
 //
 // The caller supplies mint because the SHAPE is the one genuinely
 // vendor-specific part: gitlab's self-hosted host requires a `whsec_` value
@@ -89,9 +81,6 @@ func MintSecret(
 		// mint with nowhere to put the result would leave a live signing
 		// secret at the third-party app and print none of it.
 		return Secret{}, ErrNoSink
-	}
-	if !CanMint(sink) {
-		return Secret{NoKeyring: true}, nil
 	}
 	if !recreate {
 		// ASKED BEFORE ANYTHING IS MINTED, and skipped only where the

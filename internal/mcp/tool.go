@@ -23,26 +23,28 @@ type Result struct {
 	// refused.
 	Failed bool
 
-	// Refusal classifies a failure for a reader that is not a model, and
-	// only a FIRST-PARTY tool sets it — see [Refusal] for why an MCP
-	// server's failure is left unclassified. Set implies Failed; empty on
-	// a Failed result means "unclassified", never "fine".
-	Refusal Refusal
-
-	// Unknown marks a failed result whose WRITE MAY HAVE LANDED: the tool
-	// made a write and nobody can vouch for its outcome (the append's
-	// acknowledgement was lost, or the node answered before it applied).
-	// Set only by a first-party tool, and only beside [RefusalUnavailable].
+	// Cause is WHY a failed call failed, as a value a caller can branch on:
+	// an authority refusal, a stale version, a node that could not decide.
+	// Nil on a success, and nil on a failure nothing in this engine
+	// classified — an MCP server's, which reports prose and no class.
 	//
-	// A FLAG BESIDE THE CLASS rather than a class of its own, because the
-	// class answers "can this node serve the call now" — and the answer is
-	// still no — while this answers a different question: whether the
-	// caller has to find out what happened before doing anything else. A
-	// person's surface that read the class alone would tell somebody
-	// "nothing happened" about a write that may have landed, and they would
-	// make it a second time. A model reads [Result.Output], which says all
-	// of this in words.
-	Unknown bool
+	// IT IS ALSO WHERE A FIRST-PARTY REFUSAL'S CLASS RIDES. A [Refusal] is
+	// an error, so a tool states its class as the cause itself — or beneath
+	// the error that caused it, through [Classify] — and [RefusalOf] and
+	// [UnknownOf] read it back out. ONE VALUE, never a class field beside
+	// it: two classifiers of one failure drift apart, and a stored "not
+	// unknown" beside a cause that says the write may have landed would
+	// have a person's screen report that nothing happened.
+	//
+	// NEVER RENDERED, and that is the one rule this field carries. Output is
+	// still the whole of what anybody reads — the incident this struct's doc
+	// describes was a reason living in a second field while the first was
+	// shown — so Cause adds nothing a model sees. It exists for the caller
+	// that answers in a protocol with STATUS CODES, where "you may not",
+	// "somebody edited it first" and "this node could not tell" are 403,
+	// 409 and 503, and reading those back out of a sentence would make the
+	// wording of a refusal an API.
+	Cause error
 }
 
 // Callable is the least a phase surface needs to offer something to a model

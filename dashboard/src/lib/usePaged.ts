@@ -24,7 +24,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type { QueryResult } from "~/lib/useQuery.ts";
-import { queryErrorCode } from "~/protocol/index.ts";
+import { queryErrorCode, type LogRefusal, type QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 /** No older page held — one constant, so an unpaged list is not a new array each render. */
@@ -37,11 +37,19 @@ export interface Paged<T, A> {
   answers: readonly A[];
   loading: boolean;
   error: QueryErrorCode | null;
+  /** What the newest page's refusal said beyond its code — see `useQuery`. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Whether a page older than every one loaded exists. */
   more: boolean;
   /** Ask for it. A no-op when there is none or one is in flight. */
   older: () => void;
   paging: boolean;
+  /**
+   * Why the last older page did not arrive — its code alone. An older page is
+   * asked once, by the reader, of the question the newest page already
+   * answered, so whatever the engine would refuse it on authority it has
+   * refused the newest page on first, with the refusal there.
+   */
   pageError: QueryErrorCode | null;
   refetch: () => void;
 }
@@ -112,6 +120,7 @@ export function usePaged<A, T>(
     answers,
     loading: first.loading,
     error: first.error,
+    refusal: first.refusal,
     more: next !== "",
     older: () => void older(),
     paging,

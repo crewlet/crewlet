@@ -7,7 +7,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import type {
   RetentionDomain,
@@ -30,6 +30,30 @@ const query = vi.hoisted(() => ({
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: () => ({ data: query.data, loading: false, error: null, refetch: query.refetch }),
 }));
+// THE READER HOLDS Admin, which every gate gesture is decided under.
+vi.mock("~/lib/viewer.ts", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
+  return {
+    ...actual,
+    useViewer: () => ({
+      login: "ops",
+      grants: ["admin"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
+      handle: "",
+      owner: "ops",
+      name: "",
+      acts: [],
+      kind: "",
+      project: "",
+      unbound: true,
+      anonymous: false,
+      loading: false,
+      asking: false,
+    }),
+  };
+});
 
 const golden = engineFile<{ answers: Record<string, RetentionGateResult> }>(
   "internal/api/testdata/gate_answer.json",
@@ -87,11 +111,9 @@ function held(
   return heldGestures(gestures, { nodes, domains, node_id: servedBy ?? "" });
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
 // A GESTURE THAT FINISHED IS HELD UNTIL THE REPORT SHOWS IT.

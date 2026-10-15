@@ -115,11 +115,22 @@ func (h *snapHarness) cursor(seq uint64) {
 
 func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
-	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: []statelog.Registered{{
-			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+	h.rebuildWith(interval, probeDomain{})
+}
+
+// rebuildWith is rebuild over a stated domain set, for the cases about an
+// artefact that predates one of them.
+func (h *snapHarness) rebuildWith(interval time.Duration, domains ...statelog.Domain) {
+	h.t.Helper()
+	registered := make([]statelog.Registered, 0, len(domains))
+	for _, d := range domains {
+		registered = append(registered, statelog.Registered{
+			Domain: d, Spec: specOf(d),
 			Health: func() statelog.Health { return h.health },
-		}},
+		})
+	}
+	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Domains:       registered,
 		File:          h.estate,
 		Dir:           h.dir,
 		NodeID:        "node-a",
@@ -804,6 +815,60 @@ func TestASecondTakeAtTheSamePositionDoesNotPublishOverTheFirst(t *testing.T) {
 		t.Errorf("the manifest on disk names %q and the take reported %q",
 			back.Artifact, second.Artifact)
 	}
+}
+
+// TestAFreshArtefactShortOfADomainDoesNotSuppressATake is the rollout hazard,
+// at its source.
+//
+// On the day a domain is added, every artefact on every node's disk was taken
+// by the build before it and names one domain too few. [statelog.Offer.Usable]
+// refuses such an artefact WHOLESALE, so no joiner can adopt any of them — and
+// judged on its age alone, each node then declines to take a complete one for
+// a whole interval, while the trim goes on counting the useless artefacts as
+// snapshots.
+func TestAFreshArtefactShortOfADomainDoesNotSuppressATake(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	if _, err := h.snap.Take(t.Context()); err != nil {
+		t.Fatalf("the first take: %v", err)
+	}
+
+	// THE CONTROL FIRST: an artefact naming every domain this node runs
+	// still suppresses, or this change would simply disable the interval.
+	if _, err := h.snap.Take(t.Context()); !isRecentSkip(err) {
+		t.Fatalf("a second take against a complete artefact = %v, want a recent skip", err)
+	}
+
+	// Now the build registers a second domain. The artefact on disk is
+	// young and names only the first.
+	h.rebuildWith(24*time.Hour, probeDomain{}, secondDomain{})
+	if _, err := h.snap.Take(t.Context()); isRecentSkip(err) {
+		t.Fatal("a young artefact that names no position for a domain this node runs " +
+			"suppressed a take, so the fleet would hold nothing adoptable for a " +
+			"whole interval")
+	}
+}
+
+func isRecentSkip(err error) bool {
+	reason, ok := statelog.Skipped(err)
+	return ok && reason == statelog.SkipRecent
+}
+
+// secondDomain is a domain the harness's artefacts predate, for the rollout
+// case. It declares nothing the snapshotter needs beyond its name and stream.
+type secondDomain struct{ probeDomain }
+
+func (secondDomain) Name() string { return "second" }
+
+// Stream is the probe's own declaration under another name, so it is a
+// complete spec — a record ceiling included, which every domain declares —
+// and the one it is registered with ([specOf]) instantiates it.
+func (secondDomain) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.Name = "CREWLET_SECOND"
+	spec.Subjects = []string{"crewlet.second.log.>"}
+	spec.SubjectPrefix = "crewlet.second.log"
+	return spec
 }
 
 // A TAKE WRITES THE MANIFEST EVERY BUILD READS, AND NAMES EVERY LOG.

@@ -58,7 +58,7 @@ func (Prompt) Source() string { return Source }
 // the seat can begin reasoning from the trigger. A bare transition carries no
 // prose at all and is a pointer at a task the seat must read first.
 func (Prompt) RequiresRecon(n notify.Inbound) bool {
-	if n.Metadata[MetaTaskKey] == "" {
+	if metaAddress(n.Metadata) == "" {
 		return false
 	}
 	switch ChangeKind(n.EventType) {
@@ -122,7 +122,8 @@ func Owes(metadata map[string]string) string {
 }
 
 // owedPartition is the separator between a conversation and the surface a
-// partition of it owes. Neither a task key nor an object id carries it.
+// partition of it owes. Neither a conversation identity (`task:<id>` or
+// `<object>:<id>`) nor a surface name carries it.
 const owedPartition = "#owes:"
 
 // PartitionKey implements [notify.Prompt]: the task is the conversation, and
@@ -142,17 +143,43 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 	return key
 }
 
-// ConversationIdentity implements [notify.Prompt]: the task is the
-// conversation.
+// ConversationIdentity implements [notify.Prompt]: the TASK is the
+// conversation, and it is named by its ID. The partition key above is this,
+// or a finer cut of it — the invariant [notify.Prompt.ConversationIdentity]
+// requires.
 //
-// THE KEY rather than the uuid, because the key is what a person pastes into
-// chat and what a seat writes in a commit message — so a chat thread about
-// ENG-42 and the tracker activity on it land in one ledger, which is the whole
-// point of a conversation key. The partition key above is this, or a finer
-// cut of it — the invariant [notify.Prompt.ConversationIdentity] requires.
+// # The id and never the key
+//
+// A key is an ADDRESS — what a person pastes into chat and types into a tool
+// call — and an address is not one task for the life of the deployment:
+//
+//   - TWO TASKS CAN HOLD ONE KEY. A counter restored beside newer work mints
+//     numbers those tasks already hold, and the applier flags every holder but
+//     the claimant `key_collision` rather than refuse a record the broker
+//     committed. Keyed on the key, wakes about the two coalesced into ONE
+//     digest and their turns shared ONE ledger, so a seat woken about the
+//     duplicate was handed the claimant's thread as its own history.
+//   - A KEY MOVES. A cross-project move re-keys the task (ENG-7 becomes OPS-3),
+//     and keyed on the key its conversation started over under the new one:
+//     the ledger of every turn the seat had taken on it was filed where its
+//     next turn never looked, and a coding run parked on a question asked
+//     from the task could not be matched by the answer posted on it.
+//
+// The id is the one name a task never shares and never gives up. The key was
+// chosen once so "a chat thread about ENG-42 and the tracker activity on it
+// land in one ledger" — which never happened: the spine namespaces every
+// source-local key ([notify.Namespaced]), so `work:ENG-42` and a chat
+// thread's key were never one string.
+//
+// `task:<id>`, IN THE GRAMMAR A NON-TASK WAKE'S OBJECT ALREADY USES, so the two
+// can never collide, and a task-subject wake keys exactly as its own object
+// would. The id is the one the WAKE points at ([Snapshot.TaskID]) rather than
+// the subject's: a `prioritised` wake is written on a person and is about the
+// task at the top of their list, so it joins that task's conversation, as it
+// did while both keyed on the task's key.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
-	if key := metadata[MetaTaskKey]; key != "" {
-		return key
+	if id := metadata[MetaTaskID]; id != "" {
+		return string(KindTask) + ":" + id
 	}
 	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
 	// key would put every person-scoped wake in the company into ONE
@@ -416,12 +443,11 @@ func promptAskedDecision(b *strings.Builder, meta map[string]string, d Decision)
 	if choice == "" {
 		choice = d.Options[0].ID
 	}
+	// THE ADDRESS, never the bare key: a key another task claimed first
+	// opens THAT task, so an answer sent to it would land on the claimant.
 	call := answeringCall{
-		Item: meta[MetaTaskKey], Answers: meta[MetaCommentID],
+		Item: metaAddress(meta), Answers: meta[MetaCommentID],
 		Choice: choice, Body: "<why, in a sentence or two>",
-	}
-	if call.Item == "" {
-		call.Item = meta[MetaTaskID]
 	}
 	b.WriteString("\nAnswer with ONE call to `" + CommentOnWorkTool + "`, " +
 		"naming the option you choose by its id in `choice` (one of: " +
@@ -481,6 +507,7 @@ func promptAnsweredDecision(b *strings.Builder, meta map[string]string) {
 func promptHeader(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	meta := n.Metadata
 	b.WriteString("\n\n**Task:** " + n.Subject)
+	promptCollision(b, meta)
 	if lead := changeLead(meta, promptSender(n, parties)); lead != "" {
 		b.WriteString("\n**What happened:** " + lead)
 	}
@@ -668,9 +695,37 @@ func orDash(value string) string {
 	return value
 }
 
+// metaAddress is the reference that opens the task a wake points at: its key,
+// or its id where another task claimed the key first ([ItemAddress]). Empty for
+// a wake that points at no task.
+//
+// EVERY REFERENCE A PROMPT HANDS A SEAT IS BUILT HERE, because a seat acts on
+// what it is shown: a wake about the duplicate of a key that named the key
+// sent the seat to read — and comment on, and reassign — the task that
+// claimed it.
+func metaAddress(meta map[string]string) string {
+	return ItemAddress(meta[MetaTaskID], meta[MetaTaskKey],
+		meta[MetaKeyCollision] == "true")
+}
+
+// promptCollision says, under the task's own name, why a wake names it by its
+// id: its key is one another task claimed first, and opens that task.
+//
+// SAID RATHER THAN LEFT TO THE ID, because a seat that sees an id where it is
+// used to a key, and the key in the deltas or the title, reaches for the key.
+func promptCollision(b *strings.Builder, meta map[string]string) {
+	if meta[MetaKeyCollision] != "true" || meta[MetaTaskKey] == "" {
+		return
+	}
+	key, id := meta[MetaTaskKey], meta[MetaTaskID]
+	b.WriteString("\n**Key:** " + key + " — another task claimed this key " +
+		"first, so **" + key + "** opens THAT task. This one is reached only " +
+		"by its id, **" + id + "**: use the id in every call about it.")
+}
+
 // promptContext is the recon pointer.
 func promptContext(b *strings.Builder, meta map[string]string) {
-	key := meta[MetaTaskKey]
+	key := metaAddress(meta)
 	if key == "" {
 		return
 	}

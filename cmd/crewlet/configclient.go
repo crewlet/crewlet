@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
@@ -43,12 +44,12 @@ type configClient struct {
 	answerCap int
 }
 
-func newConfigClient(boot *config.Bootstrap, override string) (*configClient, error) {
+func newConfigClient(environ config.Source, boot *config.Bootstrap, override string) (*configClient, error) {
 	base, err := nodeBaseURL(boot, override, "the fleet's company configuration")
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken(boot, "/config")
+	token, err := nodeAPIToken(environ, "/config")
 	if err != nil {
 		return nil, err
 	}
@@ -130,20 +131,20 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 
 // maxConfigResponseBytes bounds one answer.
 //
-// SIZED FOR THE COMPANY, not for the two fields this client reads. A write's
-// answer carries the engine's derived hierarchy of the whole document it
-// stored, every seat with its managers and reports, and a refusal carries a
-// located problem per failure beside the same hierarchy, so an answer grows
-// with the company it describes. The 64 KiB this used to be is about two
-// hundred seats of hierarchy: past that, a write that had landed was reported
-// as an answer this build could not read, and a refusal lost its detail.
+// SIZED FOR THE DOCUMENT, not for the two fields this client reads. A write's
+// answer carries a located warning per thing the engine will run but a person
+// should know about, and a refusal a located problem per failure, so an
+// answer grows with the document it judged. The 64 KiB this used to be lost a
+// refusal's detail on a large document, and reported a write that had landed
+// as an answer this build could not read.
 //
 // Sixteen times the largest document the route accepts
-// ([configapi.MaxBodyBytes]), because the hierarchy restates each seat of the
-// document with its relations spelled out, and that restatement is several
-// times the size of a seat as it is usually written. It still bounds a node
-// that answers with far more than any company could produce, and the client's
-// own timeout bounds one that never stops.
+// ([configapi.MaxBodyBytes]), because each entry restates its path, its
+// segments and a sentence saying what to write instead, which is routinely
+// ten times the field it is about — a mistyped provider key is a few bytes and
+// its problem a few hundred. It still bounds a node that answers with far
+// more than any document could produce, and the client's own timeout bounds
+// one that never stops.
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.
@@ -156,22 +157,22 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 		Stored  string `json:"stored_revision_id"`
 	}
 	_ = json.Unmarshal(raw, &body)
+	if msg, ok := credentialRefusal(status, raw, true); ok {
+		return fmt.Errorf("%s: %s", c.base, msg)
+	}
 	switch {
 	case status == http.StatusNotFound:
 		// PUT /config answers no 404 of its own, so any 404 is the surface
 		// missing rather than something under it.
 		return missingSurface(c.base, "/config", body.Error)
-	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
 		return lostRace(c.base, body.Current, body.Stored)
-	case status == http.StatusForbidden && body.Error == string(configapi.CodeConfigManaged):
+	case status == http.StatusForbidden && body.Error == string(httpjson.CodeConfigManaged):
 		// THE CREDENTIAL IS VALID AND NOT A WRITER, so the remedy is which
 		// token this command sent, and the refusal says where it came from.
 		return fmt.Errorf("%s refused the import: %s\n  %s\n  (this command "+
-			"authenticated with %s when it is set, else the first of Tier A's "+
-			"api.auth.tokens)", c.base, body.Detail, body.Hint, apiTokenEnv)
+			"authenticated with %s, the one credential it reads)",
+			c.base, body.Detail, body.Hint, apiTokenEnv)
 	}
 	msg := body.Error
 	if msg == "" {

@@ -117,7 +117,7 @@ roles:
     handle: swe
     email: swe@example.com
     goal: ship
-    manages: [Junior]
+    manages: [junior]
     token_budget: {day: 1000, month: 20000}
     mcp_env:
       gitlab:
@@ -219,12 +219,13 @@ func TestOrganizationNormalisesTheHierarchy(t *testing.T) {
 name: Acme
 roles:
   - name: Contractor
-    unit: Core
+    unit: core
     mcp_env:
       gitlab: {GITLAB_HOST: contractor.example}
 units:
   - name: Core
-    lead: CTO
+    id: core
+    lead: cto
     mcp_env:
       gitlab: {GITLAB_TOKEN: "${SHARED}", GITLAB_HOST: gitlab.com}
     roles:
@@ -239,14 +240,14 @@ units:
 	if len(o.Roles) != 0 {
 		t.Fatalf("the root seat should have moved into its unit; root holds %d", len(o.Roles))
 	}
-	unit := o.Unit("Core")
-	if unit == nil || unit.Role("Contractor") == nil {
+	unit := o.Unit("core")
+	if unit == nil || unit.Role("contractor") == nil {
 		t.Fatal("the moved seat is not a member of its unit")
 	}
 
 	// Inheritance merges per VARIABLE: a seat overriding one entry must
 	// not silently drop the token beside it.
-	contractor := o.Role("Contractor")
+	contractor := o.Role("contractor")
 	if got := contractor.MCPEnv["gitlab"]["GITLAB_TOKEN"]; got != "${SHARED}" {
 		t.Fatalf("the moved seat missed the unit's shared credential: %q", got)
 	}
@@ -256,8 +257,8 @@ units:
 
 	// The lead auto-manages what nobody else does, which is what makes a
 	// roster complete without listing every report twice.
-	cto := o.Role("CTO")
-	if !slices.Contains(cto.Manages, "Engineer") || !slices.Contains(cto.Manages, "Contractor") {
+	cto := o.Role("cto")
+	if !slices.Contains(cto.Manages, "engineer") || !slices.Contains(cto.Manages, "contractor") {
 		t.Fatalf("lead manages = %v", cto.Manages)
 	}
 }
@@ -270,10 +271,11 @@ func TestOrganizationDoesNotMutateTheConfig(t *testing.T) {
 	cfg := mustCompany(t, `
 name: Acme
 roles:
-  - {name: Contractor, unit: Core}
+  - {name: Contractor, unit: core}
 units:
   - name: Core
-    lead: CTO
+    id: core
+    lead: cto
     mcp_env: {gitlab: {GITLAB_TOKEN: "${SHARED}"}}
     roles:
       - {name: CTO}
@@ -295,9 +297,17 @@ units:
 // A dangling reference is not a validation failure: live config management
 // bootstraps an org in pieces, so a unit can land before the seat that
 // leads it, and refusing the revision would make that state unreachable.
+//
+// THE REFERENCE IS A WELL-FORMED HANDLE, which is the whole fixture. What
+// this protects is the leniency of RESOLUTION, and the two are separate
+// rules: a `lead:` that is shaped like a handle and names nobody is a seat
+// somebody is about to hire, while one shaped like a display name can never
+// resolve under any chart and is refused by
+// [Company.validateReferenceShapes]. A fixture written in the second shape
+// would pass this test for the wrong reason the day the leniency was lost.
 func TestDanglingReferencesAreReportedNotRejected(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, "name: Acme\nunits:\n  - {name: Core, lead: NotYetHired}\n")
+	cfg := mustCompany(t, "name: Acme\nunits:\n  - {name: Core, id: core, lead: not-yet-hired}\n")
 	if len(cfg.DanglingRefs()) == 0 {
 		t.Fatal("a dangling lead should be reported")
 	}
@@ -327,19 +337,20 @@ integrations:
 roles:
   - name: Founder
     kind: human
-    manages: [CEO, Ghost]
+    manages: [ceo, ghost]
     contact: {gitlab_username: founder}
   - name: CEO
 units:
   - name: Platform
-    lead: Tech Lead
+    id: platform
+    lead: tech-lead
     roles:
       - name: Tech Lead
       - name: Site Reliability
         handle: sre
 `)
 	want := []org.DanglingRef{
-		{Kind: org.RefManages, From: "Founder", To: "Ghost"},
+		{Kind: org.RefManages, From: "Founder", To: "ghost"},
 		{Kind: org.RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "former-engineer"},
 	}
 	// Compared by what they name: the seat pointer belongs to an
@@ -370,6 +381,47 @@ func TestToggleKeepsItsThirdState(t *testing.T) {
 	off := mustCompany(t, "name: Acme\nroles:\n  - {name: CEO, learning_enabled: false}\n").Roles[0]
 	if !off.LearningEnabled.IsSet() || off.LearningEnabled.Or(true) {
 		t.Fatal("an explicit false must be distinguishable from unset")
+	}
+}
+
+// A GITLAB ACCESS LEVEL NAMES A SEAT BY ITS HANDLE.
+//
+// The override follows the seat whose handle keys it, and a key naming no
+// seat is the one DanglingSettingsRefs reports, because it is the grant
+// waiting for whoever is next given that handle.
+func TestAnAccessLevelNamesTheSeatWhoseHandleKeysIt(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, `
+name: Acme
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+    provisioning:
+      group: acme
+      access_levels:
+        ghost: developer
+        head: maintainer
+roles:
+  - {name: Head, handle: head}
+  - {name: SWE, handle: swe}
+`)
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioning := cfg.Integrations.GitLab.Provisioning
+	if level, found := provisioning.OverrideFor(o.Role("head")); !found || level != "maintainer" {
+		t.Errorf("head's override = %q, %v; want maintainer", level, found)
+	}
+	// THE CONTROL: a seat no key names has no override.
+	if level, found := provisioning.OverrideFor(o.Role("swe")); found {
+		t.Errorf("swe's override = %q; no key names it", level)
+	}
+	dangling := cfg.DanglingSettingsRefs(o)
+	if len(dangling) != 1 || dangling[0].To != "ghost" || dangling[0].Kind != org.RefGitLabAccessLevel {
+		t.Errorf("DanglingSettingsRefs = %+v, want only the key naming nobody", dangling)
 	}
 }
 
@@ -562,7 +614,7 @@ func TestPlacementAndTheNodeBlockAgreeOnEveryShape(t *testing.T) {
 		"zo\u00a0ne": false, "": false,
 	} {
 		quoted := strconv.Quote(key)
-		_, nodeErr := ParseBootstrap([]byte("node:\n  labels:\n    "+quoted+": v\n"), EnvOnly())
+		_, nodeErr := ParseRunnableBootstrap([]byte("node:\n  labels:\n    "+quoted+": v\n"), EnvOnly())
 		_, seatErr := ParseCompany([]byte("name: Acme\nroles:\n  - name: Builder\n" +
 			"    placement:\n      labels:\n        " + quoted + ": v\n"))
 		agree(t, "label key", quoted, accepted, nodeErr, seatErr)
@@ -573,7 +625,7 @@ func TestPlacementAndTheNodeBlockAgreeOnEveryShape(t *testing.T) {
 		".hidden": false, "node/1": false,
 	} {
 		quoted := strconv.Quote(id)
-		_, nodeErr := ParseBootstrap([]byte("node:\n  id: "+quoted+"\n"), EnvOnly())
+		_, nodeErr := ParseRunnableBootstrap([]byte("node:\n  id: "+quoted+"\n"), EnvOnly())
 		_, seatErr := ParseCompany([]byte("name: Acme\nroles:\n  - name: Builder\n" +
 			"    placement:\n      node: " + quoted + "\n"))
 		agree(t, "node id", quoted, accepted, nodeErr, seatErr)
@@ -584,9 +636,8 @@ func TestPlacementAndTheNodeBlockAgreeOnEveryShape(t *testing.T) {
 //
 // Organization builds a seat from the authored role and normalises it in
 // place. The contact rode along as the SAME pointer, so every read rewrote the
-// stored revision's contact — padded and mixed-case ids trimmed and lowercased
-// under the reader — and two reads at once (an apply, and the dashboard's
-// placement read on its tick) raced on it.
+// document's contact — padded and mixed-case ids trimmed and lowercased under
+// the reader — and two reads at once raced on it.
 func TestReadingTheOrgLeavesTheAuthoredContactAlone(t *testing.T) {
 	t.Parallel()
 	c, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +

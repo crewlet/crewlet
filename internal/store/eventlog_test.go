@@ -48,7 +48,7 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 			return len(rows), err
 		}},
 		{"List by related agent", func(at time.Time) (int, error) {
-			rows, err := log.List(ctx, store.ListQuery{RelatedAgent: "PM", At: at})
+			rows, err := log.List(ctx, store.ListQuery{RelatedAgent: "id-pm", At: at})
 			return len(rows), err
 		}},
 		// ONE NODE'S PART OF THE AXIS, whose first bar is the day the floor
@@ -107,7 +107,7 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 			return len(rows), err
 		}},
 		{"AgentPhases", func(at time.Time) (int, error) {
-			rows, _, err := log.AgentPhases(ctx, "id-pm", "", nil, at)
+			rows, _, err := log.AgentPhases(ctx, "id-pm", nil, at)
 			return len(rows), err
 		}},
 	} {
@@ -152,7 +152,7 @@ func TestAListingAndItsTraceSiblingsShareOneFloor(t *testing.T) {
 		{ID: "cause", Type: "webhook_received", Category: "webhook", Time: floor.Add(time.Minute)},
 		// The work it caused: names the seat.
 		{ID: "work", Type: "agent_phase_completed", Category: "agent", Time: floor.Add(2 * time.Minute),
-			Actor: "PM"},
+			Actor: "PM", Tags: map[string]string{"agent_id": "id-pm"}},
 		// Below the floor under the pinned instant: on no page.
 		{ID: "older", Type: "webhook_received", Category: "webhook", Time: floor.Add(-time.Minute)},
 	} {
@@ -162,7 +162,7 @@ func TestAListingAndItsTraceSiblingsShareOneFloor(t *testing.T) {
 		}
 	}
 
-	rows, err := log.List(t.Context(), store.ListQuery{RelatedAgent: "PM", At: at, Limit: 10})
+	rows, err := log.List(t.Context(), store.ListQuery{RelatedAgent: "id-pm", At: at, Limit: 10})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

@@ -8,8 +8,11 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // MCPServerState is one server's condition across the fleet, decided here
@@ -108,8 +111,9 @@ type MCPServerNode struct {
 	Failed   int  `json:"failed"`
 	Tools    int  `json:"tools"`
 	// Error is one failed instance's reason, bounded on the wire, and
-	// ErrorSeat the seat it was launched for ("" for a shared server).
-	// The whole text is the node's `mcp_server_failed` log line.
+	// ErrorSeat the seat it was launched for ("" for a shared server), by
+	// its handle. The whole text is the node's
+	// `mcp_server_failed` log line.
 	Error     string `json:"error"`
 	ErrorSeat string `json:"error_seat"`
 }
@@ -122,9 +126,10 @@ type MCPServerNode struct {
 // not answer in time, only one whose last heartbeat carried no status, and
 // that is a column of its own rather than a row of zeros.
 //
-// OPERATOR-ONLY, like `fleet`: it names the nodes, the launch commands and
-// the first line of each failure, which is the shape of the deployment rather
-// than the company's work.
+// ADMIN'S, AS THE CONFIGURATION IS (ADR-0033): it names the launch commands
+// and the first line of each failure, which is the configuration and what
+// became of it rather than the company's work — `/config` shows the same
+// reader the same commands.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -165,11 +170,14 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	}
 
 	rows := map[string]*MCPServerRow{}
+	var organization *org.Organization
 	if s.Company != nil {
-		if company := s.Company(); company != nil {
+		company, roster := s.Company()
+		if company != nil {
 			for i := range company.MCPServers {
 				rows[company.MCPServers[i].Name] = configuredRow(&company.MCPServers[i])
 			}
+			organization = roster
 		}
 	}
 	// A SERVER ONLY A NODE KNOWS, which is a node on another revision: the
@@ -191,7 +199,8 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 			cell := MCPServerNode{Node: r.node, Reported: r.reported}
 			if m, ok := r.servers[name]; ok {
 				cell.Started, cell.Failed, cell.Tools = m.Started, m.Failed, m.Tools
-				cell.Error, cell.ErrorSeat = m.Error, m.ErrorSeat
+				cell.Error = m.Error
+				cell.ErrorSeat = failedSeat(organization, m.ErrorSeat)
 				row.Started += m.Started
 				row.Failed += m.Failed
 				row.Tools = max(row.Tools, m.Tools)
@@ -202,6 +211,24 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		out.Servers = append(out.Servers, *row)
 	}
 	return out, nil
+}
+
+// failedSeat names the seat a failed instance was launched for by its handle.
+//
+// A NODE REPORTS THE SEAT'S ID, as a lease names its seat, and the screen reads
+// a handle; resolved here, on this answer's own org. A seat this org no longer
+// holds is named by its id — the honest fallback, as a lease's is in `fleet`
+// — and a shared server's failure names none.
+func failedSeat(organization *org.Organization, id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	if organization != nil {
+		if role := organization.AgentSeatByID(id); role != nil {
+			return role.Handle()
+		}
+	}
+	return id.String()
 }
 
 // configuredRow is a server's launch as the configuration declares it, with

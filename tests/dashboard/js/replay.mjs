@@ -19,8 +19,9 @@
 // Usage: node replay.mjs <frames.json> <act.json> [--print]
 //
 //   frames.json  a JSON array of raw frame strings, in arrival order
-//   act.json     one `/operator/act` exchange: {tool, args, request_id,
-//                status, body}, the body the engine's answer byte for byte
+//   act.json     one `/operator/act` exchange: {tool, args, op_id, status,
+//                body} — the operation key the press sent in its
+//                `Idempotency-Key` header, and the engine's answer byte for byte
 //   --print      dump the resulting store state as JSON on stdout
 //
 // Exits non-zero with a diagnosis on stderr when the frames do not drive the
@@ -29,9 +30,11 @@
 import { readFileSync } from "node:fs";
 import { PROTOCOL_URL } from "./dashboardRoot.mjs";
 
-// The browser bits the socket and the token store reach for. This socket is
-// never dialled — the frames are fed straight to the message handler — but the
-// module builds one at construction, so the global has to exist.
+// The browser bits the socket reaches for. This socket is never dialled — the
+// frames are fed straight to the message handler — but the module builds one
+// at construction, so the global has to exist. There is no token store to
+// stub: the dashboard's credential is the session cookie, which no script
+// holds.
 class InertWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -46,7 +49,6 @@ class InertWebSocket {
   }
 }
 globalThis.WebSocket = InertWebSocket;
-globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 globalThis.fetch = async () => {
   throw new Error("offline: the replay has no server");
 };
@@ -102,6 +104,51 @@ if (!state.agents.length) {
 }
 if (!state.events.length) {
   problems.push("no events: the activity feed is empty");
+}
+
+// A SEAT IS PAIRED BY ITS AGENT ID, never by its name: the store merges an
+// overlay onto the roster row carrying the same `agent_id` and drops one for
+// a seat the roster does not carry. So both halves of the pairing are the
+// server's to send — every roster row and every overlay must carry the id —
+// and a push that stopped sending it would leave every seat idle with each
+// overlay silently dropped, which the `working` check below reports only as a
+// symptom.
+const anonymousRows = state.agents.filter((a) => typeof a.agent_id !== "string" || a.agent_id === "");
+if (anonymousRows.length) {
+  problems.push(
+    `${anonymousRows.length} of ${state.agents.length} roster rows carry no \`agent_id\`: ` +
+      "no overlay can ever reach them",
+  );
+}
+const rosterIDs = new Set(state.agents.map((a) => a.agent_id));
+let overlays = 0;
+let unkeyed = 0;
+const strangers = new Set();
+for (const raw of frames) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    continue;
+  }
+  if (msg.kind !== "agents" || !Array.isArray(msg.data)) continue;
+  for (const row of msg.data) {
+    overlays++;
+    if (typeof row.agent_id !== "string" || row.agent_id === "") unkeyed++;
+    else if (!rosterIDs.has(row.agent_id)) strangers.add(row.agent_id);
+  }
+}
+if (overlays === 0) {
+  problems.push("no `agents` overlay was pushed: no seat's live state could ever move");
+}
+if (unkeyed) {
+  problems.push(`${unkeyed} of ${overlays} \`agents\` overlays carry no \`agent_id\`: the store drops them`);
+}
+if (strangers.size) {
+  problems.push(
+    `\`agents\` overlays name ${[...strangers].join(", ")}, which no roster row carries: ` +
+      "the store drops them",
+  );
 }
 
 // Somewhere in the run a seat must have been working with a live call — that
@@ -384,7 +431,7 @@ globalThis.fetch = async (href, init) => {
 };
 const floors = new SessionFloors();
 const wrote = await act(exchange.tool, exchange.args, {
-  requestId: exchange.request_id,
+  opId: exchange.op_id,
   floors,
 });
 const engineAnswer = JSON.parse(exchange.body);
@@ -396,8 +443,16 @@ if (sent.length !== 1) {
     problems.push(`the write went to ${init.method} ${href}, not POST /operator/act/${exchange.tool}`);
   }
   const body = JSON.parse(init.body);
-  if (body.request_id !== exchange.request_id) {
-    problems.push(`the write carried request id ${body.request_id}, not the press's own`);
+  // THE OPERATION RIDES THE HEADER, and the body is the arguments alone: the
+  // engine refuses a body key it does not read, and a key minted anywhere but
+  // the press is a retry that writes twice.
+  const key = (init.headers || {})["Idempotency-Key"];
+  if (key !== exchange.op_id) {
+    problems.push(`the write carried operation key ${JSON.stringify(key)}, not the press's own`);
+  }
+  const extra = Object.keys(body).filter((k) => k !== "args");
+  if (extra.length) {
+    problems.push(`the write's body carries ${extra.join(", ")} beside its arguments`);
   }
   if (JSON.stringify(body.args) !== JSON.stringify(exchange.args)) {
     problems.push(

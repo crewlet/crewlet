@@ -18,8 +18,8 @@ import (
 // Crossing the ceiling must never drop a day: the stream is created to refuse
 // rather than discard, the publisher reports the refusal as a full log rather
 // than as a transient failure, and the alarm that tells an operator names THIS
-// domain — a fleet with four logs is told which one is full, not that
-// something is.
+// domain — a node with five logs is told which one is full, not that something
+// is.
 func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	t.Parallel()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
@@ -35,7 +35,8 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	const ceiling = 16 << 10
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: ceiling,
-		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		MaxPerSubject:   spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)

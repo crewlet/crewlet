@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -42,11 +44,6 @@ import (
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
-
-	// committed is this node's own applied position on the pages log, or
-	// nil on a build that runs no applier. It is what a read's own answer
-	// is stamped with.
-	committed func() statelog.Position
 }
 
 // ReaderOptions configure a reader.
@@ -57,11 +54,6 @@ type ReaderOptions struct {
 	// level is a label rather than a guarantee, which is silent at every
 	// surface that renders one.
 	Log *statelog.Reader
-
-	// Committed is this node's applied position. Nil answers the zero
-	// position, which is what a test with no runner has and what a read
-	// then honestly reports.
-	Committed func() statelog.Position
 }
 
 // NewReader builds the knowledge base's read side.
@@ -75,16 +67,8 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed}
-	if r.committed == nil {
-		r.committed = func() statelog.Position { return statelog.Position{} }
-	}
-	return r, nil
+	return &Reader{db: opts.DB, log: opts.Log}, nil
 }
-
-// At is the position this node's rows were derived through, which every answer
-// here is true as of.
-func (r *Reader) At() statelog.Position { return r.committed() }
 
 // Filter narrows a page listing.
 type Filter struct {
@@ -158,40 +142,29 @@ type Summary struct {
 	// a folder again.
 	Folder bool `json:"folder,omitempty"`
 
-	// AuthorSeat is the PERSON behind [Summary.Author] when the author is an
-	// operator's token: the seat it was bound to when it wrote the create,
-	// off the create's own history row, on the terms a task's reporter seat
-	// is read on in the tracker. The token stays the author, which is the
-	// audit trail; this is who a screen draws.
-	AuthorSeat string `json:"author_seat,omitempty"`
-
-	// SavedBy, SavedBySeat and SavedAt are the last change to what the page
-	// SAYS: its create, a save or a rename, each of which writes a revision.
+	// SavedBy and SavedAt are the last change to what the page SAYS: its
+	// create, a save or a rename, each of which writes a revision.
 	// [Summary.Updated] moves with every change, a label, a watch and a move
-	// included, which is the wrong instant for "last saved". SavedBySeat is
-	// the person behind an operator's token, as [Summary.AuthorSeat] is.
-	SavedBy     string    `json:"saved_by,omitempty"`
-	SavedBySeat string    `json:"saved_by_seat,omitempty"`
-	SavedAt     time.Time `json:"saved_at"`
+	// included, which is the wrong instant for "last saved". SavedBy is the
+	// writer under the one name every row of theirs carries ([Actor.Name]): a
+	// seat's handle, which is a person's seat too, or the login of a credential
+	// nobody is bound through.
+	SavedBy string    `json:"saved_by,omitempty"`
+	SavedAt time.Time `json:"saved_at"`
 
-	// savedID is the history row the three fields above are read from.
+	// savedID is the history row the two fields above are read from.
 	savedID string
 }
 
 // savedKinds are the changes that write a revision: what "last saved" means.
 const savedKinds = `'created', 'saved', 'renamed'`
 
-// summaryPerson is the two read-time columns every listing row carries beyond
-// its head: the seat behind an operator author, and the history row of the
-// last save, which [Reader.attachSaves] reads in one statement for the page.
-//
-// FROM THE HISTORY because that is the one place the seat is stored: a head,
-// a revision and a comment record the token, and the history row of the same
-// record names the person ([MutationRecord.ActorSeat]).
-const summaryPerson = `
-		       (SELECT a.actor_seat FROM pages_history a
-		         WHERE a.page_id = p.id AND a.kind = 'created' AND a.actor = p.author
-		           AND a.actor_seat <> '' LIMIT 1),
+// summarySaved is the read-time column every listing row carries beyond its
+// head: the history row of its last save, which [Reader.attachSaves] reads in
+// one statement for the whole page of rows. FROM THE HISTORY because the head
+// keeps who CREATED the page and when anything last moved it, and neither is
+// who last changed what it says.
+const summarySaved = `
 		       (SELECT h.id FROM pages_history h
 		         WHERE h.page_id = p.id AND h.kind IN (` + savedKinds + `)
 		         ORDER BY h.created_at DESC, h.id DESC LIMIT 1)`
@@ -204,9 +177,9 @@ const summaryPerson = `
 // that drew one said "50" about both.
 //
 // THE POSITION AND THE COVERAGE TRAVEL WITH THE ROWS, because a caller cannot
-// reconstruct either afterwards: [Reader.At] answers about NOW rather than
-// about the transaction this listing was read in, and a set read that could
-// not account for everything is indistinguishable from a short one.
+// reconstruct either afterwards: a position read after the answer is about NOW
+// rather than about the transaction this listing was read in, and a set read
+// that could not account for everything is indistinguishable from a short one.
 type Listing struct {
 	Pages []Summary `json:"pages"`
 
@@ -253,7 +226,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	var args []any
 	if f.Container != "" {
 		where = append(where, "p.container = ?")
-		args = append(args, strings.ToUpper(f.Container))
+		args = append(args, ContainerKey(f.Container))
 	}
 	if f.ParentID != "" {
 		where = append(where, "p.parent_id = ?")
@@ -432,7 +405,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		       (SELECT COUNT(*) FROM pages_heads c
 		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
 		         WHERE `+strings.Join(child.where, " AND ")+`),
-		       p.body = '',`+summaryPerson+`
+		       p.body = '',`+summarySaved+`
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+where+`
@@ -449,15 +422,15 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 			s                         Summary
 			skill, onboarding, folder int
 			updated, revision         int64
-			authorSeat, savedID       sql.NullString
+			savedID                   sql.NullString
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
-			&s.Children, &folder, &authorSeat, &savedID); err != nil {
+			&s.Children, &folder, &savedID); err != nil {
 			return listPage{}, fmt.Errorf("pages: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
-		s.AuthorSeat, s.savedID = authorSeat.String, savedID.String
+		s.savedID = savedID.String
 		s.Updated = store.DecodeTime(updated)
 		s.Revision = uint64(revision)
 		out = append(out, s)
@@ -493,20 +466,20 @@ func (r *Reader) attachSaves(ctx context.Context, tx *sql.Tx, items []Summary) e
 		return nil
 	}
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, actor, actor_seat, created_at FROM pages_history WHERE id IN (`+
+		`SELECT id, actor, created_at FROM pages_history WHERE id IN (`+
 			placeholders(len(ids))+`)`, ids...)
 	if err != nil {
 		return fmt.Errorf("pages: read who last saved: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, actor, seat string
+		var id, actor string
 		var when int64
-		if err := rows.Scan(&id, &actor, &seat, &when); err != nil {
+		if err := rows.Scan(&id, &actor, &when); err != nil {
 			return fmt.Errorf("pages: scan who last saved: %w", err)
 		}
 		if i, ok := at[id]; ok {
-			items[i].SavedBy, items[i].SavedBySeat = actor, seat
+			items[i].SavedBy = actor
 			items[i].SavedAt = store.DecodeTime(when)
 		}
 	}
@@ -562,16 +535,6 @@ type Detail struct {
 	// that only groups pages.
 	Folder bool `json:"folder"`
 
-	// AuthorSeat is [Summary.AuthorSeat], the person behind an operator
-	// author.
-	AuthorSeat string `json:"author_seat,omitempty"`
-
-	// CommentSeats names the person behind each comment an operator's token
-	// wrote, keyed by comment id, off the comment's own history row: a
-	// comment records the token, which is the audit trail, and the thread
-	// draws the person.
-	CommentSeats map[string]string `json:"comment_seats,omitempty"`
-
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
 	Children []Summary         `json:"children,omitempty"`
@@ -602,13 +565,8 @@ type Detail struct {
 // METADATA ONLY, because the projection keeps only that — reading one
 // revision's body is a coordination read, on demand.
 type RevisionSummary struct {
-	Version int    `json:"version"`
-	Author  string `json:"author,omitempty"`
-
-	// AuthorSeat is the person behind an operator's token, off the history
-	// row the same record wrote.
-	AuthorSeat string `json:"author_seat,omitempty"`
-
+	Version   int       `json:"version"`
+	Author    string    `json:"author,omitempty"`
 	Message   string    `json:"message,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -659,13 +617,7 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		}
 		detail.Skill, detail.Onboarding = skill != 0, onboarding != 0
 		detail.Folder = page.Body == ""
-		if detail.AuthorSeat, err = authorSeat(ctx, tx, id, page.Author); err != nil {
-			return err
-		}
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
-			return err
-		}
-		if detail.CommentSeats, err = commentSeats(ctx, tx, id); err != nil {
 			return err
 		}
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
@@ -691,23 +643,26 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 }
 
 // pageReadScope is what a point read of one page is about, resolved from the
-// reference the caller named.
+// reference the caller named — inside the answer's own transaction, where the
+// framework probes it ([statelog.Query.Resolve]).
 //
 // THE PAGE'S OWN PATH, under the space it is filed in. An address adds its
 // title term as well, because a create or a rename arbitrates on the title and
 // is filed under it — a deferred rename that took this address is about this
-// read even while the page it resolved to still holds the name.
+// read even while the page it resolved to still holds the name. The address's
+// container is canonical ([ContainerKey]), as every scope a record is filed
+// under is.
 //
 // A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
 // page" is a claim about rows a deferred create has not written: an address is
-// exactly the term such a create is filed under, and an id names nothing
-// narrower than the domain.
+// exactly the term such a create is filed under, and an id is decided by
+// [absentPageScope].
 func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
 	query := `SELECT id, container FROM pages_heads WHERE id = ?`
 	args := []any{ref}
 	var address *ScopeTerm
 	if container, title, ok := strings.Cut(ref, "/"); ok {
-		container = strings.ToUpper(strings.TrimSpace(container))
+		container = ContainerKey(container)
 		address = &ScopeTerm{Kind: TermTitle, Container: container, ID: TitleToken(title)}
 		query = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
 		args = []any{container, NormalizeTitle(title)}
@@ -717,7 +672,7 @@ func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeS
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		if address == nil {
-			return statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}, nil
+			return absentPageScope(ctx, tx, ref)
 		}
 		return statelog.ScopeSet{Paths: []string{address.Path()}}, nil
 	case err != nil:
@@ -728,6 +683,102 @@ func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeS
 		paths = append(paths, address.Path())
 	}
 	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
+}
+
+// absentPageScope is [pageReadScope] for an ID no row holds.
+//
+// A MINTED ID NAMES NO SPACE: the object path a create files it under names a
+// container the absent row cannot supply. So the page is about its object path
+// UNDER EVERY CONTAINER, and every term that contains such a path — the
+// domain, the containers' root, and ANY container's own term, since a scope is
+// the complete set of objects its apply may write and a container term covers
+// every page that may come to be in it. That is not a finite list of paths, so
+// it is answered as the retained records' own paths that fall inside it
+// ([mayHoldPage]) beside the id's object path in the containerless space,
+// whose every ancestor falls inside it too: the framework's probe then matches
+// exactly the records that may create the page. The domain term, the obvious
+// answer, refused an absent id under ANY retained record — one about another
+// page in another space included — and an object path in one space alone
+// served "no such page" past a record about a whole space that may be the one
+// creating it.
+//
+// ANYTHING ELSE names no page a record could create, because every page id is
+// minted: it is the containerless object path alone, which only a record about
+// the whole domain covers.
+//
+// THE CONTAINER IS MATCHED IN GO, segment by segment, rather than by a LIKE
+// pattern: `%` spans the separator, so a pattern for "any container's own
+// term" also matches every page path under every container, and LIKE folds
+// case where a path does not. The retained set it walks is this node's
+// undecodable records, which a node holds few of and a node holding many has
+// a louder problem than this read.
+func absentPageScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
+	id, minted := mintedID(ref)
+	if !minted {
+		return statelog.ScopeSet{Paths: []string{
+			ScopeTerm{Kind: TermObject, ID: ref}.Path(),
+		}}, nil
+	}
+	paths := []string{ScopeTerm{Kind: TermObject, ID: id.String()}.Path()}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT s.path
+		  FROM pages_log_deferred_scope s
+		  JOIN pages_log_deferred d ON d.position = s.position`)
+	if err != nil {
+		return statelog.ScopeSet{}, fmt.Errorf("pages: ask whether a retained "+
+			"record creates page %s: %w", id, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return statelog.ScopeSet{}, fmt.Errorf("pages: read a retained "+
+				"record's scope: %w", err)
+		}
+		if mayHoldPage(path, id.String()) {
+			paths = append(paths, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return statelog.ScopeSet{}, fmt.Errorf("pages: read the retained "+
+			"records' scopes: %w", err)
+	}
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
+}
+
+// mayHoldPage reports whether a retained record's scope path covers page id
+// in SOME container: whether path is the page's object path, or any term
+// above it, with the container segment matching whatever it names — see
+// [absentPageScope].
+func mayHoldPage(path, id string) bool {
+	within := strings.Split(ScopeTerm{Kind: TermObject, Container: anyContainer,
+		ID: id}.Path(), statelog.ScopeSeparator)
+	held := strings.Split(strings.Trim(strings.TrimSpace(path),
+		statelog.ScopeSeparator), statelog.ScopeSeparator)
+	if len(held) > len(within) {
+		return false
+	}
+	for i, segment := range held {
+		if within[i] != anyContainer && segment != within[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// anyContainer stands in the container segment of the path [mayHoldPage]
+// compares against. A space key is upper-case and slug-shaped, so no real
+// container is spelled with a byte a path never carries.
+const anyContainer = "\x00"
+
+// mintedID is ref as the uuid an id this engine mints is, and whether it is
+// one — an address, or any other text, names no page a record could create.
+func mintedID(ref string) (uuid.UUID, bool) {
+	if strings.Contains(ref, "/") {
+		return uuid.UUID{}, false
+	}
+	id, err := uuid.Parse(ref)
+	return id, err == nil
 }
 
 // locate resolves a reference to a page row.
@@ -748,7 +799,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 		// so every address lookup scanned the container.
 		query = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
 		          WHERE container = ? AND title_norm = ?`
-		args = []any{strings.ToUpper(strings.TrimSpace(container)), NormalizeTitle(title)}
+		args = []any{ContainerKey(container), NormalizeTitle(title)}
 	}
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
 	switch {
@@ -787,64 +838,10 @@ func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Com
 	return out, rows.Err()
 }
 
-// authorSeat is the person behind a page's author, off the create's own
-// history row, and empty when the author was not a token bound to somebody.
-//
-// FROM THE CREATE ROW rather than from the chart's CURRENT binding, because a
-// token re-bound since would name somebody who wrote nothing, and only when
-// that row's actor IS the author, which the create sets and nothing rewrites.
-func authorSeat(ctx context.Context, tx *sql.Tx, pageID, author string) (string, error) {
-	if author == "" {
-		return "", nil
-	}
-	var seat string
-	err := tx.QueryRowContext(ctx, `
-		SELECT actor_seat FROM pages_history
-		 WHERE page_id = ? AND kind = 'created' AND actor = ? AND actor_seat <> ''
-		 LIMIT 1`, pageID, author).Scan(&seat)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("pages: read who wrote %s: %w", pageID, err)
-	}
-	return seat, nil
-}
-
-// commentSeats is the person behind each comment an operator's token wrote,
-// keyed by comment id, off each comment's own history row.
-func commentSeats(ctx context.Context, tx *sql.Tx, pageID string) (map[string]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT comment_id, actor_seat FROM pages_history
-		 WHERE page_id = ? AND kind = 'comment' AND comment_id <> '' AND actor_seat <> ''`,
-		pageID)
-	if err != nil {
-		return nil, fmt.Errorf("pages: read who commented on %s: %w", pageID, err)
-	}
-	defer rows.Close()
-	var out map[string]string
-	for rows.Next() {
-		var comment, seat string
-		if err := rows.Scan(&comment, &seat); err != nil {
-			return nil, fmt.Errorf("pages: scan who commented: %w", err)
-		}
-		if out == nil {
-			out = map[string]string{}
-		}
-		out[comment] = seat
-	}
-	return out, rows.Err()
-}
-
 func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]RevisionSummary, error) {
-	// THE SEAT IS JOINED from the history row the same record wrote: a
-	// revision and its history row share the record's log position.
 	rows, err := tx.QueryContext(ctx,
-		`SELECT r.edit_version, r.author, COALESCE(h.actor_seat, ''), r.message,
-		        r.created_at
-		   FROM pages_revisions r
-		   LEFT JOIN pages_history h ON h.page_id = r.page_id AND h.version = r.version
-		  WHERE r.page_id = ? ORDER BY r.version DESC LIMIT ?`, pageID, RevisionsKept)
+		`SELECT edit_version, author, message, created_at FROM pages_revisions
+		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`, pageID, RevisionsKept)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the history of %s: %w", pageID, err)
 	}
@@ -853,7 +850,7 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 	for rows.Next() {
 		var s RevisionSummary
 		var at int64
-		if err := rows.Scan(&s.Version, &s.Author, &s.AuthorSeat, &s.Message, &at); err != nil {
+		if err := rows.Scan(&s.Version, &s.Author, &s.Message, &at); err != nil {
 			return nil, fmt.Errorf("pages: scan revision: %w", err)
 		}
 		s.CreatedAt = store.DecodeTime(at)
@@ -1031,7 +1028,7 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 	if fresh.Level == "" {
 		return nil, errors.New("pages: this read names no level")
 	}
-	container = strings.ToUpper(strings.TrimSpace(container))
+	container = ContainerKey(container)
 	if container == "" {
 		return nil, nil
 	}

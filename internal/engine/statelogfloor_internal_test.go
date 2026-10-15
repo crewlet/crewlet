@@ -87,7 +87,7 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 // stay, and read from another data node), and sent to adopt.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -105,7 +105,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -184,7 +184,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node replaying up to the floor refuses reads as %q, want %q — "+
 			"the records are on the log and it clears on its own", got, statelog.RefuseBehind)
 	}
-	if e.NativeHydrated(t.Context()) {
+	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the published floor")
 	}
 	// AND IT KEEPS THE SEATS IT HOLDS. Being behind is admission's concern
@@ -193,7 +193,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// clears on its own. A replaying node is necessarily one with records
 	// pending — the floor is at most one past the log's end — so this is
 	// also the case a lag-derived term would get wrong.
-	if ok, domain := e.SeatsServiceable(); !ok {
+	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("a node replaying records the log still holds shed its seats "+
 			"(domain %q) — that is being behind, not being wrong", domain)
 	}
@@ -223,7 +223,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node below the log refuses reads as %q, want %q", got,
 			statelog.RefuseBelowFloor)
 	}
-	if e.NativeHydrated(t.Context()) {
+	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the log")
 	}
 	// A COPY WITH A HOLE IN IT GOES OUT OF SERVICE, and the node keeps its
@@ -236,7 +236,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 			_, serves := e.local.For(t.Context())
 			return !serves
 		})
-	if ok, reason := e.SeatsServiceable(); !ok {
+	if ok, reason := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node shed its seats over a copy below the log (%s) — a "+
 			"wrong copy goes out of service, and the seats stay", reason)
 	}
@@ -258,7 +258,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 // and requires the fence's refusal under want, with nothing appended.
 func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want statelog.Reason) {
 	t.Helper()
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	_, before, err := running.log.Bounds(t.Context())
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)
@@ -290,7 +290,7 @@ func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want state
 // join's own comment once confused with a never-written stream's.
 func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -313,7 +313,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	// purge below is this test's own.
 	e.stopRetention()
 
-	s := e.native.Load().log
+	s := e.core.Load().log
 	name := tracker.Domain{}.Name()
 	spec := tracker.Domain{}.Stream()
 	running := s.Domain(name)
@@ -362,7 +362,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	appendBarrier := func() uint64 {
 		t.Helper()
 		seq, _, err := running.log.Append(t.Context(),
-			spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
+			spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, running.signer.Seal(body))
 		if err != nil {
 			t.Fatalf("append a barrier: %v", err)
 		}
@@ -503,7 +503,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T) {
 	t.Parallel()
 	e, _, running := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	writer := e.native.Load().writer
 	if writer == nil {
 		t.Fatal("the node runs no tracker writer")
@@ -573,8 +573,8 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
-	s := e.native.Load().log
-	gate := e.native.Load().gate
+	s := e.core.Load().log
+	gate := e.core.Load().gate
 	if gate == nil {
 		t.Fatal("the node runs no node gate")
 	}
@@ -586,7 +586,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 
 	const away = "node-away"
 	if res, err := gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict", By: "operator"}); err != nil || !res.Complete() {
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator}); err != nil || !res.Complete() {
 		t.Fatalf("evict %s: %v (%+v)", away, err, res)
 	}
 	at := running.runner.Committed()
@@ -632,7 +632,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		}
 		return out
 	}
-	readmit := GateRequest{Node: away, OpID: "op-readmit", By: "operator"}
+	readmit := GateRequest{Node: away, OpID: statelog.NewOpID(time.Now(), "readmit"), By: gateOperator}
 	refusedIn := func(domain string, seq, floorWant, firstWant uint64) {
 		t.Helper()
 		before := end()
@@ -766,7 +766,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	if e.native.Load().writer == nil || e.native.Load().pages == nil {
 		t.Fatal("the node runs no tracker writer or no page store")
 	}

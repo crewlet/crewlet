@@ -23,7 +23,7 @@ import (
 // NULL here would make every such row distinct from every other, which is the
 // exact opposite of what the key is for.
 type Subject struct {
-	// Handle is the seat, when the counterparty resolved to one.
+	// Handle is the seat's handle, when the counterparty resolved to one.
 	Handle string
 	// ExternalID and Platform identify an unmapped external human.
 	ExternalID string
@@ -55,6 +55,7 @@ func (s Subject) Valid() bool {
 
 // Profile is what one observer has learned about one subject.
 type Profile struct {
+	// Observer is the observing seat's handle.
 	Observer string
 	Subject  Subject
 
@@ -94,6 +95,8 @@ func NewCounterparties(db *store.DB) *Counterparties { return &Counterparties{db
 
 // Observation is one interaction's worth of what was learned.
 type Observation struct {
+	// Observer and Subject are keyed as [Profile]'s are: a seat by its
+	// handle.
 	Observer string
 	Subject  Subject
 
@@ -349,7 +352,7 @@ func (c *Counterparties) List(ctx context.Context, observer string, limit int) (
 
 // Count is how many people one seat holds a profile of — the set
 // [Counterparties.List] returns at most [MaxProfilesListed] of, so a listing
-// that was cut can say what it was cut from.
+// that was cut can say what it was cut from. Asked by the seat's handle.
 func (c *Counterparties) Count(ctx context.Context, observer string) (int, error) {
 	if c == nil || c.db == nil || observer == "" {
 		return 0, nil

@@ -40,12 +40,13 @@ import (
 // # Named from the source rows, never from the index
 //
 // The index keeps a title for ranking and never re-reads it for a rename, so a
-// backlink's title and a task's key and status are read from the REPLICATED
-// rows in a second transaction: the one read in this package that crosses the
-// estate boundary, which is why it is a batch from each side rather than a
-// join. A source the index still lists and the rows no longer publish (a page
-// trashed a moment ago, a task removed) is dropped — the orphan pass will drop
-// its links shortly, and listing it meanwhile would be a link to nothing.
+// backlink's title and a task's key, status and whether that key is its own
+// ([TaskLink.KeyCollision]) are read from the REPLICATED rows in a second
+// transaction: the one read in this package that crosses the estate boundary,
+// which is why it is a batch from each side rather than a join. A source the
+// index still lists and the rows no longer publish (a page trashed a moment
+// ago, a task removed) is dropped — the orphan pass will drop its links
+// shortly, and listing it meanwhile would be a link to nothing.
 type Backlinks struct {
 	Pages []PageLink `json:"pages"`
 	Tasks []TaskLink `json:"tasks"`
@@ -67,8 +68,24 @@ type PageLink struct {
 
 // TaskLink is one work item that links here.
 type TaskLink struct {
-	ID     string `json:"id"`
-	Key    string `json:"key"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
+
+	// KeyCollision marks a task holding a key ANOTHER task claimed first. The
+	// tracker answers a key with the task that claimed it, so a link built
+	// from [TaskLink.Key] would open the claimant rather than the task that
+	// links here; a reader reaches this one by [TaskLink.ID] instead (the
+	// tracker's `ItemAddress` rule, which the dashboard's `itemAddress`
+	// mirrors).
+	//
+	// THE TRACKER'S OWN COLUMN, read rather than re-derived, exactly as every
+	// tracker reader reads it: the applier derives `key_collision` from the
+	// key directory on every apply, so it is the same on every node and
+	// follows the claim wherever a purge hands it. Deriving it again here
+	// from `tracker_task_keys` would be a second copy of that rule, free to
+	// drift from the first.
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Title  string `json:"title"`
 	Status string `json:"status"`
 
@@ -225,6 +242,12 @@ func relatedTasks(ctx context.Context, tx *sql.Tx, pageID string) ([]string, err
 
 // linkedTasks names the live tasks among the cited and the related ids, by
 // key, each once with the ways it links.
+//
+// TWO TASKS CAN HOLD ONE KEY ([TaskLink.KeyCollision]), so the key alone does
+// not order the list: a tie is broken by the claimant first — the task the key
+// actually opens — and then by id, because the rows arrive from batched `IN`
+// reads in no order SQL promises and `slices.SortFunc` is not stable, so a tie
+// left to the input drew the two in either order from one answer to the next.
 func linkedTasks(ctx context.Context, tx *sql.Tx, cited, related []string) ([]TaskLink, error) {
 	via := map[string][]string{}
 	for _, id := range related {
@@ -239,7 +262,7 @@ func linkedTasks(ctx context.Context, tx *sql.Tx, cited, related []string) ([]Ta
 	out := []TaskLink{}
 	for chunk := range slices.Chunk(ids, ScanBatch) {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, key, title, status FROM tracker_tasks
+			SELECT id, key, key_collision, title, status FROM tracker_tasks
 			 WHERE removed_at IS NULL AND id IN (`+binds(len(chunk))+`)`,
 			anyOf(chunk)...)
 		if err != nil {
@@ -247,10 +270,12 @@ func linkedTasks(ctx context.Context, tx *sql.Tx, cited, related []string) ([]Ta
 		}
 		for rows.Next() {
 			var t TaskLink
-			if err := rows.Scan(&t.ID, &t.Key, &t.Title, &t.Status); err != nil {
+			var collision int
+			if err := rows.Scan(&t.ID, &t.Key, &collision, &t.Title, &t.Status); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
+			t.KeyCollision = collision == 1
 			t.Via = via[t.ID]
 			out = append(out, t)
 		}
@@ -260,7 +285,18 @@ func linkedTasks(ctx context.Context, tx *sql.Tx, cited, related []string) ([]Ta
 		}
 		_ = rows.Close()
 	}
-	slices.SortFunc(out, func(a, b TaskLink) int { return compareKeys(a.Key, b.Key) })
+	slices.SortFunc(out, func(a, b TaskLink) int {
+		if c := compareKeys(a.Key, b.Key); c != 0 {
+			return c
+		}
+		if a.KeyCollision != b.KeyCollision {
+			if b.KeyCollision {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
 	return out, nil
 }
 

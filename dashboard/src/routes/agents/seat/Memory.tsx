@@ -49,7 +49,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
       {memory.loading && !data && (
         <Skeleton variant="text" rows={5} label="Loading this seat's memory" />
       )}
-      <QueryState error={memory.error} loading={memory.loading && !data}>
+      <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
         {data && (
           <>
             <p className="t-caption">{heldWords(data.held_by)}</p>
@@ -183,7 +183,11 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
       <h3 id="prof-conversations" className="prof-section-title">
         Conversations
       </h3>
-      <QueryState error={threads.error} loading={threads.loading && !data}>
+      <QueryState
+        error={threads.error}
+        refusal={threads.refusal}
+        loading={threads.loading && !data}
+      >
         <div className="split thread-split">
           <Card padding="none">
             <Card.Header

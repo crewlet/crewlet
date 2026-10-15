@@ -223,7 +223,9 @@ func (r *roundTrip) writerOver(t *testing.T, appender statelog.Appender) *tracke
 	}
 	fence.Committed = r.waiter.Committed
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Log: appender, Records: r.log, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Log: appender,
+		Records: statelog.VerifiedLog{Log: r.log, Verifier: r.verifier},
+		Signer:  testSigner(t, tracker.Domain{}), Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Voids: r.waiter, Identity: r.waiter,
 		NodeID: r.nodeID, Admission: r.reserve,
 		Generation:    func() uint32 { return 0 },
@@ -351,6 +353,13 @@ type lossyLog struct {
 	landedOn string
 	landed   func()
 
+	// arriving runs BEFORE an append to a subject ending in its suffix
+	// reaches the broker, on the appending goroutine — after the write
+	// was decided and before it is accepted, which is where a case puts
+	// somebody else's whole gesture that the write's snapshot never saw.
+	arrivingOn string
+	arriving   func()
+
 	// dropOn and dropStage lose ONE append's acknowledgement on one
 	// subject and then the probe that resolves it — so a walk's single
 	// step, and nothing either side of it, has an unknown outcome. A read
@@ -426,6 +435,26 @@ func (l *lossyLog) afterAppendTo(suffix string, fn func()) {
 	l.landedOn, l.landed = suffix, fn
 }
 
+// beforeAppendTo runs fn once, before the next append to a subject ending in
+// suffix reaches the broker.
+func (l *lossyLog) beforeAppendTo(suffix string, fn func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.arrivingOn, l.arriving = suffix, fn
+}
+
+// takeArriving is the before-hook for subject, cleared as it is taken.
+func (l *lossyLog) takeArriving(subject string) func() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.arriving == nil || !strings.HasSuffix(subject, l.arrivingOn) {
+		return nil
+	}
+	fn := l.arriving
+	l.arriving = nil
+	return fn
+}
+
 // takeLanded is the hook for subject, cleared as it is taken.
 func (l *lossyLog) takeLanded(subject string) func() {
 	l.mu.Lock()
@@ -478,6 +507,9 @@ func (l *lossyLog) Append(ctx context.Context, subject, msgID string, expect *ui
 		return 0, false, &jetstream.APIError{
 			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded",
 		}
+	}
+	if fn := l.takeArriving(subject); fn != nil {
+		fn()
 	}
 	seq, dup, err := l.Appender.Append(ctx, subject, msgID, expect, body)
 	if err == nil {

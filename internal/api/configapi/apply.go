@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -63,7 +64,9 @@ type Applied struct {
 	// a re-activated stored company still breaks. Never nil.
 	Warnings []config.Warning
 
-	// Derived is the hierarchy the engine derives from the revision.
+	// Derived is the hierarchy the engine derives from the revision: every
+	// seat's handle, unit and agent id, and every unit's key, as the
+	// running company will see them.
 	Derived config.Derived
 }
 
@@ -112,8 +115,8 @@ type ValidationError struct {
 	Err error
 
 	// Derived is the hierarchy the refused document derives. A document
-	// with problems still has one, and a person fixing those problems needs
-	// to see it: a misspelled lead is easier to find in the chart it breaks.
+	// can be refused for one seat and still show a person where every
+	// other seat lands, and the problems are placed on that hierarchy.
 	Derived config.Derived
 }
 
@@ -122,8 +125,8 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 
 // RefusalFields is the structured half of a refused configuration document,
 // for a surface answering the refusal in its own words: the problems it
-// breaks, located and classified ([config.Problems]), and the hierarchy the
-// engine derived from it when it parsed far enough to have one.
+// breaks, located and classified ([config.Problems]), and — for a document the
+// engine parsed far enough to have one — the hierarchy it derived.
 //
 // ONE MAPPING for every surface a document refusal reaches, so a dashboard
 // placing problems on the chart reads the same shape from /config and from
@@ -140,7 +143,8 @@ func RefusalFields(err error) map[string]any {
 	var docErr *DocumentError
 	switch {
 	case errors.As(err, &invalid):
-		return map[string]any{"problems": config.Problems(invalid.Err), "derived": invalid.Derived}
+		return map[string]any{"problems": config.Problems(invalid.Err),
+			"derived": invalid.Derived}
 	case errors.As(err, &patchErr):
 		return map[string]any{"problems": config.Problems(patchErr.Err)}
 	case errors.As(err, &docErr):
@@ -159,11 +163,10 @@ type ApplyRequest struct {
 	// what it was for matters most here.
 	Summary string
 
-	// Author is who the revision records as its writer: the operator whose
-	// credential made an HTTP write, or the node for the engine's own. The
-	// KIND is the caller's to state because only the caller knows it — a
-	// label alone cannot say whether a person or the engine wrote.
-	Author store.Author
+	// By is who the revision records as its author: the name, the kind and
+	// the credential it was written through, [iam.ActorFor]'s whole answer
+	// for the party — or the engine's own name for a write a timer made.
+	By iam.Actor
 
 	// Expect is the revision the caller built this edit on. Empty is
 	// unconditional, which is what a first import and a script that owns
@@ -226,10 +229,18 @@ type draft struct {
 	build func(base) (*config.Company, []byte, error)
 	// rules is what the proposed company is held to.
 	rules func(*config.Company) error
-	// author is who the write is made as: the credential [Service.Authorize]
-	// judges, and the writer the revision records — one value for both, so
-	// the author a write was admitted as is the author it is stored under.
-	author store.Author
+	// principal is who asked for the write, which is admitted on what it
+	// changes (admission.go); nil for the engine's own writes, which no
+	// request made.
+	principal *iam.Principal
+	// addressedCheck is a dry run of one seat or unit at an address
+	// [Service.mayReach] admitted the caller to, which is answered even when
+	// it changes nothing (admission.go).
+	addressedCheck bool
+	// by is who the write is made as: the credential [Service.Authorize]
+	// judges, and the author the revision records — one value for both, so
+	// the party a write was admitted as is the party it is stored under.
+	by iam.Actor
 	// republishes is a write that re-publishes the active document's
 	// stored bytes unchanged ([Service.Reload]). It changes nothing about
 	// the company, so a managed document does not refuse it: see
@@ -249,20 +260,32 @@ type prepared struct {
 	document []byte
 	warnings []config.Warning
 	derived  config.Derived
-	author   store.Author
+	// by is the draft's party, carried rather than passed again to
+	// [Service.commit], so the author stored is the one prepare judged.
+	by iam.Actor
 }
 
 // prepare builds and checks a write, storing nothing.
 //
 // # In this order, and each step for a reason
 //
+//   - Whether the CREDENTIAL may change a managed document at all
+//     (managed.go), before anything is read: it is a question about who
+//     is asking and never about what they sent.
 //   - The active revision, and what the caller built on. A stale base is
 //     refused before any work, because nothing built on it can be kept.
 //   - The stored document, opened and held to no rule: it is the merge base
 //     and the prior masks are restored from, and a revision this build
 //     would refuse must stay replaceable by the write that corrects it.
 //   - The proposal, built by the draft.
+//   - Whether the caller may make it: admin, or a lead inside
+//     their own subtree (admission.go). The engine's own writes are not asked.
+//   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
+//     it too.
 //   - Its rules, and what an answer reports about it.
+//   - Whether it takes a human seat away from somebody bound to it or an
+//     open invitation holding it, which is the one step that reads outside
+//     this node (seatheld.go).
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// WHO MAY CHANGE THE DOCUMENT, before this reads or stores anything: a
 	// credential a managed deployment does not let write is refused, and a
@@ -271,7 +294,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// The HTTP routes have already asked, before they read the request
 	// ([Service.refusedManaged]); this is the rule for every other caller.
 	if !d.republishes {
-		if err := s.Authorize(d.author); err != nil {
+		if err := s.Authorize(d.by); err != nil {
 			return nil, err
 		}
 	}
@@ -311,21 +334,25 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	// DERIVED BEFORE IT IS JUDGED, because a refusal carries it too: a
-	// document with problems still has a hierarchy.
+	// WHO MAY MAKE IT, BEFORE ANYTHING IS SAID ABOUT IT: a refusal names what
+	// the caller may not change, rather than what is wrong with parts of the
+	// company they cannot read.
+	if d.principal != nil {
+		if err := admit(ctx, *d.principal, b.prior, company, d.addressedCheck); err != nil {
+			return nil, err
+		}
+	}
 	derived := config.Derive(company)
 	if invalid := d.rules(company); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
-	// AND AGAINST THE DEPLOYMENT, with the rule the apply itself runs
-	// ([config.CheckTiers]): a document every node would refuse to apply is
-	// refused here, naming the Tier A field, rather than activated to be
-	// refused everywhere a moment later.
-	if invalid := config.CheckTiers(s.boot, company); invalid != nil {
-		return nil, &ValidationError{Err: invalid, Derived: derived}
+	// AFTER THE RULES, because a document that is refused anyway takes no
+	// seat away, and it is the one step here that reads outside this node.
+	if err := s.checkHeldSeats(ctx, b.prior, company); err != nil {
+		return nil, err
 	}
 	p := &prepared{
-		document: document, warnings: company.Warnings(), derived: derived, author: d.author,
+		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
 	}
 	if found {
 		p.base = active.ID
@@ -349,26 +376,36 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 //
 // The plane is there: [Service.prepare] refused the write otherwise, and a
 // prepared write comes from nowhere else.
+//
+// BY IS THE AUTHOR AND THE CREDENTIAL BOTH, and the revision keeps both: a
+// revision is kept for ever, and one that named only the credential — a
+// person's machine token, `pat:<id>` — named something the identity sweep
+// deletes a week after it lapses, and with it the only record of whose it was.
+// It is the prepared write's own party rather than an argument, so the author
+// a revision is stored under is the one [Service.Authorize] judged.
 func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Applied, error) {
-	author := p.author
+	by := p.by
 	payload, err := secrets.Seal(s.cipher, p.document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
 	}
 	at := s.now()
 	id, err := s.configs.Insert(ctx, store.Revision{
-		ParentID: p.base, Source: revisionSource, CreatedBy: author.Name,
-		CreatedByKind: author.Kind, Summary: summary, Payload: payload, CreatedAt: at,
+		ParentID: p.base, Source: revisionSource, CreatedBy: by.Name,
+		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
+		Summary: summary, Payload: payload, CreatedAt: at,
 	})
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: store the config: %w", err)
 	}
 	published, err := s.plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: p.base,
-		// THE AUTHOR TRAVELS WITH THE POINTER, so every peer that adopts
-		// this revision records who wrote it rather than itself.
+		// THE ORIGIN RIDES THE POINTER, so every node that adopts this
+		// revision records who wrote it, through which credential, from
+		// where and when — rather than itself, from `fleet`, at the
+		// instant it happened to apply it.
 		Origin: coord.RevisionOrigin{
-			Author: author.Name, AuthorKind: string(author.Kind),
+			Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
 			Source: revisionSource, CreatedAt: at,
 		},
 		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
@@ -386,7 +423,8 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		// while this node goes on serving what it served, and its
 		// reconciler adopts whichever revision won.
 		log.InfoContext(ctx, "config_activation_raced",
-			"revision", id, "expected", p.base, "by", author.Name)
+			"revision", id, "expected", p.base, "by", by.Name,
+			"operator", by.OperatorID)
 		raced := &RacedError{Base: p.base, Stored: id}
 		if current, _, terr := s.plane.Target(ctx); terr == nil {
 			raced.Current = current.RevisionID
@@ -402,18 +440,21 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	// this node's active revision when it applies the epoch.
 	//
 	// AT THE POINTER'S INSTANT, which may be later than the one asked for
-	// (see [coord.ActivationAt]): the local copy's `activated_at` is what
-	// this node boots its chart with next time.
+	// (see [coord.ActivationAt]): the local copy's `activated_at` is the
+	// instant this node's config history shows and the one its reconciler
+	// holds the pointer against, and at the instant it asked for the
+	// reconciler would read the fleet's own activation as a re-activation
+	// this node had not applied.
 	if _, aerr := s.configs.Activate(ctx, id, published.At); aerr != nil {
 		log.WarnContext(ctx, "config_revision_not_marked_active",
 			"revision", id, "epoch", published.Epoch, "error", aerr,
 			"detail", "the fleet is running this revision; this node marks "+
 				"it active when its reconciler applies the epoch")
 	}
-	s.nudge(ctx, id, summary, author)
+	s.nudge(ctx, id, summary, by)
 	log.InfoContext(ctx, "config_revision_written",
-		"revision", id, "epoch", published.Epoch, "by", author.Name,
-		"by_kind", string(author.Kind), "summary", summary)
+		"revision", id, "epoch", published.Epoch, "by", by.Name,
+		"operator", by.OperatorID, "summary", summary)
 	return Applied{
 		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
 		Warnings: p.warnings, Derived: p.derived,
@@ -428,7 +469,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
-		expect: req.Expect, requireActive: true, author: req.Author,
+		expect: req.Expect, requireActive: true, by: req.By,
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
@@ -478,9 +519,9 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 // or empty for nothing, which refuses the write if a revision has appeared
 // since. A full replacement built on nothing and landing on something would
 // discard a company its author never saw.
-func replaceDraft(incoming *config.Company, built string, author store.Author) draft {
+func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
-		expect: built, expectAbsent: built == "", author: author,
+		expect: built, expectAbsent: built == "", by: by,
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.found {
@@ -560,10 +601,20 @@ func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company,
 	// document to NO rule. Validation happens exactly once, in prepare,
 	// after the masks are restored. This line used to validate here as
 	// well, before the restore, so on a document a newer peer had extended
-	// every PATCH that carried a masked credential (any roles or units
-	// array read from GET /config) was refused as an invalid patch naming
-	// the masks.
-	return config.DecodeCompany(merged)
+	// every PATCH that carried a masked credential (any mcp_servers list
+	// read from GET /config) was refused as an invalid patch naming the
+	// masks.
+	//
+	// AND IT MINTS NOTHING, where the authored reader writes down every
+	// unit's key and every seat's handle: a seat the patch added would be
+	// stored without its handle, and take another from its name the first
+	// time that name was corrected.
+	cfg, err = config.DecodeCompany(merged)
+	if err != nil {
+		return nil, err
+	}
+	config.MintIdentities(cfg)
+	return cfg, nil
 }
 
 // withoutLines clears the line from every fault in err, for a failure found in
@@ -617,9 +668,9 @@ func onlyUnknownField(_ *config.Company, err error) error {
 // A NEW revision rather than a re-pointed old one, for the same reason revert
 // writes one: the history stays append-only, so "the credentials were
 // reloaded at 04:12" is a fact somebody can find later.
-func (s *Service) Reload(ctx context.Context, summary string, author store.Author) (Applied, error) {
+func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (Applied, error) {
 	prepared, err := s.prepare(ctx, draft{
-		requireActive: true, author: author,
+		requireActive: true, by: by,
 		// NOT A CHANGE TO THE COMPANY, so a managed document does not
 		// refuse it: the bytes below are the active revision's own, and
 		// what a reload exists for is the credential rotation a person

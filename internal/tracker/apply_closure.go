@@ -123,11 +123,13 @@ func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 // beneath the root, and a board keeps a subtree's rows to the project it is
 // drawing on the assumption that it does. So a subtask elsewhere is not drawn
 // under its root — which is what a move that stopped part-way leaves until it
-// is finished, and what a merge re-parenting a subtask onto a task in another
-// project leaves until somebody moves it. The column, its filter and the
-// attention index all shipped with the schema and nothing ever set it, so the
-// attention queue answered `flag=inconsistent_project` with nothing on every
-// company.
+// is finished. The writer refuses every other way in (a create or a re-parent
+// under a parent in another project, see [refuseParent], and a merge carrying
+// subtasks across, [ErrReparentAcrossProjects]); this is what a record that
+// carries the shape anyway gets instead of a refusal that would stall every
+// node. The column, its filter and the attention index all shipped with the
+// schema and nothing ever set it, so the attention queue answered
+// `flag=inconsistent_project` with nothing on every company.
 //
 // DERIVED HERE, where the root is already known, and so on every apply that
 // can move either end: a task's own apply rebuilds its ancestry, and a root's

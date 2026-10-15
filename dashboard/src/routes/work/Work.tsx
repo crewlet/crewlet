@@ -90,7 +90,7 @@ export function Work() {
             refusal is said beside it, because "this is not an empty company"
             is the fact a reader acts on. */}
         {none ? <NoWorkYet /> : <ItemsView archivedProjects={archived} />}
-        <QueryState error={projects.error} loading={false} />
+        <QueryState error={projects.error} refusal={projects.refusal} loading={false} />
       </div>
     </>
   );

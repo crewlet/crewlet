@@ -21,7 +21,7 @@ they part, [the reasons are listed](#why-the-counter-and-the-rollup-still-differ
 ## Budget windows
 
 A `token_budget` is a set of ceilings per calendar window — `day`, `week` and
-`month`, each optional — on the company, on a role, or on both:
+`month`, each optional — on the company, on an agent seat, or on both:
 
 ```yaml
 timezone: Europe/Berlin
@@ -76,27 +76,15 @@ the company's before the seat's — so a window that a coding run, a background
 pass or a person's answers filled says when it last turned work away rather
 than reading as one that has refused nothing.
 
-A window's allowance comes back when the window turns over, rolled inside the
-first charge after the boundary — nothing has to run at midnight. There is no
-reset: to make room before a window turns over, raise its ceiling. The engine
-judges each window's `state` — `ok`, `near` at 90% of the ceiling, or `refusing`
-— and every screen draws the engine's word rather than dividing for itself. See
-[Deployment § Token budgets](deployment.md#token-budgets) for the park a seat out
-of room waits in, and [Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows)
-for how the counter is kept.
-
-### Raising a ceiling from the dashboard
-
-**Spend › Budgets** (`#/spend/budgets`) draws every scope's day, week and month
-with what it has spent and its ceiling, and an operator raises a ceiling there
-in place: the pencil beside it takes `50M`, `2.5M` or the digits, and an empty
-field removes the ceiling. Every save is checked against the whole company
-first, so a ceiling that could never refuse a turn — a seat's at or above the
-company's — is shown as a warning before it is stored. Home and the Inbox offer
-the same change as **Raise budget** on a seat the engine stopped, opened on the
-scope that is actually refusing it. It is an ordinary configuration revision,
-recorded with a summary such as "Raise Agent PM's daily token ceiling from 2M
-to 5M", and each node enforces it once it has applied that epoch. See
+Both ceilings are part of the company document. The **company's**
+`token_budget` and a **seat's** are written through
+[`/config`](configure-via-api.md) (`admin`) — a seat's on its own with
+`PUT /config/roles/{handle}` — and every node enforces them once it has applied
+that epoch. The write is a revision recorded with a summary such as "Raise the
+company's daily token ceiling from 2M to 5M". A seat ceiling the company's own
+ceiling makes unable to refuse a turn — a seat's day at or above the company's
+day, say — is reported as a warning at the seat's ceiling by `crewlet validate` and on
+every `/config` write's answer. See
 [Dashboard design § Spend › Budgets](../reference/dashboard-design.md#spend--budgets-raised-in-place).
 
 ## The spend rollup, and why it has two sources
@@ -110,8 +98,9 @@ happens; no screen of the bundled dashboard draws it.
 
 **Every named window** — 7, 30 or 90 days, or two dates you name — is read from
 the replicated [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
-Every node derives its own seats' day from its own event log and publishes it
-whole; every node applies every node's days. So a named window is:
+Every data node derives its own day from its own event log — its own seats',
+and those of the nodes without `data` whose events it keeps through custody —
+and publishes it whole; every data node applies every node's days. So a named window is:
 
 - **the company's**, whichever node answers — a three-node fleet no longer shows
   a third of its spend on the node the dashboard happened to reach;

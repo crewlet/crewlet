@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -33,7 +34,7 @@ import (
 func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	if len(s.held().order) == 0 {
 		t.Fatal("the node runs no domain, so nothing below is checked")
 	}
@@ -76,7 +77,7 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	// A CHECKPOINT, so this node's rows are keyed to a stream at all.
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-1", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
@@ -165,7 +166,7 @@ func TestAPeerIsOnThisStreamOnlyWhereItsRowSaysSo(t *testing.T) {
 func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	for _, op := range []string{"op-1", "op-2"} {
 		if res, err := e.native.Load().writer.EvictNode(t.Context(), op, "node-"+op); err != nil ||
 			res.Outcome != statelog.OutcomeApplied {
@@ -231,7 +232,7 @@ func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 		t.Fatalf("delete the stream: %v", err)
 	}
 	_, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: stream, Confirm: statelog.ConfirmationOf(time.Now()), By: "ops-1",
+		Stream: stream, Confirm: statelog.ConfirmationOf(time.Now()), By: reanchorOperator,
 	})
 	if !errors.Is(err, statelog.ErrReanchorRefused) ||
 		!strings.Contains(err.Error(), "could not be read") {
@@ -254,7 +255,7 @@ func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 // started the loop again, so even a reanchor that worked needed a restart.
 func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -274,7 +275,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	lost := readCursorRow(t, e, tracker.Domain{}.Name()).created
 	// EVERY OTHER DOMAIN'S CHECKPOINT, as its applier left it.
 	untouched := map[string]cursorRow{}
-	for _, name := range e.native.Load().log.held().order {
+	for _, name := range e.core.Load().log.held().order {
 		if name == (tracker.Domain{}).Name() {
 			continue
 		}
@@ -290,20 +291,20 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 
 	// SECOND BOOT: the tracker stops on the recreated log.
 	e2, back2 := bootNode(t, &b, cfg)
-	running := e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e2.core.Load().log.Domain(tracker.Domain{}.Name())
 	waitUntil(t, 10*time.Second, "the tracker to stop on its recreated log", func() bool {
 		return errors.Is(running.runner.Stopped(), statelog.ErrStreamRecreated)
 	})
 	// THE POSITION THIS NODE PUBLISHES NAMES THE LOST STREAM, which its rows
 	// came from — not the rebuilt one this runner was built against at boot
 	// — or a peer would compare this node's sequences with the new stream's.
-	e2.native.Load().log.publishPositions(t.Context())
+	e2.core.Load().log.publishPositions(t.Context())
 	published, err := e2.backends.Fleet.Positions(t.Context())
 	if err != nil {
 		t.Fatalf("read the register: %v", err)
 	}
 	for _, row := range published {
-		if row.NodeID != e2.native.Load().nodeID {
+		if row.NodeID != e2.core.Load().nodeID {
 			continue
 		}
 		if got := row.Domains[tracker.Domain{}.Name()].StreamCreatedAt; statelog.IdentityOf(lost, got, true) != statelog.StreamSame {
@@ -338,7 +339,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	}
 
 	plan, err := e2.Reanchor(t.Context(), ReanchorRequest{
-		Stream: trackerStream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
+		Stream: trackerStream, Confirm: statelog.ConfirmationOf(live), By: reanchorOperator,
 	})
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
@@ -384,7 +385,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 			t.Errorf("%s's checkpoint moved from %+v to %+v during a reanchor of "+
 				"the tracker's log", name, before, got)
 		}
-		other := e2.native.Load().log.Domain(name).runner
+		other := e2.core.Load().log.Domain(name).runner
 		if err := other.StreamIdentity(); err != nil {
 			t.Errorf("%s refuses after a reanchor of another log: %v", name, err)
 		}
@@ -398,8 +399,8 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	// THIRD BOOT: every applier comes up on its own stream.
 	e3, _ := bootNode(t, &b, cfg)
 	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", hydrated(t, e3))
-	for _, name := range e3.native.Load().log.held().order {
-		runner := e3.native.Load().log.Domain(name).runner
+	for _, name := range e3.core.Load().log.held().order {
+		runner := e3.core.Load().log.Domain(name).runner
 		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
 		// — and zero for a log nothing was ever written to, which is every
 		// log but the tracker's here: the company boots with no activation,
@@ -416,7 +417,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 			t.Errorf("%s refuses after the restart: %v", name, err)
 		}
 	}
-	if got := e3.native.Load().log.Domain(tracker.Domain{}.Name()).runner.Committed().Generation; got != gen {
+	if got := e3.core.Load().log.Domain(tracker.Domain{}.Name()).runner.Committed().Generation; got != gen {
 		t.Fatalf("the tracker came back at generation %d, want %d", got, gen)
 	}
 }
@@ -436,7 +437,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 // double; the objects are what went wrong, and they are what is checked.
 func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -508,7 +509,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 
 	// THIRD BOOT: the same stream, ending below this node's checkpoint.
 	e3, _ := bootNode(t, &b, cfg)
-	running := e3.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e3.core.Load().log.Domain(tracker.Domain{}.Name())
 	waitUntil(t, 10*time.Second, "the tracker to find its checkpoint past the log", func() bool {
 		return errors.Is(running.runner.StreamIdentity(), statelog.ErrAheadOfLog)
 	})
@@ -530,7 +531,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 			"the log's end, %d", view.Case, view.Cursor, stats.LastSeq)
 	}
 	plan, err := e3.Reanchor(t.Context(), ReanchorRequest{
-		Stream: trackerStream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1",
+		Stream: trackerStream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
 	})
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
@@ -628,7 +629,7 @@ func taskState(t *testing.T, e *Engine, id string) taskFields {
 func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
 	stream := running.spec.Name
@@ -659,7 +660,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 		t.Fatalf("read the register: %v", err)
 	}
 	for _, row := range rows {
-		if row.NodeID != e.native.Load().nodeID {
+		if row.NodeID != e.core.Load().nodeID {
 			continue
 		}
 		if got := row.Domains[name].StreamCreatedAt; statelog.IdentityOf(lost, got, true) != statelog.StreamSame {
@@ -685,7 +686,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	}
 	reanchor := func() (statelog.ReanchorPlan, error) {
 		return e.Reanchor(t.Context(), ReanchorRequest{
-			Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
+			Stream: stream, Confirm: statelog.ConfirmationOf(live), By: reanchorOperator,
 		})
 	}
 
@@ -738,7 +739,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 		t.Fatalf("read the register: %v", err)
 	}
 	for _, row := range rows {
-		if row.NodeID == e.native.Load().nodeID && row.Domains[name].Generation != plan.Generation {
+		if row.NodeID == e.core.Load().nodeID && row.Domains[name].Generation != plan.Generation {
 			t.Fatalf("right after the reanchor this node's row says generation %d, "+
 				"want %d — the peers it left behind would not hear of it until the "+
 				"next heartbeat", row.Domains[name].Generation, plan.Generation)
@@ -760,7 +761,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
@@ -787,7 +788,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	}
 
 	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: tracker.Domain{}.Stream().Name, Confirm: named[1], By: "ops-1",
+		Stream: tracker.Domain{}.Stream().Name, Confirm: named[1], By: reanchorOperator,
 	})
 	if err != nil {
 		t.Fatalf("Reanchor confirming the instant the refusal named: %v", err)
@@ -823,7 +824,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	store := e.native.Load().pages
 	if store == nil {
 		t.Fatal("the node runs no knowledge base")
@@ -846,7 +847,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	}
 	live := view.CreatedAt
 	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
+		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: reanchorOperator,
 	})
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
@@ -856,7 +857,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	// THE PAGES LOG CARRIES THE PAGES RECORD, applied as the pages audit row.
 	waitUntil(t, 10*time.Second, "the pages generation record to apply", func() bool {
 		return countRows(t, e, `SELECT COUNT(*) FROM pages_log_generations
-			WHERE generation = 1 AND by = 'operator:ops-1'`) == 1
+			WHERE generation = 1 AND by = 'ops-1'`) == 1
 	})
 	// AND THE TRACKER NEVER HEARD OF IT.
 	if n := countRows(t, e, `SELECT COUNT(*) FROM tracker_log_generations`); n != 0 {
@@ -900,7 +901,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 func TestHaltingOneApplierLeavesTheOthersRunning(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	halted := s.Domain(tracker.Domain{}.Name())
 	other := s.Domain(pages.Domain{}.Name())
 
@@ -941,7 +942,7 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 	e, _ := aRunningNode(t)
 	_, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: tracker.Domain{}.Stream().Name, Confirm: "2020-01-01T00:00:00Z",
-		By: "ops-1",
+		By: reanchorOperator,
 	})
 	if !errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a reanchor confirming the wrong instant = %v, want a refusal", err)
@@ -971,7 +972,7 @@ func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	t.Helper()
 	subject := tracker.EvictionSubject(node)
 	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "ops-1",
+		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "ops-1",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -979,7 +980,7 @@ func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	}
 	record, err := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.GateRecordVersion, OpID: opID, Subject: subject,
+			V: tracker.RecordVersion, OpID: opID, Subject: subject,
 			Op: tracker.OpEviction, CreatedAt: time.Now().UTC(),
 			Scope: tracker.ScopeSet{Subject: true}, Gen: gen, Writer: writer,
 		},
@@ -992,7 +993,7 @@ func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	spec := running.spec
 	wire := statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
 	seq, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+wire.String(),
-		opID, nil, record)
+		opID, nil, running.signer.Seal(record))
 	if err != nil {
 		t.Fatalf("append the eviction of %s: %v", node, err)
 	}
@@ -1007,7 +1008,7 @@ type cursorRow struct {
 
 func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	t.Helper()
-	stream := e.native.Load().log.Domain(domain).spec.Name
+	stream := e.core.Load().log.Domain(domain).spec.Name
 	at, created, _, err := statelog.CursorFor(t.Context(), e.backends.Store.Replicated(), stream)
 	if err != nil {
 		t.Fatalf("read %s's checkpoint: %v", domain, err)
@@ -1015,10 +1016,14 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	return cursorRow{at: at, created: created}
 }
 
-// testActivation is the configuration activation an internal test's direct
-// container writes name. Any fixed non-zero instant: what these cases are
-// about is not the epoch, and the containers they write start at none.
+// testActivation is the activation an internal test's direct container writes
+// are stamped with. Any non-zero instant: what these cases are about is not the
+// chart, and the containers they write start at none.
 var testActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+
+// reanchorOperator is who runs a reanchor in these cases: the author, the kind
+// of party and the credential every generation record carries.
+var reanchorOperator = iam.Actor{Name: "ops-1", Kind: iam.ActorOperator, OperatorID: "ops-1"}
 
 func countRows(t *testing.T, e *Engine, query string, args ...any) int {
 	t.Helper()
@@ -1073,7 +1078,7 @@ func jetStreamOn(t *testing.T, back *Backends) natsjs.JetStream {
 func TestTwoNodesCannotOpenOneGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	spec := running.spec
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -1099,13 +1104,13 @@ func TestTwoNodesCannotOpenOneGeneration(t *testing.T) {
 	}
 	zero := uint64(0)
 	if _, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+rec.Subject.String(),
-		rec.OpID, &zero, rec.Payload); err != nil {
+		rec.OpID, &zero, running.signer.Seal(rec.Payload)); err != nil {
 		t.Fatalf("land the peer's generation record: %v", err)
 	}
 
 	_, err = e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: spec.Name, Confirm: statelog.ConfirmationOf(view.CreatedAt),
-		By: "ops-1", Force: true,
+		By: reanchorOperator, Force: true,
 	})
 	if !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), "node-b") {
 		t.Fatalf("a forced reanchor onto the generation node-b opened = %v, want a "+

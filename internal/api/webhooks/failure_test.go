@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 )
 
@@ -43,6 +44,9 @@ func TestABodyThatStopsMidWayIsNotHalfAccepted(t *testing.T) {
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.Code)
+	}
+	if got := refusalCode(t, res); got != httpjson.CodeUnreadableBody {
+		t.Errorf("error = %q, want the vocabulary's %q", got, httpjson.CodeUnreadableBody)
 	}
 	if e.published.count() != 0 || len(e.rows(t)) != 0 {
 		t.Error("a truncated body reached the queue or the store")
@@ -140,46 +144,5 @@ func TestTheOAuthLandingIsReachableBeforeAnythingIsConfigured(t *testing.T) {
 	if !strings.Contains(page, "Bot User OAuth Token") ||
 		!strings.Contains(page, "OAuth &amp; Permissions") {
 		t.Errorf("the page does not say where the token is:\n%s", page)
-	}
-}
-
-func TestAMalformedJWKEntryIsSkippedNotTrusted(t *testing.T) {
-	t.Parallel()
-	// One unusable entry must not discard the rest — a key set carries the
-	// outgoing key alongside the incoming one through a rotation — and an
-	// entry whose exponent will not fit an int must be skipped rather than
-	// WRAPPED into a different key, which produces a public key that is
-	// wrong without being detectably so.
-	cases := []struct {
-		name string
-		doc  string
-		want bool
-	}{
-		{"a good entry beside a broken one",
-			`{"keys":[{"kid":"bad","kty":"RSA","n":"!!!","e":"AQAB"},` +
-				`{"kid":"k0","kty":"RSA","n":"` + modulusOf(t) + `","e":"AQAB"}]}`, true},
-		{"an exponent too large for an int",
-			`{"keys":[{"kid":"k0","kty":"RSA","n":"` + modulusOf(t) +
-				`","e":"AQABAQABAQABAQAB"}]}`, false},
-		{"an exponent of zero",
-			`{"keys":[{"kid":"k0","kty":"RSA","n":"` + modulusOf(t) + `","e":"AA"}]}`, false},
-		{"an empty modulus",
-			`{"keys":[{"kid":"k0","kty":"RSA","n":"","e":"AQAB"}]}`, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = w.Write([]byte(tc.doc))
-			}))
-			t.Cleanup(server.Close)
-			_, err := webhooks.NewJWKS(server.URL, nil, nil).Key(t.Context(), "k0")
-			if tc.want && err != nil {
-				t.Errorf("the usable key was discarded with the broken one: %v", err)
-			}
-			if !tc.want && err == nil {
-				t.Error("a key that cannot be rebuilt correctly was accepted")
-			}
-		})
 	}
 }

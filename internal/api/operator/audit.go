@@ -6,8 +6,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/org"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -20,8 +21,9 @@ import (
 // publish listener writes the event store row on this node.
 //
 // Declared here, by the consumer, and exported because the API's backup route
-// publishes through [Audit] too — one construction of the envelope rather
-// than two that could disagree about its source.
+// and the human write surface's tool-less verbs publish through [Audit] too —
+// one construction of the envelope rather than several that could disagree
+// about its source.
 type AuditPublisher interface {
 	Publish(ctx context.Context, topic string, ev *events.Event) error
 }
@@ -55,75 +57,114 @@ func Audit(ctx context.Context, pub AuditPublisher, data events.Payload) {
 	}
 }
 
-// BoundSeat is the human seat a token id is bound to by
-// `contact.crewlet_operator_id`, or "" for a token nobody bound — the person
-// an audit record names beside the credential. Exported for the API's backup
-// route, which has the same question about the same caller. lookup resolves a
-// `${VAR}` binding, as [Options.Env] does here.
-func BoundSeat(chart func() *org.Organization, lookup org.EnvLookup, operatorID string) string {
-	return seatFor(chart, lookup, operatorID)
+// Acted is one call's runtime audit record, built from the request's
+// principal: who made it, through which credential, on which transport, the
+// verb, the operation and what became of it.
+//
+// THE PRINCIPAL IS THE ONE THE REQUEST CARRIES, written down by
+// [auth.AttributionOf] — [iam.ActorFor]'s three halves — so the audit row and
+// every history row the call wrote name the same author, kind and credential.
+//
+// EXPORTED for the human write surface's tool-less verbs — a purge, a rename,
+// a take-down — which make their writes without a tool and record the call
+// through this same constructor rather than a copy of it.
+func Acted(ctx context.Context, transport, verb, requestID string,
+	outcome types.AuditOutcome, position, refusal string) types.OperatorActed {
+
+	by := auth.AttributionOf(ctx)
+	return types.NewOperatorActed(types.OperatorActed{
+		ActorName: by.Name, ActorKind: string(by.Kind), OperatorID: by.OperatorID,
+		Transport: transport, Tool: verb, RequestID: requestID,
+		Outcome: outcome, Position: position, Refusal: refusal,
+	})
 }
 
-// dispatch is the one path every transport takes into a tool, and the one
-// place a call is audited — so the dashboard and a person's assistant cannot
-// differ in what is recorded about them.
-//
-// A PROVEN READ IS NOT AUDITED: it changes nothing, and a row per question an
-// assistant asked would bury the writes an audit is read for. A tool whose
-// read-only hint is unknown is audited as the write it may be, the same rule
-// the act transport admits it by. A name the catalogue does not hold is not a
-// call at all.
-func (s *Server) dispatch(ctx context.Context, transport, requestID, name string,
-	args map[string]any) (tools.Result, bool, error) {
+// AuditGesture publishes the runtime audit record of one call a surface made
+// WITHOUT a tool — the human write surface's purge, rename, trash, restore,
+// comment take-down and remark edit — read exactly as [Server.Dispatch] reads
+// a tool's: a writer error through [ClassifyWrite], so it is `unknown` where
+// the write may have landed, `refused` with its class where the domain or the
+// authority table said no, and `failed` where the node broke — a fault, or
+// nothing classified it; and the writer's own outcome and position where it
+// answered.
+func AuditGesture(ctx context.Context, pub AuditPublisher, transport, verb,
+	key string, outcome statelog.Outcome, position statelog.Position, err error) {
 
-	// THE CALLER'S SEAT IS RESOLVED ONCE, here or at the transport's
-	// admission, and the tool's actor and the audit record both read that
-	// one answer — see [withSeat].
-	operatorID, _ := auth.OperatorFrom(ctx)
-	seat, pinned := pinnedSeat(ctx)
-	if !pinned {
-		seat = seatFor(s.chart, s.env, operatorID)
-		ctx = withSeat(ctx, seat)
+	if err != nil {
+		result := tools.Result{Failed: true, Cause: ClassifyWrite(err)}
+		got, _, refusal := auditOutcome(verb, result, nil)
+		Audit(ctx, pub, Acted(ctx, transport, verb, key, got, "", refusal))
+		return
 	}
-	result, served, err := s.catalogue.call(ctx, name, args)
-	if !served || readOnly(name) {
-		return result, served, err
+	got := types.AuditOutcome(outcome)
+	if outcome == "" {
+		// A WRITE THAT CHANGED NOTHING APPENDED NOTHING, and is applied:
+		// the state asked for already holds.
+		got = types.AuditApplied
 	}
-	record := types.OperatorActed{
-		OperatorID: operatorID,
-		ActorSeat:  seat,
-		Transport:  transport,
-		Tool:       name,
-		RequestID:  requestID,
+	if !got.Valid() {
+		got = types.AuditUnknown
 	}
-	record.Outcome, record.Position, record.Refusal = auditOutcome(name, result, err)
-	Audit(ctx, s.audit, types.NewOperatorActed(record))
-	return result, served, err
+	at := ""
+	if !position.IsZero() {
+		at = position.String()
+	}
+	Audit(ctx, pub, Acted(ctx, transport, verb, key, got, at, ""))
+}
+
+// AuditRefusal publishes the runtime audit record of a call a surface refused
+// on an authority decision it took ITSELF, before any writer or tool ran: a
+// decision this node could not take is `refused` as `unavailable`, and every
+// other is `refused` as `forbidden` — the classes a tool's own gate states for
+// the same two answers.
+func AuditRefusal(ctx context.Context, pub AuditPublisher, transport, verb,
+	key string, undecided bool) {
+
+	class := crewletmcp.RefusalForbidden
+	if undecided {
+		class = crewletmcp.RefusalUnavailable
+	}
+	Audit(ctx, pub, Acted(ctx, transport, verb, key, types.AuditRefused, "",
+		string(class)))
+}
+
+// auditCall publishes one dispatched call's record.
+//
+// A PROVEN READ IS NOT AUDITED, and the dispatch does not call this for one: it
+// changes nothing, and a row per question an assistant asked would bury the
+// writes an audit is read for. A tool whose read-only hint is unknown is
+// audited as the write it may be.
+func (s *Server) auditCall(ctx context.Context, c Call, result tools.Result, err error) {
+	outcome, position, refusal := auditOutcome(c.Tool, result, err)
+	Audit(ctx, s.audit, Acted(ctx, c.Transport, c.Tool, c.Key, outcome,
+		position, refusal))
 }
 
 // auditOutcome reads what became of one call, in the audit's vocabulary.
 //
-// THE SAME READING THE ACT TRANSPORT ANSWERS WITH, so the record and the
-// answer the caller was given cannot disagree: an interruption is `unknown`,
-// because whether the write before it landed is exactly what nobody knows; a
+// THE SAME READING THE TRANSPORTS ANSWER WITH, so the record and the answer the
+// caller was given cannot disagree: an interruption is `unknown`, because
+// whether the write before it landed is exactly what nobody knows; a write the
+// tool could not vouch for is `unknown` too ([crewletmcp.UnknownOf]); a
 // classified refusal is `refused` with its class; an unclassified failure is
-// `failed`; and a success is the tool's own stated outcome and position
-// ([receiptOf]), `unknown` for an outcome this build does not know.
+// `failed`, and so is a FAULT ([crewletmcp.RefusalInternalError]) — the node
+// broke rather than turned the call down, which is the outcome `failed` names,
+// and its reason is in the log rather than stated; and a success is the tool's
+// own stated outcome and position ([receiptOf]), `unknown` for an outcome this
+// build does not know.
 func auditOutcome(name string, result tools.Result, err error) (
 	types.AuditOutcome, string, string) {
 
 	if err != nil {
 		return types.AuditUnknown, "", ""
 	}
-	if result.Failed && result.Unknown {
-		// A write nobody can vouch for, which the caller is answered as
-		// `unknown` — never `refused`, which would record that nothing
-		// was written.
+	if crewletmcp.UnknownOf(result) {
 		return types.AuditUnknown, "", ""
 	}
 	if result.Failed {
-		if _, known := RefusalStatus(result.Refusal); known {
-			return types.AuditRefused, "", string(result.Refusal)
+		class := crewletmcp.RefusalOf(result)
+		if class.Valid() && class != crewletmcp.RefusalInternalError {
+			return types.AuditRefused, "", string(class)
 		}
 		return types.AuditFailed, "", ""
 	}

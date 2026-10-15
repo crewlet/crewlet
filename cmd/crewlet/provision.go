@@ -10,11 +10,13 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // The provisioning commands, and the flags they share.
@@ -74,7 +76,9 @@ func bootstrapFlag(fs *flag.FlagSet) *string {
 // three provision commands just before this call, so two running at once
 // raced on it — which the race detector caught the moment the CLI's tests
 // ran in parallel. A writer is an argument the caller already has.
-func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenSink, func(), error) {
+func (s sinkFlags) open(ctx context.Context, environ config.Source, stdout io.Writer) (
+	provision.TokenSink, func(), error) {
+
 	chosen := 0
 	for _, on := range []bool{*s.secretStore, *s.envFile != "", *s.print} {
 		if on {
@@ -102,11 +106,23 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 		return sink, func() {}, err
 	}
 
-	sv, closeStore, err := openSecretStore(ctx, *s.bootstrap, *s.api)
+	sv, closeStore, err := openSecretStore(ctx, environ, *s.bootstrap, *s.api)
 	if err != nil {
 		return nil, nil, err
 	}
-	return provision.NewSecretStoreSink(sv, currentOperator()), closeStore, nil
+	return provision.NewSecretStoreSink(sinkStore{sv}, hostAuthor()), closeStore, nil
+}
+
+// sinkStore is a secret target as a provisioning sink's store. The author a
+// row records is the store's to report and a sink has nobody to tell, so the
+// answer is dropped here rather than widening the sink's own seam.
+type sinkStore struct{ *secretTarget }
+
+func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) error {
+
+	_, err := s.secretTarget.Set(ctx, name, value, by, source, now)
+	return err
 }
 
 // companyResolver builds the chain a run resolves Tier B ${VAR} references
@@ -124,41 +140,47 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 //
 // # When there is no store
 //
-// A node with no bootstrap at this path, or one declaring no keyring,
-// resolves from the environment alone. That is the pre-store deployment and
-// it is supported — so it is a NOTE rather than a failure, and it is a note
+// A run with no bootstrap at this path resolves from the environment alone —
+// the command is run somewhere other than a node, with `-public-url` naming
+// the deployment — so it is a NOTE rather than a failure, and it is a note
 // rather than silence: a mistyped -config resolving nothing has exactly the
 // destructive outcome above, and an operator has to be able to see which
-// chain ran.
+// chain ran. A bootstrap that exists always names a keyring, because Tier A
+// refuses one that does not.
 //
 // A bootstrap that exists and cannot be read fails the run instead. Someone
 // who configured a store and did not get it must not have their secrets
 // quietly resolved from a stale export.
-func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (*config.Resolver, func(), error) {
-	envOnly := func(why string) (*config.Resolver, func(), error) {
-		fmt.Fprintf(notes, "%s: resolving ${VAR} from the environment only.\n", why)
-		return config.EnvOnly(), func() {}, nil
-	}
+// IT ALSO HANDS BACK THE TIER A IT LOADED, which every caller now needs and
+// none of them should load a second time. Where a vendor reaches this
+// deployment is Tier A's ([webhookBase]), the OPERATOR's fact rather than the
+// company's — so a command building a webhook URL or an app manifest reads it
+// from here, and a second `LoadBootstrap` in each command would be six places
+// to disagree about which file was consulted. Nil when there is no Tier A file
+// at all, which is a real way to run these commands: the caller then has only
+// the `-public-url` flag, which is exactly what it is for.
+func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (
+	*config.Resolver, *config.Bootstrap, func(), error) {
+
 	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
-		return envOnly("no " + bootstrapPath)
+		fmt.Fprintf(notes, "no %s: resolving ${VAR} from the environment only.\n",
+			bootstrapPath)
+		return config.EnvOnly(), nil, func() {}, nil
 	}
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
-		return nil, nil, err
-	}
-	if len(boot.Secrets.Keys) == 0 {
-		return envOnly(bootstrapPath + " declares no secrets.keys")
+		return nil, nil, nil, err
 	}
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	values, err := sv.All(ctx)
 	if err != nil {
 		closeStore()
-		return nil, nil, fmt.Errorf("read the secret store: %w", err)
+		return nil, nil, nil, fmt.Errorf("read the secret store: %w", err)
 	}
-	return config.WithStore(config.MapSource(values)), closeStore, nil
+	return config.WithStore(config.MapSource(values)), boot, closeStore, nil
 }
 
 // operatorCredential reads the human operator's own credential, from the
@@ -177,7 +199,7 @@ func operatorCredential(name string) string {
 }
 
 // runGitLabProvision is `crewlet gitlab provision`.
-func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
+func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("gitlab provision", flag.ContinueOnError)
@@ -188,7 +210,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 			"GITLAB_ADMIN_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
-			"defaults to integrations.public_base_url")
+			"defaults to "+publicURLDefault)
 	rotate := fs.Bool("rotate", false,
 		"mint a fresh token for every seat, including seats whose current "+
 			"one still works (the engine has to be restarted after)")
@@ -266,7 +288,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// so a -dry-run does it too — a dry run that could not say this would
 	// be silent about the one outcome an operator most needs warning of.
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -279,11 +301,11 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// RESOLVED ONCE, for the reason the Slack command states: the value is
 	// read in three places here and three separate reads of the flag is
 	// how one of them disagrees with the others.
-	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	base, baseKey := webhookBase(*publicURL, boot), webhookBaseKey(boot)
 
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
-		env.Value(cfg.SigningSecret), signingVar, *rotate, base != "")
+		env.Value(cfg.SigningSecret), signingVar, *rotate, base != "", baseKey)
 
 	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run
 	// uses. A --dry-run that re-derived it separately would be a second
@@ -299,7 +321,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	sink, closeSink, err := sinks.open(ctx, stdout)
+	sink, closeSink, err := sinks.open(ctx, environ, stdout)
 	if err != nil {
 		return err
 	}
@@ -325,6 +347,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
 		WebhookBase:      base,
+		WebhookBaseKey:   baseKey,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
@@ -438,7 +461,10 @@ func printNotes(w io.Writer, notes []string) {
 type vendorCommand struct {
 	sub  string
 	args string // the operand spelling shown in usage, without the vendor
-	run  func(args []string, stdout, stderr io.Writer) error
+	// run takes the invocation's environment ([runIn]) first, because a
+	// command that stores what it mints may reach the running node's
+	// /secrets with the credential read from it.
+	run func(environ config.Source, args []string, stdout, stderr io.Writer) error
 }
 
 // vendorCommands is the whole vendor CLI surface, and it is the ONLY list.
@@ -485,7 +511,7 @@ var vendorCommands = map[string][]vendorCommand{
 var errUnknownSub = errors.New("unknown command")
 
 // runIntegration dispatches `crewlet <vendor> <command>`.
-func runIntegration(vendor string, args []string, stdout, stderr io.Writer) error {
+func runIntegration(environ config.Source, vendor string, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	commands := vendorCommands[vendor]
 	if len(commands) == 0 {
@@ -496,7 +522,7 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 	}
 	for _, command := range commands {
 		if command.sub == sub {
-			return command.run(rest, stdout, stderr)
+			return command.run(environ, rest, stdout, stderr)
 		}
 	}
 	if sub != "" && sub != "help" {
@@ -527,7 +553,7 @@ func soleVarOf(value string) string {
 }
 
 // runMattermostProvision is `crewlet mattermost provision`.
-func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
+func runMattermostProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("mattermost provision", flag.ContinueOnError)
@@ -580,13 +606,13 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout)
+	sink, closeSink, err := sinks.open(ctx, environ, stdout)
 	if err != nil {
 		return err
 	}
 	defer closeSink()
 
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -656,7 +682,7 @@ func sortedKeys(m map[string][]string) []string {
 }
 
 // runMattermostDoctor is `crewlet mattermost doctor`.
-func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
+func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("mattermost doctor", flag.ContinueOnError)
@@ -695,7 +721,7 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -793,67 +819,93 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 	return fromConfig
 }
 
-// webhookBase is the address a third-party app reaches this deployment on: the flag
-// when one was passed, and the company document's own value otherwise.
-//
-// THE FLAG WINS, and only when it is non-empty. It is the one-off override —
-// a staging tunnel, a run against a second site — while the document is what
-// every other reader of this value sees, the reconcile loop included. A flag
-// that won even when unset would make an operator who simply forgot it
-// silently re-point a working hook at "".
-//
-// The flag is taken AS TYPED and the document's value is RESOLVED, which is
-// the difference between the two: somebody typing `-public-url` typed an
-// address, while `public_base_url` may be a whole `${VAR}` this run has to
-// read before it can build anything a third-party app will hold. See
-// [config.Integrations.WebhookBase].
+// publicURLDefault is how every `-public-url` flag's help names what it
+// overrides: Tier A's webhook address, which is one key or the other depending
+// on whether the file sets a public listener ([config.API.WebhookBaseKey]).
+// One string for the five commands, so no help line names one key of the two.
+const publicURLDefault = "api.public.external_url where api.public is set, " +
+	"and api.external_url otherwise"
+
 // noPublicBase says what to change when a run needs an address and has none.
 //
-// THREE WAYS TO BE EMPTY, and they are not the same work. The flag was not
-// given AND the company names no public base; or it names one that this
-// process cannot resolve, because [config.Integrations.WebhookBase] turns a
-// ${VAR} it cannot see into "" rather than into the text of the variable. A
-// message naming only the flag sent an operator who had already set the field
-// looking for something they did not need.
-func noPublicBase(in *config.Integrations) string {
+// TWO WAYS TO BE EMPTY NOW, WHERE THERE WERE THREE. While the address was a
+// Tier B pointer, a company could also name one that this process could not
+// resolve — a `${VAR}` nothing exported, which read back as "" rather than as
+// the text of the variable — so the message had to tell an operator who had
+// already set the field that their variable was the problem. Tier A is
+// resolved before the document is decoded, so what is left is the honest pair:
+// no Tier A file was read, or it names no webhook address.
+//
+// THE KEY THE FILE WOULD BE READ FROM, never a literal: with `api.public` set
+// the address is `api.public.external_url`, and naming `api.external_url`
+// there sent an operator to set a key that was already set and that nothing
+// building a vendor URL reads.
+func noPublicBase(boot *config.Bootstrap) string {
 	const why = "every app's Events API request URL and OAuth redirect URL " +
 		"are built from it, so an app created without one delivers nowhere " +
 		"and cannot be installed"
-	raw := ""
-	if in != nil {
-		raw = strings.TrimSpace(in.PublicBaseURL)
+	if boot == nil {
+		return "no address for this deployment: pass -public-url, or point " +
+			"-config at the Tier A file that sets its webhook address (" +
+			publicURLDefault + "). " + why
 	}
-	if raw == "" {
-		return "no public base URL: pass -public-url, or set " +
-			"integrations.public_base_url in the company document. " + why
-	}
-	if name, ok := provision.SoleVar(raw); ok {
-		return fmt.Sprintf(
-			"integrations.public_base_url points at ${%s} and this process "+
-				"resolved nothing for it — set %s in the environment, in the "+
-				"file named by -env-file, or in the secret store, or pass "+
-				"-public-url to override it for this run. %s", name, name, why)
-	}
-	return fmt.Sprintf(
-		"integrations.public_base_url is %q, which resolved to nothing — "+
-			"correct it in the company document, or pass -public-url to "+
-			"override it for this run. %s", raw, why)
+	return "`" + boot.API.WebhookBaseKey() + "` is unset in this deployment's " +
+		"Tier A file: set it there, or pass -public-url to override it for " +
+		"this run. " + why
 }
 
-func webhookBase(flagValue string, in *config.Integrations, resolve func(string) (string, bool)) string {
+// webhookBase is the address a third-party app reaches this deployment on,
+// which this run builds vendor URLs on: the `-public-url` flag when it was
+// given, and otherwise Tier A's webhook address ([config.API.WebhookBase]) —
+// the public listener's `api.public.external_url` once `api.public` is set,
+// and `api.external_url` otherwise.
+//
+// THE VENDORS' ADDRESS, NEVER THE PERSON'S. Once `api.public` is set every
+// webhook route is served only on that listener and `api.external_url` answers
+// 404 for each of them, so a hook, a manifest or a redirect built on the
+// person's address delivers nowhere — and the reconcile loop, which builds on
+// this same accessor, re-pointed every hook this command registered on its
+// next tick.
+//
+// THE FLAG WINS ONLY WHEN IT WAS TYPED. It is the one-off override — a staging
+// tunnel, a run against a second site — while Tier A's address is what every
+// other reader of it sees, the reconcile loop included. One that won even when
+// unset would let an operator who simply forgot it silently re-point a working
+// hook at "".
+//
+// NOTHING IS RESOLVED HERE, for either: somebody typing `-public-url` typed an
+// address, and Tier A's `${VAR}` references are expanded before the file is
+// decoded — so by the time this reads it, it is an address too. With no Tier A
+// file at all there is only the flag.
+func webhookBase(flagValue string, boot *config.Bootstrap) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	if in == nil {
+	if boot == nil {
 		return ""
 	}
-	return in.WebhookBase(resolve)
+	return boot.API.WebhookBase()
+}
+
+// webhookBaseKey is the Tier A key [webhookBase] falls back to, which a pass
+// handed no address names as the setting to fill in ([config.API.WebhookBaseKey]).
+//
+// FROM THE SAME BLOCK AS THE ADDRESS, so the two cannot name different
+// listeners. With no Tier A file there is no public listener to name, and the
+// zero [config.API] answers exactly that — the key [setup.BaseKey] reads empty
+// as, said here rather than left empty so a command never leans on a default.
+func webhookBaseKey(boot *config.Bootstrap) string {
+	var api config.API
+	if boot != nil {
+		api = boot.API
+	}
+	return api.WebhookBaseKey()
 }
 
 // accountMode is where this run owns the accounts it creates.
 //
 // THE DOCUMENT IS THE DEFAULT and the flag is a one-invocation override, the
-// way `-public-url` overrides `integrations.public_base_url`. The flag used to
+// way `-public-url` overrides Tier A's webhook address. The flag used to
 // be the only source, which made this a fact only the person who typed it
 // knew — and the engine provisions the same company from the same document
 // with no flag to read, so the two disagreed on the one input that decides

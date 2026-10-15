@@ -15,10 +15,16 @@
  *  - A PHRASE PAST THE SEARCH BOUND IS NOT ASKED, and the screen says why.
  *  - THE RESULTS ARE GROUPED BY SPACE IN THE ENGINE'S ORDER, and j and k move
  *    the choice the preview reads.
- *  - THE LANDING DRAWS THE PERSON BEHIND A TOKEN, and its days are the
- *    company's, cut at the company's midnight.
+ *  - THE LANDING DRAWS WHOEVER THE RECORD NAMES: a seat by the chart's name
+ *    for it, a credential bound to no seat by its login, and the engine's own
+ *    change as the engine. Its days are the company's, cut at the company's
+ *    midnight.
+ *  - WATCHING IS ASKED BY THE SEAT THE READER ACTS AS, so a credential bound
+ *    to no seat, which a watch never subscribes, asks for nothing.
  *  - A SPACE'S PEEK COUNTS OFF THE TOTAL, never off the rows one read
- *    returned, and WHO FILES THERE HAS FOUR STATES.
+ *    returned, and WHO FILES THERE HAS FOUR STATES: "needs Admin" is
+ *    said only to a reader who does not hold it, never to one whose read of
+ *    the company document is merely in flight.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -30,8 +36,9 @@ import { ContainerPeek } from "./peeks.tsx";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings, Shell } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { resetForTest as resetRecents } from "~/lib/recents.ts";
-import { resetForTest as resetStars } from "~/lib/starred.ts";
+import { recentsKey, resetForTest as resetRecents } from "~/lib/recents.ts";
+import { resetForTest as resetStars, starsKey } from "~/lib/starred.ts";
+import { noteReader } from "~/lib/reader.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { withDerived } from "~/test/org.ts";
@@ -54,6 +61,7 @@ afterEach(() => {
   cleanup();
   try {
     localStorage.clear();
+    sessionStorage.clear();
   } catch {
     // no storage in this environment is fine
   }
@@ -74,11 +82,12 @@ const ORG = {
   units: [],
 };
 
-/** The person this browser's token is bound to. */
+/** The person signed in on this browser, who writes as their seat. */
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["save_page", "comment_on_page", "write_page"],
@@ -314,7 +323,7 @@ test("j and k move the chosen result, and the preview reads the chosen page", as
           title: params.id === "p-1" ? "Provisioner runbook" : "Deploy runbook",
           status: "published",
           version: 3,
-          author: "founder",
+          author: "jane",
           updated_at: "2026-09-24T22:00:00Z",
           revision: 9,
           body: "The runbook body.",
@@ -322,7 +331,6 @@ test("j and k move the chosen result, and the preview reads the chosen page", as
         revision: 9,
         skill: false,
         onboarding: false,
-        author_seat: "jane",
         history: [
           { version: 3, author: "swe", created_at: "2026-09-24T22:00:00Z", message: "Fix step 2" },
         ],
@@ -333,7 +341,7 @@ test("j and k move the chosen result, and the preview reads the chosen page", as
   await waitFor(() =>
     expect(within(preview).getByRole("heading", { name: "Provisioner runbook" })).toBeTruthy(),
   );
-  // THE PERSON BEHIND THE TOKEN, never the token: the author is Jane.
+  // THE SEAT THE AUTHOR WROTE AS, by the chart's name for it.
   expect(within(preview).getByText("Jane Founder")).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("region", { name: "Results" }), { key: "j" });
   await waitFor(() =>
@@ -496,16 +504,16 @@ function detailOf(id: string, title: string, body: string, history: unknown[] = 
   };
 }
 
-// THE NEWEST CHANGE LEADS, and the person behind a token is who it names; the
-// feed beside it holds the rest under the COMPANY's days.
+// THE NEWEST CHANGE LEADS, named by the seat its writer wrote as; the feed
+// beside it holds the rest under the COMPANY's days.
 test("the newest change leads in its own tile, and the feed holds the rest", async () => {
   landing({
     page_activity: {
       changes: [
         written("c-1", "2026-09-24T23:00:00Z", {
           title: "Provisioner runbook",
-          actor: "founder",
-          actor_seat: "jane",
+          actor: "jane",
+          actor_kind: "human",
         }),
         written("c-2", "2026-09-24T13:00:00Z", {
           page_id: "p-2",
@@ -518,7 +526,7 @@ test("the newest change leads in its own tile, and the feed holds the rest", asy
   const latest = await screen.findByRole("article", { name: "Newest change" });
   await waitFor(() => expect(within(latest).getByText("Jane Founder")).toBeTruthy());
   expect(within(latest).getByRole("heading", { level: 2 }).textContent).toBe("Provisioner runbook");
-  expect(within(latest).queryByText("founder")).toBeNull();
+  expect(within(latest).queryByText("jane")).toBeNull();
   // 08:00 on the 25th in Tokyo: today, though it is the 24th in UTC.
   expect(latest.querySelector(".knowledge-latest-who time")?.textContent).toBe("Today 08:00");
   expect(
@@ -719,8 +727,10 @@ test("an empty landing says so once, and each small tile in one line", async () 
 // A KEPT PAGE IS READ FOR WHAT IT IS NOW: a recent carries the label the page
 // had when it was opened, and a rename since is drawn by the new title.
 test("continue reading draws each page by its title now, and who last saved it", async () => {
+  // RECENTS ARE THE READER'S OWN (`lib/recents.ts`): kept under a key naming them.
+  noteReader("p-1");
   localStorage.setItem(
-    "crewlet_recents",
+    recentsKey("p-1"),
     JSON.stringify([
       {
         // A page's address is its id, and a recent whose path resolves to no
@@ -736,7 +746,7 @@ test("continue reading draws each page by its title now, and who last saved it",
   landing({
     page_activity: { changes: [] },
     page: detailOf("p-1", "Settlement algorithm", "Nets every balance.", [
-      { version: 2, author: "founder", author_seat: "jane", created_at: "2026-09-24T22:00:00Z" },
+      { version: 2, author: "jane", created_at: "2026-09-24T22:00:00Z" },
     ]),
   });
   const reading = await screen.findByRole("region", { name: /Continue reading/ });
@@ -784,6 +794,72 @@ test("watching draws who last saved each page, and nothing where no save is name
     .getAllByRole("listitem")
     .find((row) => row.textContent?.includes("Split modes"));
   expect(split?.textContent).not.toMatch(/Last saved/);
+});
+
+// ONE NAME PER WRITER, the one the record carries: a person writes as their
+// seat and is drawn by the chart's name for it, a credential bound to no seat
+// writes under its login and is drawn as that, and the engine's own change is
+// the engine rather than the name it writes under.
+test("the landing draws a credential by its login, and the engine's change as the engine", async () => {
+  landing({
+    page_activity: {
+      changes: [
+        written("c-1", "2026-09-24T23:00:00Z", {
+          title: "Provisioner runbook",
+          actor: "jane",
+          actor_kind: "human",
+        }),
+        written("c-2", "2026-09-24T13:00:00Z", {
+          page_id: "p-2",
+          title: "Release checklist",
+          kind: "created",
+          actor: "ci.docs",
+          actor_kind: "operator",
+        }),
+        written("c-3", "2026-09-24T12:00:00Z", {
+          page_id: "p-3",
+          title: "Tool catalogue",
+          actor: "crewlet",
+          actor_kind: "system",
+        }),
+      ],
+    },
+  });
+  const feed = await screen.findByRole("region", { name: /Recently written/ });
+  await waitFor(() => expect(within(feed).getAllByRole("listitem")).toHaveLength(2));
+  const rows = within(feed).getAllByRole("listitem");
+  expect(rows[0]?.textContent).toMatch(/Release checklist.*ci\.docs wrote it/);
+  expect(rows[1]?.textContent).toMatch(/Tool catalogue.*The engine saved it/);
+  expect(feed.textContent).not.toContain("crewlet");
+});
+
+// A WATCH IS FILED UNDER A SEAT: a bound reader asks by the seat they act as,
+// and a credential bound to none subscribes nobody, so it asks nothing.
+test("watching asks by the reader's seat, and asks nothing for an unbound credential", async () => {
+  const asked = landing({ page_activity: { changes: [] } });
+  await screen.findByRole("region", { name: /Watching/ });
+  await waitFor(() =>
+    expect(asked.find((a) => a.what === "pages" && "watcher" in a.params)?.params.watcher).toBe(
+      "jane",
+    ),
+  );
+  cleanup();
+
+  const unbound = {
+    login: "svc:docs",
+    grants: ["knowledge"],
+    handle: "",
+    owner: "svc:docs",
+    name: "",
+    kind: "",
+    acts: ["save_page", "write_page"],
+  };
+  const none = landing({ page_activity: { changes: [] }, viewer: unbound });
+  const region = await screen.findByRole("region", { name: /Watching/ });
+  await waitFor(() =>
+    expect(within(region).getByText(/has none, so it follows no page/)).toBeTruthy(),
+  );
+  expect(none.some((a) => a.what === "pages" && "watcher" in a.params)).toBe(false);
 });
 
 // AN AGE IS NOT A DAY: a row under "Oct 09" said "1d ago", the same as the
@@ -897,8 +973,10 @@ test("a new page's row never repeats its title as its note", async () => {
 
 test("pinned lists the pages starred from a page's More menu, and only pages", async () => {
   location.hash = "#/knowledge";
+  // STARS ARE THE READER'S OWN (`lib/starred.ts`): kept under a key naming them.
+  noteReader("p-1");
   localStorage.setItem(
-    "crewlet_starred",
+    starsKey("p-1"),
     JSON.stringify([
       {
         path: ["knowledge", "pages", "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a"],
@@ -933,8 +1011,22 @@ function pageRow(n: number) {
   };
 }
 
-/** Render the space's peek; `config` undefined leaves that read in flight. */
-function mountPeek(options: { rows: number; total: number; after?: string; config?: unknown }) {
+/** A signed-in reader holding Admin, which who files here is read under. */
+const READER = { ...JANE, grants: ["admin"] };
+
+/**
+ * Render the space's peek; `config` undefined leaves that read in flight,
+ * `refused` refuses it, and `viewer` is [READER] unless told.
+ */
+function mountPeek(options: {
+  rows: number;
+  total: number;
+  after?: string;
+  config?: unknown;
+  /** The company document's read is refused. */
+  refused?: boolean;
+  viewer?: unknown;
+}) {
   return mount(
     ran,
     [{ key: "ENG", name: "Engineering", pages: options.total }],
@@ -945,7 +1037,13 @@ function mountPeek(options: { rows: number; total: number; after?: string; confi
         total: options.total,
         after: options.after,
       },
-      config: () => (options.config === undefined ? new Promise(() => {}) : options.config),
+      config: () =>
+        options.refused
+          ? Promise.reject(new Error("unauthorized"))
+          : options.config === undefined
+            ? new Promise(() => {})
+            : options.config,
+      viewer: options.viewer ?? READER,
     },
     <ContainerPeek id="ENG" />,
   );
@@ -972,17 +1070,23 @@ test("a space read whole says nothing about a window", async () => {
   expect(screen.getByText("authors, not editors")).toBeTruthy();
 });
 
-test("who files here: no token is told so, and a token whose read is in flight is not", async () => {
-  mountPeek({ rows: 1, total: 1 });
+test("who files here: a reader without the grant is told so, and one whose read is in flight is not", async () => {
+  const asked = mountPeek({ rows: 1, total: 1, viewer: { ...READER, grants: [] } });
   await waitFor(() =>
-    expect(screen.getByText("Who files here needs an operator token to read")).toBeTruthy(),
+    expect(screen.getByText("Who files here needs Admin access to read")).toBeTruthy(),
   );
+  // NOTHING IS ASKED that the engine has already said this reader may not read.
+  expect(asked.some((a) => a.what === "config")).toBe(false);
 
   cleanup();
-  localStorage.setItem("crewlet_api_token", "tok");
   mountPeek({ rows: 1, total: 1 });
   await waitFor(() => expect(screen.getByText("Who files here is still being read")).toBeTruthy());
-  expect(screen.queryByText(/needs an operator token/)).toBeNull();
+  expect(screen.queryByText(/needs Admin/)).toBeNull();
+
+  // REFUSED: the read answered with an error, which is neither of the above.
+  cleanup();
+  mountPeek({ rows: 1, total: 1, refused: true });
+  await waitFor(() => expect(screen.getByText("Owner unknown")).toBeTruthy());
 
   cleanup();
   mountPeek({
@@ -993,4 +1097,5 @@ test("who files here: no token is told so, and a token whose read is in flight i
   // THE TITLE AND THE FACT: the unit that files here, named.
   await waitFor(() => expect(screen.getAllByText("Engineering").length).toBe(2));
   expect(screen.queryByText(/Who files here/)).toBeNull();
+  expect(screen.queryByText("Owner unknown")).toBeNull();
 });

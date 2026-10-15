@@ -35,7 +35,7 @@ func TestTheObjectsBlockIsValidated(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			b.Stream.StoreDir = t.TempDir()
 			b.Store.Objects = tc.objects
 			err := b.Validate()

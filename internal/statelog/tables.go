@@ -18,9 +18,11 @@ import (
 //
 // # Why the framework writes a domain's tables
 //
-// The operation ledger and the deferred-record table are `Local` — this node's
-// own — but they are written in the APPLIER's transaction, beside the rows,
-// because contract 2 puts them there and a transaction is one file. Their
+// The operation ledger is `Divergent` — it travels in every snapshot but stays
+// out of the identity claim, since only `applied_at` differs between nodes —
+// and the deferred-record table is `Local`, this node's own. Both are written
+// in the APPLIER's transaction, beside the rows, because contract 2 puts them
+// there and a transaction is one file. Their
 // contents are framework facts: an operation id and a position, a record this
 // build could not decode. So the domain owns the schema, which is in its own
 // migration, and the framework owns the statements, which are here — one
@@ -389,11 +391,7 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 	case err != nil:
 		return Position{}, fmt.Errorf("statelog: read the anchor on %s: %w", subject, err)
 	}
-	return Position{
-		Stream:     t.stream,
-		Generation: uint32(packed / GenerationStride),
-		Seq:        uint64(packed % GenerationStride),
-	}, nil
+	return Unpack(t.stream, packed), nil
 }
 
 // writeOp records that this node applied an operation at a position, by the
@@ -448,6 +446,43 @@ const OpsPurgeBatch = 2000
 // re-decides an operation that already landed. A batch that deleted nothing
 // records nothing, because nothing was forgotten.
 func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int64, error) {
+	return t.purgeOpsWhere(ctx, db, func(tx *sql.Tx) error {
+		return t.markLost(ctx, tx, cutoff)
+	}, `applied_at < ?`, store.EncodeTime(cutoff))
+}
+
+// purgeOpsOfKind deletes the operation rows on one subject KIND applied before
+// cutoff, reporting how many went.
+//
+// A RANGE OVER THE SUBJECT, which is how the ledger stores it — the stream's
+// prefix, the kind, the id — so a kind is the subjects between `<kind>.` and
+// the next character up, plus the kind itself for one with no id. It seeks on
+// a `(subject, applied_at)` index the DOMAIN ships beside its ops table: a
+// kind with a horizon of its own is one whose rows the default sweep would
+// otherwise keep for the default's length, and only a domain that declares
+// one pays for the index.
+//
+// ITS LOSS IS THE KIND'S, NOT THE TABLE'S ([tables.markLostKind]). Recorded
+// as the table's, an hourly sweep of one kind would tell the publisher the
+// whole ledger lost everything older than an hour, and every other kind's
+// operation minted before that would be answered `unknown` without being
+// published — see replicated migration 0041.
+func (t tables) purgeOpsOfKind(ctx context.Context, db Estate, kind string,
+	cutoff time.Time) (int64, error) {
+
+	whole := t.prefix + "." + kind
+	return t.purgeOpsWhere(ctx, db, func(tx *sql.Tx) error {
+		return t.markLostKind(ctx, tx, kind, cutoff)
+	}, `(subject = ? OR (subject >= ? AND subject < ?)) AND applied_at < ?`,
+		whole, whole+".", whole+"/", store.EncodeTime(cutoff))
+}
+
+// purgeOpsWhere is both sweeps' loop over one predicate, recording what each
+// batch that deleted anything forgot through mark, in that batch's own
+// transaction.
+func (t tables) purgeOpsWhere(ctx context.Context, db Estate, mark func(*sql.Tx) error,
+	predicate string, args ...any) (int64, error) {
+
 	if t.ops == "" {
 		return 0, nil
 	}
@@ -457,8 +492,8 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 		err := db.Tx(ctx, func(tx *sql.Tx) error {
 			res, err := tx.ExecContext(ctx, `
 				DELETE FROM `+t.ops+` WHERE rowid IN (
-					SELECT rowid FROM `+t.ops+` WHERE applied_at < ? LIMIT ?)`,
-				store.EncodeTime(cutoff), OpsPurgeBatch)
+					SELECT rowid FROM `+t.ops+` WHERE `+predicate+` LIMIT ?)`,
+				append(args, OpsPurgeBatch)...)
 			if err != nil {
 				return err
 			}
@@ -466,7 +501,7 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 			if err != nil || deleted == 0 {
 				return err
 			}
-			return t.markLost(ctx, tx, cutoff)
+			return mark(tx)
 		})
 		if err != nil {
 			return total, fmt.Errorf("statelog: sweep %s: %w", t.ops, err)
@@ -477,6 +512,60 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 			// rather than on a zero: a final batch that exactly
 			// filled the limit costs one more empty statement, and a
 			// loop that only stopped at zero would run one anyway.
+			return total, nil
+		}
+	}
+}
+
+// purgeAnchors removes arbitration anchors below the published trim floor.
+//
+// THE TABLE HAD NO DELETE ANYWHERE IN THE TREE. `0001_the_state_log_lands.sql`
+// ships `statelog_anchor_swept_idx` and says in so many words that the SWEEP
+// needs it — and then nothing swept. One row per arbitrated subject, kept for
+// the life of the deployment: every task, every page, every subject any writer
+// ever contended on, in the replicated estate, in every snapshot artefact and
+// in every backup. It bites the tracker and the knowledge base today; a domain
+// whose subjects are per session would only make it fatal sooner.
+//
+// # Why the trim floor is the right cutoff, and an age would not be
+//
+// An anchor's whole job is to answer "what does this subject's last record
+// expect", and a record below the floor is one no node can replay any more.
+// Above the floor the row must stay however old it is, because an anchor read
+// as absent hands the next writer an expectation of "this subject holds
+// nothing" — which the broker refuses for ever against a subject that does.
+// So this is keyed on the same published floor the trim itself moves, never on
+// a clock: two nodes reading their own wall clocks would delete different rows.
+//
+// BATCHED, as purgeOps is and for the same reason: one unbounded DELETE over a
+// company's whole subject space holds the writer for as long as it takes.
+func (t tables) purgeAnchors(ctx context.Context, db Estate, floor Position) (int64, error) {
+	if floor.Seq == 0 {
+		// NOTHING IS BELOW ZERO, and a floor of zero is what a log
+		// that has never trimmed publishes. Sweeping on it would be a
+		// statement per tick that deletes nothing.
+		return 0, nil
+	}
+	var total int64
+	for {
+		var deleted int64
+		err := db.Tx(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, `
+				DELETE FROM statelog_anchor WHERE rowid IN (
+					SELECT rowid FROM statelog_anchor
+					WHERE stream = ? AND anchor < ? LIMIT ?)`,
+				t.stream, floor.Packed(), OpsPurgeBatch)
+			if err != nil {
+				return err
+			}
+			deleted, err = res.RowsAffected()
+			return err
+		})
+		if err != nil {
+			return total, fmt.Errorf("statelog: sweep the anchors on %s: %w", t.stream, err)
+		}
+		total += deleted
+		if deleted < OpsPurgeBatch {
 			return total, nil
 		}
 	}
@@ -504,25 +593,59 @@ func (t tables) markLost(ctx context.Context, tx *sql.Tx, before time.Time) erro
 	return nil
 }
 
+// markLostKind records that the ops table may have lost rows of one subject
+// KIND applied before before, in the caller's transaction — the one that loses
+// them — and monotone for [tables.markLost]'s reason. It is the watermark of a
+// kind whose rows a domain sweeps sooner than the rest ([OpsHorizon.Kinds]);
+// see replicated migration 0041.
+func (t tables) markLostKind(ctx context.Context, tx *sql.Tx, kind string,
+	before time.Time) error {
+
+	if t.ops == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO statelog_ops_lost_kind (ops_table, subject_kind, lost_before)
+		VALUES (?, ?, ?)
+		ON CONFLICT (ops_table, subject_kind) DO UPDATE SET
+			lost_before = MAX(lost_before, excluded.lost_before)`,
+		t.ops, kind, store.EncodeTime(before))
+	if err != nil {
+		return fmt.Errorf("statelog: record that %s lost %s rows before %s: %w",
+			t.ops, kind, before.UTC().Format(time.RFC3339Nano), err)
+	}
+	return nil
+}
+
 // lostBefore answers the instant before which the ops table may have lost
-// rows, reporting false when it has lost none — see [Rows.LostBefore] and
-// migration 0017.
-func (t tables) lostBefore(ctx context.Context, tx *sql.Tx) (time.Time, bool, error) {
+// rows of an operation on a subject of this kind, reporting false when it has
+// lost none — see [Rows.LostBefore] and replicated migrations 0017 and 0041.
+//
+// THE LATER OF TWO WATERMARKS: the table's, which every kind shares, and the
+// kind's own where a sweep of that kind alone has run. An empty kind asks the
+// table's alone.
+func (t tables) lostBefore(ctx context.Context, tx *sql.Tx, kind string) (time.Time, bool, error) {
 	if t.ops == "" {
 		return time.Time{}, false, nil
 	}
-	var before int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT lost_before FROM statelog_ops_lost WHERE ops_table = ?`,
-		t.ops).Scan(&before)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return time.Time{}, false, nil
-	case err != nil:
+	var table, ofKind sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+		SELECT
+			(SELECT lost_before FROM statelog_ops_lost WHERE ops_table = ?),
+			(SELECT lost_before FROM statelog_ops_lost_kind
+				WHERE ops_table = ? AND subject_kind = ? AND ? <> '')`,
+		t.ops, t.ops, kind, kind).Scan(&table, &ofKind)
+	if err != nil {
 		return time.Time{}, false, fmt.Errorf("statelog: read how far back %s "+
 			"may have lost rows: %w", t.ops, err)
 	}
-	return store.DecodeTime(before), true, nil
+	switch {
+	case !table.Valid && !ofKind.Valid:
+		return time.Time{}, false, nil
+	case !ofKind.Valid || (table.Valid && table.Int64 >= ofKind.Int64):
+		return store.DecodeTime(table.Int64), true, nil
+	}
+	return store.DecodeTime(ofKind.Int64), true, nil
 }
 
 // OpEntry is one row of a domain's operation ledger: an operation this node's
@@ -658,7 +781,7 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 			(position, subject, subject_kind, subject_id, version, payload, stored_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (position) DO NOTHING`,
-		key, subject, rec.Subject.Kind, rec.Subject.ID, rec.V, rec.Payload,
+		key, subject, rec.Subject.Kind, rec.Subject.ID, rec.V, rec.framed,
 		store.EncodeTime(rec.StoredAt)); err != nil {
 		return fmt.Errorf("statelog: retain the record at %s: %w", rec.Position, err)
 	}
@@ -766,16 +889,50 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 		return Deferral{}, false, nil
 	}
 
-	args := make([]any, 0, len(closure)+len(roots)*2+1)
-	for _, p := range closure {
-		args = append(args, p)
-	}
+	// THE ROOTS ARE A ROW SET, NEVER A CHAIN OF `OR`s.
+	//
+	// A scope's roots are one per OBJECT the operation writes, so a batch
+	// carries as many as it has members. Written as
+	// `... OR s.path = ? OR s.path LIKE ? ...` that is two chained terms per
+	// root, and a chained `OR` parses LEFT-DEEP: the expression tree's depth
+	// grows with the list. Turso refuses one past a hundred with
+	// `Parse error: Expression tree is too large (maximum depth 100)`, so a
+	// batch of fifty-odd objects failed its own apply — measured, with the
+	// whole batch lost.
+	//
+	// A CTE of `SELECT ? UNION ALL …` is a compound SELECT rather than one
+	// expression, so its depth does not grow with the list: probed clean at
+	// a thousand prefixes.
+	//
+	// The EXACT match stays an `IN` list, which is flat for the same reason
+	// and which the roots join: a root is both a path the query is about and
+	// a prefix of the paths beneath it.
+	//
+	// THE BINDINGS FOLLOW THE TEXT. A `?` is positional, and the CTE that
+	// holds the prefixes is the FIRST thing in the statement — so its values
+	// are bound first, and the exact paths after them. Appended the other
+	// way round, the CTE was handed the first exact paths as its "prefixes"
+	// and the IN list ended in the real prefixes as literal strings: the
+	// descendant clause never matched a descendant at all, and the ancestor
+	// clause matched its first paths through LIKE — case-blind, and with an
+	// `_` in a path read as a wildcard.
+	exact := make([]string, 0, len(closure)+len(roots))
+	exact = append(exact, closure...)
+	exact = append(exact, roots...)
+	args := make([]any, 0, len(roots)+len(exact)+1)
 	q := `SELECT d.position, d.version FROM ` + t.scope + ` s
 	      JOIN ` + t.deferred + ` d ON d.position = s.position
-	      WHERE (s.path IN (` + placeholders(len(closure)) + `)`
-	for _, r := range roots {
-		q += ` OR s.path = ? OR s.path LIKE ? ESCAPE '\'`
-		args = append(args, r, store.LikePrefix(r+ScopeSeparator))
+	      WHERE (s.path IN (` + placeholders(len(exact)) + `)`
+	if len(roots) > 0 {
+		q = `WITH beneath(prefix) AS (` + unionOfPlaceholders(len(roots)) + `) ` + q +
+			` OR EXISTS (SELECT 1 FROM beneath
+			             WHERE s.path LIKE beneath.prefix ESCAPE '\')`
+		for _, r := range roots {
+			args = append(args, store.LikePrefix(r+ScopeSeparator))
+		}
+	}
+	for _, p := range exact {
+		args = append(args, p)
 	}
 	q += `)`
 	if below != nil {
@@ -828,9 +985,28 @@ func (t tables) scopeOf(ctx context.Context, tx *sql.Tx, packed int64) (ScopeSet
 	return ScopeSet{Paths: out}, nil
 }
 
+// holdsDeferred reports whether this node holds any record it could not
+// decode.
+func (t tables) holdsDeferred(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM `+t.deferred+` LIMIT 1`).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("statelog: look for a deferred record: %w", err)
+	}
+	return true, nil
+}
+
 // oldestDeferred is the earliest record this node could not decode, which is
 // what the node's own applied-through position is derived from and what an
 // operator's "which build do I need" question is answered with.
+//
+// WITH ITS SCOPE, which is what [Deferral] promises every holder: it was read
+// without one, so every Deferral the runner handed out carried an empty scope,
+// and a caller asking whether that record was about a given object — the one
+// question a scope exists to answer — was told "no" for every object there is.
 func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool, error) {
 	var packed int64
 	var version int64
@@ -843,6 +1019,10 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 	case err != nil:
 		return Deferral{}, false, fmt.Errorf("statelog: read the oldest deferred record: %w", err)
 	}
+	scope, err := t.scopeOf(ctx, tx, packed)
+	if err != nil {
+		return Deferral{}, false, err
+	}
 	return Deferral{
 		Position: Position{
 			Stream:     t.stream,
@@ -850,6 +1030,7 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 			Seq:        uint64(packed % GenerationStride),
 		},
 		Version: int(version),
+		Scope:   scope,
 	}, true, nil
 }
 
@@ -862,4 +1043,25 @@ func placeholders(n int) string {
 // and therefore whether an anchor is written for it.
 func arbitrates(kinds []string, kind string) bool {
 	return slices.Contains(kinds, kind)
+}
+
+// unionOfPlaceholders is n bound values as a one-column row set.
+//
+// `SELECT ? UNION ALL SELECT ? …`, which is a COMPOUND SELECT: its depth does
+// not grow with n the way a chained `OR` or `IN (SELECT …)` expression does.
+// See [tables.deferredBelow] for the parse-depth refusal this shape exists to
+// stay under.
+func unionOfPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(n * len("SELECT ? UNION ALL "))
+	for i := range n {
+		if i > 0 {
+			b.WriteString(" UNION ALL ")
+		}
+		b.WriteString("SELECT ?")
+	}
+	return b.String()
 }

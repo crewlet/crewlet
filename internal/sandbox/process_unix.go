@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
@@ -28,6 +29,15 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	if len(cmd.argv) == 0 {
 		return ExecResult{}, errors.New("sandbox: runHost needs a command")
 	}
+	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE: os/exec hands a child whose
+	// Env is nil the ENGINE's — its keyring, its Tier A tokens and every
+	// credential it was started with. Every container-runtime call here once
+	// reached the child that way; refused, the next one to forget cannot.
+	if cmd.env == nil {
+		return ExecResult{}, fmt.Errorf("sandbox: %s was about to run with no "+
+			"environment of its own, which os/exec would fill with the engine's; "+
+			"it was not started", cmd.argv[0])
+	}
 	timeout := cmd.timeout
 	if timeout <= 0 {
 		timeout = controlTimeout
@@ -39,7 +49,7 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 
 	proc := exec.Command(cmd.argv[0], cmd.argv[1:]...) //nolint:noctx // the timeout is enforced below, on the GROUP
 	proc.Dir = cmd.cwd
-	proc.Env = flattenEnv(cmd.env)
+	proc.Env = hostbox.Environ(cmd.env)
 	procgroup.Detach(proc)
 
 	var stdout, stderr capture

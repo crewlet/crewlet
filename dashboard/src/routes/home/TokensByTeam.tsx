@@ -59,6 +59,7 @@ export function TokensByTeam({
       </div>
       <QueryState
         error={spend.error}
+        refusal={spend.refusal}
         loading={spend.loading && !data}
         empty={
           data && bands.length === 0
@@ -75,7 +76,10 @@ export function TokensByTeam({
           moreLabel={(n) => `${plural(n, "more team")}`}
           data={bands.map((b) => ({
             id: b.group || "other",
-            label: b.other ? "Everyone else" : b.group,
+            // A UNIT BAND IS KEYED BY THE UNIT'S KEY and named by its
+            // `label`: two units may share a name, and a key is no name to
+            // draw. The key stands in only where the engine sent no label.
+            label: b.other ? "Everyone else" : b.label || b.group,
             sub: b.other
               ? plural(b.folded, "team")
               : b.seats

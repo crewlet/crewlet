@@ -147,7 +147,7 @@ func TestSeedingDoesNotCountWhatTheStreamAlreadyApplied(t *testing.T) {
 	s := seededState(t)
 	live := phaseSpend("p1", "2026-06-14T11:45:00Z", 40)
 	s.Apply(live)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		id("e1"), at("2026-06-14T11:45:00Z")))
 
 	s.Seed(livestate.History{
@@ -215,7 +215,7 @@ func TestAnEventTheSeedAlreadyListedIsListedOnceWhenItStreams(t *testing.T) {
 func TestSeededRowsAreOrderedAgainstLiveOnes(t *testing.T) {
 	t.Parallel()
 	s := seededState(t)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		id("live"), at("2026-06-14T11:59:00Z")))
 	s.Seed(livestate.History{Events: []livestate.FeedRow{
 		storedRow("old", "2026-06-14T09:00:00Z"),
@@ -338,18 +338,20 @@ func TestSeedSetsEachSeatsLastTurnAndAParkedOne(t *testing.T) {
 	t.Parallel()
 	// "Idle · last turn 24m ago" has to survive a restart, and so does a
 	// turn parked on a coding run: the run is a durable record and a box,
-	// not a goroutine, and the turn is still the seat's.
+	// not a goroutine, and the turn is still the seat's. Both seats carry
+	// one role name, so a seed grouped by name would file one seat's turns
+	// as the other's.
 	s := seededState(t)
 	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
 	item := &types.WorkItem{Backend: "native", ID: "t-1", Key: "ENG-1"}
 	change := s.Seed(livestate.History{Turns: []store.Turn{
-		{TurnID: "old", AgentRole: "Lead", StartedAt: base, EndedAt: base.Add(time.Minute), Complete: true},
-		{TurnID: "newer", AgentRole: "Lead", StartedAt: base.Add(time.Hour),
+		{TurnID: "old", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base, EndedAt: base.Add(time.Minute), Complete: true},
+		{TurnID: "newer", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base.Add(time.Hour),
 			EndedAt: base.Add(time.Hour + time.Minute), Complete: true, Failed: true},
 		// Running or died: nobody can say which from the store.
-		{TurnID: "unfinished", AgentRole: "Lead", StartedAt: base.Add(2 * time.Hour),
+		{TurnID: "unfinished", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base.Add(2 * time.Hour),
 			EndedAt: base.Add(2 * time.Hour)},
-		{TurnID: "waiting", AgentRole: "Coder", StartedAt: base, EndedAt: base.Add(time.Minute),
+		{TurnID: "waiting", AgentID: "Coder", AgentRole: "Engineer", StartedAt: base, EndedAt: base.Add(time.Minute),
 			Parked: true, WorkItem: item},
 	}})
 	if _, ok := change.Agents["Lead"]; !ok {
@@ -387,11 +389,11 @@ func TestSeedDoesNotOverwriteWhatTheStreamAlreadySaid(t *testing.T) {
 	// The caller subscribes first and reads second, so the stream can land
 	// a newer turn before the seed does.
 	s := seededState(t)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "live"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead", "turn_id": "live"},
 		at("2026-06-14T11:59:00Z")))
 	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
 	s.Seed(livestate.History{Turns: []store.Turn{
-		{TurnID: "stored", AgentRole: "Lead", StartedAt: base, EndedAt: base, Complete: true},
+		{TurnID: "stored", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base, EndedAt: base, Complete: true},
 	}})
 	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.TurnID != "live" {
 		t.Errorf("last turn = %+v, want the stream's newer one kept", last)

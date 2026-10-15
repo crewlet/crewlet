@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,6 +34,12 @@ type transferHarness struct {
 }
 
 func newTransferHarness(t *testing.T, bytes int) *transferHarness {
+	return newTransferHarnessWith(t, bytes, 0)
+}
+
+// newTransferHarnessWith is newTransferHarness with a stated admission bound,
+// for the case about a donor that is already full.
+func newTransferHarnessWith(t *testing.T, bytes, maxTransfers int) *transferHarness {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -80,10 +87,11 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 		},
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: harnessDonor,
-		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
-		Path:   func(statelog.Manifest) string { return h.artefact },
+		NodeID:       harnessDonor,
+		Dial:         func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
+		Newest:       func() (statelog.Manifest, bool) { return h.manifest, true },
+		Path:         func(statelog.Manifest) string { return h.artefact },
+		MaxTransfers: maxTransfers,
 	})
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
@@ -360,7 +368,12 @@ func TestADonorWhoseConfirmationFailedIsConfirmedAgain(t *testing.T) {
 // The one failure a confirmation is not asked again after: a closed connection
 // sends nothing again, so every later attempt would fail at once, and a loop
 // that went on asking would spin for the node's whole life on a donor that
-// answers nobody.
+// answers nobody. And it is a CLOSE ([statelog.ErrDonorConnectionClosed]),
+// not a failed dial: the donor had subscribed, so the connection was closed
+// under it, which its owner answers by dialling again at once.
+//
+// Mutation: answer the close with an error that does not wrap the sentinel,
+// as the confirmation did, and the first check goes red.
 func TestADonorWhoseConnectionClosedEnds(t *testing.T) {
 	t.Parallel()
 	ns := coreBroker(t)
@@ -394,6 +407,11 @@ func TestADonorWhoseConnectionClosedEnds(t *testing.T) {
 	case err := <-served:
 		if err == nil || ctx.Err() != nil {
 			t.Fatalf("Serve returned %v on a closed connection, want the reason", err)
+		}
+		if !errors.Is(err, statelog.ErrDonorConnectionClosed) {
+			t.Errorf("Serve returned %v for a connection closed under a donor "+
+				"that had subscribed, want %v: its loop would wait out a "+
+				"doubling back-off on a new outage", err, statelog.ErrDonorConnectionClosed)
 		}
 	case <-time.After(10 * time.Second):
 		cancel()
@@ -634,6 +652,33 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 	}
 }
 
+// A JOINER TOLD TO STOP STOPS ASKING.
+//
+// Collecting offers waits out a window for donors to answer, and it waited out
+// the whole of it whatever its caller said: a node shutting down while it
+// looked for a snapshot sat in the collection until the window closed, and
+// then reported the offers as though nothing had happened. A cancelled caller
+// is answered at once, with the cancellation.
+func TestCollectingOffersStopsWhenItsCallerDoes(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, 4096)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	const window = 10 * time.Second
+	started := time.Now()
+	offers, err := statelog.CollectOffers(ctx, h.nc, statelog.OfferRequest{
+		NodeID: "joiner",
+	}, window)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled collection answered %d offer(s) and %v, want the "+
+			"cancellation", len(offers), err)
+	}
+	if waited := time.Since(started); waited >= window/2 {
+		t.Errorf("a cancelled collection took %v of its %v window", waited, window)
+	}
+}
+
 // A DONOR THAT GIVES UP SAYS SO IN THE TERMINATOR, and a truncated file is
 // never reported as a snapshot.
 //
@@ -787,6 +832,115 @@ func TestOffersAreRankedNewestFirst(t *testing.T) {
 	}
 	if at(9_000).Newest() <= at(4_200).Newest() {
 		t.Fatal("a newer artefact does not rank above an older one")
+	}
+}
+
+// TestNothingBelowTheFloorOutranksAnythingAboveIt, and among equals the choice
+// is this joiner's own.
+//
+// Ordering by the artefact alone makes every joiner in a fleet rank the same
+// offers the same way, so a fleet that restarts together sends every one of
+// them at whichever node happens to hold the newest artefact. That node then
+// refuses all but a few, and the rest spend a collection window asking again.
+// Shuffling the EQUALS before the ordering keeps "best artefact first" exact
+// and makes the choice among the best differ per joiner.
+func TestNothingBelowTheFloorOutranksAnythingAboveIt(t *testing.T) {
+	t.Parallel()
+	offer := func(node string, seq uint64) statelog.Offer {
+		return statelog.Offer{Fetch: node, Manifest: statelog.Manifest{
+			V:       statelog.ManifestVersion,
+			Domains: map[string]statelog.DomainPosition{"probe": {Seq: seq}},
+		}}
+	}
+	// Four donors at one position and one that is strictly better.
+	equal := []statelog.Offer{
+		offer("a", 9_000), offer("b", 9_000), offer("c", 9_000), offer("d", 9_000),
+	}
+	best := offer("e", 9_500)
+
+	firsts := map[string]int{}
+	for seed := range uint64(64) {
+		ranked := statelog.RankOffersForTest(append([]statelog.Offer{best}, equal...), seed)
+		if ranked[0].Fetch != "e" {
+			t.Fatalf("seed %d ranked %q first; a strictly newer artefact must always "+
+				"come first, or the shuffle is choosing the replay length",
+				seed, ranked[0].Fetch)
+		}
+		firsts[ranked[1].Fetch]++
+	}
+	if len(firsts) < 2 {
+		t.Errorf("across 64 seeds the same donor was always chosen among the equals "+
+			"(%v) — every joiner in a fleet would then ask one node", firsts)
+	}
+}
+
+// TestADonorAdmitsAtMostNTransfers, and tells the rest so at once.
+//
+// Every fetch is a goroutine holding an open file and a credit window of chunks
+// in flight, on a subject every joiner in the fleet can reach. Unbounded, a
+// fleet that restarts together spawns one per joiner on whichever node answered
+// first — and since the offers were ranked identically everywhere, that is one
+// node.
+//
+// WHAT IS OVER THE BOUND IS TERMINATED WITH A REASON rather than queued. A
+// joiner told no immediately asks the next donor; one left waiting on a queue
+// it cannot see spends its whole collection window on a node that was never
+// going to answer it.
+func TestADonorAdmitsAtMostNTransfers(t *testing.T) {
+	t.Parallel()
+	// One admission, against an artefact big enough that a transfer is
+	// several credit windows long rather than one round trip.
+	h := newTransferHarnessWith(t, statelog.SnapshotChunkBytes*statelog.SnapshotTransferWindow*8, 1)
+
+	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
+		NodeID: "joiner",
+	}, statelog.OfferWindow)
+	if err != nil {
+		t.Fatalf("CollectOffers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("collected %d offer(s), want 1", len(offers))
+	}
+
+	// EIGHT JOINERS AT ONCE, which is the shape this bounds: a fleet
+	// restarting together, every node ranking the same offer first.
+	const joiners = 8
+	results := make(chan error, joiners)
+	var start sync.WaitGroup
+	start.Add(1)
+	for i := range joiners {
+		go func() {
+			start.Wait()
+			_, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0],
+				filepath.Join(t.TempDir(), fmt.Sprintf("joiner-%d.db", i)))
+			results <- err
+		}()
+	}
+	start.Done()
+
+	var admitted, refused int
+	var refusal string
+	for range joiners {
+		switch err := <-results; {
+		case err == nil:
+			admitted++
+		case strings.Contains(err.Error(), "ask another node"):
+			refused++
+			refusal = err.Error()
+		default:
+			t.Errorf("a transfer failed for an unexpected reason: %v", err)
+		}
+	}
+	if refused == 0 {
+		t.Fatalf("all %d concurrent joiners were admitted against a bound of 1, so a "+
+			"fleet restarting together would spawn one goroutine per joiner here",
+			joiners)
+	}
+	if admitted == 0 {
+		t.Error("no joiner was admitted at all, so the bound refuses rather than bounds")
+	}
+	if !strings.Contains(refusal, "which is its limit") {
+		t.Errorf("the refusal does not say why: %q", refusal)
 	}
 }
 
@@ -1083,6 +1237,124 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	if string(first.Data) != "sentinel" {
 		t.Fatalf("a donor was asked to send (%q) by a joiner whose caller had "+
 			"already given up", first.Data)
+	}
+}
+
+// A DONOR WHOSE CONNECTION IS CLOSED UNDER IT SAYS SO.
+//
+// The NATS client closes a connection for good on an error it does not retry,
+// and the donor's is the connection carrying the largest messages a node
+// sends. Serve used to wait on its context and nothing else, so a donor whose
+// connection was gone sat subscribed to nothing for the rest of the node's
+// life, advertising an artefact it could no longer stream. It returns now,
+// naming the close, which is what lets its owner dial again — and only its
+// owner can, because a donor's loss is not the node's.
+//
+// The case closes the connection the donor dialled, from outside the donor,
+// which is what the client does when it gives up on one.
+//
+// Mutation: wait on the context alone in Serve and the donor never returns.
+func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	dialled := make(chan *nats.Conn, 1)
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "closed-under",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			nc, err := q.DialOwned()
+			if err == nil {
+				dialled <- nc
+			}
+			return nc, err
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, true },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(t.Context()) }()
+	nc := <-dialled
+	// SERVING, which is the premise: the close is one under a donor the
+	// server had confirmed was listening.
+	for until := time.Now().Add(10 * time.Second); !donor.Serving(); {
+		if time.Now().After(until) {
+			t.Fatal("the donor never said it was serving")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	nc.Close()
+
+	select {
+	case err := <-served:
+		if !errors.Is(err, statelog.ErrDonorConnectionClosed) {
+			t.Errorf("Serve returned %v, want %v", err, statelog.ErrDonorConnectionClosed)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the donor's connection was closed and Serve is still waiting " +
+			"on its context: a donor subscribed to nothing, for good")
+	}
+}
+
+// A DONOR HANDED A CONNECTION ALREADY CLOSED HAD NOTHING TO SERVE OVER, AND
+// SAYS SO AS A FAILED DIAL.
+//
+// [statelog.ErrDonorConnectionClosed] tells the caller the donor HAD been
+// serving, and the engine's loop answers it as a new outage: it redials from
+// its base, a second later, and logs the stop every time. A connection that was
+// closed before Serve could subscribe on it is the opposite — the dial failed,
+// as a refused one does — and called a close, one that arrived closed on every
+// redial would be redialled once a second, with an ERROR line each time, for as
+// long as it went on. The close is staged where it cannot be raced: the dial
+// itself hands back a connection it has closed.
+//
+// Mutation: check the connection for a close before subscribing and answer
+// ErrDonorConnectionClosed, as Serve did, and both checks go red; ignore the
+// subscription's refusal and wait as though serving, and the case times out.
+func TestADonorHandedAClosedConnectionReportsAFailedDial(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "closed-on-arrival",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			nc, err := q.DialOwned()
+			if err == nil {
+				nc.Close()
+			}
+			return nc, err
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, true },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(t.Context()) }()
+
+	select {
+	case err := <-served:
+		if errors.Is(err, statelog.ErrDonorConnectionClosed) {
+			t.Errorf("Serve answered a connection that arrived closed with %v, "+
+				"which says the donor had been serving: its loop would redial at "+
+				"once and log it as a new outage on every attempt", err)
+		}
+		if err == nil || !errors.Is(err, nats.ErrConnectionClosed) {
+			t.Errorf("Serve returned %v, want a failed dial naming the closed "+
+				"connection (%v)", err, nats.ErrConnectionClosed)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Serve is waiting on a connection that arrived closed")
 	}
 }
 

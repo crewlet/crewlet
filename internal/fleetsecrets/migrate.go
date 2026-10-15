@@ -2,7 +2,6 @@ package fleetsecrets
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -72,9 +71,11 @@ func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) 
 	}
 	local, err := from.List(ctx)
 	if err != nil {
-		if errors.Is(err, secrets.ErrNoKeyring) {
-			return nil, nil
-		}
+		// NOT EVEN A MISSING KEYRING IS SKIPPED. That was a no-op once,
+		// for a node that kept its secrets in the environment; every node
+		// holds a keyring now, so a local store that cannot be read is a
+		// fault like any other, and a silent skip would leave this node's
+		// rows where no peer can see them with nothing said.
 		return nil, fmt.Errorf("fleetsecrets: read this node's secrets: %w", err)
 	}
 	if len(local) == 0 {
@@ -104,16 +105,20 @@ func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) 
 					"fleetsecrets: open this node's %s to migrate it: %w",
 					row.Name, err)
 			}
-			// The ORIGINAL author and the ORIGINAL instant are
-			// preserved and the source is stamped: "who set this" is
-			// the question the provenance columns exist to answer, and
-			// "when" is what the next migration compares against.
-			// Stamped with this pass's own clock, the record would say
-			// when this node booted rather than when its operator wrote
-			// the value, and a second stopped node's later offline
-			// write would read as the earlier one — and be dropped —
-			// whenever this node happened to start first.
-			if err := to.Set(ctx, row.Name, value, row.UpdatedBy, MigrateSource, row.UpdatedAt); err != nil {
+			// The ORIGINAL author — who, of what kind, through which
+			// credential — and the ORIGINAL instant are preserved and
+			// the source is stamped: "who set this" is the question the
+			// provenance columns exist to answer, and "when" is what the
+			// next migration compares against. Stamped with this pass's
+			// own clock, the record would say when this node booted
+			// rather than when its operator wrote the value, and a second
+			// stopped node's later offline write would read as the
+			// earlier one — and be dropped — whenever this node happened
+			// to start first.
+			if err := to.Set(ctx, row.Name, value, secrets.Author{
+				Name: row.UpdatedBy, Kind: row.UpdatedByKind,
+				OperatorID: row.OperatorID,
+			}, MigrateSource, row.UpdatedAt); err != nil {
 				return moved, fmt.Errorf("fleetsecrets: migrate %s: %w", row.Name, err)
 			}
 			moved = append(moved, row.Name)

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The inbound edge, wired.
@@ -59,6 +60,53 @@ type notifications struct {
 	// which is what keeps [Engine.Registry] non-nil for every reader that
 	// found a company through [Engine.Company].
 	registryFor *Company
+
+	// rebuilding serialises every WHOLE rebuild of the registry, and every
+	// write into a live one, against each other. See directory.go.
+	//
+	// ITS OWN MUTEX rather than mu, because a rebuild reads the identity
+	// directory — a store read — and mu is taken on the inbound hot path
+	// by every reader of [Engine.Registry]; holding mu across the read
+	// would park every delivery behind it. Always taken BEFORE mu, never
+	// while holding it.
+	//
+	// It exists because the registry has TWO rebuild triggers — a
+	// published company, and a moved directory: the identity applier's
+	// committed batch on a data node, the periodic net's re-read on a node
+	// without `data` — and the second rebuilds for the SAME company the
+	// first built for, which is exactly the case registryFor's identity
+	// test cannot tell apart.
+	// Two rebuilds interleaved that way publish whichever finished last,
+	// and that can be the one that read the directory first.
+	rebuilding sync.Mutex
+
+	// directory is the identity directory as the registry reads it:
+	//
+	//   - on a data node, this node's own rows, handed over by the core
+	//     runtime as it opens the domain at boot ([Engine.startCore]);
+	//   - on a node without `data`, a data node's rows through the
+	//     estate's router ([routedIdentity]), handed over by
+	//     [Engine.startRoutedDirectory] — the chart and this node's own
+	//     Tier A tokens applied to the answer here, on the asking side;
+	//   - nil only on an engine that calls neither — `crewlet validate`
+	//     and a test — which keeps the chart-only behaviour no running
+	//     node builds from.
+	//
+	// Set once, at boot, under mu.
+	directory notify.Directory
+
+	// directoryAt is the identity applier's committed position, and
+	// readAt what it was when the last reading was taken — so the
+	// periodic safety net can tell "nothing was applied since" from "rows
+	// moved with no committed hook", which is what an adoption does.
+	// NIL ON A NODE WITHOUT `data`, which runs no applier whose position
+	// could say the rows moved, so the net reads the directory on every
+	// tick there. directoryFailed marks a last reading that could not be
+	// taken, so the net retries it however still the position is. All
+	// three are read and written under [notifications.rebuilding].
+	directoryAt     func() statelog.Position
+	readAt          statelog.Position
+	directoryFailed bool
 
 	admits notify.Admitter
 
@@ -235,9 +283,36 @@ func (e *Engine) ChatThreads() *notify.ThreadReaders {
 // SERVER rather than about the config — losing them on an apply would make
 // every agent's own message annotate as a stranger until something
 // reconnected.
-func (e *Engine) refreshParties(c *Company) {
-	reg := notify.NewRegistry(c.Org)
-	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK)
+//
+// # And it reads the identity directory, every time
+//
+// Which human seats' contact identities are registered depends on the org AND
+// on whether each seat's holder may still be reached, so every rebuild takes a
+// fresh reading of the directory — see directory.go, which is also where the
+// OTHER trigger lives: a suspension moves nothing in the org, so this
+// function alone would never withdraw anybody.
+func (e *Engine) refreshParties(ctx context.Context, c *Company) {
+	e.notify.rebuilding.Lock()
+	defer e.notify.rebuilding.Unlock()
+	e.rebuildPartiesLocked(c, e.readStandingLocked(ctx))
+}
+
+// rebuildPartiesLocked builds a WHOLE registry for c under one directory
+// reading and swaps it in. The caller holds [notifications.rebuilding].
+//
+// WHOLE, never a diff against the live one: the vendor identities, the chat
+// identities and the human contacts are each re-registered from their own
+// sources, because a patch applied to a fresh registry drops every identity it
+// did not touch, and a patch applied to the live one mutates a value a
+// running turn may be reading.
+func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
+	// ONE SNAPSHOT for both halves, because a seat's address and its contact
+	// ids may both be `${VAR}` references, and two reads of
+	// the resolver could straddle a refresh and index the seat's address and
+	// its identities against two different stores.
+	lookup := e.resolver().LookupOK
+	reg := notify.NewRegistry(c.Org, lookup)
+	rec := reg.ReconcileHumanContacts(c.Org, lookup, standing)
 
 	// The CODE HOST's seat identities are config-derived, so they are
 	// rebuilt from the new company here rather than carried across. Doing
@@ -257,7 +332,6 @@ func (e *Engine) refreshParties(c *Company) {
 	}
 
 	e.notify.mu.Lock()
-	e.notify.registry, e.notify.registryFor = reg, c
 	chat := e.notify.mattermost
 	hosted := e.notify.slack
 	e.notify.mu.Unlock()
@@ -267,14 +341,27 @@ func (e *Engine) refreshParties(c *Company) {
 	// where a tracker's or a code host's are config-derived and rebuilt
 	// above. Losing them on an apply would make every agent's own message
 	// annotate as a stranger until something reconnected.
+	//
+	// BEFORE THE SWAP, and it used to be after it: published first, the
+	// new registry answered every agent's own bot as a stranger for the
+	// moment between the two, and with the directory's trigger a registry
+	// is rebuilt on every suspension rather than only on an apply. A
+	// transport repointed at a registry nobody reads yet loses nothing —
+	// a seat it connects meanwhile registers into the one about to be
+	// published.
 	if chat != nil {
 		chat.Reregister(reg)
 	}
 	if hosted != nil {
 		hosted.Reregister(reg)
 	}
+
+	e.notify.mu.Lock()
+	e.notify.registry, e.notify.registryFor = reg, c
+	e.notify.mu.Unlock()
 	log.Info("parties_indexed", "company", c.Config.Name, "parties", reg.Len(),
 		"human_contacts", rec.Registered, "unresolved", rec.Unresolved,
+		"withheld_seats", len(reg.Withheld()), "directory", standing.Consulted(),
 		"conflicts", len(rec.Conflicts))
 }
 
@@ -531,12 +618,37 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 // meant one line deciding a security property, and the mistake it invites —
 // passing the config through unresolved — leaves six routes verifying
 // against the literal "${GITLAB_SIGNING_SECRET}".
+// BUILT ONCE PER PUBLISHED COMPANY, not once per delivery.
+//
+// Assembling it walks every seat in the org and resolves each `${VAR}` it
+// finds through the secret store — and this is on the path of EVERY inbound
+// webhook, which for a busy code host is the engine's highest-rate request.
+// Per request that is a full roster walk plus one store lookup per credential,
+// for an answer that cannot have changed: the material is a function of the
+// company and of the resolver snapshot, and both move only when a company is
+// published. A rotation is no exception — it is the re-activation gesture,
+// which publishes one.
+//
+// So the cache is keyed on the company's IDENTITY, the same comparison
+// [Engine.indexes] makes and for the same reason: a company equal in every
+// field is still a different publish with its own derived state.
+//
+// LAZY rather than built in the convergence, so a node serving no webhooks
+// never assembles it at all, and the map it returns is shared with every
+// other caller — readers only.
 func (e *Engine) WebhookSecrets() webhooks.Secrets {
 	company := e.Company()
 	if company == nil {
 		return webhooks.Secrets{}
 	}
-	return webhooks.SecretsOf(company.Config, company.Org, e.Resolve)
+	e.hooks.mu.Lock()
+	defer e.hooks.mu.Unlock()
+	if e.hooks.built == company {
+		return e.hooks.material
+	}
+	e.hooks.material = webhooks.SecretsOf(company.Config, company.Org, e.Resolve)
+	e.hooks.built = company
+	return e.hooks.material
 }
 
 // VerifiableSources lists the integrations whose RESOLVED material can

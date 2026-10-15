@@ -27,7 +27,11 @@ afterEach(() => {
 const isWrite = (r: SentRequest) =>
   r.path === "/config" && r.method === "PUT" && !r.query.has("dry_run");
 
-/** Fills the create form and starts the company from a template. */
+/**
+ * Fills the create form and starts the company from a template. The form
+ * offers the operator's own seat ticked, named "Founder": `seat: false`
+ * unticks it, and `seat: true` gives it a contact identity besides.
+ */
 async function startCompany(options: { template?: string; seat?: boolean } = {}) {
   fireEvent.change(await screen.findByLabelText("Company name"), {
     target: { value: "Nimbus" },
@@ -36,10 +40,13 @@ async function startCompany(options: { template?: string; seat?: boolean } = {})
   if (options.template) {
     fireEvent.click(screen.getByRole("radio", { name: options.template }));
   }
-  if (options.seat) {
-    fireEvent.click(screen.getByRole("checkbox", { name: "Add a seat for yourself" }));
-    fireEvent.change(screen.getByLabelText("Your seat's name"), { target: { value: "Founder" } });
-    fireEvent.change(screen.getByLabelText("Slack member ID"), { target: { value: "U0FOUNDER" } });
+  if (options.seat === false) {
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Add a seat for yourself/ }));
+  }
+  if (options.seat === true) {
+    fireEvent.change(screen.getByLabelText(/^Slack member ID/), {
+      target: { value: "U0FOUNDER" },
+    });
   }
   fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
 }
@@ -58,16 +65,47 @@ test("the form starts the company from a template, and the check is create-only"
   expect(sent.mission).toBe("Ship weather.");
   // The operator's own seat, with the one identity they gave, and the
   // template's neutral titles below it.
+  // Every node carries its identity from the start, minted from its name.
   expect(sent.roles?.[0]).toMatchObject({
     name: "Founder",
+    handle: "founder",
     kind: "human",
     contact: { slack_user_id: "U0FOUNDER" },
+    manages: ["chief-executive"],
   });
-  expect(sent.roles?.[1]?.name).toBe("Chief Executive");
+  expect(sent.roles?.[1]).toMatchObject({ name: "Chief Executive", handle: "chief-executive" });
   expect(sent.units?.map((u) => u.name)).toEqual(["Engineering", "Product", "Marketing"]);
   // And the whole start is one operation: undone, the form is back.
   fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
   expect(await screen.findByRole("button", { name: "Start the company" })).toBeDefined();
+});
+
+// EVERY PERSON HOLDS A HUMAN SEAT, so a company started with none is one
+// nobody can join until somebody adds one: the operator's own seat is
+// offered ticked and named, and leaving it out is a choice made by unticking.
+test("the operator's own seat is offered from the start, ticked and named", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  const own = await screen.findByRole("checkbox", { name: /^Add a seat for yourself/ });
+  expect((own as HTMLInputElement).checked).toBe(true);
+  expect((screen.getByLabelText("Your seat's name") as HTMLInputElement).value).toBe("Founder");
+  screen.getByText(/invite or create yourself on it from the org chart/);
+  await startCompany({});
+  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
+  expect((engine.checks().at(-1)!.body as CompanyDocument).roles?.[0]).toMatchObject({
+    name: "Founder",
+    kind: "human",
+  });
+});
+
+test("a company started with the own seat unticked has no human seat", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await startCompany({ seat: false });
+  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
+  const roles = (engine.checks().at(-1)!.body as CompanyDocument).roles ?? [];
+  expect(roles.length).toBeGreaterThan(0);
+  expect(roles.some((r) => r.kind === "human")).toBe(false);
 });
 
 // NOTHING TO UNDO, CHECK OR SAVE until a template is recorded, so the form

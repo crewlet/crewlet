@@ -10,9 +10,16 @@
  * the foot never moves when the engine's state does. Pressing it opens the
  * ENGINE PANEL above it (the kit's `Popover`): the state again with this
  * node's name, the fleet, the configuration and the uptime, the alarms by
- * name, and a way to each place that acts on them. A refused token is the one
- * state a press can fix, so there the row is the button that asks for another
- * and opens no panel.
+ * name, and a way to each place that acts on them.
+ *
+ * Two states are not about the engine at all but about THIS BROWSER, and the
+ * engine serves it nothing to put in a panel. Nobody signed in is the one a
+ * press can fix, so there the row is the button that goes to the sign-in and
+ * opens no panel. A refusal of somebody the engine knows is fixed by an
+ * admin: the row STATES it and is no control at all (the kit's static rail
+ * row: no pointer, no chevron, never focused), and the panel drawn in place
+ * of the screen carries the retry and the sign-out. A statement wearing a
+ * control's marks reads as a control that does nothing.
  *
  * # One state, chosen by precedence
  *
@@ -20,21 +27,25 @@
  * AND diverged), and a row that listed them all is a row nobody reads. So the
  * row says the ONE that decides what a reader should do, in this order:
  *
- *   1. the token was refused: nothing else on screen can be trusted;
- *   2. the engine was lost: everything shown is the last push;
- *   3. nothing has reported yet: the tab is still connecting, which is not
+ *   1. nobody is signed in: the engine accepted no session from this
+ *      browser, and nothing else on screen can be trusted;
+ *   2. the engine knows who this is and will not serve them (a seat taken out
+ *      of the chart), in danger — never for want of access, since the socket
+ *      serves every signed-in reader the overview;
+ *   3. the engine was lost: everything shown is the last push;
+ *   4. nothing has reported yet: the tab is still connecting, which is not
  *      "healthy" and not a fault either, so its dot is neutral;
- *   4. this node is draining: it is leaving and hands its seats on;
- *   5. this node is FALLING BEHIND: its watched duty has missed a beat, and
+ *   5. this node is draining: it is leaving and hands its seats on;
+ *   6. this node is FALLING BEHIND: its watched duty has missed a beat, and
  *      the push's `stall_lag_seconds` says for how long. The figure climbs
  *      towards the lease TTL, at which the watchdog ends the process, so it
  *      outranks every state below, each of which waits for a person;
- *   6. no configuration is applied: STARTING while its first apply runs (the
+ *   7. no configuration is applied: STARTING while its first apply runs (the
  *      posture says `wait`, and the dot is neutral, since nothing needs a
  *      person), and no company otherwise;
- *   7. the node's posture diverged from the fleet (`shed`, `stuck`,
+ *   8. the node's posture diverged from the fleet (`shed`, `stuck`,
  *      `isolated`): it is running a configuration nobody else is;
- *   8. serving: "Engine healthy" ONLY when the alarm table was evaluated and
+ *   9. serving: "Engine healthy" ONLY when the alarm table was evaluated and
  *      nothing in it fires, and "Engine serving" otherwise.
  *
  * THE DOT IS THE POSTURE, AND ONLY THE POSTURE. A standing alarm is a second
@@ -50,12 +61,12 @@
  * the connection; nothing there polls. The alarm COUNT is the push's, which
  * is the evaluation the engine's gauge and log lines come from. Their NAMES
  * are not on the push, which is public and carries only the one that has
- * stood longest; they are the operator's retention report, the same document
- * Settings › Backups & retention lists them from, asked for when the panel
- * opens and again when the count moves. Each is named by the rule in
- * `lib/alarms.ts`. A reader without an operator credential, or a report not
- * answered yet, gets the longest-standing alarm by name and how many more
- * stand.
+ * stood longest; they are the retention report, the same document Settings ›
+ * Backups & retention lists them from, asked for when the panel opens and
+ * again when the count moves, and only of a reader holding the access that
+ * section opens on (Admin). Each is named by the rule in
+ * `lib/alarms.ts`. A reader without that grant, or a report not answered yet,
+ * gets the longest-standing alarm by name and how many more stand.
  *
  * # What it cannot say
  *
@@ -91,7 +102,8 @@ const AGREED = new Set(["", "serve", "wait"]);
 
 /** Which of the engine's states the row says. */
 export type EngineState =
-  | "token"
+  | "signed-out"
+  | "refused"
   | "unreachable"
   | "connecting"
   | "draining"
@@ -120,13 +132,32 @@ export interface EngineReading {
 export function engineReading(input: {
   connected: boolean;
   authRejected: boolean;
+  /** Why the engine will not serve a browser it knows, or null. */
+  accessRefused?: string | null;
   lostAt: number | null;
   everConnected: boolean;
   health: EngineHealth | null;
 }): EngineReading {
-  const { connected, authRejected, lostAt, everConnected, health } = input;
+  const { connected, authRejected, accessRefused = null, lostAt, everConnected, health } = input;
   if (authRejected) {
-    return { state: "token", tone: "danger", title: "Token refused", health: null, lostAt };
+    return {
+      state: "signed-out",
+      tone: "danger",
+      title: "Not signed in",
+      lead: "The engine accepted no session from this browser",
+      health: null,
+      lostAt,
+    };
+  }
+  if (accessRefused !== null) {
+    return {
+      state: "refused",
+      tone: "danger",
+      title: "Access refused",
+      lead: `The engine knows who you are and will not serve you (${accessRefused})`,
+      health: null,
+      lostAt: null,
+    };
   }
   if (!connected && lostAt !== null) {
     return {
@@ -208,26 +239,38 @@ export function engineReading(input: {
 
 export function EnginePanel({
   reading,
-  operator,
-  onSetToken,
+  readsReport,
+  onSignIn,
 }: {
   reading: EngineReading;
-  /** Whether this reader may ask the operator's retention report, which names the alarms. */
-  operator: boolean;
-  onSetToken: () => void;
+  /**
+   * Whether this reader may ask the retention report, which names the alarms:
+   * whether they hold the access Settings › Backups & retention opens on.
+   */
+  readsReport: boolean;
+  onSignIn: () => void;
 }) {
-  // A REFUSED TOKEN IS THE ONE STATE A PRESS CAN FIX, so the row is that
+  // NOBODY SIGNED IN IS THE ONE STATE A PRESS CAN FIX, so the row is that
   // button, named for what pressing it does.
-  if (reading.state === "token") {
+  if (reading.state === "signed-out") {
     return (
       <AppShell.RailRow
         icon={<StatusDot tone="danger" />}
         trailing={<KeyGlyph size="xs" />}
-        label={`${reading.title}. Set another token`}
-        onClick={onSetToken}
+        label={`${reading.title}. Sign in`}
+        onClick={onSignIn}
       >
         {reading.title}
       </AppShell.RailRow>
+    );
+  }
+  // A STATEMENT WEARS NOTHING A CONTROL WEARS. A refusal of somebody the
+  // engine knows is repaired by an admin: the row says so, and is the kit's
+  // static row, with no pointer, no chevron and no
+  // place in the tab order. The panel in place of the screen says the rest.
+  if (reading.state === "refused") {
+    return (
+      <AppShell.RailRow icon={<StatusDot tone={reading.tone} />}>{reading.title}</AppShell.RailRow>
     );
   }
   const count = reading.health?.alarms?.count ?? 0;
@@ -254,7 +297,7 @@ export function EnginePanel({
         </AppShell.RailRow>
       )}
     >
-      {(close) => <PanelBody reading={reading} operator={operator} close={close} />}
+      {(close) => <PanelBody reading={reading} readsReport={readsReport} close={close} />}
     </Popover>
   );
 }
@@ -262,11 +305,11 @@ export function EnginePanel({
 /** What the panel says. Mounted only while it is open, so nothing here runs for a closed row. */
 function PanelBody({
   reading,
-  operator,
+  readsReport,
   close,
 }: {
   reading: EngineReading;
-  operator: boolean;
+  readsReport: boolean;
   close: () => void;
 }) {
   const now = useNow();
@@ -321,7 +364,7 @@ function PanelBody({
             ) : count === 0 ? (
               "None"
             ) : (
-              <AlarmNames count={count} worst={health.alarms.worst} operator={operator} />
+              <AlarmNames count={count} worst={health.alarms.worst} readsReport={readsReport} />
             )}
           </DescriptionList.Item>
         </DescriptionList>
@@ -383,13 +426,13 @@ function PanelBody({
 function AlarmNames({
   count,
   worst,
-  operator,
+  readsReport,
 }: {
   count: number;
   worst: string | undefined;
-  operator: boolean;
+  readsReport: boolean;
 }) {
-  const report = useQuery("retention", undefined, { enabled: operator });
+  const report = useQuery("retention", undefined, { enabled: readsReport });
   const { refetch } = report;
   const seen = useRef(count);
   useEffect(() => {

@@ -93,8 +93,10 @@ func PathList(paths []Path) string {
 // Each is a LIST of paths rather than one, because a vendor moves these
 // between releases and an operator overriding a single field should not have
 // to know which release the engine was written against. The first path that
-// resolves to a number wins; when none does, the count is estimated and
-// [Completion.Estimated] says so.
+// resolves to a number wins; when none does, the count is estimated (four
+// characters a token), and `crewlet llm doctor` reports the profile's token
+// usage as estimated, because a budget built on estimates is a different
+// promise.
 type UsagePaths struct {
 	Input      []Path `yaml:"input,omitempty"`
 	Output     []Path `yaml:"output,omitempty"`

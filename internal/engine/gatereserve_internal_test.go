@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -16,7 +17,8 @@ import (
 
 // fullForOrdinaryWrites fills each identity log, with records every build
 // decodes and no gate drops, until it holds at least minBytes, and then sets
-// its ceiling to ceiling(bytes held) — answering the ceiling each got, by log.
+// its ceiling to ceiling(its reservation, bytes held) — answering the ceiling
+// each got, by log.
 //
 // THE CEILING IS SET ON THE STREAM ITSELF, past the capacity window, because
 // what is under test is what a log at its ceiling takes, not how it came to be
@@ -24,13 +26,14 @@ import (
 // it would after any resize.
 //
 // A FEW PADDED BARRIERS AND A SMALL TOP-UP, because what a reserve admits is a
-// function of bytes alone ([statelog.OrdinaryCeiling], [statelog.GateReserve]):
-// filling with barriers of a few hundred bytes each was a thousand appends,
-// each one applied, for the same bytes four padded ones hold. Each padded
-// barrier leaves fillTopUp of the target, so the last bytes are still small
-// barriers and the log ends as close past minBytes as it always did.
+// function of bytes alone ([statelog.Reservation.Ordinary],
+// [statelog.Reservation.Bytes]): filling with barriers of a few hundred bytes
+// each was a thousand appends, each one applied, for the same bytes four
+// padded ones hold. Each padded barrier leaves fillTopUp of the target, so the
+// last bytes are still small barriers and the log ends as close past minBytes
+// as it always did.
 func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64,
-	ceiling func(held uint64) uint64) map[string]uint64 {
+	ceiling func(reservation statelog.Reservation, held uint64) uint64) map[string]uint64 {
 
 	t.Helper()
 	out := map[string]uint64{}
@@ -55,7 +58,7 @@ func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64
 		if err != nil {
 			t.Fatalf("read %s's usage: %v", name, err)
 		}
-		limit := ceiling(stats.Bytes)
+		limit := ceiling(statelog.ReservationOf(running.domain), stats.Bytes)
 		if err := running.log.SetMaxBytes(t.Context(), limit); err != nil {
 			t.Fatalf("set %s's ceiling to %d: %v", name, limit, err)
 		}
@@ -65,9 +68,11 @@ func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64
 }
 
 const (
-	// fillPad is the most padding one barrier carries: 32 KiB, far under
-	// the broker's payload ceiling ([statelog.MaxAppendBytes]), so four of
-	// them fill the largest target a case here sets.
+	// fillPad is the most padding one barrier carries: 32 KiB, under the
+	// largest record any identity-claiming log declares
+	// ([statelog.StreamSpec.MaxRecordBytes] — the identity estate's 128 KiB
+	// is the smallest), so the stream's own max_msg_size takes it, and four
+	// of them fill the largest target a case here sets.
 	fillPad = 32 << 10
 
 	// fillTopUp is what the padded barriers leave of a fill for small ones:
@@ -107,20 +112,21 @@ func paddedBarrierOn(t *testing.T, running *runningLog, pad int) {
 	if body, err = json.Marshal(record); err != nil {
 		t.Fatalf("re-encode the padded barrier: %v", err)
 	}
+	// SIGNED, as [barrierOn]'s is: an applier refuses a frame this keyring
+	// does not open, so an unsigned padded barrier would stop the log the
+	// fill means to move rather than be applied.
 	if _, _, err := running.log.Append(t.Context(),
-		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body); err != nil {
+		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil,
+		running.signer.Seal(body)); err != nil {
 		t.Fatalf("append a padded barrier: %v", err)
 	}
 }
 
 // ordinaryCeilingAt is the smallest ceiling whose ordinary writes are held to
-// no less than held — a log exactly full for everything but a gate record.
-func ordinaryCeilingAt(held uint64) uint64 {
-	limit := held
-	for statelog.OrdinaryCeiling(limit, true) < held {
-		limit++
-	}
-	return limit
+// no less than held — a log exactly full for everything but a gate record —
+// found by the capacity verb's own search, with no floor.
+func ordinaryCeilingAt(reservation statelog.Reservation, held uint64) uint64 {
+	return smallestTargetAbove(held-1, reservation, 0)
 }
 
 // refusedFull reports whether err is the full-log refusal.
@@ -135,7 +141,8 @@ func refusedFull(err error) bool {
 func requireOrdinaryRefused(t *testing.T, running *runningLog) {
 	t.Helper()
 	name := running.domain.Name()
-	index, err := statelog.NewReadIndex(running.domain, running.spec, running.log, running.reserve,
+	index, err := statelog.NewReadIndex(running.domain, running.spec, running.log,
+		running.signer, running.reserve,
 		barrierEncoder(running.domain),
 		func() uint32 { return running.runner.Committed().Generation }, nil)
 	if err != nil {
@@ -166,19 +173,21 @@ func requireOrdinaryRefused(t *testing.T, running *runningLog) {
 func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	identity := identityLogs(t, e.native.Load().log)
-	// A HUNDRED AND TWENTY-EIGHT KIBIBYTES HELD keeps a reserve of about
-	// eight: room for many eviction records of a few hundred bytes each,
-	// and more than one barrier is counted at — so a reserve that admitted
-	// ordinary appends up to the broker's own ceiling would let the barrier
-	// below through, and the case would say so.
+	identity := identityLogs(t, e.core.Load().log)
+	// A HUNDRED AND TWENTY-EIGHT KIBIBYTES HELD, under a ceiling whose
+	// reserve is each log's fleet term — seven of its largest appends and
+	// a mebibyte — which is room for many eviction records of a few
+	// hundred bytes each, and more than one barrier is counted at: a
+	// reserve that admitted ordinary appends up to the broker's own
+	// ceiling would let the barrier below through, and the case would say
+	// so.
 	ceilings := fullForOrdinaryWrites(t, identity, 128<<10, ordinaryCeilingAt)
 	for _, running := range identity {
 		requireOrdinaryRefused(t, running)
 	}
 
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
-		Node: "node-gone", OpID: "op-full", By: "operator"})
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
+		Node: "node-gone", OpID: statelog.NewOpID(time.Now(), "full"), By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict on full logs: %v", err)
 	}
@@ -192,7 +201,7 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s's usage: %v", name, err)
 		}
-		soft := statelog.OrdinaryCeiling(ceilings[name], true)
+		soft := statelog.ReservationOf(running.domain).Ordinary(ceilings[name])
 		if stats.Bytes <= soft || stats.Bytes > ceilings[name] {
 			t.Fatalf("%s holds %d bytes with the eviction landed, want it in the "+
 				"reserve between %d and %d", name, stats.Bytes, soft, ceilings[name])
@@ -219,12 +228,13 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 	t.Parallel()
 	e, _, _ := trimmedTracker(t)
-	identity := identityLogs(t, e.native.Load().log)
+	identity := identityLogs(t, e.core.Load().log)
 	// SIXTY-FOUR BYTES OF ROOM, less than any eviction record.
-	fullForOrdinaryWrites(t, identity, 48<<10, func(held uint64) uint64 { return held + 64 })
+	fullForOrdinaryWrites(t, identity, 48<<10,
+		func(_ statelog.Reservation, held uint64) uint64 { return held + 64 })
 
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
-		Node: "node-gone", OpID: "op-past", By: "operator"})
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
+		Node: "node-gone", OpID: statelog.NewOpID(time.Now(), "past"), By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict: %v", err)
 	}
@@ -262,7 +272,7 @@ func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	recorder, err := metrics.New()
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
@@ -274,15 +284,16 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 	}
 	for _, running := range s.running() {
 		name := running.domain.Name()
-		reserved := statelog.KeepsGateReserve(running.domain)
+		reservation := statelog.ReservationOf(running.domain)
 		stats, err := running.log.Stats(t.Context())
 		if err != nil {
 			t.Fatalf("read %s's usage: %v", name, err)
 		}
-		want := *statelog.Headroom(stats.Bytes, stats.MaxBytes, reserved)
-		var wantReserve uint64
-		if reserved {
-			wantReserve = statelog.GateReserve(stats.MaxBytes)
+		want := *reservation.Headroom(stats.Bytes, stats.MaxBytes)
+		wantReserve := reservation.Bytes(stats.MaxBytes)
+		if reservation.Kept && wantReserve == 0 {
+			t.Fatalf("%s keeps a reserve and it is zero of a %d-byte ceiling",
+				name, stats.MaxBytes)
 		}
 		got := rows[name]
 		if got.ReserveBytes != wantReserve {
@@ -294,7 +305,7 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 				"ordinary writes are held to", name, got.HeadroomFraction, want)
 		}
 
-		r.gauges(name, reserved, stats, statelog.TrimDecision{}, fleetInputs{})
+		r.gauges(name, reservation, stats, statelog.TrimDecision{}, fleetInputs{})
 		var gauged *float64
 		for _, snap := range recorder.Read() {
 			if snap.Name == metrics.StatelogLogHeadroomFraction && snap.Attrs["domain"] == name {

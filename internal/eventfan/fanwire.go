@@ -41,8 +41,11 @@ import (
 //   - A listing and its axis take `feed_only`, the rows the activity feed
 //     carries ([store.ListQuery.FeedOnly]): every node leaves the types the
 //     feed keeps out of its own page and its own bars.
-//   - The company's phases narrow by `agent_id`, the seat's own id, because
-//     two unit seats share a role name.
+//   - EVERY SEAT IS NARROWED BY `agent_id` ALONE — the company's phases, one
+//     seat's phases, a page of turns and a spend window alike — the id every
+//     node derives from the seat's immutable handle (ADR-0013), and never by a
+//     role name, which two seats may share: read by name, one seat's history
+//     listed every namesake's. No question carries a `role`.
 //   - A page of turns takes `since` and `until` as the asker's two instants on
 //     the turn's start rather than whole days back from each peer's clock,
 //     and `before_id` as the cursor's second term beside its start
@@ -51,7 +54,7 @@ import (
 //     turn where a page lists it ([Fleet.Turns]).
 //   - Every question carries the asker's instant, `at` — the instant every
 //     node floors the history at (see [store.EventLog]), so no node answers
-//     as of its own clock.
+//     as of its own clock — and a node refuses one that carries none.
 //   - Beside every count are the rows it NAMES rather than counts — a
 //     custody batch the node has written and not settled (see the package
 //     doc) — and `kept` is the second question that resolves them: which of
@@ -63,7 +66,7 @@ import (
 //   - `notification_outcomes` asks what became of the notifications each
 //     third-party app delivered over a window the asker names, rather than
 //     over the span of the newest page of notification events.
-const Protocol = 5
+const Protocol = 6
 
 // Subject is where a history question is scattered: ONE subject for the whole
 // fleet, every node serving it, because the answerers are every node rather
@@ -281,9 +284,10 @@ type traceRowsParams struct {
 	At time.Time `json:"at"`
 }
 
+// turnsParams is a page of turns. It narrows to one seat by AgentID alone —
+// never by a role name, which two seats may share.
 type turnsParams struct {
 	SinceDays int            `json:"since_days,omitempty"`
-	AgentRole string         `json:"role,omitempty"`
 	AgentID   string         `json:"agent_id,omitempty"`
 	Model     string         `json:"model,omitempty"`
 	WorkKey   string         `json:"work_key,omitempty"`
@@ -308,7 +312,7 @@ type turnsParams struct {
 func turnsParamsOf(q store.TurnQuery) turnsParams {
 	p := turnsParams{
 		Since: q.Since, Until: q.Until, At: q.At,
-		SinceDays: q.SinceDays, AgentRole: q.AgentRole, AgentID: q.AgentID,
+		SinceDays: q.SinceDays, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
 		Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
 	}
@@ -323,7 +327,7 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 func (p turnsParams) query(ids []string) store.TurnQuery {
 	q := store.TurnQuery{
 		Since: p.Since, Until: p.Until, At: p.At,
-		SinceDays: p.SinceDays, AgentRole: p.AgentRole, AgentID: p.AgentID,
+		SinceDays: p.SinceDays, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
 		Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
 		IDs: ids,
@@ -334,12 +338,11 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 	return q
 }
 
-// phasesParams is both phase questions' parameters. The company's phases read
-// only AgentID and a seat's read both, since a seat's history is matched by
-// either identifier its rows were written under.
+// phasesParams is both phase questions' parameters: the seat, by the id every
+// node derives for it, and never by a role name, which two seats may share —
+// read by name, one seat's history listed every namesake's.
 type phasesParams struct {
 	AgentID string      `json:"agent_id,omitempty"`
-	Role    string      `json:"role,omitempty"`
 	Limit   int         `json:"limit,omitempty"`
 	Before  *cursorWire `json:"before,omitempty"`
 
@@ -351,10 +354,12 @@ type phasesParams struct {
 // cuts the same one rather than each counting back from its own clock — and
 // the instant it was cut against, so every node floors it there too.
 type phaseTokenParams struct {
-	Since     time.Time `json:"since"`
-	Until     time.Time `json:"until"`
-	AgentRole string    `json:"role,omitempty"`
-	Limit     int       `json:"limit,omitempty"`
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until"`
+	Limit int       `json:"limit,omitempty"`
+
+	// AgentID narrows to one seat.
+	AgentID string `json:"agent_id,omitempty"`
 
 	// Before is the record a paged read resumes below — see
 	// [Fleet.PhaseTokens].
@@ -365,12 +370,12 @@ type phaseTokenParams struct {
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
-	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole,
+	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentID: q.AgentID,
 		Limit: q.Limit, Before: cursorOf(q.Before), At: q.At}
 }
 
 func (p phaseTokenParams) query() store.PhaseTokenQuery {
-	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole,
+	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentID: p.AgentID,
 		Limit: p.Limit, Before: p.Before.cursor(), At: p.At}
 }
 
@@ -517,7 +522,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor(), p.At)
+		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Before.cursor(), p.At)
 		if err != nil {
 			return nil, err
 		}

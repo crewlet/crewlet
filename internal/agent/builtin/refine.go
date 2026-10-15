@@ -134,7 +134,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	// agent rewrite another's learned procedure with nothing in the way.
 	sk, found, err := t.skills.Get(ctx, handle, name)
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
+		return nodeFailure(ctx, RefineSkillTool, err, fmt.Sprintf("Could not load %q", clip(name)), ""), nil
 	}
 	if !found {
 		return refused(tools.RefusalNotFound, fmt.Sprintf(
@@ -158,7 +158,8 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		At:           time.Now().UTC(),
 	})
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not refine %q: %v", clip(name), err)), nil
+		return nodeFailure(ctx, RefineSkillTool, err, fmt.Sprintf("Could not refine %q", clip(name)),
+			"The skill is as it was."), nil
 	}
 	// The VERSION is what makes successive refinements distinguishable, and
 	// the kind tells a success annotation from a counter-example. Published

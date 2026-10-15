@@ -84,6 +84,14 @@ test("each team's bar is split by its seats and keyed by their names", () => {
   expect(keys).toEqual([["SWE600", "FE300"], ["PM300"]]);
 });
 
+// A TEAM IS NAMED, NEVER KEYED: the engine keys a unit band by the unit's key
+// and sends its name as `label`, so a bar drawn from `group` read "core-eng".
+test("a team's bar is named by its label, not by the key it is grouped under", () => {
+  const { container } = mount([band("core-eng", 900, { label: "Core Engineering", seats: 1 })]);
+  expect(container.textContent).toContain("Core Engineering");
+  expect(container.textContent).not.toContain("core-eng");
+});
+
 // THE RESIDUAL ROW IS SEVERAL TEAMS, so it is one bar in the residual hue
 // rather than a split of seats from teams the card does not name; a team the
 // engine answered without its seats is one bar in the first hue, as before.

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -30,9 +29,9 @@ type healthSample struct {
 // the node's first company and on a later one — the node's API and reconcile
 // loop as serveNodeWith wires them, the write through PUT /config, the apply
 // by the running loop. One part of that wiring is replaced: the engine's
-// applied hook, which the API installs only to re-broadcast the dashboard's
-// config-derived surfaces and which nothing /health reports reads, is taken
-// over below as the observer inside each apply.
+// company-published hook, which the API installs only to re-broadcast the
+// dashboard's config-derived surfaces and which nothing /health reports reads,
+// is taken over below as the observer inside each apply.
 //
 // For about a tenth of a second during every apply that then succeeded, the
 // body used to say `posture: isolated` — and `status: isolated`, or
@@ -43,14 +42,11 @@ type healthSample struct {
 //
 // TWO READERS, because one would not be able to fail: a poller samples the
 // whole run as a client does, and could miss a short apply entirely; the
-// engine's applied hook reads /health from INSIDE each apply, after the epoch
-// is swapped and before the outcome is recorded, every time.
+// engine's company-published hook reads /health from INSIDE each apply, after
+// the epoch is swapped and before the outcome is recorded, every time.
 func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 	t.Parallel()
-	const token = "a-test-token"
-	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: token}}
+	boot := bootstrapFor(t, freePort(t))
 	seedEngineStore(t, boot)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot})
 	if err != nil {
@@ -89,7 +85,7 @@ func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 		inside []healthSample
 		failed []error
 	)
-	e.SetOnApplied(func(ctx context.Context) {
+	e.SetOnCompanyPublished(func(ctx context.Context) {
 		sample, err := read(ctx)
 		mu.Lock()
 		defer mu.Unlock()
@@ -119,7 +115,7 @@ func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Authorization", "Bearer "+cliFixtureToken)
 		req.Header.Set("X-Summary", "posture under a successful apply")
 		res, err := client.Do(req)
 		if err != nil {

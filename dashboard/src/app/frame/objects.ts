@@ -36,6 +36,7 @@ export type ObjectKind =
   | "integration"
   | "credential"
   | "revision"
+  | "person"
   | "notice";
 
 export interface ObjectRef {
@@ -69,10 +70,19 @@ export function parseRef(token: string | null | undefined): ObjectRef | null {
 export interface KindSpec {
   /** What this kind is called in a header eyebrow and a palette row. */
   label: string;
-  /** The object's own page. */
+  /** The object's own page — or, for a kind whose peek IS its page ([peekIsPage]), the list it is read beside. */
   pathOf: (id: string) => string[];
   /** Ids that carry their own separators, split for the route. */
   mono?: boolean;
+  /**
+   * THE PEEK IS THE OBJECT'S PAGE: there is no screen of its own to open, so
+   * its address — what a modifier-click opens in a new tab and a copied link
+   * holds — is the list `pathOf` names WITH ITS PEEK OPEN, and the rail draws
+   * no `Open` over that list, which could only close it. A person is the case:
+   * their directory row is the whole of what the dashboard holds about them,
+   * read beside People & access, and the route table gives that screen no tail.
+   */
+  peekIsPage?: boolean;
 }
 
 /**
@@ -116,6 +126,10 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
     pathOf: (id) => ["settings", "config", "revisions", id],
     mono: true,
   },
+  // A PERSON — or a service account — BY THE ID THE DIRECTORY KEYS THEM ON,
+  // never a login, which a rename moves to somebody else. Read in its peek
+  // beside People & access, which is the only page a directory row has.
+  person: { label: "Person", pathOf: () => ["settings", "people"], peekIsPage: true },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
   // somebody's inbox naming a change to something else, so its "page" is the
   // inbox that holds it — and that is where it is read in place and marked,

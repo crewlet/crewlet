@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -70,9 +71,13 @@ func segmentAux(scale int) auxspend.Spent {
 	return auxspend.Spent{Calls: 3, Input: 80 * scale, Output: 12 * scale, CacheRead: 40 * scale}
 }
 
+// fixtureRun is the run every case here charges for: a run id as the engine
+// mints one, time-ordered, carrying the instant the run began.
+const fixtureRun = "018bcfe5-6800-7000-8000-000000000001"
+
 func dispatchTel(item *types.WorkItem) turnTelemetry {
 	t := turnTelemetry{
-		handle: "dev", runID: "run-1", trigger: types.Trigger{Type: "work_item"},
+		handle: "dev", runID: fixtureRun, trigger: types.Trigger{Type: "work_item"},
 		startedAt: time.Unix(1_700_000_000, 0).UTC(), written: &turnctx.Written{},
 		auxSpent: auxspend.NewTally(),
 	}
@@ -318,9 +323,9 @@ func TestASegmentsOperationIDIsStableAcrossARetry(t *testing.T) {
 		t.Fatalf("a re-run segment named a new operation: %q then %q", a.opID, b.opID)
 	}
 	for _, pair := range [][2]string{
-		{segmentOpID("run-1", "", false), segmentOpID("run-1", "launch-1", true)},
-		{segmentOpID("run-1", "launch-1", true), segmentOpID("run-1", "launch-2", true)},
-		{segmentOpID("run-1", "", false), segmentOpID("run-2", "", false)},
+		{segmentOpID("run-1", "", false, time.Time{}), segmentOpID("run-1", "launch-1", true, time.Time{})},
+		{segmentOpID("run-1", "launch-1", true, time.Time{}), segmentOpID("run-1", "launch-2", true, time.Time{})},
+		{segmentOpID("run-1", "", false, time.Time{}), segmentOpID("run-2", "", false, time.Time{})},
 	} {
 		if pair[0] == pair[1] {
 			t.Errorf("two segments share the operation %q", pair[0])
@@ -349,8 +354,79 @@ func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 		turn.Result{Decision: phase.Done}, nil, time.Unix(1_700_000_060, 0).UTC())
 	rec := &fakeRecorder{err: errors.New("the tracker is behind")}
 	(&Engine{}).chargeSegment(t.Context(), rec, c)
-	if len(rec.calls) != 1 || rec.calls[0] != "turn/run-1/dispatch" {
+	if len(rec.calls) != 1 || rec.calls[0] != segmentOpID(fixtureRun, "", false, time.Time{}) {
 		t.Fatalf("the recorder was asked %v, want the dispatch segment once", rec.calls)
+	}
+}
+
+// A SEGMENT'S OPERATION ID IS IN THE GRAMMAR, minted at the run's start.
+//
+// The tracker's ledger reads the instant an id was minted to decide whether it
+// can vouch for it; an id that carries none is answered `unknown` and never
+// published on a node whose ledger has lost a row, so a segment's spend would
+// silently go uncharged. And the instant is the RUN's — a resumed segment
+// minutes later shares it — never the segment's or the call's.
+//
+// Mutation: go back to `turn/<run>/<segment>`, or mint at the segment's start,
+// and this fails.
+func TestASegmentsOperationIDIsMintedAtTheRunsStart(t *testing.T) {
+	t.Parallel()
+	began, ok := statelog.OpMintedAt(fixtureRun)
+	if !ok {
+		t.Fatal("the fixture run id carries no instant, so this case proves nothing")
+	}
+	for _, id := range []string{
+		segmentOpID(fixtureRun, "", false, time.Time{}), segmentOpID(fixtureRun, "launch-1", true, time.Time{}),
+	} {
+		if err := statelog.CheckCallerOpID(id); err != nil {
+			t.Errorf("segment id %q is outside the operation-id grammar: %v", id, err)
+		}
+		if at, minted := statelog.OpMintedAt(id); !minted || !at.Equal(began) {
+			t.Errorf("segment id %q was minted at %v (%v), want the run's start %v",
+				id, at, minted, began)
+		}
+	}
+}
+
+// A REBASED SEGMENT MINTS AT ITS REBASE (ADR-0029), and every attempt that
+// carries the same rebase derives the same id.
+//
+// A segment that comes longer after its run began than the operation ledger
+// remembers — a resume a month after its launch — is minted at the instant
+// [rebaseFor] chose for the attempt, or its charge is answered `unknown` on
+// every node and the segment's spend is lost. And the id is still the
+// segment's: a retry carrying the recorded rebase reaches the same one.
+//
+// Mutation: ignore rebasedTo in [segmentOpID] and this fails.
+func TestARebasedSegmentIsMintedAtItsRebase(t *testing.T) {
+	t.Parallel()
+	began, ok := statelog.OpMintedAt(fixtureRun)
+	if !ok {
+		t.Fatal("the fixture run id carries no instant, so this case proves nothing")
+	}
+	rebased := began.Add(40 * 24 * time.Hour)
+	id := segmentOpID(fixtureRun, "launch-1", true, rebased)
+	if err := statelog.CheckCallerOpID(id); err != nil {
+		t.Fatalf("rebased segment id %q is outside the operation-id grammar: %v", id, err)
+	}
+	if at, minted := statelog.OpMintedAt(id); !minted || !at.Equal(rebased) {
+		t.Errorf("rebased segment id %q was minted at %v (%v), want the rebase %v",
+			id, at, minted, rebased)
+	}
+	if again := segmentOpID(fixtureRun, "launch-1", true, rebased); again != id {
+		t.Errorf("a retry carrying the same rebase named %q, want %q", again, id)
+	}
+	if id == segmentOpID(fixtureRun, "launch-1", true, time.Time{}) {
+		t.Error("a rebased segment derived the id its run's start mints")
+	}
+	// AND THE CHARGE CARRIES IT: the telemetry's rebase is what the
+	// segment's charge is published under.
+	tel := dispatchTel(&nativeItem)
+	tel.resumed, tel.launchID, tel.rebasedTo = true, "launch-1", rebased
+	c := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
+		rebased.Add(time.Minute))
+	if c.opID != id {
+		t.Errorf("a rebased attempt charged under %q, want %q", c.opID, id)
 	}
 }
 
@@ -494,7 +570,7 @@ func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
 	}
 	e.auxSpend.Flush(t.Context())
 	recs := pub.records(t)
-	if len(recs) != 1 || recs[0].Stage != types.AuxStageTurn || recs[0].TurnID != "run-1" ||
+	if len(recs) != 1 || recs[0].Stage != types.AuxStageTurn || recs[0].TurnID != fixtureRun ||
 		recs[0].Purpose != types.AuxCondense(string(compact.KindOutcome)) {
 		t.Fatalf("the rewrite was recorded as %+v, want the turn's condense_outcome", recs)
 	}
@@ -579,4 +655,89 @@ func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
 			"segment's own and the run's bridged ones together", got.SubagentCount,
 			got.SubagentInputTokens, got.SubagentOutputTokens, got.SubagentTokens)
 	}
+}
+
+// THE RECORD THAT ENDS A TURN STATES THE WHOLE TURN, its parked segments
+// included.
+//
+// The usage domain reads a turn's statistics off that one record, because the
+// turn's other records are not all on one node — a stateless node's are kept a
+// batch at a time by whichever data node won each claim, and a turn resumed on
+// another node leaves its first segment behind. So the segment that parks hands
+// its span and its reviews on with the conversation, the segment that ends the
+// turn adds its own and says whether the turn failed, and a segment that only
+// parked states nothing — the turn has not ended.
+//
+// Mutation: leave the carried measurement out of the end, or state one on a
+// parked segment, and this goes red.
+func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1_700_000_000, 0).UTC()
+	first := runner.Spend{Reviews: 2, SentBack: 1, Unaccepted: 1}
+	second := runner.Spend{Reviews: 1}
+
+	dispatch := dispatchTel(nil)
+	dispatch.startedAt = start
+	parked := dispatch.chargeFor(first, turn.Result{Suspended: true}, nil, start.Add(time.Minute))
+	if want := (execstate.TurnSoFar{DurationMS: 60_000, Reviews: 2, SentBack: 1, Unaccepted: 1}); parked.soFar == nil || *parked.soFar != want {
+		t.Fatalf("the parked segment hands on %+v, want its own span and reviews %+v", parked.soFar, want)
+	}
+	e, p, tel := failing(t)
+	tel.startedAt = start
+	e.publishTurnCompleted(t.Context(), tel, first, turn.Result{Suspended: true}, nil, start.Add(time.Minute))
+	if got := only[*types.TurnCompleted](t, p, "turn_completed"); got.Turn != nil {
+		t.Errorf("a segment that parked stated the whole turn %+v — it has not ended", got.Turn)
+	}
+
+	for _, c := range []struct {
+		name   string
+		res    turn.Result
+		failed bool
+	}{
+		{"accepted", turn.Result{Decision: phase.Done}, false},
+		{"failed", turn.Result{Decision: phase.Failed}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, p, tel := failing(t)
+			tel.resumed, tel.soFar = true, parked.soFar
+			tel.startedAt = start.Add(time.Hour)
+			e.publishTurnCompleted(t.Context(), tel, second, c.res, nil, tel.startedAt.Add(30*time.Second))
+			got := only[*types.TurnCompleted](t, p, "turn_completed")
+			want := types.TurnTally{DurationMS: 90_000, Failed: c.failed, Reviews: 3, SentBack: 1, Unaccepted: 1}
+			if got.Turn == nil || *got.Turn != want {
+				t.Errorf("the record ending the turn states %+v, want both segments' spans "+
+					"and reviews and whether it failed: %+v — never the park in between, "+
+					"which held no seat", got.Turn, want)
+			}
+			if got.DurationMS != 30_000 {
+				t.Errorf("the ending segment's own duration_ms is %d, want its 30000 — the "+
+					"whole turn is the tally's", got.DurationMS)
+			}
+		})
+	}
+
+	// A TURN WHOSE PAST NOBODY MEASURED — resumed from a park a build before
+	// the tally made, so its conversation carried no measurement — states
+	// none and hands none on: neither its end nor a park of its own can say
+	// what its first segment ran, and a tally of the rest would be read as
+	// the whole turn. Its end is then summed from its records.
+	//
+	// Mutation: drop the guard from either the end or the park, and this
+	// names which.
+	t.Run("an unmeasured past", func(t *testing.T) {
+		e, p, tel := failing(t)
+		tel.resumed, tel.soFar = true, nil
+		tel.startedAt = start.Add(time.Hour)
+		if again := tel.chargeFor(second, turn.Result{Suspended: true}, nil,
+			tel.startedAt.Add(time.Minute)); again.soFar != nil {
+			t.Errorf("a segment of a turn whose past nobody measured parks again handing on "+
+				"%+v — its own share, which the end would read as the whole turn", again.soFar)
+		}
+		e.publishTurnCompleted(t.Context(), tel, second, turn.Result{Decision: phase.Done}, nil,
+			tel.startedAt.Add(30*time.Second))
+		if got := only[*types.TurnCompleted](t, p, "turn_completed"); got.Turn != nil {
+			t.Errorf("the end of a turn whose past nobody measured states %+v — a tally of "+
+				"its last segment alone", got.Turn)
+		}
+	})
 }

@@ -78,7 +78,8 @@ const (
 	// refuses a label the project has not declared — so a seat without
 	// this verb could never use the `labels` argument on the tools it does
 	// hold. Every other facet it carries is gated inside, on the project's
-	// lead or on a person's own credential, and the refusals name which.
+	// lead or an admin, who overrides it (archiving also on a
+	// principal that is not an agent), and the refusals name which.
 	WriteProjectTool = "write_project"
 
 	// TaskActivityTool is what HAPPENED, which no board can answer: a

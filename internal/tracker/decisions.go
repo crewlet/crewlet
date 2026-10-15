@@ -30,9 +30,10 @@ const MaxDecisions = 50
 
 // DecisionsQuery asks what is waiting on one person.
 type DecisionsQuery struct {
-	// Who is the person, with every identity their rows carry — see
-	// [Party].
-	Who Party
+	// Handle is the person — their record name (iam.RecordOwner), which
+	// for a person bound to a seat is that seat whatever credential they
+	// hold, so an ask put to them under any credential is one row here.
+	Handle string
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -71,7 +72,7 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 		return DecisionsAnswer{}, fmt.Errorf("tracker: this decisions read names " +
 			"no level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
-	case len(q.Who.Handles()) == 0:
+	case q.Handle == "":
 		return DecisionsAnswer{}, invalid("a decisions read names nobody")
 	}
 	var out DecisionsAnswer
@@ -92,11 +93,11 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 		}
 		// EVERY BODY WHOLE: this is the screen's read, which has no
 		// answer ceiling to fit.
-		if out.Asks, out.Total, err = readAsks(ctx, tx, q.Who, anchor.At,
+		if out.Asks, out.Total, err = readAsks(ctx, tx, q.Handle, anchor.At,
 			MaxDecisions, 0); err != nil {
 			return err
 		}
-		if out.OldestAt, err = oldestAsk(ctx, tx, q.Who); err != nil {
+		if out.OldestAt, err = oldestAsk(ctx, tx, q.Handle); err != nil {
 			return err
 		}
 		out.LogSeq, out.AppliedThrough, err = readCheckpoint(ctx, tx)
@@ -116,12 +117,12 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 
 // oldestAsk is when the longest-waiting open ask was put to this person, over
 // the same predicate [readAsks] pages.
-func oldestAsk(ctx context.Context, tx *sql.Tx, who Party) (*time.Time, error) {
+func oldestAsk(ctx context.Context, tx *sql.Tx, handle string) (*time.Time, error) {
 	var oldest sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `
 		SELECT MIN(c.created_at) FROM `+openAsksFrom+`
-		WHERE `+openAsksWhere(who), who.args()...).Scan(&oldest); err != nil {
-		return nil, fmt.Errorf("tracker: read the oldest ask waiting on %s: %w", who, err)
+		WHERE `+openAsksWhere, handle).Scan(&oldest); err != nil {
+		return nil, fmt.Errorf("tracker: read the oldest ask waiting on %s: %w", handle, err)
 	}
 	if !oldest.Valid {
 		return nil, nil

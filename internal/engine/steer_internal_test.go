@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -11,36 +12,91 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// ask scatters one note the way steer_turn does, and returns every reply.
+// steerRing is the keyring every node of a steer case's fleet holds.
+var steerRing = statelog.OneKey("k1", "the steer cases' fleet key material")
+
+// mustSteerDesk is a desk over ring.
+func mustSteerDesk(t *testing.T, ring statelog.Keyring) *steerDesk {
+	t.Helper()
+	d, err := newSteerDesk(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// founderNote is the note every case sends, as the founder's session.
+func founderNote(turnID string) steer.Request {
+	return steer.Request{
+		Version: steer.WireVersion, TurnID: turnID, NoteID: "req-1",
+		Note: "use staging", By: "founder", ByKind: iam.ActorHuman, OperatorID: "pat:ops-token",
+	}
+}
+
+// sealedNote is req signed on wire the way steer_turn signs it: a fresh id and
+// a deadline ahead.
+func sealedNote(t *testing.T, wire *steerWire, req steer.Request) (steer.Request, []byte) {
+	t.Helper()
+	req.ID, req.Deadline = signedask.NewID(), time.Now().Add(time.Minute)
+	sealed, err := wire.SealRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return req, sealed
+}
+
+// ask scatters one note the way steer_turn does, signed on wire, and returns
+// every reply it believes.
 func ask(t *testing.T, q interface {
 	Ask(context.Context, string, []byte, int) ([][]byte, error)
-}, turnID string, want int) []steer.Reply {
+}, wire *steerWire, turnID string, want int) []steer.Reply {
 	t.Helper()
-	raw, err := json.Marshal(steer.Request{
-		Version: steer.WireVersion, TurnID: turnID, NoteID: "req-1",
-		Note: "use staging", By: "ops-token", BySeat: "founder",
-	})
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	req, sealed := sealedNote(t, wire, founderNote(turnID))
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
-	replies, err := q.Ask(ctx, topics.SeatSteer, raw, want)
+	replies, err := q.Ask(ctx, topics.SeatSteer, sealed, want)
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
 	out := make([]steer.Reply, 0, len(replies))
 	for _, r := range replies {
-		var reply steer.Reply
-		if err := json.Unmarshal(r, &reply); err != nil {
-			t.Fatalf("an unreadable reply: %v", err)
+		reply, why, err := wire.OpenReply(r, req.ID)
+		if err != nil || why != "" {
+			t.Fatalf("a reply the asker cannot believe: %q, %v", why, err)
 		}
 		out = append(out, reply)
+	}
+	return out
+}
+
+// steerServing serves desk on q's broker for the length of the case.
+func steerServing(t *testing.T, q *memory.Queue, desk *steerDesk) {
+	t.Helper()
+	stop, err := q.Serve(t.Context(), topics.SeatSteer, desk.answer)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+}
+
+// steerClients is n started clients of one broker.
+func steerClients(t *testing.T, n int) []*memory.Queue {
+	t.Helper()
+	broker := memory.NewBroker()
+	out := make([]*memory.Queue, n)
+	for i := range out {
+		out[i] = broker.Client()
+		if err := out[i].Start(t.Context()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
 	}
 	return out
 }
@@ -53,37 +109,29 @@ func ask(t *testing.T, q interface {
 // claiming to have handed a note to a turn it cannot reach.
 func TestOnlyTheSeatHolderAnswersASteer(t *testing.T) {
 	t.Parallel()
-	broker := memory.NewBroker()
-	holder, other := broker.Client(), broker.Client()
-	for _, q := range []*memory.Queue{holder, other} {
-		if err := q.Start(t.Context()); err != nil {
-			t.Fatalf("Start: %v", err)
-		}
-	}
-	running, idle := newSteerDesk(), newSteerDesk()
-	for q, d := range map[*memory.Queue]*steerDesk{holder: running, other: idle} {
-		stop, err := q.Serve(t.Context(), topics.SeatSteer, d.answer)
-		if err != nil {
-			t.Fatalf("Serve: %v", err)
-		}
-		t.Cleanup(func() { _ = stop(context.Background()) })
-	}
+	clients := steerClients(t, 2)
+	holder, other := clients[0], clients[1]
+	running, idle := mustSteerDesk(t, steerRing), mustSteerDesk(t, steerRing)
+	steerServing(t, holder, running)
+	steerServing(t, other, idle)
 	box := steer.New()
-	running.register("run-1", "swe", box)
+	running.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box)
 
-	got := ask(t, other, "run-1", 0)
+	got := ask(t, other, idle.wire, "run-1", 0)
 	if len(got) != 1 {
 		t.Fatalf("%d nodes answered for one running turn: %+v", len(got), got)
 	}
-	if got[0].Status != steer.StatusAccepted || got[0].AgentHandle != "swe" {
+	if got[0].Status != steer.StatusAccepted || got[0].AgentHandle != "swe" ||
+		got[0].Agent != sweAgent {
 		t.Errorf("the holder answered %+v", got[0])
 	}
-	if notes := box.Drain(); len(notes) != 1 || notes[0].BySeat != "founder" {
+	if notes := box.Drain(); len(notes) != 1 || notes[0].By != "founder" ||
+		notes[0].ByKind != iam.ActorHuman || notes[0].OperatorID != "pat:ops-token" {
 		t.Errorf("the turn holds %+v, want the one note from the founder", notes)
 	}
 	// NOBODY ANSWERS for a turn no node runs or remembers — which the tool
 	// reports as unknown, never as not running.
-	if got := ask(t, other, "run-unknown", 0); len(got) != 0 {
+	if got := ask(t, other, idle.wire, "run-unknown", 0); len(got) != 0 {
 		t.Errorf("a turn nobody runs was answered: %+v", got)
 	}
 }
@@ -93,16 +141,16 @@ func TestOnlyTheSeatHolderAnswersASteer(t *testing.T) {
 // note to a turn that is over. The memory is bounded.
 func TestAnEndedTurnIsAnsweredClosedForAWhile(t *testing.T) {
 	t.Parallel()
-	d := newSteerDesk()
-	d.register("run-1", "swe", steer.New())
+	d := mustSteerDesk(t, steerRing)
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, steer.New())
 	d.close("run-1")
-	status, handle, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
-	if err != nil || status != steer.StatusClosed || handle != "swe" {
-		t.Fatalf("an ended turn answered (%s, %q, %v), want closed", status, handle, err)
+	status, seat, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
+	if err != nil || status != steer.StatusClosed || seat.handle != "swe" || seat.agent != sweAgent {
+		t.Fatalf("an ended turn answered (%s, %+v, %v), want closed on its seat", status, seat, err)
 	}
 	for i := range steerClosedMemory {
 		id := "later-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		d.register(id, "swe", steer.New())
+		d.register(id, steerSeat{handle: "swe"}, steer.New())
 		d.close(id)
 	}
 	if _, _, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"}); err == nil {
@@ -129,8 +177,8 @@ func TestAnAgentRuntimeTurnRefusesSteer(t *testing.T) {
 	if steerBox(nil).Supported() != true {
 		t.Fatal("a native turn's box refuses notes")
 	}
-	d := newSteerDesk()
-	d.register("run-1", "swe", steerBox(launcherStub{}))
+	d := mustSteerDesk(t, steerRing)
+	d.register("run-1", steerSeat{handle: "swe"}, steerBox(launcherStub{}))
 	status, _, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
 	if err != nil || status != steer.StatusUnsupported {
 		t.Errorf("an agent-runtime turn answered (%s, %v), want unsupported", status, err)
@@ -148,10 +196,12 @@ type offeringProvider struct {
 func (offeringProvider) Model() string { return "offering" }
 
 func (p offeringProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
-	raw, _ := json.Marshal(steer.Request{
-		Version: steer.WireVersion, TurnID: p.runID, NoteID: "req-1",
-		Note: "use staging", By: "ops-token", BySeat: "founder",
-	})
+	req := founderNote(p.runID)
+	req.ID, req.Deadline = signedask.NewID(), time.Now().Add(time.Minute)
+	raw, err := p.desk.wire.SealRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := p.desk.answer(ctx, raw); err != nil {
 		return nil, err
 	}
@@ -166,7 +216,7 @@ func (p offeringProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Com
 // a note sent after the end is answered closed.
 func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 	t.Parallel()
-	desk := newSteerDesk()
+	desk := mustSteerDesk(t, steerRing)
 	e, p := starting(t, modelsOf(t, offeringProvider{desk: desk, runID: "run-1"}))
 	e.steers = desk
 	tick := events.New(types.TaskAssigned{
@@ -185,7 +235,8 @@ func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 	}
 	got, _ := events.DataAs[*types.AgentTurnSteered](evs[at])
 	if got.Outcome != types.SteerExpired || got.NoteID != "req-1" || got.TurnID != "run-1" ||
-		got.SteeredBySeat != "founder" || got.Note != "use staging" || got.Round != 0 {
+		got.SteeredBy != "founder" || got.SteeredByKind != string(iam.ActorHuman) ||
+		got.OperatorID != "pat:ops-token" || got.Note != "use staging" || got.Round != 0 {
 		t.Errorf("the note is recorded %+v, want it expired, unread, naming who sent it", got)
 	}
 	if ended := position(evs, "agent_turn_completed"); ended < at {
@@ -205,4 +256,127 @@ func modelsOf(t *testing.T, p llm.Provider) *phase.Registry {
 		t.Fatalf("phase.NewRegistry: %v", err)
 	}
 	return models
+}
+
+// sweAgent is the fixture seat's derived id, as a desk files it.
+const sweAgent = "0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"
+
+// A PROBE SAYS WHOSE TURN IT IS AND TAKES NOTHING.
+//
+// Who may steer a turn is decided on the turn's seat, and the serving node
+// learns the seat only from the running node — so it asks first, and only an
+// offer after a decision hands the note over. A probe that took a note would
+// put it in front of the turn before anybody decided whether the person could
+// send it.
+func TestAProbeNamesTheTurnsSeatAndTakesNothing(t *testing.T) {
+	t.Parallel()
+	d := mustSteerDesk(t, steerRing)
+	box := steer.New()
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box)
+
+	probe, raw := sealedNote(t, d.wire, steer.Request{Version: steer.WireVersion,
+		TurnID: "run-1", Probe: true})
+	out, err := d.answer(t.Context(), raw)
+	if err != nil {
+		t.Fatalf("a probe was refused: %v", err)
+	}
+	reply, why, err := d.wire.OpenReply(out, probe.ID)
+	if err != nil || why != "" {
+		t.Fatalf("the probe's reply is not one the asker can believe: %q, %v", why, err)
+	}
+	if reply.Status != steer.StatusAccepted || reply.Agent != sweAgent || reply.AgentHandle != "swe" {
+		t.Errorf("the probe answered %+v, want accepted on the turn's seat", reply)
+	}
+	if notes := box.Drain(); len(notes) != 0 {
+		t.Errorf("a probe put %d notes in front of the turn", len(notes))
+	}
+
+	// AND ONE FOR A TURN THAT ENDED is closed, on the seat it ran on.
+	d.close("run-1")
+	if status, seat, err := d.probe("run-1"); err != nil || status != steer.StatusClosed ||
+		seat.agent != sweAgent {
+		t.Errorf("a probe of an ended turn answered (%s, %+v, %v), want closed", status, seat, err)
+	}
+}
+
+// ONLY A NOTE THE FLEET SIGNED REACHES A TURN. The running node offers a note
+// as the person it names, on the asking node's decision that they may steer
+// the turn — so a note anybody who can reach the broker could write would put
+// words in front of a running agent under anybody's name. Three ways to try —
+// no signature, a signature under the fleet's key id with somebody else's
+// material, and the fleet's signature over a note altered after it was made —
+// and none is answered or offered.
+func TestOnlyANoteTheFleetSignedReachesATurn(t *testing.T) {
+	t.Parallel()
+	d := mustSteerDesk(t, steerRing)
+	box := steer.New()
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box)
+
+	unsigned, err := json.Marshal(founderNote("run-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, outsider := sealedNote(t, mustSteerDesk(t,
+		statelog.OneKey("k1", "not the fleet's material")).wire, founderNote("run-1"))
+	_, altered := sealedNote(t, d.wire, founderNote("run-1"))
+	altered = bytes.Replace(altered, []byte(`"by":"founder"`), []byte(`"by":"ceo"`), 1)
+	if !bytes.Contains(altered, []byte(`"by":"ceo"`)) {
+		t.Fatal("the case did not alter the signed sender")
+	}
+	for name, sent := range map[string][]byte{
+		"unsigned":                         unsigned,
+		"signed under somebody else's key": outsider,
+		"altered after it was signed":      altered,
+	} {
+		if out, err := d.answer(t.Context(), sent); err == nil || out != nil {
+			t.Errorf("%s: answered %q, want nothing", name, out)
+		}
+	}
+	if notes := box.Drain(); len(notes) != 0 {
+		t.Fatalf("a note the fleet did not sign reached the turn: %+v", notes)
+	}
+}
+
+// A NOTE THE FLEET SIGNED IS OFFERED ONCE: the same bytes arriving again — a
+// note captured off the wire and sent back — are answered by nobody, however
+// the first was answered.
+func TestAReplayedNoteIsAnsweredByNobody(t *testing.T) {
+	t.Parallel()
+	d := mustSteerDesk(t, steerRing)
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, steer.New())
+	_, sealed := sealedNote(t, d.wire, founderNote("run-1"))
+	if _, err := d.answer(t.Context(), sealed); err != nil {
+		t.Fatalf("the note itself was refused: %v", err)
+	}
+	if out, err := d.answer(t.Context(), sealed); err == nil || out != nil {
+		t.Fatalf("a replayed note was answered %q", out)
+	}
+}
+
+// A NOTE UNDER A KEY THE RUNNING NODE DOES NOT HOLD IS ANSWERED UNVERIFIED by
+// that node alone, and nothing is offered: the key is a fact about the node,
+// which an operator changes by adding it, so the person is told that rather
+// than `unknown` — and a node the turn is not on stays silent, as it does for
+// any note not its own.
+func TestANoteUnderAnUnheldKeyIsAnsweredUnverified(t *testing.T) {
+	t.Parallel()
+	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+		steerRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
+	}}
+	clients := steerClients(t, 3)
+	running, idle, asking := mustSteerDesk(t, steerRing), mustSteerDesk(t, steerRing),
+		mustSteerDesk(t, rotated)
+	steerServing(t, clients[0], running)
+	steerServing(t, clients[1], idle)
+	box := steer.New()
+	running.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box)
+
+	got := ask(t, clients[2], asking.wire, "run-1", 0)
+	if len(got) != 1 || got[0].Unverified == "" || got[0].Status != "" || got[0].Agent != "" {
+		t.Fatalf("a note under an unheld key was answered %+v, want the running node "+
+			"alone saying it could not verify it", got)
+	}
+	if notes := box.Drain(); len(notes) != 0 {
+		t.Fatalf("a note the running node could not verify reached the turn: %+v", notes)
+	}
 }

@@ -41,7 +41,7 @@ import (
 // beside the stored value it corresponds to where there is one: a struct field
 // by its JSON name, a map entry by its key. A LIST MEMBER IS MATCHED BY
 // IDENTITY, by the same rules as [Company.RestoreRedacted], because
-// position is not identity: a seat by its handle and a unit by its name,
+// position is not identity: a seat by its handle and a unit by its key,
 // anywhere in the document, so one that moved keeps its keys; an MCP server or
 // a setup step by its name within its own list. An identity that is empty or
 // held twice in the stored document matches nothing, since guessing which of

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -35,6 +36,17 @@ type roundTrip struct {
 	reader  *pages.Reader
 	waiter  *testWaiter
 
+	// signer is the key this node's publisher seals every record under,
+	// held here too for the cases that append a record by hand — another
+	// build's, a barrier — which the fleet's own writer would have signed
+	// just the same, and which every reader refuses unsigned.
+	signer *statelog.Signer
+
+	// verifier opens a record's frame, because this harness replays the
+	// log exactly as the framework's own loop does and that loop verifies
+	// before any domain decodes.
+	verifier *statelog.Verifier
+
 	consumed uint64
 }
 
@@ -54,7 +66,24 @@ func (r *roundTrip) markLedgerLost(cutoff time.Time) {
 	}
 }
 
+// harnessSpaces are the containers every round trip declares: the ones its
+// cases write in, and the root and skills containers it reserves.
+var harnessSpaces = []string{"ENG", "OPS", "PROD", "SUITE", "HOME", "TS"}
+
 func newRoundTrip(t *testing.T) *roundTrip {
+	t.Helper()
+	return newRoundTripOn(t, openLog(t), openNodeStore(t, "node.db"), "node-a")
+}
+
+// harnessReserved is what every round trip's store is told the company holds
+// back and declares — see [newRoundTripOn].
+func harnessReserved() pages.Reserved {
+	return pages.Reserved{Skills: "TS", Root: "HOME", Declared: harnessSpaces}
+}
+
+// openLog stands up a broker and the knowledge base's log on it, both closed
+// with the test.
+func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -66,13 +95,17 @@ func newRoundTrip(t *testing.T) *roundTrip {
 		}
 	})
 	spec := pages.Domain{}.Stream()
-	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
-	// property under test: the shipped default is sized for years of a real
-	// company's growth, and an embedded broker in a temporary directory
-	// refuses to reserve it.
+	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is the
+	// floor Tier A holds stream.pages_log_max_bytes to: the smallest log any
+	// node runs, which is the one the gate reserve takes the largest share
+	// of, so every write here is admitted against the tightest ordinary
+	// ceiling a production log has — and a reservation an embedded broker
+	// in a temporary directory can grant, where a default sized for years
+	// of a company's growth may not be. Everything else is the domain's
+	// own declaration, its largest record included.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
-		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
-		Duplicates: spec.Duplicates,
+		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.PagesLogMaxBytesFloor,
+		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
 	}
@@ -80,7 +113,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	return newRoundTripOn(t, log, openNodeStore(t, "node.db"), "node-a")
+	return log
 }
 
 // openNodeStore opens one node's own store, closed with the test.
@@ -100,6 +133,16 @@ func openNodeStore(t *testing.T, name string) store.ReplicatedHandle {
 // its own id and its own store — the shape a race between two nodes needs.
 func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	nodeID string) *roundTrip {
+
+	t.Helper()
+	return newRoundTripReserving(t, log, db, nodeID, harnessReserved)
+}
+
+// newRoundTripReserving is [newRoundTripOn] with the store's own idea of what
+// the company reserves and declares — nil for a store built with no seam at
+// all, which is what a case about that zero needs.
+func newRoundTripReserving(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
+	nodeID string, reserved func() pages.Reserved) *roundTrip {
 
 	t.Helper()
 	rows, err := pages.NewRows(db.Reader(), pages.Domain{}.Stream())
@@ -124,7 +167,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	fence.Committed = waiter.Committed
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(pages.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(pages.Domain{}.Stream(),
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -132,9 +175,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
+	signer, verifier := testSigner(t, pages.Domain{}), testVerifier(t, pages.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Spec: pages.Domain{}.Stream(), Log: log, Records: log, Rows: rows, Fence: fence,
-		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
+		Domain: pages.Domain{}, Spec: pages.Domain{}.Stream(), Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
+		Rows:    rows, Fence: fence, Signer: signer,
+		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter,
+		NodeID:        nodeID,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -145,6 +192,16 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	kb, err := pages.NewStore(pages.Options{
 		Publisher: publisher, DB: db.Reader(),
 		Now: func() time.Time { return wednesday },
+		// EVERY HARNESS RESERVES TS AND HOME, so both rules are in force
+		// on every case rather than only on the one that is about them —
+		// a rule installed by its own test alone is one the rest of the
+		// suite proves nothing about. And it DECLARES the spaces the cases
+		// write in — the two reserved ones among them, as a company's
+		// root and skills containers always are — for the same reason:
+		// every create here passes the declared-space rule, so a case
+		// creating somewhere undeclared fails rather than passing on a
+		// store that checked nothing. See [harnessReserved].
+		Reserved: reserved,
 	})
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
@@ -158,9 +215,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: db.Reader(), Log: authority, Committed: waiter.Committed,
-	})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: db.Reader(), Log: authority})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
@@ -168,6 +223,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 		t: t, db: db, log: log, store: kb,
 		applier: pages.NewApplier(nodeID, nil, nil),
 		reader:  reader, waiter: waiter,
+		signer: signer, verifier: verifier,
 	}
 	// THIS NODE'S APPLIER RUNS WHILE A WRITE WAITS, as a running node's
 	// does — see [testWaiter]. A case about a node that is behind says so
@@ -195,7 +251,17 @@ func (r *roundTrip) drain() {
 		if !ok {
 			continue
 		}
-		env, err := pages.DecodeEnvelope(payload)
+		// THE FRAME FIRST, exactly as the framework's loop does it: a
+		// record is signed on its way to the appender, and what a
+		// domain decodes is the BODY. A replay that handed the
+		// domain's decoder these bytes would be reading the signature
+		// as JSON, which is what this harness did for one commit and
+		// what every reader of a signed log has to get right.
+		body, verdict := r.verifier.Open(payload)
+		if verdict != statelog.Verified {
+			r.t.Fatalf("record %d did not verify: %s", seq, verdict)
+		}
+		env, err := pages.DecodeEnvelope(body)
 		if err != nil {
 			r.t.Fatalf("decode record %d: %v", seq, err)
 		}
@@ -211,7 +277,7 @@ func (r *roundTrip) drain() {
 			Position: statelog.Position{
 				Stream: spec.Name, Generation: env.Gen, Seq: seq,
 			},
-			Payload:  payload,
+			Payload:  body,
 			StoredAt: storedAt,
 		}
 		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
@@ -413,3 +479,29 @@ func agent(handle string) pages.Actor {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// testSigner is this suite's record signer.
+//
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED, so a write authority built
+// without one is refused at construction rather than producing records the
+// fleet would refuse one at a time, on every node, for ever. The key is a
+// fixture: what these cases are about is what the domain writes, and the
+// signature's own rules are certified in [statelog].
+func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
+}

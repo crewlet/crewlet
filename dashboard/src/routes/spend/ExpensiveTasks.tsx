@@ -17,6 +17,13 @@
  *
  * ABSENT ON A COMPANY WHOSE TRACKER IS NOT THE ENGINE'S: `work_items` is then
  * not served (`unknown_query`) and there is no task spend to rank.
+ *
+ * AND THE OVERVIEW'S CARD IS NOT ASKED OF A READER WITHOUT TRACKER. The
+ * overview is everybody's, a task is the tracker's, and a question the engine
+ * would refuse drew its refusal — a "Sign in" callout to somebody already
+ * signed in — on every visit; the card says what would open it instead, as the
+ * median tile beside it does. The list at `#/spend/tasks` is its own section,
+ * drawn locked by the navigation for the same reader.
  */
 
 import { Card, Skeleton } from "@crewlethq/ui";
@@ -32,6 +39,8 @@ import { fmtCount, fmtExact } from "~/lib/format.ts";
 import { isRange, useTimeRange } from "~/lib/range.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { WorkSummary } from "~/protocol/types.ts";
 import { useMemo } from "react";
@@ -42,6 +51,7 @@ import {
   taskFacts,
   windowWords,
 } from "./model.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /** How many the overview's card lists — the design's three. */
 export const TOP_TASKS = 3;
@@ -49,9 +59,9 @@ export const TOP_TASKS = 3;
 /** How many the list asks for: the tracker's page ceiling for one answer. */
 export const TASK_ROWS = 50;
 
-/** A task's address and its peek: the key where it has one, else its id. */
+/** A task's peek, at its address ([itemAddress]). */
 function itemRef(row: WorkSummary): { kind: "item"; id: string } {
-  return { kind: "item", id: row.key || row.id };
+  return { kind: "item", id: itemAddress(row) };
 }
 
 /**
@@ -70,13 +80,26 @@ export function ExpensiveTasksCard({
   /** `window=` as the overview carries it, so "All" opens the same window. */
   window: string;
 }) {
+  const viewer = useViewer();
   const ready = Boolean(since && until);
   const answer = useQuery(
     "work_items",
     ready ? expensiveTasksParams(since!, until!, TOP_TASKS) : undefined,
-    { enabled: ready },
+    { enabled: ready && viewer.tracker },
   );
   if (answer.error === "unknown_query") return null;
+  if (!viewer.loading && !viewer.tracker) {
+    // NO "ALL" LINK: the list is the tracker's too, so it would lead to the
+    // same lock this card already says.
+    return (
+      <Card className="spend-card" padding="none">
+        <div className="spend-card-head">
+          <h2 className="spend-title">Most expensive tasks</h2>
+        </div>
+        <p className="spend-card-body spend-caption">{`Needs ${accessNames([TRACKER])} access`}</p>
+      </Card>
+    );
+  }
   const rows = answer.data?.items ?? [];
   return (
     <Card className="spend-card" padding="none">
@@ -86,7 +109,12 @@ export function ExpensiveTasksCard({
           All
         </a>
       </div>
-      <QueryState error={answer.error} detail={answer.detail} loading={false}>
+      <QueryState
+        error={answer.error}
+        refusal={answer.refusal}
+        detail={answer.detail}
+        loading={false}
+      >
         {!answer.data ? (
           <div className="spend-card-body">
             <Skeleton height="6rem" />
@@ -165,6 +193,7 @@ export function ExpensiveTasks() {
         </PageActions>
         <QueryState
           error={refused}
+          refusal={spend.error ? spend.refusal : answer.refusal}
           detail={spend.error ? spend.detail : undefined}
           loading={false}
         />
@@ -183,7 +212,12 @@ export function ExpensiveTasks() {
             {words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens
           </span>
         </div>
-        <QueryState error={answer.error} detail={answer.detail} loading={false}>
+        <QueryState
+          error={answer.error}
+          refusal={answer.refusal}
+          detail={answer.detail}
+          loading={false}
+        >
           <DataGrid
             name="tasks"
             rows={answer.data ? rows : undefined}

@@ -7,11 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
 // rosterFleet is the fleet store the roster reads the activation pointer from,
@@ -72,46 +74,62 @@ roles:
 	e.epoch.current.Store(company)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.
-	if _, err := e.activeSeatHandles(t.Context()); !errors.Is(err, maintenance.ErrNoActiveRevision) {
+	if _, err := e.activeSeats(t.Context()); !errors.Is(err, maintenance.ErrNoActiveRevision) {
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
-	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1", At: time.Now(), Origin: coord.RevisionOrigin{AuthorKind: "operator", Source: "api", CreatedAt: time.Now()}})
+	// EVERY ACTIVATION CARRIES ITS ORIGIN: the store refuses one without.
+	origin := coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorHuman,
+		Source: "api", CreatedAt: time.Now()}
+	earlier, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now(), Origin: origin})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now(), Origin: origin})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 
-	// A node with no reconciler cannot say which activation it serves.
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
-		t.Fatalf("a node with no reconciler produced a roster %v", handles)
+	// A company no activation has named — the file a node booted with —
+	// cannot say it is the fleet's.
+	if handles, err := e.activeSeats(t.Context()); err == nil {
+		t.Fatalf("a company no activation named produced a roster %v", handles)
 	}
 
-	// THE RECONCILER THE ENGINE BUILDS is the one the roster reads, or the
-	// sweep could never judge a seat on a real node.
-	r, err := e.NewReconciler(ReconcilerOptions{
-		Store: refinementStore(t), Fleet: fleet, Queue: qmem.New(), NodeID: "node-a",
-	})
-	if err != nil {
-		t.Fatalf("NewReconciler: %v", err)
-	}
-	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch})
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
-		t.Fatalf("a node behind the fleet's epoch produced a roster %v; its seats may be stale", handles)
+	// A company applied from an EARLIER activation is behind the fleet:
+	// its seats may be stale.
+	company.ActivatedAt = earlier.At
+	if handles, err := e.activeSeats(t.Context()); err == nil {
+		t.Fatalf("a node behind the fleet's activation produced a roster %v; its "+
+			"seats may be stale", handles)
 	}
 
-	r.publish(applyProgress{applied: activation.Epoch, target: activation.Epoch})
-	handles, err := e.activeSeatHandles(t.Context())
+	company.ActivatedAt = activation.At
+	handles, err := e.activeSeats(t.Context())
 	if err != nil {
-		t.Fatalf("a node serving the fleet's epoch: %v", err)
+		t.Fatalf("a node serving the fleet's activation: %v", err)
 	}
-	// Agent seats only: a human seat has no mailbox to retire or keep.
-	if !slices.Equal(handles, []string{"ceo", "swe"}) {
-		t.Fatalf("roster = %v, want the agent seats", handles)
+	// Agent seats only: a human seat has no mailbox to retire or keep. And
+	// each carries the ID its mailbox is named by, because the sweep builds
+	// every one of those names from it.
+	var named []string
+	for _, s := range handles {
+		if s.ID == uuid.Nil {
+			t.Errorf("roster entry %q carries no seat id, so the sweep can name "+
+				"neither its mailbox nor the lease that excludes a node running it",
+				s.Handle)
+		}
+		named = append(named, s.Handle)
+	}
+	if !slices.Equal(named, []string{"ceo", "swe"}) {
+		t.Fatalf("roster = %v, want the agent seats", named)
 	}
 
 	// An unreadable pointer is unknown, never the last roster it produced.
 	fleet.down = true
-	if handles, err := e.activeSeatHandles(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
+	if handles, err := e.activeSeats(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("roster with an unreadable pointer = (%v, %v), want the store's error", handles, err)
 	}
 }

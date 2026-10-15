@@ -203,9 +203,8 @@ func TestAConfigClientReadsSixteenDocumentsOfAnswer(t *testing.T) {
 		t.Errorf("maxConfigResponseBytes = %d, want 16 × configapi.MaxBodyBytes (%d)",
 			maxConfigResponseBytes, 16*configapi.MaxBodyBytes)
 	}
-	boot := &config.Bootstrap{}
-	boot.API.Auth.Disabled = true
-	client, err := newConfigClient(boot, "http://127.0.0.1:1")
+	client, err := newConfigClient(tokenEnviron(cliFixtureToken), &config.Bootstrap{},
+		"http://127.0.0.1:1")
 	if err != nil {
 		t.Fatalf("newConfigClient: %v", err)
 	}

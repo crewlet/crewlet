@@ -14,11 +14,16 @@ import (
 // REPLACEABLE through this surface, and nothing that would RUN it accepts it.
 
 // refusedByThisBuild makes a stored document this build's validator refuses:
-// a seat naming a model provider the company does not configure.
+// a delegate template naming a model provider the company does not configure,
+// which is the rule a seat naming one breaks, one field along.
 func refusedByThisBuild(document map[string]any) {
-	roles, _ := document["roles"].([]any)
-	seat, _ := roles[1].(map[string]any)
-	seat["llm"] = "nonexistent"
+	document["workers"] = map[string]any{
+		"researcher": map[string]any{
+			"description":   "reads sources and reports findings with citations",
+			"system_prompt": "You research.",
+			"model":         "nonexistent",
+		},
+	}
 }
 
 // A REVISION THIS BUILD REFUSES IS STILL SERVED.
@@ -28,7 +33,7 @@ func refusedByThisBuild(document map[string]any) {
 // document they needed to fix.
 func TestAStoredRevisionThisBuildRefusesIsStillServed(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	id := s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	for _, path := range []string{
@@ -37,7 +42,6 @@ func TestAStoredRevisionThisBuildRefusesIsStillServed(t *testing.T) {
 		"/config/revisions/" + id,
 		"/config/revisions/" + id + "/diff?against=active",
 		"/config/references",
-		"/config/roles/cto",
 	} {
 		res := s.do(t, http.MethodGet, path, "", nil)
 		if res.Code != http.StatusOK {
@@ -57,7 +61,7 @@ func TestAStoredRevisionThisBuildRefusesIsStillServed(t *testing.T) {
 // the one write that fixes the company answered 500.
 func TestACorrectedPutReplacesARevisionThisBuildRefuses(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	res := s.do(t, http.MethodPut, "/config", companyDoc,
@@ -76,7 +80,7 @@ func TestACorrectedPutReplacesARevisionThisBuildRefuses(t *testing.T) {
 // skipped validation would pass the first and store a company no node runs.
 func TestAPatchReplacesARevisionThisBuildRefusesOnlyWhenItCorrectsIt(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	unrelated := s.do(t, http.MethodPatch, "/config", `{"mission": "unrelated"}`, summaryHeader)
@@ -89,8 +93,9 @@ func TestAPatchReplacesARevisionThisBuildRefusesOnlyWhenItCorrectsIt(t *testing.
 	}
 
 	fixed := s.do(t, http.MethodPatch, "/config",
-		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
-		            {"name": "CTO", "handle": "cto", "llm": "zulu"}]}`,
+		`{"workers": {"researcher": {"description": "reads sources and reports
+		    findings with citations", "system_prompt": "You research.",
+		    "model": "zulu"}}}`,
 		summaryHeader)
 	if fixed.Code != http.StatusCreated {
 		t.Fatalf("a correcting PATCH = %d, want 201: %s", fixed.Code, fixed.Body)
@@ -108,7 +113,7 @@ func TestAPatchReplacesARevisionThisBuildRefusesOnlyWhenItCorrectsIt(t *testing.
 // validated was the only thing that could fail.
 func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	refused := s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	reload := s.do(t, http.MethodPost, "/config/reload", "", nil)
@@ -119,7 +124,7 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 		t.Errorf("reload error = %v, want validation_error", got)
 	}
 
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 	revert := s.do(t, http.MethodPost, "/config/revisions/"+refused+"/revert", "", nil)
 	if revert.Code != http.StatusBadRequest {
 		t.Fatalf("revert = %d, want 400: %s", revert.Code, revert.Body)
@@ -136,158 +141,24 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 	}
 }
 
-// duplicateNamesDoc breaks both admission rules and no runnable one: two units
-// called "Platform" in different departments, each holding a seat called
-// "Engineer" on its own explicit handle. A newer peer may admit it under
-// rules this build does not share, and a company running on it runs.
-const duplicateNamesDoc = companyDoc + `
-units:
-  - name: Engineering
-    children:
-      - name: Platform
-        roles:
-          - {name: Engineer, handle: platform-engineer, llm: zulu}
-  - name: Product
-    children:
-      - name: Platform
-        roles:
-          - {name: Engineer, handle: product-engineer, llm: zulu}
-`
-
-// correctedUnits is the same organization with every name unique.
-const correctedUnits = `{"units": [
-  {"name": "Engineering", "children": [{"name": "Engineering Platform",
-    "roles": [{"name": "Platform Engineer", "handle": "platform-engineer", "llm": "zulu"}]}]},
-  {"name": "Product", "children": [{"name": "Product Platform",
-    "roles": [{"name": "Product Engineer", "handle": "product-engineer", "llm": "zulu"}]}]}]}`
-
-// A STORED REVISION WITH DUPLICATE NAMES IS SERVED, AND A NEW WRITE KEEPING
-// THEM IS REFUSED, WHILE ONE CORRECTING THEM IS ACCEPTED.
-//
-// The admission rules are the rules an applied revision may break: a newer
-// peer can admit one under rules this build does not share. Such a company
-// has to stay readable and repairable, and nothing may add a fresh duplicate
-// or carry one forward through a write to this build.
-func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
-	t.Parallel()
-
-	t.Run("served", func(t *testing.T) {
-		t.Parallel()
-		s := newSurface(t, nil)
-		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
-		for _, path := range []string{"/config", "/config?format=yaml", "/config/units/Platform"} {
-			if res := s.do(t, http.MethodGet, path, "", nil); res.Code != http.StatusOK {
-				t.Errorf("GET %s = %d, want 200: %s", path, res.Code, res.Body)
-			}
-		}
-	})
-
-	t.Run("a PUT keeping them is refused and a corrected one lands", func(t *testing.T) {
-		t.Parallel()
-		s := newSurface(t, nil)
-		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
-
-		kept := s.do(t, http.MethodPut, "/config", duplicateNamesDoc, map[string]string{"X-Summary": "keep"})
-		if kept.Code != http.StatusBadRequest {
-			t.Fatalf("a PUT keeping duplicate names = %d, want 400: %s", kept.Code, kept.Body)
-		}
-		body := decode(t, kept)
-		detail, _ := body["detail"].(string)
-		if body["error"] != "validation_error" ||
-			!strings.Contains(detail, "duplicate unit name") || !strings.Contains(detail, "duplicate seat name") {
-			t.Errorf("the refusal does not name both rules: %v", body)
-		}
-
-		var corrected map[string]any
-		if err := json.Unmarshal([]byte(correctedUnits), &corrected); err != nil {
-			t.Fatal(err)
-		}
-		document := companyDoc + "\nunits: " + mustJSON(t, corrected["units"]) + "\n"
-		res := s.do(t, http.MethodPut, "/config", document, map[string]string{"X-Summary": "correct"})
-		if res.Code != http.StatusCreated {
-			t.Fatalf("a corrected PUT = %d, want 201: %s", res.Code, res.Body)
-		}
-	})
-
-	t.Run("a PATCH keeping them is refused and a correcting one lands", func(t *testing.T) {
-		t.Parallel()
-		s := newSurface(t, nil)
-		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
-
-		kept := s.do(t, http.MethodPatch, "/config", `{"mission": "unrelated"}`, summaryHeader)
-		if kept.Code != http.StatusBadRequest {
-			t.Fatalf("a PATCH keeping duplicate names = %d, want 400: %s", kept.Code, kept.Body)
-		}
-		res := s.do(t, http.MethodPatch, "/config", correctedUnits, summaryHeader)
-		if res.Code != http.StatusCreated {
-			t.Fatalf("a correcting PATCH = %d, want 201: %s", res.Code, res.Body)
-		}
-		if document := s.activeDocument(t); !strings.Contains(document, "Engineering Platform") {
-			t.Errorf("the correction did not land: %s", document)
-		}
-	})
-
-	t.Run("a PUT introducing them is refused", func(t *testing.T) {
-		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
-		res := s.do(t, http.MethodPut, "/config", duplicateNamesDoc, map[string]string{"X-Summary": "add"})
-		if res.Code != http.StatusBadRequest {
-			t.Fatalf("a PUT introducing duplicate names = %d, want 400: %s", res.Code, res.Body)
-		}
-	})
-
-	// A reload and a revert are applies, held to the runnable rules only: a
-	// credential rotation on a company carrying a duplicate must work.
-	t.Run("a reload and a revert of it are accepted", func(t *testing.T) {
-		t.Parallel()
-		s := newSurface(t, nil)
-		stored := s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
-		if res := s.do(t, http.MethodPost, "/config/reload", "", nil); res.Code != http.StatusCreated {
-			t.Fatalf("reload = %d, want 201: %s", res.Code, res.Body)
-		}
-		// Moved on through the API, so the fleet pointer and the store agree
-		// on what the revert is built over.
-		if res := s.do(t, http.MethodPut, "/config", companyDoc,
-			map[string]string{"X-Summary": "move on"}); res.Code != http.StatusCreated {
-			t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
-		}
-		res := s.do(t, http.MethodPost, "/config/revisions/"+stored+"/revert", "", nil)
-		if res.Code != http.StatusCreated {
-			t.Fatalf("revert = %d, want 201: %s", res.Code, res.Body)
-		}
-	})
-}
-
-// mustJSON renders a value as JSON, which is also valid YAML.
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	raw, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(raw)
-}
-
 // A PATCH OVER A PEER-EXTENDED DOCUMENT RESTORES ITS MASKS BEFORE VALIDATING.
 //
 // The strict reader refuses the merged document for the peer's field, and the
 // fallback reads it with the stored-form decoder. That fallback validated, and
-// validation runs before the masks are restored, so any PATCH carrying a roles
-// array read from GET /config (every seat's literal credential masked) was
-// refused as an invalid patch naming the masks.
+// validation runs before the masks are restored, so any PATCH carrying a list
+// read from GET /config (every member's literal credential masked) was refused
+// as an invalid patch naming the masks.
 func TestAPatchOverAPeerExtendedDocumentRestoresMasksBeforeValidating(t *testing.T) {
 	t.Parallel()
-	const literal = "per-seat-literal-token"
+	const literal = "per-server-literal-token"
 	doc := companyDoc + `
 mcp_servers:
   - name: tracker
     command: tracker-mcp
     shared: false
+    env: {TOKEN: ` + literal + `}
 `
-	doc = strings.Replace(doc, "    handle: ceo\n    llm: zulu\n",
-		"    handle: ceo\n    llm: zulu\n    mcp_env:\n      tracker: {TOKEN: "+literal+"}\n", 1)
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, doc, func(document map[string]any) {
 		document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
 	})
@@ -300,15 +171,15 @@ mcp_servers:
 	if err := json.Unmarshal(read.Body.Bytes(), &served); err != nil {
 		t.Fatal(err)
 	}
-	roles, err := json.Marshal(map[string]any{"roles": served["roles"]})
+	servers, err := json.Marshal(map[string]any{"mcp_servers": served["mcp_servers"]})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(roles), "__redacted__") {
-		t.Fatalf("the roles carry no mask, so this proves nothing: %s", roles)
+	if !strings.Contains(string(servers), "__redacted__") {
+		t.Fatalf("the servers carry no mask, so this proves nothing: %s", servers)
 	}
 
-	res := s.do(t, http.MethodPatch, "/config", string(roles), summaryHeader)
+	res := s.do(t, http.MethodPatch, "/config", string(servers), summaryHeader)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("PATCH = %d, want 201: %s", res.Code, res.Body)
 	}

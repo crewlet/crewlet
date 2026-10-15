@@ -1,6 +1,6 @@
 /**
- * A project's files: what is kept, a page at a time, and a download that
- * carries the operator's token rather than a bare link.
+ * A project's files: what is kept, a page at a time, and a download fetched
+ * over the session rather than a bare link, so its refusal is the engine's.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -9,7 +9,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { fileAddress, fileName, ProjectFiles } from "./Files.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
-import { rest } from "~/protocol/rest.ts";
+import { rest, RestError } from "~/protocol/rest.ts";
 import type { WorkFilesAnswer } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -28,7 +28,7 @@ function serving(pages: Record<string, WorkFilesAnswer>) {
     return pages[String(params.after ?? "")] ?? { project: "ENG", files: [], complete: true };
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   return query;
 }
 
@@ -76,17 +76,39 @@ test("a page of files is listed, and the next page is the engine's own cursor", 
   expect(await screen.findByText("a.md")).toBeTruthy();
 });
 
-test("a download fetches the bytes with the token, and a refusal is said on the row", async () => {
+test("a download fetches the bytes over the session, and a refusal is said on the row", async () => {
   serving({ "": { project: "ENG", files: [file("reports/q3 plan.md")], complete: true } });
-  const blob = vi
-    .spyOn(rest, "blob")
-    .mockRejectedValueOnce(new Error("the object store did not answer"));
+  const blob = vi.spyOn(rest, "blob").mockRejectedValueOnce(
+    new RestError(503, {
+      error: "content_unavailable",
+      detail: "the object store did not answer",
+    }),
+  );
   mount();
   fireEvent.click(await screen.findByText("Download"));
   await waitFor(() =>
-    expect(screen.getByText(/Not downloaded: the object store did not answer/)).toBeTruthy(),
+    expect(screen.getByText(/Not downloaded: The object store did not answer\./)).toBeTruthy(),
   );
   expect(blob).toHaveBeenCalledWith("/work/files/ENG/reports/q3%20plan.md");
+});
+
+// A REFUSAL ON AUTHORITY NAMES THE GRANT the engine said would admit the
+// reader, rather than its code: "unauthorized" on the row tells a person
+// nothing they can act on.
+test("a download refused on authority says which grant would admit the reader", async () => {
+  serving({ "": { project: "ENG", files: [file("a.md")], complete: true } });
+  vi.spyOn(rest, "blob").mockRejectedValueOnce(
+    new RestError(403, { error: "unauthorized", reason: "no_grant", grants: ["tracker"] }),
+  );
+  mount();
+  fireEvent.click(await screen.findByText("Download"));
+  await waitFor(() =>
+    expect(
+      screen.getByText(
+        /Not downloaded: Downloading a project's file needs Tracker access\. An admin can give it to you\./,
+      ),
+    ).toBeTruthy(),
+  );
 });
 
 test("a path is escaped segment by segment and saved under its own name", () => {

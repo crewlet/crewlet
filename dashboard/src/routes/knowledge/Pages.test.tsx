@@ -6,8 +6,8 @@
  *  - THE OUTLINE ASKS FOR ONE LEVEL, and a folder's pages only once its row
  *    opens: a space of four hundred pages costs one window until somebody
  *    opens a folder.
- *  - A ROW SAYS WHO LAST SAVED WHAT THE PAGE SAYS, drawn as the person behind
- *    an operator's token.
+ *  - A ROW SAYS WHO LAST SAVED WHAT THE PAGE SAYS, drawn as whoever the record
+ *    names: the seat a person writes as.
  *  - CREATE FILES WHERE IT IS: a Document goes to the composer filed there, and
  *    a Folder named in place is a page with an empty body, written at once.
  *  - CREATE IS DRAWN FOR EVERY READER, and held with the reason for one who
@@ -45,9 +45,10 @@ const RUNBOOK = "22222222-2222-4222-8222-222222222222";
 const CHILD = "33333333-3333-4333-8333-333333333333";
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["save_page", "comment_on_page", "write_page"],
@@ -78,8 +79,7 @@ const TOP = [
     id: RUNBOOK,
     title: "Runbook",
     status: "draft",
-    saved_by: "founder",
-    saved_by_seat: "jane",
+    saved_by: "jane",
     saved_at: "2026-09-24T22:00:00Z",
   }),
 ];
@@ -251,7 +251,7 @@ test("a row links its page, marks a draft, and says who last saved what it says"
       .getAttribute("href"),
   ).toBe(`#/knowledge/pages/${RUNBOOK}`);
   expect(within(row).getByText("Draft")).toBeTruthy();
-  // THE PERSON BEHIND THE TOKEN, never the token.
+  // THE SEAT A PERSON WRITES AS, drawn by the chart's name for it.
   expect(within(row).getByText("Last saved by Jane Founder")).toBeTruthy();
 });
 
@@ -303,13 +303,8 @@ test("Escape lets a folder's name go, and nothing is written", async () => {
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
-  ],
-  [
-    "an unbound token",
-    { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] },
-    WRITE_REASONS.unbound,
   ],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
 ])("Create is drawn for %s, held with the reason", async (_who, viewer, reason) => {
@@ -319,4 +314,22 @@ test.each([
   expect(create.getAttribute("aria-disabled")).toBe("true");
   expect(create.getAttribute("title")).toBe(reason);
   expect(posted).toEqual([]);
+});
+
+// AN UNBOUND PRINCIPAL IS NOT A BLOCK (ADR-0024): a credential the directory
+// binds to no seat writes under its own login, so Create is held only where the
+// engine says it would not make the change.
+test("Create is offered to a credential bound to no seat that the engine serves", async () => {
+  mount({
+    login: "svc:docs",
+    grants: ["knowledge"],
+    handle: "",
+    owner: "svc:docs",
+    name: "",
+    kind: "",
+    acts: ["write_page"],
+  });
+  await settle();
+  const create = within(outline()).getByRole("button", { name: "Create" });
+  expect(create.getAttribute("aria-disabled")).not.toBe("true");
 });

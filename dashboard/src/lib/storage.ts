@@ -22,16 +22,23 @@
  *
  * # What storage is for in this product
  *
- * Per-browser conveniences and nothing else: a token, a mode and a theme,
- * the stars and recents a reader keeps, the width they dragged a panel to, an
- * org draft not yet saved. Nothing the COMPANY agrees on lives here (that is
- * the engine's), and every reader wraps each access in a try/catch, because a
- * private window throws on the accessor and a cleared profile answers nothing.
+ * Per-browser conveniences and nothing else: a mode and a theme, the stars and
+ * recents a reader keeps, the width they dragged a panel to, an org draft not
+ * yet saved, and which person a tab was last read by. Nothing the COMPANY
+ * agrees on lives here (that is the engine's), and every reader wraps each
+ * access in a try/catch, because a private window throws on the accessor and a
+ * cleared profile answers nothing.
+ *
+ * AND NEVER A CREDENTIAL. The session is a cookie no script can read, and a
+ * bearer kept here is one any script injected into the page reads too.
+ *
+ * A KEY MAY BE A PREFIX, for a list kept PER READER (`lib/recents.ts`,
+ * `lib/starred.ts`): the reader's id follows it, so one browser shared by two
+ * people holds two lists, and the sign-in that hands the browser on deletes
+ * every one but the signing-in person's (`lib/reader.ts`).
  */
 
 export const STORAGE_KEYS = {
-  /** The API token this browser presents (`protocol/authToken.ts`). */
-  apiToken: "crewlet_api_token",
   /** The mode: light, dark or the system's (`lib/prefs.ts`). */
   theme: "crewlet_theme",
   /**
@@ -41,10 +48,22 @@ export const STORAGE_KEYS = {
   palette: "crewlet_palette",
   /** Compact, normal or comfortable (`lib/prefs.ts`). */
   density: "crewlet_density",
-  /** Objects this reader opened, for the palette (`lib/recents.ts`). */
-  recents: "crewlet_recents",
-  /** Pages this reader starred, for the sidebar (`lib/starred.ts`). */
-  starred: "crewlet_starred",
+  /**
+   * The PREFIX of each reader's list of objects they opened, for the palette
+   * (`lib/recents.ts`): the reader's id follows it.
+   */
+  recents: "crewlet_recents/",
+  /**
+   * The PREFIX of each reader's starred pages, for the sidebar
+   * (`lib/starred.ts`): the reader's id follows it.
+   */
+  starred: "crewlet_starred/",
+  /**
+   * Which principal this TAB was last read by, in `sessionStorage` rather
+   * than `localStorage` — it describes one tab, and goes with everything else
+   * the tab holds (`lib/reader.ts`).
+   */
+  reader: "crewlet_reader",
   /** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
   peekWidth: "crewlet.peek.width",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */

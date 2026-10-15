@@ -79,7 +79,7 @@ func TestAnInboxIsReadableAtAll(t *testing.T) {
 	r := newRoundTrip(t)
 	routeTo(t, r, "t-1", "ENG-1", "bob")
 
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if len(got.Notices) == 0 {
 		t.Fatal("bob was assigned work and his inbox is empty")
 	}
@@ -103,7 +103,7 @@ func TestAnInboxIsReadableAtAll(t *testing.T) {
 
 	// AND NOBODY ELSE'S INBOX HAS IT, which is the recipient predicate
 	// doing its job rather than the table being read whole.
-	if other := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("cy")}); len(other.Notices) != 0 {
+	if other := r.inbox(tracker.InboxQuery{Handle: "cy"}); len(other.Notices) != 0 {
 		t.Fatalf("cy's inbox holds %d notices about bob's work",
 			len(other.Notices))
 	}
@@ -119,7 +119,7 @@ func TestTheActorJoinsFromTheHistory(t *testing.T) {
 	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 	routeAs(t, r, bob, "t-1", "ENG-1", "ana")
 
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("ana")})
+	got := r.inbox(tracker.InboxQuery{Handle: "ana"})
 	if len(got.Notices) == 0 {
 		t.Fatal("ana's inbox is empty")
 	}
@@ -141,7 +141,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 	r := newRoundTrip(t)
 	routeTo(t, r, "t-1", "ENG-1", "bob")
 
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if !slices.Equal(got.PrimaryReasons, tracker.DefaultPrimaryReasons) {
 		t.Fatalf("a person who has said nothing gets %v, want the shipped "+
 			"default", got.PrimaryReasons)
@@ -155,13 +155,13 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 	// rather than being storage for a rule nobody wrote.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
 		PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention},
-	}); err != nil {
+	}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("declare the split: %v", err)
 	}
 	r.drain()
 
-	got = r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got = r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if !slices.Equal(got.PrimaryReasons, []tracker.Reason{tracker.ReasonMention}) {
 		t.Fatalf("the declared split is %v, want [mention]", got.PrimaryReasons)
 	}
@@ -172,7 +172,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 
 	// AND PRIMARY_ONLY DROPS THE REST rather than labelling it.
 	if only := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), PrimaryOnly: true,
+		Handle: "bob", PrimaryOnly: true,
 	}); len(only.Notices) != 0 {
 
 		t.Fatalf("primary_only returned %d context notices", len(only.Notices))
@@ -190,7 +190,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 	routeTo(t, r, "t-1", "ENG-1", "bob")
 	routeTo(t, r, "t-2", "ENG-2", "bob")
 
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if len(got.Notices) != 2 {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(got.Notices))
 	}
@@ -212,13 +212,13 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
 		},
-	}); err != nil {
+	}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark the seen-through position: %v", err)
 	}
 	r.drain()
 
-	got = r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got = r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if got.Unread != 1 {
 		t.Fatalf("%d unread after reading past the older notice, want 1",
 			got.Unread)
@@ -233,13 +233,13 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 	// AND AN ENTRY ABOVE IT IS MARKED TOO, which is what a person working
 	// their queue out of order does.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
-		tracker.InboxGesture{Read: []string{newest.RecordID}}); err != nil {
+		tracker.InboxGesture{Read: []string{newest.RecordID}}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark the newer notice read: %v", err)
 	}
 	r.drain()
 
-	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), Unread: true}); len(
+	if got := r.inbox(tracker.InboxQuery{Handle: "bob", Unread: true}); len(
 		got.Notices) != 0 {
 
 		t.Fatalf("%d notices are still unread after both were marked",
@@ -256,7 +256,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	r := newRoundTrip(t)
 	routeTo(t, r, "t-1", "ENG-1", "bob")
 
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if len(got.Notices) != 1 {
 		t.Fatalf("bob's inbox holds %d notices, want 1", len(got.Notices))
 	}
@@ -268,7 +268,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	// the reader is what has to survive it.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
 		PrimaryReasons: &[]tracker.Reason{},
-	}); err != nil {
+	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("write bob's record: %v", err)
 	}
 	r.drain()
@@ -281,7 +281,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 		t.Fatalf("plant a position in a dead stream: %v", err)
 	}
 
-	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); got.Unread != 1 {
+	if got := r.inbox(tracker.InboxQuery{Handle: "bob"}); got.Unread != 1 {
 		t.Fatal("a position from another stream marked the live stream's " +
 			"notices read, so a recreated stream empties everybody's inbox")
 	}
@@ -295,20 +295,20 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	r := newRoundTrip(t)
 	routeTo(t, r, "t-1", "ENG-1", "bob")
 
-	notice := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}).Notices[0]
+	notice := r.inbox(tracker.InboxQuery{Handle: "bob"}).Notices[0]
 	asleep := wednesday.Add(48 * time.Hour)
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", tracker.InboxGesture{
 		Snooze: []tracker.Snooze{{RecordID: notice.RecordID, Until: asleep}},
-	}); err != nil {
+	}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("snooze: %v", err)
 	}
 	r.drain()
 
-	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); len(got.Notices) != 0 {
+	if got := r.inbox(tracker.InboxQuery{Handle: "bob"}); len(got.Notices) != 0 {
 		t.Fatalf("a snoozed notice is still in the inbox: %+v", got.Notices)
 	}
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"),
+	got := r.inbox(tracker.InboxQuery{Handle: "bob",
 		Snoozed: tracker.SnoozeInclude})
 	if len(got.Notices) != 1 || !got.Notices[0].Snoozed {
 		t.Fatalf("snoozed=include did not return the snoozed notice: %+v",
@@ -318,7 +318,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	// AND ONE WHOSE TIME HAS COME IS BACK, without a write to promote it:
 	// the same rows, read after the instant.
 	back, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+		Handle: "bob", Level: statelog.ReadStale,
 		Snoozed: tracker.SnoozeExclude,
 	}, asleep.Add(time.Minute))
 	if err != nil {
@@ -341,7 +341,7 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 	routeTo(t, r, "t-2", "ENG-2", "bob")
 	routeTo(t, r, "t-3", "ENG-3", "bob")
 
-	first := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), Limit: 2})
+	first := r.inbox(tracker.InboxQuery{Handle: "bob", Limit: 2})
 	if len(first.Notices) != 2 {
 		t.Fatalf("the first page holds %d, want 2", len(first.Notices))
 	}
@@ -349,7 +349,7 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 		t.Fatal("a page with more behind it carries no cursor")
 	}
 	second := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Limit: 2, Cursor: first.NextCursor,
+		Handle: "bob", Limit: 2, Cursor: first.NextCursor,
 	})
 	if len(second.Notices) != 1 {
 		t.Fatalf("the second page holds %d, want 1", len(second.Notices))
@@ -367,7 +367,7 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 
 	// AND `since` IS THE CHEAP FORM of the same question.
 	oldest := second.Notices[0]
-	after := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), Since: statelog.Position{
+	after := r.inbox(tracker.InboxQuery{Handle: "bob", Since: statelog.Position{
 		Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 		Seq: oldest.LogSeq,
 	}})
@@ -378,15 +378,15 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 
 	for name, q := range map[string]tracker.InboxQuery{
 		"no handle": {Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude},
-		"no level":  {Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeExclude},
-		"an unknown reason": {Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+		"no level":  {Handle: "bob", Snoozed: tracker.SnoozeExclude},
+		"an unknown reason": {Handle: "bob", Level: statelog.ReadStale,
 			Snoozed: tracker.SnoozeExclude,
 			Reasons: []tracker.Reason{"because-i-said-so"}},
 		// THE ZERO SCOPE IS REFUSED, not read as one of the three: each
 		// is some caller's right default, so a reader that picked one
 		// would answer the other two's question wrong without saying so.
-		"no snoozed scope": {Who: tracker.PartyOf("bob"), Level: statelog.ReadStale},
-		"an unknown snoozed scope": {Who: tracker.PartyOf("bob"),
+		"no snoozed scope": {Handle: "bob", Level: statelog.ReadStale},
+		"an unknown snoozed scope": {Handle: "bob",
 			Level: statelog.ReadStale, Snoozed: "sometimes"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -407,14 +407,14 @@ func TestReasonsFilterRatherThanClassify(t *testing.T) {
 	routeTo(t, r, "t-1", "ENG-1", "bob")
 
 	if got := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Reasons: []tracker.Reason{tracker.ReasonMention},
+		Handle: "bob", Reasons: []tracker.Reason{tracker.ReasonMention},
 	}); len(got.Notices) != 0 {
 
 		t.Fatalf("filtering to mentions returned %d assignments",
 			len(got.Notices))
 	}
 	if got := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Reasons: []tracker.Reason{tracker.ReasonAssignee},
+		Handle: "bob", Reasons: []tracker.Reason{tracker.ReasonAssignee},
 	}); len(got.Notices) != 1 {
 
 		t.Fatal("filtering to assignments returned nothing, so the filter " +
@@ -459,7 +459,7 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	if detail.Task.Key == "" {
 		t.Fatal("the write minted no key at all")
 	}
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	got := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if len(got.Notices) == 0 {
 		t.Fatal("bob was assigned work and his inbox is empty")
 	}
@@ -510,26 +510,26 @@ func createOf(r *roundTrip, key string) string {
 	return ids[0]
 }
 
-// A CHANGE IS NOT NEWS TO THE PERSON WHO MADE IT — under EITHER of their
-// names. A founder who files work on her own seat through her assistant must
-// not find it in her own inbox, unread, as "assigned to you": that is a
-// notice about what she just did, and every one inflated her unread count.
-// The wake already dropped her ([tracker.Route]); the inbox rows did not.
+// A CHANGE IS NOT NEWS TO THE PERSON WHO MADE IT — whatever credential they
+// made it through. A founder who files work on her own seat through her
+// assistant must not find it in her own inbox, unread, as "assigned to you":
+// that is a notice about what she just did, and every one inflated her unread
+// count. The wake already dropped her ([tracker.Route]); the inbox rows did
+// not. A person bound to a seat writes AS it (iam.ActorFor), the credential
+// riding beside the actor, so her own write's actor IS the recipient.
 func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
-		OperatorID: "founder", Seat: "jane-founder",
+	jane := r.writer.As("jane-founder", tracker.AuthorHuman, tracker.Provenance{
+		OperatorID: "pat:founder",
 	})
-	routeAs(t, r, token, "t-own", "ENG-1", "jane-founder")
+	routeAs(t, r, jane, "t-own", "ENG-1", "jane-founder")
 	// AND A COLLEAGUE'S CHANGE STILL REACHES HER, or the rule would be
 	// emptying the inbox rather than keeping her own actions out of it.
 	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 	routeAs(t, r, bob, "t-bob", "ENG-2", "jane-founder")
 
-	got := r.inbox(tracker.InboxQuery{
-		Who: tracker.Party{Handle: "jane-founder", OperatorID: "founder"},
-	})
+	got := r.inbox(tracker.InboxQuery{Handle: "jane-founder"})
 	var keys []string
 	for _, n := range got.Notices {
 		keys = append(keys, n.SubjectKey)

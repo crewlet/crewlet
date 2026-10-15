@@ -4,7 +4,10 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -122,11 +125,40 @@ func RenderGate(evict bool, result engine.GateResult) GateAnswer {
 	return out
 }
 
-// GateRefusal is a gesture refused before anything was written: the status and
-// the body the route answers with.
+// GateRefusal is a gesture refused before anything was written: the status,
+// the code and the facts the route answers with.
+//
+// IN THE ENGINE'S ENVELOPE, like every other refusal this surface writes — the
+// code is on httpjson's table and carries its sentence as `message` — and a
+// 503 carries the Retry-After its remedy implies. It was a bare map written
+// with no sentence, whose one 503 (`eviction_unjudged`) said `retry_same_op`
+// in its body and, by carrying no Retry-After, "do not come back" in its
+// header.
 type GateRefusal struct {
 	Status int
-	Body   map[string]any
+	Code   httpjson.Code
+	Fields httpjson.Detail
+
+	// RetryAfter is the Retry-After in whole seconds, on a 503 whose cause
+	// waiting can clear; zero writes none.
+	RetryAfter int
+}
+
+// Envelope is the refusal's body as the route sends it — [httpjson.Envelope]'s,
+// so the golden file records exactly what a client reads. A server standing in
+// for a node answers with [GateRefusal.Write] rather than encoding this itself,
+// or its 503 goes out with no Retry-After.
+func (g GateRefusal) Envelope() map[string]any { return httpjson.Envelope(g.Code, g.Fields) }
+
+// Write answers the refusal: a 503 through [httpjson.UnavailableWith], which
+// sets the header and the envelope together, and anything else through
+// [httpjson.FailWithFields].
+func (g GateRefusal) Write(w http.ResponseWriter) {
+	if g.Status == http.StatusServiceUnavailable {
+		httpjson.UnavailableWith(w, g.Code, g.RetryAfter, g.Fields)
+		return
+	}
+	httpjson.FailWithFields(w, g.Status, g.Code, g.Fields)
 }
 
 // RenderGateRefusal renders err if it is one of the gate's refusals, reporting
@@ -145,9 +177,10 @@ type GateRefusal struct {
 // minting another are both safe — carrying it is what makes "the same request"
 // something a client can read off the answer rather than remember.
 //
-// A MAP rather than a struct for one reason: a readmission refusal carries
-// numbers whose zero is a real value — a node that never published, a position
-// of zero — and an omitempty struct would drop the facts the refusal is about.
+// A MAP OF FACTS rather than a struct for one reason: a readmission refusal
+// carries numbers whose zero is a real value — a node that never published, a
+// position of zero — and an omitempty struct would drop the facts the refusal
+// is about.
 func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 	var readmission *statelog.ReadmissionRefusal
 	var eviction *statelog.EvictionRefusal
@@ -161,97 +194,108 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 		// is an append: 409 with the sentence naming the mode, because the
 		// remedy is the fleet's return to normal mode rather than anything
 		// about the node named. Nothing was judged and nothing was written.
-		return GateRefusal{Status: http.StatusConflict, Body: map[string]any{
-			"error": "not_publishing", "detail": err.Error(),
-			"hint": "this node is in a capacity window and writes nothing to " +
-				"the logs until the fleet is restarted into normal mode; run the " +
-				"gesture again then",
-			"actions": []statelog.GateAction{statelog.GateWait},
-			"node":    node, "op_id": opID,
-		}}, true
+		return GateRefusal{Status: http.StatusConflict, Code: httpjson.CodeNotPublishing,
+			Fields: httpjson.Detail{
+				"detail": err.Error(),
+				"hint": "this node is in a capacity window and writes nothing to " +
+					"the logs until the fleet is restarted into normal mode; run " +
+					"the gesture again then",
+				"actions": []statelog.GateAction{statelog.GateWait},
+				"node":    node, "op_id": opID,
+			}}, true
 	case errors.Is(err, engine.ErrInvalidGate):
 		// A NODE ID NO NODE COULD RUN UNDER is a typo rather than a fault,
 		// and it is the caller's to fix: nothing was judged and nothing
 		// was written.
-		return GateRefusal{Status: http.StatusBadRequest, Body: map[string]any{
-			"error": "invalid_gate", "detail": err.Error(),
-		}}, true
+		return GateRefusal{Status: http.StatusBadRequest, Code: httpjson.CodeInvalidGate,
+			Fields: httpjson.Detail{"detail": err.Error()}}, true
 	case errors.As(err, &unjudged):
 		// COORDINATION COULD NOT BE READ HERE, which is this node's
 		// condition rather than the target's — so a 503 carrying the way
-		// past it, not a 500 an operator reads as an engine bug.
+		// past it, not a 500 an operator reads as an engine bug. The
+		// Retry-After is the UNDECIDED scale ([authz.RetryUndecidedSeconds]):
+		// what the caller waits for is one read of the presence leases
+		// coming back, a store blip rather than an outage.
 		remedy := unjudged.Remedy()
-		return GateRefusal{Status: http.StatusServiceUnavailable, Body: map[string]any{
-			"error": "eviction_unjudged", "detail": unjudged.Error(),
-			"hint": remedy.Detail, "actions": remedy.Actions, "node": node,
-			"op_id": opID,
-		}}, true
+		return GateRefusal{Status: http.StatusServiceUnavailable,
+			Code: httpjson.CodeEvictionUnjudged, RetryAfter: authz.RetryUndecidedSeconds,
+			Fields: httpjson.Detail{
+				"detail": unjudged.Error(), "hint": remedy.Detail,
+				"actions": remedy.Actions, "node": node, "op_id": opID,
+			}}, true
 	case errors.As(err, &readmissionUnjudged):
 		// A READMISSION NOBODY COULD JUDGE, which is not the target's state
 		// but a read on this node that failed — so a 503 carrying the way
 		// past it, as an eviction's is, and never the 500 an operator reads
-		// as an engine bug. Nothing was written.
+		// as an engine bug. Nothing was written. The Retry-After is the
+		// undecided scale for the eviction's reason: what the caller waits
+		// for is one read coming back.
 		remedy := readmissionUnjudged.Remedy()
-		body := map[string]any{
-			"error": "readmission_unjudged", "detail": readmissionUnjudged.Error(),
-			"hint": remedy.Detail, "actions": remedy.Actions, "node": node,
-			"op_id": opID,
+		fields := httpjson.Detail{
+			"detail": readmissionUnjudged.Error(), "hint": remedy.Detail,
+			"actions": remedy.Actions, "node": node, "op_id": opID,
 		}
 		if readmissionUnjudged.Log != "" {
-			body["log"] = readmissionUnjudged.Log
+			fields["log"] = readmissionUnjudged.Log
 		}
-		return GateRefusal{Status: http.StatusServiceUnavailable, Body: body}, true
+		return GateRefusal{Status: http.StatusServiceUnavailable,
+			Code: httpjson.CodeReadmissionUnjudged, RetryAfter: authz.RetryUndecidedSeconds,
+			Fields: fields}, true
 	case errors.As(err, &readmission):
 		// 409 WITH THE NUMBERS, because the inequality is the reason — an
 		// operator told only "500 gate_failed" would read an engine problem
 		// where there is a node still catching up.
 		remedy := readmission.Remedy()
-		return GateRefusal{Status: http.StatusConflict, Body: map[string]any{
-			"error": "readmission_refused", "detail": readmission.Error(),
-			"hint": remedy.Detail, "actions": remedy.Actions,
-			"node": node, "op_id": opID, "domain": readmission.Domain,
-			"published":        readmission.Published,
-			"position":         readmission.Seq,
-			"generation":       readmission.Generation,
-			"floor":            readmission.Bound.Floor,
-			"first_seq":        readmission.Bound.First,
-			"floor_generation": readmission.Bound.Generation,
-		}}, true
+		return GateRefusal{Status: http.StatusConflict,
+			Code: httpjson.CodeReadmissionRefused, Fields: httpjson.Detail{
+				"detail": readmission.Error(),
+				"hint":   remedy.Detail, "actions": remedy.Actions,
+				"node": node, "op_id": opID, "domain": readmission.Domain,
+				"published":        readmission.Published,
+				"position":         readmission.Seq,
+				"generation":       readmission.Generation,
+				"floor":            readmission.Bound.Floor,
+				"first_seq":        readmission.Bound.First,
+				"floor_generation": readmission.Bound.Generation,
+			}}, true
 	case errors.As(err, &eviction):
 		// A NODE STILL RENEWING ITS PRESENCE LEASE is still reaching the
 		// fleet, and nothing was written anywhere.
 		remedy := eviction.Remedy()
-		return GateRefusal{Status: http.StatusConflict, Body: map[string]any{
-			"error": "eviction_refused", "detail": eviction.Error(),
-			"hint": remedy.Detail, "actions": remedy.Actions, "node": node,
-			"op_id": opID,
-		}}, true
+		return GateRefusal{Status: http.StatusConflict,
+			Code: httpjson.CodeEvictionRefused, Fields: httpjson.Detail{
+				"detail": eviction.Error(), "hint": remedy.Detail,
+				"actions": remedy.Actions, "node": node, "op_id": opID,
+			}}, true
 	}
 	return GateRefusal{}, false
 }
 
-// logGateRefusal is the route's own line for a refusal it answered.
-func logGateRefusal(operator, node string, err error) {
+// logGateRefusal is the route's own line for a refusal it answered, naming who
+// pressed as every other line on this surface does: the author and the
+// credential they pressed it through.
+func logGateRefusal(by iam.Actor, node string, err error) {
 	var readmission *statelog.ReadmissionRefusal
 	var eviction *statelog.EvictionRefusal
 	var unjudged *engine.GateUnjudged
 	var readmissionUnjudged *engine.ReadmissionUnjudged
 	switch {
 	case errors.As(err, &unjudged):
-		log.Warn("retention_eviction_unjudged", "operator", operator,
-			"node", node, "error", unjudged.Err)
+		log.Warn("retention_eviction_unjudged", "by", by.Name,
+			"operator", by.OperatorID, "node", node, "error", unjudged.Err)
 	case errors.As(err, &readmissionUnjudged):
-		log.Warn("retention_readmission_unjudged", "operator", operator,
-			"node", node, "log", readmissionUnjudged.Log, "error", readmissionUnjudged.Err)
+		log.Warn("retention_readmission_unjudged", "by", by.Name,
+			"operator", by.OperatorID, "node", node, "log", readmissionUnjudged.Log,
+			"error", readmissionUnjudged.Err)
 	case errors.As(err, &readmission):
-		log.Info("retention_readmission_refused", "operator", operator,
-			"node", node, "domain", readmission.Domain,
+		log.Info("retention_readmission_refused", "by", by.Name,
+			"operator", by.OperatorID, "node", node, "domain", readmission.Domain,
 			"position", readmission.Seq, "floor", readmission.Bound.Held())
 	case errors.As(err, &eviction):
-		log.Info("retention_eviction_refused", "operator", operator,
-			"node", node, "detail", eviction.Detail)
+		log.Info("retention_eviction_refused", "by", by.Name,
+			"operator", by.OperatorID, "node", node, "detail", eviction.Detail)
 	case errors.Is(err, engine.ErrNotPublishing):
-		log.Info("retention_gate_not_publishing", "operator", operator,
-			"node", node, "detail", err.Error())
+		log.Info("retention_gate_not_publishing", "by", by.Name,
+			"operator", by.OperatorID, "node", node, "detail", err.Error())
 	}
 }

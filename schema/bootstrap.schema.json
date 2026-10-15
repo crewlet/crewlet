@@ -6,6 +6,15 @@
         "auth": {
           "$ref": "#/$defs/APIAuth"
         },
+        "external_url": {
+          "description": "Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "host": {
           "description": "Bind address for the HTTP surface.",
           "type": [
@@ -34,6 +43,48 @@
         },
         "public": {
           "$ref": "#/$defs/APIPublic"
+        },
+        "trusted_proxies": {
+          "description": "CIDR blocks whose X-Forwarded-For is honoured. Empty trusts no forwarded header.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "APIAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "description": "How long a grant, status or credential change is kept (default 9600h = 400d, 2160h..24000h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "sessions": {
+          "description": "How long a sign-in, step-up and sign-out is kept (default 2160h = 90d, 168h..9600h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": [
@@ -44,7 +95,7 @@
     "APIAuth": {
       "additionalProperties": false,
       "properties": {
-        "allow_anonymous_read": {
+        "accept_insecure": {
           "anyOf": [
             {
               "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
@@ -53,15 +104,32 @@
               "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
             }
           ],
-          "description": "Serve reads without a token (default true).",
+          "description": "Acknowledge an insecure posture on a routable address. Logged at WARN on every start.",
           "type": [
             "boolean",
             "string",
             "null"
           ]
+        },
+        "admin": {
+          "anyOf": [
+            {
+              "enum": [
+                "serve",
+                "refuse",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
+          ],
+          "description": "Whether this node grants admin to those who hold it (serve), or clamps admin away and keeps every app (refuse). Required once the API is served."
         },
         "allowed_origins": {
-          "description": "CORS origins. Empty = same-origin only.",
+          "description": "Additional browser origins this deployment is reached on. Empty = same-origin only.",
           "items": {
             "type": [
               "string",
@@ -74,9 +142,12 @@
             "array",
             "null"
           ]
+        },
+        "audit": {
+          "$ref": "#/$defs/APIAudit"
         },
         "company_writers": {
-          "description": "Token ids that alone may change the company document. Empty = every token.",
+          "description": "Ids of the Tier A tokens that alone may change the company document. Empty = whoever the authority table admits.",
           "items": {
             "type": [
               "string",
@@ -90,24 +161,28 @@
             "null"
           ]
         },
-        "disabled": {
+        "min_password_length": {
           "anyOf": [
             {
-              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+              "maximum": 256,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             {
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
             }
           ],
-          "description": "Local-dev only: serve every route unauthenticated.",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
+          "description": "Minimum password length. 0 takes the engine's floor of 12."
+        },
+        "session": {
+          "$ref": "#/$defs/APISession"
         },
         "tokens": {
-          "description": "Accepted bearer tokens. Empty refuses every write.",
+          "description": "The deployment's machine credentials. At least one is required once the API is served.",
           "items": {
             "$ref": "#/$defs/APIToken"
           },
@@ -115,6 +190,23 @@
             "array",
             "null"
           ]
+        },
+        "totp": {
+          "anyOf": [
+            {
+              "enum": [
+                "required",
+                "optional",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
+          ],
+          "description": "Whether a second factor is required of a person signing in with a password (default required). optional off loopback needs accept_insecure."
         }
       },
       "type": [
@@ -125,6 +217,15 @@
     "APIPublic": {
       "additionalProperties": false,
       "properties": {
+        "external_url": {
+          "description": "Where vendors and remote sandboxes reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "host": {
           "description": "Bind address for the public listener. Empty binds every interface.",
           "type": [
@@ -157,11 +258,65 @@
         "null"
       ]
     },
+    "APISession": {
+      "additionalProperties": false,
+      "properties": {
+        "absolute": {
+          "description": "Longest a session may live from sign-in (default 168h, 1h..720h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "step_up": {
+          "description": "How long a proof of identity authorises a step-up gesture (default 1h, 5m..24h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "APIToken": {
       "additionalProperties": false,
       "properties": {
+        "grants": {
+          "description": "What this credential may do: admin, tracker, knowledge. Required and non-empty.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "id": {
-          "description": "Short lowercase label recorded as the author of writes made with this token.",
+          "anyOf": [
+            {
+              "maxLength": 58,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)*$"
+            },
+            {
+              "const": ""
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Short label; the token acts under the login token:\u003cid\u003e, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64.",
           "type": [
             "string",
             "number",
@@ -698,7 +853,7 @@
               "type": "string"
             }
           ],
-          "description": "Connection pool bound for the node's database, and the readers of the replicated estate's (at least two, with one pinned writer per log added on top); 0 takes the store default of 4."
+          "description": "Ordinary readers of the node's database pool, and of the replicated estate's (at least two there); the identity reserve and one pinned writer per log are added on top. 0 takes the store default, max(8, GOMAXPROCS)."
         },
         "objects": {
           "$ref": "#/$defs/StoreObjects"
@@ -820,6 +975,23 @@
           ],
           "description": "Event stream retention; 0 takes the queue default."
         },
+        "iam_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 17179869184,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."
+        },
         "leaf": {
           "$ref": "#/$defs/StreamLeaf"
         },
@@ -858,7 +1030,7 @@
           "description": "Copies of every stream and coordination bucket, and of the company's files on the default nats object store, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members."
         },
         "store_dir": {
-          "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart). Required on a member of a fleet (a named cluster, peers or a leaf listener); refused on a leaf.",
+          "description": "Embedded stream persistence directory. Required on an embedded broker member, solo included: it keeps every state log from boot. Refused on a leaf.",
           "type": [
             "string",
             "number",
@@ -870,7 +1042,7 @@
           "anyOf": [
             {
               "maximum": 70368744177664,
-              "minimum": 5368709120,
+              "minimum": 6442450944,
               "type": [
                 "integer",
                 "null"
@@ -972,7 +1144,7 @@
           "anyOf": [
             {
               "maximum": 68719476736,
-              "minimum": 1073741824,
+              "minimum": 67108864,
               "type": [
                 "integer",
                 "null"
@@ -983,7 +1155,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."
+          "description": "Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."
         }
       },
       "type": [
@@ -1416,6 +1588,30 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "$comment": "every node needs secrets.keys: every state-log record is signed under it.",
+      "allOf": [
+        {
+          "properties": {
+            "secrets": {
+              "properties": {
+                "keys": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "keys"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "secrets"
+          ],
+          "type": "object"
+        }
+      ]
     }
   ],
   "properties": {

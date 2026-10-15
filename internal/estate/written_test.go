@@ -32,6 +32,17 @@ func (w reportingWriter) CreateTask(ctx context.Context, opID string, task track
 	return out, err
 }
 
+// EditComment is the TRACKER's remark edit — the node's own EditComment is the
+// knowledge base's, and a writer for one actor answers the tracker's.
+func (w reportingWriter) EditComment(_ context.Context, opID, _, _, _, _ string,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
+	w.note("task_comment_edit")
+	w.mu.Lock()
+	w.opIDs = append(w.opIDs, opID)
+	w.mu.Unlock()
+	return tracker.WriteResult{}, nil
+}
+
 // turnSet is an asking turn's own set of the items it wrote, in its process.
 type turnSet struct {
 	mu    sync.Mutex
@@ -54,49 +65,71 @@ func (s *turnSet) keys() []string {
 	return out
 }
 
-// keyed records the call key a page write arrived with.
-func (f *fakeNode) keyed(key pages.CallKey) {
+// keyed records the key a page write arrived with — its actor's operation key,
+// or a comment's turn key.
+func (f *fakeNode) keyed(key string) {
 	f.mu.Lock()
 	f.keys = append(f.keys, key)
 	f.mu.Unlock()
 }
 
-// seeds is every call key's seed this node's page writes arrived with.
+// seeds is every key this node's page writes arrived with.
 func (f *fakeNode) seeds() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]string, 0, len(f.keys))
-	for _, key := range f.keys {
-		out = append(out, key.Seed)
-	}
-	return out
+	return slices.Clone(f.keys)
 }
 
-func (f *fakeNode) Create(_ context.Context, _ pages.Actor, in pages.NewPage) (pages.Written, error) {
+func (f *fakeNode) Create(_ context.Context, actor pages.Actor, _ pages.NewPage) (pages.Written, error) {
 	f.note("page_create")
-	f.keyed(in.CallKey)
+	f.keyed(actor.OpKey)
 	return pages.Written{}, nil
 }
 
-func (f *fakeNode) SavePage(_ context.Context, _ pages.Actor, _ string,
-	save pages.Save) (pages.Written, error) {
+func (f *fakeNode) SavePage(_ context.Context, actor pages.Actor, _ string,
+	_ pages.Save) (pages.Written, error) {
 	f.note("page_save")
-	f.keyed(save.CallKey)
+	f.keyed(actor.OpKey)
 	return pages.Written{}, nil
 }
 
-func (f *fakeNode) Rename(_ context.Context, _ pages.Actor, _, _ string, _ bool,
-	key pages.CallKey) (pages.Written, error) {
+func (f *fakeNode) Rename(_ context.Context, actor pages.Actor, _, _ string,
+	_ bool) (pages.Written, error) {
 	f.note("page_rename")
-	f.keyed(key)
+	f.keyed(actor.OpKey)
 	return pages.Written{}, nil
 }
 
-func (f *fakeNode) EditComment(_ context.Context, _ pages.Actor, _, _, _ string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
+func (f *fakeNode) EditComment(_ context.Context, actor pages.Actor, _, _,
+	_ string) (pages.Comment, pages.Written, error) {
 	f.note("comment_edit")
-	f.keyed(key)
+	f.keyed(actor.OpKey)
 	return pages.Comment{}, pages.Written{}, nil
+}
+
+func (f *fakeNode) Trash(_ context.Context, actor pages.Actor, _ string) (pages.Written, error) {
+	f.note("page_trash")
+	f.keyed(actor.OpKey)
+	return pages.Written{}, nil
+}
+
+func (f *fakeNode) Restore(_ context.Context, actor pages.Actor, _ string) (pages.Written, error) {
+	f.note("page_restore")
+	f.keyed(actor.OpKey)
+	return pages.Written{}, nil
+}
+
+func (f *fakeNode) Purge(_ context.Context, actor pages.Actor, _, _ string) (pages.Written, error) {
+	f.note("page_purge")
+	f.keyed(actor.OpKey)
+	return pages.Written{}, nil
+}
+
+func (f *fakeNode) RemoveComment(_ context.Context, actor pages.Actor, _, _ string,
+	_ pages.CommentAuthority) (pages.Written, error) {
+	f.note("comment_remove")
+	f.keyed(actor.OpKey)
+	return pages.Written{}, nil
 }
 
 // PlaceTask is a drop whose lane step lands and whose order step this node's
@@ -202,42 +235,66 @@ func TestALocalWriteReportsIntoTheTurnsSetOnce(t *testing.T) {
 // A KEYED PAGE WRITE NOBODY ANSWERED IS ASKED AGAIN, UNDER ITS KEY — and an
 // unkeyed one never is.
 //
-// The key is what makes a repeat the same operation: the operation id, a new
-// page's id and a comment's id are all derived from it, so the next holder's
-// ledger collapses a write the silent one may have made. Without one the
-// store mints a fresh id per call and a second holder would write a second
-// page or a second comment. EACH OF THE FIVE PAGE WRITES says which of its
-// arguments is its key, and a predicate reading the wrong one either repeats
-// an unkeyed write or strands a keyed one.
+// The key is what makes a repeat the same operation: the pages store derives
+// the operation id — and a new page's id, and a comment's — from it and what
+// the write says, so the next holder's ledger collapses a write the silent one
+// may have made. Without one the store mints a fresh id per call and a second
+// holder would write a second page or a second comment. EVERY PAGE WRITE says
+// where its key is — the actor's operation key, or for a comment made from a
+// turn the turn's own — and a predicate reading the wrong one either repeats an
+// unkeyed write or strands a keyed one.
 func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 	t.Parallel()
 	since := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	key := statelog.NewOpID(since, "page")
 	for _, tc := range []struct {
 		name  string
 		asked string
-		write func(ctx context.Context, p Pages, key pages.CallKey) error
+		write func(ctx context.Context, p Pages, key string) error
 	}{
-		{"create", "page_create", func(ctx context.Context, p Pages, key pages.CallKey) error {
-			_, err := p.Create(ctx, pages.Actor{}, pages.NewPage{Container: "ENG", Title: "Runbook",
-				CallKey: key})
+		{"create", "page_create", func(ctx context.Context, p Pages, key string) error {
+			_, err := p.Create(ctx, pages.Actor{OpKey: key},
+				pages.NewPage{Container: "ENG", Title: "Runbook"})
 			return err
 		}},
-		{"save", "page_save", func(ctx context.Context, p Pages, key pages.CallKey) error {
+		{"save", "page_save", func(ctx context.Context, p Pages, key string) error {
 			body := "v2"
-			_, err := p.SavePage(ctx, pages.Actor{}, "p1", pages.Save{BaseVersion: 1, Body: &body,
-				CallKey: key})
+			_, err := p.SavePage(ctx, pages.Actor{OpKey: key}, "p1",
+				pages.Save{BaseVersion: 1, Body: &body})
 			return err
 		}},
-		{"rename", "page_rename", func(ctx context.Context, p Pages, key pages.CallKey) error {
-			_, err := p.Rename(ctx, pages.Actor{}, "p1", "Runbook v2", false, key)
+		{"rename", "page_rename", func(ctx context.Context, p Pages, key string) error {
+			_, err := p.Rename(ctx, pages.Actor{OpKey: key}, "p1", "Runbook v2", false)
 			return err
 		}},
-		{"comment", "comment", func(ctx context.Context, p Pages, key pages.CallKey) error {
-			_, _, err := p.Comment(ctx, pages.Actor{}, "p1", pages.NewComment{Body: "hi", CallKey: key})
+		{"comment", "comment", func(ctx context.Context, p Pages, key string) error {
+			_, _, err := p.Comment(ctx, pages.Actor{OpKey: key}, "p1", pages.NewComment{Body: "hi"})
 			return err
 		}},
-		{"edit comment", "comment_edit", func(ctx context.Context, p Pages, key pages.CallKey) error {
-			_, _, err := p.EditComment(ctx, pages.Actor{}, "p1", "c1", "hello", key)
+		{"comment from a turn", "comment", func(ctx context.Context, p Pages, key string) error {
+			_, _, err := p.Comment(ctx, pages.Actor{}, "p1",
+				pages.NewComment{Body: "hi", TurnKey: key, TurnSince: since})
+			return err
+		}},
+		{"edit comment", "comment_edit", func(ctx context.Context, p Pages, key string) error {
+			_, _, err := p.EditComment(ctx, pages.Actor{OpKey: key}, "p1", "c1", "hello")
+			return err
+		}},
+		{"trash", "page_trash", func(ctx context.Context, p Pages, key string) error {
+			_, err := p.Trash(ctx, pages.Actor{OpKey: key}, "p1")
+			return err
+		}},
+		{"restore", "page_restore", func(ctx context.Context, p Pages, key string) error {
+			_, err := p.Restore(ctx, pages.Actor{OpKey: key}, "p1")
+			return err
+		}},
+		{"purge", "page_purge", func(ctx context.Context, p Pages, key string) error {
+			_, err := p.Purge(ctx, pages.Actor{OpKey: key}, "p1", "spam")
+			return err
+		}},
+		{"remove comment", "comment_remove", func(ctx context.Context, p Pages, key string) error {
+			_, err := p.RemoveComment(ctx, pages.Actor{OpKey: key}, "p1", "c1",
+				pages.CommentAuthority{Moderate: true})
 			return err
 		}},
 	} {
@@ -254,18 +311,17 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 			}
 
 			f, second := silentFirst(t)
-			key := pages.CallKey{Seed: "run-7", Since: since}
 			if err := tc.write(t.Context(), f.client.Pages(), key); err != nil {
 				t.Fatalf("a keyed %s with its first holder silent = %v, want it written "+
 					"by the next", tc.name, err)
 			}
-			if !second.askedFor(tc.asked) || !slices.Equal(second.seeds(), []string{"run-7"}) {
-				t.Fatalf("the next holder ran %v under keys %v, want the %s under run-7",
-					second.asked, second.seeds(), tc.asked)
+			if !second.askedFor(tc.asked) || !slices.Equal(second.seeds(), []string{key}) {
+				t.Fatalf("the next holder ran %v under keys %v, want the %s under %s",
+					second.asked, second.seeds(), tc.asked, key)
 			}
 
 			f, second = silentFirst(t)
-			err := tc.write(t.Context(), f.client.Pages(), pages.CallKey{})
+			err := tc.write(t.Context(), f.client.Pages(), "")
 			if !errors.Is(err, ErrOutcomeUnknown) {
 				t.Fatalf("an unkeyed %s with its first holder silent = %v, want ErrOutcomeUnknown",
 					tc.name, err)

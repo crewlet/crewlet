@@ -1729,7 +1729,7 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 	out := make([]toolloop.SteerNote, 0, len(notes))
 	emit := s.r.emitter()
 	for _, n := range notes {
-		msg := prompts.SteerMessage(n.Sender(), n.Text)
+		msg := prompts.SteerMessage(n.By, n.Text)
 		s.r.carrySteer(msg)
 		emit.steered(s.ctx, s.ph, s.iteration, s.offset+round, n)
 		out = append(out, toolloop.SteerNote{ID: n.ID, Message: msg})

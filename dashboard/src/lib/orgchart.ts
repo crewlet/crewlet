@@ -71,8 +71,10 @@ export function placeLine(seat: Seat): string {
 }
 
 /**
- * Every project filed to each unit, by unit NAME — the address a unit has
- * everywhere on the anonymous surface (`lib/seats.ts` `Unit.name`).
+ * Every project filed to each unit, by unit KEY — what a project's `unit:`
+ * names and what [Unit.id] is (`lib/seats.ts`). Never the unit's NAME, which is
+ * prose two units may share: keyed on it, two teams called Platform drew each
+ * other's projects in their boxes.
  */
 export function projectsByUnit(
   projects: readonly Pick<WorkProjectRow, "key" | "unit" | "archived">[],
@@ -81,8 +83,8 @@ export function projectsByUnit(
   for (const p of projects) {
     // AN ARCHIVED PROJECT IS NOT WHERE A UNIT'S WORK GOES: its key on the
     // unit's node would send a reader to a board nobody files to.
-    if (p.archived || !p.unit?.name) continue;
-    out.set(p.unit.name, [...(out.get(p.unit.name) ?? []), p.key]);
+    if (p.archived || !p.unit?.key) continue;
+    out.set(p.unit.key, [...(out.get(p.unit.key) ?? []), p.key]);
   }
   for (const keys of out.values()) keys.sort();
   return out;
@@ -243,10 +245,13 @@ export type StateCounts = Record<SeatActivity, number>;
  */
 export function stateCounts(index: OrgIndex, agents: readonly AgentRow[]): StateCounts {
   const counts: StateCounts = { working: 0, needs: 0, stopped: 0, idle: 0 };
-  const byRole = new Map(agents.map((a) => [a.role, a]));
+  // EACH SEAT BY ITS OWN ROW, paired by HANDLE (the roster row's `id`): paired
+  // by NAME, which two seats may share, two "Engineer"s were each counted in
+  // the state of whichever row came last.
+  const byHandle = new Map(agents.map((a) => [a.id, a]));
   for (const seat of index.seats) {
     if (seat.kind === "human") continue;
-    const activity = byRole.get(seat.name)?.activity;
+    const activity = byHandle.get(seat.handle)?.activity;
     if (activity && activity in counts) counts[activity] += 1;
   }
   return counts;

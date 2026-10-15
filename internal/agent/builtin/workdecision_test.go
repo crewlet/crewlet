@@ -18,10 +18,10 @@ import (
 func decisionRegistry(t *testing.T, trk *fakeTracker, kb builtin.PageReader) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{
+	if _, err := builtin.Register(reg, gated(builtin.Deps{
 		Work:  builtin.WorkDeps{Reader: trk, Writer: trk.as},
 		Pages: builtin.PageDeps{Reader: kb},
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -112,7 +112,7 @@ func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 			"title": "which?", "project": "ENG", "decision": decisionArg()}},
 	} {
 		got := callWork(t, reg, c.tool, c.args)
-		if !got.Failed || got.Refusal != tools.RefusalInvalid ||
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			!strings.Contains(got.Output, "`ask`") {
 			t.Errorf("%s: a decision asked of nobody gave %+v", c.tool, got)
 		}
@@ -125,7 +125,7 @@ func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 	noKB := newFakeTracker()
 	got := callWork(t, decisionRegistry(t, noKB, nil), builtin.CommentOnWorkTool,
 		map[string]any{"item": "ENG-1", "body": "?", "ask": "pm", "decision": decisionArg()})
-	if !got.Failed || got.Refusal != tools.RefusalInvalid || !strings.Contains(got.Output, "url") {
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output, "url") {
 		t.Errorf("a page cited with no knowledge base gave %+v", got)
 	}
 	if len(noKB.patched) != 0 {
@@ -242,7 +242,7 @@ func informRegistry(t *testing.T, trk *fakeTracker,
 
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{
+	if _, err := builtin.Register(reg, gated(builtin.Deps{
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Actor: actor,
 			Channels: fakeChannels{
@@ -253,7 +253,7 @@ func informRegistry(t *testing.T, trk *fakeTracker,
 			},
 		},
 		Pages: builtin.PageDeps{Reader: newFakeKB()},
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -291,7 +291,7 @@ func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
 			"project": "ENG", "ask": "pm", "decision": informedDecision("slack", "releases")}},
 	} {
 		got := callWork(t, reg, c.tool, c.args)
-		if !got.Failed || got.Refusal != tools.RefusalForbidden ||
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
 			!strings.Contains(got.Output, "agent seat") {
 			t.Errorf("%s: an operator's inform gave %+v", c.tool, got)
 		}
@@ -325,7 +325,7 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 		got := callWork(t, informRegistry(t, trk, nil), builtin.CommentOnWorkTool,
 			map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
 				"decision": informedDecision(c.surface, c.channel)})
-		if !got.Failed || got.Refusal != tools.RefusalInvalid ||
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			!strings.Contains(got.Output, c.refusal) {
 			t.Errorf("%s: gave %+v — want invalid, listing %q", name, got, c.refusal)
 		}

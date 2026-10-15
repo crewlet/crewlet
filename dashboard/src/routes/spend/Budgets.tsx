@@ -1,7 +1,7 @@
 /**
  * Spend › Budgets: every scope's day, week and month — what it has spent, the
  * ceiling it is held to, and whether the gate is refusing it — with each
- * ceiling editable in place by an operator.
+ * ceiling editable in place by an admin.
  *
  * # Its own screen, because it answers a different question from spend
  *
@@ -34,8 +34,8 @@
  * the whole company first (a seat ceiling above the company's never refuses
  * a turn, and the check says so before it is saved), stored as a revision,
  * and applied by every node (`components/budgetWrite.tsx`). The editor is
- * drawn for every reader and disabled with the reason for one without an
- * operator credential.
+ * drawn for every reader and disabled with the reason for one without
+ * Admin.
  *
  * # The counter is the FLEET's, and unreadable is not zero
  *
@@ -63,7 +63,7 @@ import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
 
 /** How often the counters are re-read: the gate's own report cadence is 15s,
@@ -240,7 +240,9 @@ function resetLine(answer: BudgetsAnswer): string {
 export function Budgets() {
   const seatBadge = useSeatBadgeOf();
   const budgets = useQuery("budgets", undefined, { pollMs: BUDGETS_POLL_MS });
-  const access = useConfigWriteAccess();
+  // ANYWHERE: a lead may raise the ceilings of the seats they lead, so the
+  // one blanket reason below is only for a reader who can change none.
+  const access = useOrgWriteAccess("anywhere");
   const now = useNow();
   const { open: openPeek } = usePeekControls();
   const answer = budgets.data;
@@ -291,7 +293,9 @@ export function Budgets() {
       {budgets.loading && !answer && (
         <Skeleton variant="text" rows={4} label="Loading the budget counters" />
       )}
-      {!answer && <QueryState error={budgets.error} loading={budgets.loading} />}
+      {!answer && (
+        <QueryState error={budgets.error} refusal={budgets.refusal} loading={budgets.loading} />
+      )}
 
       {answer && answer.durable === false && (
         <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>

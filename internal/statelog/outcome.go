@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 )
 
 // Outcome is what a write's caller is told, and there are exactly three
@@ -18,9 +19,15 @@ import (
 // wrong-last-sequence refusal, and no answer at all.
 //
 // The boolean that used to sit beside this — saying whether the apply wait
-// succeeded — is deliberately absent. Durability is carried by the position
-// being set and the wait is carried by the enum itself, so a third field could
-// only ever disagree with one of them.
+// SUCCEEDED — is deliberately absent, and stays absent. Durability is carried
+// by the position being set and success by the enum itself, so that field
+// could only ever disagree with one of them.
+//
+// [Result.Waited] is not it, and the distinction is exactly the one that makes
+// the removed field redundant and this one not. "The wait succeeded" is
+// derivable — it is `applied`. "A wait was attempted at all" is not, once
+// [Request.NoWait] exists: the two pendings it produces carry the same
+// outcome and mean opposite things about this node.
 type Outcome string
 
 const (
@@ -73,6 +80,22 @@ type Result struct {
 	// retries under.
 	OpID string
 
+	// Waited says an apply wait was ATTEMPTED, which is what tells the
+	// two pendings apart.
+	//
+	// NOT "the wait succeeded" — that is derivable and is `applied`. This
+	// says whether anybody asked, and it exists because [Request.NoWait]
+	// made the question askable: a pending that was waited for says this
+	// NODE is behind, and a pending that was not says the caller declined
+	// to find out. Reported as one, a deliberate skip reads to an
+	// operator as a node falling behind under load, which is a health
+	// signal they will go and act on.
+	//
+	// FALSE ON EVERY OUTCOME THAT DID NOT REACH THE WAIT — a refusal, a
+	// round that lost its race — which is honest rather than absent
+	// information: no wait happened there either.
+	Waited bool
+
 	// Version is the object's new version on an applied write: the
 	// position packed, which is the same number the row carries.
 	Version int64
@@ -102,10 +125,12 @@ type Result struct {
 	// took is on the log, and the one this call would have taken is not.
 	Collapsed bool
 
-	// Unvouched says an `unknown` was answered because THIS NODE'S operation
-	// ledger cannot vouch for the operation — it was minted before the instant
-	// the ledger may have lost rows from (its retention sweep) and the ledger
-	// holds no row for it — rather than because an acknowledgement was lost.
+	// Unvouched says an `unknown` was answered because THIS NODE'S
+	// operation ledger cannot vouch for the operation — it was minted
+	// before the instant the ledger may have lost rows from (a retention
+	// sweep: this node's, or a donor's inherited with its ledger on an
+	// adoption) and the ledger holds no row for it — rather than because
+	// an acknowledgement was lost.
 	//
 	// # Why a caller has to be able to tell the two apart
 	//
@@ -169,8 +194,24 @@ func LessCertain(a, b Outcome) Outcome {
 // answer, because a caller barriers on it before its next read: the earlier
 // one is a floor BELOW a record the call made, and a read at it can come back
 // without that record.
+//
+// # Why it asks [Position.Before] rather than comparing packed values
+//
+// A packed value is a coordinate in ONE log's number space, and two logs'
+// spaces are unrelated: compared bare, a position on the knowledge base's log
+// would "follow" one on the tracker's for no reason but the sizes of two
+// counters, and the answer would name a log the caller never barriers on.
+// [Position.Before] is the one place that refuses the comparison, so a
+// position on ANOTHER stream never replaces the first — a caller barriers on
+// one log, and a second log's position is no floor on it.
 func Later(a, b Position) Position {
-	if b.Packed() > a.Packed() {
+	switch {
+	case a.IsZero():
+		return b
+	case b.IsZero():
+		return a
+	}
+	if before, err := a.Before(b); err == nil && before {
 		return b
 	}
 	return a
@@ -201,6 +242,19 @@ const (
 	// fences before it appended: it takes the write itself, under the same
 	// operation id once the window has passed, or under a fresh one sooner.
 	ReasonEvicted Reason = "evicted"
+
+	// ReasonEvictionUnknown — this node's own eviction state could not be
+	// read, which is the third value and it BLOCKS: publishing under it
+	// could produce durable records every node drops. It clears when the
+	// state is read again.
+	//
+	// ITS OWN REASON RATHER THAN [ReasonEvicted], because the two send a
+	// caller opposite ways: an eviction is permanent until an operator
+	// readmits the node, while a coordination blip is gone in seconds.
+	// Folded into one, every write on the node during a blip was a 503
+	// saying "waiting cannot clear this" — no Retry-After — which is the
+	// signal a client stops asking on.
+	ReasonEvictionUnknown Reason = "eviction_unknown"
 
 	// ReasonDeferred — this node holds a record it cannot decode whose
 	// scope covers this object, so its rows are stale and any decision
@@ -262,8 +316,32 @@ const (
 	// appends rather than dropping records. An operator raises the
 	// ceiling or unblocks the trim. On a log that keeps a gate reserve
 	// an ordinary write meets this at the ceiling less the reserve
-	// ([OrdinaryCeiling]), and a gate record only at the broker's own.
+	// ([Reservation.Ordinary]), and a gate record only at the broker's own.
 	ReasonLogFull Reason = "log_full"
+
+	// ReasonRecordTooLarge — the record is larger than the broker takes in
+	// one message, and nothing about the log's size is involved. No node
+	// can place it and no wait changes it. The detail names which limit
+	// refused it, because each has its own remedy: the server's
+	// max_payload (an operator raises it on every server of an external
+	// cluster — a node refuses at boot a connection held to less than the
+	// transport's contract, so this is a server that holds it to less
+	// since), the
+	// stream's own max_msg_size (somebody reconfigured the stream; it is
+	// restored), or the file store's per-record limit (nothing raises it)
+	// — and splitting the change answers all three.
+	//
+	// ITS OWN REASON RATHER THAN [ReasonLogFull], which it used to be:
+	// that one tells an operator to raise a ceiling or unblock the trim,
+	// and a record too large is refused by a log with room to spare.
+	ReasonRecordTooLarge Reason = "record_too_large"
+
+	// ReasonBrokerRefused — the broker refused to store the record, named
+	// a reason, and it is none this framework has a remedy for: a sealed
+	// stream, a JetStream store with no resources left, a limit nobody
+	// declared on a state log. The detail carries the broker's own code
+	// and words, which are the remedy. Nothing about waiting changes it.
+	ReasonBrokerRefused Reason = "broker_refused"
 
 	// ReasonSkew — the broker answered a last sequence BELOW an
 	// expectation this node formed, which cannot happen on a healthy
@@ -327,20 +405,49 @@ const (
 // is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
 //
 // A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
-// deleted, abandoned or overtaken — rather than under a generic word,
-// because the gate is what says why: which is why there is no `gated` here.
+// deleted, abandoned or overtaken — rather than under a generic word, because
+// the gate is what says why: which is why there is no `gated` here.
 func Reasons() []Reason {
 	return []Reason{
-		ReasonEvicted, ReasonDeferred, ReasonBehind, ReasonBelowFloor,
-		ReasonFloorUnknown, ReasonDeleted, ReasonAbandoned,
-		ReasonOvertaken, ReasonLogFull, ReasonSkew, ReasonOpReused,
-		ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
+		ReasonEvicted, ReasonEvictionUnknown, ReasonDeferred, ReasonBehind,
+		ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonAbandoned,
+		ReasonOvertaken, ReasonLogFull, ReasonRecordTooLarge, ReasonBrokerRefused,
+		ReasonSkew, ReasonOpReused, ReasonLogTruncated, ReasonWrongStream,
+		ReasonSuperseded,
 	}
 }
 
 // Valid reports whether r is a reason this build names — an unknown one off
 // the wire is a value to show rather than one to switch on.
 func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
+
+// Retryable reports whether this refusal clears on THIS node without anybody
+// doing anything — the write-side twin of [ReadRefusal.Retryable], and for its
+// reason: a node that is behind catches up, while an evicted node, a deleted
+// object or a full log refuses the same write however long the caller waits.
+//
+// FOUR CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
+// caller's previous write applies it, a node BELOW the trim floor catches up
+// or adopts a snapshot, and a floor or an eviction state that could not be
+// read is read again. [ReasonDeferred] is deliberately not one of them:
+// ANOTHER node can serve the write, and this one cannot until it is upgraded —
+// so "come back here" is the wrong instruction however soon it is given. Nor
+// is any refusal whose remedy is a NEW operation or an operator's gesture —
+// abandoned, overtaken, a reused operation id, a truncated or wrong log, a
+// superseded operation — because the same request refuses the same way
+// however long the caller waits.
+//
+// A REASON SPELLED LIKE A [ReadRefusal] IS ITS TWIN AND AGREES WITH IT, which
+// [TestAWriteRefusalAndItsReadTwinAgreeOnWaiting] holds: the two describe one
+// state of one node, so a surface telling a writer to come back and a reader
+// not to — or the reverse — is contradicting itself about that node.
+func (r Reason) Retryable() bool {
+	switch r {
+	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown, ReasonEvictionUnknown:
+		return true
+	}
+	return false
+}
 
 // BlamesWriter reports whether a gate answering r dropped a record for what its
 // WRITER was or did — evicted, or stamped with a generation a reanchor voided
@@ -374,6 +481,38 @@ func (r Reason) BlamesWriter() bool {
 	return false
 }
 
+// RetryAfter is how long a caller should wait before bringing the request err
+// refused back to THIS node: ZERO when waiting cannot change the answer, the
+// refusal's own derived hint where it has one, and otherwise when it is
+// retryable and derived nothing — or is not a refusal this package made at
+// all, which is the caller's to judge rather than this package's.
+//
+// ONE RULE FOR EVERY SURFACE that answers a refusal in a status code. Written
+// at each one, it drifted: a surface turned a refusal waiting cannot clear — a
+// node holding a record it cannot decode, an evicted one — into `Retry-After:
+// 2`, and the work surface did the same to every write refusal, so a client
+// polled every two seconds a node that would not answer until somebody
+// upgraded or readmitted it. And the zero is the only honest hint there is:
+// [Refused.RetryAfter] already says so for a read, and [Reason.Retryable]
+// says it for a write, which carries no hint of its own.
+func RetryAfter(err error, otherwise time.Duration) time.Duration {
+	var refused *Refused
+	if errors.As(err, &refused) {
+		switch {
+		case !refused.Code.Retryable():
+			return 0
+		case refused.RetryAfter > 0:
+			return refused.RetryAfter
+		}
+		return otherwise
+	}
+	var unavailable *Unavailable
+	if errors.As(err, &unavailable) && !unavailable.Reason.Retryable() {
+		return 0
+	}
+	return otherwise
+}
+
 // ErrUnavailable is what a refusal wraps, so a caller can tell a refusal from
 // a conflict with errors.Is before it looks at the reason.
 var ErrUnavailable = errors.New("statelog: unavailable")
@@ -396,6 +535,12 @@ var ErrConflict = errors.New("statelog: conflict")
 // A REASON AND A DETAIL rather than a message, because two different readers
 // need it: a surface switches on the reason to decide whether to retry
 // elsewhere, and a person reads the detail to find out what to change.
+//
+// THE DETAIL IS WRITTEN FOR THAT PERSON, and every surface sends it on — so it
+// is composed by this package, naming positions, versions, settings and the
+// words a broker chose for its refusal, and never an error's own text: a
+// store's error is a driver's message or a database path, and it goes to the
+// log. [Refused.Detail] is held to the same rule.
 type Unavailable struct {
 	Reason   Reason
 	Detail   string

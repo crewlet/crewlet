@@ -141,9 +141,10 @@ func (m *MCPServer) IsShared() bool { return m.Shared.Or(true) }
 //
 // A shared server serves every AGENT seat; a per-seat template serves only a
 // seat that declares credentials for it under mcp_env — its own or its unit's,
-// which is why this reads the seat AS THE ENGINE RUNS IT ([Company.SeatsAsRun])
-// rather than the authored role — because a template with nobody's identity
-// in it is a server nobody can act through. A human seat runs no tools at all.
+// which is why this takes the seat AS THE ENGINE RUNS IT ([org.Organization]
+// as the engine built it, where a unit's credentials are already layered under
+// its agent members), rather than the authored role — because a template with nobody's identity in it is a server
+// nobody can act through. A human seat runs no tools at all.
 //
 // THE ONE RULE, read by the engine when it starts a seat's children and by the
 // org projection when it tells a reader which servers a seat can reach, so the

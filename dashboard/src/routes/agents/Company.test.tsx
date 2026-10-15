@@ -15,7 +15,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { Teams, UnitBlock } from "./Company.tsx";
+import { Teams, UnitBlock, UnitPeek, UnitScreen } from "./Company.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -33,16 +33,28 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** Engineering holds one seat of its own and a team of two under it. */
+/** Engineering holds one seat of its own and a team of two under it — as the
+ *  engine sends it: every seat with its handle and every unit with its key. */
 const ORG: OrgProjection = {
   name: "Acme",
   roles: [],
   units: [
     {
+      id: "engineering",
       name: "Engineering",
       type: "department",
       roles: [{ name: "VP Engineering", handle: "vpe" }],
-      children: [{ name: "Backend", type: "team", roles: [{ name: "Dev A" }, { name: "Dev B" }] }],
+      children: [
+        {
+          id: "backend",
+          name: "Backend",
+          type: "team",
+          roles: [
+            { name: "Dev A", handle: "dev-a" },
+            { name: "Dev B", handle: "dev-b" },
+          ],
+        },
+      ],
     },
   ],
   derived: {
@@ -52,8 +64,8 @@ const ORG: OrgProjection = {
       { handle: "dev-b", name: "Dev B", kind: "agent" },
     ],
     units: [
-      { name: "Engineering", type: "department", seats: ["vpe"] },
-      { name: "Backend", type: "team", seats: ["dev-a", "dev-b"] },
+      { id: "engineering", name: "Engineering", type: "department", seats: ["vpe"] },
+      { id: "backend", name: "Backend", type: "team", seats: ["dev-a", "dev-b"] },
     ],
   },
 } as unknown as OrgProjection;
@@ -113,8 +125,13 @@ async function teams(org: OrgProjection) {
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(
       what === "work_projects"
-        ? { projects: [{ key: "BE", unit: { name: "Backend", resolved: true } }], total: 1 }
-        : { operator_id: "", acts: [] },
+        ? {
+            projects: [{ key: "BE", unit: { key: "backend", name: "Backend", resolved: true } }],
+            total: 1,
+          }
+        : what === "viewer"
+          ? { login: "jane", owner: "jane", grants: ["tracker"], acts: [] }
+          : {},
     );
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -138,8 +155,9 @@ test("a unit's lead is the engine's, and an inherited one is marked", async () =
     derived: {
       ...(ORG as unknown as { derived: object }).derived,
       units: [
-        { name: "Engineering", type: "department", seats: ["vpe"], lead: "vpe" },
+        { id: "engineering", name: "Engineering", type: "department", seats: ["vpe"], lead: "vpe" },
         {
+          id: "backend",
           name: "Backend",
           type: "team",
           seats: ["dev-a", "dev-b"],
@@ -162,4 +180,51 @@ test("a unit shows its project key and its goals", async () => {
   await teams(withGoals);
   expect(screen.getByRole("link", { name: "BE" }).getAttribute("href")).toBe("#/work/BE");
   expect(screen.getByText("Ship the scheduler")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// A unit's own page and peek
+// ---------------------------------------------------------------------------
+
+/** One unit's page or peek, addressed by `id`, over a connected socket. */
+async function unitAt(Unit: typeof UnitScreen | typeof UnitPeek, id: string) {
+  const store = new Store();
+  store.applyHealth(healthFrame());
+  store.setConnected(true);
+  store.applyOrg(ORG);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(
+      what === "work_projects" ? { projects: [], total: 0 } : { login: "", owner: "", acts: [] },
+    );
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <Unit id={id} />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+}
+
+// A UNIT IS FOUND BY ITS KEY, which is what every link to it writes
+// (`unitRoute`) — the page and the peek alike — and never by its name, which
+// two units may share. Found by name, every link Teams and the chart drew to a
+// unit whose key is not its name opened "no unit". Mutation: look the unit up
+// by name and both halves of each case go red.
+test("a unit's page and peek are found by its key, never by its name", async () => {
+  for (const Unit of [UnitScreen, UnitPeek]) {
+    await unitAt(Unit, "backend");
+    expect(screen.queryByText(/No unit has the key/)).toBeNull();
+    expect(screen.getAllByText("Backend").length).toBeGreaterThan(0);
+    cleanup();
+
+    await unitAt(Unit, "Backend");
+    expect(screen.getByText("No unit has the key “Backend”")).toBeTruthy();
+    cleanup();
+  }
 });

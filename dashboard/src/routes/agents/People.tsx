@@ -32,6 +32,9 @@ import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   activityOf,
@@ -68,7 +71,13 @@ type Grouping = (typeof GROUPINGS)[number];
  * absolute number that is "full".
  */
 function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
-  const answer = useQuery("work_workload", undefined, { pollMs: 60_000 });
+  // THE TRACKER'S QUESTION, asked only of a reader holding Tracker: who holds
+  // how much open work is the tracker's to say.
+  const viewer = useViewer();
+  const answer = useQuery("work_workload", undefined, {
+    pollMs: 60_000,
+    enabled: viewer.tracker,
+  });
   // THE BAR'S "FIND A SEAT" NARROWS THIS VIEW TOO, by the fields a load row
   // has: who it is and where they sit. The bar stays the same field whichever
   // view is open, so it has to mean something on both.
@@ -87,9 +96,15 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   // rather than per row, so every track on the table is drawn against the
   // same number.
   const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
+  if (!viewer.loading && !viewer.tracker) {
+    return (
+      <GrantRequired what="Workload" grants={[TRACKER]} reader={viewer.login} size="compact" />
+    );
+  }
   return (
     <QueryState
       error={answer.error}
+      refusal={answer.refusal}
       loading={answer.loading}
       empty={
         rows.length
@@ -261,15 +276,27 @@ export function People() {
   const rows = useMemo<Row[]>(() => {
     const matches = (...fields: (string | undefined)[]) =>
       !needle || fields.some((f) => f?.toLowerCase().includes(needle));
-    const inChart = new Set(index.seats.map((s) => s.name));
-    const byRole = new Map(agents.map((a) => [a.role, a]));
+    // EACH SEAT'S ROW BY ITS HANDLE — the roster row's `id` — never by its
+    // name, which two seats may share.
+    const inChart = new Set(index.seats.map((s) => s.handle).filter(Boolean));
+    const byHandle = new Map(agents.map((a) => [a.id, a]));
     const out: Row[] = [
       ...index.seats
         .filter((s) => matches(s.name, s.handle, s.goal, s.unit?.name))
-        .map((seat) => ({ key: seat.key, name: seat.name, seat, agent: byRole.get(seat.name) })),
+        .map((seat) => ({
+          key: seat.key,
+          name: seat.name,
+          seat,
+          agent: seat.handle ? byHandle.get(seat.handle) : undefined,
+        })),
       ...agents
-        .filter((a) => !inChart.has(a.role) && matches(a.role, a.handle))
-        .map((agent) => ({ key: `removed:${agent.role}`, name: agent.role, seat: null, agent })),
+        .filter((a) => !inChart.has(a.id) && matches(a.role, a.handle))
+        .map((agent) => ({
+          key: `removed:${agent.agent_id}`,
+          name: agent.role,
+          seat: null,
+          agent,
+        })),
     ];
     // By NAME. Never by a field that a live push moves.
     return out.sort((a, b) => a.name.localeCompare(b.name));

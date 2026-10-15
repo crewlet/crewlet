@@ -14,7 +14,7 @@
  *
  * Dropping a row somewhere else — or `Alt` with Up or Down on a focused row,
  * because a pointer-only reorder is a write a keyboard reader cannot make —
- * sends `set_priorities` as the person the token is bound to (ADR-0024). Three
+ * sends `set_priorities` as the person signed in (ADR-0024). Three
  * rules make it honest:
  *
  *  - THE WHOLE STORED LIST, NOT THE ROWS. The rows are the open entries and at

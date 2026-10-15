@@ -49,8 +49,7 @@ Usage:
                                    List revisions, newest first
   crewlet config diff ID [-against ID|active]
                                    Compare two revisions
-  crewlet config activate ID       Re-point the fleet at a revision
-  crewlet config seal              Encrypt a plaintext active revision under the keyring
+  crewlet config activate ID       Mark a revision active here; published at the next start
   crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
 
 Flags:
@@ -70,7 +69,7 @@ becomes unreadable.
 // directions, because the two lists are three screens apart and nothing else
 // connects them.
 var configSubcommands = []string{
-	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
+	"import", "show", "export", "revisions", "diff", "activate", "rekey",
 }
 
 // defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
@@ -82,7 +81,7 @@ var configSubcommands = []string{
 // window. An operator who wants the whole history says `-limit`.
 const defaultRevisionLimit = 20
 
-func runConfig(args []string, stdout, stderr io.Writer) error {
+func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, configUsage, defaultBootstrapPath)
@@ -172,10 +171,11 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 			path:          subject,
 			apiURL:        apiURL,
 			summary:       summary,
+			environ:       environ,
 		}, stdout)
 	}
 
-	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath)
+	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath, lockedStoreRemedy(sub))
 	if err != nil {
 		return err
 	}
@@ -192,10 +192,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		return diffRevisions(ctx, cs, subject, against, stdout)
 	case "activate":
 		return activateRevision(ctx, cs, subject, stdout)
-	case "seal":
-		return sealConfig(ctx, cs, *bootstrapPath, stdout)
 	case "rekey":
-		return rekeyConfig(ctx, cs, *bootstrapPath, dryRun, stdout)
+		return rekeyConfig(ctx, cs, dryRun, stdout)
 	default:
 		// Unreachable: the guard above admits only configSubcommands,
 		// `import` returned before the store was opened, and a test
@@ -226,7 +224,13 @@ type configStore struct {
 	boot *config.Bootstrap
 }
 
-func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, func(), error) {
+// openConfigStore opens this node's store under the keyring Tier A names.
+//
+// remedy is what the caller's operator should do when a running engine holds
+// the file ([engineHoldsTheStore]): every command has its own route around
+// the lock, and one sentence for all of them named a route most of them do not
+// have.
+func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*configStore, func(), error) {
 	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 	if err != nil {
 		return nil, nil, err
@@ -236,14 +240,13 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 			"and activates it on every node, this one included."); err != nil {
 		return nil, nil, err
 	}
-	// A NIL CIPHER IS VALID HERE, unlike for `secrets`: company_config is
-	// stored in the clear when Tier A configures no keyring, and
-	// secrets.Open passes an unsealed payload straight through.
-	var cipher secrets.Cipher
-	if len(boot.Secrets.Keys) > 0 {
-		if cipher, err = boot.Secrets.Cipher(); err != nil {
-			return nil, nil, fmt.Errorf("secrets keyring: %w", err)
-		}
+	// THE KEYRING IS NOT OPTIONAL HERE ANY MORE. It used to be — the
+	// store's revisions had a plaintext mode for a node with no keyring —
+	// and every node holds one now, so a revision this command writes is
+	// sealed and one it reads must be (see [secrets.Open]).
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		return nil, nil, fmt.Errorf("secrets keyring: %w", err)
 	}
 	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
 	// are the node's own, and this command reads nothing a state log
@@ -253,15 +256,11 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
 	if err != nil {
-		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the
-		// difference between "you are blocked" and "do this instead": the
-		// API writes the same revision and activates it on every node,
-		// which is what an operator wanted from `config import` anyway.
+		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it is the
+		// difference between "you are blocked" and "do this instead" — but
+		// the route is the caller's to name ([lockedStoreRemedy]).
 		return nil, nil, engineHoldsTheStore(fmt.Errorf("open store: %w", err),
-			bootstrapPath, "Use the API against the running node instead — "+
-				"PUT /config stores the revision AND activates it fleet-wide, "+
-				"which this offline path cannot do; or stop `crewlet run` on "+
-				"this node and re-run.")
+			bootstrapPath, remedy)
 	}
 	return &configStore{
 		configs: db.Configs(), cipher: cipher,
@@ -290,11 +289,17 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	parent := ""
 	if found {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		current, err := secrets.Open(cs.cipher, active.Payload)
-		if err != nil {
-			return fmt.Errorf("open the active revision: %w", err)
-		}
-		if bytes.Equal(current, document) {
+		current, err := openStored(cs.cipher, active)
+		switch {
+		case errors.Is(err, secrets.ErrUnsealedWithKey):
+			// AN UNSEALED ACTIVE REVISION IS REPLACED, NEVER COMPARED: this
+			// import is the remedy every reader's refusal of one names
+			// ([refuseUnsealed]), so refusing it here too left a store
+			// whose active revision is plaintext with no way out at all.
+			// Nothing is read from it — it is only the new one's parent.
+		case err != nil:
+			return err
+		case bytes.Equal(current, document):
 			fmt.Fprintf(stdout,
 				"%s already matches the active revision %s; nothing imported\n",
 				path, active.ID)
@@ -308,19 +313,23 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		return err
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
-		CreatedByKind: store.AuthorOperator, Summary: summary,
+		ParentID: parent, Source: "file", CreatedBy: hostActor().Name,
+		CreatedByKind: hostActor().Kind, Summary: summary,
 		Payload: payload,
 	})
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
 	}
-	fmt.Fprintf(stdout, "imported %s as revision %s (sealed=%t)\n", path, id, cs.cipher != nil)
-	fmt.Fprintln(stdout, publishNote)
+	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed=` flag
+	// printed `true` on every import, since nothing is stored unsealed.
+	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
+	fmt.Fprintf(stdout, "imported %s as revision %s (sealed under %s)\n", path, id, sealedUnder)
+	fmt.Fprintln(stdout, importPublishNote)
 	return nil
 }
 
-// publishNote is what an OFFLINE import or activation can and cannot do.
+// offlinePublish is what an OFFLINE write that marks a revision active can
+// and cannot do, and every such note opens with it.
 //
 // The fleet's activation pointer lives in the coordination store, and on the
 // default embedded topology that store is inside the engine's own process —
@@ -330,10 +339,71 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 //
 // Said out loud rather than left to be discovered: an operator who imported a
 // revision and saw nothing change would reasonably conclude the import
-// failed, and the fix — restart, or use the API — is not guessable.
-const publishNote = "This node will publish it to the fleet at its next start. " +
-	"To activate it on a RUNNING fleet without a restart, use the API: " +
-	"PUT /config to a node that is up."
+// failed, and the fix — restart, or reach a running node — is not guessable.
+//
+// WHAT REACHES A RUNNING FLEET IS EACH COMMAND'S OWN, which is why the notes
+// below are several rather than one: `PUT /config` stores and activates a
+// document, but it activates nothing that is already stored and re-seals
+// nothing.
+const offlinePublish = "This node will publish it to the fleet at its next start."
+
+// importPublishNote is an offline import's: the route to a running fleet is
+// `PUT /config` on a node that is up, which this same command takes while a
+// node holds the store.
+const importPublishNote = offlinePublish + " To make the file the running " +
+	"fleet's company without a restart, PUT /config to a node that is up, or " +
+	"run `crewlet config import` while a node is up: with the engine holding " +
+	"this store it goes through that node's API, and -api names any node."
+
+// activatePublishNote is an offline activation's: a running node activates a
+// stored revision by storing its document again as a new one, which is the
+// append-only history's way of moving the pointer back.
+func activatePublishNote(revisionID string) string {
+	return offlinePublish + " To activate it on a running fleet without a " +
+		"restart, POST /config/revisions/" + revisionID + "/revert to the node " +
+		"holding this store while it is up."
+}
+
+// rekeyPublishNote is an offline rekey's: a running node re-seals the active
+// document under its own active key whenever it stores it again, which is
+// what a reload does.
+const rekeyPublishNote = offlinePublish + " On a running fleet, POST " +
+	"/config/reload to a node that is up stores the active document again, " +
+	"sealed under that node's active key, and activates it."
+
+// lockedStoreRemedy is what a `crewlet config` subcommand tells an operator
+// whose engine holds the store: the route to the same answer through a
+// running node, where there is one.
+//
+// `import` is absent because it never asks: it goes through the node's API on
+// a locked store by itself ([importCompany]).
+func lockedStoreRemedy(sub string) string {
+	const stop = "stop `crewlet run` on this node and re-run."
+	switch sub {
+	case "show", "export":
+		return "Read it through the running node instead — GET /config " +
+			"serves the active revision with its credentials masked, and " +
+			"GET /config/revisions/<id> any other — or " + stop
+	case "revisions":
+		return "Read them through the running node instead — GET " +
+			"/config/revisions — or " + stop
+	case "diff":
+		return "Compare them through the running node instead — GET " +
+			"/config/revisions/<id>/diff?against=<id|active> — or " + stop
+	case "activate":
+		return "Activate it through the running node instead — POST " +
+			"/config/revisions/<id>/revert stores that revision's document " +
+			"again and activates it fleet-wide — or " + stop
+	case "rekey":
+		return "Re-seal through the running node instead — POST " +
+			"/config/reload stores the active document again under that " +
+			"node's active key — or " + stop
+	default:
+		// Every subcommand that opens the store is named above; a new one
+		// still gets the stop, which is always true.
+		return "S" + stop[1:]
+	}
+}
 
 // exportConfig prints one revision as YAML.
 func exportConfig(ctx context.Context, cs *configStore, revisionID string,
@@ -384,7 +454,8 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 			marker = "*"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", marker, r.ID,
-			r.CreatedAt.Format(time.RFC3339), r.CreatedBy, r.Source, r.Summary)
+			r.CreatedAt.Format(time.RFC3339),
+			describeAuthor(r.CreatedBy, r.OperatorID), r.Source, r.Summary)
 	}
 	return w.Flush()
 }
@@ -491,6 +562,36 @@ func renderValue(v any) string {
 	}
 }
 
+// openStored opens a revision this node's store holds, and a refusal says what
+// brings it back.
+//
+// An UNSEALED revision is refused: nothing vouches for who wrote it, and its
+// document comes back only by importing it again from the operator's own
+// copy. A revision sealed under a key the keyring does not hold needs that key
+// back.
+func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
+	document, err := secrets.Open(cipher, rev.Payload)
+	switch {
+	case err == nil:
+		return document, nil
+	case errors.Is(err, secrets.ErrUnsealedWithKey):
+		return nil, refuseUnsealed(rev.ID)
+	default:
+		return nil, fmt.Errorf("revision %s does not open under this node's "+
+			"keyring; restore the key it was sealed under to secrets.keys: %w",
+			rev.ID, err)
+	}
+}
+
+// refuseUnsealed is the refusal of a revision stored without a seal, whichever
+// command met it, and it names the one gesture that brings the document back.
+func refuseUnsealed(revisionID string) error {
+	return fmt.Errorf("revision %s is stored without a seal, so it is not "+
+		"opened; to have its document again, import it from your own copy with "+
+		"`crewlet config import`, which stores it sealed: %w",
+		revisionID, secrets.ErrUnsealedWithKey)
+}
+
 // storedCompany opens one revision, or the active one, as the stored form.
 //
 // THE STORED-FORM READER, never the authored one. A revision is JSON a build
@@ -505,9 +606,9 @@ func storedCompany(ctx context.Context, cs *configStore, revisionID string) (sto
 	if err != nil {
 		return store.Revision{}, nil, err
 	}
-	document, err := secrets.Open(cs.cipher, rev.Payload)
+	document, err := openStored(cs.cipher, rev)
 	if err != nil {
-		return store.Revision{}, nil, fmt.Errorf("open revision %s: %w", rev.ID, err)
+		return store.Revision{}, nil, err
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {
@@ -542,7 +643,7 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	// watching, which is how a rotated secret reaches a running fleet
 	// without a restart.
 	fmt.Fprintf(stdout, "marked %s active on this node\n", revisionID)
-	fmt.Fprintln(stdout, publishNote)
+	fmt.Fprintln(stdout, activatePublishNote(revisionID))
 	return nil
 }
 
@@ -585,6 +686,10 @@ type importTarget struct {
 	path          string
 	apiURL        string
 	summary       string
+
+	// env is the invocation's environment ([runIn]), which the API route
+	// reads its credential from.
+	environ config.Source
 }
 
 // importCompany writes a company document as a new active revision, through
@@ -639,7 +744,7 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		return importThroughNode(ctx, boot, t, summary, stdout)
 	}
 
-	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath)
+	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath, "")
 	if err != nil {
 		if !errors.Is(err, store.ErrLocked) {
 			return err
@@ -661,7 +766,7 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
 	summary string, stdout io.Writer,
 ) error {
-	client, err := newConfigClient(boot, t.apiURL)
+	client, err := newConfigClient(t.environ, boot, t.apiURL)
 	if err != nil {
 		return err
 	}

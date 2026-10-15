@@ -10,12 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE NODE GATE: eviction and readmission as ONE fleet gesture over every
@@ -107,7 +103,10 @@ const (
 	// GateLogBudget bounds the LOGS, from the first record to the last log's
 	// answer. They are written at once ([NodeGate.write]), so it waits as long
 	// as the SLOWEST log — written one after another, the bound would grow
-	// with the logs a gesture writes.
+	// with the logs a gesture writes, and it did: a literal minute sized when
+	// two logs claimed identity lost half its margin as the register grew,
+	// without anybody deciding it. Written at once, a log added to the
+	// register costs the gesture nothing.
 	//
 	// THIRTY SECONDS, from what one log waits on: an append through this
 	// node's own write authority, whose two waits are each bounded by
@@ -124,12 +123,31 @@ const (
 	GateBudget = GateLogBudget
 
 	// GateAnswerBudget is the longest a node takes to answer one gesture
-	// request: its judgement, then the gesture — fifty seconds.
-	// `crewlet retention evict` and the dashboard wait a little longer than
-	// this, so the node's own answer — every log's outcome and the
-	// operation id — reaches the operator before the client gives up.
+	// request: its judgement, then the gesture — fifty seconds. A client
+	// waits [GateClientWait], a little longer, so the node's own answer —
+	// every log's outcome and the operation id — reaches the operator
+	// before the client gives up.
 	GateAnswerBudget = GateJudgeBudget + GateBudget
+
+	// gateRoundTrip is what a client's wait adds to [GateAnswerBudget]: the
+	// request's round trip around the node's own answer — two of the
+	// five-second resolutions a gesture legitimately makes, back to back,
+	// which is the ten seconds every other verb a client sends waits.
+	gateRoundTrip = 2 * statelog.DefaultResolveBudget
 )
+
+// GateClientWait is how long a client waits for a gesture's answer — one
+// minute: the node's own bound on answering ([GateAnswerBudget]) and the
+// request's round trip around it.
+//
+// ONE STATED RELATION for every client, because each used to carry its own
+// number with a comment saying how it related to the node's: `crewlet
+// retention evict` and `readmit` read this, and the dashboard's
+// GATE_REQUEST_TIMEOUT_MS is held to it exactly by a gate in internal/api.
+// Waiting past the node's own bound is what makes its answer — every log's
+// outcome and what to do about the ones it could not finish — reach the
+// operator rather than a client timeout that knows none of it.
+func GateClientWait() time.Duration { return GateAnswerBudget + gateRoundTrip }
 
 // ErrInvalidGate is what a gate request that could not be carried out as given
 // wraps: no node, a node id no node could run under, no operation id, or no
@@ -145,9 +163,20 @@ type GateRequest struct {
 	// of a partial result is the same operation on every log.
 	OpID string
 
-	// By is the operator who ran it, recorded on every log's record — it is
-	// what `crewlet retention status` names beside an eviction.
-	By string
+	// By is the principal who ran it, recorded on every log's record as the
+	// author, the kind of party and the credential they acted through
+	// ([iam.ActorFor]) — what `crewlet retention status` names beside an
+	// eviction.
+	//
+	// THE PRINCIPAL AND NOT ITS NAME, for two reasons. The records carry
+	// the author's kind and the credential beside the name, and a bare
+	// name recorded every gesture as an operator acting through a
+	// credential named after themselves: a person bound to a seat, or a
+	// machine token acting as its owner, read as a Tier A token of that
+	// name. And the identity estate's writer judges admin on the party's
+	// OWN grants at the record ([registration.NewGate]), which a name
+	// cannot carry.
+	By iam.Principal
 
 	// Force evicts a node that still holds a live presence lease — see
 	// [statelog.PermitEviction] — and one whose lease could not be read at
@@ -160,7 +189,17 @@ type GateRequest struct {
 // THE NODE ID IS HELD TO THE RULE A NODE'S OWN ID IS, because it becomes a
 // subject token on every identity log: an id no node could run under is a
 // typo, and one carrying a wildcard is an append the broker refuses outright.
+//
+// AND THE OPERATION ID TO THE GRAMMAR A CALLER'S IS ([statelog.CheckCallerOpID]),
+// here and not only at the route: every log's operation is derived from it,
+// and the publisher reads the instant it was minted at to decide whether this
+// node's ledger can vouch for a retry. An id that carries none reads as
+// minted at the epoch, so once any ledger has been swept the gesture is
+// answered `unknown` on every log without being published — on the first
+// attempt as on every retry, a gesture that can never run and never says why.
+// The HTTP route held that and nothing else did.
 func (r GateRequest) valid() error {
+	opID := statelog.CheckCallerOpID(r.OpID)
 	switch {
 	case r.Node == "":
 		return fmt.Errorf("%w: a node gate names no node", ErrInvalidGate)
@@ -172,11 +211,20 @@ func (r GateRequest) valid() error {
 		return fmt.Errorf("%w: the gate on %s has no operation id — a retry "+
 			"under a fresh one would be a second gesture rather than the same "+
 			"one finished", ErrInvalidGate, r.Node)
-	case r.By == "":
+	case opID != nil:
+		return fmt.Errorf("%w: the gate on %s: %w", ErrInvalidGate, r.Node, opID)
+	case iam.RecordOwner(r.By) == "":
 		return fmt.Errorf("%w: the gate on %s names no operator, and every "+
 			"log's record carries who ran it", ErrInvalidGate, r.Node)
 	}
 	return nil
+}
+
+// operator is who ran the gesture as the log lines name them: the author and
+// the credential, the two columns an operator searches the trail by.
+func (r GateRequest) operator() (name, credential string) {
+	a := iam.ActorFor(r.By)
+	return a.Name, a.OperatorID
 }
 
 // GateUnjudged is an eviction nobody could judge: the presence leases it is
@@ -452,22 +500,43 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		case statelog.ReasonFloorUnknown:
 			return retry("the trim floor could not be read: the same gesture " +
 				"under the same operation id finishes it once coordination answers")
+		case statelog.ReasonEvictionUnknown:
+			return retry("this node could not read its own eviction state, which " +
+				"clears the moment it reads again: then the same gesture under the " +
+				"same operation id finishes it")
 		case statelog.ReasonBelowFloor:
 			return retry("this node is adopting a peer's snapshot: the same "+
 				"gesture under the same operation id finishes it once it has, here "+
 				"or through another node", statelog.GateOtherNode)
 		}
+		// EVERY OTHER REASON, in the framework's own two classes rather
+		// than one: a reason that clears on this node by itself
+		// ([statelog.Reason.Retryable]) is offered the retry — this arm
+		// told an operator no retry cleared `eviction_unknown`, which the
+		// next read of the state does — and every reason is advised in
+		// the REFUSAL'S OWN WORDS, because they are what say what clears
+		// it: the limit that refused a record too large and what moves
+		// it, the broker's words on a refusal it named. Reduced to the
+		// reason's name, both reached the operator as a word with no
+		// remedy, while the remedy written for one of them — "check the
+		// broker's max_payload", on a bare queue.ErrTooLarge — sat on a
+		// branch no refusal reached: every too-large answer the state log
+		// gives is this typed refusal.
+		own := ""
+		if refusal.Detail != "" {
+			own = " — " + refusal.Detail
+		}
+		if refusal.Reason.Retryable() {
+			return retry("this refusal clears on this node by itself: " +
+				string(refusal.Reason) + own)
+		}
 		return statelog.GateRemedy{
-			Detail: "no retry clears this refusal: " + string(refusal.Reason),
+			Detail: "no retry clears this refusal: " + string(refusal.Reason) + own,
 		}
 	}
 	if errors.Is(d.Err, statelog.ErrConflict) {
 		return retry("the node's gate subject kept changing under this write: the " +
 			"same gesture under the same operation id finishes it")
-	}
-	if errors.Is(d.Err, queue.ErrTooLarge) {
-		return statelog.GateRemedy{Detail: "the record is larger than the broker " +
-			"carries, which no retry changes: check the broker's max_payload"}
 	}
 	return retry("the write failed before it could answer: the same gesture under " +
 		"the same operation id finishes it")
@@ -605,7 +674,7 @@ type gateLog struct {
 	// operation whose record is already the gate in force, answers where it
 	// landed without publishing, which the log's own snapshot judges
 	// ([statelog.GateStanding]).
-	write func(ctx context.Context, by, opID, node string, readmit bool) (statelog.Result, error)
+	write gateWrite
 }
 
 // liveLeases is the slice of the coordination backend the gate and the trim
@@ -679,10 +748,11 @@ func domainOpID(gesture string, readmit bool, domain, node string) string {
 // newNodeGate builds the gesture over every identity-claiming log this node
 // runs, in the register's own order.
 //
-// A LOG THAT CLAIMS IDENTITY AND HAS NO WRITER HERE REFUSES THE BOOT. The trim
-// counts nodes on it, so an eviction that could not reach it would lift every
-// pin but that one — the defect this gate replaced, reintroduced by adding a
-// domain.
+// A LOG THAT CLAIMS IDENTITY AND HAS NO WRITER HERE REFUSES THE BOOT — and
+// before anything is provisioned, since [checkRegister] asks every such entry
+// for its [registration.NewGate]. The trim counts nodes on it, so an eviction
+// that could not reach it would lift every pin but that one — the defect this
+// gate replaced, reintroduced by adding a domain.
 //
 // Its OWN writers, rather than the surfaces' — the tracker's may not exist
 // (a company on an external tracker still runs every log in the register) and
@@ -692,10 +762,10 @@ func domainOpID(gesture string, readmit bool, domain, node string) string {
 // BUILT ONCE, over the logs the node started: a data node runs every log in
 // the register from boot and none starts or stops while it runs, so the logs a
 // gesture writes are the same for the life of the node, and every one is
-// written here, through this node's own write authority.
-func newNodeGate(s *stateLog, leases liveLeases, nodeID string,
-	rec *metrics.Recorder) (*NodeGate, error) {
-
+// written here, through this node's own write authority — each built by its
+// register entry with the node's own identity and recorder, which the state
+// log carries.
+func newNodeGate(s *stateLog, leases liveLeases) (*NodeGate, error) {
 	g := &NodeGate{
 		live: func(ctx context.Context) ([]statelog.Presence, error) {
 			return livePresences(ctx, leases)
@@ -707,8 +777,7 @@ func newNodeGate(s *stateLog, leases liveLeases, nodeID string,
 		if !running.domain.ClaimsIdentity() {
 			continue
 		}
-		gl, err := gateLogFor(running, running.publisher,
-			s.estate().Reader(), nodeID, rec)
+		gl, err := gateLogFor(s, running, running.publisher)
 		if err != nil {
 			return nil, err
 		}
@@ -722,60 +791,24 @@ func newNodeGate(s *stateLog, leases liveLeases, nodeID string,
 }
 
 // gateLogFor is one identity-claiming log's writer for the gate, publishing
-// through publisher — the domain's own write authority — and reading the rows
-// it decides from out of db.
-func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.ReplicatedReader,
-	nodeID string, rec *metrics.Recorder) (gateLog, error) {
+// through publisher — the domain's own write authority — and built by the
+// domain's register entry, the one place every domain is declared.
+func gateLogFor(s *stateLog, running *runningLog,
+	publisher *statelog.Publisher) (gateLog, error) {
 
 	name := running.domain.Name()
-	gl := gateLog{domain: running.domain.Name(), stream: running.spec.Name,
-		duplicates: running.spec.Duplicates}
-	switch name {
-	case tracker.Domain{}.Name():
-		w, err := tracker.NewWriter(tracker.WriterDeps{
-			Publisher: publisher, DB: db, NodeID: nodeID,
-			Drain: running.runner.Drain, Metrics: rec,
-			// THE NODE'S OWN IDENTITY, overridden per gesture with the
-			// operator who ran it — see [tracker.Writer.As].
-			Actor: nodeID, ActorKind: tracker.AuthorSystem,
-		})
-		if err != nil {
-			return gateLog{}, fmt.Errorf("engine: the node gate's writer for %s: %w", name, err)
-		}
-		gl.write = func(ctx context.Context, by, opID, node string,
-			readmit bool) (statelog.Result, error) {
-
-			as := w.As(by, tracker.AuthorOperator, tracker.Provenance{OperatorID: by})
-			gate := as.EvictNode
-			if readmit {
-				gate = as.ReadmitNode
-			}
-			res, err := gate(ctx, opID, node)
-			return res.Result, err
-		}
-	case pages.Domain{}.Name():
-		kb, err := pages.NewStore(pages.Options{Publisher: publisher, DB: db})
-		if err != nil {
-			return gateLog{}, fmt.Errorf("engine: the node gate's writer for %s: %w", name, err)
-		}
-		gl.write = func(ctx context.Context, by, opID, node string,
-			readmit bool) (statelog.Result, error) {
-
-			// THE OPERATOR AS THE PAGE STORE NAMES ONE, which is the
-			// credential's own id — the same spelling the tracker's
-			// record carries, so both logs name the same person.
-			actor := pages.Actor{Handle: by, Kind: pages.AuthorOperator, OperatorID: by}
-			if readmit {
-				return kb.ReadmitNode(ctx, actor, opID, node)
-			}
-			return kb.EvictNode(ctx, actor, opID, node)
-		}
-	default:
+	entry, found := registrationFor(name)
+	if !found || entry.NewGate == nil {
 		return gateLog{}, fmt.Errorf("engine: domain %q claims identity and the node "+
 			"gate has no writer for its log — an eviction would lift every "+
 			"other log's pin and leave the node counted on this one", name)
 	}
-	return gl, nil
+	write, err := entry.NewGate(s, running, publisher)
+	if err != nil {
+		return gateLog{}, fmt.Errorf("engine: the node gate's writer for %s: %w", name, err)
+	}
+	return gateLog{domain: name, stream: running.spec.Name,
+		duplicates: running.spec.Duplicates, write: write}, nil
 }
 
 // Evict removes a node from every identity-claiming log's counted set.
@@ -810,8 +843,9 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 	case err != nil && !req.Force:
 		return GateResult{}, &GateUnjudged{Node: req.Node, Err: err}
 	case err != nil:
+		by, credential := req.operator()
 		log.WarnContext(ctx, "retention_eviction_forced_unjudged",
-			"node", req.Node, "operator", req.By, "op_id", req.OpID,
+			"node", req.Node, "by", by, "operator", credential, "op_id", req.OpID,
 			"error", err.Error(),
 			"detail", "the presence leases could not be read, so nothing "+
 				"established that the node is gone; the operator forced it")
@@ -822,8 +856,9 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 		if req.Force && slices.ContainsFunc(live, func(p statelog.Presence) bool {
 			return p.NodeID == req.Node
 		}) {
+			by, credential := req.operator()
 			log.WarnContext(ctx, "retention_eviction_forced_live",
-				"node", req.Node, "operator", req.By, "op_id", req.OpID,
+				"node", req.Node, "by", by, "operator", credential, "op_id", req.OpID,
 				"detail", "the node holds a live presence lease and the "+
 					"operator forced its eviction past it")
 		}

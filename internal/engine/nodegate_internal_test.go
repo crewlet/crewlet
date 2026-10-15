@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -28,7 +29,7 @@ import (
 func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	self := s.nodeID
 	const away = "node-away"
 	r := &retention{fleet: back.Fleet, state: s, db: back.Store, nodeID: self,
@@ -57,8 +58,8 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		return rows
 	}
 
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict", By: "operator"})
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator})
 	if err != nil || !res.Complete() {
 		t.Fatalf("evict %s: %v (%+v)", away, err, res)
 	}
@@ -195,13 +196,13 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
-	gate := e.native.Load().gate
+	s := e.core.Load().log
+	gate := e.core.Load().gate
 	const away = "node-away"
 	identity := identityLogs(t, s)
 
 	if res, err := gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict", By: "operator"}); err != nil || !res.Complete() {
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator}); err != nil || !res.Complete() {
 		t.Fatalf("evict: %v (%+v)", err, res)
 	}
 	// CAUGHT UP ON EVERY LOG, which is what a readmission is judged on.
@@ -217,7 +218,7 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	}
 
 	res, err := gate.Readmit(t.Context(), GateRequest{
-		Node: away, OpID: "op-readmit", By: "operator"})
+		Node: away, OpID: statelog.NewOpID(time.Now(), "readmit"), By: gateOperator})
 	if err != nil || !res.Complete() {
 		t.Fatalf("readmit: %v (%+v)", err, res)
 	}
@@ -248,8 +249,8 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
-	gate := e.native.Load().gate
+	s := e.core.Load().log
+	gate := e.core.Load().gate
 	identity := identityLogs(t, s)
 	const live = "node-live"
 	if _, _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
@@ -269,7 +270,8 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 		return out
 	}
 	before := ends()
-	_, err := gate.Evict(t.Context(), GateRequest{Node: live, OpID: "op-live", By: "operator"})
+	opID := statelog.NewOpID(time.Now(), "evict")
+	_, err := gate.Evict(t.Context(), GateRequest{Node: live, OpID: opID, By: gateOperator})
 	var refusal *statelog.EvictionRefusal
 	if !errors.As(err, &refusal) || refusal.NodeID != live {
 		t.Fatalf("evicting a node holding a live lease answered %v, want its refusal", err)
@@ -279,10 +281,18 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	}
 
 	res, err := gate.Evict(t.Context(), GateRequest{
-		Node: live, OpID: "op-live", By: "operator", Force: true})
+		Node: live, OpID: opID, By: gateOperator, Force: true})
 	if err != nil || !res.Complete() {
 		t.Fatalf("a forced eviction: %v (%+v)", err, res)
 	}
+}
+
+// gateOperator is who runs the gesture in these cases: a machine credential
+// holding admin, the permission the route asks and the identity estate's
+// writer asks again at the record.
+var gateOperator = iam.Principal{
+	Login: "ops:cli", Kind: iam.KindMachine,
+	Grants: []iam.Grant{iam.GrantAdmin},
 }
 
 // identityLogs is every identity-claiming domain this node runs, in the
@@ -313,7 +323,7 @@ func containerRecord(t *testing.T, key, writer string) []byte {
 	}
 	payload, err := pages.Encode(pages.MutationRecord{
 		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.RecordVersion, OpID: "op-container-" + key,
+			V: pages.RecordVersion, OpID: statelog.NewOpID(time.Now(), "container-"+key),
 			Subject: pages.ContainerSubject(key), Op: pages.OpPatch,
 			Writer: writer, Scope: pages.ScopeSet{Subject: true},
 		},

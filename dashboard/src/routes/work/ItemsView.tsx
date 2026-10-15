@@ -45,8 +45,8 @@
  * # It writes, as the reader
  *
  * A board card can be dragged, and a writer changes a row's status, priority
- * or holder in place — each through `useAct`, as the person the token is bound
- * to (ADR-0024), conditional on the version the row was drawn at. Nothing moves
+ * or holder in place — each through `useAct`, as the person signed in
+ * (ADR-0024), conditional on the version the row was drawn at. Nothing moves
  * until the engine answers; see `shapes/Board.tsx` and `shapes/cells.tsx`.
  *
  * # Every row is reachable
@@ -136,6 +136,8 @@ import {
   type Scope,
   type Shape,
   type TrackerFilters,
+  itemAddress,
+  itemPath,
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
@@ -285,16 +287,16 @@ export function ItemsView({
   // here on: it narrows the query, it carries a chip, and the chip takes it
   // off.
   const [unit] = useParam("unit", "");
-  const [groupBy, setGroupBy] = useParam("group_by", "");
+  const [groupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
   // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
   // value is "the key, or the fallback", which reads an ABSENT key and a
   // PRESENT EMPTY one as the same string — and the empty one is a real column,
   // the one holding the rows with no value on this axis. So the value is read
-  // off the whole query, the way [useFieldFilters] reads the custom fields, and
-  // the setter is kept for the one gesture that CLEARS it. See
-  // [TrackerFilters.group].
-  const [, setGroup] = useParam("group", "");
+  // off the whole query, the way [useFieldFilters] reads the custom fields,
+  // and the one gesture that CLEARS it is the group-by's own patch
+  // ([onGroupBy]), which takes the narrowing off with the axis it belongs to.
+  // See [TrackerFilters.group].
   const [sort, setSort] = useParam("sort", "");
   const [blocked] = useParam("blocked", "");
   const [due] = useParam("due", "");
@@ -346,14 +348,12 @@ export function ItemsView({
   // nothing reads it, rather than a key that steers a screen with no tab
   // showing which way.
   //
-  // AND IT NAMES THE READER, because a pin is a person's: without `viewer` the
-  // engine answers every view unpinned, and the strip could never draw the
-  // views this reader pinned.
-  const strip = useQuery(
-    "work_views",
-    viewer.handle ? { container, viewer: viewer.handle } : { container },
-    { pollMs: 120_000, enabled: !host },
-  );
+  // AND IT NAMES NOBODY. A pin is a person's, and the engine answers this
+  // reader's pins from their credential — the record kept under their own
+  // name, a seat or a login — so there is no `viewer=` to send: the engine
+  // refuses the key on every question, because whose record a read is about is
+  // never a typed name.
+  const strip = useQuery("work_views", { container }, { pollMs: 120_000, enabled: !host });
   // THE TYPES AND THE COMPANY'S OWN FIELDS COME FROM THE CATALOGUE, never from
   // the rows: a filter built from the page can only offer what happens to be
   // on it, so a board showing no bugs would offer no way to ask for one.
@@ -484,7 +484,7 @@ export function ItemsView({
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
   const paged = usePagedItems(params, { pollMs: ITEMS_POLL_MS });
-  const { data, loading, error } = paged;
+  const { data, loading, error, refusal } = paged;
 
   // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
   // The row says a task is removed; WHO removed it, WHEN, and whether the
@@ -522,7 +522,7 @@ export function ItemsView({
     [rows, groups, shape, hidden],
   );
   const neighbours = useMemo(
-    () => drawn.map((r) => ({ kind: "item" as const, id: r.key })),
+    () => drawn.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
     [drawn],
   );
   // AND THE QUESTION, so a task opened through the peek's Open carries it like
@@ -548,14 +548,16 @@ export function ItemsView({
     return out;
   }, [agents]);
   const decisions = useQuery("decisions", undefined, {
-    enabled: shape === "board" && viewer.handle !== "",
+    enabled: shape === "board" && viewer.owner !== "",
     pollMs: ITEMS_POLL_MS,
   });
   const waiting = useMemo(() => {
     const out = new Map<string, CardWaiting>();
+    // BY THE TASK'S ID, as `liveOnItems` is: a key two tasks hold would put
+    // one run's wait on both cards.
     for (const item of decisions.data?.items ?? []) {
-      const key = item.run?.work_item?.key;
-      if (item.kind === "run" && key && !out.has(key)) out.set(key, { since: item.run?.paused_at });
+      const id = item.run?.work_item?.id;
+      if (item.kind === "run" && id && !out.has(id)) out.set(id, { since: item.run?.paused_at });
     }
     return out;
   }, [decisions.data]);
@@ -569,8 +571,8 @@ export function ItemsView({
   // when a task on screen loses its running turn, the list asks again then,
   // rather than drawing the task as it was for up to a poll's length.
   const runningHere = drawn
-    .filter((r) => live.has(r.key))
-    .map((r) => r.key)
+    .filter((r) => live.has(r.id))
+    .map((r) => r.id)
     .join(",");
   const wasRunning = useRef("");
   // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
@@ -667,7 +669,7 @@ export function ItemsView({
   // A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page can
   // ask where it sits in it (`around=`) and step to the next one.
   const list = useMemo(() => listParam(params), [params]);
-  const itemHref = (row: WorkSummary) => href(["work", row.key], list ? { list } : undefined);
+  const itemHref = (row: WorkSummary) => href(itemPath(row), list ? { list } : undefined);
 
   // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
   // click and shows in the status bar. Built here because this is the only
@@ -944,7 +946,7 @@ export function ItemsView({
               used to describe one — and that prop takes a title and a hint. A
               refusal and a pending read still come first: they are the two
               states an empty list must never be confused with. */}
-          <QueryState error={error} loading={loading}>
+          <QueryState error={error} refusal={refusal} loading={loading}>
             {nothingShown ? (
               <EmptyList
                 narrowed={filtered}
@@ -970,7 +972,7 @@ export function ItemsView({
                 detail={detail}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
                 facts={facts}
@@ -1015,7 +1017,7 @@ export function ItemsView({
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
                 removals={inTrash ? removals : undefined}
@@ -1037,7 +1039,7 @@ export function ItemsView({
                 selected={peek?.kind === "item" ? peek.id : ""}
                 now={now}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 more={pageMore}
               />
             )}
@@ -1048,7 +1050,7 @@ export function ItemsView({
                 month={thisMonth}
                 chrome={chrome}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onMonth={setMonth}
                 onToday={() => setMonth("")}
                 dayHref={dayListHref}

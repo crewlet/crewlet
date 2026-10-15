@@ -32,7 +32,7 @@ import (
 // below rather than as a decision.
 func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -50,7 +50,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.Load().log
+	s := e.core.Load().log
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
 	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the

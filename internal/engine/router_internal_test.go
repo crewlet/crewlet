@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,13 +12,36 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
+// routerEnvelopes are a test fleet member's estate envelopes: every node of the
+// fleet a case stands up holds the one keyring, so each verifies what the other
+// signed.
+func routerEnvelopes(t *testing.T) *estate.Envelopes {
+	t.Helper()
+	envelopes, err := estate.NewEnvelopes(statelog.OneKey("k1", "the router cases' fleet key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelopes
+}
+
+// withCore publishes a core runtime on e whose copy the local estate judges —
+// a stand-in log, since every verdict here is the case's own read.
+func withCore(e *Engine) *core {
+	c := &core{log: &stateLog{}}
+	e.core.Store(c)
+	return c
+}
+
 // localWith is a local estate judging its copy by read.
 func localWith(e *Engine, now func() time.Time,
-	read func(context.Context, *native) copyVerdict) *localEstate {
+	read func(context.Context, *core) copyVerdict) *localEstate {
 	return &localEstate{e: e, now: now, read: read}
 }
 
@@ -43,27 +65,40 @@ func judged(ctx context.Context, l *localEstate) (estate.Backend, bool) {
 }
 
 // sound is a copy that is not wrong and answers requests.
-func sound(context.Context, *native) copyVerdict {
+func sound(context.Context, *core) copyVerdict {
 	return copyVerdict{answers: true}
 }
 
-// A DATA NODE'S COPY IS SERVED BEFORE ITS RUNTIME IS UP, with no halves, so
-// every operation on it is answered "not here" and moves on rather than being
-// refused as an estate nobody serves — and with its halves, answering, once
-// the runtime is.
+// A DATA NODE'S COPY IS SERVED WITH WHAT IT RUNS: nothing at all before its
+// core is up, so every operation on it is answered "not here" and moves on
+// rather than being refused as an estate nobody serves; the identity directory
+// and no halves once its core runs — every data node runs one from boot, a
+// company or none — so a node without `data` can ask who holds each seat
+// before this one has met a company; and its halves, answering, once a company
+// brings them up.
+//
+// Mutation: hand the directory over only with the native halves and the
+// second step serves a data node with no company as one with no directory.
 func TestTheLocalEstateServesItsCopyWithWhatItRuns(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{}}
 	l := localWith(e, time.Now, sound)
 
 	b, ok := l.For(t.Context())
-	if !ok || b.Tracker != nil {
-		t.Fatalf("a copy with no runtime = (%+v, %v), want served with no halves", b, ok)
+	if !ok || b.Tracker != nil || b.Identity != nil {
+		t.Fatalf("a copy with no core = (%+v, %v), want served with nothing", b, ok)
+	}
+	c := withCore(e)
+	c.iamReader = &iamdomain.Reader{}
+	if b, ok = judged(t.Context(), l); !ok || b.Tracker != nil || b.Identity == nil {
+		t.Fatalf("a copy with a core and no company = (%+v, %v), want its directory "+
+			"and no halves", b, ok)
 	}
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
-	if b, ok = judged(t.Context(), l); !ok || b.Tracker == nil || b.Answers == nil ||
-		!b.Answers(t.Context()) {
-		t.Fatalf("a copy with a runtime = (%+v, %v), want its halves, answering", b, ok)
+	if b, ok = judged(t.Context(), l); !ok || b.Tracker == nil || b.Identity == nil ||
+		b.Answers == nil || !b.Answers(t.Context()) {
+		t.Fatalf("a copy with its halves = (%+v, %v), want its directory and its "+
+			"halves, answering", b, ok)
 	}
 }
 
@@ -80,9 +115,10 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	verdict := copyVerdict{answers: true}
 	e := &Engine{backends: &Backends{}}
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
 	l := localWith(e, func() time.Time { return now },
-		func(context.Context, *native) copyVerdict { return verdict })
+		func(context.Context, *core) copyVerdict { return verdict })
 
 	if _, ok := judged(t.Context(), l); !ok {
 		t.Fatal("a sound copy is not served")
@@ -92,7 +128,7 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	if _, ok := judged(t.Context(), l); ok {
 		t.Fatal("a copy that is wrong is still served")
 	}
-	if ok, reason := e.SeatsServiceable(); !ok {
+	if ok, reason := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("a wrong copy shed the node's seats (%s) — it goes out of "+
 			"service, and the seats read the estate from another data node", reason)
 	}
@@ -139,21 +175,21 @@ func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 	var reads atomic.Int32
 	verdict := copyVerdict{answers: true}
 	l := localWith(&Engine{}, func() time.Time { return now },
-		func(context.Context, *native) copyVerdict {
+		func(context.Context, *core) copyVerdict {
 			reads.Add(1)
 			return verdict
 		})
-	n := &native{}
+	c := &core{log: &stateLog{}}
 	fresh := func() copyVerdict {
-		l.verdict(t.Context(), n)
+		l.verdict(t.Context(), c)
 		landed(l)
-		return l.verdict(t.Context(), n)
+		return l.verdict(t.Context(), c)
 	}
 
 	// A COPY NEVER JUDGED, whose first read found no broker, answers
 	// nothing.
 	verdict = copyVerdict{refusal: statelog.RefuseBrokerUnreachable}
-	if l.verdict(t.Context(), n).answers {
+	if l.verdict(t.Context(), c).answers {
 		t.Fatal("a copy nobody could measure answered")
 	}
 	now = now.Add(servingRecheck)
@@ -162,7 +198,7 @@ func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 		t.Fatal("a copy measured as answering did not")
 	}
 	for range 10 {
-		l.verdict(t.Context(), n)
+		l.verdict(t.Context(), c)
 	}
 	if got := reads.Load(); got != 2 {
 		t.Fatalf("the verdict was read %d times, want 2 — once per recheck", got)
@@ -198,7 +234,7 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 16)
 	l := localWith(&Engine{}, now,
-		func(context.Context, *native) copyVerdict {
+		func(context.Context, *core) copyVerdict {
 			reads.Add(1)
 			started <- struct{}{}
 			<-release
@@ -206,7 +242,7 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 			clock.Add(int64(3 * servingRecheck))
 			return copyVerdict{answers: true}
 		})
-	n := &native{}
+	c := &core{log: &stateLog{}}
 
 	// NEVER JUDGED: every request waits on the ONE read, and a request
 	// whose caller gives up leaves without it.
@@ -217,13 +253,13 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			answered <- l.verdict(t.Context(), n).answers
+			answered <- l.verdict(t.Context(), c).answers
 		}()
 	}
 	<-started
 	impatient, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	v, returned := within(time.Second, func() copyVerdict { return l.verdict(impatient, n) })
+	v, returned := within(time.Second, func() copyVerdict { return l.verdict(impatient, c) })
 	close(release)
 	switch {
 	case !returned:
@@ -243,7 +279,7 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	}
 	// STAMPED WHEN IT LANDED: three rechecks passed during the read, and
 	// the verdict it stored is still fresh.
-	l.verdict(t.Context(), n)
+	l.verdict(t.Context(), c)
 	landed(l)
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("a verdict read slower than the recheck was stale when stored: %d reads", got)
@@ -253,14 +289,14 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	// before it while the read that replaces it is in flight.
 	clock.Add(int64(servingRecheck))
 	stuck := make(chan struct{})
-	l.read = func(context.Context, *native) copyVerdict {
+	l.read = func(context.Context, *core) copyVerdict {
 		reads.Add(1)
 		<-stuck
 		return copyVerdict{answers: true}
 	}
 	answered2, returned := within(time.Second, func() bool {
 		for range requests {
-			if !l.verdict(t.Context(), n).answers {
+			if !l.verdict(t.Context(), c).answers {
 				return false
 			}
 		}
@@ -408,15 +444,16 @@ func staleView(t *testing.T) (*coord.LeaseView, func() time.Time) {
 // dataNodeOver is a data node serving the estate from a copy judged by read,
 // whose router routes by view.
 func dataNodeOver(t *testing.T, view *coord.LeaseView, now func() time.Time,
-	read func(context.Context, *native) copyVerdict) *Engine {
+	read func(context.Context, *core) copyVerdict) *Engine {
 
 	t.Helper()
 	e := &Engine{backends: &Backends{}, dataView: view}
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
 	e.local = localWith(e, now, read)
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: silentAsker{}, Placement: e.estatePlacement(),
-		Local: e.local, Session: estate.NewSession(),
+		Local: e.local, Session: estate.NewSession(), Envelopes: routerEnvelopes(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -443,7 +480,7 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	t.Parallel()
 	view, now := staleView(t)
 	var faulted atomic.Bool
-	e := dataNodeOver(t, view, now, func(context.Context, *native) copyVerdict {
+	e := dataNodeOver(t, view, now, func(context.Context, *core) copyVerdict {
 		if faulted.Load() {
 			return copyVerdict{fault: "tracker", answers: true}
 		}
@@ -451,11 +488,11 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	})
 	judged(t.Context(), e.local)
 
-	if ok, reason := e.serviceable(now()); !ok {
+	if ok, reason := e.serviceable(t.Context(), now()); !ok {
 		t.Fatalf("a data node serving its seats from its own copy shed them over a stale "+
 			"view: %s", reason)
 	}
-	if !e.NativeHydrated(t.Context()) {
+	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("a data node whose own copy admits a seat withheld its claims over a stale view")
 	}
 
@@ -466,17 +503,17 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	e.local.slot = verdictSlot{}
 	e.local.mu.Unlock()
 	judged(t.Context(), e.local)
-	if ok, _ := e.serviceable(now()); ok {
+	if ok, _ := e.serviceable(t.Context(), now()); ok {
 		t.Fatal("a node whose copy is wrong and whose view cannot name a data node kept its seats")
 	}
-	if e.NativeHydrated(t.Context()) {
+	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("a node whose copy is wrong and whose view cannot name a data node claimed a seat")
 	}
 
 	// A NODE HOLDING NO DATA, on the same view, sheds.
 	stateless := &Engine{dataView: view}
 	stateless.remote.Store(&remoteNative{tracker: true})
-	if ok, reason := stateless.serviceable(now()); ok ||
+	if ok, reason := stateless.serviceable(t.Context(), now()); ok ||
 		!strings.Contains(reason, "cannot say who serves the estate") {
 		t.Fatalf("a node holding no data kept its seats over a view that cannot route (%v, %q)",
 			ok, reason)
@@ -484,7 +521,7 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	// AND A COMPANY ENTIRELY ON VENDORS routes nothing, so nothing sheds.
 	vendors := &Engine{dataView: view}
 	vendors.remote.Store(&remoteNative{})
-	if ok, reason := vendors.serviceable(now()); !ok {
+	if ok, reason := vendors.serviceable(t.Context(), now()); !ok {
 		t.Fatalf("a company routing nothing shed its seats: %s", reason)
 	}
 }
@@ -523,7 +560,7 @@ func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
 			e, answer := statelessOver(t)
 			e.remote.Store(&step.runs)
 			answer(step.tracker, step.pages)
-			if got := e.NativeHydrated(t.Context()); got != step.want {
+			if got := e.StateLogHydrated(t.Context()); got != step.want {
 				t.Fatalf("a node running tracker=%v wiki=%v, asking a data node serving "+
 					"tracker=%v pages=%v, admitted a seat: %v, want %v",
 					step.runs.tracker, step.runs.wiki, step.tracker, step.pages, got, step.want)
@@ -536,33 +573,54 @@ func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
 	e, answer := statelessOver(t)
 	e.remote.Store(&remoteNative{tracker: true, wiki: true})
 	answer(true, false)
-	if e.NativeHydrated(t.Context()) {
+	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("a seat was admitted on a data node that does not run the wiki the company runs")
 	}
 	answer(true, true)
-	if !e.NativeHydrated(t.Context()) {
+	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("a seat was withheld after the data node came to serve both halves")
 	}
 }
 
 // statelessOver is a node holding no data whose router asks one data node,
-// and a function that sets what that data node answers admission's ping with
-// and moves the router's clock past the trust it holds an answer for.
+// and a function that sets which halves that data node serves — answering
+// admission's ping through the estate's own server, over a broker both share,
+// under one keyring — and moves the router's clock past the trust it holds an
+// answer for.
 func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
 	t.Helper()
 	var clock atomic.Int64
 	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
-	asker := &pingAnswerer{}
+	broker := memory.NewBroker()
+	// STARTED, as each node's connection is before anything serves or asks
+	// over it: a client is minted stopped, and a stopped one refuses both.
+	started := func() *memory.Queue {
+		q := broker.Client()
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+		return q
+	}
+	envelopes := routerEnvelopes(t)
+	data := &servedHalves{}
+	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{
+		Self: "data-1", Local: data, Envelopes: envelopes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "agent-1", Queue: asker, Placement: oneDataNode{},
-		Session: estate.NewSession(),
-		Now:     func() time.Time { return time.Unix(0, clock.Load()) },
+		Self: "agent-1", Queue: started(), Placement: oneDataNode{},
+		Session: estate.NewSession(), Envelopes: envelopes,
+		Now: func() time.Time { return time.Unix(0, clock.Load()) },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &Engine{router: router}, func(tracker, pages bool) {
-		asker.set(tracker, pages)
+		data.set(tracker, pages)
 		clock.Add(int64(time.Minute))
 	}
 }
@@ -573,22 +631,28 @@ type oneDataNode struct{}
 func (oneDataNode) Holders() ([]string, error) { return []string{"data-1"}, nil }
 func (oneDataNode) Unanswered(string)          {}
 
-// pingAnswerer is a data node answering admission's ping with the halves it is
-// told it runs.
-type pingAnswerer struct {
-	mu     sync.Mutex
-	answer []byte
+// servedHalves is a data node's copy serving the halves it is told it runs,
+// admitting a seat — what admission's ping reads of it.
+type servedHalves struct {
+	mu            sync.Mutex
+	tracker, wiki bool
 }
 
-func (p *pingAnswerer) set(tracker, pages bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.answer = fmt.Appendf(nil, `{"node":"data-1","result":{"Tracker":%t,"Pages":%t}}`,
-		tracker, pages)
+func (h *servedHalves) set(tracker, wiki bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tracker, h.wiki = tracker, wiki
 }
 
-func (p *pingAnswerer) Ask(context.Context, string, []byte, int) ([][]byte, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return [][]byte{p.answer}, nil
+func (h *servedHalves) For(context.Context) (estate.Backend, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var b estate.Backend
+	if h.tracker {
+		b.Tracker = &tracker.Reader{}
+	}
+	if h.wiki {
+		b.Pages = &pages.Reader{}
+	}
+	return b, true
 }

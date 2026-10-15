@@ -287,7 +287,7 @@ export function RecentPhases({
       {first.loading && !first.data ? (
         <Skeleton variant="text" rows={5} rowHeight={44} label="Loading recent phases" />
       ) : first.error ? (
-        <QueryState error={first.error} loading={false} />
+        <QueryState error={first.error} refusal={first.refusal} loading={false} />
       ) : settled.items.length === 0 ? (
         <EmptyState
           size="compact"
@@ -314,7 +314,7 @@ export function RecentPhases({
       )}
       <div className="live-card-foot">
         {pageError ? (
-          <QueryState error={pageError} loading={false} />
+          <QueryState error={pageError} refusal={null} loading={false} />
         ) : exhausted ? (
           <span className="t-caption">Start of the record.</span>
         ) : (

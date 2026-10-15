@@ -73,7 +73,9 @@ const (
 	hashedJS   = "/static/dashboard/assets/index-Cndv8LWe.js"
 )
 
-// fetch runs one request and returns the whole response.
+// fetch runs one GET as the fixture's credential, with any extra headers a
+// case names. A header the case supplies wins, which is how a case asks for a
+// different credential — or, by naming an empty Authorization, for none.
 func fetch(t *testing.T, a *api.App, path string, headers map[string]string) *http.Response {
 	t.Helper()
 	return serve(a, path, headers)
@@ -84,7 +86,9 @@ func fetch(t *testing.T, a *api.App, path string, headers map[string]string) *ht
 // served in memory has nothing to fail on but the answer it gets, which the
 // caller reads.
 func serve(a *api.App, path string, headers map[string]string) *http.Response {
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	// CREDENTIALLED, as every request here is: the shell is exempt, and the
+	// crawl reaches routes that are not.
+	req := authed(httptest.NewRequest(http.MethodGet, path, nil))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -607,8 +611,9 @@ func head(t *testing.T, a *api.App, path string) *http.Response {
 func TestATraversalNeverReachesTheAssetHandler(t *testing.T) {
 	t.Parallel()
 	// The FIRST of two layers, and the only one an end-to-end request can
-	// see: http.ServeMux cleans a request path before routing, so a ".."
-	// spelled in a URL is redirected rather than routed.
+	// see: a ".." spelled in a URL is refused before it is routed at all
+	// (authz.CanonicalPath, wrapped round the whole surface), where it used
+	// to be cleaned and redirected by http.ServeMux.
 	//
 	// Which is exactly why this is not the test that proves the handler
 	// safe — it passed with the handler serving whatever it was asked for.
@@ -664,6 +669,53 @@ func TestTheDashboardCarriesItsSecurityHeaders(t *testing.T) {
 	}
 }
 
+// A SECURE DEPLOYMENT SAYS SO ON EVERY ASSET ANSWER, the gzip 200 and its 304
+// included.
+//
+// The header is set before routing ([pagepolicy.Apply]), and an asset handler
+// REPLACES the page policy with the dashboard's — so the one way to lose it is
+// a handler that writes its headers in a way that drops one, and the answers
+// most at risk are the two this file added: the encoded 200, whose headers are
+// assembled around a second body, and the revalidation answer a browser mostly
+// receives. A plain-http deployment sends none, which is the control: a header
+// that was always there would pass the first half on any build.
+func TestASecureDeploymentSendsHSTSOnEveryAssetAnswer(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	b.API.ExternalURL = "https://crewlet.example.com"
+	secure := newApp(t, api.Options{Bootstrap: &b, Assets: tree()})
+	gz := map[string]string{"Accept-Encoding": "gzip"}
+
+	first := fetch(t, secure, hashedJS, gz)
+	if first.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatal("the hashed module was not gzipped, so the gzip 200 was not exercised")
+	}
+	revalidated := fetch(t, secure, hashedJS, map[string]string{
+		"Accept-Encoding": "gzip", "If-None-Match": first.Header.Get("ETag"),
+	})
+	if revalidated.StatusCode != http.StatusNotModified {
+		t.Fatalf("the gzip revalidation answered %d, so its 304 was not exercised",
+			revalidated.StatusCode)
+	}
+	for name, res := range map[string]*http.Response{
+		"the gzip 200":      first,
+		"its 304":           revalidated,
+		"the identity 200":  fetch(t, secure, hashedJS, nil),
+		"the shell":         fetch(t, secure, "/dashboard", nil),
+		"the shell gzipped": fetch(t, secure, "/dashboard", gz),
+	} {
+		if got := res.Header.Get("Strict-Transport-Security"); got != pagepolicy.HSTS {
+			t.Errorf("%s (%d): Strict-Transport-Security = %q, want %q", name,
+				res.StatusCode, got, pagepolicy.HSTS)
+		}
+	}
+
+	plain := newApp(t, api.Options{Assets: tree()})
+	if got := fetch(t, plain, hashedJS, gz).Header.Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("a plain-http deployment sent Strict-Transport-Security %q", got)
+	}
+}
+
 // EVERY OTHER RESPONSE CARRIES THE API POLICY, including the ones no handler
 // writes on purpose: the redirect from `/` (an HTML body), the mux's own 404,
 // a JSON read and a refusal from the guard.
@@ -674,12 +726,12 @@ func TestEveryOtherResponseCarriesTheAPIPolicy(t *testing.T) {
 	guarded := newApp(t, api.Options{Bootstrap: &closed, Assets: tree()})
 
 	for name, res := range map[string]*http.Response{
-		"the redirect from /":  fetch(t, open, "/", nil),
-		"an unrouted path":     fetch(t, open, "/no-such-route", nil),
-		"a JSON read":          fetch(t, open, "/health", nil),
-		"a refusal (401)":      fetch(t, guarded, "/org", nil),
-		"a missing asset":      fetch(t, open, "/static/dashboard/js/nope.js", nil),
-		"a traversal redirect": fetch(t, open, "/static/../../etc/passwd", nil),
+		"the redirect from /": fetch(t, open, "/", nil),
+		"an unrouted path":    fetch(t, open, "/no-such-route", nil),
+		"a JSON read":         fetch(t, open, "/health", nil),
+		"a refusal (401)":     fetch(t, guarded, "/org", nil),
+		"a missing asset":     fetch(t, open, "/static/dashboard/js/nope.js", nil),
+		"a traversal refusal": fetch(t, open, "/static/../../etc/passwd", nil),
 	} {
 		assertSecurityHeaders(t, name, res, pagepolicy.API)
 	}

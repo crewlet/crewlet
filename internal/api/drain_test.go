@@ -36,7 +36,7 @@ func drainingApp(t *testing.T, draining bool) *api.App {
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
 		},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	return a
 }
@@ -67,13 +67,14 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // startsWork is every kind of request the gate refuses, one of each route
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
-// credential writes, the setup pass, the operator writes and the operator MCP
-// surface.
+// credential writes, the setup pass, the deployment's controls (the backup,
+// the retention gestures and the fleet broker's membership), a project's file
+// bytes, the operator writes and the operator MCP surface.
 //
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
 // a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all twenty — and it is
+// what makes the refusal case above meaningful for every entry — and it is
 // also what would let an entry naming a path nothing serves sit here for ever
 // looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
 // holds the declaration in BOTH directions for that reason, in the idiom
@@ -82,9 +83,10 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // grew a surface and left its declaration behind.
 //
 // [drainingApp] is a node with no store, no coordination store and no company,
-// so the three surfaces that need one (/config, /secrets, /setup) and the two
-// that need a tracker (/work/{id}/purge, /operator/mcp, /operator/act/{tool})
-// are not mounted on it.
+// so the three surfaces that need one (/config, /secrets, /setup) and the ones
+// that need a tracker, a knowledge base or an object store (the write surface
+// under /work/items and /pages, a project's file bytes under /work/files,
+// /operator/mcp and /operator/act/{tool}) are not mounted on it.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -102,7 +104,13 @@ var startsWork = []struct {
 	{http.MethodPost, "/setup/integrations/github/provision", false},
 	{http.MethodPost, "/backup", true},
 	{http.MethodPost, "/work/retention/ack", true},
-	{http.MethodPost, "/work/ENG-1/purge", false},
+	{http.MethodPost, "/fleet/broker/remove/node-c", true},
+	{http.MethodPost, "/fleet/broker/remove-peer/abcdefgh", true},
+	{http.MethodPut, "/work/files/ENG/report.md", false},
+	{http.MethodDelete, "/work/files/ENG/report.md", false},
+	{http.MethodPost, "/work/items/ENG-1/purge", false},
+	{http.MethodPatch, "/work/items/ENG-1", false},
+	{http.MethodPost, "/pages/p-1/restore", false},
 	{http.MethodPost, "/operator/mcp", false},
 	{http.MethodPost, "/operator/act/create_work_item", false},
 }
@@ -267,7 +275,7 @@ func TestACredentialIsStillTheFirstQuestionDuringADrain(t *testing.T) {
 	// route would not.
 	a := drainingApp(t, true)
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}")))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}"))))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("an unauthenticated write answered %d during a drain, want 401", rec.Code)
 	}

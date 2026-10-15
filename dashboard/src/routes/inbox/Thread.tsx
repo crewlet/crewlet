@@ -155,7 +155,7 @@ function ThreadPage({
   if (read.loading && !read.data)
     return <Skeleton variant="text" rows={2} label="Loading the thread" />;
   return (
-    <QueryState error={read.error} loading={false}>
+    <QueryState error={read.error} refusal={read.refusal} loading={false}>
       <ol className="inbox-thread-list">
         {comments.map((c) => (
           <ThreadEntry
@@ -166,7 +166,6 @@ function ThreadPage({
                 ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
                 : ""
             }
-            seat={read.data?.comment_seats?.[c.id] ?? ""}
             index={index}
             now={now}
           />
@@ -179,21 +178,20 @@ function ThreadPage({
 function ThreadEntry({
   comment,
   chose,
-  seat,
   index,
   now,
 }: {
   comment: WorkComment;
-  /** The person behind the token that wrote it, or "" where the author is a seat. */
-  seat: string;
   /** The option this answer chose, by its words, or "". */
   chose: string;
   index: OrgIndex;
   now: number;
 }) {
-  // THE PERSON, NEVER THE CREDENTIAL: a token's comment is drawn as the seat
-  // it was bound to, and one bound to nobody as "An operator".
-  const who = whoOf(index, seat || (comment.author_kind === "operator" ? "" : comment.author));
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity directory
+  // binds to a seat comments AS that seat, and anybody bound to none under
+  // their own login, a name, drawn as one. A comment with no author is the
+  // engine's.
+  const who = whoOf(index, comment.author, comment.author_kind);
   return (
     <li className="inbox-thread-entry">
       <SeatAvatar
@@ -205,7 +203,7 @@ function ThreadEntry({
       />
       <div className="inbox-thread-body">
         <div className="inbox-thread-meta">
-          <strong>{who?.name ?? "An operator"}</strong>
+          <strong>{who?.name ?? "The engine"}</strong>
           {/* THE READER'S OWN CLOCK, to the minute: a time alone today, the
               date with it before. */}
           <time dateTime={comment.created_at} title={fmtDateTime(comment.created_at)}>

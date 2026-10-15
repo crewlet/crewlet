@@ -32,6 +32,8 @@ const (
 // Used by pointer: normalisation writes inherited leads and channels into
 // it, and callers compare units by identity.
 type Unit struct {
+	// Name is DISPLAY ONLY: what a person reads in a prompt, on a board, in
+	// a channel topic. Nothing resolves a unit by it — see [Unit.ID].
 	Name string   `yaml:"name" json:"name"`
 	Type UnitType `yaml:"type,omitempty" json:"type,omitempty"`
 
@@ -41,15 +43,16 @@ type Unit struct {
 	// A unit's name is what people read — in a prompt, on a board, in a
 	// channel topic — so it is renamed for the reasons prose is renamed,
 	// and everything keyed on it moves when it does. An id is chosen once
-	// and never read by anybody, so what is keyed on it survives the
-	// rename.
+	// and IMMUTABLE (ADR-0013's rule for a seat's handle), so what is keyed
+	// on it survives the rename: a document that changes a unit's id has
+	// removed one unit and created another.
 	//
-	// OPTIONAL, and absent means exactly today's behaviour: [Unit.Key]
-	// falls back to the name. Adding one to a unit that already has work
-	// filed against it does not rewrite those rows and does not have to —
-	// a filter on a unit matches the SET of its id and its name, which is
-	// [Organization.UnitByRef]'s promise and is where every durable unit
-	// reference in the engine is resolved.
+	// IT IS WHAT REFERENCES IT. A `manages:` entry naming a unit and a root
+	// seat's `unit:` both resolve by [Unit.Key], which is this id, so
+	// renaming a team moves nothing that points at it. The config layer
+	// REQUIRES one on every authored unit and mints it from the name at
+	// import (config.MintUnitID), so a document read from YAML always
+	// carries one; the fallback in [Unit.Key] is for a tree built in Go.
 	//
 	// IT DOES NOT STOP A RENAME RE-ONBOARDING THE SEATS BENEATH IT. That
 	// is a different mechanism: onboarding turns on the unit's NAME, which
@@ -59,12 +62,20 @@ type Unit struct {
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 
-	// Lead names the seat that leads this unit: routing work within it,
-	// acting as its single point of contact, and auto-managing any direct
-	// member that no direct member of this unit already manages (see
-	// [Organization.Normalize] for how a unit reference counts).
+	// Lead is the HANDLE of the seat that leads this unit: routing work
+	// within it, acting as its single point of contact, and auto-managing
+	// any direct member that no direct member of this unit already manages
+	// (see [Organization.Normalize] for how a unit reference counts).
 	//
-	// The name may resolve to a seat in this unit, in a descendant, or —
+	// THE HANDLE, never the display name, and that is the whole reason a
+	// seat has a handle. A name is prose a founder edits; the handle is the
+	// identity every other layer already addresses the seat by — its inbox,
+	// its derived agent id, its external accounts — so a unit's lead and the
+	// seat the engine runs cannot come apart. Resolving a display name meant
+	// two derivations of one answer, and they disagreed on every seat whose
+	// operator declared a handle.
+	//
+	// The handle may resolve to a seat in this unit, in a descendant, or —
 	// after inheritance — in an ancestor. A unit with no lead of its own
 	// inherits its parent's, cascading to any depth. Read the resolved seat
 	// through [Unit.LeadRole] or [Organization.EffectiveLead]; a
@@ -137,15 +148,11 @@ type Unit struct {
 
 // Key is this unit's identity: its id when it has one, its name otherwise.
 //
-// EVERYTHING DURABLE KEYS ON THIS and everything a person reads keys on
-// [Unit.Name]. The two are the same string on a company that set no ids,
-// which is what makes the field optional rather than a migration.
-//
-// Which is also why nothing durable may compare against it directly. A row
-// written before an id was added holds the name and a row written after it
-// holds the id, so the two spellings coexist for the life of the deployment
-// and a reference is resolved back through [Organization.UnitByRef] — which
-// matches this OR the name — rather than equated with this.
+// EVERYTHING KEYS ON THIS — every durable row, and every reference in the
+// document itself ([Organization.Unit], a `manages:` entry, a root seat's
+// `unit:`) — while everything a person reads keys on [Unit.Name]. The
+// fallback is what keeps a tree built in Go addressable; an authored document
+// always carries an id, which the config layer requires and mints.
 func (u *Unit) Key() string {
 	if u == nil {
 		return ""
@@ -156,20 +163,26 @@ func (u *Unit) Key() string {
 	return strings.TrimSpace(u.Name)
 }
 
-// Role returns the direct member with this name, or nil.
-func (u *Unit) Role(name string) *Role {
+// Role returns the direct member with this HANDLE, or nil.
+func (u *Unit) Role(handle string) *Role {
+	if handle == "" {
+		return nil
+	}
 	for _, r := range u.Roles {
-		if r.Name == name {
+		if r.Handle() == handle {
 			return r
 		}
 	}
 	return nil
 }
 
-// Child returns the direct child unit with this name, or nil.
-func (u *Unit) Child(name string) *Unit {
+// Child returns the direct child unit answering to this KEY, or nil.
+func (u *Unit) Child(key string) *Unit {
+	if key == "" {
+		return nil
+	}
 	for _, c := range u.Children {
-		if c.Name == name {
+		if c.Key() == key {
 			return c
 		}
 	}
@@ -212,21 +225,28 @@ func (u *Unit) AllUnits() iter.Seq[*Unit] {
 	}
 }
 
-// FindRole returns the seat with this name anywhere in this subtree, or
+// FindRole returns the seat with this HANDLE anywhere in this subtree, or
 // nil.
-func (u *Unit) FindRole(name string) *Role {
+func (u *Unit) FindRole(handle string) *Role {
+	if handle == "" {
+		return nil
+	}
 	for r := range u.AllRoles() {
-		if r.Name == name {
+		if r.Handle() == handle {
 			return r
 		}
 	}
 	return nil
 }
 
-// FindUnit returns this unit or the descendant with this name, or nil.
-func (u *Unit) FindUnit(name string) *Unit {
+// FindUnit returns this unit or the descendant answering to this KEY, or
+// nil.
+func (u *Unit) FindUnit(key string) *Unit {
+	if key == "" {
+		return nil
+	}
 	for d := range u.AllUnits() {
-		if d.Name == name {
+		if d.Key() == key {
 			return d
 		}
 	}
@@ -252,8 +272,9 @@ func (u *Unit) LeadRole() *Role {
 	return nil
 }
 
-// IsLedBy reports whether this unit designates r as its lead.
-func (u *Unit) IsLedBy(r *Role) bool { return u.Lead != "" && u.Lead == r.Name }
+// IsLedBy reports whether this unit designates r as its lead, by r's
+// handle — the identity [Unit.Lead] holds.
+func (u *Unit) IsLedBy(r *Role) bool { return u.Lead != "" && u.Lead == r.Handle() }
 
 // hasDirectAgent reports whether any DIRECT member is an agent seat — the
 // question a fan-out schedule asks, since it never reaches descendants and

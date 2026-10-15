@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/period"
 )
@@ -227,9 +229,16 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	s := openStore(t, nc, time.Minute)
 
 	// A dot is a SUBJECT SEPARATOR in a NATS key, so an unescaped one would
-	// split the key into two tokens; a handle really can contain one.
-	dotted := coord.SeatResource("alice.smith")
-	plain := coord.SeatResource("alice")
+	// split the key into two tokens.
+	//
+	// BUILT FROM THE CLASS DIRECTLY rather than through coord.SeatResource,
+	// which takes a uuid and can no longer produce a dotted name. What is
+	// under test is the STORE's key encoding over an arbitrary resource
+	// name, and there is nothing in the contract that says a class's names
+	// are uuid-shaped — a company name, a duty and a stream all reach these
+	// buckets, and each can carry a dot.
+	dotted := coord.ClassSeat.Resource("alice.smith")
+	plain := coord.ClassSeat.Resource("alice")
 	for _, r := range []string{dotted, plain} {
 		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: time.Minute, Preferred: "node-a",
@@ -461,6 +470,71 @@ func TestFleetContract(t *testing.T) {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 		return func() coord.Fleet { return openFleetForTest(t, nc, prefix) }
 	})
+}
+
+// THE BODY RIDES THE POINTER AS THE JSON IT IS.
+//
+// Carried as bytes, encoding/json spells it as a base64 string — over an
+// envelope whose ciphertext is base64 already, so every body would cross the
+// wire encoded twice and a third larger than it is. The contract suite cannot
+// see the record, only what Payload hands back, so the WIRE SHAPE is asserted
+// here: the pointer's own record carries the body as an object, beside the
+// origin the contract requires.
+//
+// Mutation: carry the payload as []byte in activationRecord and the field is a
+// string.
+func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	body := `{"__encrypted__":"enc:v1:k1:q8+/Zm9vYmFy=="}`
+	if _, err := store.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte(body), At: time.Now(),
+		Origin: coord.RevisionOrigin{
+			Author: "maya", AuthorKind: iam.ActorOperator, Source: "api", CreatedAt: time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	entry, err := store.get(t.Context(), store.config, activationKey)
+	if err != nil {
+		t.Fatalf("read the pointer: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(entry.Value(), &fields); err != nil {
+		t.Fatalf("decode the pointer: %v", err)
+	}
+	if got := string(fields["payload"]); got != body {
+		t.Errorf("the pointer's payload field is %s, want the object %s", got, body)
+	}
+}
+
+// A POINTER THAT CARRIES NO BODY IS UNREADABLE, NOT ABSENT.
+//
+// Every activation writes its body into the pointer, so a pointer naming a
+// revision with none is a record nothing this build writes. Answered as
+// "absent" it would read to a converging node as a pointer that moved between
+// its Target and this read, and the node would wait for a body that is never
+// coming; an error says the store holds something it cannot use. And a pointer
+// naming ANOTHER revision is still absent, which is the control.
+//
+// Mutation: answer a bodiless pointer as not found and the first half fails.
+func TestAPointerWithNoBodyIsUnreadable(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	ctx := t.Context()
+	raw, err := json.Marshal(map[string]any{"revision_id": "rev-1", "at": time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.config.Put(ctx, activationKey, raw); err != nil {
+		t.Fatalf("plant the pointer: %v", err)
+	}
+	if got, found, err := store.Payload(ctx, "rev-1"); err == nil {
+		t.Errorf("a pointer with no body answered found=%v %s with no error", found, got)
+	}
+	if got, found, err := store.Payload(ctx, "rev-2"); err != nil || found {
+		t.Errorf("another revision's read = %s found=%v err=%v, want absent", got, found, err)
+	}
 }
 
 // A CORRUPT CREDENTIAL RECORD RAISES RATHER THAN VANISHING.

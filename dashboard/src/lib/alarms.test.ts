@@ -75,14 +75,28 @@ describe("a list of alarms", () => {
 });
 
 describe("the logs an alarm stands on", () => {
+  /** The engine's `trim_blocked` sentence for a log keeping `n` records past its window. */
+  const kept = (n: number) =>
+    `the trim has not advanced for 46h, and the log is keeping up to ${n} record(s) older than its 24h replay window`;
+
   // LOGS ONE TERM HOLDS ARE ONE LINE: four logs waiting on one backup are one
   // fact with four names in it, dated by the one held longest.
   test("logs held by one term are one line, from the earliest hold", () => {
     const lines = alarmLogLines({
       domains: [
-        { domain: "tracker", detail: "", term: "backup_floor", since: "2031-04-02T01:00:00Z" },
-        { domain: "vectors", detail: "", term: "backup_floor", since: "2031-04-01T22:00:00Z" },
-        { domain: "pages", detail: "", term: "backup_floor", since: "2031-04-02T02:00:00Z" },
+        {
+          domain: "tracker",
+          detail: kept(1200),
+          term: "backup_floor",
+          since: "2031-04-02T01:00:00Z",
+        },
+        {
+          domain: "vectors",
+          detail: kept(40),
+          term: "backup_floor",
+          since: "2031-04-01T22:00:00Z",
+        },
+        { domain: "pages", detail: kept(7), term: "backup_floor", since: "2031-04-02T02:00:00Z" },
       ],
     });
     expect(lines).toEqual([
@@ -90,6 +104,13 @@ describe("the logs an alarm stands on", () => {
         term: "backup_floor",
         domains: ["tracker", "vectors", "pages"],
         since: "2031-04-01T22:00:00Z",
+        // EACH LOG KEEPS ITS OWN MEASUREMENT on the shared line, in the
+        // report's order: what it keeps past its window is no date's to say.
+        logs: [
+          { domain: "tracker", detail: kept(1200) },
+          { domain: "vectors", detail: kept(40) },
+          { domain: "pages", detail: kept(7) },
+        ],
       },
     ]);
   });
@@ -106,6 +127,10 @@ describe("the logs an alarm stands on", () => {
     expect(lines.map((l) => [l.term, l.domains])).toEqual([
       ["applied", ["tracker", "usage"]],
       ["feed_ack_floor", ["pages"]],
+    ]);
+    expect(lines.map((l) => l.logs?.map((m) => m.domain))).toEqual([
+      ["tracker", "usage"],
+      ["pages"],
     ]);
   });
 

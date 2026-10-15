@@ -12,6 +12,7 @@ func everyLogPrefix() []string {
 		topics.TrackerLogPrefix,
 		topics.TrackerVectorsPrefix,
 		topics.PagesLogPrefix,
+		topics.IamLogPrefix,
 		topics.UsageLogPrefix,
 	}
 }
@@ -78,6 +79,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.PagesLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the pages log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.IamLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.IamLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the identity log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 	}
 }
 
@@ -139,6 +144,8 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_TRACKER_VECTORS", "crewlet.tracker.vectors"},
 		{"pages", topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard,
 			"CREWLET_PAGES_LOG", "crewlet.pages.log"},
+		{"iam", topics.IamLogStream, topics.IamLogPrefix, topics.IamLogWildcard,
+			"CREWLET_IAM_LOG", "crewlet.iam.log"},
 		{"usage", topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard,
 			"CREWLET_USAGE_LOG", "crewlet.usage.log"},
 	} {

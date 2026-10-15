@@ -34,11 +34,25 @@
  * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
- * # Settings is never hidden
+ * # A lock goes where the closed thing is, and a row is never hidden
  *
- * It carries a lock for a reader without an operator credential, and stays: a
- * section that vanished when a credential is absent is indistinguishable from
- * one that does not exist.
+ * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
+ * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
+ * row that vanished when access is absent is indistinguishable from one that
+ * does not exist. Its title names what would open it — the access a reader
+ * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
+ * Knowledge. A workspace only PART of which is closed is not locked as a
+ * whole: Settings draws its locks per section, in its column. Settings
+ * carried a key for any closed section, so a person holding nothing but
+ * their own Account was told Settings was closed to them — while its first
+ * group, You, needs nothing at all. That group is why the Settings row is
+ * never locked.
+ *
+ * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
+ * work's count and the pinned views are tracker answers, so a reader without
+ * Tracker asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
+ * [PinnedSection]) — a figure beside a lock would be a refusal drawn as a
+ * number.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -53,10 +67,18 @@ import {
 } from "@crewlethq/ui";
 import { ActivityGlyph, KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
-import { WORKSPACES, workspaceOf, type WorkspaceRow } from "~/app/nav.ts";
+import {
+  WORKSPACES,
+  sectionOpen,
+  workspaceMissing,
+  workspaceOf,
+  workspaceRow,
+  type WorkspaceRow,
+} from "~/app/nav.ts";
+import { accessNames, type Grant } from "~/lib/access.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
@@ -72,17 +94,25 @@ import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
+import { goSignIn } from "~/lib/session.ts";
+import { useKeyHints } from "~/lib/media.ts";
 
-export function Sidebar({
-  onSearch,
-  onSetToken,
-}: {
-  onSearch: () => void;
-  onSetToken: () => void;
-}) {
+export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
+  // WHAT THE READER HOLDS, for the locks — the frame's one reading of it
+  // (`useHeldGrants`), which Settings' column and the route's own refusal read
+  // too. Null while nobody has said: a lock drawn on no answer claims a
+  // refusal nobody has made.
+  const held = useHeldGrants();
+  // THE ALARMS' NAMES ARE THE RETENTION REPORT'S, asked only of a reader the
+  // section that lists them opens for — by the rule every lock is drawn by —
+  // so the panel never asks a question the engine would refuse.
+  const readsReport = useMemo(() => {
+    const backups = workspaceRow("settings")?.sections.find((s) => s.key === "backups");
+    return held !== null && backups !== undefined && sectionOpen(backups, held);
+  }, [held]);
 
   // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
   // the reader's way to it without reaching for the toggle in the bar. Only
@@ -92,10 +122,15 @@ export function Sidebar({
   // one), and the drawer's own Escape is what closes it.
   const shell = useAppShell();
   useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
+  const keyHints = useKeyHints();
   const org = useOrg();
   const agents = useAgents();
   const health = useEngineHealth();
-  const { connected, authRejected, lostAt, everConnected } = useConnection();
+  const { connected, authRejected, accessRefused, lostAt, everConnected } = useConnection();
+  // THE ENGINE REFUSED THIS BROWSER (a seat taken out of the chart) and
+  // nothing of the company is offered: the live sections, whose answers an
+  // earlier socket may have left behind, are not drawn.
+  const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
@@ -163,16 +198,25 @@ export function Sidebar({
         : {},
   };
 
-  const row = (ws: WorkspaceRow) => (
-    <NavRow
-      key={ws.key}
-      label={ws.label}
-      icon={ws.icon}
-      path={ws.path}
-      current={here === ws.key}
-      {...figures[ws.key]}
-    />
-  );
+  const row = (ws: WorkspaceRow) => {
+    const needs = held === null ? [] : workspaceMissing(ws, held);
+    return (
+      <NavRow
+        key={ws.key}
+        label={
+          needs.length > 0 ? (
+            <Locked label={ws.label} needs={needs} said={`needs ${accessNames(needs)} access`} />
+          ) : (
+            ws.label
+          )
+        }
+        icon={ws.icon}
+        path={ws.path}
+        current={here === ws.key}
+        {...figures[ws.key]}
+      />
+    );
+  };
 
   return (
     <AppShell.Rail
@@ -198,38 +242,26 @@ export function Sidebar({
       footer={
         <>
           <SidebarNav label="Settings">
-            {WORKSPACES.filter((ws) => ws.place === "foot").map((ws) => (
-              <NavRow
-                key={ws.key}
-                label={
-                  // THE LOCK IS ON THE ROW, NOT INSTEAD OF IT. General is the
-                  // charter, readable by anybody; every other section needs an
-                  // operator credential, and the lock says so before a click.
-                  !viewer.operator ? (
-                    <span className="side-locked">
-                      {ws.label}
-                      <KeyGlyph size="xs" aria-hidden="true" />
-                      <span className="sr-only">, most sections need an operator credential</span>
-                    </span>
-                  ) : (
-                    ws.label
-                  )
-                }
-                icon={ws.icon}
-                path={ws.path}
-                current={here === ws.key}
-              />
-            ))}
+            {/* THE LOCK IS ON THE ROW, NOT INSTEAD OF IT — see the module's
+                note — and drawn by the same rule as every other row's. */}
+            {WORKSPACES.filter((ws) => ws.place === "foot").map(row)}
           </SidebarNav>
           <RailBoundary label="Engine" resetKey={at}>
             <EnginePanel
-              reading={engineReading({ connected, authRejected, lostAt, everConnected, health })}
-              operator={viewer.operator}
-              onSetToken={onSetToken}
+              reading={engineReading({
+                connected,
+                authRejected,
+                accessRefused,
+                lostAt,
+                everConnected,
+                health,
+              })}
+              readsReport={readsReport}
+              onSignIn={goSignIn}
             />
           </RailBoundary>
           <RailBoundary label="You" resetKey={at}>
-            <UserBlock viewer={viewer} seatName={seatName} onSetToken={onSetToken} />
+            <UserBlock viewer={viewer} seatName={seatName} />
           </RailBoundary>
         </>
       }
@@ -241,7 +273,12 @@ export function Sidebar({
           title="Search everything"
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
-          shortcut={<Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle />}
+          // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
+          // phone's drawer "Ctrl + K" named a key nobody there has, and cut
+          // the trigger's own label to "Ask or jump t…".
+          shortcut={
+            keyHints ? <Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle /> : undefined
+          }
         />
       </div>
       <SidebarNav label="Navigation">
@@ -254,13 +291,15 @@ export function Sidebar({
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        <RailBoundary label="Pinned" resetKey={at}>
-          <PinnedSection
-            path={route.path}
-            viewKey={route.query.get("view") ?? ""}
-            viewer={viewer.handle}
-          />
-        </RailBoundary>
+        {!unserved && viewer.tracker && (
+          <RailBoundary label="Pinned" resetKey={at}>
+            <PinnedSection
+              path={route.path}
+              viewKey={route.query.get("view") ?? ""}
+              owner={viewer.owner}
+            />
+          </RailBoundary>
+        )}
         <RailBoundary label="Starred" resetKey={at}>
           <StarredSection path={route.path} />
         </RailBoundary>
@@ -270,6 +309,20 @@ export function Sidebar({
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
+  );
+}
+
+/**
+ * A row's label with the lock beside it: its title names what would open it,
+ * and a screen reader hears `said` after the label.
+ */
+function Locked({ label, needs, said }: { label: string; needs: readonly Grant[]; said: string }) {
+  return (
+    <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
+      {label}
+      <KeyGlyph size="xs" aria-hidden="true" />
+      <span className="sr-only">, {said}</span>
+    </span>
   );
 }
 
@@ -318,9 +371,12 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
 /**
  * The views THIS READER pinned, each with the total it selects.
  *
- * ASKED WITH THE VIEWER, which is the whole of the fix this row owes: a pin is
- * a person's, and the strip asked for without one has no pins in it — so the
- * section this replaced asked the shared strip and never drew a pinned row.
+ * THE CALLER'S OWN, and the engine says whose: `work_saved_views` counts the
+ * pins of whoever asks — a `viewer=` that named anybody else was a free choice
+ * of whose personal views to read, and the engine takes none — so the section
+ * asks only once the reader has a record to keep pins under (`owner`), and
+ * asks nothing of a reader with none. A saved view is the tracker's, so the
+ * section is mounted only for a reader holding Tracker.
  *
  * AND ACROSS EVERY CONTAINER (`work_saved_views`), never the workspace strip: a
  * view pinned from a project board lives in that project, and read from the
@@ -333,17 +389,22 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
 function PinnedSection({
   path,
   viewKey,
-  viewer,
+  owner,
 }: {
   path: string[];
   /** The `view=` the reader is on, which is what marks a pinned row current. */
   viewKey: string;
-  viewer: string;
+  /** The name the reader's own record is kept under, or "" for nobody's. */
+  owner: string;
 }) {
-  const views = useQuery("work_saved_views", viewer ? { viewer, counts: true } : undefined, {
-    enabled: viewer !== "",
-    pollMs: 120_000,
-  });
+  const views = useQuery(
+    "work_saved_views",
+    { counts: true },
+    {
+      enabled: owner !== "",
+      pollMs: 120_000,
+    },
+  );
   const pinned = (views.data?.views ?? []).filter((v) => v.pinned && v.id);
   if (pinned.length === 0) return null;
   return (

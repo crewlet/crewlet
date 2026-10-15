@@ -126,17 +126,28 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 	}{
 		{"a valid put", http.MethodPut, companyDoc, true, http.StatusOK},
 		{"a valid put creating the company", http.MethodPut, companyJSONDoc, false, http.StatusOK},
-		{"a put the validator refuses", http.MethodPut, strings.Replace(companyDoc, "llm: zulu", "llm: nowhere", 1), true, http.StatusBadRequest},
+		{"a put the validator refuses", http.MethodPut,
+			strings.Replace(companyDoc, "type: anthropic", "type: nowhere", 1),
+			true, http.StatusBadRequest},
 		{"a put that does not parse", http.MethodPut, "name: [", true, http.StatusBadRequest},
 		{"a valid patch", http.MethodPatch, `{"mission": "checked"}`, true, http.StatusOK},
-		{"a patch the validator refuses", http.MethodPatch, `{"roles": [{"name": "CEO", "llm": "nowhere"}]}`, true, http.StatusBadRequest},
+		{"a patch the validator refuses", http.MethodPatch,
+			`{"providers": {"llm": {"zulu": {"type": "nowhere", "model": "m"}}}}`,
+			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
+		// THE ORG IS PART OF THE DOCUMENT, so a dry run checks it too.
+		{"a put carrying seats", http.MethodPut,
+			companyDoc + "\nroles:\n  - {name: CEO, handle: ceo}\n",
+			true, http.StatusOK},
+		{"a patch carrying units", http.MethodPatch,
+			`{"units": [{"name": "Engineering", "id": "engineering"}]}`,
+			true, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := newCountedSurface(t)
 			if tc.seeded {
-				s.seed(t, companyDoc, nil)
+				s.seed(t, companyDoc)
 			}
 			before := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
 
@@ -160,7 +171,7 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 	// parameter make exactly one of each, or every zero above proves nothing.
 	for _, method := range []string{http.MethodPut, http.MethodPatch} {
 		s := newCountedSurface(t)
-		s.seed(t, companyDoc, nil)
+		s.seed(t, companyDoc)
 		body := companyDoc
 		if method == http.MethodPatch {
 			body = `{"mission": "written"}`
@@ -180,14 +191,16 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 //
 // base_revision_id is how a client learns that the revision moved between its
 // read and its check without a second request; the warnings and the derived
-// hierarchy are what a builder draws before the operator saves.
+// hierarchy are what a builder draws before the operator saves. A reference
+// that is well formed and names nobody is a WARNING rather than a refusal, so
+// a dry run is where a builder learns of one.
 func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	base := s.seed(t, companyDoc, nil)
+	base := s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true",
-		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["CTO", "Ghost"]},
+		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["cto", "ghost"]},
 		            {"name": "CTO", "handle": "cto", "llm": "zulu"}]}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("dry run = %d, want 200: %s", res.Code, res.Body)
@@ -204,18 +217,34 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	if !answer.Valid || answer.Base != base {
 		t.Errorf("valid = %v, base = %q, want true and %q", answer.Valid, answer.Base, base)
 	}
-	if len(answer.Warnings) != 1 || answer.Warnings[0].Kind != config.WarningDanglingReference ||
+	// THE DANGLING ENTRY, LOCATED, and then — in [config.Company.Warnings]'
+	// own order, what is broken before what is worth knowing — the advisory
+	// that a company of agents alone admits nobody: every person holds a
+	// human seat, and this draft declares none. The check is where a builder
+	// hears it, before an operator meets the refusal of their first
+	// invitation.
+	if len(answer.Warnings) != 2 || answer.Warnings[0].Kind != config.WarningDanglingReference ||
 		answer.Warnings[0].Path != "roles[0].manages[1]" || answer.Warnings[0].Seat != "ceo" {
-		t.Errorf("warnings = %+v, want the dangling manages entry, located", answer.Warnings)
+		t.Errorf("warnings = %+v, want the dangling manages entry, located, "+
+			"then the advisory about no human seat", answer.Warnings)
+	} else if w := answer.Warnings[1]; w.Kind != config.WarningAdvisory || w.Path != "roles" ||
+		!strings.Contains(w.Message, "no `kind: human` seat") {
+		t.Errorf("warnings[1] = %+v, want the advisory at `roles` that nobody "+
+			"can be invited into a company with no human seat", w)
 	}
 	if len(answer.Derived.Seats) != 2 || answer.Derived.Seats[1].Manager != "ceo" ||
 		answer.Derived.Seats[1].Path != "roles[1]" {
 		t.Errorf("derived = %+v, want the CTO reporting to the CEO, with its path", answer.Derived)
 	}
 
-	// Creating the company is checked against nothing, and says so.
+	// Creating the company is checked against nothing, and says so. The
+	// company declares a person's seat somebody can be reached at, so it has
+	// nothing to be warned about: a company with no human seat is advised
+	// that nobody can join it.
 	empty := newCountedSurface(t)
-	created := empty.do(t, http.MethodPut, "/config?dry_run=true", companyJSONDoc,
+	created := empty.do(t, http.MethodPut, "/config?dry_run=true", strings.Replace(
+		companyJSONDoc, `"name":"Acme",`, `"name":"Acme","roles":[{"name":"Founder",`+
+			`"kind":"human","contact":{"slack_user_id":"U0FOUNDER"}}],`, 1),
 		map[string]string{"If-None-Match": "*"})
 	if created.Code != http.StatusOK {
 		t.Fatalf("create dry run = %d, want 200: %s", created.Code, created.Body)
@@ -233,21 +262,25 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 //
 // The first thing the dashboard's builder sends on every load is a check of a
 // draft with no operations in it, which is an empty merge patch: it is how the
-// lens gets the warnings and the hierarchy of the company as it stands. An
-// empty patch object is therefore not the empty BODY a write refuses, and a
-// check that answered invalid_patch would open the builder on a problem
-// nobody caused.
+// lens gets the warnings of the company as it stands. An empty patch object is
+// therefore not the empty BODY a write refuses, and a check that answered
+// invalid_patch would open the builder on a problem nobody caused.
 func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true", `{}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("a check of an empty patch = %d, want 200: %s", res.Code, res.Body)
 	}
-	if derived, ok := decode(t, res)["derived"].(map[string]any); !ok || derived["seats"] == nil {
-		t.Errorf("the check carries no hierarchy for the company as it stands: %s", res.Body)
+	body := decode(t, res)
+	if valid, _ := body["valid"].(bool); !valid {
+		t.Errorf("a check of a draft that changes nothing is not valid: %s", res.Body)
+	}
+	if _, ok := body["warnings"].([]any); !ok {
+		t.Errorf("the check carries no warnings list for the company as it "+
+			"stands: %s", res.Body)
 	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("a check wrote %+v", got)
@@ -269,7 +302,7 @@ func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 func TestTheDryRunParameterIsReadFirstAndOnlyTrueOrFalse(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 
 	for _, query := range []string{"dry_run=yes", "dry_run=1", "dry_run=", "dry_run", "dry_run=TRUE", "dry_run=true&dry_run=true"} {
 		for _, tc := range []struct {
@@ -314,7 +347,7 @@ func TestTheDryRunParameterIsReadFirstAndOnlyTrueOrFalse(t *testing.T) {
 func TestADryRunNeedsNoSummaryAndLiftsOneOut(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 
 	for name, tc := range map[string]struct{ method, body string }{
 		"put with none":      {http.MethodPut, companyDoc},
@@ -350,7 +383,7 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	}
 
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 	stale := s.do(t, http.MethodPatch, "/config?dry_run=true", `{"mission": "x"}`,
 		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
 	if stale.Code != http.StatusConflict || decode(t, stale)["error"] != "revision_advanced" {
@@ -367,24 +400,51 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	}
 }
 
+// duplicateStepsDoc breaks one ADMISSION rule and no runnable one: two of the
+// company's own sandbox setup steps share a name. A step's name is how a run's
+// account of its setup says which step failed, so a submitted document is
+// refused for the pair — but a box runs both steps exactly as written, so a
+// stored revision carrying them still applies, warned about.
+const duplicateStepsDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-literal"]
+  sandbox:
+    fake: true
+    setup:
+      - {name: registry, commands: ["true"]}
+      - {name: registry, commands: ["true"]}
+`
+
 // EVERY WRITE ANSWERS WHAT IT PRODUCED: its revision and epoch, its warnings
 // and the hierarchy the engine derives from it.
 //
 // A reload and a revert re-activate a stored company under the runnable rules
 // only, so theirs is the answer that can carry an admission warning: a company
 // a newer peer admitted under other rules, which runs and which a write
-// keeping it would be refused for.
+// keeping it would be refused for. Every other write here submits a document
+// that breaks no admission rule, so its answer carries none — the control
+// that keeps the first half from passing on a surface that warned about
+// everything.
 func TestEveryWriteAnswersItsWarningsAndDerivedHierarchy(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	first := s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+	first := s.seedStored(t, duplicateStepsDoc, func(map[string]any) {})
 
-	for _, tc := range []struct{ name, method, path, body string }{
-		{"reload", http.MethodPost, "/config/reload", ""},
-		{"put", http.MethodPut, "/config", companyDoc},
-		{"patch", http.MethodPatch, "/config", `{"mission": "answered"}`},
-		{"entity", http.MethodPut, "/config/roles/ceo", `{"name": "CEO", "handle": "ceo", "llm": "zulu"}`},
-		{"revert", http.MethodPost, "/config/revisions/" + first + "/revert", ""},
+	for _, tc := range []struct {
+		name, method, path, body string
+		seats                    int
+	}{
+		{"reload", http.MethodPost, "/config/reload", "", 0},
+		{"put", http.MethodPut, "/config", orgDoc, 3},
+		{"patch", http.MethodPatch, "/config", `{"mission": "answered"}`, 3},
+		{"entity", http.MethodPut, "/config/roles/ceo",
+			`{"name": "CEO", "handle": "ceo", "llm": "zulu", "goal": "answered"}`, 3},
+		{"revert", http.MethodPost, "/config/revisions/" + first + "/revert", "", 0},
 	} {
 		res := s.do(t, tc.method, tc.path, tc.body, summaryHeader)
 		if res.Code != http.StatusCreated {
@@ -400,9 +460,9 @@ func TestEveryWriteAnswersItsWarningsAndDerivedHierarchy(t *testing.T) {
 			t.Fatalf("%s: decode: %v", tc.name, err)
 		}
 		if answer.RevisionID == "" || answer.Epoch == 0 || answer.Warnings == nil ||
-			answer.Derived == nil || len(answer.Derived.Seats) == 0 {
-			t.Errorf("%s answered %s, want a revision, an epoch, a warnings list and the hierarchy",
-				tc.name, res.Body)
+			answer.Derived == nil || len(answer.Derived.Seats) != tc.seats {
+			t.Errorf("%s answered %s, want a revision, an epoch, a warnings list and "+
+				"the hierarchy of %d seats", tc.name, res.Body, tc.seats)
 		}
 		var kinds []string
 		for _, w := range answer.Warnings {
@@ -429,36 +489,32 @@ func problemsOf(t *testing.T, res interface{ Result() *http.Response }) []config
 
 // AN ENTITY WRITE HAS A CHECK TOO, and it is the same write storing nothing.
 //
-// The Budgets screen raises one seat's ceiling through `PUT
-// /config/roles/{handle}` and checks it first, because the caller of an entity
-// write never sees the rest of the document: the whole-company validation
-// behind the splice is the only place it can learn that a ceiling it typed sits
-// above the company's own and will never refuse a turn. Without the parameter
-// the route stored every check as a revision and an epoch; with it read after
-// the body, a mistyped value was a write.
+// The caller of an entity write never sees the rest of the document, so the
+// whole-company validation behind the splice is the only place it can learn
+// that a provider fine on its own leaves the company invalid. Without the
+// parameter the route stored every check as a revision and an epoch; with it
+// read after the body, a mistyped value was a write.
 func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	t.Parallel()
-	capped := strings.Replace(companyDoc, "name: Acme\n", "name: Acme\ntoken_budget:\n  day: 1000\n", 1)
 	s := newCountedSurface(t)
-	base := s.seed(t, capped, nil)
+	base := s.seed(t, companyDoc)
 	s.forget()
 
-	role := entityOf(t, s.surface, configapi.EntityRoles, "ceo")
-	role["token_budget"] = map[string]any{"day": 5000}
-	raised, err := json.Marshal(role)
+	provider := entityOf(t, s.surface, configapi.EntityLLMProviders, "zulu")
+	provider["model"] = "claude-opus-5"
+	changed, err := json.Marshal(provider)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// No summary: nothing is stored to record one on.
-	res := s.do(t, http.MethodPut, "/config/roles/ceo?dry_run=true", string(raised), nil)
+	res := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(changed), nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("an entity check = %d, want 200: %s", res.Code, res.Body)
 	}
 	var answer struct {
-		Valid    bool             `json:"valid"`
-		Base     string           `json:"base_revision_id"`
-		Warnings []config.Warning `json:"warnings"`
+		Valid bool   `json:"valid"`
+		Base  string `json:"base_revision_id"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
 		t.Fatalf("decode: %v (%s)", err, res.Body)
@@ -466,43 +522,37 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	if !answer.Valid || answer.Base != base {
 		t.Errorf("valid = %v, base = %q, want true and %q", answer.Valid, answer.Base, base)
 	}
-	idle := slices.IndexFunc(answer.Warnings, func(w config.Warning) bool {
-		return w.Path == "roles[0].token_budget.day" && w.Seat == "ceo"
-	})
-	if idle < 0 {
-		t.Errorf("warnings = %+v, want the seat ceiling above the company's, located", answer.Warnings)
-	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("an entity check wrote %+v, want nothing", got)
 	}
-	if budget := entityOf(t, s.surface, configapi.EntityRoles, "ceo")["token_budget"]; budget != nil {
-		t.Errorf("the check changed the seat: token_budget = %v", budget)
+	if model := entityOf(t, s.surface, configapi.EntityLLMProviders, "zulu")["model"]; model != "claude-sonnet-5" {
+		t.Errorf("the check changed the provider: model = %v", model)
 	}
 
-	// A refusal is the write's own, located at the key to remove.
-	role["token_budget"] = map[string]any{"day": 0}
-	zero, err := json.Marshal(role)
+	// A refusal is the write's own, located at the key to correct.
+	provider["type"] = "nonsense"
+	broken, err := json.Marshal(provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	refused := s.do(t, http.MethodPut, "/config/roles/ceo?dry_run=true", string(zero), nil)
+	refused := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(broken), nil)
 	if refused.Code != http.StatusBadRequest ||
-		!strings.Contains(refused.Body.String(), "roles[0].token_budget.day") {
-		t.Errorf("a check of a 0 ceiling = %d %s, want 400 located at the key", refused.Code, refused.Body)
+		!strings.Contains(refused.Body.String(), "providers.llm.zulu.type") {
+		t.Errorf("a check of an unknown type = %d %s, want 400 located at the key", refused.Code, refused.Body)
 	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("a refused entity check wrote %+v, want nothing", got)
 	}
 
 	// And a mistyped parameter is refused before the body is read.
-	if bad := s.do(t, http.MethodPut, "/config/roles/ceo?dry_run=yes", string(raised), nil); bad.Code != http.StatusBadRequest ||
+	if bad := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=yes", string(changed), nil); bad.Code != http.StatusBadRequest ||
 		decode(t, bad)["error"] != "invalid_query" {
 		t.Errorf("dry_run=yes = %d %s, want 400 invalid_query", bad.Code, bad.Body)
 	}
 
 	// THE FAKES CAN COUNT: the same request as a write makes one of each.
-	written := s.do(t, http.MethodPut, "/config/roles/ceo", string(raised),
-		map[string]string{"X-Summary": "raise the CEO's daily ceiling"})
+	written := s.do(t, http.MethodPut, "/config/llm-providers/zulu", string(changed),
+		map[string]string{"X-Summary": "move zulu to opus"})
 	if written.Code != http.StatusCreated {
 		t.Fatalf("the entity write = %d, want 201: %s", written.Code, written.Body)
 	}

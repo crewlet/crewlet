@@ -58,7 +58,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 	e, company := routingEngine(t, srv.URL)
 
 	// THE APPLY, which resolves what it can and leaves this seat behind.
-	e.refreshParties(company)
+	e.refreshParties(t.Context(), company)
 	if _, err := e.startJira(t.Context(), company, company.Config.Integrations.Jira); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 		t.Fatalf("company: %v", err)
 	}
 	e.epoch.current.Store(rebuilt)
-	e.refreshParties(rebuilt)
+	e.refreshParties(t.Context(), rebuilt)
 
 	if found := e.resolveRouting(t.Context(), integration.KindJira, nil); len(found) != 0 {
 		t.Errorf("findings = %+v, want none: no seat here claims a tracker "+
@@ -144,7 +144,7 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 	t.Parallel()
 	e, company := routingEngine(t, "https://jira.example.com")
-	e.refreshParties(company)
+	e.refreshParties(t.Context(), company)
 
 	for _, kind := range integration.Kinds {
 		switch kind {
@@ -162,9 +162,10 @@ func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 // instance at url.
 func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	t.Helper()
+	e := sealingNode(t)
 	// AN EMPTY ENVIRONMENT, so ${JIRA_ORG_TOKEN} answers nothing whatever
 	// the runner exports.
-	e := &Engine{environ: config.MapSource{}}
+	e.environ = config.MapSource{}
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -215,7 +216,7 @@ func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	e, company := routingEngine(t, srv.URL)
-	e.refreshParties(company)
+	e.refreshParties(t.Context(), company)
 
 	// A pass whose own world is entirely converged: every finding below
 	// belongs to the engine.
@@ -298,7 +299,7 @@ roles:
 				t.Fatalf("company: %v", err)
 			}
 			e.epoch.current.Store(company)
-			e.refreshParties(company)
+			e.refreshParties(t.Context(), company)
 
 			if found := e.resolveRouting(t.Context(), integration.KindGitLab, nil); len(found) != 0 {
 				t.Errorf("findings = %+v; the surface's own pass reports the "+
@@ -327,7 +328,7 @@ func TestASeatTheSurfacesOwnPassReportedIsNotReportedTwice(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	e, company := routingEngine(t, srv.URL)
-	e.refreshParties(company)
+	e.refreshParties(t.Context(), company)
 
 	if found := e.resolveRouting(t.Context(), integration.KindJira,
 		map[string]bool{"ceo": true}); len(found) != 0 {

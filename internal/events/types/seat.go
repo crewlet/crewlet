@@ -8,10 +8,21 @@ import (
 )
 
 // A person's control over a running seat: pausing it, resuming it, a turn a
-// pause stopped, and a note a person sent a running turn. A pause itself is a coordination record (coord.SeatPause);
-// these are the fleet's account of each change, published once by the writer
-// whose compare-and-set won, so two people pausing one seat at once put one row
-// in the log rather than two.
+// pause stopped, and a note a person sent a running turn. A pause itself is a
+// coordination record (coord.SeatPause); these are the fleet's account of each
+// change, published once by the writer whose compare-and-set won, so two people
+// pausing one seat at once put one row in the log rather than two.
+//
+// # Who did it, in three halves
+//
+// Every `…_by` here is the author iam.ActorFor names — the seat for a person
+// the identity directory binds to one, the login for anybody else — beside its
+// `…_by_kind` (iam.ActorKind's vocabulary: agent, human, operator, system) and
+// the `operator_id` the gesture came through (`pat:<id>`, `session:<lineage>`,
+// or the login where the principal is its own credential). The same three
+// facts every tracker and page record carries, under the same names, so
+// a feed row about a pause and the history row of the work it held up cannot
+// name two different people.
 
 func init() {
 	events.Register[SeatPaused]()
@@ -27,11 +38,12 @@ type SeatPaused struct {
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 
-	// PausedBy is who paused it — the author, which for a person acting
-	// through a credential is the token's own name — and PausedBySeat the
-	// person that credential is bound to, empty for one nobody bound.
+	// PausedBy is who paused it, PausedByKind what sort of author that is,
+	// and OperatorID the credential they did it through — see the file's
+	// doc for the three halves.
 	PausedBy     string `json:"paused_by"`
-	PausedBySeat string `json:"paused_by_seat,omitempty"`
+	PausedByKind string `json:"paused_by_kind"`
+	OperatorID   string `json:"operator_id,omitempty"`
 
 	// Reason is why, in the pauser's own words. Optional.
 	Reason string `json:"reason,omitempty"`
@@ -59,11 +71,7 @@ func (e SeatPaused) AgentID() string { return e.Agent }
 // SummaryFor names who paused the seat, which is the one question a feed row
 // about a pause is asked.
 func (e SeatPaused) SummaryFor(actor string) string {
-	who := e.PausedBySeat
-	if who == "" {
-		who = e.PausedBy
-	}
-	phrase := "was paused by " + who
+	phrase := "was paused by " + e.PausedBy
 	if e.StopRunning {
 		phrase += ", stopping its turn"
 	}
@@ -77,16 +85,19 @@ type SeatResumed struct {
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 
-	// ResumedBy and ResumedBySeat are who lifted it, in the same two halves
-	// as [SeatPaused.PausedBy].
+	// ResumedBy, ResumedByKind and OperatorID are who lifted it and the
+	// credential they did it through, in the three halves of
+	// [SeatPaused.PausedBy].
 	ResumedBy     string `json:"resumed_by"`
-	ResumedBySeat string `json:"resumed_by_seat,omitempty"`
+	ResumedByKind string `json:"resumed_by_kind"`
+	OperatorID    string `json:"operator_id,omitempty"`
 
-	// PausedBy and PausedAt are the pause this lifted, so the row that ends
-	// a pause says how long it lasted and whose it was without joining back
-	// to a row that may have aged out of the log.
-	PausedBy string    `json:"paused_by"`
-	PausedAt time.Time `json:"paused_at"`
+	// PausedBy, PausedByKind and PausedAt are the pause this lifted, so the
+	// row that ends a pause says how long it lasted and whose it was
+	// without joining back to a row that may have aged out of the log.
+	PausedBy     string    `json:"paused_by"`
+	PausedByKind string    `json:"paused_by_kind"`
+	PausedAt     time.Time `json:"paused_at"`
 }
 
 // EventType is the "seat_resumed" wire type.
@@ -100,11 +111,7 @@ func (e SeatResumed) AgentID() string { return e.Agent }
 
 // SummaryFor names who resumed the seat.
 func (e SeatResumed) SummaryFor(actor string) string {
-	who := e.ResumedBySeat
-	if who == "" {
-		who = e.ResumedBy
-	}
-	return lead(actor, "was resumed by "+who)
+	return lead(actor, "was resumed by "+e.ResumedBy)
 }
 
 // AgentTurnStopped records that a turn was ended by a person rather than by
@@ -125,11 +132,12 @@ type AgentTurnStopped struct {
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
 	WorkKey string `json:"work_key,omitempty"`
 
-	// StoppedBy and StoppedBySeat are who paused the seat with the stop,
-	// in the same two halves as [SeatPaused.PausedBy], and Reason is what
-	// they gave.
+	// StoppedBy, StoppedByKind and OperatorID are who paused the seat with
+	// the stop and the credential they did it through, in the three halves
+	// of [SeatPaused.PausedBy], and Reason is what they gave.
 	StoppedBy     string `json:"stopped_by"`
-	StoppedBySeat string `json:"stopped_by_seat,omitempty"`
+	StoppedByKind string `json:"stopped_by_kind"`
+	OperatorID    string `json:"operator_id,omitempty"`
 	Reason        string `json:"reason,omitempty"`
 }
 
@@ -144,11 +152,7 @@ func (e AgentTurnStopped) AgentID() string { return e.Agent }
 
 // SummaryFor names who stopped the turn.
 func (e AgentTurnStopped) SummaryFor(actor string) string {
-	who := e.StoppedBySeat
-	if who == "" {
-		who = e.StoppedBy
-	}
-	return lead(actor, "had its turn stopped by "+who)
+	return lead(actor, "had its turn stopped by "+e.StoppedBy)
 }
 
 // SteerOutcome is what became of a person's note to a running turn.
@@ -207,10 +211,12 @@ type AgentTurnSteered struct {
 	// Note is what the person wrote.
 	Note string `json:"note"`
 
-	// SteeredBy and SteeredBySeat are who sent it, in the same two halves
-	// as [SeatPaused.PausedBy], and SentAt when the turn took it.
+	// SteeredBy, SteeredByKind and OperatorID are who sent it and the
+	// credential they sent it through, in the three halves of
+	// [SeatPaused.PausedBy], and SentAt when the turn took it.
 	SteeredBy     string    `json:"steered_by"`
-	SteeredBySeat string    `json:"steered_by_seat,omitempty"`
+	SteeredByKind string    `json:"steered_by_kind"`
+	OperatorID    string    `json:"operator_id,omitempty"`
 	SentAt        time.Time `json:"sent_at"`
 }
 
@@ -225,12 +231,8 @@ func (e AgentTurnSteered) AgentID() string { return e.Agent }
 
 // SummaryFor names who sent the note and whether the turn read it.
 func (e AgentTurnSteered) SummaryFor(actor string) string {
-	who := e.SteeredBySeat
-	if who == "" {
-		who = e.SteeredBy
-	}
 	if e.Outcome == SteerExpired {
-		return lead(actor, "finished before reading a note from "+who)
+		return lead(actor, "finished before reading a note from "+e.SteeredBy)
 	}
-	return lead(actor, "read a note from "+who)
+	return lead(actor, "read a note from "+e.SteeredBy)
 }

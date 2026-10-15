@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -31,10 +30,10 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err := addressMatches(at, container, token, p.Container, p.Title); err != nil {
 		return 0, err
 	}
-	// A CREATE FOR A PURGED PAGE APPLIES NOWHERE. The gate cannot see this
-	// — a title subject names its page only in a payload the gate may not
-	// be able to read — so the check is here, where the payload is
-	// decoded.
+	// A CREATE FOR A PURGED PAGE APPLIES NOWHERE. The deletion gate cannot
+	// see this — it is keyed on the subject ([gatedPage]), and a title
+	// subject names its page only in the payload — so the check is here,
+	// where the payload is decoded.
 	purged, err := pageIsPurged(ctx, tx, p.PageID)
 	if err != nil {
 		return 0, err
@@ -105,12 +104,12 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	// A RENAME OF A PURGED PAGE APPLIES NOWHERE, on [Applier.applyCreate]'s
 	// reasoning and for a sharper consequence. The deletion gate cannot see
-	// this record — a title subject names its page only in a payload the
-	// gate may not be able to read — so a rename that lost its race with a
-	// purge would otherwise claim an address for a page whose every row is
-	// gone. Nothing releases such a claim and nothing can re-take it: the
-	// claim row IS the first-writer guard, so the name is dead for the life
-	// of the deployment.
+	// this record — it is keyed on the subject ([gatedPage]), and a title
+	// subject names its page only in the payload — so a rename that lost
+	// its race with a purge would otherwise claim an address for a page
+	// whose every row is gone. Nothing releases such a claim and nothing
+	// can re-take it: the claim row IS the first-writer guard, so the name
+	// is dead for the life of the deployment.
 	purged, err := pageIsPurged(ctx, tx, p.PageID)
 	if err != nil {
 		return 0, err
@@ -266,7 +265,7 @@ func (a *Applier) applyRetitle(ctx context.Context, tx *sql.Tx, at applyContext,
 func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 	p PagePatch) (int, error) {
 
-	head, found, err := readHead(ctx, tx, at.subject().ID)
+	head, writtenAt, found, err := readHeadAt(ctx, tx, at.subject().ID)
 	if err != nil {
 		return 0, err
 	}
@@ -280,6 +279,21 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 			"this position, so a missing row is a record this build applied "+
 			"incorrectly rather than one that has not arrived",
 			at.position, at.subject().ID)
+	}
+	if writtenAt >= at.packed {
+		// ALREADY APPLIED. Every row this function writes is guarded on
+		// its own key, and for one of them that is not enough: the next
+		// revision number is DERIVED from the head it just read, so a
+		// redelivery reads a head that has already moved, derives a
+		// number one higher, and inserts a second immutable body under
+		// a key nothing has taken. Two nodes then hold the same page at
+		// different revision counts, and the one that saw the
+		// redelivery reports a version the other has never heard of.
+		//
+		// A KEY GUARD CANNOT EXPRESS THIS, which is why the check is
+		// here and not on the insert: the key is correct and unused, and
+		// the record that produced it is one this node has already run.
+		return 0, nil
 	}
 
 	rows := 0
@@ -847,9 +861,8 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 	change := Change{
 		V: DocumentVersion, ID: at.record.OpID, PageID: pageID, Kind: kind,
 		Actor: at.record.Actor, ActorKind: at.record.ActorKind,
-		OperatorID: at.record.OperatorID, ActorSeat: at.record.ActorSeat,
-		CommentID: commentID, Excerpt: excerpt,
-		TurnID: at.record.TurnID, Chain: at.record.Chain,
+		OperatorID: at.record.OperatorID, CommentID: commentID,
+		Excerpt: excerpt, TurnID: at.record.TurnID, Chain: at.record.Chain,
 		Quiet: quiet == 1, CreatedAt: at.brokerAt,
 	}
 	document, err := EncodeChange(change)
@@ -858,13 +871,12 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO pages_history
-			(id, page_id, kind, actor, actor_kind, operator_id, actor_seat,
-			 comment_id, excerpt, turn_id, quiet, created_at, broker_at, version,
-			 document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, page_id, kind, actor, actor_kind, operator_id, comment_id,
+			 excerpt, turn_id, quiet, created_at, broker_at, version, document)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		change.ID, pageID, string(kind), change.Actor, string(change.ActorKind),
-		change.OperatorID, change.ActorSeat, commentID, excerpt, change.TurnID, quiet,
+		change.OperatorID, commentID, excerpt, change.TurnID, quiet,
 		store.EncodeTime(at.brokerAt), store.EncodeTime(at.brokerAt),
 		at.packed, document)
 	if err != nil {
@@ -875,22 +887,38 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 	return int(n), nil
 }
 
-// readHead reads one page's current state out of this transaction.
-func readHead(ctx context.Context, tx *sql.Tx, id string) (Page, bool, error) {
+// readHeadAt reads one page's current state AND the position it was last
+// written at, out of this transaction.
+//
+// THE POSITION COMES BACK WITH THE STATE because an apply that DERIVES a value
+// from the state it read — the next revision number is the head's version plus
+// one — cannot be made idempotent by a key guard on what it writes. A
+// redelivery re-reads a head that has already moved, derives a number one
+// higher, and inserts a second row under a key nothing has taken. Reading the
+// two separately is how one of them ends up describing a different apply.
+func readHeadAt(ctx context.Context, tx *sql.Tx, id string) (Page, int64, bool, error) {
 	var document []byte
+	var at int64
 	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM pages_heads WHERE id = ?`, id).Scan(&document)
+		`SELECT document, version FROM pages_heads WHERE id = ?`, id).Scan(&document, &at)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Page{}, false, nil
+		return Page{}, 0, false, nil
 	case err != nil:
-		return Page{}, false, fmt.Errorf("pages: read the head of %s: %w", id, err)
+		return Page{}, 0, false, fmt.Errorf("pages: read the head of %s: %w", id, err)
 	}
 	head, err := DecodePage(document)
 	if err != nil {
-		return Page{}, false, fmt.Errorf("pages: decode the head of %s: %w", id, err)
+		return Page{}, 0, false, fmt.Errorf("pages: decode the head of %s: %w", id, err)
 	}
-	return head, true, nil
+	return head, at, true, nil
+}
+
+// readHead is [readHeadAt] for the callers that write nothing derived from
+// what they read, and therefore need no position to compare against.
+func readHead(ctx context.Context, tx *sql.Tx, id string) (Page, bool, error) {
+	head, _, found, err := readHeadAt(ctx, tx, id)
+	return head, found, err
 }
 
 // pageIsPurged reports whether a page carries a permanent deletion marker.
@@ -1002,7 +1030,7 @@ func claimTitle(ctx context.Context, tx *sql.Tx, at applyContext,
 func addressMatches(at applyContext, container, token, claimedContainer,
 	claimedTitle string) error {
 
-	if strings.ToUpper(claimedContainer) == container &&
+	if ContainerKey(claimedContainer) == container &&
 		TitleToken(claimedTitle) == token {
 		return nil
 	}
@@ -1010,5 +1038,5 @@ func addressMatches(at applyContext, container, token, claimedContainer,
 		"its payload claims %s/%q — the subject IS the address, so a record "+
 		"that took one and wrote another would leave the arbitrated name held "+
 		"by nothing", at.position, container, token,
-		strings.ToUpper(claimedContainer), claimedTitle)
+		ContainerKey(claimedContainer), claimedTitle)
 }

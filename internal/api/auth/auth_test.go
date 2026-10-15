@@ -1,14 +1,20 @@
 package auth_test
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // guard builds a guard over a Tier A shaped by the mutator.
@@ -26,12 +32,18 @@ func withTokens(tokens ...config.APIToken) func(*config.APIAuth) {
 }
 
 // serve runs one request through the guard and returns the response and the
-// operator id the handler saw.
+// credential a write the handler made would be attributed through.
 func serve(t *testing.T, g *auth.Guard, method, path, header string) (*http.Response, string) {
 	t.Helper()
 	var seen string
 	handler := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, _ = auth.OperatorFrom(r.Context())
+		if principal, how := iam.From(r.Context()); how == iam.Resolved {
+			seen = auth.AttributionOf(r.Context()).OperatorID
+			if seen != iam.ActorFor(principal).OperatorID {
+				t.Errorf("the attribution a write takes (%q) is not the "+
+					"principal's own (%q)", seen, iam.ActorFor(principal).OperatorID)
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(method, path, nil)
@@ -45,83 +57,118 @@ func serve(t *testing.T, g *auth.Guard, method, path, header string) (*http.Resp
 
 // --- what the guard covers ---------------------------------------------- //
 
-func TestWritesNeedATokenAndReadsDoNotByDefault(t *testing.T) {
-	t.Parallel()
-	// allow_anonymous_read defaults on, and what it opens is worth naming:
-	// /events and /agents/{id}/memory carry full LLM transcripts.
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-
-	for _, method := range []string{"GET", "HEAD", "OPTIONS"} {
-		if g.Requires("/events", method) {
-			t.Errorf("%s /events required a token under anonymous read", method)
-		}
-	}
-	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
-		if !g.Requires("/agents", method) {
-			t.Errorf("%s /agents served without a token", method)
-		}
-	}
-}
-
-func TestConfigIsGuardedEvenForReads(t *testing.T) {
-	t.Parallel()
-	// Reading it exposes the whole company document, and writing it
-	// changes the company — so it is never eligible for anonymous read.
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	for _, path := range []string{"/config", "/config/", "/config/revisions", "/config/audit"} {
-		if !g.Requires(path, "GET") {
-			t.Errorf("GET %s served without a token", path)
-		}
-	}
-}
-
-func TestSecretsIsGuardedEvenForReads(t *testing.T) {
-	t.Parallel()
-	// The fleet's credential store. Even the listing, which carries no
-	// values, says which credentials a company holds and when each last
-	// changed — and one route returns a value outright. Anonymous read is
-	// ON by default, so leaving this off the list would serve the whole
-	// inventory to anyone who could reach the port.
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	for _, path := range []string{
-		"/secrets", "/secrets/", "/secrets/GITLAB_TOKEN",
-		"/secrets/GITLAB_TOKEN?reveal=true",
-	} {
-		if !g.Requires(path, "GET") {
-			t.Errorf("GET %s served without a token", path)
-		}
-	}
-}
-
-// EVERY ALWAYS-GUARDED PREFIX IS ACTUALLY CONSULTED.
+// EVERY GUARDED ROUTE NEEDS A CREDENTIAL, READS INCLUDED, and the method no
+// longer enters into it.
 //
-// The list and the check are one function apart, and the failure mode of a
-// prefix that is declared but not consulted is silent: the surface serves
-// anonymously in the default posture and nothing anywhere reports it.
-func TestEveryAlwaysGuardedPrefixIsEnforced(t *testing.T) {
+// This asserted the opposite until `allow_anonymous_read` was deleted: a GET
+// of /events served without one, by default, and /events and
+// /agents/{id}/memory carry full LLM transcripts — prompts, tool arguments,
+// diary entries.
+func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 	t.Parallel()
+	// THROUGH THE MIDDLEWARE, because the method is what this case is
+	// about and [auth.Unguarded] does not take one: asked of the predicate,
+	// the loop below would be one tautology repeated seven times. The
+	// middleware is where a verb could still be branched on, so it is the
+	// only place the claim can be held.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	if len(auth.GuardedPrefixes) == 0 {
-		t.Fatal("no prefix is always guarded, so this asserts nothing")
-	}
-	for _, prefix := range auth.GuardedPrefixes {
-		if !g.Requires(prefix, "GET") {
-			t.Errorf("%s is declared always-guarded and served anyway", prefix)
+
+	for _, method := range []string{
+		"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE",
+	} {
+		for _, path := range []string{"/events", "/agents", "/agents/x/memory"} {
+			res, _ := serve(t, g, method, path, "")
+			if res.StatusCode != http.StatusUnauthorized {
+				t.Errorf("%s %s answered %d without a credential, want 401",
+					method, path, res.StatusCode)
+			}
 		}
-		if !auth.AlwaysGuarded(prefix + "/anything") {
-			t.Errorf("%s does not cover what is beneath it", prefix)
+	}
+	// The counterfactual: the credential IS served, or the case above would
+	// pass on a guard that refused everything.
+	if res, _ := serve(t, g, http.MethodGet, "/events", "Bearer secret"); res.StatusCode != http.StatusOK {
+		t.Errorf("a valid credential answered %d", res.StatusCode)
+	}
+}
+
+// THE SURFACES THAT CARRY THE COMPANY ITSELF ARE GUARDED, reads included, and
+// so is everything beneath each of them.
+//
+// This used to be a declared list — `GuardedPrefixes` — because everything NOT
+// on it followed `allow_anonymous_read` and served by default. The list is gone
+// with that posture: guarded is what a route IS unless [auth.Unguarded] exempts
+// it. What still has to be asserted is that none of these ever lands on the
+// exemption list, because that is the one edit that would open them again, and
+// each is a surface whose READ is as sensitive as its write — or, for the last
+// two, whose every WRITE lands a record with an author:
+//
+//   - /config: the whole company document — its org chart, its integrations,
+//     and every ${VAR} reference in it by name.
+//   - /secrets: the fleet's credential store. Even the listing, carrying no
+//     values, says which credentials a company holds and when each last
+//     changed, and one route returns a value outright.
+//   - /setup: the map of which credentials a company has NOT configured, which
+//     is worth as much to an attacker as the configuration.
+//   - /operator: the operator MCP surface, which files and moves work and
+//     writes the knowledge base. Deliberately not under /mcp/, which is exempt
+//     wholesale for the sandbox bridge.
+//   - /work and /pages: the human write surface over the tracker and the
+//     knowledge base. A write there with nobody behind it would be a record
+//     with no author, which is the one thing it exists never to write.
+func TestTheCompanysOwnSurfacesAreGuardedEvenForReads(t *testing.T) {
+	t.Parallel()
+	for _, prefix := range []string{
+		"/config", "/secrets", "/setup", "/operator", "/work", "/pages",
+	} {
+		for _, path := range []string{
+			prefix, prefix + "/", prefix + "/anything",
+			prefix + "/deep/er?reveal=true",
+		} {
+			if auth.Unguarded(path) {
+				t.Errorf("%s is exempt from the guard", path)
+			}
 		}
 	}
 }
 
-func TestClosingAnonymousReadClosesReadsToo(t *testing.T) {
+// THE CONTROL FOR THE RULE ABOVE. If every path were guarded the assertion
+// would pass for the wrong reason, so the exemptions have to still exempt —
+// and they are the only thing that does.
+func TestOnlyTheDeclaredExemptionsAreUnguarded(t *testing.T) {
 	t.Parallel()
-	g := guard(t, func(a *config.APIAuth) {
-		a.AllowAnonymousRead = false
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	})
-	if !g.Requires("/events", "GET") {
-		t.Error("a closed posture still served reads")
+	for _, path := range []string{"/health", "/ready", "/", "/webhooks/slack"} {
+		if !auth.Unguarded(path) {
+			t.Errorf("%s is declared exempt and was guarded anyway", path)
+		}
+	}
+	if auth.Unguarded("/events") {
+		t.Error("/events is not exempt and was served without a credential")
+	}
+}
+
+// THE SIGN-OUT OF THIS SESSION IS EXEMPT, AND NO OTHER SIGN-OUT IS.
+//
+// A sign-out clears the cookie whatever the node can read, and guarded, a node
+// that could not read its identity estate answered it 503 before it ran — so
+// nobody could sign out on exactly the node that could vouch for nobody. The
+// one that ends THIS session verifies every bearer the browser holds itself,
+// so it needs no guard. Signing out everywhere and ending a named session act
+// on a caller the guard resolved, and exempting them — or a /auth/logout/
+// prefix, which would take both with it — would be a credential surface
+// behind no credential.
+//
+// Mutation: drop the sign-out from the exact set and its row is guarded;
+// exempt a prefix and the last two rows are served without a credential.
+func TestOnlyThisSessionsSignOutIsUnguarded(t *testing.T) {
+	t.Parallel()
+	for path, exempt := range map[string]bool{
+		auth.PathAuthLogout: true,
+		"/auth/logout/all":  false,
+		"/auth/logout/018f3a9c-0000-7000-8000-0000000000bb": false,
+	} {
+		if auth.Unguarded(path) != exempt {
+			t.Errorf("%s: unguarded = %v, want %v", path, !exempt, exempt)
+		}
 	}
 }
 
@@ -130,10 +177,6 @@ func TestTheProbesAndTheShellAreNeverGuarded(t *testing.T) {
 	// An orchestrator has no token, and a liveness check that 401s is a
 	// liveness check that fails. The page that prompts for a token cannot
 	// itself require one.
-	g := guard(t, func(a *config.APIAuth) {
-		a.AllowAnonymousRead = false
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	})
 	for _, path := range []string{
 		"/", "/health", "/ready", "/dashboard", "/favicon.ico",
 		"/health/", "/ready/", "/dashboard/",
@@ -143,7 +186,7 @@ func TestTheProbesAndTheShellAreNeverGuarded(t *testing.T) {
 		// reads the whole company. Its per-run signed token IS the check.
 		"/mcp/tok",
 	} {
-		if g.Requires(path, "GET") {
+		if !auth.Unguarded(path) {
 			t.Errorf("%s was guarded", path)
 		}
 	}
@@ -154,12 +197,8 @@ func TestASiblingOfAProbeIsGuarded(t *testing.T) {
 	// The exact/prefix split is the point. As prefixes, /health and /ready
 	// would silently have exempted any future route merely starting with
 	// those letters, on the day it was added.
-	g := guard(t, func(a *config.APIAuth) {
-		a.AllowAnonymousRead = false
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	})
 	for _, path := range []string{"/health-admin", "/readyz-reset", "/healthz", "/dashboards"} {
-		if !g.Requires(path, "GET") {
+		if auth.Unguarded(path) {
 			t.Errorf("%s was exempted as if it were a probe", path)
 		}
 	}
@@ -192,10 +231,12 @@ func TestAValidTokenAuthenticatesAsItsOperator(t *testing.T) {
 		config.APIToken{ID: "founder", Token: "secret-a"},
 		config.APIToken{ID: "ci", Token: "secret-b"},
 	))
+	// THROUGH THE MIDDLEWARE, which is the only path a bearer takes: each
+	// token resolves to its own login, and never to its neighbour's.
 	for id, token := range map[string]string{"founder": "secret-a", "ci": "secret-b"} {
-		got, ok := g.Operator(token)
-		if !ok || got != id {
-			t.Errorf("token for %q resolved to %q/%v", id, got, ok)
+		res, seen := serve(t, g, "POST", "/agents", "Bearer "+token)
+		if res.StatusCode != http.StatusOK || seen != iam.TokenLogin(id) {
+			t.Errorf("token for %q resolved to %q (%d)", id, seen, res.StatusCode)
 		}
 	}
 }
@@ -204,8 +245,9 @@ func TestAWrongOrMissingTokenAuthenticatesAsNobody(t *testing.T) {
 	t.Parallel()
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 	for _, candidate := range []string{"", "wrong", "secre", "secrett", "SECRET"} {
-		if _, ok := g.Operator(candidate); ok {
-			t.Errorf("%q authenticated", candidate)
+		res, seen := serve(t, g, "POST", "/agents", "Bearer "+candidate)
+		if res.StatusCode != http.StatusUnauthorized || seen != "" {
+			t.Errorf("%q authenticated as %q (%d)", candidate, seen, res.StatusCode)
 		}
 	}
 }
@@ -221,7 +263,7 @@ func TestTheBearerSchemeIsCaseInsensitiveAndTrimmed(t *testing.T) {
 		if res.StatusCode != http.StatusOK {
 			t.Errorf("%q: status = %d", header, res.StatusCode)
 		}
-		if seen != "founder" {
+		if seen != "token:founder" {
 			t.Errorf("%q: operator = %q", header, seen)
 		}
 	}
@@ -240,24 +282,27 @@ func TestANonBearerHeaderIsRefused(t *testing.T) {
 
 // --- the postures -------------------------------------------------------- //
 
-func TestNoTokensRefusesEveryWriteAndAllOfConfig(t *testing.T) {
+func TestNoTokensRefusesEveryGuardedRoute(t *testing.T) {
 	t.Parallel()
-	// A real posture, not an oversight: a read-only deployment has no
-	// credential to manage, which is strictly safer than being made to
-	// mint one it will never use.
+	// NO LONGER A POSTURE ANYBODY SHOULD BE IN, which config refuses once
+	// the API is served — but the guard must not fail, so what it does
+	// here is still worth pinning: no candidate can match, so everything
+	// but the exemptions answers 401. It used to serve every read.
 	g := guard(t, nil)
 
-	res, _ := serve(t, g, "GET", "/events", "")
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("a read was refused with no tokens configured: %d", res.StatusCode)
-	}
 	for _, tc := range []struct{ method, path string }{
-		{"POST", "/agents"}, {"GET", "/config"}, {"POST", "/config/revisions"},
+		{"GET", "/events"}, {"POST", "/agents"},
+		{"GET", "/config"}, {"POST", "/config/revisions"},
 	} {
 		res, _ := serve(t, g, tc.method, tc.path, "Bearer anything")
 		if res.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401: no token can match", tc.method, tc.path, res.StatusCode)
 		}
+	}
+	// The exemptions still serve, or the assertion above would pass on a
+	// guard that refused literally everything.
+	if res, _ := serve(t, g, "GET", "/health", ""); res.StatusCode != http.StatusOK {
+		t.Errorf("the liveness probe = %d, want it served", res.StatusCode)
 	}
 }
 
@@ -272,42 +317,12 @@ func TestNoBootstrapAtAllStillGuardsWrites(t *testing.T) {
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 with no Tier A at all", res.StatusCode)
 	}
-	if res, _ := serve(t, g, "GET", "/events", ""); res.StatusCode != http.StatusOK {
-		t.Errorf("reads = %d, want them served", res.StatusCode)
+	if res, _ := serve(t, g, "GET", "/events", ""); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("reads = %d, want 401: with no Tier A nobody has said who "+
+			"may act, and the read surface carries every LLM transcript this "+
+			"company has produced", res.StatusCode)
 	}
 }
-
-func TestDisabledServesEverythingAsAnonymous(t *testing.T) {
-	t.Parallel()
-	g := guard(t, func(a *config.APIAuth) { a.Disabled = true })
-
-	res, seen := serve(t, g, "POST", "/config/revisions", "")
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want a disabled guard to serve", res.StatusCode)
-	}
-	// The explicit label is what keeps a disabled-mode write
-	// distinguishable in an audit row from a real operator's.
-	if seen != auth.AnonymousOperator {
-		t.Errorf("operator = %q, want %q", seen, auth.AnonymousOperator)
-	}
-	if got, ok := g.Operator(""); !ok || got != auth.AnonymousOperator {
-		t.Errorf("Operator(\"\") = %q/%v", got, ok)
-	}
-}
-
-func TestTheReservedIDIsTheOneTheAPIStamps(t *testing.T) {
-	t.Parallel()
-	// Config refuses it as a token id, the chart refuses it as a seat
-	// binding, and the API stamps it. Two copies would disagree silently,
-	// each side staying self-consistent while the reservation stopped
-	// covering what is actually written.
-	if auth.AnonymousOperator != org.ReservedOperatorID {
-		t.Errorf("the API stamps %q but the chart reserves %q",
-			auth.AnonymousOperator, org.ReservedOperatorID)
-	}
-}
-
-// --- the middleware ------------------------------------------------------ //
 
 func TestARefusalSaysSoInJSONAndNothingElse(t *testing.T) {
 	t.Parallel()
@@ -337,39 +352,37 @@ func TestAnUnguardedRouteReachesTheHandlerWithNoOperator(t *testing.T) {
 	}
 }
 
-func TestAValidTokenIsAttributedEvenWhereItIsNotRequired(t *testing.T) {
+func TestABearerIsResolvedOnlyWhereTheGuardJudgesIt(t *testing.T) {
 	t.Parallel()
-	// Attribution and authorization are different questions. A route that
-	// does not REQUIRE a token can still be told who presented one, which
-	// is what lets an operator-only query be answered on a surface the
-	// anonymous-read posture lets through.
-	//
-	// Resolving only on guarded routes made that unreachable: the query
-	// arrived with a valid token, no operator attached, and came back
-	// unauthorized to a caller holding the right credential.
+	// A GUARDED ROUTE RESOLVES THE BEARER IT RELIES ON, and an unguarded
+	// one never compares it. It used to be resolved everywhere, so that an
+	// exempt route could be told who presented one — and none reads that:
+	// what it bought was a directory read for a matching Tier A value on
+	// /health, /static and the webhooks, answering a right guess slower
+	// than a wrong one at line rate, on routes whose refusals nothing
+	// counts. See [auth.Guard]'s resolveUnguarded.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 
-	// An unguarded route under an open read posture.
-	if _, seen := serve(t, g, "GET", "/events", "Bearer secret"); seen != "founder" {
-		t.Errorf("operator = %q on an unguarded read, want founder", seen)
+	if _, seen := serve(t, g, "GET", "/events", "Bearer secret"); seen != "token:founder" {
+		t.Errorf("operator = %q on a guarded read, want token:founder", seen)
 	}
-	// And an exempt one.
-	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "founder" {
-		t.Errorf("operator = %q on an exempt route, want founder", seen)
+	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "" {
+		t.Errorf("operator = %q on an exempt route, want none: the bearer "+
+			"was compared where nothing judges it", seen)
 	}
 }
 
 func TestNobodyIsReportedAsAbsentRatherThanAsAnEmptyName(t *testing.T) {
 	t.Parallel()
-	// OperatorFrom answers (id, ok), and the two halves have to agree. A
-	// failed resolution attached as an empty NAME reads as ok=true with no
-	// id — so a caller that checks ok, which is the whole point of
-	// returning it, is told somebody is there.
+	// A FAILED RESOLUTION IS A FINDING, never a principal with an empty
+	// name: attached as one, a caller asking "is somebody there" — which
+	// is the whole point of the resolution — is told yes.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 
 	var present bool
 	handler := g.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		_, present = auth.OperatorFrom(r.Context())
+		_, how := iam.From(r.Context())
+		present = how == iam.Resolved
 	}))
 	req := httptest.NewRequest("GET", "/events", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
@@ -387,10 +400,10 @@ func TestAWrongTokenIsNotAttributedOnAnUnguardedRoute(t *testing.T) {
 	// route that does not require a token still serves — that is what
 	// unguarded means — but the caller is nobody.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	res, seen := serve(t, g, "GET", "/events", "Bearer wrong")
+	res, seen := serve(t, g, "GET", "/health", "Bearer wrong")
 
 	if res.StatusCode != http.StatusOK {
-		t.Errorf("status = %d: a bad token closed an unguarded read", res.StatusCode)
+		t.Errorf("status = %d: a bad token closed an unguarded route", res.StatusCode)
 	}
 	if seen != "" {
 		t.Errorf("operator = %q, want nobody", seen)
@@ -419,25 +432,44 @@ func TestTheGuardReportsItsOwnPosture(t *testing.T) {
 	t.Parallel()
 	// The startup line has to be able to state what was loaded, which is
 	// the difference between an operator knowing their posture and
-	// assuming it.
+	// assuming it. One number now rather than three: there is no read
+	// posture and no disabled posture left to state.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	if g.Tokens() != 1 || !g.AnonymousRead() || g.Disabled() {
-		t.Errorf("posture = tokens %d / read %v / disabled %v",
-			g.Tokens(), g.AnonymousRead(), g.Disabled())
+	if g.Tokens() != 1 {
+		t.Errorf("posture = tokens %d, want 1", g.Tokens())
+	}
+	if auth.New(nil).Tokens() != 0 {
+		t.Error("a guard built from no Tier A reported credentials it does not hold")
 	}
 }
 
-func TestASocketCanAttachItsOwnOperator(t *testing.T) {
+// A BARE CONTEXT IS UNKNOWN, not anonymous: a handler nobody wired through the
+// guard looks exactly like one whose resolver found nobody, and reading either
+// as the other is how a surface decides it is safe to serve because nothing
+// told it otherwise.
+func TestABareContextIsUnknownRatherThanAnonymous(t *testing.T) {
 	t.Parallel()
-	// The dashboard's socket carries its credential as a query parameter
-	// rather than a header, so the stream handler authenticates it itself
-	// and hands the id down the same way the middleware does.
-	ctx := auth.WithOperator(t.Context(), "founder")
-	if got, ok := auth.OperatorFrom(ctx); !ok || got != "founder" {
-		t.Errorf("operator = %q/%v", got, ok)
+	if _, how := iam.From(t.Context()); how != iam.Unknown {
+		t.Errorf("a bare context resolved as %q, want unknown", how)
 	}
-	if _, ok := auth.OperatorFrom(t.Context()); ok {
-		t.Error("a bare context reported an operator")
+}
+
+// A WRITE NOBODY RESOLVED IS ATTRIBUTED TO `anonymous`, of the operator kind
+// and through no credential — never to an empty name, which reads as a write
+// nobody made, and never to a guess. Mutation: answer the zero Actor for the
+// unresolved arms and the empty author is what a revision records.
+func TestAWriteNobodyResolvedIsAttributedToAnonymous(t *testing.T) {
+	t.Parallel()
+	want := iam.Actor{Name: iam.AnonymousActor, Kind: iam.ActorOperator}
+	for name, ctx := range map[string]context.Context{
+		"a context no resolver touched": t.Context(),
+		"a resolver that found nobody":  iam.WithAnonymous(t.Context()),
+		"a resolver that could not say": iam.WithUnresolved(t.Context(),
+			errors.New("the identity estate is behind")),
+	} {
+		if got := auth.AttributionOf(ctx); got != want {
+			t.Errorf("%s: attributed to %+v, want %+v", name, got, want)
+		}
 	}
 }
 
@@ -451,9 +483,6 @@ func TestAnEmptyConfiguredTokenIsNotABypass(t *testing.T) {
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: ""}}
 	g := auth.New(&b)
 
-	if _, ok := g.Operator(""); ok {
-		t.Error("an empty candidate authenticated against an empty token")
-	}
 	res, seen := serve(t, g, "POST", "/config/revisions", "")
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", res.StatusCode)
@@ -468,35 +497,73 @@ func TestAnEmptyConfiguredTokenIsNotABypass(t *testing.T) {
 	}
 }
 
-func TestConfigRefusesTheShapesThatWouldLockEveryoneOut(t *testing.T) {
+// THE GUARD DOES NOT FAIL, SO CONFIG HAS TO, and this is where the two meet:
+// every posture that would leave this surface unreachable is refused by
+// `crewlet validate` on a laptop rather than by a process at bind time.
+//
+// The list moved wholesale when `allow_anonymous_read` went. It used to hold
+// one shape — no tokens with reads closed — because with reads open a
+// credential-less deployment was a working read-only one. There is no read
+// posture now, so a served API with no credential is unreachable full stop,
+// and three more facts became load-bearing at the same time: whether this node
+// serves admin, the address the cookie's flags come from, and the keyring that
+// signs it.
+func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) {
 	t.Parallel()
-	// Checked in config rather than at API startup, so `crewlet validate`
-	// catches them on a laptop rather than a deployment catching them at
-	// bind time.
+	complete := func() config.Bootstrap {
+		b := config.DefaultBootstrap()
+		// A STREAM THAT SURVIVES A RESTART, which every node needs
+		// whatever it serves; its directory is never opened here.
+		b.Stream.StoreDir = "/var/lib/crewlet/stream"
+		b.API.Port = 8000
+		b.API.ExternalURL = "http://localhost:8000"
+		b.API.Auth.Admin = iam.AdminServe
+		b.API.Auth.Tokens = []config.APIToken{{
+			ID: "founder", Token: strings.Repeat("k", 32),
+			Grants: []iam.Grant{iam.GrantAdmin},
+		}}
+		b.Secrets = config.Secrets{
+			ActiveKeyID: "k1",
+			Keys: []config.SecretKey{{
+				ID: "k1", Material: base64.StdEncoding.EncodeToString(make([]byte, 32)),
+			}},
+		}
+		return b
+	}
+	// THE CONTROL FIRST. Without it every case below could be passing on
+	// some unrelated refusal, which is how a suite ends up asserting that
+	// validation fails rather than that it fails for this reason.
+	control := complete()
+	if err := control.Validate(); err != nil {
+		t.Fatalf("the complete posture does not validate, so every case below "+
+			"may be failing on something else: %v", err)
+	}
 	for _, tc := range []struct {
 		name string
-		auth config.APIAuth
+		make func(*config.Bootstrap)
 		want string
 	}{
-		{
-			// Every route guarded by a token that does not exist: a
-			// process that starts cleanly, binds its port, and answers
-			// 401 to everything including its own dashboard.
-			name: "no tokens with reads closed",
-			auth: config.APIAuth{AllowAnonymousRead: false},
-			want: "nothing is reachable",
-		},
-		{
-			name: "the reserved attribution as a token id",
-			auth: config.APIAuth{
-				AllowAnonymousRead: true,
-				Tokens:             []config.APIToken{{ID: org.ReservedOperatorID, Token: "t"}},
-			},
-			want: "reserved",
-		},
+		{"no credential at all", func(b *config.Bootstrap) {
+			b.API.Auth.Tokens = nil
+		}, "at least one token is required"},
+		{"no word on whether this node serves admin", func(b *config.Bootstrap) {
+			b.API.Auth.Admin = ""
+		}, "required once this node serves the API"},
+		{"no address a browser reaches this on", func(b *config.Bootstrap) {
+			b.API.ExternalURL = ""
+		}, "required once this node serves the API"},
+		{"no keyring to sign a session with", func(b *config.Bootstrap) {
+			b.Secrets = config.Secrets{}
+		}, "every session cookie"},
+		{"a credential short enough to guess", func(b *config.Bootstrap) {
+			b.API.Auth.Tokens[0].Token = "short"
+		}, "at least"},
+		{"a credential whose blast radius nobody stated", func(b *config.Bootstrap) {
+			b.API.Auth.Tokens[0].Grants = nil
+		}, "stated where it is pinned"},
 	} {
-		b := config.DefaultBootstrap()
-		b.API.Auth = tc.auth
+		b := complete()
+		tc.make(&b)
 		err := b.Validate()
 		if err == nil {
 			t.Errorf("%s: validated", tc.name)
@@ -508,85 +575,173 @@ func TestConfigRefusesTheShapesThatWouldLockEveryoneOut(t *testing.T) {
 	}
 }
 
-func TestTheOrdinaryPosturesStillValidate(t *testing.T) {
+// THE COUNTERFACTUAL. A node that serves no HTTP at all needs none of the
+// API's own rules — each is gated on this node SERVING the API (`api.port` set
+// and the ingress role among `node.roles`), and a worker node that had to
+// declare an admin posture, an address and a token for a surface it does not bind
+// would be three settings of ceremony for nothing. The keyring is not one of
+// them: every node needs it, because every node runs state logs whose records
+// are signed under it, so this node carries one and nothing else.
+func TestANodeServingNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
-	// The counterfactual to the two refusals above: no tokens WITH reads
-	// open is a real read-only deployment, and it must not be refused.
-	for _, tc := range []struct {
-		name string
-		auth config.APIAuth
-	}{
-		{"read-only, no credential to manage", config.APIAuth{AllowAnonymousRead: true}},
-		{"reads closed with a token", config.APIAuth{
-			Tokens: []config.APIToken{{ID: "founder", Token: "secret"}},
+	b := config.DefaultBootstrap()
+	b.Stream.StoreDir = "/var/lib/crewlet/stream"
+	b.Secrets = config.Secrets{
+		ActiveKeyID: "k1",
+		Keys: []config.SecretKey{{
+			ID: "k1", Material: base64.StdEncoding.EncodeToString(make([]byte, 32)),
 		}},
-	} {
-		b := config.DefaultBootstrap()
-		b.API.Auth = tc.auth
-		if err := b.Validate(); err != nil {
-			t.Errorf("%s: %v", tc.name, err)
-		}
+	}
+	if b.API.Port != 0 {
+		t.Fatal("the default binds a port, so this case is not the one it names")
+	}
+	if err := b.Validate(); err != nil {
+		t.Errorf("a node serving no API was refused: %v", err)
 	}
 }
 
-// --- the socket's query token -------------------------------------------- //
+// --- no credential in a URL ----------------------------------------------- //
 
-// THE SOCKET PATH TAKES ITS TOKEN FROM THE QUERY, AND NOTHING ELSE DOES.
+// NO ROUTE TAKES A CREDENTIAL FROM ITS URL, THE SOCKET INCLUDED.
 //
-// A browser cannot set a header on a WebSocket constructor, so the dashboard
-// sends its token as ?token= on /ws/stream. The middleware used to read the
-// header alone and leave the query to the stream handler, and under a closed
-// posture it answered 401 before that handler ever ran: the dashboard could
-// not connect with a valid token on the one posture whose point is that the
-// token is required.
-func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
+// The socket used to read `?token=` because a browser cannot set a header on
+// a WebSocket constructor, and it was the one route that paid the price of a
+// credential in a URL — every proxy's access log and the browser's history.
+// The dashboard's handshake carries its session cookie now, and a script sets
+// the header, so a valid token in the query of ANY route, this one first,
+// authenticates nobody.
+func TestNoRouteTakesACredentialFromItsURL(t *testing.T) {
 	t.Parallel()
 	g := guard(t, func(a *config.APIAuth) {
-		a.AllowAnonymousRead = false
 		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	})
 
-	res, seen := serve(t, g, http.MethodGet, auth.SocketPath+"?token=secret", "")
-	if res.StatusCode != http.StatusOK || seen != "founder" {
-		t.Fatalf("a valid query token on the socket path = %d as %q, want 200 as founder",
-			res.StatusCode, seen)
-	}
-	res, _ = serve(t, g, http.MethodGet, auth.SocketPath+"?token=wrong", "")
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("a wrong query token on the socket path = %d, want 401", res.StatusCode)
-	}
-	// The header still works there, and wins over a stale query.
-	res, seen = serve(t, g, http.MethodGet, auth.SocketPath+"?token=stale", "Bearer secret")
-	if res.StatusCode != http.StatusOK || seen != "founder" {
-		t.Errorf("a header beside a stale query = %d as %q, want 200 as founder", res.StatusCode, seen)
-	}
-	// And a token in the URL of any OTHER route authenticates nobody: a URL
-	// lands in proxy logs and browser history, which is a price paid for
-	// exactly one route that has no alternative.
-	for _, path := range []string{"/events?token=secret", "/config?token=secret", "/ws/streams?token=secret"} {
+	for _, path := range []string{
+		auth.SocketPath + "?token=secret",
+		"/events?token=secret",
+		"/config?token=secret",
+	} {
 		res, seen := serve(t, g, http.MethodGet, path, "")
 		if res.StatusCode != http.StatusUnauthorized || seen != "" {
 			t.Errorf("%s = %d as %q, want 401 as nobody", path, res.StatusCode, seen)
 		}
 	}
+	// THE CONTROL: the same token in the header opens the socket, so the
+	// refusal above is about where it was presented and not about the token.
+	res, seen := serve(t, g, http.MethodGet, auth.SocketPath, "Bearer secret")
+	if res.StatusCode != http.StatusOK || seen != "token:founder" {
+		t.Errorf("the token in the header on the socket path = %d as %q, want 200 as founder",
+			res.StatusCode, seen)
+	}
 }
 
-// THE LABELS THE GUARD ACCEPTS, in order, and none under a disabled guard —
-// which accepts every caller as anonymous and no listed token at all, so a
-// listing read off the document would name credentials that authenticate
-// nobody.
+// THE GUARD REFUSES IN THE ENVELOPE EVERY OTHER SURFACE ANSWERS WITH.
+//
+// It used to write the body by hand — a Content-Type, a WriteHeader and a JSON
+// literal, three lines that say nothing about which vocabulary the code comes
+// from or where the sentence beside it lives. A caller refused HERE, before any
+// route runs, and a caller refused BY a route must read one shape, because the
+// dashboard's token gate branches on both: a stale credential is refused at
+// this middleware and the screen that offers to forget it renders the same
+// `message` it would for any other refusal.
+func TestTheGuardsRefusalIsTheSharedEnvelope(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+	res, _ := serve(t, g, "POST", "/config", "Bearer stale-from-last-deployment")
+
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", res.StatusCode)
+	}
+	if got := res.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	if got := res.Header.Get("X-Content-Type-Options"); got != "" {
+		t.Errorf("X-Content-Type-Options = %q: nosniff beside a JSON body is the "+
+			"one pairing that stops a strict client parsing it", got)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v", err)
+	}
+	if body["error"] != string(httpjson.CodeInvalidToken) {
+		t.Errorf("error = %v, want %q", body["error"], httpjson.CodeInvalidToken)
+	}
+	if body["message"] != httpjson.CodeInvalidToken.Message() {
+		t.Errorf("message = %v, want the code's own sentence — this is what a "+
+			"person is shown when their token stops working", body["message"])
+	}
+}
+
+// THE LABELS THE GUARD ACCEPTS, in order and never their values — what
+// `GET /iam/node-tokens` lists for this node — and none for a Tier A that
+// declares no token, so a listing read off the guard never names a credential
+// that authenticates nobody here.
 func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 	t.Parallel()
 	g := guard(t, withTokens(config.APIToken{ID: "ops", Token: "t-ops"},
 		config.APIToken{ID: "ci", Token: "t-ci"}))
-	if got := g.TokenIDs(); strings.Join(got, ",") != "ci,ops" {
+	got := g.TokenIDs()
+	if strings.Join(got, ",") != "ci,ops" {
 		t.Errorf("TokenIDs = %v, want the labels in order", got)
 	}
-	off := guard(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "ops", Token: "t-ops"}}
-		a.Disabled = true
-	})
-	if got := off.TokenIDs(); len(got) != 0 {
-		t.Errorf("a disabled guard lists %v, want none", got)
+	for _, id := range got {
+		if strings.HasPrefix(id, "t-") {
+			t.Errorf("TokenIDs carries a token VALUE %q", id)
+		}
+	}
+	if got := guard(t, withTokens()).TokenIDs(); len(got) != 0 {
+		t.Errorf("a guard with no Tier A token lists %v, want none", got)
+	}
+}
+
+// A TIER A TOKEN CARRIES WHAT THIS NODE'S ADMIN POSTURE LETS IT CARRY,
+// decided on every request it presents.
+//
+// `api.auth.admin` is a decision-time bound: nothing is written when it
+// changes, so the one place it can act is where the bearer is composed. On a
+// node that serves admin a token listing it carries admin and every app it
+// confers; on one that refuses admin the same token keeps every app and loses
+// admin, so a founder's break-glass token still reaches the tracker and the
+// knowledge base while the node withholds the administration this deployment
+// chose not to serve. A token listing apps alone is the same on both, and a
+// posture this build cannot name confers nothing at all.
+//
+// Mutation: compose the bearer from its own list, or under a fixed posture,
+// and this fails.
+func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
+	t.Parallel()
+	every := []iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}
+	apps := []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+	for _, tc := range []struct {
+		posture iam.AdminPosture
+		listed  []iam.Grant
+		want    []iam.Grant
+	}{
+		{iam.AdminServe, []iam.Grant{iam.GrantAdmin}, every},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantAdmin}, apps},
+		{iam.AdminServe, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{"sometimes", []iam.Grant{iam.GrantAdmin}, []iam.Grant{}},
+	} {
+		g := guard(t, func(a *config.APIAuth) {
+			a.Admin = tc.posture
+			a.Tokens = []config.APIToken{{ID: "founder", Token: "secret-a",
+				Grants: tc.listed}}
+		})
+		var got []iam.Grant
+		handler := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if p, how := iam.From(r.Context()); how == iam.Resolved {
+				got = slices.Sorted(slices.Values(p.Grants))
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/agents", nil)
+		req.Header.Set("Authorization", "Bearer secret-a")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		want := slices.Sorted(slices.Values(tc.want))
+		if !slices.Equal(got, want) {
+			t.Errorf("api.auth.admin %q, a token listing %v carries %v, want %v",
+				tc.posture, tc.listed, got, want)
+		}
 	}
 }

@@ -203,16 +203,17 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 //
 // There is no `reset`, and no route for one (ADR-0019). Each ceiling is per
 // calendar window, and a window's allowance comes back when the window turns
-// over; room before then is made by raising the ceiling, which is a config
-// change like any other.
-func runBudgets(args []string, stdout, stderr io.Writer) error {
+// over; room before then is made by raising the ceiling — a seat's through
+// `PUT /config/roles/{handle}`, the company's through `PATCH /config` — which
+// is a write like any other, recorded under its author.
+func runBudgets(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "show":
-		return budgetsShow(rest, stdout, stderr)
+		return budgetsShow(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr,
-			"usage: crewlet budgets show [<config.yaml>] [-url] [-token]")
+			"usage: crewlet budgets show [<config.yaml>] [-url URL]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown budgets command %q", sub)
@@ -232,8 +233,8 @@ type budgetWindow struct {
 }
 
 // budgetsShow prints what each scope has spent, window by window.
-func budgetsShow(args []string, stdout, stderr io.Writer) error {
-	client, err := nodeClientFor(args, "budgets show", stderr, nil)
+func budgetsShow(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	client, err := nodeClientFor(environ, args, "budgets show", stderr, nil)
 	if err != nil {
 		return err
 	}

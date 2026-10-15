@@ -76,37 +76,50 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	}
 	mux := http.NewServeMux()
 	mountBridge(mux, bridge)
-	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)))
+	// NO CSRF GATE HERE, and it is not an omission: this listener serves
+	// one route, the tool bridge, whose credential is a signed token in
+	// its own path rather than anything a browser attaches — so there is
+	// no cross-site request for a check to refuse. A box running generated
+	// code is not a browser and has no origin to send.
+	//
+	// THE PUBLIC LISTENER'S SCHEME, since that is the socket this binds on
+	// ([servedOverHTTPS]) — never api.port's, which is another address.
+	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)),
+		servedOverHTTPS(bootstrap, true))
 }
 
-// mountOperator registers the operator surface's transports, or says why it
-// did not.
+// mountOperator registers the operator surface's two transports — MCP for an
+// operator's own assistant and the act route for a person at the dashboard —
+// over the one dispatch.
 //
-// A nil server is an ordinary configuration — a company on Jira and
-// Confluence has no native record for this to manage — and the route is then
-// ABSENT rather than answering 404 from a registered handler: an endpoint
-// that exists and lists no tools reads to an operator as broken, while one
-// that is not there matches what their config says.
+// A nil server is a surface this API serves none of — a suite about something
+// else — and both routes are then ABSENT. Otherwise each is mounted ONCE and
+// every request reads the catalogue this node serves at that moment: a node
+// that has not met its company answers `503 no_active_revision`, and one whose
+// catalogue is empty answers as the route's absence would — an endpoint that
+// exists and lists no tools reads to an operator as broken.
 func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	if server == nil {
 		return
 	}
-	// EVERY METHOD, for the reason the bridge takes every method: streamable
-	// HTTP is a GET for the server-to-client stream and a DELETE to end a
-	// session.
+	// EVERY METHOD, so the transport's own verbs reach the SDK: this surface
+	// is served statelessly and the SDK answers a GET for a stream and a
+	// DELETE for a session with its own `405 Allow: POST`, which a client
+	// reads as "no stream offered" — a mux 405 would read as a route
+	// registered wrong.
 	mux.Handle(operator.MCPPath, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
-		"tools", server.Tools(),
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
-			"an api.auth.tokens entry")
-	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only,
-	// one tool per request, admitting a token bound to a seat and nobody
-	// else (ADR-0024). Under the same always-guarded prefix, so the guard in
-	// front of it is the one in front of /operator/mcp.
+			"an api.auth.tokens entry or a person's own credential; the tools "+
+			"it lists are the ones this node serves when it asks")
+	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only, one
+	// tool per request, as the principal the request resolved to
+	// (ADR-0024). Guarded like every route the exemption list does not
+	// name, and refused by the drain gate like every other write.
 	mux.Handle(operator.ActPattern, server.ActHandler())
 	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
-		"tools", server.Acts(),
-		"detail", "the dashboard writes here as the person the presented "+
-			"token is bound to by contact.crewlet_operator_id")
+		"detail", "the dashboard writes here as the principal its session "+
+			"or token resolves to, one catalogue tool per request, under the "+
+			"Idempotency-Key it names")
 }

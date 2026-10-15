@@ -13,10 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/iam"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -94,11 +98,25 @@ func answer(t *testing.T, s queries.Sources, what string, params map[string]any)
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	data, err := r.Answer(t.Context(), what, params, "operator")
+	data, err := r.Answer(everyGrant(t), what, params)
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
 	return data
+}
+
+// everyGrant is a context carrying a credential that may ask anything.
+//
+// EVERY CASE HERE IS ABOUT AN ANSWER rather than about authority, so they all
+// ask as a credential holding the ten and this says it once. The cases that
+// ARE about authority build their own principal and name the grant they hold,
+// which is the only place a test should be spelling one out.
+func everyGrant(t *testing.T) context.Context {
+	t.Helper()
+	return iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:test", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: iam.AllGrants,
+	})
 }
 
 // asMap round-trips an answer through JSON, which is what a client sees.
@@ -123,7 +141,7 @@ func TestSchedulesProjectsWhatIsConfigured(t *testing.T) {
 	// just added shows immediately rather than after its first fire.
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "schedules", nil))
 
 	rows, _ := body["schedules"].([]any)
@@ -155,7 +173,7 @@ func TestAZonelessScheduleIsDescribedOnTheCompanysClock(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "schedules", nil))
 	rows, _ := body["schedules"].([]any)
 	if len(rows) != 1 {
@@ -213,7 +231,7 @@ func TestSchedulesCarriesTheDispatchHistory(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Runs: &fakeRuns{runs: []schedule.Run{{
 			FireKey: schedule.FireKey{
 				Scope: "role", ScopeID: "ceo", ScheduleName: "standup",
@@ -244,7 +262,7 @@ func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
 	// blank the page over its least important part.
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Runs:    &fakeRuns{err: context.DeadlineExceeded},
 	}, "schedules", nil))
 
@@ -262,7 +280,7 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -281,9 +299,10 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	}
 	// LISTED rather than counted: "which seats reach Mattermost" is the
 	// question that follows "how many", and the answer is already in the
-	// config.
+	// config. By HANDLE, which a reader can follow to the seat — a name is
+	// prose two seats may share.
 	seats, _ := byKind["mattermost"]["seats"].([]any)
-	if len(seats) != 1 || seats[0] != "CEO" {
+	if len(seats) != 1 || seats[0] != "ceo" {
 		t.Errorf("mattermost seats = %v, want the one seat with a bot of its own",
 			byKind["mattermost"]["seats"])
 	}
@@ -297,7 +316,7 @@ func TestAMissingSecretIsReportedAsFalseNotAsAbsent(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.GitLab.SigningSecret = ""
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -332,7 +351,7 @@ func TestASurfaceWithNoSecretReportsNull(t *testing.T) {
 	// the field got there.
 	cfg.Integrations.ForgeAppID = "app-123"
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	want := map[string]bool{"forge": false, "mattermost": false}
@@ -380,13 +399,13 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	claim(coord.NodeResource("node-a"), "node-a:1", map[string]any{
 		"roles": []any{"seats", "workers"}, "labels": map[string]any{"zone": "eu"},
 	})
-	claim(coord.SeatResource("ceo"), "node-a:1", nil)
+	cfg := company(t)
+	claim(seatLease(t, cfg, "ceo"), "node-a:1", nil)
 	claim(coord.WorkerResource("scheduler"), "node-a:1", nil)
 
-	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	nodes, _ := body["nodes"].([]any)
@@ -409,7 +428,7 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	}
 	// Since when the node has held it — the lease's tenure start, which
 	// is what "node-a · since 08:02" renders from.
-	held, err := backend.Get(t.Context(), coord.SeatResource("ceo"))
+	held, err := backend.Get(t.Context(), seatLease(t, cfg, "ceo"))
 	if err != nil || held == nil {
 		t.Fatalf("Get = (%v, %v)", held, err)
 	}
@@ -450,7 +469,7 @@ func TestFleetSaysWhatEachNodesBrokerIs(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 	got := map[string]any{}
 	nodes, _ := body["nodes"].([]any)
@@ -485,7 +504,7 @@ func TestFleetNamesTheSeatsNoNodeCanRun(t *testing.T) {
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unplaceable, _ := body["unplaceable"].([]any)
@@ -514,7 +533,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unmanned, _ := body["unmanned_roles"].([]any)
@@ -530,7 +549,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
-// EVERY ANSWER SETTINGS DRAWS NEEDS AN OPERATOR CREDENTIAL.
+// EVERY ANSWER SETTINGS DRAWS IS ADMIN'S.
 //
 // The dashboard's rail marks all five Admin destinations `guarded: true`: it
 // draws a lock on the row and its palette says "needs a token". That flag is
@@ -541,20 +560,20 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 // held which seat, the lease epochs and the rollout's progress.
 //
 // The two here are the two this registry gates by these sources;
-// Configuration's four are [TestTheConfigQueryIsOperatorOnly] and Credentials
+// Configuration's four are [TestTheConfigQueryIsAdmins] and Credentials
 // is `/secrets`, a prefix guarded whole. Named rather than derived, because
 // the mapping from a screen to the question it asks lives in each screen's own
 // `useQuery` call and no gate can see across the two languages — so the
 // registration check below is what stops this list going quiet: a name nothing
 // registers fails rather than passing as "gated".
-func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
+func TestTheAdminWorkspacesAnswersAreAdmins(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{
 		Coord:   coordmemory.New(),
 		NodeID:  "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	})
 	for _, what := range []string{"fleet", "integrations"} {
 		// REGISTERED AT ALL, first. A question this registry does not
@@ -564,14 +583,24 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 			t.Errorf("%s is not registered, so this case asserts nothing about it", what)
 			continue
 		}
-		if !r.RequiresOperator(what) {
-			t.Errorf("%s is an Admin answer the rail locks, but the registry "+
-				"serves it to any caller", what)
+		// AND IT IS ADMIN'S. Both describe the DEPLOYMENT rather than the
+		// company's work, so somebody who uses every app of the company
+		// must not reach either.
+		if got := r.PostureOf(what).Grant(); got != iam.GrantAdmin {
+			t.Errorf("%s is an Admin answer the rail locks and requires %q, "+
+				"which is not admin", what, got)
 		}
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(
+		// AND SOMEBODY HOLDING EVERY APP IS ACTUALLY REFUSED, which is
+		// what the declaration above is worth: asserting it alone would
+		// pass on a registry that declared one and enforced nothing.
+		narrow := iam.WithPrincipal(t.Context(), iam.Principal{
+			ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
+			Stage: iam.StageActive, Grants: iam.Apps,
+		})
+		if _, err := r.Answer(narrow, what, nil); !errors.Is(
 			err, queries.ErrUnauthorized) {
 
-			t.Errorf("%s answered %v without a credential, want an "+
+			t.Errorf("%s answered %v to somebody holding every app, want an "+
 				"authorization refusal", what, err)
 		}
 	}
@@ -592,7 +621,7 @@ func TestAnUnreachableLeaseTableIsUnavailableRatherThanFailed(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty, NodeID: "node-a"})
 
-	_, err := r.Answer(t.Context(), "fleet", nil, "op-1")
+	_, err := r.Answer(everyGrant(t), "fleet", nil)
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("an unreachable lease table answered %v, want ErrUnavailable", err)
 	}
@@ -612,7 +641,7 @@ func TestACoordinationFailureThatIsNotAnOutageIsNotRetried(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty})
 
-	_, err := r.Answer(t.Context(), "fleet", nil, "op-1")
+	_, err := r.Answer(everyGrant(t), "fleet", nil)
 	if err == nil {
 		t.Fatal("a failed read answered successfully")
 	}
@@ -632,7 +661,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 		"fleet", "schedules", "integrations", "conversations",
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
-		if _, err := r.Answer(t.Context(), what, nil, "operator"); err == nil {
+		if _, err := r.Answer(everyGrant(t), what, nil); err == nil {
 			t.Errorf("%s answered from a registry with no source for it", what)
 		}
 	}
@@ -648,38 +677,42 @@ func TestAgentMemoryNeedsASeat(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Memory: &stubMemory{}})
-	if _, err := r.Answer(t.Context(), "agent_memory", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "agent_memory", nil); err == nil {
 		t.Fatal("an agent_memory query with no id was answered")
 	}
 }
 
-// THE REST ROUTE CARRIES `{id}`, which a caller may fill with the seat's
-// derived agent id rather than its handle. A seat's lease — and so its holder —
-// is found by the HANDLE, so the id is resolved through the chart before the
-// read is routed; asked by the uuid, the lease lookup would find no seat and
-// answer an empty memory for a seat that has one.
-func TestAgentMemoryIsAskedOfTheHolderByHandle(t *testing.T) {
+// A MEMORY QUESTION REACHES THE HOLDER WITH THE SEAT WHOLE, resolved from the
+// handle it was asked by — the seat's agent id (its lease and diary) and its
+// handle (the rest of its memory). The derived agent id is NOT a name the question takes: a seat is
+// named by its handle on every surface, and a uuid names no seat a person can
+// read.
+func TestAgentMemoryIsAskedOfTheHolderWithTheSeatWhole(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	organization, err := cfg.Organization()
 	if err != nil {
 		t.Fatalf("organization: %v", err)
 	}
-	role := organization.AgentSeatByHandle("cto")
-	agentID, ok := organization.AgentIDFor(role)
+	agentID, ok := organization.AgentIDFor(organization.AgentSeatByHandle("cto"))
 	if !ok {
 		t.Fatal("the fixture has no cto seat")
 	}
-	for _, asked := range []string{"cto", agentID.String()} {
-		memory := &stubMemory{}
-		answer(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
-			Memory:  memory,
-		}, "agent_memory", map[string]any{"id": asked, "limit": 1})
-		if memory.handle != "cto" || memory.limit != 1 {
-			t.Errorf("asked by %q, the holder was asked about %q at %d, want cto at 1",
-				asked, memory.handle, memory.limit)
-		}
+	memory := &stubMemory{}
+	answer(t, queries.Sources{
+		Company: companySource(t, cfg),
+		Memory:  memory,
+	}, "agent_memory", map[string]any{"id": "cto", "limit": 1})
+	if memory.seat.ID != agentID || memory.seat.Handle != "cto" ||
+		memory.limit != 1 {
+		t.Errorf("the holder was asked about %+v at %d, want cto whole at 1",
+			memory.seat, memory.limit)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Company: companySource(t, cfg), Memory: &stubMemory{}})
+	if _, err := r.Answer(everyGrant(t), "agent_memory",
+		map[string]any{"id": agentID.String()}); !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("asked by the seat's uuid: %v, want not found", err)
 	}
 }
 
@@ -768,7 +801,7 @@ func TestAnUnreadableLeaseTableFailsTheFleetQuery(t *testing.T) {
 		Coord:  brokenCoord(errors.New("store down")),
 		NodeID: "node-a",
 	})
-	if _, err := r.Answer(t.Context(), "fleet", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "fleet", nil); err == nil {
 		t.Fatal("an unreadable lease table answered a fleet")
 	}
 }
@@ -798,7 +831,7 @@ func TestASeatOnAnIngressOnlyNodeIsStillUnplaceable(t *testing.T) {
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "edge",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unplaceable, _ := body["unplaceable"].([]any)
@@ -827,7 +860,7 @@ func TestASeatOnlyAWithdrawnNodeMatchesIsUnplaceable(t *testing.T) {
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unplaceable, _ := body["unplaceable"].([]any)
@@ -851,16 +884,16 @@ func TestASeatThatIsHeldIsNotReportedUnplaceable(t *testing.T) {
 		}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := backend.TryAcquire(t.Context(), coord.SeatResource("cto"),
+	cfg := company(t)
+	if _, _, err := backend.TryAcquire(t.Context(), seatLease(t, cfg, "cto"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := company(t)
 	cfg.Roles[1].Placement = &config.RolePlacement{Labels: map[string]string{"zone": "us"}}
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	for _, entry := range body["unplaceable"].([]any) {
@@ -900,7 +933,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	nodes, _ := body["nodes"].([]any)
@@ -939,7 +972,7 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// The engine names gitlab and nothing else, so mattermost is the
 		// configured-but-unrouted side of the comparison.
 		Routed: func(context.Context) []string { return []string{"gitlab"} },
@@ -983,7 +1016,7 @@ integrations:
 		t.Fatalf("parse: %v", err)
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// The engine resolved gitlab's secret and not jira's — which is
 		// exactly what an unset ${VAR} on one of them looks like.
 		Verifiable: func(context.Context) []string { return []string{"gitlab"} },
@@ -1019,7 +1052,7 @@ func TestANodeThatCannotSayWhatResolvedAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// No Verifiable: the shape of a node whose engine has not started
 		// its notification service yet.
 	}, "integrations", nil))
@@ -1050,7 +1083,7 @@ func TestANodeThatCannotSayWhatRoutesAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// No Routed: nothing has registered a parser yet.
 	}, "integrations", nil))
 
@@ -1078,7 +1111,7 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Routed:  func(context.Context) []string { return []string{} },
 	}, "integrations", nil))
 
@@ -1148,7 +1181,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Routed:  func(context.Context) []string { return []string{"gitlab"} },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{{
@@ -1213,7 +1246,7 @@ func TestTheIntegrationsAnswerRollsEveryToolUp(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Converges: func(kind integration.Kind) bool {
 			return kind != integration.KindSlack
 		},
@@ -1383,14 +1416,25 @@ func declaredFields(t *testing.T, iface string) map[string]bool {
 func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
+	cfg := company(t)
+	// THE SEAT'S OWN ID, which its diary and onboarding marker are keyed by —
+	// derived as every node derives it, never invented by the fixture.
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	id, ok := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	if !ok {
+		t.Fatal("the fixture has no ceo seat")
+	}
+	ceo := id.String()
 	stores := &memread.Stores{
 		Diary: learning.NewDiary(db), Episodes: learning.NewEpisodes(db),
 		Skills: learning.NewSkills(db), Onboarding: learning.NewOnboarding(db),
-		AgentID: func(handle string) string { return "agent-" + handle },
-		Now:     func() time.Time { return pinned },
+		Now: func() time.Time { return pinned },
 	}
 	if err := stores.Diary.Write(t.Context(), learning.DiaryEntry{
-		ID: "d-1", AgentID: "agent-ceo", Kind: learning.DiaryShort,
+		ID: "d-1", AgentID: ceo, Kind: learning.DiaryShort,
 		Content:  "the release window moved to Thursday",
 		TTLUntil: pinned.Add(time.Hour), Source: "tool:reflect_and_persist",
 		TurnID: "turn-1", CreatedAt: pinned,
@@ -1424,7 +1468,7 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 		t.Fatalf("skill: %v", err)
 	}
 	if err := stores.Onboarding.Mark(t.Context(), learning.Marker{
-		AgentID: "agent-ceo", ChainHash: "chain-1", Handle: "ceo",
+		AgentID: ceo, ChainHash: "chain-1", Handle: "ceo",
 	}, pinned); err != nil {
 		t.Fatalf("onboarding: %v", err)
 	}
@@ -1445,7 +1489,8 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	}}
 
 	body := asMap(t, answer(t, queries.Sources{
-		Memory: &memread.Reader{Owner: "node-a:1", Local: stores},
+		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
+		Company: companySource(t, cfg),
 	}, "agent_memory", map[string]any{"id": "ceo"}))
 
 	holdShape(t, "AgentMemory", []map[string]any{body}, false)
@@ -1463,7 +1508,8 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	// ONE EPISODE WHOLE, which the listing carries the openings of: the
 	// same row shape, inside its own answer.
 	detail := asMap(t, answer(t, queries.Sources{
-		Memory: &memread.Reader{Owner: "node-a:1", Local: stores},
+		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
+		Company: companySource(t, cfg),
 	}, "agent_episode", map[string]any{"id": "ceo", "episode": "ep-1"}))
 	holdShape(t, "AgentEpisode", []map[string]any{detail}, false)
 	holdShape(t, "Episode", []map[string]any{asMap(t, detail["episode"])}, false)
@@ -1481,7 +1527,7 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	// seat in the chart, each with its totals and its newest note.
 	overview := asMap(t, answer(t, queries.Sources{
 		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
-		Company: func() *config.Company { return company(t) },
+		Company: companySource(t, cfg),
 	}, "memory_overview", nil))
 	holdShape(t, "MemoryOverview", []map[string]any{overview}, false)
 	seats := rowsOf(t, overview["seats"])
@@ -1513,10 +1559,10 @@ func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	stores := &memread.Stores{AgentID: func(h string) string { return "agent-" + h }}
+	stores := &memread.Stores{}
 	body := asMap(t, answer(t, queries.Sources{
 		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "memory_overview", nil))
 	seats := rowsOf(t, body["seats"])
 	if len(seats) != 14 {
@@ -1542,7 +1588,7 @@ func (s *stubProfiles) Count(context.Context, string) (int, error) { return len(
 // fleet view has to survive one of its columns being unreadable.
 type brokenPlane struct{}
 
-func (brokenPlane) Payload(context.Context, string) ([]byte, bool, error) {
+func (brokenPlane) Payload(context.Context, string) (json.RawMessage, bool, error) {
 	return nil, false, errUnreadablePlane
 }
 
@@ -1596,7 +1642,7 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
+		Company: companySource(t, cfg), Events: fleetOf(log),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	byKind := map[string]map[string]any{}
@@ -1662,7 +1708,7 @@ func TestASurfaceReadOverASocketCountsItsDeliveries(t *testing.T) {
 	appendOutcome(t, log, "drop", "notification_skipped", "mattermost", at)
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
+		Company: companySource(t, cfg), Events: fleetOf(log),
 	}, "integrations", nil))
 	mattermost := surfacesOf(t, body)["mattermost"]
 	if got := mattermost["inbound"]; got != float64(2) {
@@ -1706,7 +1752,7 @@ func TestARelayedDeliveryCountsAtItsIngressOnce(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.ForgeAppID = "app-123"
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
+		Company: companySource(t, cfg), Events: fleetOf(log),
 	}, "integrations", nil))
 	rows := surfacesOf(t, body)
 	if got := rows["forge"]["inbound"]; got != float64(2) {
@@ -1763,7 +1809,7 @@ func TestIntegrationOutcomesAreCountedAtTheDeliveriesInstant(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
@@ -1868,7 +1914,7 @@ func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testi
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	if got, want := body["traffic_since"], floor.Format(time.RFC3339Nano); got != want {
 		t.Errorf("traffic_since = %v, want the history floor, %s — the page held every delivery", got, want)
@@ -1918,7 +1964,7 @@ func TestNoDeliveryCountsTheOutcomesOfTheWholeHistory(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	if body["traffic_known"] != true {
 		t.Fatalf("traffic_known = %v, want an empty page reported as measured", body["traffic_known"])
@@ -1975,7 +2021,7 @@ func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	if got, want := body["traffic_since"], edge.Add(time.Microsecond).Format(time.RFC3339Nano); got != want {
 		t.Errorf("traffic_since = %v, want a microsecond past the page's oldest delivery, %s", got, want)
@@ -2023,7 +2069,7 @@ func TestTheNewestDeliveryIsNeverBeforeItsWindow(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	raw, _ := body["traffic_since"].(string)
 	since, err := time.Parse(time.RFC3339Nano, raw)
@@ -2052,7 +2098,7 @@ func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
@@ -2083,7 +2129,7 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
+		Company: companySource(t, cfg), Events: fleetOf(log),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	if len(rows) == 0 {
@@ -2129,7 +2175,7 @@ func TestAnUncountableOutcomeIsNullBesideItsDeliveries(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Events:  uncountableOutcomes{fleetOf(log)},
 	}, "integrations", nil))
 	if body["traffic_known"] != true {
@@ -2161,7 +2207,7 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 	t.Run("cannot say", func(t *testing.T) {
 		t.Parallel()
 		rows := integrationRows(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 		})
 		for kind, row := range rows {
 			if got, present := row["reconcile"]; !present || got != nil {
@@ -2174,7 +2220,7 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 	t.Run("a finding", func(t *testing.T) {
 		t.Parallel()
 		rows := integrationRows(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 			Reconciles: func(context.Context) []integration.State {
 				return []integration.State{{
 					Kind: integration.KindGitLab,
@@ -2266,9 +2312,12 @@ func integrationRows(t *testing.T, sources queries.Sources) map[string]map[strin
 // answered an empty seat list, and a zero count, for every one of them: the
 // Slack row then reported no per-seat app on a company running seven, and its
 // secret_present was computed from a count that was always zero while the
-// routes verified fine. The walk is company.EachRole, which is exported for
-// exactly this and whose own doc records the first time a top-level-only
-// lookup shipped.
+// routes verified fine.
+//
+// The walk is the COMPANY'S OWN ORG now, which is the same rule one step
+// further on: a stored revision carries no `roles:` and no `units:` at all,
+// so even the whole-document walk that fixed this answers nothing for a
+// running company. What a seat carries is on the seat.
 func TestSeatsInUnitsAreReported(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -2313,7 +2362,7 @@ units:
 		t.Fatalf("parse: %v", err)
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -2329,8 +2378,8 @@ units:
 	if len(seats) != 2 {
 		t.Fatalf("mattermost seats = %v, want the two seats in units", seats)
 	}
-	if seats[0] != "SRE" || seats[1] != "SWE" {
-		t.Errorf("mattermost seats = %v, want them sorted", seats)
+	if seats[0] != "sre" || seats[1] != "swe" {
+		t.Errorf("mattermost seats = %v, want their handles, sorted", seats)
 	}
 
 	// And the Slack count, which decides whether the row claims a secret at
@@ -2343,21 +2392,20 @@ units:
 
 // A SURFACE'S REGISTRATION IS COMPARED WITH THE ADDRESS IN FORCE.
 //
-// A company's public base moves, and a registration made against the old one
-// keeps pointing somewhere that no longer answers. Where a pass registers the
+// A deployment's external address moves, and a registration made against the
+// old one keeps pointing somewhere that no longer answers. Where a pass registers the
 // hook the next tick moves it; where nothing does, only a person can, and
 // this is the only thing that can tell them.
-func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
+func TestAMovedWebhookBaseIsReportedPerSurface(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	// SLACK IS THE SURFACE THIS IS FOR: its Request URL is a field a person
 	// typed at the third-party app, so nothing converges it and the
 	// comparison is the only thing that can say the address moved.
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company:    func() *config.Company { return cfg },
-		PublicBase: func() string { return "https://now.example.com" },
+		Company:     companySource(t, cfg),
+		WebhookBase: func() string { return "https://now.example.com" },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
 				{Kind: integration.KindSlack, Endpoint: "https://old.example.com"},
@@ -2390,59 +2438,19 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	}
 }
 
-// A ${VAR} PUBLIC BASE IS COMPARED RESOLVED, ON BOTH SIDES.
-//
-// `public_base_url` may be a whole reference, and what a surface registered is
-// the address that reference RESOLVED to. Comparing a registration against the
-// reference itself never matches, so every company writing one would read
-// "the address moved" on every surface, for ever — an action-needed badge
-// nobody can clear, on deployments that are working perfectly.
-func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
-	t.Parallel()
-	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "${PUBLIC_URL}"
-	cfg.Integrations.Slack = &config.Slack{}
-	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
-		// What the node's own chain reads the reference as, which is what
-		// the passes registered with.
-		PublicBase: func() string { return "https://now.example.com" },
-		Reconciles: func(context.Context) []integration.State {
-			return []integration.State{
-				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
-			}
-		},
-	}, "integrations", nil))
-
-	rows, _ := body["integrations"].([]any)
-	for _, row := range rows {
-		entry, _ := row.(map[string]any)
-		if entry["key"] != "slack" {
-			continue
-		}
-		if got := entry["endpoint_current"]; got != true {
-			t.Errorf("endpoint_current = %v, want true: the registration holds "+
-				"exactly what this node reads the reference as", got)
-		}
-		return
-	}
-	t.Fatal("no slack row")
-}
-
 // AND A PROCESS THAT CANNOT READ THE ADDRESS SAYS NOTHING, rather than false.
 //
 // A node that cannot read the address cannot know what the current one is.
 // Answering false there would report every registration as stale on the
 // strength of a value this node never had, which is the same three-valued rule
 // Routed, Verifiable and Reconciles already follow.
-func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
+func TestAnUnknowableWebhookBaseLeavesTheAnswerNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
-		// PublicBase deliberately unset: this process cannot say.
+		Company: companySource(t, cfg),
+		// WebhookBase deliberately unset: this process cannot say.
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
 				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
@@ -2476,9 +2484,8 @@ func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{{Kind: integration.KindGitLab}}
 		},
@@ -2520,7 +2527,7 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
 
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -2561,7 +2568,7 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 		OrgID: "f1240761-c455-41b5-a7f5-4a64f9c6e729", APIKey: "${ATLASSIAN_API_KEY}",
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// BOTH KNOWN, so a null here is this surface's own answer rather
 		// than a process that could not say: with these nil every row
 		// reports null and the test would pass over the old code too.
@@ -2614,7 +2621,7 @@ func TestTheForgeRelayRoutesAsTheProductItRelays(t *testing.T) {
 		cfg := company(t)
 		cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
 		body := asMap(t, answer(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 			Routed:  func(context.Context) []string { return routed },
 		}, "integrations", nil))
 		rows, _ := body["integrations"].([]any)
@@ -2658,7 +2665,7 @@ func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.Mattermost = &config.Mattermost{URL: "https://chat.example.com", Team: "acme"}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Routed:  func(context.Context) []string { return []string{"mattermost"} },
 	}, "integrations", nil))
 
@@ -2700,7 +2707,7 @@ func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 	rowFor := func(t *testing.T, cfg *config.Company, kind string) map[string]any {
 		t.Helper()
 		body := asMap(t, answer(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 		}, "integrations", nil))
 		rows, _ := body["integrations"].([]any)
 		for _, row := range rows {
@@ -2715,13 +2722,16 @@ func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 	// as the one fact it is about.
 	firstAgent := func(t *testing.T, cfg *config.Company) *config.Role {
 		t.Helper()
-		for role := range cfg.EachRole() {
-			if role.Seat().IsAgent() {
-				return role
+		var found *config.Role
+		eachAuthoredSeat(cfg, func(role *config.Role) {
+			if found == nil && role.Seat().IsAgent() {
+				found = role
 			}
+		})
+		if found == nil {
+			t.Fatal("the fixture has no agent seat")
 		}
-		t.Fatal("the fixture has no agent seat")
-		return nil
+		return found
 	}
 
 	t.Run("github keeps its row while the block enables it", func(t *testing.T) {
@@ -2820,9 +2830,9 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 	cfg.Integrations.GitHub = nil
 	cfg.Integrations.GitLab = nil
 	cfg.Integrations.Datadog = nil
-	for role := range cfg.EachRole() {
+	eachAuthoredSeat(cfg, func(role *config.Role) {
 		if !role.Seat().IsAgent() {
-			continue
+			return
 		}
 		role.Integrations.Slack = &config.RoleSlack{
 			BotToken: "${BOT}", SigningSecret: "${SIG}",
@@ -2831,9 +2841,9 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
 			PrivateKey: "${PEM}", WebhookSecret: "${HOOK}",
 		}
-	}
+	})
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
@@ -2995,6 +3005,61 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	}
 }
 
+// EACH NODE'S ADMIN POSTURE IS VISIBLE, because a fleet that disagrees about it
+// is legal and otherwise silent.
+//
+// `api.auth.admin` is applied at decision time, per node, per request, and
+// nothing is written when it changes — that is what makes turning a node to
+// `refuse` immediate, and what makes a fleet whose nodes disagree a LEGAL state
+// a rolling restart passes through (or a deliberate one: an admin node beside
+// nodes published to the people who only use the company). Invisible, the
+// symptom is a person whose authority depends on which node a load balancer
+// sent them to. Each row naming its node's posture is that being said out loud
+// — and a node serving no API names none rather than reading as one that
+// refuses.
+//
+// Mutation: publish the field under another key, or always, and this goes
+// red.
+func TestTheFleetReportsEachNodesAdminPosture(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	claim := func(node string, status coord.NodeStatus) {
+		t.Helper()
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{
+				Owner: node + ":1", TTL: time.Minute,
+				Meta: map[string]any{coord.StatusKey: status.Meta()},
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim("node-a", coord.NodeStatus{AdminPosture: iam.AdminServe})
+	claim("node-b", coord.NodeStatus{AdminPosture: iam.AdminRefuse})
+	// A node that serves no API declares none, and must not read as a
+	// third opinion.
+	claim("node-c", coord.NodeStatus{})
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	for node, want := range map[string]iam.AdminPosture{
+		"node-a": iam.AdminServe, "node-b": iam.AdminRefuse,
+	} {
+		if got := byID[node]["admin"]; got != string(want) {
+			t.Errorf("%s reports its admin posture as %v, want %s", node, got, want)
+		}
+	}
+	if _, present := byID["node-c"]["admin"]; present {
+		t.Error("a node that serves no API carries an admin posture anyway, so " +
+			"a worker binding no API reads as a node that refuses")
+	}
+}
+
 // ONE SCHEDULE'S HISTORY, which the company-wide ledger cannot be.
 //
 // `schedules.recent_runs` is fifty rows across EVERY schedule, so a company
@@ -3075,14 +3140,26 @@ func TestThePageScreenReadsWhatTheseAnswersSend(t *testing.T) {
 			LastTurnID: "run-a", LastWorkKey: "wk-1", LastQuery: "dhcp"},
 		read("skill_loaded", 1, at, "run-a", ""))
 	sources := f.sources()
+	// A PLACE ON A TASK WHOSE KEY ANOTHER TASK CLAIMED FIRST, so the row
+	// carries `key_collision` — the field a link needs to reach this task by
+	// its id rather than open the claimant by the key.
 	sources.Work = &stubWork{places: map[string]tracker.TurnPlace{
-		"run-a": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
+		"run-a": {TaskID: "t-1", Key: "ENG-412", KeyCollision: true,
+			Title: "Retry PXE boot", Ordinal: 2}}}
 	sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}}
+	// A BACKLINK TO EACH HOLDER OF ONE KEY, so a row carries `key_collision`
+	// — the field the rail needs to open the duplicate by its id rather than
+	// the claimant by the key — and a row without it says the flag is
+	// optional.
 	sources.Backlinks = stubBacklinks{links: search.Backlinks{
 		Pages: []search.PageLink{{ID: "p-2", Container: "ENG", Title: "On-call"}},
-		Tasks: []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry", Status: "todo",
-			Via: []string{search.TaskLinkedPage}}},
-		PagesTotal: 1, TasksTotal: 1,
+		Tasks: []search.TaskLink{
+			{ID: "t-0", Key: "ENG-412", Title: "Retry", Status: "todo",
+				Via: []string{search.TaskLinkedPage}},
+			{ID: "t-1", Key: "ENG-412", KeyCollision: true, Title: "Retry PXE boot",
+				Status: "todo", Via: []string{search.TaskCitesPage}},
+		},
+		PagesTotal: 1, TasksTotal: 2,
 	}}
 
 	reads := asMap(t, askRaw(t, registryOver(t, sources), "page_reads", map[string]any{"page": readPage}))

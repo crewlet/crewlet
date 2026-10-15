@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
 
@@ -589,96 +588,6 @@ func TestAKeyThatCannotBeRevokedIsReportedForARealPerson(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING CREATES NO ACCOUNT AT DATADOG.
-//
-// [provision.CanMint] exists for exactly this pass: it makes an ACCOUNT and
-// then mints a key on it, and the rollback can only revoke the key — so
-// reaching the first Record on a sink that cannot record leaves a service
-// account at Datadog that nobody asked for and that nothing can ever
-// authenticate as. The loop hands provision.ReadOnly() to a node with no
-// keyring, and this pass took it for an ordinary sink: it created every
-// seat's account, then reported each one as "could not read whether <VAR>
-// already holds a key" on every tick, and not one of those sentences named
-// the bootstrap field that fixes it.
-func TestANodeWithNoKeyringCreatesNoAccount(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}
-	created := 0
-	reg.handle["/api/v2/service_accounts"] = func(w http.ResponseWriter, _ *http.Request) {
-		created++
-		_, _ = w.Write([]byte(`{"data":{"id":"u1","attributes":{"email":"a@b","name":"SRE"}}}`))
-	}
-
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre", "oncall"),
-		Creds: pair, Sink: provision.ReadOnly(),
-	})
-	if err != nil {
-		t.Fatalf("pass: %v", err)
-	}
-	if created != 0 {
-		t.Errorf("a node that cannot seal a credential created %d service "+
-			"account(s) nothing will ever authenticate as", created)
-	}
-	// ONE FINDING NAMING THE BOOTSTRAP FIELD, and NOT one per seat naming
-	// a variable none of them can do anything about. (The webhook is
-	// reported too — these Options carry no public base — which is a
-	// different fact about a different half.)
-	var keyring, perSeat int
-	for _, f := range res.Findings() {
-		switch f.Subject {
-		case "secrets.keys":
-			keyring++
-			if f.Kind != integration.FindingCredentialMissing {
-				t.Errorf("kind = %q, want credential_missing", f.Kind)
-			}
-		case "sre", "oncall":
-			perSeat++
-		}
-	}
-	if keyring != 1 {
-		t.Errorf("findings = %+v, want one naming secrets.keys", res.Findings())
-	}
-	if perSeat != 0 {
-		t.Errorf("%d seat(s) were reported individually for one bootstrap "+
-			"field nothing about a seat can fix", perSeat)
-	}
-}
-
-// AND THE INBOUND HALF STILL RUNS ON THAT NODE.
-//
-// This is the difference from every other pass that checks CanMint. The
-// webhook definition is written with the organization credentials the company
-// document already carries, so it needs no keyring at all — and it is the
-// half that carries the alerts. A check placed before it would take a
-// company's whole monitoring integration down over a bootstrap field that has
-// nothing to do with it.
-func TestANodeWithNoKeyringStillRegistersTheWebhook(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	noSeats(reg)
-	held := &stored{}
-	serveWebhook(reg, held)
-
-	opts := hookOptions(t, reg, base)
-	opts.Plan = planWith("sre")
-	opts.Sink = provision.ReadOnly()
-	if _, err := datadog.Reconcile(context.Background(), opts); err != nil {
-		t.Fatalf("pass: %v", err)
-	}
-	if held.hook == nil {
-		t.Fatal("a node with no keyring left this company's alerts unrouted")
-	}
-	if got, want := held.hook.URL, base+"/webhooks/datadog"; got != want {
-		t.Errorf("url = %q, want %q", got, want)
-	}
-}
-
 // CONNECTING RE-ENABLES AN ACCOUNT THIS ENGINE'S OWN DISCONNECT DISABLED.
 //
 // Re-enabling used to be refused outright, on the reasoning that undoing a
@@ -877,19 +786,13 @@ func TestAnUnreadableKeyListingLeavesAHeldCredentialAlone(t *testing.T) {
 // without looking and answered "ready" over the dead agent it was pressed
 // about, while the next scheduled pass repaired the very thing it had just
 // declared fine. What a missing sink withholds is the permission to WRITE,
-// never the ability to look, which is why the other three provisioning
-// surfaces gate on provision.CanMint instead.
+// never the ability to look.
 func TestACheckReportsASeatWhoseAccountHoldsNoKey(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		sink provision.TokenSink
 	}{
-		// A NODE WITH NO KEYRING IS DELIBERATELY NOT HERE. It returns
-		// before the seat walk and reports secrets.keys instead — one
-		// bootstrap field rather than a finding per agent — which is the
-		// argued behaviour sealsNothing exists for. See
-		// TestANodeWithNoKeyringReportsTheOneFieldThatFixesIt below.
 		{"the dashboard's check, with no sink at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1007,41 +910,5 @@ func TestACheckThatCannotReadTheKeysReportsNothing(t *testing.T) {
 		if f.Subject == "sre" {
 			t.Errorf("reported %+v on an answer Datadog never gave", f)
 		}
-	}
-}
-
-// AND A NODE WITH NO KEYRING STILL REPORTS THE ONE FIELD THAT FIXES IT.
-//
-// It cannot provision an identity at all, so it returns before the seat walk:
-// a finding per agent would be seven third-party app problems standing in for
-// one bootstrap field, and none of them would name secrets.keys. Asserted here
-// because the check above deliberately excludes this sink, and an exclusion
-// nothing pins is an exclusion that quietly becomes a gap.
-func TestANodeWithNoKeyringReportsTheOneFieldThatFixesIt(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
-	}
-
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: provision.ReadOnly(),
-	})
-	if err != nil {
-		t.Fatalf("pass: %v", err)
-	}
-	var subjects []string
-	for _, f := range res.Findings() {
-		subjects = append(subjects, f.Subject)
-		if f.Subject == "sre" {
-			t.Errorf("reported %+v per seat, standing in for one bootstrap field", f)
-		}
-	}
-	if !slices.Contains(subjects, "secrets.keys") {
-		t.Errorf("findings name %v, want secrets.keys — the only thing that fixes it",
-			subjects)
 	}
 }

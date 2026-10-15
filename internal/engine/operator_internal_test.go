@@ -88,7 +88,10 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 		return q
 	}
 	peer := &peerCopy{}
-	stop, err := estate.Serve(t.Context(), start(), "data-peer", peer, estate.ServerSeams{})
+	envelopes := routerEnvelopes(t)
+	stop, err := estate.Serve(t.Context(), start(), estate.ServerOptions{
+		Self: "data-peer", Local: peer, Envelopes: envelopes,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,9 +99,11 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 
 	var faulted atomic.Bool
 	e := &Engine{backends: &Backends{}, mode: statelog.ModeNormal}
+	// A DATA NODE: its core runs, and the copy it holds is judged.
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
 		writer: &tracker.Writer{}, pages: &pages.Store{}})
-	e.local = localWith(e, time.Now, func(context.Context, *native) copyVerdict {
+	e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict {
 		if faulted.Load() {
 			return copyVerdict{fault: "tracker", answers: true}
 		}
@@ -106,7 +111,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	})
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: start(), Placement: twoDataNodes{},
-		Local: e.local, Session: estate.NewSession(),
+		Local: e.local, Session: estate.NewSession(), Envelopes: envelopes,
 	})
 	if err != nil {
 		t.Fatal(err)

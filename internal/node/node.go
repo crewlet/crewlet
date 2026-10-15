@@ -11,6 +11,12 @@
 //
 // That ordering is the whole point, and it is why the fleet suite exercises
 // this package rather than the seat host directly.
+//
+// The second thing that belongs here for the same reason is that every seat in
+// the COMPANY has a mailbox, whether or not this node will ever run it — the
+// queue knows about subscriptions and nothing about seats, the seat host knows
+// about seats and nothing about subscriptions. See [Node.EnsureMailboxes],
+// which converges that rather than re-creating it.
 package node
 
 import (
@@ -23,9 +29,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -86,7 +93,7 @@ type Config struct {
 	// its runs have to be recovered and its mail parked before anything
 	// can deliver, or the first message starts a second turn beside a
 	// coding job that is still going.
-	SeatReady func(ctx context.Context, handle string, lease coord.Lease) error
+	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
 	// AttachHolds names the pause holds a seat's mailbox must already carry
 	// when it is attached — the reasons [queue.EventQueue.PauseTopic] is
@@ -100,7 +107,11 @@ type Config struct {
 	// the attachment, and the mail waiting on the inbox would be the first
 	// thing this node's consumer ran. A hold is keyed on the subscription
 	// rather than on an attachment, which is what lets it be taken first.
-	AttachHolds func(handle string) []string
+	//
+	// ASKED BY THE SEAT'S ID, the name the held mailbox is built from and
+	// the key every hold is kept under: the agent id derived from the
+	// seat's handle (ADR-0013).
+	AttachHolds func(seat uuid.UUID) []string
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
@@ -113,7 +124,7 @@ type Config struct {
 	// them. It is the opposite direction from SeatsAdmitted and fires on a
 	// different class of fault — a node that cannot serve its seats' work
 	// at all; see [seat.Config.Serviceable].
-	SeatsServiceable func() (bool, string)
+	SeatsServiceable func(ctx context.Context) (bool, string)
 
 	// SeatAdmitted runs when a seat this node holds STARTS ADMITTING TURNS:
 	// once its acquisition is established — the mailbox attached and
@@ -128,12 +139,17 @@ type Config struct {
 	// whose resume the seat's preparation inherited and could not run while
 	// the seat was still establishing. It never fails anything: the seat is
 	// already serving.
-	SeatAdmitted func(ctx context.Context, handle string)
+	//
+	// THE WHOLE SEAT, as every other seat hook here is handed: what waits on
+	// the edge may be filed by the id or by the handle, and a hook handed
+	// one of them would have to resolve the other through a company view
+	// that may already have moved.
+	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
-	SeatDone func(ctx context.Context, handle string)
+	SeatDone func(ctx context.Context, seat placement.Seat)
 
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
@@ -157,6 +173,20 @@ type Config struct {
 	SweepInterval     time.Duration
 }
 
+// acksLoss is what a node asks of its queue about the connection every
+// delivery is settled over: the jetstream backend's [jetstream.Queue.AcksLost],
+// closed once that connection is closed for good.
+//
+// DECLARED HERE, by the one consumer, rather than on the queue contract: the
+// memory twin settles nothing over a connection that can be lost, so it has
+// nothing to promise and does not have this — and a queue that does not is one
+// whose drain is never cut short, which is the true answer for it. Asked of
+// the queue itself rather than handed in beside it, so the node cannot be
+// given one queue's deliveries and another's signal.
+type acksLoss interface {
+	AcksLost() <-chan struct{}
+}
+
 // MailboxRegistry is the fleet record a node writes before it creates a seat's
 // mailbox. Declared here, by the consumer; internal/maintenance implements it,
 // beside the sweep that reads the record back.
@@ -165,7 +195,10 @@ type MailboxRegistry interface {
 	// returns once the node may create it. It may wait: a retirement of the
 	// seat's previous mailbox that is still deleting it has to finish first,
 	// or the subscription this node creates is deleted under it.
-	Register(ctx context.Context, handle string) error
+	//
+	// THE WHOLE SEAT, because the record is filed under the id its mailbox
+	// is named by and carries the handle as the label a person reads.
+	Register(ctx context.Context, seat placement.Seat) error
 }
 
 // Node is one process's participation in a company.
@@ -177,11 +210,34 @@ type Node struct {
 	// turns is the per-node concurrency gate every turn passes through.
 	turns *gate
 
+	// acksLost is the queue's [acksLoss] signal, and nil — never closed —
+	// for a queue without one.
+	acksLost <-chan struct{}
+
+	// cut is closed by a drain cut short because the turns'
+	// acknowledgements can no longer land, and ends every turn running then
+	// or started after. See [Node.Drain]. Never closed otherwise — a drain
+	// that can wait, waits. A channel rather than a context held here,
+	// because what it carries is one node-lifetime fact and not a request's
+	// scope: each turn's own context stays the delivery's, threaded in.
+	cut     chan struct{}
+	cutOnce sync.Once
+
 	// attached records which seats this node currently consumes, so a
 	// release detaches exactly what an acquire attached. Guarded because
 	// the seat host calls hooks from its own goroutines.
+	//
+	// KEYED ON THE SEAT'S ID, as its lease and its mailbox are, with its
+	// handle beside it for the diagnostics.
 	mu       sync.Mutex
-	attached map[string]struct{}
+	attached map[uuid.UUID]string
+
+	// mail is what this node knows about the company's mailboxes, and the
+	// convergence loop's own lifetime. See mailboxes.go.
+	mail   *mailboxes
+	loopMu sync.Mutex
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // New builds a node.
@@ -200,8 +256,13 @@ func New(cfg Config) (*Node, error) {
 	n := &Node{
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
-		attached: map[string]struct{}{},
+		attached: map[uuid.UUID]string{},
+		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
+		cut:      make(chan struct{}),
+	}
+	if q, ok := cfg.Queue.(acksLoss); ok {
+		n.acksLost = q.AcksLost()
 	}
 
 	host, err := seat.New(seat.Config{
@@ -244,126 +305,37 @@ func (n *Node) Owner() string { return n.cfg.Owner }
 // Start begins claiming seats and consuming their mail.
 //
 // The mailboxes come up BEFORE the claiming, and that ordering is the point —
-// see [Node.EnsureMailboxes].
+// see [Node.EnsureMailboxes]. The loop that keeps them converged starts AFTER
+// the host, because the first pass has already run here and a second one
+// racing the host's own first sweep would buy nothing.
 func (n *Node) Start(ctx context.Context) error {
 	if err := n.cfg.Queue.Start(ctx); err != nil {
 		return fmt.Errorf("node: start queue: %w", err)
 	}
 	n.EnsureMailboxes(ctx)
 	n.host.Start(ctx)
+
+	// The goroutine's lifetime belongs to this node: it is cancelled by
+	// Stop and waited for there, so a stopped node is one that has
+	// finished converging rather than one still holding a broker call.
+	n.loopMu.Lock()
+	defer n.loopMu.Unlock()
+	if n.cancel != nil {
+		return nil
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	n.cancel = cancel
+	n.wg.Go(func() { n.converge(loopCtx) })
 	return nil
-}
-
-// EnsureMailboxes creates the durable subscription behind every agent seat in
-// the company — not just the ones this node claims.
-//
-// A DURABLE SUBSCRIPTION IS A SEAT'S MAILBOX: it exists without a consumer and
-// retains what is published while nothing is attached. Its absence is not an
-// error anybody sees, because publishing to a topic no subscription covers
-// DROPS THE EVENT SILENTLY. The queue contract documents EnsureSubscription
-// for exactly this and nothing in the engine ever called it, so a seat's mail
-// existed only from the moment some node happened to attach a consumer to it.
-//
-// That is a whole class of quiet loss. A company's seats are claimed a few at
-// a time across successive sweeps, so every webhook, notification and
-// scheduled trigger aimed at a seat this fleet had not reached yet went
-// nowhere — during boot, during a rollout, and permanently for any seat no
-// live node's placement matches.
-//
-// EVERY seat, not this node's share: a mailbox is a fact about the company,
-// and the node that ends up serving a seat may not be this one. Creating one
-// is idempotent, so every node doing it costs a no-op.
-//
-// Best effort, per seat. A subscription that cannot be created is logged and
-// the rest still get theirs — the alternative is a node that refuses to start
-// because one topic was unreachable, which loses strictly more mail.
-//
-// Exported so a config apply can run it again: a revision that ADDS a role
-// adds a seat, and that seat's mail is dropped until somebody makes it a
-// mailbox.
-//
-// REGISTERED FIRST. Each seat's mailbox is recorded with the fleet before it is
-// created, because once the seat leaves the company the handle is gone from the
-// org every node derives the name from, and the record is what the retirement
-// of that mailbox runs on. A registration that fails is logged and the mailbox
-// is created anyway, since a seat in the company losing mail is worse than a
-// mailbox the maintenance sweep registers on its next tick, whether the seat is
-// still in the company or, found through the broker's subscription listing,
-// already gone.
-func (n *Node) EnsureMailboxes(ctx context.Context) {
-	// ONE CEILING OVER THE WHOLE PASS, because this is one replicated
-	// create PER SEAT in a row and each carries its own per-create budget.
-	// A company of thirty seats on a wedged metadata group would otherwise
-	// hold the boot for thirty of them, serially — the product again,
-	// which is the bound [jsprovision.SequenceBudget] exists to replace.
-	//
-	// It reads the topology off the queue, so a solo node keeps the short
-	// one and nothing here has to be told which it is.
-	if c, ok := n.cfg.Queue.(interface {
-		Clustered() jsprovision.Clustered
-	}); ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.Clustered().SequenceBudget())
-		defer cancel()
-	}
-
-	created := 0
-	// ONE READ of the seat list for the walk and the line that reports it. Two
-	// reads straddled an apply that changed the seats, and the log then
-	// claimed a count the walk never covered.
-	seats := n.cfg.Seats()
-	for _, seat := range seats {
-		inbox, group := topics.AgentInbox(seat.Handle), topics.AgentInboxGroup(seat.Handle)
-		if inbox == "" || group == "" {
-			continue
-		}
-		if n.cfg.Mailboxes != nil {
-			if err := n.cfg.Mailboxes.Register(ctx, seat.Handle); err != nil {
-				if ctx.Err() != nil {
-					n.log.Warn("seat_mailboxes_interrupted", "error", ctx.Err(),
-						"detail", "the walk stopped before every seat's mailbox was created; "+
-							"the next apply or start runs it again")
-					return
-				}
-				n.log.Warn("seat_mailbox_unregistered", "handle", seat.Handle, "error", err,
-					"detail", "the mailbox is created anyway; until the maintenance sweep "+
-						"registers it, it cannot be retired if this seat is removed")
-			}
-		}
-		made, err := n.cfg.Queue.EnsureSubscription(ctx, inbox, group)
-		if errors.Is(err, queue.ErrNotLive) {
-			// The queue is not up yet, which is not a fault: the boot
-			// apply runs before Start and Start does this again a moment
-			// later. Returning rather than continuing, because every
-			// remaining seat would report the same thing — one honest
-			// line beats seven identical warnings about a state that is
-			// about to resolve itself.
-			n.log.Debug("seat_mailboxes_deferred",
-				"detail", "the broker client is not started yet; the node's "+
-					"own start creates these")
-			return
-		}
-		if err != nil {
-			n.log.Warn("seat_mailbox_unavailable", "handle", seat.Handle, "error", err,
-				"detail", "mail published to this seat before it is claimed is "+
-					"dropped rather than retained")
-			continue
-		}
-		if made {
-			created++
-		}
-	}
-	// "provisioned" RATHER THAN "created", because on a fleet booting
-	// together this counts what THIS node found absent and then made —
-	// and two members that create one mailbox in the same instant are
-	// both handed it, with no way to tell which one's create did it. See
-	// [queue.EventQueue.EnsureSubscription]. Reading these lines across a
-	// fleet, the counts can sum to more than the company has seats.
-	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "provisioned", created)
 }
 
 // Stop gives up every seat and stops consuming.
 func (n *Node) Stop(ctx context.Context) {
+	// THE CONVERGENCE FIRST, and waited for: it talks to the broker, and
+	// a pass still in flight while the host releases its seats would be
+	// creating mailboxes for a company this process has stopped serving.
+	n.stopConverging()
+
 	// The seat host's own stop releases every held seat, and each release
 	// detaches that seat's mailbox through OnRelease — so by the time this
 	// returns the node consumes nothing.
@@ -375,6 +347,23 @@ func (n *Node) Stop(ctx context.Context) {
 	// Stopping it here took the broker down through a layer that had no
 	// way to know it was not the owner.
 	n.host.Stop(ctx)
+}
+
+// stopConverging cancels the mailbox loop and waits for it.
+//
+// UNDER loopMu FOR THE WHOLE OF IT, including the wait: a WaitGroup may not be
+// counted up from zero concurrently with a Wait, and [Node.Start] adds to this
+// one under the same lock. The loop itself never takes it, so there is nothing
+// for the wait to deadlock against — what it costs is that a Start racing a
+// Stop queues behind it, which is the correct order for those two anyway.
+func (n *Node) stopConverging() {
+	n.loopMu.Lock()
+	defer n.loopMu.Unlock()
+	if n.cancel != nil {
+		n.cancel()
+		n.cancel = nil
+	}
+	n.wg.Wait()
 }
 
 // drainLogInterval is how often a drain says how much work is left.
@@ -425,6 +414,24 @@ const drainLogInterval = 10 * time.Second
 // the seats' teardowns between them, so it could only agree with the
 // allowance or cut a give-back short for time no store had spent.
 //
+// # Unless the acknowledgements are gone
+//
+// The wait is worth its length because a turn that finishes is ACKNOWLEDGED:
+// its outcome is recorded and nobody runs it again. Once the queue reports its
+// acks lost ([acksLoss]) — its own connection closed for good, the one every
+// delivery is settled over — no running turn's outcome can be, so the broker
+// hands each delivery to whichever node takes its seat and that node runs it
+// again. Finishing it here would buy nothing but a second copy of every side
+// effect (a chat post, a comment, a tracker write) and a later exit. So step 3 ends
+// AT ONCE and every turn still running is CANCELLED, and the rest proceeds as
+// before: the seats are released, in the same order, on the same budget. The
+// cut is one-way — a turn started after it is cancelled as it starts — which
+// matches the only thing that closes the channel, a node that is stopping.
+//
+// Nothing else cuts it. A node that lost only a second connection (the
+// coordination store's, on an embedded broker) stops too, but its acks still
+// land, so its drain waits like a signal's.
+//
 // Drain does not stop the node: a drained node still renews presence-free and
 // the layers beneath are all reversible, so it could be told to claim again.
 // Stop is what ends it.
@@ -457,14 +464,44 @@ func (n *Node) Drain(ctx context.Context) {
 	// keep publishing, and "wait until nothing is running" never comes
 	// true. It is also the reversible verb — a drain that turns out to be
 	// a shed can be undone, which PauseDelivery could not offer.
-	for _, handle := range n.host.Held() {
-		if err := n.OnAdmission(ctx, handle, false); err != nil {
-			n.log.Warn("drain_quiesce_failed", "handle", handle, "error", err)
+	for _, s := range n.host.HeldSeats() {
+		if err := n.OnAdmission(ctx, s, false); err != nil {
+			n.log.Warn("drain_quiesce_failed", "handle", s.Handle, "error", err)
 		}
 	}
 
+	// THE WAIT ENDS THE MOMENT THE ACKS ARE LOST, whether they were lost
+	// before the drain began (the usual order: the loss is what stopped the
+	// node) or while it waits. A watcher rather than a check per interval,
+	// because the interval is ten seconds of turns making side effects
+	// nobody will record. Its lifetime is this call's: the deferred cancel
+	// ends it however the loop below ends.
+	wait, endWait := context.WithCancel(ctx)
+	defer endWait()
+	if n.acksLost != nil {
+		go func() {
+			select {
+			case <-n.acksLost:
+				endWait()
+			case <-wait.Done():
+			}
+		}()
+	}
+
 	for {
-		remaining, err := n.cfg.Queue.WaitForHandlers(ctx, drainLogInterval)
+		remaining, err := n.cfg.Queue.WaitForHandlers(wait, drainLogInterval)
+		if n.acksGone() {
+			n.cutOnce.Do(func() { close(n.cut) })
+			if remaining > 0 {
+				n.log.Warn("drain_cut", "in_flight", remaining,
+					"detail", "the queue's own broker connection is closed for "+
+						"good, so nothing the running turns conclude can be "+
+						"acknowledged and each would be run again by whichever "+
+						"node takes its seat: they are cancelled rather than "+
+						"waited for")
+			}
+			break
+		}
 		if err != nil {
 			n.log.Warn("drain_wait_failed", "error", err)
 			break
@@ -492,16 +529,19 @@ func (n *Node) Drain(ctx context.Context) {
 // receives work before its runtime is up runs its first turn against a
 // half-built engine. Attaching last means the mailbox is the final thing to
 // open, so the first event to arrive meets a seat that can serve it.
-func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) error {
-	inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Lease) error {
+	handle := s.Handle
+	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
-		// An unroutable handle. Refusing here rather than attaching to a
-		// subject nobody publishes to is what keeps the failure loud.
-		return fmt.Errorf("node: seat %q has no inbox subject", handle)
+		// A seat with no id has no mailbox. Refusing here rather than
+		// attaching to a subject nobody publishes to is what keeps the
+		// failure loud.
+		return fmt.Errorf("node: seat %q has no inbox subject: it derives no "+
+			"seat id, and a mailbox is named by the id", handle)
 	}
 
 	if n.cfg.SeatReady != nil {
-		if err := n.cfg.SeatReady(ctx, handle, lease); err != nil {
+		if err := n.cfg.SeatReady(ctx, s, lease); err != nil {
 			// The seat is REFUSED rather than attached anyway: a seat
 			// whose in-flight runs could not be recovered would take new
 			// work beside a coding job nothing is tracking.
@@ -510,7 +550,7 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 	}
 
 	if n.cfg.AttachHolds != nil {
-		for _, hold := range n.cfg.AttachHolds(handle) {
+		for _, hold := range n.cfg.AttachHolds(s.ID) {
 			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, hold); err != nil {
 				// REFUSED rather than attached without it: a seat whose
 				// hold could not be taken would run the mail it exists to
@@ -537,7 +577,7 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 	}
 
 	n.mu.Lock()
-	n.attached[handle] = struct{}{}
+	n.attached[s.ID] = handle
 	n.mu.Unlock()
 	n.log.Info("seat_attached", "handle", handle, "epoch", lease.Epoch)
 	return nil
@@ -545,9 +585,9 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 
 // OnEstablished passes on that an acquired seat now admits turns — see
 // [Config.SeatAdmitted].
-func (n *Node) OnEstablished(ctx context.Context, handle string, _ coord.Lease) {
+func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Lease) {
 	if n.cfg.SeatAdmitted != nil {
-		n.cfg.SeatAdmitted(ctx, handle)
+		n.cfg.SeatAdmitted(ctx, s)
 	}
 }
 
@@ -581,6 +621,21 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 		return queue.Defer("node is draining, so this turn was not started")
 	}
 	defer release()
+	// ENDED BY A DRAIN THAT CANNOT WAIT FOR IT, and by nothing else here:
+	// once the queue's acknowledgements can no longer land, this turn's
+	// outcome will not be recorded and its seat's successor runs the same
+	// delivery again, so every side effect it makes from then on is made
+	// twice. See [Node.Drain]. The watcher's lifetime is the turn's: the
+	// deferred cancel ends it however the turn returns.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-n.cut:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	return n.cfg.Turn(ctx, handle, evs)
 }
 
@@ -589,8 +644,9 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 // Reporting an error means the teardown could NOT be proven, and the seat
 // host keeps the lease in response: a seat this process may still be
 // consuming must not be handed to a peer.
-func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reason seat.ReleaseReason) error {
-	inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, reason seat.ReleaseReason) error {
+	handle := s.Handle
+	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
 		return nil
 	}
@@ -605,10 +661,10 @@ func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reas
 	}
 
 	n.mu.Lock()
-	delete(n.attached, handle)
+	delete(n.attached, s.ID)
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
-		n.cfg.SeatDone(ctx, handle)
+		n.cfg.SeatDone(ctx, s)
 	}
 	n.log.Info("seat_detached", "handle", handle, "reason", reason.String())
 	return nil
@@ -621,8 +677,9 @@ func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reas
 // prove ownership stops taking NEW work but keeps the seat; when a renew
 // succeeds again the consumer must be told to resume, or the seat stays
 // owned, attached, and permanently deaf.
-func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) error {
-	inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+func (n *Node) OnAdmission(ctx context.Context, s placement.Seat, admitted bool) error {
+	handle := s.Handle
+	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
 		return nil
 	}
@@ -641,7 +698,7 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 	// THE SAME EDGE AS AN ESTABLISHMENT, for whatever was refused while
 	// ownership could not be proven — see [Config.SeatAdmitted].
 	if admitted && n.cfg.SeatAdmitted != nil {
-		n.cfg.SeatAdmitted(ctx, handle)
+		n.cfg.SeatAdmitted(ctx, s)
 	}
 	return nil
 }
@@ -667,9 +724,9 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 // a node that still holds them.
 func (n *Node) ResumeClaiming(ctx context.Context) {
 	n.turns.open()
-	for _, handle := range n.host.Held() {
-		if err := n.OnAdmission(ctx, handle, true); err != nil {
-			n.log.Warn("resume_admit_failed", "handle", handle, "error", err)
+	for _, s := range n.host.HeldSeats() {
+		if err := n.OnAdmission(ctx, s, true); err != nil {
+			n.log.Warn("resume_admit_failed", "handle", s.Handle, "error", err)
 		}
 	}
 	n.host.ResumeClaiming(ctx)
@@ -678,13 +735,34 @@ func (n *Node) ResumeClaiming(ctx context.Context) {
 // InFlightTurns is how many turns hold a concurrency slot right now.
 func (n *Node) InFlightTurns() int { return n.turns.inFlight() }
 
-// Attached reports the seats this node currently consumes. Diagnostics and
-// the fleet suite's "attached to exactly what I own" assertion read it.
+// acksGone reports whether the queue's [acksLoss] signal has closed. A queue
+// without one leaves the channel nil, which never has, and the default arm
+// answers that.
+func (n *Node) acksGone() bool {
+	select {
+	case <-n.acksLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// Attached reports the seats this node currently consumes, by the handle each
+// was attached under. Diagnostics and the fleet suite's "attached to exactly
+// what I own" assertion read it.
 func (n *Node) Attached() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	out := slices.Collect(maps.Keys(n.attached))
-	return out
+	return slices.Collect(maps.Values(n.attached))
+}
+
+// AttachedSeats reports the seats this node currently consumes, by id — the
+// question a reader of a seat's state asks ("is this node's copy current?"),
+// which must not depend on the handle the seat answered to when it arrived.
+func (n *Node) AttachedSeats() []uuid.UUID {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Collect(maps.Keys(n.attached))
 }
 
 // partitionKey groups a seat's inbox into the batches one turn is given.

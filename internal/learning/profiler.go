@@ -137,8 +137,8 @@ func (p *Profiler) Name() string { return ProfilerSource }
 // completion, an A2A ask) carries no interactions, and a pass over it would
 // spend a call to profile nobody.
 func (p *Profiler) Skip(t Turn) string {
-	if t.Event.AgentHandle == "" {
-		// Profiles are OBSERVER-scoped. Without a handle there is nobody
+	if t.Seat() == "" {
+		// Profiles are OBSERVER-scoped. Without a seat there is nobody
 		// for the observation to belong to.
 		return "no_observer"
 	}
@@ -182,7 +182,8 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 	// same preference every turn, and the store's merge then rewrites an
 	// identical value while LastCorroboratedAt moves — which reports a
 	// counterparty as freshly learned about when nothing was learned.
-	existing, _, err := p.counterparts.Get(ctx, t.Event.AgentHandle, s.subject)
+	//
+	existing, _, err := p.counterparts.Get(ctx, t.Seat(), s.subject)
 	if err != nil {
 		// Degraded rather than skipped, the same trade the persist
 		// decider makes for its dedup block: a patch written without the
@@ -202,7 +203,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 	}
 
 	counted, err := p.counterparts.Record(ctx, Observation{
-		Observer: t.Event.AgentHandle,
+		Observer: t.Seat(),
 		Subject:  s.subject,
 		Traits:   traits,
 		// THE UNIT OF WORK, not the run: the count is an unconditional
@@ -338,7 +339,7 @@ func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
 			// every one of them under one profile.
 			continue
 		}
-		if s.Handle == t.Event.AgentHandle {
+		if s.Handle != "" && s.Handle == t.Seat() {
 			// A SEAT DOES NOT PROFILE ITSELF. Its own echoed post can
 			// reach it as an interaction, and a self-profile is a bag of
 			// traits nothing ever reads.

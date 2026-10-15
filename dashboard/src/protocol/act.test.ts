@@ -8,12 +8,14 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { act, newRequestId } from "./act.ts";
-import { onTokenRequested } from "./authToken.ts";
+import { ACT_ERRORS } from "../contract/errors.ts";
+import { act, newActOpID } from "./act.ts";
 import { SessionFloors } from "./session.ts";
+import { currentSessionNeed, sessionRestored, setStepUpConfirmer } from "./signin.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  sessionRestored();
 });
 
 interface Call {
@@ -47,30 +49,35 @@ const APPLIED = {
   receipt: { views: ["v1"] },
 };
 
+/** The operation key a call sent, off its `Idempotency-Key` header. */
+const keyOf = (call: Call) => (call.init.headers as Record<string, string>)["Idempotency-Key"];
+
 describe("the request", () => {
-  test("is one JSON object carrying the request id and the arguments, to the tool's route", async () => {
+  // THE OPERATION RIDES THE HEADER every surface reads it from, and the body is
+  // the tool's arguments and nothing else: the engine refuses a body key it
+  // does not read, so an operation key sent anywhere but the header would be
+  // refused on every press.
+  test("is the arguments as JSON, to the tool's route, under its operation key", async () => {
     const calls = stub(async () => json(APPLIED, 200));
     const floors = new SessionFloors();
-    const requestId = newRequestId();
-    await act("set_pins", { views: { add: ["v1"] } }, { requestId, floors });
+    const opId = newActOpID();
+    await act("set_pins", { views: { add: ["v1"] } }, { opId, floors });
     const { url, init } = calls[0]!;
     expect(init.method).toBe("POST");
     expect(new URL(url).pathname).toBe("/operator/act/set_pins");
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
-    expect(JSON.parse(init.body as string)).toEqual({
-      request_id: requestId,
-      args: { views: { add: ["v1"] } },
-    });
+    expect(keyOf(calls[0]!)).toBe(opId);
+    expect(JSON.parse(init.body as string)).toEqual({ args: { views: { add: ["v1"] } } });
   });
 
-  // THE ENGINE REFUSES A REQUEST ID THAT IS NOT A UUIDv7 — it reads the
-  // instant the id carries — and a browser reached over plain http has no
+  // THE ENGINE REFUSES A KEY THAT IS NOT A UUIDv7 — it reads the instant the
+  // key carries — and a browser reached over plain http has no
   // `crypto.randomUUID` to mint one with.
   test("mints a version-7 UUID without randomUUID", () => {
     const own = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
     Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
     try {
-      const ids = new Set(Array.from({ length: 50 }, () => newRequestId()));
+      const ids = new Set(Array.from({ length: 50 }, () => newActOpID()));
       expect(ids.size).toBe(50);
       for (const id of ids) {
         expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -84,19 +91,35 @@ describe("the request", () => {
   // THE INSTANT IS THE GESTURE'S: the engine reads it back as the operation's
   // mint instant, so the leading 48 bits are the millisecond it was pressed.
   test("carries the instant the gesture began", () => {
-    const id = newRequestId(0x0192_7c3a_4e5b);
+    const id = newActOpID(0x0192_7c3a_4e5b);
     expect(id.startsWith("01927c3a-4e5b-7")).toBe(true);
   });
 
-  test("sends the same request id again when the caller retries a press", async () => {
+  test("sends the same operation key again when the caller retries a press", async () => {
     const calls = stub(async () => json(APPLIED, 200));
     const floors = new SessionFloors();
     const first = await act("set_pins", { views: { add: ["v1"] } }, { floors });
-    await act("set_pins", { views: { add: ["v1"] } }, { requestId: first.requestId, floors });
-    const ids = calls.map(
-      (c) => (JSON.parse(c.init.body as string) as { request_id: string }).request_id,
+    await act("set_pins", { views: { add: ["v1"] } }, { opId: first.opId, floors });
+    expect(keyOf(calls[0]!)).toBe(first.opId);
+    expect(keyOf(calls[1]!)).toBe(first.opId);
+  });
+
+  // A PRESS REFUSED FOR A STALE PROOF IS MADE ONCE THE PERSON HAS CONFIRMED,
+  // under the SAME operation: the replay is the press, not a second one.
+  test("a step-up is confirmed and the same operation replayed", async () => {
+    let n = 0;
+    const calls = stub(async () =>
+      n++ === 0 ? json({ error: "step_up_required", window: "step_up" }, 403) : json(APPLIED, 200),
     );
-    expect(ids[0]).toBe(ids[1]);
+    const stop = setStepUpConfirmer(async () => true);
+    try {
+      const result = await act("set_pins", {}, { floors: new SessionFloors() });
+      expect(result.kind).toBe("applied");
+      expect(calls).toHaveLength(2);
+      expect(keyOf(calls[1]!)).toBe(keyOf(calls[0]!));
+    } finally {
+      stop();
+    }
   });
 });
 
@@ -174,12 +197,38 @@ describe("what a change came to", () => {
     });
   });
 
-  test("a tool that refused unavailable wrote nothing: refused, and worth retrying", async () => {
+  test("the engine's unknown names the operation a retry sends again", async () => {
+    const opId = newActOpID();
     stub(async () =>
-      json({ error: "unavailable", tool: "set_pins", detail: "sealed for maintenance" }, 503),
+      json(
+        { error: "unavailable", outcome: "unknown", op_id: opId, detail: "nobody can say" },
+        503,
+      ),
+    );
+    const result = await act("set_pins", {}, { opId, floors: new SessionFloors() });
+    expect(result).toMatchObject({ kind: "unknown", opId, reason: "nobody can say" });
+  });
+
+  // WHETHER WAITING CHANGES IT IS THE ENGINE'S TO SAY: a `503` it wrote
+  // carries a `Retry-After` where it does, and none where it does not.
+  test("a tool that refused unavailable wrote nothing: refused, and worth retrying", async () => {
+    stub(
+      async () =>
+        new Response(JSON.stringify({ error: "unavailable", tool: "set_pins", detail: "sealed" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Retry-After": "2" },
+        }),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
     expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: true });
+  });
+
+  test("an unavailable the engine says no wait clears is not worth retrying", async () => {
+    stub(async () =>
+      json({ error: "unavailable", tool: "set_pins", refusal: "log_full", detail: "full" }, 503),
+    );
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: false });
   });
 
   // THE TOOL'S OWN SENTENCE ONLY WHERE IT NAMES THE ARGUMENT; everywhere else
@@ -240,37 +289,28 @@ describe("what a change came to", () => {
     expect(heard).not.toHaveBeenCalled();
   });
 
-  test("an unbound token is refused with the engine's remedy beside it", async () => {
+  // A REFUSAL ON AUTHORITY SAYS WHAT WOULD ADMIT THE CALLER, read off the
+  // answer — a screen never names a grant itself.
+  test("a refusal on authority carries the grants that would admit the caller", async () => {
     stub(async () =>
-      json(
-        {
-          error: "unbound",
-          tool: "set_pins",
-          detail: "the token ci is bound to no seat",
-          hint: "give a human seat contact.crewlet_operator_id: ci",
-        },
-        403,
-      ),
+      json({ error: "unauthorized", reason: "no_grant", grants: ["admin"], tool: "set_pins" }, 403),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
     expect(result).toMatchObject({
       kind: "refused",
-      code: "unbound",
-      hint: "give a human seat contact.crewlet_operator_id: ci",
+      code: "unauthorized",
+      grants: ["admin"],
+      sentence: ACT_ERRORS.unauthorized,
     });
   });
 
-  test("a refused token asks the shell for another", async () => {
+  // NOBODY SIGNED IN IS THE SESSION'S NEED, not a token to set: the browser
+  // holds nothing a script could read, so the repair is a sign-in.
+  test("a refused credential asks for a sign-in", async () => {
     stub(async () => json({ error: "invalid_token" }, 401));
-    const asked = vi.fn();
-    const stop = onTokenRequested(asked);
-    try {
-      const result = await act("set_pins", {}, { floors: new SessionFloors() });
-      expect(result).toMatchObject({ kind: "refused", code: "invalid_token" });
-      expect(asked).toHaveBeenCalledOnce();
-    } finally {
-      stop();
-    }
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result).toMatchObject({ kind: "refused", code: "invalid_token" });
+    expect(currentSessionNeed()).toBe("sign_in");
   });
 
   test("the caller's own abort rejects: it is not an answer", async () => {
@@ -287,4 +327,14 @@ describe("what a change came to", () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
+});
+
+// NO SENTENCE MENTIONS A TOKEN: the dashboard holds no credential a person
+// could set, so a sentence telling them to is advice they cannot take. (A
+// TOKEN BUDGET is the model's tokens, which is another word.)
+test("no refusal sentence tells a person about a token", () => {
+  const offenders = Object.entries(ACT_ERRORS)
+    .filter(([, sentence]) => sentence !== null && /\btokens?\b(?! budget)/i.test(sentence))
+    .map(([code]) => code);
+  expect(offenders).toEqual([]);
 });

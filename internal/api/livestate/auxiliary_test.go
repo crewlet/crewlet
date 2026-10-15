@@ -49,7 +49,10 @@ func TestAnAuxiliaryRecordMovesNoSeat(t *testing.T) {
 	}
 
 	change := s.Apply(auxiliaryEnv(t, types.AuxiliarySpend{
-		Agent: "a-1", AgentHandle: "lead", RoleName: "Lead",
+		// The seat the turn above ran on, by the agent id it is keyed by
+		// (turnPayload's): a record naming another seat would move this one
+		// trivially never.
+		Agent: "Lead", AgentHandle: "lead", RoleName: "Lead",
 		Stage: types.AuxStageReflection, Purpose: types.AuxPersistDecider,
 		TurnID: "tn-1", Model: "claude-haiku-4-5", ProviderKey: "cheap",
 		Day: "2026-06-14", Calls: 2, FailedCalls: 1, InputTokens: 900, OutputTokens: 60,
@@ -85,7 +88,7 @@ func TestAnAuxiliaryRecordIsNotALineOfTheFeed(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	change := s.Apply(auxiliaryEnv(t, types.AuxiliarySpend{
-		Agent: "a-1", RoleName: "Lead", Stage: types.AuxStageTurn,
+		Agent: "Lead", RoleName: "Lead", Stage: types.AuxStageTurn,
 		Purpose: types.AuxMemoryFilter, TurnID: "tn-1", Calls: 1, TotalTokens: 100,
 	}, id("aux-1")))
 	if change.Events {

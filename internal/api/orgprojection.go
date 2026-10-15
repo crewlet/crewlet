@@ -4,41 +4,57 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The org projection: the company's identity and its seat and unit tree, as
 // GET /org, the socket snapshot's `org` key and the `org` push carry it.
 //
-// # An explicit public type, never a marshal of the config's own structs
+// # An explicit type, never a marshal of the config's own structs
 //
-// These three surfaces are ANONYMOUSLY READABLE under the default posture
-// (`api.auth.allow_anonymous_read: true`), and the only surface that shows the
-// whole document, /config, is guarded in full. The projection used to marshal
-// config.Role and config.Unit verbatim and rely on nothing else, which made it
-// deny-by-omission: every field somebody added to a role was public the day it
-// landed. That had already happened. Contact identities (a person's Slack
-// member id, GitHub login, email), `${VAR}` names in a Mattermost username,
-// placement labels and sandbox setup commands (routinely the place a registry
-// credential is written) all reached an anonymous reader, and the secret tags
-// redaction relies on covered none of them because none of them is a
-// credential in the narrow sense.
+// These three surfaces answer EVERYBODY — every principal the guard resolves,
+// a colleague holding no permission at all included, since the org chart is
+// the overview (ADR-0033) — while the only surface that shows the whole
+// document, /config, is admin's. Every route and socket is authenticated; there
+// is no anonymous reader any more (`api.auth.allow_anonymous_read` is a named
+// refusal in internal/config), but the audience here is still far wider than
+// the configuration's. The projection used to marshal config.Role and
+// config.Unit verbatim and rely on nothing else, which made it
+// deny-by-omission: every field somebody added to a role reached this audience
+// the day it landed. That had already happened, back when the audience was
+// anybody at all. Contact identities (a person's Slack member id, GitHub
+// login, email), `${VAR}` names in a Mattermost username, placement labels and
+// sandbox setup commands (routinely the place a registry credential is
+// written) all reached it, and the secret tags redaction relies on covered
+// none of them because none of them is a credential in the narrow sense.
 //
-// So the public shape is spelled out here field by field, and a field reaches
-// an anonymous reader only by being written into one of these types on
-// purpose. Everything else stays behind the guarded `config` query, which is
+// So the reader's shape is spelled out here field by field, and a field
+// reaches everybody only by being written into one of these types on purpose.
+// Everything else stays behind the admin's configuration answers, which is
 // where the dashboard reads it. Configured work that has a read surface of its
 // own is not repeated here either: schedules are described by /schedules. A
-// token budget IS carried, as the ceilings the document writes, beside the
-// /budgets meters that say how much of each window is spent: a ceiling is a
-// statement of what the company may spend, not an account or a credential,
-// and a seat's page that could show the meter and not the rule behind it
-// would be answering "how close" without "to what".
+// token budget IS carried, as the ceilings in force, beside the /budgets
+// meters that say how much of each window is spent: a ceiling is a statement
+// of what the company may spend, not an account or a credential, and a seat's
+// page that could show the meter and not the rule behind it would be answering
+// "how close" without "to what".
+//
 // TestEveryOrgFieldIsClassified fails the day config.Company, config.Role or
 // config.Unit gains a field nobody has classified, so a new field needs a
 // decision rather than defaulting to either side.
+//
+// # The tree is the running organisation's
+//
+// The seats and units are read from the organisation this node runs
+// ([org.Organization]) — the document's `roles:` and `units:` as the engine
+// built them, every root seat a `unit:` reference moved already in its unit —
+// so the tree a reader is shown is the one a turn reads. The company's name,
+// mission, vision, policies, clock and own token budget come from the
+// document.
 //
 // # Authored values, not effective ones
 //
@@ -66,18 +82,30 @@ import (
 // to re-run four levels of precedence. [OrgSeat.ToolSources] is the servers
 // the seat is GRANTED ([config.MCPServer.Grants], the rule the engine starts
 // a seat's children by), which depends on the company's server list and on
-// credentials the seat may inherit from its unit. [OrgSeat.Avatar] is the
-// character and colour an agent seat is drawn as ([config.RoleAvatar.Resolved]),
-// its defaults filled in, so no screen keeps a copy of what an unset avatar
-// looks like.
+// credentials the seat may inherit from its unit. Both are resolved from the
+// seat AS THE ENGINE RUNS IT — the running organisation, where a unit's
+// credentials are already layered under its agent members — never from the
+// authored role.
 //
-// None carries anything a reader could act with. A provider KEY is the
-// label a document gives a model entry (`fast`, `review`), never the model's
-// account, endpoint or key, and a server NAME is the label its tools are
-// already prefixed with in every prompt; the entries they name, and every
-// credential under `mcp_env`, stay guarded.
+// NEITHER REACHES THE OVERVIEW. A provider key names a model entry and a
+// server name names a tool server, and both are read off a seat's RUNTIME
+// settings, which `GET /config` serves only to an admin; a label derived from
+// them follows the same rule, or the projection would be a way round that
+// guard. So the projection is [stream.Shaped]: an admin audience is handed the
+// resolved fields, and every other audience the same tree without them — on
+// the push, the snapshot and GET /org alike. What they never carry, for any audience, is anything a
+// reader could act with: the entries they name, and every credential under
+// `mcp_env`, stay guarded.
+//
+// [OrgSeat.Avatar] is resolved too, and reaches every audience: the character
+// and colour an agent seat is drawn as ([config.RoleAvatar.Resolved]), its
+// defaults filled in, so no screen keeps a copy of what an unset avatar looks
+// like. It is presentation and nothing else — no account, no credential and
+// nothing a reader could dial — and a seat drawn one way for one reader and
+// another way for the next would be two seats.
 
-// OrgProjection is the anonymous view of a company.
+// OrgProjection is the reader's view of a company: the overview everybody
+// sees, and an admin with the resolved fields beside it.
 //
 // Every field is omitted when empty, so a node with no active company answers
 // `{}`, which is the shape the dashboard already reads as "nothing loaded".
@@ -88,10 +116,10 @@ type OrgProjection struct {
 	Policies []string `json:"policies,omitempty"`
 
 	// Timezone is the company's ONE clock (ADR-0018) as the engine resolves
-	// it: the IANA name the document writes, or `UTC` where it writes none.
+	// it: the IANA name the settings write, or `UTC` where they write none.
 	//
-	// PUBLIC, because every date an anonymous reader is shown is cut on it
-	// — "today", "this week", a due band, an overdue mark — and a screen
+	// AN OVERVIEW FIELD, because every date a reader is shown is cut on
+	// it — "today", "this week", a due band, an overdue mark — and a screen
 	// that cut them on the browser's own zone would put a task under a
 	// different day from the one the engine's own answer beside it names.
 	// It says where a company keeps its hours, which its every timestamp
@@ -99,9 +127,9 @@ type OrgProjection struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// TokenBudget is the company's own ceiling per calendar window, as the
-	// document writes it: the windows it caps and nothing for the ones it
-	// leaves open. PUBLIC for the reason the package doc gives; how much of
-	// each window is spent is the /budgets answer.
+	// settings write it: the windows it caps and nothing for the ones it
+	// leaves open. An overview field for the reason the package doc
+	// gives; how much of each window is spent is the /budgets answer.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
 	Roles []OrgSeat `json:"roles,omitempty"`
@@ -118,8 +146,9 @@ type OrgProjection struct {
 	// The fields above stay as WRITTEN, so a reader can still tell a
 	// declared lead from an inherited one.
 	//
-	// WITHOUT PATHS, which is the one difference from the guarded answers:
-	// an anonymous reader is given no document to point into, and membership
+	// WITHOUT PATHS, which is the one difference from the admin's
+	// configuration answers: a reader is given no document to point into,
+	// and membership
 	// is in each unit's seats. Nothing else here is a fact the fields above
 	// do not already carry, so it needs no classification of its own beyond
 	// this: it is those values, resolved.
@@ -148,24 +177,27 @@ type OrgSeat struct {
 	// the person it is.
 	Avatar *OrgAvatar `json:"avatar,omitempty"`
 
-	// TokenBudget is this seat's own ceilings, as written; a window it does
-	// not name is capped only by the company's.
+	// TokenBudget is this seat's own ceilings, as the document writes
+	// them; a window it does not name is capped only by the company's.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
-	// LLM is RESOLVED (see the package doc): each phase's provider chain,
-	// keyed by the phase's wire name, the first key the model it runs on and
-	// every later one a fallback in the order they are tried. Every phase is
-	// present on an agent seat of a company with a provider, and the field
-	// is absent on a human seat, which runs no model, and on a company that
-	// configures none.
+	// LLM is RESOLVED, and only an admin audience is handed it (see
+	// the package doc): each phase's provider chain, keyed by the phase's
+	// wire name, the first key the model it runs on and every later one a
+	// fallback in the order they are tried. Every phase is present on an
+	// agent seat of a company with a provider, and the field is absent on a
+	// human seat, which runs no model, on a company that configures none,
+	// and for every reader who is not an admin.
 	LLM map[string][]string `json:"llm,omitempty"`
 
-	// ToolSources is RESOLVED (see the package doc): where this seat's tools
-	// come from, in the registry's own origin grammar — `builtin` first, then
-	// `mcp:<server>` for each server it is granted, in the order the company
-	// declares them. What the seat is GRANTED, not what is running: a server
-	// that failed to start is still listed, and the node heartbeat's MCP
-	// report is what says it failed. Absent on a human seat.
+	// ToolSources is RESOLVED, and only an admin audience is handed it
+	// (see the package doc): where this seat's tools come from, in the
+	// registry's own origin grammar — `builtin` first, then `mcp:<server>`
+	// for each server it is granted, in the order the company declares them.
+	// What the seat is GRANTED, not what is running: a server that failed to
+	// start is still listed, and the node heartbeat's MCP report is what says
+	// it failed. Absent on a human seat and for every reader who is not an
+	// admin.
 	ToolSources []string `json:"tool_sources,omitempty"`
 }
 
@@ -186,8 +218,8 @@ type OrgTokenBudget struct {
 	Month *int `json:"month,omitempty"`
 }
 
-// orgTokenBudget copies an authored budget, nil when it caps nothing so the
-// field is omitted rather than written as `{}`.
+// orgTokenBudget copies the company's authored budget, nil when it caps nothing
+// so the field is omitted rather than written as `{}`.
 func orgTokenBudget(b config.TokenBudget) *OrgTokenBudget {
 	if b.Day == nil && b.Week == nil && b.Month == nil {
 		return nil
@@ -202,8 +234,39 @@ func orgTokenBudget(b config.TokenBudget) *OrgTokenBudget {
 	return &OrgTokenBudget{Day: clone(b.Day), Week: clone(b.Week), Month: clone(b.Month)}
 }
 
+// seatTokenBudget is a seat's ceilings as the composed org holds them, nil when
+// it caps nothing — the company's shape, so a reader draws both alike.
+func seatTokenBudget(c org.TokenCeilings) *OrgTokenBudget {
+	window := func(p period.Period) *int {
+		n, capped := c[p]
+		if !capped {
+			return nil
+		}
+		return &n
+	}
+	out := OrgTokenBudget{Day: window(period.Day), Week: window(period.Week), Month: window(period.Month)}
+	if out.Day == nil && out.Week == nil && out.Month == nil {
+		return nil
+	}
+	return &out
+}
+
 // OrgUnit is the public half of one unit, nesting to any depth.
 type OrgUnit struct {
+	// ID is the unit's KEY — what a `manages:` entry and a seat's `unit:`
+	// resolve — and it carries [config.Unit.IdentityKey] rather than the
+	// authored field, so a unit that declares no id answers with the name
+	// that is its key instead of with nothing.
+	//
+	// IT IS PUBLIC BECAUSE NOTHING ELSE HERE RESOLVES A REFERENCE. A seat's
+	// `manages` entry on this projection is the authored value, which may
+	// name a unit — and with only display names beside it a client had
+	// nothing in the same response to resolve that key against. It either
+	// matched on the name, which is a different value the moment a unit
+	// declares an id, or rendered the raw string and called the reference
+	// broken. Giving the client the id-or-name rule instead would be a
+	// second derivation of the one thing this engine keeps in one place.
+	ID        string    `json:"id,omitempty"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type,omitempty"`
 	Purpose   string    `json:"purpose,omitempty"`
@@ -215,7 +278,7 @@ type OrgUnit struct {
 	Children  []OrgUnit `json:"children,omitempty"`
 }
 
-// orgProjection builds the anonymous view of the current company.
+// orgProjection builds the reader's view of the current company.
 //
 // Read through the source on every call rather than captured, because an apply
 // replaces the company and a projection built at boot would keep showing a
@@ -226,19 +289,22 @@ type OrgUnit struct {
 // while the applied company is shared by every reader of the epoch, so an
 // aliased slice would make the projection only as immutable as every one of
 // those readers is careful.
-func orgProjection(company func() *config.Company) OrgProjection {
+func orgProjection(company func() (*config.Company, *org.Organization)) OrgProjection {
 	if company == nil {
 		return OrgProjection{}
 	}
-	c := company()
+	c, roster := company()
 	if c == nil {
 		return OrgProjection{}
 	}
-	derived := config.Derive(c).WithoutPaths()
+	// THE ROSTER for the tree, so a reader is shown the seats and units as
+	// the engine runs them; the company's NAME, mission, vision, policies,
+	// clock and own budget from the document.
+	derived := config.DeriveFrom(roster)
 	b := orgBuilder{
-		asRun:     c.SeatsAsRun(),
 		providers: c.Providers.ProviderOrder(),
 		servers:   c.MCPServers,
+		avatars:   avatars(c),
 	}
 	return OrgProjection{
 		Name:        c.Name,
@@ -247,44 +313,87 @@ func orgProjection(company func() *config.Company) OrgProjection {
 		Policies:    slices.Clone(c.Policies),
 		Timezone:    c.Location().String(),
 		TokenBudget: orgTokenBudget(c.TokenBudget),
-		Roles:       b.seats(c.Roles),
-		Units:       b.units(c.Units),
+		Roles:       b.seats(rootSeats(roster)),
+		Units:       b.units(topUnits(roster)),
 		Derived:     &derived,
 	}
 }
 
-// orgBuilder carries what a seat's resolved fields are resolved against.
+// rootSeats is the seats that belong to no unit, which is what the `roles:`
+// half of this projection has always been.
+func rootSeats(o *org.Organization) []*org.Role {
+	if o == nil {
+		return nil
+	}
+	return o.Roles
+}
+
+// topUnits is the units at the top of the tree; each carries its own children.
+func topUnits(o *org.Organization) []*org.Unit {
+	if o == nil {
+		return nil
+	}
+	return o.Units
+}
+
+// orgBuilder carries what a seat's resolved fields are resolved against: the
+// company's settings, while the seat they are resolved for is the running
+// organisation's.
 type orgBuilder struct {
-	// asRun is each authored seat's running form ([config.Company.SeatsAsRun]).
-	asRun map[*config.Role]*org.Role
 	// providers is providers.llm's keys in config order.
 	providers []string
 	servers   []config.MCPServer
+
+	// avatars is each authored seat's avatar by handle. The DOCUMENT's, not
+	// the running organisation's: how a seat is drawn is presentation the
+	// runtime model has no use for, so it is read where it is written, and
+	// found by the handle both shapes carry — the one key that names a seat
+	// in either.
+	avatars map[string]*config.RoleAvatar
 }
 
-func (b orgBuilder) seats(roles []config.Role) []OrgSeat {
+// avatars is every seat's authored avatar in c, keyed by the handle the seat
+// runs under ([config.Role.IdentityKey], the one the running organisation
+// carries) — nil entries included, which [config.RoleAvatar.Resolved] answers
+// with the defaults.
+func avatars(c *config.Company) map[string]*config.RoleAvatar {
+	out := map[string]*config.RoleAvatar{}
+	for role := range c.EachRole() {
+		out[role.IdentityKey()] = role.Avatar
+	}
+	return out
+}
+
+// seats is the public half of a list of seats, with the resolved fields of
+// every agent seat.
+//
+// THE DECLARED HANDLE rather than the derived one, because these fields are
+// the AS-WRITTEN half of the projection: `derived` beside them is where a
+// reader finds what the engine resolved, and a left-hand side that quietly
+// answered the resolved value would leave a client unable to tell a seat that
+// declared a handle from one whose handle came from its name.
+func (b orgBuilder) seats(roles []*org.Role) []OrgSeat {
 	if len(roles) == 0 {
 		return nil
 	}
 	out := make([]OrgSeat, 0, len(roles))
-	for i := range roles {
-		r := &roles[i]
+	for _, r := range roles {
 		seat := OrgSeat{
 			Name:                 r.Name,
 			Kind:                 string(r.Kind),
-			Handle:               r.Handle,
+			Handle:               r.DeclaredHandle,
 			Goal:                 r.Goal,
 			Backstory:            r.Backstory,
 			Responsibilities:     slices.Clone(r.Responsibilities),
 			BehavioralGuidelines: slices.Clone(r.BehavioralGuidelines),
 			Manages:              slices.Clone(r.Manages),
 			Availability:         r.Availability,
-			TokenBudget:          orgTokenBudget(r.TokenBudget),
+			TokenBudget:          seatTokenBudget(r.TokenBudget),
 		}
-		if run := b.asRun[r]; run != nil && run.IsAgent() {
-			seat.LLM = b.llm(run)
-			seat.ToolSources = b.toolSources(run)
-			look := r.Avatar.Resolved()
+		if r.IsAgent() {
+			seat.LLM = b.llm(r)
+			seat.ToolSources = b.toolSources(r)
+			look := b.avatars[r.Handle()].Resolved()
 			seat.Avatar = &OrgAvatar{Character: string(look.Character), Color: string(look.Color)}
 		}
 		out = append(out, seat)
@@ -315,24 +424,73 @@ func (b orgBuilder) toolSources(seat *org.Role) []string {
 	return out
 }
 
-func (b orgBuilder) units(units []config.Unit) []OrgUnit {
+// units is the public half of a list of units, nesting to any depth.
+//
+// THE DECLARED LEAD AND CHANNEL, on [orgBuilder.seats]' own reasoning: the
+// cascade's answers are in `derived`, which reports whether each was
+// inherited, and a left-hand side carrying the inherited value would make the
+// two halves say the same thing and lose the distinction.
+func (b orgBuilder) units(units []*org.Unit) []OrgUnit {
 	if len(units) == 0 {
 		return nil
 	}
 	out := make([]OrgUnit, 0, len(units))
-	for i := range units {
-		u := &units[i]
+	for _, u := range units {
 		out = append(out, OrgUnit{
+			ID:        u.Key(),
 			Name:      u.Name,
 			Type:      string(u.Type),
 			Purpose:   u.Purpose,
-			Lead:      u.Lead,
+			Lead:      u.DeclaredLead,
 			Goals:     slices.Clone(u.Goals),
-			Channel:   u.Channel,
-			Knowledge: slices.Clone(u.Knowledge),
+			Channel:   u.DeclaredChannel,
+			Knowledge: slices.Clone(u.KnowledgeRefs),
 			Roles:     b.seats(u.Roles),
 			Children:  b.units(u.Children),
 		})
+	}
+	return out
+}
+
+// For is the projection as audience may read it: whole for an admin, and
+// without any seat's resolved model chain or tool sources for everybody else —
+// see the package doc. Every other field is the reader's. The variant is named
+// after which of the two it is, `admin` or `overview`.
+//
+// A COPY, never the projection edited in place: one projection is handed to
+// every client of a broadcast, each in its own shape.
+func (p OrgProjection) For(audience stream.Audience) (string, any) {
+	if audience.Admin() {
+		return "admin", p
+	}
+	narrow := p
+	narrow.Roles = withoutResolved(p.Roles)
+	narrow.Units = unitsWithoutResolved(p.Units)
+	return "overview", narrow
+}
+
+// withoutResolved is seats with their resolved fields removed.
+func withoutResolved(seats []OrgSeat) []OrgSeat {
+	if seats == nil {
+		return nil
+	}
+	out := slices.Clone(seats)
+	for i := range out {
+		out[i].LLM, out[i].ToolSources = nil, nil
+	}
+	return out
+}
+
+// unitsWithoutResolved is units whose every seat, at any depth, has its
+// resolved fields removed.
+func unitsWithoutResolved(units []OrgUnit) []OrgUnit {
+	if units == nil {
+		return nil
+	}
+	out := slices.Clone(units)
+	for i := range out {
+		out[i].Roles = withoutResolved(out[i].Roles)
+		out[i].Children = unitsWithoutResolved(out[i].Children)
 	}
 	return out
 }

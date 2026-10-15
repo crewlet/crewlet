@@ -9,12 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -135,6 +139,14 @@ type answerRig struct {
 	budget   *answerBudget
 	position string
 	seat     string
+
+	// grants are what the asker holds: both apps unless a case is about
+	// what one of them, or neither, may be answered from.
+	grants []iam.Grant
+
+	// cache is the node's one answer cache, built once and handed to every
+	// catalogue the rig builds — as the operator surface does.
+	cache *builtin.AnswerCache
 }
 
 func newAnswerRig() *answerRig {
@@ -156,7 +168,29 @@ func newAnswerRig() *answerRig {
 		budget:   &answerBudget{},
 		position: "tracker@1:10,pages@1:20,vectors@1:5",
 		seat:     "founder",
+		grants:   slices.Clone(iam.Apps),
+		cache:    builtin.NewAnswerCache(builtin.AnswerCacheEntries),
 	}
+}
+
+// askedAs is a tool called as one principal whatever context it is handed.
+type askedAs struct {
+	tools.Callable
+	caller iam.Principal
+}
+
+func (a askedAs) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return a.Callable.Call(iam.WithPrincipal(ctx, a.caller), args)
+}
+
+// asker is who the rig asks as: a person bound to the rig's seat, or — with
+// no seat — a principal the directory binds to none, holding the rig's grants.
+func (r *answerRig) asker() iam.Principal {
+	if r.seat == "" {
+		return iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "ci.release",
+			Stage: iam.StageActive, Grants: r.grants}
+	}
+	return boundTo(r.seat, r.grants...)
 }
 
 func (r *answerRig) tool(t *testing.T) tools.Callable {
@@ -170,14 +204,13 @@ func (r *answerRig) tool(t *testing.T) tools.Callable {
 		Answer: builtin.AnswerDeps{
 			Models: r.model, Budget: r.budget,
 			Corpus: func() (string, bool) { return r.position, r.position != "" },
-			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "founder-token", Kind: tracker.AuthorOperator,
-					OperatorID: "founder-token", Seat: r.seat}, nil
-			},
+			Actor:  builtin.PrincipalActor,
+			Cache:  r.cache,
 		},
+		Authorize: builtin.Decide(authz.NoChart{}),
 	}) {
 		if tool.Name() == builtin.AnswerKnowledgeTool {
-			return tool
+			return askedAs{Callable: tool, caller: r.asker()}
 		}
 	}
 	t.Fatal("the operator catalogue serves no answer_knowledge with every seam wired")
@@ -378,17 +411,18 @@ func TestAnAnswerNeverCarriesAPrice(t *testing.T) {
 	}
 }
 
-// AN UNBOUND TOKEN CANNOT ASK, on either transport: the spend is on a
-// person's behalf, and a credential nobody bound is not a person. Nothing is
-// searched, nothing asked of a model and nothing charged.
+// A PRINCIPAL NO SEAT BINDS CANNOT ASK, on either transport: the answer runs
+// on the auxiliary model of the asker's own seat, and the spend is on their
+// behalf — there is no default model to fall back on. Nothing is searched,
+// nothing asked of a model and nothing charged.
 func TestAnUnboundCredentialIsRefusedBeforeAnythingIsSpent(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
 	rig.seat = ""
 	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
-	if !res.Failed || res.Refusal != tools.RefusalForbidden ||
-		!strings.Contains(res.Output, "contact.crewlet_operator_id") {
-		t.Fatalf("an unbound credential was not refused with the binding to make: %+v", res)
+	if !res.Failed || tools.RefusalOf(res) != tools.RefusalForbidden ||
+		!strings.Contains(res.Output, "bound to no seat") {
+		t.Fatalf("an unbound person was not refused, naming why: %+v", res)
 	}
 	if rig.model.calls != 0 || len(rig.model.uses) != 0 || len(rig.search.asked) != 0 {
 		t.Errorf("refused after spending: model %d, resolutions %d, searches %d",
@@ -407,7 +441,7 @@ func TestASpentBudgetRefusesTheAnswerBeforeItIsWritten(t *testing.T) {
 	rig.budget.refusal = builtin.BudgetRefusal{Period: "month", Window: "2026-09",
 		ResetsAt: resets, Used: 1000, Limit: 1000}
 	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
-	if !res.Failed || res.Refusal != tools.RefusalBudgetExhausted ||
+	if !res.Failed || tools.RefusalOf(res) != tools.RefusalBudgetExhausted ||
 		!strings.Contains(res.Output, "2026-09") || !strings.Contains(res.Output, "2026-10-01T00:00:00Z") {
 		t.Fatalf("answered %+v, want budget_exhausted naming the month and its reset", res)
 	}
@@ -418,7 +452,7 @@ func TestASpentBudgetRefusesTheAnswerBeforeItIsWritten(t *testing.T) {
 	rig = newAnswerRig()
 	rig.budget.err = errors.New("counter unreachable")
 	if res, _, _ := ask(t, rig.tool(t), "How do we deploy?"); !res.Failed ||
-		res.Refusal != tools.RefusalUnavailable || rig.model.calls != 0 {
+		tools.RefusalOf(res) != tools.RefusalUnavailable || rig.model.calls != 0 {
 		t.Fatalf("an unreadable counter let the answer through: %+v", res)
 	}
 }
@@ -441,7 +475,7 @@ func TestNoSourcesIsAnsweredWithoutAModelAndNoSearchIsRefused(t *testing.T) {
 	rig.search.nothing = true
 	rig.items.err = errors.New("index unreachable")
 	if res, _, _ := ask(t, rig.tool(t), "Who owns billing?"); !res.Failed ||
-		res.Refusal != tools.RefusalUnavailable || rig.model.calls != 0 {
+		tools.RefusalOf(res) != tools.RefusalUnavailable || rig.model.calls != 0 {
 		t.Fatalf("a search that never ran was answered: %+v", res)
 	}
 }
@@ -456,7 +490,7 @@ func TestAnEmptyReplyIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	rig.model.content = "  "
 	tool := rig.tool(t)
 	res, _, _ := ask(t, tool, "How do we deploy?")
-	if !res.Failed || res.Refusal != tools.RefusalUnavailable {
+	if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable {
 		t.Fatalf("an empty reply was answered: %+v", res)
 	}
 	if len(rig.model.uses) != 1 || rig.model.uses[0].Purpose != types.AuxAnswerKnowledge {
@@ -479,7 +513,7 @@ func TestARefusedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
 		Completion: &llm.Completion{Model: "aux-small", InputTokens: 640, OutputTokens: 9,
 			StopReason: llm.StopRefusal}})
 	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
-	if !res.Failed || res.Refusal != tools.RefusalUnavailable {
+	if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable {
 		t.Fatalf("a refused answer was answered: %+v", res)
 	}
 	if len(rig.model.uses) != 1 || rig.model.uses[0].Purpose != types.AuxAnswerKnowledge {
@@ -492,7 +526,7 @@ func TestARefusedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
 func TestAnAnswerNeedsAQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
-	if res, _, _ := ask(t, rig.tool(t), "   "); !res.Failed || res.Refusal != tools.RefusalInvalid {
+	if res, _, _ := ask(t, rig.tool(t), "   "); !res.Failed || tools.RefusalOf(res) != tools.RefusalInvalid {
 		t.Fatalf("an empty question was answered: %+v", res)
 	}
 }
@@ -511,6 +545,25 @@ func TestAnswerKnowledgeIsOmittedWithNoBudget(t *testing.T) {
 		if tool.Name() == builtin.AnswerKnowledgeTool {
 			t.Fatal("answer_knowledge was served with no budget behind it")
 		}
+	}
+}
+
+// AND A SEAT NEVER ASKS, however it is granted: a seat has search_knowledge
+// and a model of its own, and an answer a second model wrote into its context
+// would be one it could not check. The table refuses it before the tool runs.
+func TestASeatIsNeverAnsweredFromTheCompanysKnowledge(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	tool := rig.tool(t).(askedAs)
+	tool.caller = iam.Principal{ID: uuid.New(), Kind: iam.KindSeat, Login: "founder",
+		Seat: "founder", Stage: iam.StageActive, Grants: slices.Clone(iam.Apps)}
+	res, _, _ := ask(t, tool, "How do we deploy?")
+	if !res.Failed || !errors.Is(res.Cause, builtin.ErrRefused) {
+		t.Fatalf("a seat was answered: %+v", res)
+	}
+	if rig.model.calls != 0 || len(rig.search.asked) != 0 {
+		t.Errorf("refused after spending: model %d, searches %d", rig.model.calls,
+			len(rig.search.asked))
 	}
 }
 
@@ -593,5 +646,103 @@ func TestALongQuestionIsRefusedNotCut(t *testing.T) {
 	}
 	if rig.model.calls != 0 || len(rig.search.asked) != 0 {
 		t.Fatal("a refused question still searched or spent")
+	}
+}
+
+// AN ANSWER IS WRITTEN ONLY FROM WHAT ITS ASKER MAY READ.
+//
+// An answer quotes its sources, so an answer written from a work item and read
+// by somebody kept off the tracker is the work item read. The pages are
+// searched only for an asker holding the knowledge base and the items only for
+// one holding the tracker — through the one per-app filter every cross-app
+// answer asks — and an asker holding neither is refused by the table before
+// anything is searched or spent. Mutating either search to ignore the asker's
+// apps, or the table to admit an asker with neither, turns this red.
+func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name         string
+		grants       []iam.Grant
+		pages, items bool
+	}{
+		{"both apps", slices.Clone(iam.Apps), true, true},
+		{"admin, which includes both", []iam.Grant{iam.GrantAdmin}, true, true},
+		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, true},
+		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newAnswerRig()
+			rig.grants = c.grants
+			res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
+			if res.Failed {
+				t.Fatalf("refused: %s", res.Output)
+			}
+			if got := len(rig.search.asked) > 0; got != c.pages {
+				t.Errorf("the pages were searched = %v, want %v", got, c.pages)
+			}
+			if got := len(rig.items.asked) > 0; got != c.items {
+				t.Errorf("the work items were searched = %v, want %v", got, c.items)
+			}
+			for _, source := range answer.Sources {
+				if source.Kind == builtin.AnswerSourcePage && !c.pages ||
+					source.Kind == builtin.AnswerSourceTask && !c.items {
+					t.Errorf("the answer cites the %s %q, which this asker may not read",
+						source.Kind, source.Ref)
+				}
+			}
+		})
+	}
+
+	rig := newAnswerRig()
+	rig.grants = nil
+	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+	var refused *builtin.DecisionRefused
+	if !res.Failed || !errors.As(res.Cause, &refused) ||
+		!slices.Equal(refused.Decision.Grants, iam.Apps) {
+		t.Fatalf("an asker holding neither app = %+v, want the table's refusal naming "+
+			"both apps", res)
+	}
+	if rig.model.calls != 0 || len(rig.search.asked) != 0 || len(rig.items.asked) != 0 {
+		t.Errorf("refused after searching or spending: model %d, pages %d, items %d",
+			rig.model.calls, len(rig.search.asked), len(rig.items.asked))
+	}
+}
+
+// TWO ASKERS WHO MAY READ DIFFERENT CORPORA NEVER SHARE AN ANSWER.
+//
+// The cache is the node's, and its key used to be the question and the corpus
+// position — so a person holding the tracker alone, asking what a colleague
+// holding both apps had just asked, was handed an answer written from pages
+// they may not read. The apps are in the key; askers who may read the same
+// corpora still share, an admin with somebody holding both apps among them.
+func TestTheTwoAppSetsCacheApart(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	askAs := func(grants ...iam.Grant) builtin.KnowledgeAnswer {
+		t.Helper()
+		rig.grants = grants
+		res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if res.Failed {
+			t.Fatalf("refused: %s", res.Output)
+		}
+		return answer
+	}
+	if both := askAs(iam.Apps...); both.Cached || rig.model.calls != 1 {
+		t.Fatalf("the first answer: cached %v after %d calls", both.Cached, rig.model.calls)
+	}
+	tracker := askAs(iam.GrantTracker)
+	if tracker.Cached || rig.model.calls != 2 {
+		t.Fatalf("a tracker-only asker was served the answer written for both apps "+
+			"(cached %v after %d model calls)", tracker.Cached, rig.model.calls)
+	}
+	for _, source := range tracker.Sources {
+		if source.Kind == builtin.AnswerSourcePage {
+			t.Errorf("the tracker-only answer cites the page %q", source.Ref)
+		}
+	}
+	if admin := askAs(iam.GrantAdmin); !admin.Cached || rig.model.calls != 2 {
+		t.Errorf("an admin, who reads what both apps hold, was not served the answer "+
+			"written for both (cached %v after %d calls)", admin.Cached, rig.model.calls)
 	}
 }

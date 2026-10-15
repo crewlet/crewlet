@@ -242,7 +242,7 @@ export function startingProject(
   if (chain.length) {
     const byUnit = projectsByUnit(projects);
     for (const unit of [...chain].reverse()) {
-      const key = byUnit.get(unit.name)?.[0];
+      const key = byUnit.get(unit.id)?.[0];
       if (key) return key;
     }
   }
@@ -373,8 +373,10 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     if (!result) return;
     if (result.kind === "applied") {
       onClose();
-      const key = (result.receipt as { key?: string } | null)?.key;
-      if (key) nav.to(["work", key]);
+      // AT THE ADDRESS THE RECEIPT NAMES (`item`), never its key: a key a
+      // restored counter handed out again opens the task that claimed it.
+      const address = (result.receipt as { item?: string } | null)?.item;
+      if (address) nav.to(["work", address]);
     } else if (result.kind === "pending") {
       onClose();
     }

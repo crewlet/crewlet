@@ -3,8 +3,9 @@
  * time beside the list, and the gestures they make on it as themselves.
  *
  * Its failure modes are quiet ones. A mark that sent the whole inbox back
- * erased a snooze made in another tab; a row drawn with the token's id put a
- * credential where a person belongs; a Snoozed list that listed everything;
+ * erased a snooze made in another tab; a row drawn as anybody but whoever the
+ * record names put a stranger where a person belongs; a link on a key another
+ * task claimed first opened that task; a Snoozed list that listed everything;
  * an option that sent something other than the choice, or answered beside the
  * one write every surface answers through; an answered question that came
  * back as an update; and "posted to #leadership" promised on an ask that
@@ -43,9 +44,10 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: EVERY_TOOL,
@@ -196,7 +198,7 @@ function mount({
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ kind: what, params: params ?? {} });
@@ -333,23 +335,29 @@ describe("the list", () => {
     expect(earlier.queryByText("something about r-1")).toBeNull();
   });
 
-  // THE PERSON, NEVER THE CREDENTIAL.
-  test("a row is drawn as the seat behind a token, never as the token", async () => {
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds
+  // to a seat writes AS the seat, so their row draws as the seat, never as the
+  // credential they wrote through; a principal bound to none writes under its
+  // own login, which is a name and is drawn as one; and only the engine's own
+  // change names nobody.
+  test("a row is drawn as the seat a person writes as, and an unbound principal as its login", async () => {
     mount({
       answers: {
         work_inbox: inboxes({
           unread: [
-            notice("r-1", { actor: "U0MAYA", actor_kind: "operator", actor_seat: "maya" }),
-            notice("r-2", { actor: "U0ANON", actor_kind: "operator" }),
+            notice("r-1", { actor: "maya", actor_kind: "human", operator_id: "pat:t-1" }),
+            notice("r-2", { actor: "ci.bot", actor_kind: "operator" }),
+            notice("r-3", { actor: "crewlet", actor_kind: "system" }),
           ],
         }),
       },
     });
     await settle();
     expect(screen.getAllByText("Maya Ops").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("An operator").length).toBeGreaterThan(0);
-    expect(screen.queryByText("U0MAYA")).toBeNull();
-    expect(screen.queryByText("U0ANON")).toBeNull();
+    expect(screen.getAllByText("ci.bot").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("The engine").length).toBeGreaterThan(0);
+    expect(screen.queryByText("pat:t-1")).toBeNull();
+    expect(screen.queryByText("An operator")).toBeNull();
   });
 
   // AND THE SENTENCE NAMES THEM AS THE ROW DOES. The engine writes a lead's
@@ -365,9 +373,8 @@ describe("the list", () => {
               primary: true,
               subject_kind: "person",
               subject_id: "jane",
-              actor: "U0MAYA",
-              actor_kind: "operator",
-              actor_seat: "maya",
+              actor: "maya",
+              actor_kind: "human",
               excerpt: "maya put PROD-91 at position 1 of your priorities",
             }),
             // A COMMENT IS SOMEBODY'S OWN WORDS, and a handle in it stays.
@@ -387,7 +394,10 @@ describe("the list", () => {
     mount({
       answers: {
         work_inbox: inboxes({ unread: [notice("r-1")] }),
-        work_items: { items: [{ key: "PROD-91", title: "Ledger export" }], total_hint: 1 },
+        work_items: {
+          items: [{ id: "t-91", key: "PROD-91", title: "Ledger export" }],
+          total_hint: 1,
+        },
       },
     });
     await settle();
@@ -406,6 +416,32 @@ describe("the list", () => {
     fireEvent.click(task);
     await settle();
     expect(decodeURIComponent(location.hash)).toContain("peek=item:PROD-91");
+  });
+
+  // A KEY TWO TASKS HOLD OPENS THE ONE THAT CLAIMED IT, so a notice about the
+  // other is reached by its task's id, and titled by it: the title read is by
+  // key, and answers both.
+  test("a row on a key another task claimed first opens and names its own task", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxes({
+          unread: [notice("r-1", { task: "t-dup", subject_key_collision: true })],
+        }),
+        work_items: {
+          // THE CLAIMANT LAST, so a title filed by key alone would be its.
+          items: [
+            { id: "t-dup", key: "PROD-91", key_collision: true, title: "The duplicate" },
+            { id: "t-91", key: "PROD-91", title: "The claimant" },
+          ],
+          total_hint: 2,
+        },
+      },
+    });
+    await settle();
+    const list = within(screen.getByRole("navigation", { name: "Inbox" }));
+    const task = list.getByRole("link", { name: "PROD-91 The duplicate" });
+    expect(task.getAttribute("href")).toBe("#/work/t-dup");
+    expect(list.queryByText(/The claimant/)).toBeNull();
   });
 
   // THE OPEN ROW WAS DRAWN TWICE: a tint on the row and a rail beside it.
@@ -609,7 +645,7 @@ describe("the pane", () => {
     expect(screen.getByRole("region", { name: "Conversation on this task" })).toBeTruthy();
   });
 
-  test("the conversation is read a page at a time and names the person behind a token", async () => {
+  test("the conversation is read a page at a time and names each comment's author", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
       answers: {
@@ -622,14 +658,13 @@ describe("the pane", () => {
             {
               id: "c-20",
               task: "t-12",
-              author: "U0MAYA",
-              author_kind: "operator",
+              author: "maya",
+              author_kind: "human",
               body: "I can move the webinar.",
               reply_to: "c-12",
               created_at: new Date().toISOString(),
             },
           ],
-          comment_seats: { "c-20": "maya" },
           next_cursor: "1:c-19",
         },
       },
@@ -640,7 +675,7 @@ describe("the pane", () => {
     expect(read.params.cursor).toBeUndefined();
     const thread = within(screen.getByRole("region", { name: "Replies to this question" }));
     expect(thread.getByText("Maya Ops")).toBeTruthy();
-    expect(thread.queryByText("U0MAYA")).toBeNull();
+    expect(thread.queryByText("maya")).toBeNull();
     // THE REPLY BOX, at the end, for words that answer nothing.
     expect(
       thread.getByPlaceholderText("Reply without answering. @mention to bring someone in."),
@@ -675,6 +710,10 @@ describe("the pane", () => {
     ).toBeTruthy();
     expect(document.querySelector("blockquote")?.textContent).toBe(run.run.question);
     expect(byline()).toBe("CTO’s coding run on LEAD-12");
+    // A TURN'S TASK IS OPENED BY ITS ID: the turn's reference carries no
+    // collision flag, and a key another task claimed first opens that task.
+    const pane = document.querySelector(".crewlet-reading-pane__byline") as HTMLElement;
+    expect(within(pane).getByRole("link").getAttribute("href")).toBe("#/work/t-12");
     fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
       target: { value: "Yes, delete it." },
     });
@@ -710,26 +749,71 @@ describe("the pane", () => {
 // THREE VIEWER STATES, three sentences, and every control drawn for each,
 // enabled only where the engine makes the change for this person.
 describe("who is looking", () => {
-  const NOBODY = { operator_id: "", operator: false, handle: "", name: "", kind: "", acts: [] };
-  const UNBOUND = { operator_id: "ci", operator: true, handle: "", name: "", kind: "", acts: [] };
+  const NOBODY = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
+  const UNBOUND = {
+    login: "svc:ops",
+    grants: ["tracker"],
+    handle: "",
+    owner: "svc:ops",
+    name: "",
+    kind: "",
+    acts: ["mark_inbox"],
+  };
 
-  test.each([
-    [
-      "an anonymous reader",
-      { ...NOBODY, anonymous: true },
-      "Set a token bound to your seat to see your updates",
-      WRITE_REASONS.anonymous,
-    ],
-    ["an unbound token", UNBOUND, "No seat uses token", WRITE_REASONS.unbound],
-  ])("%s is told what would make this their inbox", async (_who, viewer, sentence, reason) => {
+  test("an anonymous reader is told what would make this their inbox", async () => {
+    const viewer = { ...NOBODY, anonymous: true };
     mount({ viewer, answers: { viewer } });
     await settle();
-    expect(screen.getByText(new RegExp(sentence))).toBeTruthy();
+    expect(screen.getByText(/Nobody is signed in/)).toBeTruthy();
     // NO PERSON'S READS: nothing to ask for on nobody's behalf.
     expect(asked.some((a) => a.kind === "work_inbox" || a.kind === "decisions")).toBe(false);
     const markAll = screen.getByRole("button", { name: "Mark all read" });
     expect(markAll.getAttribute("aria-disabled")).toBe("true");
-    expect(reasonOf(markAll)).toContain(reason);
+    expect(reasonOf(markAll)).toContain(WRITE_REASONS.anonymous);
+  });
+
+  // AN UNBOUND READER IS SOMEBODY: its record is its login, and what it
+  // follows and what names it reaches it. Asked by `handle`, it had no inbox
+  // here at all while its assistant wrote notices to its login. Only a
+  // credential is ever unbound (a service account here), since every person
+  // holds a human seat, and the remedy names a HUMAN seat.
+  test("a service account bound to no seat reads the inbox kept under its login", async () => {
+    mount({
+      viewer: UNBOUND,
+      answers: { viewer: UNBOUND, work_inbox: inboxes({ unread: [notice("r-1")] }) },
+    });
+    await settle();
+    expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
+    // WHAT BINDING WOULD ADD, and the command that does it.
+    expect(screen.getByText(/a human seat nothing else holds/)).toBeTruthy();
+    expect(screen.getByText(/crewlet iam bind ID SEAT/)).toBeTruthy();
+    const reads = asked.filter((a) => a.kind === "work_inbox");
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((a) => a.params.handle === "svc:ops")).toBe(true);
+    const markAll = screen.getByRole("button", { name: "Mark all read" });
+    expect(markAll.getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  // PUSHED AS WELL AS POLLED: a commit that moves the reader's own record asks
+  // Updates and the Snoozed count again at once, rather than a poll later.
+  test("a push on the reader's own record asks their updates and snoozed again", async () => {
+    const { store } = mount({ answers: { work_inbox: inboxes({ unread: [notice("r-1")] }) } });
+    await settle();
+    // THE SCREEN'S OWN READS, not the frame's badge count (`primary_only`).
+    const count = (p: (params: Record<string, unknown>) => boolean) =>
+      asked.filter((a) => a.kind === "work_inbox" && p(a.params)).length;
+    const isUpdates = (p: Record<string, unknown>) => p.unread === true && p.snoozed === "exclude";
+    const isSnoozed = (p: Record<string, unknown>) => p.snoozed === "only";
+    const updates = count(isUpdates);
+    const snoozed = count(isSnoozed);
+    // ANOTHER RECORD'S PUSH moves nothing here.
+    await act(async () => store.applyInboxChanged({ handle: "maya" }));
+    await settle();
+    expect(count(isUpdates)).toBe(updates);
+    await act(async () => store.applyInboxChanged({ handle: "jane" }));
+    await settle();
+    expect(count(isUpdates)).toBe(updates + 1);
+    expect(count(isSnoozed)).toBe(snoozed + 1);
   });
 
   test("a bound person the engine does not serve sees every control, disabled with the reason", async () => {

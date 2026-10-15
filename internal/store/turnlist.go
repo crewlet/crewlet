@@ -154,6 +154,11 @@ type Turn struct {
 	// with no ledgerable trigger.
 	WorkKey string `json:"work_key,omitempty"`
 
+	// AgentID is the seat the turn ran on, and the row's only seat
+	// IDENTITY: it is what [TurnQuery.AgentID] selects by and what a reader
+	// joins a seat on. AgentRole is the seat's NAME as its events recorded
+	// it — a label for a row whose seat a reader can no longer resolve,
+	// never a key, since two seats may share one and a rename changes it.
 	AgentID   string `json:"agent_id,omitempty"`
 	AgentRole string `json:"role,omitempty"`
 
@@ -250,10 +255,9 @@ type TurnQuery struct {
 	Since time.Time
 	Until time.Time
 
-	// AgentRole and AgentID each narrow to one seat; a caller passes
-	// whichever it holds, for [EventLog.AgentPhases]' own reason.
-	AgentRole string
-	AgentID   string
+	// AgentID narrows to one seat, by the agent id every row of its turns
+	// carries — never by its name, for [EventLog.AgentPhases]' reason.
+	AgentID string
 
 	// Model narrows to turns whose COST used one — a phase or an in-turn
 	// auxiliary call, the rows the turn's Models lists.
@@ -456,7 +460,9 @@ const (
 	MaxTurnPage = 200
 )
 
-// Turns lists one row per turn, newest first.
+// Turns lists one row per turn, newest first, in the window [TurnQuery.Window]
+// measures from [TurnQuery.At] — the caller's instant when it labels its
+// answer, for [EventLog.TurnPartials]' reason.
 func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	parts, _, err := l.TurnPartials(ctx, q)
 	if err != nil {
@@ -721,6 +727,15 @@ func laterOf(a, b *time.Time) *time.Time {
 //
 // more reports that this log holds turns past the page — see [pastPage]. A
 // share is never a page and is never more: it answers every turn it names.
+//
+// # The window is measured from q.At, which is the CALLER's instant
+//
+// For [EventLog.PhaseTokens]' reason: the caller labels its answer with
+// [TurnQuery.Window], and the label is only true of the rows beneath it when
+// both are ONE evaluation of the window. A fleet pins every node's share to
+// the asker's instant through it, so two nodes whose clocks differ fold one
+// window rather than two; a zero At — a caller that labels nothing — is now,
+// read once for the whole answer.
 //
 // THE SHARE SAYS NOTHING ABOUT WHETHER THIS LOG LISTS THE TURN, which is the
 // question [EventLog.ListedTurns] answers beside it.
@@ -1011,12 +1026,11 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 			args = append(args, id)
 		}
 	}
-	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
-	// every row that carries none, which is every non-agent event in the
-	// window. See [seatClause].
-	if clause, ids := seatClause(q.AgentID, q.AgentRole); clause != "" {
-		where = append(where, strings.TrimPrefix(clause, " AND "))
-		args = append(args, ids...)
+	// ONLY AN ID THE CALLER HOLDS — binding an empty one matches every row
+	// that carries none, which is every non-agent event in the window.
+	if q.AgentID != "" {
+		where = append(where, "agent_id = ?")
+		args = append(args, q.AgentID)
 	}
 	if q.WorkKey != "" {
 		// WITH THE PARTIAL INDEX'S OWN PREDICATE, which is what lets the

@@ -87,15 +87,11 @@ func TestASeatErrorCarriesItsSeatAndField(t *testing.T) {
 			r.TokenBudget = TokenCeilings{period.Month: 10}
 			r.Workers = []string{"researcher"}
 		}), ErrHumanSeatField, nil},
-		{"no contact", human(func(r *Role) { r.Contact = nil }), ErrNoContact, []any{"contact"}},
 		{"a human-only field on an agent", &Role{Name: "Dev", Availability: "mornings"},
 			ErrAgentSeatField, []any{"availability"}},
 		{"an embedded reference", human(func(r *Role) {
 			r.Contact = &HumanContact{SlackUserID: "U${SUFFIX}"}
 		}), ErrEmbeddedEnvRef, []any{"contact", "slack_user_id"}},
-		{"the reserved operator id as a binding", human(func(r *Role) {
-			r.Contact = &HumanContact{SlackUserID: "U0HUMAN", CrewletOperatorID: " Anonymous "}
-		}), ErrReservedOperatorID, []any{"contact", "crewlet_operator_id"}},
 		{"a schedule field", &Role{Name: "Dev", Schedules: []Schedule{
 			{Name: "standup", Cron: "0 9 * * *", Task: "post"},
 			{Name: "report", Cron: "0 9 * *", Task: "post"},
@@ -126,7 +122,7 @@ func TestAUnitErrorCarriesItsUnitAndField(t *testing.T) {
 	fanOut := &Unit{Name: "Humans", Roles: []*Role{human()}, Schedules: []Schedule{
 		{Name: "standup", Cron: "0 9 * * *", Task: "post"},
 	}}
-	ledByAPerson := &Unit{Name: "Design", Lead: "Sarah Chen", Roles: []*Role{human(), {Name: "Dev"}},
+	ledByAPerson := &Unit{Name: "Design", Lead: "sarah-chen", Roles: []*Role{human(), {Name: "Dev"}},
 		Schedules: []Schedule{
 			{Name: "digest", Cron: "0 9 * * *", Task: "post", Target: TargetEach},
 			{Name: "roundup", Cron: "0 17 * * 5", Task: "post", Target: TargetLead},
@@ -159,15 +155,14 @@ func TestAUnitErrorCarriesItsUnitAndField(t *testing.T) {
 
 // A DUPLICATE CARRIES EVERY ENTITY THAT SHARES THE KEY, in the order they were
 // met, so a caller can put a problem beside each one rather than beside the
-// first. Three seats on one name are one error holding three seats.
+// first. Three seats on one handle are one error holding three seats.
 func TestADuplicateErrorCarriesEveryEntity(t *testing.T) {
 	t.Parallel()
-	a, b, c := &Role{Name: "Engineer", DeclaredHandle: "a"}, &Role{Name: "Engineer", DeclaredHandle: "b"},
-		&Role{Name: "Engineer", DeclaredHandle: "c"}
-	x, y := &Role{Name: "Dev"}, &Role{Name: "dev", DeclaredHandle: "dev"}
-	platformA, platformB := &Unit{Name: "Platform"}, &Unit{Name: "Platform"}
-	o := normalized(&Organization{Name: "T", Roles: []*Role{a, x}, Units: []*Unit{
-		{Name: "Engineering", Roles: []*Role{b, y}, Children: []*Unit{platformA}},
+	a, b, c := &Role{Name: "Engineer", DeclaredHandle: "dev"}, &Role{Name: "Dev"},
+		&Role{Name: "Developer", DeclaredHandle: "dev"}
+	platformA, platformB := &Unit{Name: "Platform", ID: "platform"}, &Unit{Name: "Core", ID: "platform"}
+	o := normalized(&Organization{Name: "T", Roles: []*Role{a}, Units: []*Unit{
+		{Name: "Engineering", Roles: []*Role{b}, Children: []*Unit{platformA}},
 		{Name: "Product", Roles: []*Role{c}, Children: []*Unit{platformB}},
 	}})
 
@@ -179,9 +174,8 @@ func TestADuplicateErrorCarriesEveryEntity(t *testing.T) {
 		seats []*Role
 		units []*Unit
 	}{
-		{"handle", o.Validate(), DuplicateHandle, "dev", []*Role{x, y}, nil},
-		{"seat name", o.ValidateAdmission(), DuplicateSeatName, "Engineer", []*Role{a, b, c}, nil},
-		{"unit name", o.ValidateAdmission(), DuplicateUnitName, "Platform", nil, []*Unit{platformA, platformB}},
+		{"handle", o.Validate(), DuplicateHandle, "dev", []*Role{a, b, c}, nil},
+		{"unit key", o.ValidateAdmission(), DuplicateUnitKey, "platform", nil, []*Unit{platformA, platformB}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

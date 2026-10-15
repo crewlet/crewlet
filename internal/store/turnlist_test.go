@@ -28,6 +28,7 @@ func seedTurn(t *testing.T, log *store.EventLog, id string, at time.Time,
 			// phase record carries it.
 			Tags: map[string]string{
 				"turn_id": id, "trigger": "chat", "agent_role": role,
+				"agent_id": "id-" + role,
 			},
 		}
 		if mutate != nil {
@@ -229,7 +230,7 @@ func TestTheTurnListNarrowsBySeatModelAndFailure(t *testing.T) {
 		return out
 	}
 
-	if got := ids(store.TurnQuery{AgentRole: "PM"}); !slices.Equal(got, []string{"t-pm"}) {
+	if got := ids(store.TurnQuery{AgentID: "id-PM"}); !slices.Equal(got, []string{"t-pm"}) {
 		t.Errorf("PM's turns = %v", got)
 	}
 	if got := ids(store.TurnQuery{Model: "claude-haiku-4-5"}); !slices.Equal(got,
@@ -353,11 +354,10 @@ func splitModels(s string) []string {
 // answered every non-agent event in the window.
 //
 // The clause was `(agent_id = ? OR agent_role = ?)` with both bound
-// unconditionally, so a caller holding only a role — which is every caller
-// that got its handle from a URL the roster could not resolve — matched every
-// row whose `agent_id` is empty. The guard only caught the case where BOTH
-// were empty.
-func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
+// unconditionally, so a caller holding only a role matched every row whose
+// `agent_id` is empty. The seat filter is the agent id alone now, and a seat
+// read with it still must not reach a seatless row.
+func TestASeatFilterDoesNotMatchASeatlessRow(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
@@ -371,7 +371,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "PM"})
+	got, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-PM"})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -380,10 +380,10 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 			"matched the seatless turn", got)
 	}
 
-	// AND THE SAME TRAP ONE FUNCTION OVER. `AgentPhases` bound both
+	// AND THE SAME TRAP ONE FUNCTION OVER, where `AgentPhases` bound both
 	// identifiers the same way, so a handle that resolved to no role was
 	// answered every seatless phase in the window.
-	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil, time.Now())
+	phases, _, err := log.AgentPhases(t.Context(), "id-PM", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -543,20 +543,20 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: id + "-p0", Type: "agent_phase_completed", Time: at,
 			Category: "lifecycle", Actor: "CEO",
-			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO", "agent_id": "id-CEO"},
 		}); err != nil {
 			t.Fatalf("append the phase: %v", err)
 		}
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: id + "-x", Type: eventType, Time: at.Add(time.Second),
 			Category: "system", Actor: "CEO",
-			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO", "agent_id": "id-CEO"},
 		}); err != nil {
 			t.Fatalf("append the %s: %v", eventType, err)
 		}
 	}
 
-	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO"})
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-CEO"})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 	}
 
 	yes, no := true, false
-	selected, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO", Failed: &yes})
+	selected, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-CEO", Failed: &yes})
 	if err != nil {
 		t.Fatalf("Turns(failed=true): %v", err)
 	}
@@ -579,7 +579,7 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 		t.Errorf("failed=true selected %d of %d — the filter and the column "+
 			"must answer the same question", len(selected), len(failures))
 	}
-	clean, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO", Failed: &no})
+	clean, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-CEO", Failed: &no})
 	if err != nil {
 		t.Fatalf("Turns(failed=false): %v", err)
 	}
@@ -751,6 +751,39 @@ func TestATurnShareIsNotCutByTheWindow(t *testing.T) {
 	}
 	if len(parts) != 1 || parts[0].Phases != 2 || !parts[0].StartedAt.Before(since) {
 		t.Fatalf("the share is %+v, want the whole turn from its first phase", parts)
+	}
+}
+
+// THE TURN LIST IS MEASURED FROM THE INSTANT IT IS HANDED, never from a second
+// reading of this package's clock — [store.EventLog.PhaseTokens]' rule, for its
+// reason: a fleet pins every node's share to the asker's instant, and a node
+// whose clock reads later must still fold the window the asker labelled.
+//
+// A day back from an instant two days ago reaches a turn sixty hours old,
+// which a day back from the wall clock never would, so whether it comes back
+// says which instant the read was measured from — on the list and on a share.
+//
+// Mutation: measure the window from now() again, and the turn is missing.
+func TestATurnReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	wall := time.Now().UTC()
+	at := wall.Add(-48 * time.Hour)
+	seedTurn(t, log, "then", wall.Add(-60*time.Hour), "PM", nil)
+
+	got, err := log.Turns(t.Context(), store.TurnQuery{SinceDays: 1, At: at})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(got) != 1 || got[0].TurnID != "then" {
+		t.Errorf("a day back from %s listed %+v, want the turn inside it", at, got)
+	}
+	parts, _, err := log.TurnPartials(t.Context(), store.TurnQuery{SinceDays: 1, At: at})
+	if err != nil {
+		t.Fatalf("TurnPartials: %v", err)
+	}
+	if len(parts) != 1 || parts[0].TurnID != "then" {
+		t.Errorf("a day back from %s shared %+v, want the turn inside it", at, parts)
 	}
 }
 

@@ -74,6 +74,20 @@ export const SHELL_BREAKPOINT = px(breakpoint.shell);
 /** Below this a layout is single-pane and a grid's rows are cards. */
 export const PHONE_BREAKPOINT = px(breakpoint.phone);
 
+/**
+ * A reader whose PRIMARY INPUT IS TOUCH — no hover, a coarse pointer: a phone,
+ * or a tablet held as one. Not a width: a narrow window on a laptop still has
+ * a keyboard, and a wide tablet still has none.
+ *
+ * A KEYCAP IS A HINT FOR A KEYBOARD, so the frame draws none here
+ * (`lib/media.ts`'s `useKeyHints`): the drawer's search drew "Ctrl + K" on a
+ * phone, a key the reader does not have, and the keycap took the room its own
+ * label needed. Asked this way round — "is it touch?" rather than "is there a
+ * keyboard?" — because no media feature can see a keyboard, and a browser
+ * that answers neither question keeps its hints.
+ */
+export const TOUCH_MEDIA = "(hover: none) and (pointer: coarse)";
+
 /** The peek's resting width, and the range a reader may drag it through. */
 export const PEEK_WIDTH = 420;
 export const PEEK_MAX = 640;

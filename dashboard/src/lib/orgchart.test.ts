@@ -24,9 +24,9 @@ import type { AgentRow, OrgProjection, WorkProjectRow } from "~/protocol/types.t
 import { CHART_ORG } from "~/test/orgchart.ts";
 
 const PROJECTS = [
-  { key: "ENG", unit: { name: "Core", resolved: true } },
-  { key: "OLD", unit: { name: "Core", resolved: true }, archived: true },
-  { key: "PROD", unit: { name: "Management", resolved: true } },
+  { key: "ENG", unit: { key: "core", name: "Core", resolved: true } },
+  { key: "OLD", unit: { key: "core", name: "Core", resolved: true }, archived: true },
+  { key: "PROD", unit: { key: "management", name: "Management", resolved: true } },
 ] as unknown as WorkProjectRow[];
 
 /** The tree as `parent > child` lines, for a readable equality. */
@@ -84,10 +84,23 @@ test("each seat of the reporting chart hangs under its primary manager", () => {
 
 // A UNIT'S KEY IS THE PROJECT ITS WORK IS FILED UNDER, and an archived project
 // is not where its work goes.
-test("each unit's live projects are listed by the unit's name", () => {
+test("each unit's live projects are listed by the unit's key", () => {
   expect([...projectsByUnit(PROJECTS)]).toEqual([
-    ["Core", ["ENG"]],
-    ["Management", ["PROD"]],
+    ["core", ["ENG"]],
+    ["management", ["PROD"]],
+  ]);
+});
+
+// BY KEY, NEVER BY NAME: two units may share a name, and keyed on it each
+// drew the other's projects on its node.
+test("two units sharing a name keep their own projects", () => {
+  const twins = [
+    { key: "A", unit: { key: "platform", name: "Platform", resolved: true } },
+    { key: "B", unit: { key: "platform-2", name: "Platform", resolved: true } },
+  ] as unknown as WorkProjectRow[];
+  expect([...projectsByUnit(twins)]).toEqual([
+    ["platform", ["A"]],
+    ["platform-2", ["B"]],
   ]);
 });
 
@@ -97,13 +110,13 @@ test("each unit's live projects are listed by the unit's name", () => {
 test("the legend counts each agent seat by its activity and nothing else", () => {
   const index = indexOrg(CHART_ORG);
   const agents = [
-    { role: "CEO", activity: "idle" },
-    { role: "CTO", activity: "working" },
-    { role: "SWE", activity: "working" },
-    { role: "FE", activity: "needs" },
-    { role: "PM", activity: "stopped" },
-    { role: "Jane Founder", activity: "working" },
-    { role: "Gone", activity: "working" },
+    { id: "ceo", agent_id: "a-ceo", role: "CEO", activity: "idle" },
+    { id: "cto", agent_id: "a-cto", role: "CTO", activity: "working" },
+    { id: "swe", agent_id: "a-swe", role: "SWE", activity: "working" },
+    { id: "fe", agent_id: "a-fe", role: "FE", activity: "needs" },
+    { id: "pm", agent_id: "a-pm", role: "PM", activity: "stopped" },
+    { id: "jane", agent_id: "a-jane", role: "Jane Founder", activity: "working" },
+    { id: "gone", agent_id: "a-gone", role: "Gone", activity: "working" },
   ] as unknown as AgentRow[];
   expect(stateCounts(index, agents)).toEqual({ working: 2, needs: 1, stopped: 1, idle: 1 });
 });

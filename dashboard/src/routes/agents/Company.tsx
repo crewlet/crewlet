@@ -39,11 +39,15 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { projectsByUnit } from "~/lib/orgchart.ts";
 import {
   handleLabel,
   indexOrg,
+  liveRowFor,
   seatPath,
+  unitByKey,
+  unitRoute,
   unitSeatsLabel,
   unitTally,
   UNIT_TOTAL_HINT,
@@ -61,12 +65,18 @@ import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 const PROJECT_PAGE = 200;
 
 /**
- * Every live project filed to each unit, by unit name, from the tracker. A
+ * Every live project filed to each unit, by unit key, from the tracker. A
  * company on another tracker answers nothing, and a unit then carries no key
- * rather than a wrong one.
+ * rather than a wrong one — as it does for a reader without Tracker, who is
+ * not asked.
  */
 function useUnitProjects(): Map<string, string[]> {
-  const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
+  const { tracker } = useViewer();
+  const projects = useQuery(
+    "work_projects",
+    { limit: PROJECT_PAGE },
+    { pollMs: 120_000, enabled: tracker },
+  );
   const rows = projects.error ? undefined : projects.data?.projects;
   return useMemo(() => projectsByUnit(rows ?? []), [rows]);
 }
@@ -130,7 +140,7 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
             // screen reader, which does not see the outline.
             <span className="sr-only">human</span>
           ) : (
-            <StateBadge agent={agents.find((a) => a.role === seat.name)} />
+            <StateBadge agent={liveRowFor(agents, seat)} />
           )}
         </a>
       ))}
@@ -151,7 +161,7 @@ function SubUnitLinks({ units }: { units: Unit[] }) {
   return (
     <div className="list">
       {units.map((child) => (
-        <a key={child.name} className="thread-entry" href={href(["agents", "teams", child.name])}>
+        <a key={child.key} className="thread-entry" href={href(unitRoute(child))}>
           <FolderGlyph size="sm" />
           <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
             <strong className="t-cell truncate">{child.name}</strong>
@@ -216,15 +226,16 @@ function unitView(
       { label: "Sub-units", value: tally.subUnits },
       // WHERE ITS WORK IS FILED, from the tracker — absent rather than "none"
       // on a company whose tracker is not this engine's.
-      ...(projects.get(unit.name)?.length
-        ? [{ label: "Project", value: <ProjectKeys keys={projects.get(unit.name)!} /> }]
+      ...(projects.get(unit.id)?.length
+        ? [{ label: "Project", value: <ProjectKeys keys={projects.get(unit.id)!} /> }]
         : []),
     ],
   };
 }
 
 /** The hint under every "no such unit", on the page and in the rail alike. */
-const NO_UNIT_HINT = "It may have been renamed or removed.";
+const NO_UNIT_HINT =
+  "Units are linked by key, which a rename keeps. It may have been removed, or the link used its name.";
 
 /** And what an empty one costs, which is the part a reader acts on. */
 const NO_SEATS_HINT = "Work filed to it goes to its lead, if it has one.";
@@ -247,11 +258,11 @@ export function UnitBlock({
   projects = new Map(),
 }: {
   unit: Unit;
-  /** Project keys by unit name. */
+  /** Project keys by unit key. */
   projects?: ReadonlyMap<string, readonly string[]>;
 }) {
   const lead = unit.effectiveLead;
-  const keys = projects.get(unit.name) ?? [];
+  const keys = projects.get(unit.id) ?? [];
   return (
     <section className="org-unit" aria-label={unit.name}>
       <div className="org-unit-head">
@@ -262,7 +273,7 @@ export function UnitBlock({
             full "department" tag and a full lead chip. */}
         <span className="org-unit-name">
           <FolderGlyph size="sm" style={{ color: "var(--color-text-muted)" }} />
-          <a className="t-body truncate org-unit-link" href={href(["agents", "teams", unit.name])}>
+          <a className="t-body truncate org-unit-link" href={href(unitRoute(unit))}>
             {unit.name}
           </a>
         </span>
@@ -370,12 +381,11 @@ export function Teams() {
  * routing consequence that makes a unit more than a label: knowledge,
  * delegation and escalation all follow this tree.
  *
- * ADDRESSED BY NAME, which is what every link writes — the chart, a seat's
- * unit, the palette, a unit schedule (whose scope the engine keys on the name,
- * `internal/schedule`) — and the one identifier the org tree carries. The
- * stable `id` a unit may declare is a GUARDED field of the configuration
- * (`ConfigUnit.id`), absent from the tree an anonymous reader is pushed, so a
- * page that resolved it would be a page only an operator could open.
+ * ADDRESSED BY ITS KEY ([unitByKey]), which is what every link writes
+ * (`unitRoute`) — the chart, a seat's unit, the palette, a unit schedule —
+ * and never by its name: two units may share one, and a page found by name
+ * opened whichever came first. The key is minted into the document when the
+ * unit is added and every projection carries it, so a rename moves no link.
  */
 export function UnitScreen({ id }: { id: string }) {
   const org = useOrg();
@@ -383,14 +393,14 @@ export function UnitScreen({ id }: { id: string }) {
   const projects = useUnitProjects();
   useAgentsCounts(index);
 
-  const unit = index.units.find((u) => u.name === id);
+  const unit = unitByKey(index, id);
   usePageLabels(unit ? { [id]: unit.name } : {});
 
   if (!unit) {
     return (
       <EmptyState
         icon={<NetworkGlyph size={32} />}
-        title={`No unit called “${id}”`}
+        title={`No unit has the key “${id}”`}
         description={NO_UNIT_HINT}
       />
     );
@@ -485,7 +495,7 @@ export function UnitScreen({ id }: { id: string }) {
  * The store starts with an EMPTY tree rather than a null one, so "the
  * handshake has not landed" and "this company has no units" are the same
  * value. The connection is what tells them apart: until it is up, an unknown
- * name is a tree that has not arrived and the rail says so with a skeleton
+ * key is a tree that has not arrived and the rail says so with a skeleton
  * rather than claiming a unit does not exist.
  */
 export function UnitPeek({ id }: { id: string }) {
@@ -493,7 +503,7 @@ export function UnitPeek({ id }: { id: string }) {
   const projects = useUnitProjects();
   const { connected } = useConnection();
   const index = useMemo(() => indexOrg(org), [org]);
-  const unit = index.units.find((u) => u.name === id);
+  const unit = unitByKey(index, id);
 
   if (!unit) {
     if (!connected) return <Skeleton variant="text" rows={6} label="Loading the org tree" />;
@@ -501,7 +511,7 @@ export function UnitPeek({ id }: { id: string }) {
       <EmptyState
         size="compact"
         icon={<NetworkGlyph size={32} />}
-        title={`No unit called “${id}”`}
+        title={`No unit has the key “${id}”`}
         description={NO_UNIT_HINT}
       />
     );

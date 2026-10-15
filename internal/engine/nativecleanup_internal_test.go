@@ -127,7 +127,7 @@ func awaitDial(t *testing.T, q *dialQueue) []*nats.Conn {
 
 func TestAFailedNativeStartStopsTheStateLogItStarted(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -174,7 +174,7 @@ func TestAFailedNativeStartStopsTheStateLogItStarted(t *testing.T) {
 // A withdrawal after the cancel is an answerer cancelled mid-scan, which a
 // coordinator counts as a silent empty slice rather than a missing one; a
 // cleanup that does not WAIT reports a node stopped while its loops are still
-// writing. Asserted on a half-built runtime — no log, no index, nothing the
+// writing. Asserted on a half-built runtime — no index, no reader, nothing the
 // engine installed — because that is exactly the shape [Engine.startNative]'s
 // failure path reaches it with.
 func TestTheNativeCleanupWithdrawsBeforeItCancelsAndWaits(t *testing.T) {
@@ -240,7 +240,7 @@ func TestTheNativeCleanupWithdrawsBeforeItCancelsAndWaits(t *testing.T) {
 		t.Error("shutdown returned without cancelling the runtime's context, " +
 			"so every loop under it runs on")
 	}
-	if n.log != nil {
+	if n.indexer != nil {
 		t.Fatal("this case is meant to run on a half-built runtime")
 	}
 }

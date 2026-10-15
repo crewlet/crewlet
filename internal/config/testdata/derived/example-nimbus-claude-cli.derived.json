@@ -153,6 +153,7 @@
   "units": [
     {
       "path": "units[0]",
+      "id": "leadership",
       "name": "Leadership",
       "type": "department",
       "lead": "agent-ceo",
@@ -163,6 +164,7 @@
     },
     {
       "path": "units[0].children[0]",
+      "id": "executives",
       "name": "Executives",
       "type": "team",
       "lead": "agent-ceo",
@@ -176,6 +178,7 @@
     },
     {
       "path": "units[1]",
+      "id": "product",
       "name": "Product",
       "type": "department",
       "lead": "agent-pm",
@@ -186,6 +189,7 @@
     },
     {
       "path": "units[1].children[0]",
+      "id": "product-management",
       "name": "Product Management",
       "type": "team",
       "lead": "agent-pm",
@@ -198,6 +202,7 @@
     },
     {
       "path": "units[1].children[1]",
+      "id": "developer-relations",
       "name": "Developer Relations",
       "type": "team",
       "lead": "agent-pm",
@@ -210,6 +215,7 @@
     },
     {
       "path": "units[2]",
+      "id": "engineering",
       "name": "Engineering",
       "type": "department",
       "lead": "agent-cto",
@@ -220,6 +226,7 @@
     },
     {
       "path": "units[2].children[0]",
+      "id": "core",
       "name": "Core",
       "type": "team",
       "lead": "agent-cto",

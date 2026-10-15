@@ -33,7 +33,7 @@ import (
 // one. Measured against the unfixed build it fails on the hydration wait.
 func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -49,10 +49,12 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 
 	// THE FIRST RUN applies everything its own boot wrote, which is what
 	// leaves each consumer acknowledged through the head of its log.
-	// AN ACTIVATED COMPANY, so its boot writes its chart and its knowledge
-	// spaces: those are the records this case needs on every log it can.
+	// A COMPANY WITH UNITS, booted at an activation, so its boot applies
+	// their projects and their knowledge spaces: those are the records this
+	// case needs on every log it can.
+	activated := time.Now().UTC()
 	first, err := New(t.Context(), Options{
-		Bootstrap: &b, Company: cfg, Backends: back, ActivatedAt: testActivation,
+		Bootstrap: &b, Company: cfg, Backends: back, ActivatedAt: activated,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -60,7 +62,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	heads := map[string]uint64{}
 	waitUntil(t, 20*time.Second, "the first run to apply every log", func() bool {
 		for _, domain := range registeredDomains() {
-			running := first.native.Load().log.Domain(domain.Name())
+			running := first.core.Load().log.Domain(domain.Name())
 			if running == nil {
 				return false
 			}
@@ -102,7 +104,8 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	}
 
 	// THE SECOND RUN, the same node on the same broker.
-	second, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	second, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back,
+		ActivatedAt: activated})
 	if err != nil {
 		t.Fatalf("New again: %v", err)
 	}
@@ -112,7 +115,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 		"a consumer the broker was told is done never hands them over",
 		hydrated(t, second))
 	for name, head := range heads {
-		running := second.native.Load().log.Domain(name)
+		running := second.core.Load().log.Domain(name)
 		if got := running.runner.Committed().Seq; got < head {
 			t.Errorf("%s's rows are at %d after the replay, below the %d the "+
 				"first run had applied", name, got, head)

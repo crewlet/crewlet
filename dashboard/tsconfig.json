@@ -10,6 +10,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
     "exactOptionalPropertyTypes": false,
 
     "isolatedModules": true,

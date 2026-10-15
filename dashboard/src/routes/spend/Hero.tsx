@@ -35,7 +35,10 @@ export function Hero({
   prior: QueryResult<TokenSeries>;
   /** `null` until a node has reported the counters. */
   budget: OrgBudget | null;
-  /** Whether the reader may set a ceiling: `mayChangeConfig`. */
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * Admin and, on a managed document, are one of its writers.
+   */
   mayConfigure: boolean;
 }) {
   const total = rollup?.totals.total_tokens;

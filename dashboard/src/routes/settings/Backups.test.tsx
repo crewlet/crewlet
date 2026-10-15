@@ -19,7 +19,6 @@ import { Backups } from "./Backups.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { clearToken, storeToken } from "~/protocol/authToken.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BackupsAnswer } from "~/contract/backups.ts";
 import type { RetentionReport } from "~/protocol/index.ts";
@@ -68,23 +67,28 @@ const answer = (): BackupsAnswer => ({
   ],
   history: [
     {
+      // A PRINCIPAL BOUND TO NO SEAT, under its own login (`iam.ActorFor`).
       id: "b-failed",
       at: hoursAgo(1),
       node: "node-b",
-      operator: "ops-cron",
+      actor: "ops-cron",
+      actor_kind: "operator",
       dir: "/full/disk",
       outcome: "failed",
       summary: "ops-cron: backup to /full/disk failed",
     },
     {
+      // A PERSON BOUND TO A SEAT asks AS the seat, and the credential they
+      // asked through rides beside them.
       id: "b-landed",
       at: hoursAgo(2),
       node: "node-a",
-      operator: "U0FOUNDER",
-      actor_seat: "jane",
+      actor: "jane",
+      actor_kind: "human",
+      operator_id: "session:s-1",
       dir: "/var/backups/crewlet-20260929-0200",
       outcome: "applied",
-      summary: "U0FOUNDER (jane) backed up",
+      summary: "jane backed up",
     },
   ],
   more: false,
@@ -105,11 +109,15 @@ class InertWebSocket {
   close(): void {}
 }
 
+/** Who is reading: somebody holding the grant a backup is taken under. */
+const OPERATOR = { login: "ops", owner: "ops", grants: ["admin"] };
+
 function mount(
   over: Partial<BackupsAnswer> = {},
   {
     strict = false,
     historySeconds = (30 * 86_400) as number | null,
+    viewer = OPERATOR as unknown,
     retention = null as RetentionReport | null,
   } = {},
 ) {
@@ -124,6 +132,7 @@ function mount(
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
     if (what === "backups") return Promise.resolve({ ...answer(), ...over });
+    if (what === "viewer") return Promise.resolve(viewer);
     if (what === "retention" && retention) return Promise.resolve(retention);
     return new Promise(() => {});
   });
@@ -173,12 +182,10 @@ function backupRoute(status: number, body: unknown) {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  storeToken("t0ken");
 });
 
 afterEach(() => {
   cleanup();
-  clearToken();
   vi.unstubAllGlobals();
   location.hash = "#/";
 });
@@ -204,7 +211,7 @@ test("the newest counted point is the engine's, and the others say why they are 
 });
 
 // EVERY REQUESTED BACKUP, WITH THE HOST THAT HOLDS IT, a failure drawn as one
-// and a bound token drawn as its person.
+// and a person drawn as the seat they asked as, with the credential beside.
 test("the history lists each backup with its node, its person and its outcome", async () => {
   mount();
   await settle();
@@ -218,6 +225,7 @@ test("the history lists each backup with its node, its person and its outcome", 
     .closest(".grid-row") as HTMLElement;
   expect(within(landed).getByText("Written")).toBeTruthy();
   expect(within(landed).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
+  expect(within(landed).getByText("session:s-1")).toBeTruthy();
   expect(screen.getByText("Requested").closest(".crewlet-statcard")?.textContent).toMatch(
     /1 failed/,
   );
@@ -332,16 +340,16 @@ test("a directory the host cannot create is said on the field", async () => {
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
 });
 
-// A READER WITH NO TOKEN is refused the section, and the button says why.
-test("without an operator token the section is refused and the button says why", async () => {
-  clearToken();
-  const { query } = mount();
+// A READER WITHOUT THE GRANT is told which one before pressing: the button is
+// drawn, disabled with the grant a backup is taken under.
+test("without Admin the button is held and names the grant", async () => {
+  mount({}, { viewer: { login: "jane.doe", owner: "jane.doe", grants: [] } });
   await settle();
-  expect(query.mock.calls.some(([what]) => what === "backups")).toBe(false);
   const button = screen.getByRole("button", { name: "Take a backup" });
   expect(
     button.getAttribute("aria-disabled") ?? String((button as HTMLButtonElement).disabled),
   ).toMatch(/true/);
+  expect(button.getAttribute("title")).toMatch(/needs Admin/);
 });
 
 // CLOSING DOES NOT LOSE THE OUTCOME. The engine finishes a copy whether or not

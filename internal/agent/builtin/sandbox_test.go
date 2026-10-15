@@ -36,7 +36,7 @@ func (s *launchSpy) Launch(_ context.Context, turn *turnctx.Turn, brief string) 
 func sandboxSurface(t *testing.T, launcher builtin.SandboxLauncher) *tools.Surface {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Sandbox: launcher}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Sandbox: launcher})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	surface := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.RunSandboxTool})
@@ -45,7 +45,7 @@ func sandboxSurface(t *testing.T, launcher builtin.SandboxLauncher) *tools.Surfa
 
 func TestRunSandboxIsOmittedWithoutALauncher(t *testing.T) {
 	reg := tools.NewRegistry()
-	names, err := builtin.Register(reg, builtin.Deps{})
+	names, err := builtin.Register(reg, gated(builtin.Deps{}))
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRunSandboxIsOmittedWithoutALauncher(t *testing.T) {
 
 func TestRunSandboxIsRegisteredWithALauncher(t *testing.T) {
 	reg := tools.NewRegistry()
-	names, err := builtin.Register(reg, builtin.Deps{Sandbox: &launchSpy{}})
+	names, err := builtin.Register(reg, gated(builtin.Deps{Sandbox: &launchSpy{}}))
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestRunSandboxIsRegisteredWithALauncher(t *testing.T) {
 // under its parent's identity must not reach it.
 func TestRunSandboxIsClassifiedAsWritingToASharedSurface(t *testing.T) {
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Sandbox: &launchSpy{}}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Sandbox: &launchSpy{}})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	entry, ok := reg.Snapshot().Lookup(builtin.RunSandboxTool)
@@ -156,11 +156,11 @@ func TestAnEmptyBriefIsRefusedWithoutLaunching(t *testing.T) {
 // end believing the work was done while the job was still running.
 func TestTheNonDetachedPathRefuses(t *testing.T) {
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Sandbox: &launchSpy{}}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Sandbox: &launchSpy{}})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	entry, _ := reg.Snapshot().Lookup(builtin.RunSandboxTool)
-	res, err := entry.Tool.Call(t.Context(), map[string]any{"brief": "fix it"})
+	res, err := entry.Tool.Call(everyGrant(), map[string]any{"brief": "fix it"})
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}

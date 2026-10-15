@@ -1,6 +1,8 @@
 package jetstream
 
 import (
+	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -22,10 +24,62 @@ func domainQueue(t *testing.T, spec DomainStream) *Queue {
 // probeDomain is the declaration the cases below vary from.
 func probeDomain() DomainStream {
 	return DomainStream{
-		Name:       "CREWLET_PROBE_LOG",
-		Subjects:   []string{"crewlet.probe.log.>"},
-		MaxBytes:   16 << 20,
-		Duplicates: 2 * time.Minute,
+		Name:            "CREWLET_PROBE_LOG",
+		Subjects:        []string{"crewlet.probe.log.>"},
+		MaxBytes:        16 << 20,
+		MaxMessageBytes: 64 << 10,
+		Duplicates:      2 * time.Minute,
+	}
+}
+
+// A DOMAIN'S LARGEST MESSAGE IS THE STREAM'S, AND THE BROKER REFUSES PAST IT.
+//
+// The publisher refuses a record past its domain's declared largest before
+// sending it; this is what holds a peer on a build that does not ask. So the
+// stream is created carrying the declaration, a message inside it lands, and
+// one a byte past it is refused with the broker's own per-message code — the
+// one the state log's classifier reads as a record too large rather than a
+// full log. And a declaration the broker's 32-bit field cannot carry is
+// refused at the door, since a negative there is how the broker spells
+// unlimited.
+func TestADomainsLargestMessageIsEnforcedByTheBroker(t *testing.T) {
+	t.Parallel()
+	spec := probeDomain()
+	q := domainQueue(t, spec)
+	live, err := q.js.Stream(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("read the created stream: %v", err)
+	}
+	if got := int64(live.CachedInfo().Config.MaxMsgSize); got != spec.MaxMessageBytes {
+		t.Fatalf("the stream was created with max_msg_size %d, want the declared %d",
+			got, spec.MaxMessageBytes)
+	}
+	log, err := q.DomainLog(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	fits := make([]byte, spec.MaxMessageBytes-1<<10)
+	if _, _, err := log.Append(t.Context(), "crewlet.probe.log.a", "op-fits", nil, fits); err != nil {
+		t.Fatalf("a message inside the declaration was refused: %v", err)
+	}
+	over := make([]byte, spec.MaxMessageBytes+1)
+	_, _, err = log.Append(t.Context(), "crewlet.probe.log.b", "op-over", nil, over)
+	var apiErr *jetstream.APIError
+	if !errors.As(err, &apiErr) || apiErr.ErrorCode != 10054 {
+		t.Fatalf("a message a byte past the declaration answered %v, want the "+
+			"broker's per-message refusal (10054)", err)
+	}
+
+	for _, bad := range []int64{-1, math.MaxInt32 + 1} {
+		wrong := probeDomain()
+		wrong.Name = "CREWLET_PROBE_WRONG"
+		wrong.Subjects = []string{"crewlet.probewrong.log.>"}
+		wrong.MaxMessageBytes = bad
+		if err := q.EnsureDomainStream(t.Context(), wrong); err == nil ||
+			!strings.Contains(err.Error(), "max_msg_size") {
+			t.Errorf("a largest message of %d was provisioned (%v), and the "+
+				"broker's 32-bit field would carry it as something else", bad, err)
+		}
 	}
 }
 
@@ -162,8 +216,9 @@ func TestACapacityFieldMismatchIsReportedNotApplied(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*jetstream.StreamConfig){
-		"max_bytes":  func(c *jetstream.StreamConfig) { c.MaxBytes = 999 << 20 },
-		"duplicates": func(c *jetstream.StreamConfig) { c.Duplicates = time.Hour },
+		"max_bytes":    func(c *jetstream.StreamConfig) { c.MaxBytes = 999 << 20 },
+		"max_msg_size": func(c *jetstream.StreamConfig) { c.MaxMsgSize = 1 << 20 },
+		"duplicates":   func(c *jetstream.StreamConfig) { c.Duplicates = time.Hour },
 	} {
 		t.Run(name, func(t *testing.T) {
 			want := live.CachedInfo().Config

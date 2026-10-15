@@ -1,0 +1,704 @@
+package iamapi_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE MINT SURFACE: what `POST /iam/credentials` hands the domain, and what it
+// answers. What a token may CARRY is internal/iamdomain's decision, taken in
+// the snapshot it reads the owner in, and certified there against a real
+// broker; these cases hold the surface to handing it the right owner and to
+// rendering its answer honestly.
+
+// A TOKEN IS MINTED FOR THE PERSON THE ROUTE NAMES, and never one a body does.
+//
+// The route's authority is decided on `?person=` — or on the caller when there
+// is none — and the handler used to mint for a `person` field in the BODY
+// instead. So anybody could mint a token on anybody's account by asking about
+// themselves: the table saw a person minting their own, and the handler handed
+// somebody else's to the writer. Mutation: read the owner off the body again
+// and the writer is asked for alice's.
+func TestATokenIsMintedForThePersonTheRouteNames(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	caller := ordinary() // bob, holding every app and nothing to administer
+	got := r.as(caller, http.MethodPost, "/iam/credentials",
+		map[string]any{"person": alice.String(), "label": "mine"})
+	if got.status != http.StatusCreated {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	if r.writer.minted.PersonID != caller.ID.String() {
+		t.Errorf("the token was minted for %q, want the caller %s — a body "+
+			"naming somebody else is not who the route decided on",
+			r.writer.minted.PersonID, caller.ID)
+	}
+	// AND THE DOMAIN'S WRITER IS THE CALLER'S OWN PARTY, handed the
+	// resolved principal whole: that is what a person's own token is
+	// decided on, and nothing in the mint restates it.
+	if r.writer.principal != caller.ID.String() {
+		t.Errorf("the domain's writer acts as %q, want the caller %s",
+			r.writer.principal, caller.ID)
+	}
+	// AND NAMING SOMEBODY ELSE WHERE IT COUNTS is decided by the table:
+	// an ordinary caller may not mint on the administrator's account.
+	if got := r.as(caller, http.MethodPost, "/iam/credentials?person="+
+		alice.String(), map[string]any{}); got.status != http.StatusForbidden {
+		t.Errorf("an ordinary caller minting on alice's account answered %d, "+
+			"want 403", got.status)
+	}
+}
+
+// A MINTED TOKEN'S VALUE IS IN THE ANSWER, AND IT IS THE TOKEN THE ESTATE WILL
+// VERIFY: the verifier the writer was handed, at the position the mint landed.
+func TestAMintedTokenIsShownOnceAndVerifiesAgainstWhatWasStored(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPost,
+		"/iam/credentials?person="+alice.String(), map[string]any{"label": "release"})
+	if got.status != http.StatusCreated {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	value, _ := got.body["token"].(string)
+	token, ok := credential.ParseToken(value)
+	if !ok {
+		t.Fatalf("the answer's token %q is not one this engine can parse", value)
+	}
+	minted := r.writer.minted
+	switch {
+	case token.ID != minted.ID:
+		t.Errorf("the token names credential %s and the writer stored %s",
+			token.ID, minted.ID)
+	case !credential.VerifyToken(minted.Verifier, token):
+		t.Error("the token does not verify against the verifier the writer " +
+			"was handed, so nothing this surface mints would ever work")
+	case strings.Contains(minted.Verifier, token.Secret):
+		t.Error("the stored verifier carries the secret itself")
+	}
+	// THE POSITION IS WHERE THE MINT LANDED, which only the answer knew.
+	if token.Position != 7 {
+		t.Errorf("the token carries position %d, want the landed 7",
+			token.Position)
+	}
+	if minted.Label != "release" ||
+		minted.ExpiresAt != at.Add(credential.DefaultTokenLifetime) {
+		t.Errorf("the mint was asked for label %q expiring %s", minted.Label,
+			minted.ExpiresAt)
+	}
+	// A FRESH OPERATION, never the caller's Idempotency-Key: a replayed
+	// mint would hand back the first attempt's record with this
+	// attempt's value — a token that verifies against nothing.
+	//
+	// A STEP OF THE CREDENTIAL IT MINTS, so it carries that credential's
+	// instant in the grammar the ledger vouches for a retry by.
+	if minted.OpID != statelog.StepOpID(minted.ID, "mint") ||
+		statelog.CheckCallerOpID(minted.OpID) != nil {
+		t.Errorf("the mint published as operation %q", minted.OpID)
+	}
+}
+
+// AN IDEMPOTENCY KEY DOES NOT MAKE A MINT REPLAY. Mutation: honour the key
+// and this answers the key as the operation.
+func TestAMintIgnoresTheCallersIdempotencyKey(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	body, _ := json.Marshal(map[string]any{})
+	req := httptest.NewRequest(http.MethodPost,
+		"/iam/credentials?person="+alice.String(), strings.NewReader(string(body)))
+	req.Header.Set("Idempotency-Key", "the-callers-key")
+	req = req.WithContext(iam.WithPrincipal(req.Context(), administrator()))
+	rec := httptest.NewRecorder()
+	r.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if r.writer.minted.OpID == "the-callers-key" {
+		t.Error("the mint published under the caller's key, so a retry after " +
+			"an unknown answer hands back a token nobody holds the secret of")
+	}
+}
+
+// AN UNKNOWN MINT IS RETRIED AS A NEW MINT, AND SAYS SO.
+//
+// Every other unknown here says to send the same operation back as the
+// Idempotency-Key, which a mint cannot take — it reads no key, since a replay
+// would answer the first attempt's record beside a value that verifies against
+// nothing. Answered with that sentence, a client was told a retry the route
+// ignores and `crewlet iam token` a flag it refuses. It still says the outcome
+// is unknown, since a token may have landed, and hands out no value.
+//
+// Mutation: answer it through the ordinary unknown and the header comes back.
+func TestAnUnknownMintSaysToMintAgain(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.outcomes = map[string]statelog.Outcome{"mint": statelog.OutcomeUnknown}
+	got := r.as(administrator(), http.MethodPost,
+		"/iam/credentials?person="+alice.String(), map[string]any{})
+	if got.status != http.StatusServiceUnavailable ||
+		got.body["outcome"] != httpjson.OutcomeUnknown || got.body["op_id"] == nil {
+		t.Fatalf("answered %d %v, want 503 with an unknown outcome and its operation",
+			got.status, got.body)
+	}
+	if _, shown := got.body["token"]; shown {
+		t.Error("a token value was handed out on a mint nobody can confirm")
+	}
+	detail, _ := got.body["detail"].(string)
+	if !strings.Contains(detail, "Mint again") || strings.Contains(detail, opkey.Header) {
+		t.Errorf("an unknown mint says %q, want it to say mint again and name "+
+			"no key this route would ignore", detail)
+	}
+}
+
+// WHAT THE DOMAIN REFUSES IS ANSWERED FOR WHAT IT IS: an authority refusal is
+// 403 and a malformed request is 400, never the 500 an unclassified error is.
+func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"a grant the owner does not hold",
+			fmt.Errorf("%w: admin is not among [tracker]",
+				iamdomain.ErrRefused), http.StatusForbidden},
+		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
+			iamdomain.ErrInvalidToken), http.StatusBadRequest},
+	} {
+		r := newRig(t)
+		r.writer.err = tc.err
+		got := r.as(administrator(), http.MethodPost,
+			"/iam/credentials?person="+alice.String(), map[string]any{})
+		if got.status != tc.want {
+			t.Errorf("%s answered %d, want %d (body %v)", tc.name, got.status,
+				tc.want, got.body)
+		}
+		if got.body["token"] != nil {
+			t.Errorf("%s answered a token value", tc.name)
+		}
+	}
+}
+
+// AN ADMIN MINTS A SERVICE ACCOUNT AN ADMIN TOKEN.
+//
+// A token may carry admin (ADR-0033): it acts as its owner, cut on every
+// request to what they still hold and to the node's admin posture, and what
+// keeps it off a gesture that needs a person is that gesture's own row. So an
+// admin minting for a service account that holds admin reaches the domain
+// asking for exactly that — the owner the route names, the minter the caller,
+// the permissions as typed — and the answer names them. An OMITTED list
+// reaches it as nil, which the domain reads as everything the owner holds;
+// `[]` as an empty set, a token that reads the overview alone; and a name this
+// build does not know is refused `400` naming the set before the owner is read
+// or the domain asked.
+//
+// Mutation: default an omitted list here rather than in the domain and the
+// nil case goes red; forward an unknown name and the writer is asked.
+func TestAnAdminMintsAServiceAccountAnAdminToken(t *testing.T) {
+	t.Parallel()
+	service := func(r *rig) {
+		row := unboundServiceAccount()
+		row.Grants = []iam.Grant{iam.GrantAdmin}
+		r.directory.people[ciRelease.String()] = row
+	}
+	target := "/iam/credentials?person=" + ciRelease.String()
+
+	r := newRig(t)
+	service(r)
+	got := r.as(administrator(), http.MethodPost, target,
+		map[string]any{"label": "deploy", "grants": []string{"admin"}})
+	if got.status != http.StatusCreated {
+		t.Fatalf("an admin token for a service account answered %d %v, want 201",
+			got.status, got.body)
+	}
+	if r.writer.minted.PersonID != ciRelease.String() ||
+		r.writer.principal != alice.String() ||
+		!slices.Equal(r.writer.minted.Grants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("the domain was asked for %+v by %q, want an admin token "+
+			"owned by the service account and minted by alice",
+			r.writer.minted, r.writer.principal)
+	}
+	if grants, _ := got.body["grants"].([]any); len(grants) != 1 ||
+		grants[0] != string(iam.GrantAdmin) {
+		t.Errorf("the answer names %v, want [admin]", got.body["grants"])
+	}
+
+	for name, tc := range map[string]struct {
+		body map[string]any
+		want []iam.Grant
+	}{
+		"an omitted list": {map[string]any{"label": "deploy"}, nil},
+		"an empty list": {map[string]any{"label": "deploy",
+			"grants": []string{}}, []iam.Grant{}},
+		"one app, by name": {map[string]any{"label": "deploy",
+			"grants": []string{"tracker"}}, []iam.Grant{iam.GrantTracker}},
+	} {
+		r := newRig(t)
+		service(r)
+		got := r.as(administrator(), http.MethodPost, target, tc.body)
+		if got.status != http.StatusCreated {
+			t.Errorf("%s answered %d %v", name, got.status, got.body)
+			continue
+		}
+		if (tc.want == nil) != (r.writer.minted.Grants == nil) ||
+			!slices.Equal(r.writer.minted.Grants, tc.want) {
+			t.Errorf("%s reached the domain as %#v, want %#v", name,
+				r.writer.minted.Grants, tc.want)
+		}
+	}
+
+	r = newRig(t)
+	service(r)
+	got = r.as(administrator(), http.MethodPost, target,
+		map[string]any{"label": "deploy", "grants": []string{"admin", "billing"}})
+	if got.status != http.StatusBadRequest || got.body["field"] != "grants" ||
+		!strings.Contains(fmt.Sprint(got.body["detail"]), `"billing"`) {
+		t.Errorf("a name this build does not know answered %d %v, want 400 "+
+			"naming it", got.status, got.body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("an unknown name reached the writer: %v", r.writer.calls)
+	}
+}
+
+// "FOREVER" IS UNEXPRESSIBLE, and a caller asking for it is told so rather
+// than silently clamped: five years is an intention the answer contradicts.
+func TestATokenCannotOutliveTheCeiling(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	days := int(credential.MaxTokenLifetime/(24*time.Hour)) + 1
+	got := r.as(administrator(), http.MethodPost,
+		"/iam/credentials?person="+alice.String(),
+		map[string]any{"expires_in_days": days})
+	if got.status != http.StatusBadRequest {
+		t.Errorf("a token past a year answered %d, want 400 (body %v)",
+			got.status, got.body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("the writer was asked for %v", r.writer.calls)
+	}
+}
+
+// A TOKEN DOES NOT MINT A TOKEN, whoever it acts as.
+//
+// One minted from a token is one whoever holds a pipeline's environment can
+// renew for ever, a year at a time, with nobody present. The request goes
+// through the real guard so the credential SHAPE is the guard's own answer.
+// And it is `token_refused`, every such gesture's code: answered
+// `unauthorized`, its message said the credential lacked a grant beside a
+// detail saying no grant would do. Mutation: drop the check and the writer is
+// asked to mint; answer `unauthorized` and the code is wrong.
+func TestATokenCannotMintAToken(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	presented, row := aliceToken(t)
+	rec := throughTheGuard(t, r, row, http.MethodPost, "/iam/credentials",
+		presented)
+	body := decodeBody(t, rec)
+	if rec.Code != http.StatusForbidden ||
+		body["error"] != string(httpjson.CodeTokenRefused) ||
+		body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
+		t.Errorf("a token minting a token answered %d %v, want 403 token_refused",
+			rec.Code, body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("the writer was asked for %v", r.writer.calls)
+	}
+}
+
+// A TIER A TOKEN NAMES WHO THE TOKEN IS FOR. It is the deployment's credential
+// and owns nothing, so a mint that names nobody is told to name somebody
+// rather than answered a 404 about an id no row holds — which is what
+// `crewlet iam token` without -person reaches. Mutation: drop the check and
+// this answers 404.
+func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	// A SERVICE ACCOUNT is what a Tier A token mints for — a person's
+	// own token is theirs alone, which the domain decides.
+	service := uuid.MustParse("018f3a9c-0000-7000-8000-0000000005e1")
+	r.directory.people[service.String()] = iamdomain.PersonRow{
+		ID: service.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "svc:release", Grants: []iam.Grant{iam.GrantTracker},
+	}
+	const value = "a-tier-a-token-long-enough-to-pass"
+	b := config.DefaultBootstrap()
+	b.API.Auth.Admin = iam.AdminServe
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: value,
+		Grants: []iam.Grant{iam.GrantAdmin}}}
+	guarded := auth.New(&b).Middleware(r.mux)
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/iam/credentials", http.StatusBadRequest},
+		{"/iam/credentials?person=" + service.String(), http.StatusCreated},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer "+value)
+		rec := httptest.NewRecorder()
+		guarded.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("POST %s answered %d, want %d: %s", tc.path, rec.Code,
+				tc.want, rec.Body.String())
+		}
+	}
+}
+
+// A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF — and
+// says so the same way whichever node it asks.
+//
+// A token acts as its owner and is stepped up by construction, so the route's
+// own verb admits it as it admits them — and without the proof verb's row
+// needing a person present, a leaked token could withdraw the owner's second
+// factor: the first half of taking the account. The listed password is
+// refused by the table's own word (`token_refused`) before anything is
+// written. And a password this node's directory did not list yet is refused
+// INSIDE the snapshot that revokes, with the same answer and nothing
+// published: it used to be stepped over there, landing a record on the person
+// (a version, and a trail row saying a credential was revoked, as the token)
+// and answering 200 "nothing changed" about a credential that exists and is
+// live. The control is the owner at a keyboard, who revokes the same unlisted
+// password.
+//
+// Mutations: read the proof verb as admitted before the write and the listed
+// password is revoked by a request carrying the token; step over the unlisted
+// one in the snapshot again and it answers 200 and publishes.
+func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
+	t.Parallel()
+	const password = "018f3a9c-0000-7000-8000-00000000000a"
+	for _, tc := range []struct {
+		name     string
+		target   string
+		unlisted bool
+		keyboard bool
+		want     int
+		revoked  bool
+	}{
+		{"its owner's password", password, false, false,
+			http.StatusForbidden, false},
+		{"its owner's password, before this node lists it", password, true,
+			false, http.StatusForbidden, false},
+		{"itself", tokenID, false, false, http.StatusOK, true},
+		{"the owner at a keyboard, before this node lists it", password, true,
+			true, http.StatusOK, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.held = []iamdomain.Credential{
+				{ID: password, Method: iamdomain.MethodPassword},
+				{ID: tokenID, Method: iamdomain.MethodToken},
+			}
+			// THE DIRECTORY HOLDS WHAT THE SNAPSHOT HOLDS, unless the case
+			// is the node that has not listed it yet: the route reads which
+			// credential the id names before anything is written.
+			if !tc.unlisted {
+				r.directory.creds = map[string][]iamdomain.CredentialRow{
+					alice.String(): {
+						{ID: password, PersonID: alice.String(),
+							Method: iamdomain.MethodPassword},
+						{ID: tokenID, PersonID: alice.String(),
+							Method: iamdomain.MethodToken},
+					},
+				}
+			}
+			var status int
+			var body map[string]any
+			if tc.keyboard {
+				got := r.as(administrator(), http.MethodDelete,
+					"/iam/credentials/"+tc.target, nil)
+				status, body = got.status, got.body
+			} else {
+				presented, row := aliceToken(t)
+				rec := throughTheGuard(t, r, row, http.MethodDelete,
+					"/iam/credentials/"+tc.target, presented)
+				status, body = rec.Code, decodeBody(t, rec)
+			}
+			if status != tc.want {
+				t.Fatalf("status %d, want %d: %v", status, tc.want, body)
+			}
+			if tc.want == http.StatusForbidden {
+				if body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
+					t.Errorf("refused with %v, want the table's %s", body,
+						authz.ReasonTokenRefused)
+				}
+				if slices.Contains(r.writer.calls, "credentials") {
+					t.Error("a refused revocation published a record on the person")
+				}
+				if seen := r.audit.all(); len(seen) != 0 {
+					t.Errorf("a refused revocation announced %v", seen)
+				}
+			}
+			for _, c := range r.writer.held {
+				if c.ID == tc.target && c.RevokedAt.IsZero() == tc.revoked {
+					t.Errorf("%s revoked=%v after the request, want %v", tc.name,
+						!c.RevokedAt.IsZero(), tc.revoked)
+				}
+				if c.ID != tc.target && !c.RevokedAt.IsZero() {
+					t.Errorf("credential %s was revoked, and nobody named it", c.ID)
+				}
+			}
+		})
+	}
+}
+
+// A TOKEN'S GESTURE HERE SAYS IT WAS THE TOKEN.
+//
+// A token acts as its owner, so the event a revocation announces names the
+// owner as who did it — and without the credential beside it, a leaked token
+// withdrawing its owner's other tokens reads on the audit feed exactly as the
+// owner doing so. The writer's party carries it too, for the events the domain
+// announces itself. Mutation: stop stamping the operator on the revocation and
+// the event carries the owner's login.
+func TestATokensRevocationSaysItWasTheToken(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.held = []iamdomain.Credential{{ID: tokenID, Method: iamdomain.MethodToken}}
+	presented, row := aliceToken(t)
+	if rec := throughTheGuard(t, r, row, http.MethodDelete,
+		"/iam/credentials/"+tokenID, presented); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	via := iam.MachineTokenName(tokenID)
+	revoked := only[types.IAMCredentialRevoked](t, r.audit)
+	if revoked.By != "alice.admin" || revoked.OperatorID != via {
+		t.Errorf("the revocation was announced as by %q through %q, want the "+
+			"owner through %q", revoked.By, revoked.OperatorID, via)
+	}
+	if r.writer.actor != "alice.admin" || r.writer.operator != via {
+		t.Errorf("the writer acts as %q through %q, want the owner through %q",
+			r.writer.actor, r.writer.operator, via)
+	}
+}
+
+// A PERSON MINTS THEIR OWN TOKEN FROM THEIR SESSION, and only that way.
+//
+// The self-service path: a signed-in person, through the REAL guard's session
+// arm, posting with no `?person=` — so the owner is the caller and the domain
+// is told the caller minted it, which is the one mint a person's account
+// admits. The other two parties are the halves around it: an administrator
+// naming somebody else's account is told by the domain that a person's token
+// is theirs alone (the writer's refusal renders as 403), and a request
+// presenting a token is refused before the body ([TestATokenCannotMintAToken]).
+// Mutation: drop the minter from the handler and the domain is told nobody.
+func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	signer, err := session.New(session.Options{
+		Material: runtoken.Material{ActiveID: "k1",
+			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-active-key-material"}}},
+		Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage := uuid.Must(uuid.NewV7())
+	cookie, err := signer.Mint(session.Mint{Lineage: lineage,
+		Person: bob.String(), Epoch: 1, StartPosition: 5,
+		AbsoluteExpiresAt: at.Add(8 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := config.DefaultBootstrap()
+	b.API.Auth.Admin = iam.AdminServe
+	b.API.ExternalURL = "http://127.0.0.1:8000"
+	rows := sessionRows{session.Identity{Applied: 10,
+		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
+		Person: session.PersonRow{Found: true, Epoch: 1,
+			Stage: iam.StageActive, Login: "bob.sre",
+			Grants: []iam.Grant{iam.GrantTracker}},
+	}}
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),
+		Now: func() time.Time { return at },
+		// PROVED A MOMENT AGO on the clock the route's step-up check
+		// reads, which is the wall clock: minting a credential is a
+		// step-up gesture, and this case is about WHO mints, not when.
+		Directory: rows, Applier: rows,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/iam/credentials",
+		strings.NewReader(`{"label":"my laptop"}`))
+	req.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: cookie})
+	req.Header.Set("Origin", "http://127.0.0.1:8000")
+	rec := httptest.NewRecorder()
+	auth.New(&b).WithSessions(arm).Middleware(r.mux).ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a person minting their own token answered %d: %s", rec.Code,
+			rec.Body.String())
+	}
+	if got := r.writer.minted; got.PersonID != bob.String() ||
+		r.writer.principal != bob.String() {
+		t.Errorf("the domain was asked for a token owned by %q by a writer "+
+			"acting as %q, want bob minting his own", got.PersonID,
+			r.writer.principal)
+	}
+}
+
+// sessionRows is a session directory answering one identity for every bearer.
+type sessionRows struct{ identity session.Identity }
+
+func (d sessionRows) Resolve(context.Context, string, string) (session.Identity, error) {
+	return d.identity, nil
+}
+
+// AwaitApplied arrives only where the rows already cover the position: these
+// rows never move, so a wait either has already arrived or never will.
+func (d sessionRows) AwaitApplied(_ context.Context, position uint64) error {
+	if d.identity.Applied >= position {
+		return nil
+	}
+	return context.DeadlineExceeded
+}
+
+const tokenID = "018f3a9c-0000-7000-8000-0000000000f1"
+
+// aliceToken is a token alice holds and the row that verifies it — minted
+// carrying ADMIN from an owner who holds it, so a refusal a case asserts is
+// never one for want of a permission: a token carries admin (ADR-0033), and
+// what keeps it off a gesture is the gesture's own rule.
+func aliceToken(t *testing.T) (credential.Token, credential.TokenRow) {
+	t.Helper()
+	secret, err := credential.NewTokenSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	presented := credential.Token{ID: tokenID, Position: 3, Secret: secret}
+	return presented, credential.TokenRow{
+		Applied: 10, Found: true, IsToken: true,
+		Verifier:  credential.TokenVerifier(presented.ID, secret),
+		ExpiresAt: time.Now().Add(time.Hour),
+		Grants:    []iam.Grant{iam.GrantAdmin},
+		Owner: credential.TokenOwner{
+			Found: true, ID: alice.String(), Kind: iam.KindPerson,
+			Stage: iam.StageActive, Login: "alice.admin",
+			Grants: []iam.Grant{iam.GrantAdmin},
+		},
+	}
+}
+
+// throughTheGuard runs one request presenting a machine token through the
+// real guard in front of this rig's routes.
+func throughTheGuard(t *testing.T, r *rig, row credential.TokenRow, method,
+	path string, presented credential.Token) *httptest.ResponseRecorder {
+
+	t.Helper()
+	b := config.DefaultBootstrap()
+	b.API.Auth.Admin = iam.AdminServe
+	arm, err := auth.NewTokens(auth.TokensDeps{
+		Directory: oneToken{row}, Chart: noSeats{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Authorization", "Bearer "+presented.Value())
+	rec := httptest.NewRecorder()
+	auth.New(&b).WithTokens(arm).Middleware(r.mux).ServeHTTP(rec, req)
+	return rec
+}
+
+// oneToken is a directory holding one token row.
+type oneToken struct{ row credential.TokenRow }
+
+func (d oneToken) MachineToken(context.Context, string) (credential.TokenRow, error) {
+	return d.row, nil
+}
+
+// noSeats is an organisation holding no seats.
+type noSeats struct{}
+
+func (noSeats) Seat(context.Context, string) (session.Seat, bool, error) {
+	return session.Seat{}, false, nil
+}
+
+// THE LAST AUTHENTICATOR TAKES ITS RECOVERY CODES WITH IT.
+//
+// Recovery codes stand in for an authenticator app, and held alone they are a
+// second factor every sign-in asks for with ten single-use answers — the state
+// `POST /auth/totp/recovery` refuses to create. Revoking a person's only
+// authenticator here left the codes live, so the Account page said signing in
+// asked for a password alone while every sign-in asked for a code. The
+// second-factor reset takes both; so does revoking the last authenticator,
+// each withdrawal announced. The CONTROL is one of two authenticators, whose
+// revocation leaves the codes standing beside the other.
+//
+// Mutation: drop the recovery sweep and the only authenticator's revocation
+// leaves the codes live.
+func TestTheLastAuthenticatorTakesItsRecoveryCodesWithIt(t *testing.T) {
+	t.Parallel()
+	const (
+		app      = "018f3a9c-0000-7000-8000-0000000000d1"
+		spare    = "018f3a9c-0000-7000-8000-0000000000d2"
+		recovery = "018f3a9c-0000-7000-8000-0000000000d3"
+	)
+	for _, tc := range []struct {
+		name      string
+		spare     bool
+		codesGone bool
+	}{
+		{"the only authenticator", false, true},
+		{"one of two authenticators (the control)", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.held = []iamdomain.Credential{
+				{ID: app, Method: iamdomain.MethodTOTP},
+				{ID: recovery, Method: iamdomain.MethodRecovery},
+			}
+			if tc.spare {
+				r.writer.held = append(r.writer.held,
+					iamdomain.Credential{ID: spare, Method: iamdomain.MethodTOTP})
+			}
+			got := r.as(administrator(), http.MethodDelete, "/iam/credentials/"+app, nil)
+			if got.status != http.StatusOK {
+				t.Fatalf("status %d: %v", got.status, got.body)
+			}
+			for _, c := range r.writer.held {
+				want := c.ID == app || (c.ID == recovery && tc.codesGone)
+				if revoked := !c.RevokedAt.IsZero(); revoked != want {
+					t.Errorf("%s (%s) revoked=%v, want %v", c.ID, c.Method,
+						revoked, want)
+				}
+			}
+			var announced []string
+			for _, seen := range r.audit.all() {
+				if ev, ok := seen.(types.IAMCredentialRevoked); ok {
+					announced = append(announced, ev.Credential)
+				}
+			}
+			want := []string{app}
+			if tc.codesGone {
+				want = append(want, recovery)
+			}
+			if !slices.Equal(announced, want) {
+				t.Errorf("announced the revocation of %v, want %v", announced, want)
+			}
+		})
+	}
+}

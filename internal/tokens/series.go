@@ -1,6 +1,7 @@
 package tokens
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/period"
@@ -43,7 +44,7 @@ func (i Interval) Valid() bool { return slices.Contains(Intervals, i) }
 // Group names the dimension a series is split on.
 //
 // The five a company day's spend cell answers for ITSELF, plus the one it
-// cannot: GroupUnit is resolved through [SeriesOptions.Units], because which
+// cannot: GroupUnit is resolved through [SeriesOptions.Seats], because which
 // unit a seat sits in is a fact about the org chart and this package has never
 // seen one. A cell carries no project and no work item at all — that
 // attribution is the tracker's own per-item counters, a different read over a
@@ -124,7 +125,13 @@ func PhaseBand(phase string) Band {
 // nothing to do with this grouping and belongs in no band of the chart. Every
 // other dimension is present on every cell, so the empty ones become "unknown"
 // the way the rollup's do.
-func (g Group) key(c Cell, units map[string]string) (string, bool) {
+//
+// A SEAT AND A UNIT ARE BANDED BY IDENTITY — the seat's agent id (a person's
+// [PersonKey]), the unit's key — and never by name, because two seats or two
+// units may share a name and a band keyed on it was both of them, while one
+// seat renamed inside the window was two bands. [GroupRow.Label] is what a band
+// is called.
+func (g Group) key(c Cell, seats Seats) (string, bool) {
 	switch g {
 	case GroupPhase:
 		return string(PhaseBand(c.Phase)), true
@@ -133,13 +140,16 @@ func (g Group) key(c Cell, units map[string]string) (string, bool) {
 	case GroupProvider:
 		return orUnknown(c.ProviderKey), true
 	case GroupSeat:
-		return seatName(c.Handle, c.Role, c.AgentID), true
+		return c.who(), true
 	case GroupUnit:
 		// A seat at the root of the chart is in no unit, and that is a
 		// real placement rather than a missing one — so it groups under
-		// its own name rather than under "unknown".
-		if unit := units[c.Handle]; unit != "" {
-			return unit, true
+		// its own band rather than under "unknown", which would pool
+		// every root seat with every seat the caller's chart happened not
+		// to carry. A PERSON's spend is filed under their human seat's
+		// unit, which the chart names under their [PersonKey].
+		if seat, ok := seats.lookup(c.who()); ok && seat.UnitKey != "" {
+			return seat.UnitKey, true
 		}
 		return unattachedUnit, true
 	case GroupWorker:
@@ -158,7 +168,9 @@ func (g Group) key(c Cell, units map[string]string) (string, bool) {
 // the chart rather than inside a unit.
 //
 // Not "unknown", which this package already spends on a dimension the row
-// failed to carry: a root seat's unit is not missing, there is none.
+// failed to carry: a root seat's unit is not missing, there is none. And it is
+// a key no unit can hold: a unit's key is an address, which
+// [org.NormalizeKey] folds to carry no whitespace, and this has a space in it.
 const unattachedUnit = "no unit"
 
 // DefaultSeriesGroups is how many bands a stacked chart carries before the
@@ -179,15 +191,29 @@ type GroupRow struct {
 	// Group is the band's key in each point's map. Empty on — and only on
 	// — the residual row, which is what makes the fold unambiguous without
 	// reserving a name a real phase or model might carry.
+	//
+	// By seat it is the seat's agent id (a person's [PersonKey]) and by unit
+	// the unit's key — see [Group.key] — which no reader should print: Label
+	// is the words.
 	Group string `json:"group"`
 
-	// Handle is the seat's handle when the grouping is by seat, so a row
-	// can link to the page it names.
+	// Label is what the band is called when its key is an identity rather
+	// than a name: a seat's name, a unit's name. Absent where the key is
+	// already the words (a phase, a model, a provider entry, a worker, the
+	// unattached band).
+	Label string `json:"label,omitempty"`
+
+	// Handle is the seat's handle when the grouping is by seat and the
+	// chart holds the seat, so a row can link to the page it names. Absent
+	// rather than guessed for a seat the chart no longer holds, which is
+	// [Options.Seats]' own rule — except a person's, whose handle is the
+	// only identity their band has.
 	Handle string `json:"handle,omitempty"`
 
-	// Seats counts the distinct seats that spent in a UNIT band over the
-	// window, so a legend can say "Platform · 4 seats" and a reader can
-	// tell a busy seat from a busy team.
+	// Seats counts the distinct spenders — seats by agent id, people by
+	// their handle — that spent in a UNIT band over the window, so a legend
+	// can say "Platform · 4 seats" and a reader can tell a busy seat from a
+	// busy team.
 	Seats int `json:"seats,omitempty"`
 
 	// Other marks the residual row, and Folded counts the distinct groups
@@ -207,13 +233,22 @@ type GroupRow struct {
 	Bucket
 }
 
-// GroupPart is one seat's share of a UNIT band over the window.
+// GroupPart is one spender's share of a UNIT band over the window.
 type GroupPart struct {
-	// Group is the seat as the seat grouping keys its band: its handle, else
-	// its role, else its agent id.
+	// Group is the spender as the seat grouping keys its band — the seat's
+	// agent id, or a person's [PersonKey] — an identity no reader should
+	// print: Label is the words.
 	Group string `json:"group"`
 
-	// Handle is the seat's handle, so a part can link to the seat it names.
+	// Label is what the part is called: the chart's name for the seat now,
+	// or, for a seat the chart no longer holds, the newest name its days
+	// carried — [GroupRow.Label]'s rule, so a part and the seat's own band
+	// name one seat alike.
+	Label string `json:"label"`
+
+	// Handle is the seat's handle where the chart holds it, and a person's
+	// always, so a part can link to the seat it names — [GroupRow.Handle]'s
+	// rule.
 	Handle string `json:"handle,omitempty"`
 
 	Bucket
@@ -266,9 +301,11 @@ type Series struct {
 	To    string `json:"to"`
 	Days  int    `json:"days"`
 
-	// Seat is the handle this series was narrowed to, absent for the whole
-	// company.
-	Seat string `json:"seat,omitempty"`
+	// AgentID is the seat this series was narrowed to, by its id, and Seat
+	// that seat's handle now — see [Rollup.AgentID] and [Rollup.Seat].
+	// Both absent for the whole company.
+	AgentID string `json:"agent_id,omitempty"`
+	Seat    string `json:"seat,omitempty"`
 
 	// Horizon is how far back a window can reach. See [Horizon].
 	Horizon Horizon `json:"horizon"`
@@ -314,13 +351,15 @@ type SeriesOptions struct {
 	// grouping is never capped below its four bands.
 	Groups int
 
-	// Units maps a seat's HANDLE to the unit holding it, for GroupUnit.
-	// Absent puts every seat in the unattached band rather than inventing
-	// one.
-	Units map[string]string
+	// Seats is the chart ([Seats]), as [Options.Seats] is: a seat band's
+	// name and handle, and the unit a GroupUnit band files the seat — or the
+	// person — under. A spender it does not carry lands in the unattached
+	// band rather than an invented one.
+	Seats Seats
 
-	// Seat and Horizon are echoed on the answer.
-	Seat    string
+	// AgentID is the seat the caller narrowed to, echoed on the answer with
+	// its handle now; Horizon is echoed as it is.
+	AgentID string
 	Horizon Horizon
 }
 
@@ -353,7 +392,8 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 		From:    opts.Range.First.Label,
 		To:      opts.Range.Last.Label,
 		Days:    opts.Range.Days(),
-		Seat:    opts.Seat,
+		AgentID: opts.AgentID,
+		Seat:    opts.Seats.handle(opts.AgentID),
 		Horizon: opts.Horizon,
 		Points:  []SeriesPoint{},
 		// Never nil: the client does `.by_group.length`, and an empty
@@ -406,47 +446,58 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 		}
 	}
 	seats := map[string]map[string]bool{}
+	named := map[string]*label{}
 	handles := map[string]string{}
-	// A UNIT BAND'S SEATS, by the seat grouping's key, and each seat's
-	// handle where it has one.
+	// A UNIT BAND'S SPENDERS, by the seat grouping's key, each named and
+	// linked as the seat grouping names and links its band.
 	parts := map[string]map[string]*Bucket{}
+	partNames := map[string]*label{}
 	partHandles := map[string]string{}
 	for _, c := range cells {
 		if _, inside := index[c.Day]; !inside {
 			continue
 		}
 		out.Totals.merge(c.Bucket)
-		key, ok := opts.Group.key(c, opts.Units)
+		key, ok := opts.Group.key(c, opts.Seats)
 		if !ok {
 			continue
 		}
 		out.Grouped.merge(c.Bucket)
 		bucketFor(total, key).merge(c.Bucket)
+		who := c.who()
+		seat, known := opts.Seats.lookup(who)
 		switch opts.Group {
 		case GroupSeat:
-			if c.Handle != "" {
-				handles[key] = c.Handle
-			}
+			labelFor(named, key).fold(cmp.Or(c.Role, c.Handle), c.Day, seat, known)
+			handles[key] = c.handleNow(seat)
 		case GroupUnit:
+			// A unit the chart names is labelled by that name; one it
+			// does not (and the unattached band) is printed by its key,
+			// which is then the only words there are.
+			if known && seat.UnitKey == key && seat.UnitName != "" {
+				labelFor(named, key).name = seat.UnitName
+			}
 			if seats[key] == nil {
 				seats[key] = map[string]bool{}
 				parts[key] = map[string]*Bucket{}
 			}
-			seats[key][c.who()] = true
-			seat := seatName(c.Handle, c.Role, c.AgentID)
-			bucketFor(parts[key], seat).merge(c.Bucket)
-			if c.Handle != "" {
-				partHandles[seat] = c.Handle
-			}
+			seats[key][who] = true
+			bucketFor(parts[key], who).merge(c.Bucket)
+			labelFor(partNames, who).fold(cmp.Or(c.Role, c.Handle), c.Day, seat, known)
+			partHandles[who] = c.handleNow(seat)
 		}
 	}
 
 	ranked := make([]GroupRow, 0, len(total))
 	for key, b := range total {
-		ranked = append(ranked, GroupRow{
+		row := GroupRow{
 			Group: key, Handle: handles[key], Seats: len(seats[key]),
-			Parts: rankParts(parts[key], partHandles), Bucket: *b,
-		})
+			Parts: rankParts(parts[key], partNames, partHandles), Bucket: *b,
+		}
+		if l := named[key]; l != nil {
+			row.Label = orUnknown(l.name)
+		}
+		ranked = append(ranked, row)
 	}
 	if opts.Group == GroupPhase {
 		// STACKING ORDER, not size: the four bands are a fixed legend, and a
@@ -457,7 +508,9 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			return slices.Index(Bands, Band(a.Group)) - slices.Index(Bands, Band(b.Group))
 		})
 	} else {
-		byTokensThen(ranked, func(r GroupRow) (int, string) { return r.TotalTokens, r.Group })
+		// Ties on the words a reader sees and then the key, since two
+		// bands may carry the same label.
+		byTokensThen(ranked, func(r GroupRow) (int, string) { return r.TotalTokens, r.Label + "\x00" + r.Group })
 	}
 
 	kept := map[string]bool{}
@@ -482,7 +535,7 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 		}
 		point := &out.Points[i]
 		point.merge(c.Bucket)
-		key, grouped := opts.Group.key(c, opts.Units)
+		key, grouped := opts.Group.key(c, opts.Seats)
 		switch {
 		case !grouped:
 		case kept[key]:
@@ -496,17 +549,22 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 	return out
 }
 
-// rankParts is a unit band's seats as parts, biggest first, ties on the seat's
-// key so an equal split reads the same on every node. Nil for a band with
-// none, which is every band of every grouping but the unit's.
-func rankParts(seats map[string]*Bucket, handles map[string]string) []GroupPart {
+// rankParts is a unit band's spenders as parts, biggest first, ties on the
+// words a reader sees and then the key — the bands' own order — so an equal
+// split reads the same on every node. Nil for a band with none, which is every
+// band of every grouping but the unit's.
+func rankParts(seats map[string]*Bucket, names map[string]*label, handles map[string]string) []GroupPart {
 	if len(seats) == 0 {
 		return nil
 	}
 	out := make([]GroupPart, 0, len(seats))
 	for seat, b := range seats {
-		out = append(out, GroupPart{Group: seat, Handle: handles[seat], Bucket: *b})
+		part := GroupPart{Group: seat, Handle: handles[seat], Bucket: *b}
+		if l := names[seat]; l != nil {
+			part.Label = orUnknown(l.name)
+		}
+		out = append(out, part)
 	}
-	byTokensThen(out, func(p GroupPart) (int, string) { return p.TotalTokens, p.Group })
+	byTokensThen(out, func(p GroupPart) (int, string) { return p.TotalTokens, p.Label + "\x00" + p.Group })
 	return out
 }

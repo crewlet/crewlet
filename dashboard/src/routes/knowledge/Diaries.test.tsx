@@ -59,6 +59,7 @@ const entry = (content: string) => ({
 
 function row(handle: string, over: Partial<MemoryOverviewSeat> = {}): MemoryOverviewSeat {
   return {
+    agent_id: `a-${handle}`,
     handle,
     diary_total: 7,
     episodes_total: 3,

@@ -20,7 +20,7 @@
  *
  * # Save as draft, or Publish
  *
- * Both are `write_page`, as the person the token is bound to, with `status`
+ * Both are `write_page`, as the person signed in (ADR-0024), with `status`
  * set: a draft is listed in its space and marked Draft, and found by no
  * search until it is published. On success the reader is taken to the page
  * by the id the engine answered with, never by its title.

@@ -5,9 +5,20 @@ import (
 	"errors"
 	"testing"
 
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
+
+// sealingNode is an Engine holding what every node [New] builds holds for the
+// integration loop: a fleet store, and the keyring the loop's sink seals
+// under. A harness that left them out used to be handed a read-only sink; now
+// it is handed the fault an engine with no secret store is.
+func sealingNode(t *testing.T) *Engine {
+	t.Helper()
+	_, cipher := testKeyring(t)
+	return &Engine{backends: &Backends{Fleet: coordmem.NewFleet()}, cipher: cipher}
+}
 
 // countingPass records whether the loop actually ran it.
 type countingPass struct {
@@ -47,6 +58,74 @@ func TestTheLoopConvergesNothingWithoutACompany(t *testing.T) {
 	}
 	if pass.runs != 0 {
 		t.Errorf("the pass ran %d times with no company to converge", pass.runs)
+	}
+}
+
+// A PASS THAT CANNOT BE HANDED A SEALING SINK DOES NOT RUN, AND SAYS WHY AS A
+// FAULT.
+//
+// The loop used to fall back to a read-only sink here, for a node with no
+// keyring, and every pass then reported that posture as the operator's work.
+// There is no such node now: every node holds the keyring its sink seals
+// under, so a sink that cannot be built is an engine wired without its secret
+// store — a fault the loop records and retries, never a state to converge in
+// with nothing sealed.
+func TestAPassWithNoSinkToSealIntoIsAFault(t *testing.T) {
+	t.Parallel()
+	pass := &countingPass{kind: integration.KindGitLab}
+	e := &Engine{}
+	e.epoch.current.Store(&Company{})
+	c := &passConverger{pass: pass, engine: e}
+
+	findings, err := c.Reconcile(t.Context())
+
+	if err == nil || errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("Reconcile = (%v, %v), want the fault an unbuildable sink is",
+			findings, err)
+	}
+	if pass.runs != 0 {
+		t.Errorf("the pass ran %d times with nowhere to seal what it mints", pass.runs)
+	}
+}
+
+// capturingPass records what the loop handed it.
+type capturingPass struct {
+	kind integration.Kind
+	in   setup.PassInput
+}
+
+func (p *capturingPass) Kind() integration.Kind  { return p.kind }
+func (*capturingPass) Needs() *setup.Requirement { return nil }
+
+func (p *capturingPass) Run(_ context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	p.in = in
+	return nil, nil
+}
+
+// THE LOOP HANDS A PASS THE VENDORS' ADDRESS AND THE KEY IT IS READ FROM.
+//
+// A pass with no address reports `ingress_blocked` naming the setting to fill
+// in, and only the engine knows which one that is: behind a public listener it
+// is `api.public.external_url`, which every vendor used to name as
+// `api.external_url` — a key that was set, that nothing building a vendor URL
+// reads, on a deployment whose webhooks are served only on the other socket.
+// So the key travels beside the address, from the same Tier A block.
+func TestTheLoopHandsAPassTheVendorsAddressAndItsKey(t *testing.T) {
+	t.Parallel()
+	pass := &capturingPass{kind: integration.KindDatadog}
+	e := sealingNode(t)
+	e.epoch.current.Store(&Company{})
+	e.webhookBase, e.webhookBaseKey = "https://hooks.example.com", "api.public.external_url"
+	c := &passConverger{pass: pass, engine: e}
+
+	if _, err := c.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if pass.in.WebhookBase != e.webhookBase {
+		t.Errorf("the pass was handed the address %q, want %q", pass.in.WebhookBase, e.webhookBase)
+	}
+	if pass.in.WebhookBaseKey != e.webhookBaseKey {
+		t.Errorf("the pass was handed the key %q, want %q", pass.in.WebhookBaseKey, e.webhookBaseKey)
 	}
 }
 

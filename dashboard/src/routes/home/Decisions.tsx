@@ -8,9 +8,10 @@
  * the ceiling or handing the item on (`seatDecisionsFor` decides which).
  * Newest first, three of them, and the Inbox for the rest.
  *
- * NEVER A ZERO FOR NOBODY: an anonymous reader or a token bound to no seat has
- * no decisions, and the card says what would give them some rather than
- * drawing an empty list that claims to have looked.
+ * NEVER A ZERO FOR NOBODY: an anonymous reader has no record and no
+ * decisions, and the card says what would give them some rather than drawing
+ * an empty list that claims to have looked. An UNBOUND reader is somebody
+ * (their record is their login) and is asked like anybody.
  */
 
 import { Card, Tag } from "@crewlethq/ui";
@@ -24,14 +25,11 @@ import {
 } from "~/components/DecisionRow.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type { DecisionsAnswer } from "~/protocol/index.ts";
+import type { DecisionsAnswer, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 
 /** What a reader signed in as nobody is told: a decision is a person's, so
  *  there is nothing to list until the browser is somebody. */
-export const NOBODY_SENTENCE = {
-  anonymous: "Set a token bound to your seat to see your decisions.",
-  unbound: "Bind this token to your seat to see your decisions.",
-} as const;
+export const NOBODY_SENTENCE = "Sign in to see your decisions.";
 
 /** How many decisions the landing screen shows before "Open inbox". */
 export const HOME_DECISIONS = 3;
@@ -40,6 +38,7 @@ export function Decisions({
   viewer,
   answer,
   error,
+  refusal,
   loading,
   seatConditions,
   now,
@@ -47,6 +46,8 @@ export function Decisions({
   viewer: ViewerState;
   answer: DecisionsAnswer | null;
   error: QueryErrorCode | null;
+  /** Why the read was refused, beside `error`: what `QueryState` names. */
+  refusal: QueryRefusal | LogRefusal | null;
   loading: boolean;
   seatConditions: readonly SeatCondition[];
   now: number;
@@ -59,9 +60,14 @@ export function Decisions({
       <Card.Header
         icon={<TriangleAlertGlyph size="sm" className="home-decisions-icon" />}
         actions={
-          <a className="t-link" href={decisionsHref()}>
-            Open inbox
-          </a>
+          // THE INBOX IS THE TRACKER'S: an asked person without Tracker
+          // answers here and on the task, and a link to a screen that would
+          // only say it is closed to them is not a way in.
+          viewer.tracker ? (
+            <a className="t-link" href={decisionsHref()}>
+              Open inbox
+            </a>
+          ) : undefined
         }
       >
         <Card.Title as="h3">
@@ -73,12 +79,10 @@ export function Decisions({
           )}
         </Card.Title>
       </Card.Header>
-      {!viewer.handle && !viewer.loading ? (
-        <p className="home-card-note">
-          {NOBODY_SENTENCE[viewer.anonymous ? "anonymous" : "unbound"]}
-        </p>
+      {!viewer.owner && !viewer.loading ? (
+        <p className="home-card-note">{NOBODY_SENTENCE}</p>
       ) : (
-        <QueryState error={error} loading={loading && !answer}>
+        <QueryState error={error} refusal={refusal} loading={loading && !answer}>
           {subjects.length === 0 ? (
             <div className="home-quiet">
               <strong className="t-cell">Nothing needs your decision</strong>
@@ -86,7 +90,7 @@ export function Decisions({
           ) : (
             <DecisionList
               subjects={subjects}
-              decider={{ handle: viewer.handle }}
+              decider={{ handle: viewer.owner }}
               now={now}
               limit={HOME_DECISIONS}
             />

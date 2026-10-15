@@ -18,12 +18,40 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
+// cli runs a command as an operator does, holding the fixture credential.
+//
+// THE CREDENTIAL COMES FROM THE ENVIRONMENT, exactly as it does for an
+// operator: the CLI no longer helps itself to the first entry of the Tier A
+// `api.auth.tokens` list, because that list is what a node ACCEPTS and a write
+// authored by whichever entry came first landed under a name nobody chose.
+//
+// HANDED TO THE COMMAND ([runIn]) rather than set on the process, so the cases
+// run side by side: Go refuses t.Setenv to a parallel test, and a variable set
+// on the process by one case is the credential of every command running beside
+// it. A case about another credential hands its own ([cliIn]); a case whose
+// subject IS the process's environment calls [run], which reads it.
 func cli(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
+	return cliIn(t, tokenEnviron(cliFixtureToken), args...)
+}
+
+// cliIn is [cli] in the environment a case hands it.
+func cliIn(t *testing.T, environ config.Source, args ...string) (string, string, error) {
+	t.Helper()
 	var out, errs bytes.Buffer
-	err := run(args, &out, &errs)
+	err := runIn(environ, args, &out, &errs)
 	return out.String(), errs.String(), err
 }
+
+// tokenEnviron is an invocation environment holding exactly one credential.
+func tokenEnviron(token string) config.Source {
+	return config.MapSource{apiTokenEnv: token}
+}
+
+// noEnviron is an invocation environment holding nothing — what a case hands a
+// command it expects to need no credential, so the case cannot pass on
+// whatever the machine running the suite happens to export.
+var noEnviron config.Source = config.MapSource(nil)
 
 // -check REPORTS AND APPLIES NOTHING. A command that migrated while
 // answering "what would you migrate" could never answer it.
@@ -131,6 +159,11 @@ func bootstrapForNode(t *testing.T, node *fakeNode) string {
 // bootstrapForURL is the same, for any test server. Split out because more
 // than one kind of fake node needs it and a second copy of this would be one
 // that drifts.
+// cliFixtureToken is the credential every CLI fixture's Tier A carries. It
+// clears the 26-character floor by construction: a shorter one is refused by
+// `crewlet validate`, so a fixture using one would fail on its stand-in.
+const cliFixtureToken = "cli-fixture-token-long-enough"
+
 func bootstrapForURL(t *testing.T, serverURL string) string {
 	t.Helper()
 	host, port, err := net.SplitHostPort(strings.TrimPrefix(serverURL, "http://"))
@@ -138,10 +171,21 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 		t.Fatalf("split %q: %v", serverURL, err)
 	}
 	dir := t.TempDir()
+	// A COMPLETE SERVING POSTURE, because a served API now requires one:
+	// an external URL, an admin posture, a credential of its own that
+	// clears the entropy floor, and a keyring. A fixture short of any of
+	// them is refused by `Validate` and the case fails on its own Tier A
+	// rather than on its subject.
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
-		"api:\n  host: %s\n  port: %s\n  auth:\n    tokens:\n"+
-		"      - id: ops\n        token: t0ken\n",
-		filepath.Join(dir, "index.db"), host, port)
+		"api:\n  host: %s\n  port: %s\n"+
+		"  external_url: \"http://%s:%s\"\n"+
+		"  auth:\n"+
+		"    admin: serve\n"+
+		"    tokens:\n"+
+		"      - id: ops\n        token: %s\n"+
+		"        grants: [admin]\n"+
+		fixtureStream(dir)+fixtureKeyring,
+		filepath.Join(dir, "index.db"), host, port, host, port, cliFixtureToken)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
@@ -327,9 +371,9 @@ func TestBudgetsHasNoReset(t *testing.T) {
 }
 
 // THE TOKEN IS SENT. The counters are read through the node's guarded query
-// surface, so a command that dropped the token would fail against every
-// deployment that turns anonymous reads off.
-func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
+// surface, and every route there is guarded, so a command that dropped the
+// token would be refused by every node.
+func TestABudgetCommandSendsTheExportedToken(t *testing.T) {
 	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
@@ -337,21 +381,27 @@ func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
 	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
 		t.Fatalf("budgets show: %v", err)
 	}
-	if len(node.tokens) == 0 || node.tokens[len(node.tokens)-1] != "Bearer t0ken" {
-		t.Errorf("Authorization = %v, want the config's token", node.tokens)
+	if len(node.tokens) == 0 || node.tokens[len(node.tokens)-1] != "Bearer "+cliFixtureToken {
+		t.Errorf("Authorization = %v, want the exported token", node.tokens)
 	}
 }
 
-// AN EXPORTED TOKEN WINS over the config's. An operator who exported one
-// meant that one, and a checked-in config's ${VAR} resolves to the same place
-// anyway.
-func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
+// THE CREDENTIAL IS THE ENVIRONMENT'S AND NOTHING ELSE. The config file this
+// command reads its node's address from also lists the tokens that node
+// ACCEPTS, and a CLI that helped itself to one of them would author an
+// operator's write under a name they had not chosen; the token sent is the
+// one exported, however the file's list reads.
+//
+// NOT PARALLEL, and through [run] rather than [cli]: its subject is the
+// PROCESS's environment, which is what every run of the binary reads.
+func TestTheCredentialIsTheEnvironmentsAndNeverTheConfigs(t *testing.T) {
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 	t.Setenv(apiTokenEnv, "exported")
 
-	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
-		t.Fatalf("budgets show: %v", err)
+	var out, errs bytes.Buffer
+	if err := run([]string{"budgets", "show", "-config", cfg}, &out, &errs); err != nil {
+		t.Fatalf("budgets show: %v\n%s", err, errs.String())
 	}
 	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
 		t.Errorf("Authorization = %q, want the exported token", got)
@@ -365,7 +415,13 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
-		"api:\n  host: 127.0.0.1\n  port: 1\n", filepath.Join(dir, "index.db"))
+		"api:\n  host: 127.0.0.1\n  port: 1\n"+
+		"  external_url: \"http://127.0.0.1:1\"\n"+
+		"  auth:\n    admin: serve\n"+
+		"    tokens:\n      - id: ops\n        token: %s\n"+
+		"        grants: [tracker]\n"+
+		fixtureStream(dir)+fixtureKeyring,
+		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -385,7 +441,7 @@ func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+		filepath.Join(dir, "index.db")) + fixtureStream(dir) + fixtureKeyring
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -406,12 +462,12 @@ func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
 	t.Parallel()
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
 		got, err := nodeBaseURL(&config.Bootstrap{
-			API: config.API{Host: host, Port: 8080},
+			API: config.API{Host: host, Port: 8000},
 		}, "", "this node")
 		if err != nil {
 			t.Fatalf("host %q: %v", host, err)
 		}
-		if got != "http://127.0.0.1:8080" {
+		if got != "http://127.0.0.1:8000" {
 			t.Errorf("host %q resolved to %q, want the loopback address", host, got)
 		}
 	}
@@ -526,7 +582,7 @@ func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: agent-1\n  roles: [seats]\nstore:\n  path: %s\n"+
 		"  scratch: true\nstream:\n  leaf:\n    urls: [\"nats-leaf://data-a.example.com:7422\"]\n"+
-		"coordination:\n  type: embedded-kv\n",
+		"coordination:\n  type: embedded-kv\n"+fixtureKeyring,
 		filepath.Join(dir, "index.db"))
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
@@ -569,7 +625,7 @@ func TestOfflineCommandsHonourTheReplicatedPath(t *testing.T) {
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n  replicated_path: %s\n"+
 		"secrets:\n  active_key_id: k1\n  keys:\n    - id: k1\n      material: %q\n",
 		filepath.Join(dir, "index.db"), elsewhere,
-		base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+		base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))) + fixtureStream(dir)
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

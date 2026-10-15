@@ -44,6 +44,7 @@ import { FileTextGlyph, FolderGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { RefusalNote, pressable } from "~/components/WriteButton.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -60,7 +61,6 @@ import {
   PageTags,
   SPACES_POLL_MS,
   SpacesRow,
-  drawnBy,
   newPagePath,
   pagePath,
   usePeople,
@@ -136,7 +136,7 @@ const COLUMNS: TreeGridColumn[] = [
 ];
 
 export function Pages({ container }: { container: string }) {
-  const { spaces, read, error } = useSpaces();
+  const { spaces, read, error, refusal } = useSpaces();
   const space = spaces.find((s) => s.key === container);
   // THE TRAIL NAMES THE SPACE, as a page's own trail does.
   usePageLabels(space?.name ? { [container]: space.name } : {});
@@ -150,6 +150,10 @@ export function Pages({ container }: { container: string }) {
         description="Use the search in the bar."
       />
     );
+  } else if (!read && error) {
+    // A REFUSED READ IS SAID, never drawn as a space still loading: the
+    // skeleton stood for ever over a read the engine had answered with a no.
+    body = <QueryState error={error} refusal={refusal} loading={false} />;
   } else if (!read) {
     body = <Skeleton variant="text" rows={8} label="Loading the space" />;
   } else if (!space) {
@@ -454,7 +458,7 @@ function SpaceOutline({ space }: { space: PageContainer }) {
     if (mark) return markCell(id, mark.mark, mark.parent, column, grid);
     const page = pages.get(id);
     if (!page) return null;
-    const saver = drawnBy(page.saved_by ?? page.author, page.saved_by_seat ?? page.author_seat);
+    const saver = page.saved_by ?? page.author ?? "";
     const at = page.saved_at ?? page.updated_at;
     switch (column) {
       case 1:

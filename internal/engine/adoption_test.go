@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A REVISION ANOTHER NODE WROTE KEEPS ITS AUTHOR ON THIS ONE.
@@ -22,9 +22,9 @@ func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {
 	written := pinnedNow.Add(-3 * time.Hour)
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "written-on-node-b", Summary: "grow the company",
-		Payload: yamlToJSON(t, grownCompanyDoc), At: pinnedNow,
+		Payload: p.seal(t, yamlToJSON(t, grownCompanyDoc)), At: pinnedNow,
 		Origin: coord.RevisionOrigin{
-			Author: "maya", AuthorKind: string(store.AuthorOperator),
+			Author: "maya", AuthorKind: iam.ActorOperator, OperatorID: "token:deploy",
 			Source: "api", CreatedAt: written,
 		},
 	}); err != nil {
@@ -37,9 +37,11 @@ func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("the adopted revision is not in this node's history: found=%v err=%v", found, err)
 	}
-	if got.CreatedBy != "maya" || got.CreatedByKind != store.AuthorOperator {
-		t.Errorf("adopted as written by (%q, %q), want (maya, operator) — the "+
-			"author the origin recorded", got.CreatedBy, got.CreatedByKind)
+	if got.CreatedBy != "maya" || got.CreatedByKind != iam.ActorOperator ||
+		got.OperatorID != "token:deploy" {
+		t.Errorf("adopted as written by (%q, %q, %q), want (maya, operator, "+
+			"token:deploy) — the author the origin recorded",
+			got.CreatedBy, got.CreatedByKind, got.OperatorID)
 	}
 	if got.Source != "api" || !got.CreatedAt.Equal(written) {
 		t.Errorf("adopted with source %q at %s, want api at %s — how and when it was "+

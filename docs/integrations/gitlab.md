@@ -55,14 +55,14 @@ integrations:
       access_level: developer    # default group membership (developer | maintainer)
       access_levels:             # per-handle overrides
         tech-lead: maintainer
-      username_prefix: ""        # e.g. "agent-" when the group namespace is shared with humans
+      username_prefix: ""        # crewlet when empty; the username is <prefix>-<handle>
       projects: []               # extra projects to add each account to (+ hooks only when group_webhook: false / falls back)
       group_webhook: auto        # auto (group hook, else per-project) | true (group only) | false (per-project only)
       mode: group                # where accounts are OWNED: group (default) | instance (self-managed only)
       token_scopes: [api]        # scopes minted on each service-account PAT
 ```
 
-`access_levels` is keyed by seat **handle**, and a key no seat holds is not refused: the engine logs it on every node, once per applied epoch, as an `org_dangling_reference` warning with `ref=gitlab_access_level` (see [Dangling references](../concepts/organization-model.md#dangling-references)). Remove the key when you remove the seat. Left in place, it grants its level to the next seat whose handle matches, which is typically the same role added again.
+`access_levels` is keyed by seat **handle**, which never changes for a seat: a seat given a different handle is a new seat. A key no seat answers to is not refused: the engine logs it on every node, once per applied epoch, as an `org_dangling_reference` warning with `ref=gitlab_access_level` (see [Dangling references](../concepts/organization-model.md#dangling-references)). Remove the key when you remove the seat, or it grants its level to whichever seat is next added under that handle.
 
 Four fields differ from the [hosted code host's](github.md) block beside it:
 
@@ -73,7 +73,7 @@ Four fields differ from the [hosted code host's](github.md) block beside it:
 
 The `provisioning:` sub-block drives the reconcile described under [Provisioning](#provisioning), and both the CLI and the engine's own reconcile loop read it.
 
-**`mode` says where a service account is owned, and it is not only the CLI's business.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it — and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route reports itself deleted and stays live with every credential it holds. It used to be `-mode` on the command line and nowhere else, so the engine assumed `group` for every company: against accounts created with `-mode instance` its passes minted through a group that does not own them and its disconnect removed none of them. `crewlet gitlab provision -mode …` still overrides it for one invocation, the way `-public-url` overrides `integrations.public_base_url`.
+**`mode` says where a service account is owned, and it is not only the CLI's business.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it — and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route reports itself deleted and stays live with every credential it holds. It used to be `-mode` on the command line and nowhere else, so the engine assumed `group` for every company: against accounts created with `-mode instance` its passes minted through a group that does not own them and its disconnect removed none of them. `crewlet gitlab provision -mode …` still overrides it for one invocation, the way `-public-url` overrides the Tier A webhook address — `api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise — which the command reads from the file `-config` names, already resolved.
 
 ---
 
@@ -212,7 +212,7 @@ The CLI probes the operator credential with `GET /user` up front and fails fast 
 
 For each **agent** seat that declares GitLab credentials (presence of `mcp_env.gitlab`, the same convention GitHub uses):
 
-1. **Ensure the service account exists.** Look it up by username — `<username_prefix><handle>` — and create it if missing, under the configured group or (with `-mode instance`) on the instance. The display name is `role.name`. **No email address is sent**, so GitLab assigns one itself (`service_account_group_…@noreply.<instance>`).
+1. **Ensure the service account exists.** Look it up by username — `<username_prefix>-<handle>`, the prefix being `crewlet` when it is unset (see [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle)) — and create it if missing, under the configured group or (with `-mode instance`) on the instance. The display name is `role.name`. **No email address is sent**, so GitLab assigns one itself (`service_account_group_…@noreply.<instance>`).
 
    > **That omission is load-bearing.** GitLab's service-account routes take `email` as optional, and its documentation adds the sentence this turns on: *"custom email addresses require confirmation before the account is active"*, unless the group has a matching verified domain. Crewlet used to derive `<prefix><handle>@noreply.crewlet.invalid` — a reserved TLD ([RFC 2606](https://www.rfc-editor.org/rfc/rfc2606)), so no confirmation mail can ever be delivered and no domain can ever be verified. Every account created that way was permanently inactive, and GitLab refused each of its tokens with `403 Your primary email address is not confirmed`. Letting GitLab name the address keeps the same promise — the account is a robot and its mailbox does not exist — on a domain the instance actually controls.
 
@@ -278,14 +278,14 @@ The steady-state reconcile deliberately does **not** walk the group like that. I
 
 Three sinks, chosen by flag:
 
-- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so the `source` + restart step disappears entirely — and a run against a node whose engine is up records the credential where the whole fleet reads it. This is the recommended sink once a Tier A keyring is configured.
+- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so the `source` + restart step disappears entirely — and a run against a node whose engine is up records the credential where the whole fleet reads it. This is the recommended sink: every node's Tier A carries the keyring the store seals under.
 - **`-env-file PATH`**: append/update `VAR=token` lines — the file the operator feeds the engine. Written through on every mint, so a crash mid-run cannot leave a minted-but-unrecorded credential, and each write is atomic and leaves the file `0600` — including when you created it yourself, which under the usual umask means `0644`. A newly minted token is shown once; re-runs never re-print a live token.
 - **`-print`**: emit `export VAR=token` lines to stdout for shell `eval` and persist nothing.
 
 ### Rotation & decommission
 
-- **`-rotate`** mints a fresh token for **every** seat — including seats whose current one still works — retires the previous `crewlet-provision:<handle>` tokens on that account, and updates the chosen sink. It is a flag rather than what a run does because GitLab returns a token's value exactly once: a provisioner cannot check that what it recorded last time still matches, so minting every run would revoke the credential every agent is currently authenticating with. An operator adding a tenth seat would take the other nine down, from a command whose whole promise is that it is safe to re-run. **The engine has to be restarted after.** On the GitLab.com Free tier — where every PAT expires within 365 days — this is the once-a-year cron candidate.
-- **`-decommission`** (explicit, never default) deletes managed service accounts whose seats have left the config. It refuses to act unless `provisioning.username_prefix` is set, so it can identify managed accounts without touching un-prefixed ones. Off by default because it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat.
+- **`-rotate`** mints a fresh token for **every** seat — including seats whose current one still works — retires the previous `crewlet-<handle>` tokens on that account, and updates the chosen sink. It is a flag rather than what a run does because GitLab returns a token's value exactly once: a provisioner cannot check that what it recorded last time still matches, so minting every run would revoke the credential every agent is currently authenticating with. An operator adding a tenth seat would take the other nine down, from a command whose whole promise is that it is safe to re-run. **The engine has to be restarted after.** On the GitLab.com Free tier — where every PAT expires within 365 days — this is the once-a-year cron candidate.
+- **`-decommission`** (explicit, never default) deletes managed service accounts whose seats have left the config. It considers only members of `provisioning.group` whose username starts with `<username_prefix>-` (`crewlet-` when the prefix is unset), so an account without that prefix is never touched. Off by default because it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat.
 
 A run that changed nothing still says so: the report names the seats it **kept**, because a report listing only changes reads as a run that did nothing — and the operator's next move would be to reach for `-rotate`, which is exactly the outage above.
 
@@ -358,12 +358,15 @@ base64 payload, compared in constant time against any of the header's
 space-separated `v1,…` entries, with a ±5-minute timestamp tolerance in both
 directions.
 
-- **No signature, or a wrong one → `401`.** There is no fallback. GitLab's
-  other secret — the plaintext `X-Gitlab-Token` — is not a credential here.
-- **A delivery before `signing_secret` is configured, or one whose value is
-  not a usable key → `503`** with a `Retry-After`, so the delivery is held
-  for retry rather than discarded. The request was fine; what is missing is
-  on this side.
+- **No signature, or a wrong one → `401 invalid_signature`.** There is no
+  fallback. GitLab's other secret — the plaintext `X-Gitlab-Token` — is not a
+  credential here.
+- **A delivery before `signing_secret` is configured → `503
+  no_webhook_secret`, and one whose value is not a usable `whsec_` key →
+  `503 unusable_webhook_secret`**, each with a `Retry-After`, so the delivery
+  is held for retry rather than discarded. The request was fine; what is
+  wrong is on this side — and the two codes differ because the fixes do: one
+  says to set the secret, the other that the one set is the problem.
 
 > **GitLab signs when the hook has a signing token, not when the version is
 > new enough.** These are two different secrets on the same hook and they are

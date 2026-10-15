@@ -243,6 +243,7 @@ func (controlBase) Stream() statelog.StreamSpec {
 		SubjectPrefix:   controlPrefix,
 		ArbitratedKinds: []string{"widget"},
 		MaxBytes:        16 << 20,
+		MaxRecordBytes:  64 << 10,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 	}
@@ -598,11 +599,11 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		t.Parallel()
 		err := statelogtest.Idempotency(t, func(*testing.T) statelogtest.Candidate {
 			c := control()
-			c.Applier = appendOnly{}
+			c.Applier = countingApplier{}
 			return c
 		})
 		if err == nil {
-			t.Fatal("the suite passed an applier that writes a new row per delivery")
+			t.Fatal("the suite passed an applier that counts its deliveries into a row")
 		}
 	})
 }
@@ -661,6 +662,112 @@ func TestTheSuiteHoldsAKindARowIntroducedToThatRowsVersion(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("a gadget stamped at version one passed the base-record case: %v", errs)
+	}
+}
+
+// A GATE IS STAMPED AT EXACTLY WHAT ITS OWN CHANGED APPLY NEEDS — the base
+// version until a field the table marks [statelog.VersionedField.Gate] raises
+// it, and never higher for any other field.
+//
+// The suite once refused every gate above version 1, which is the rule for a
+// domain whose gates never change: the first change to an eviction's apply,
+// stamped above the base exactly as the framework's field table intends (an
+// older build HALTS at a gate it cannot read rather than applying it the old
+// way), would have failed the shared suite with a sentence saying that build
+// defers it. Each arm is one way the write path can stamp a gate, and the
+// verdict comes back from the bytes it published.
+func TestTheSuiteHoldsAGateToItsOwnChangedApplysVersion(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		gate   changedGate
+		refuse string // empty when the suite must accept
+	}{
+		"a gate carrying nothing new, at the base version": {
+			gate: changedGate{v: 1},
+		},
+		"a gate carrying its changed apply's field, at that field's version": {
+			gate: changedGate{v: 3, Grace: "drain"},
+		},
+		"a gate carrying its changed apply's field and an ordinary one beneath it": {
+			gate: changedGate{v: 3, Grace: "drain", Colour: "violet"},
+		},
+		"a gate carrying its changed apply's field, stamped at the base version": {
+			gate: changedGate{v: 1, Grace: "drain"}, refuse: "at record version 1, want 3",
+		},
+		"a gate carrying nothing new, stamped above the base": {
+			gate: changedGate{v: 3}, refuse: "at record version 3, want 1",
+		},
+		"a gate carrying an ordinary versioned field and no changed apply": {
+			gate: changedGate{v: 2, Colour: "violet"}, refuse: "above its own changed apply",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := statelogtest.Stamped(t, func(*testing.T) statelogtest.Candidate {
+				c := control()
+				c.Domain = gateChangedDomain{}
+				c.Rows = rowsOver(c.Domain)
+				c.Fields = gateFields
+				c.Write = gateWrite(tc.gate)
+				return c
+			})
+			switch {
+			case tc.refuse == "" && err != nil:
+				t.Fatalf("the suite refused %s: %v", name, err)
+			case tc.refuse != "" && err == nil:
+				t.Fatalf("the suite passed %s", name)
+			case tc.refuse != "" && !strings.Contains(err.Error(), tc.refuse):
+				t.Errorf("the suite refused %s, but for something else: %v", name, err)
+			}
+		})
+	}
+}
+
+// gateFields is the control's table once its eviction's apply has changed: the
+// widget's colour at 2, as ever, and a field only a gate carries at 3, marked
+// as the change to what the gate's apply does.
+var gateFields = statelog.RecordFields{
+	controlFields[0],
+	{Name: "eviction.Grace", Since: 3, Path: []string{"grace"}, Gate: true},
+}
+
+// gateChangedDomain is the control at the build that reads its changed gate.
+type gateChangedDomain struct{ controlDomain }
+
+func (gateChangedDomain) RecordVersion() int { return 3 }
+
+// changedGate is an eviction as the write path publishes it, stamped at v
+// whatever it carries — the arms above choose both.
+type changedGate struct {
+	controlGate
+	v      int
+	Grace  string `json:"grace,omitempty"`
+	Colour string `json:"colour,omitempty"`
+}
+
+// gateWrite is a write path that publishes one eviction, as a node gate.
+func gateWrite(gate changedGate) func(context.Context, *statelog.Publisher, store.ReplicatedReader) error {
+	return func(ctx context.Context, pub *statelog.Publisher, _ store.ReplicatedReader) error {
+		const node = "evicted-node"
+		opID := "gate-evict-" + node
+		subject := statelog.Subject{Kind: controlGateKind, ID: node}
+		scope := statelog.ScopeSet{Paths: []string{controlGateKind}}
+		_, err := pub.Publish(ctx, statelog.Request{
+			Subject: subject, Scope: scope, OpID: opID,
+			Pattern: statelog.PatternArbitrated, NodeGate: true,
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				gate.controlGate = controlGate{
+					Envelope: statelog.Envelope{
+						V: gate.v, Kind: controlGateKind, Subject: subject, OpID: opID,
+						Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
+					},
+					Node: node,
+				}
+				payload, err := json.Marshal(gate)
+				return statelog.Decision{Payload: payload}, err
+			},
+		})
+		return err
 	}
 }
 
@@ -819,12 +926,23 @@ func (nothingReplicated) Tables() map[string]statelog.TableClass {
 }
 
 // appendOnly writes a new row per delivery, so a redelivery is visible.
-type appendOnly struct{ controlApplier }
+// countingApplier is the liar: it writes the right ROW for every delivery and
+// the wrong VALUE, incrementing a column each time it sees one.
+//
+// THAT IS THE SHAPE A REAL NON-IDEMPOTENT APPLIER TAKES. An applier that
+// inserted a new row per delivery would be caught by counting rows, which the
+// suite did until this commit; the failure a content comparison exists to
+// catch is the one where the shape is right and the values are not — a
+// redelivery that increments, a clock that is read, a node id that is stamped.
+// Two nodes then hold the same number of rows and disagree about what is in
+// them, which is precisely what nobody notices.
+type countingApplier struct{ controlApplier }
 
-func (appendOnly) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO control_widgets (id, version) VALUES (?, ?)`,
-		fmt.Sprintf("%s-%d", rec.Subject.ID, rec.Position.Seq), rec.Position.Packed())
+func (countingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO control_widgets (id, version) VALUES (?, 1)
+		ON CONFLICT (id) DO UPDATE SET version = version + 1`,
+		rec.Subject.ID)
 	return 1, err
 }
 

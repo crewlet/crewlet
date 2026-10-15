@@ -12,6 +12,7 @@
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { DESTINATIONS } from "../nav.ts";
+import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
 import { resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
@@ -144,6 +145,30 @@ export function score(text: string, query: string): number {
   return (i === 0 ? 0 : 100 + i) + t.length / 100;
 }
 
+/**
+ * How well a field matches a query WORD BY WORD, lower is better, or -1: the
+ * whole query as [score] reads it, or else every word of it the start of some
+ * word of the field — so "two step" finds "two-step verification" and "my
+ * account" finds "my account" typed with a space too many. Ranked after every
+ * whole match, which is the reader's own spelling of the field.
+ */
+export function wordScore(text: string, query: string): number {
+  const whole = score(text, query);
+  if (whole >= 0) return whole;
+  const wanted = wordsOf(query);
+  if (wanted.length < 2) return -1;
+  const own = wordsOf(text);
+  return wanted.every((w) => own.some((o) => o.startsWith(w))) ? 1000 + text.length / 100 : -1;
+}
+
+/** A field's words, lowercase, split at anything that is not a letter or a digit. */
+function wordsOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
 /** One row the palette offers, before it is drawn. */
 export interface Hit {
   id: string;
@@ -183,6 +208,43 @@ function ranked<T>(
 }
 
 /**
+ * The ranked matches of a list whose fields come in TIERS, best first, capped:
+ * an item matched in an earlier tier outranks every item matched only in a
+ * later one, whatever the scores, and within a tier [wordScore] orders them.
+ */
+function rankedInTiers<T>(
+  items: readonly T[],
+  query: string,
+  tiers: (item: T) => readonly (readonly string[])[],
+  cap: number,
+): T[] {
+  const scored: { item: T; tier: number; s: number }[] = [];
+  for (const item of items) {
+    if (!query) {
+      scored.push({ item, tier: 0, s: 0 });
+      continue;
+    }
+    const fields = tiers(item);
+    for (let tier = 0; tier < fields.length; tier++) {
+      const s = Math.min(
+        ...(fields[tier] ?? []).map((f) => {
+          const v = wordScore(f, query);
+          return v < 0 ? Infinity : v;
+        }),
+      );
+      if (Number.isFinite(s)) {
+        scored.push({ item, tier, s });
+        break;
+      }
+    }
+  }
+  return scored
+    .sort((a, b) => a.tier - b.tier || a.s - b.s)
+    .slice(0, cap)
+    .map((x) => x.item);
+}
+
+/**
  * Where the reader just was, most recent first — what an empty palette should
  * offer, because the likeliest place to go is the one they just left.
  */
@@ -196,15 +258,51 @@ export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
   }));
 }
 
-/** The screens, matched by name. */
-export function destinationHits(query: string, nav: Navigator, cap: number): Hit[] {
-  return ranked(DESTINATIONS, query, (d) => [d.label], cap).map((d) => ({
+/**
+ * Who a destination's lock is read for: nobody signed in, the access of
+ * somebody who is, or `null` while the viewer has not said — when nothing is
+ * claimed either way, since a lock claimed on a guess is a refusal nobody made.
+ */
+export type Standing = { anonymous: true } | { anonymous: false; grants: readonly string[] } | null;
+
+/**
+ * The screens, matched by name — and then by the words a reader looks for one
+ * by ([Destination.keywords]), so "password" or "2fa" finds Account. A label
+ * match always ranks first, so a screen called what was typed is never pushed
+ * under one that merely holds it; the hint's prose is never searched.
+ *
+ * A SCREEN THE READER HOLDS NONE OF THE ACCESS FOR SAYS WHAT WOULD OPEN IT,
+ * and only then: "needs a token" named a credential a person signing in has no
+ * use for, and was drawn beside every guarded row for a reader who already
+ * held the access. To a reader NOBODY SIGNED IN it says "needs sign-in", the
+ * step before any access — naming one would tell them to hold something before
+ * they are anybody. To a reader who is, it names the access ("needs Tracker
+ * access").
+ */
+export function destinationHits(
+  query: string,
+  nav: Navigator,
+  cap: number,
+  standing: Standing,
+): Hit[] {
+  return rankedInTiers(DESTINATIONS, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => ({
     id: `nav-${d.key}`,
     icon: d.icon,
     label: d.label,
-    hint: d.guarded ? `${d.hint} · needs a token` : d.hint,
+    hint: lockedHint(d.hint, d.grants, standing),
     go: () => nav.to(d.path),
   }));
+}
+
+/** A destination's hint, and what it needs where the reader lacks it. */
+function lockedHint(
+  hint: string,
+  grants: readonly Grant[] | undefined,
+  standing: Standing,
+): string {
+  if (standing === null || !grants || grants.length === 0) return hint;
+  if (standing.anonymous) return `${hint} · needs sign-in`;
+  return holdsAny(standing.grants, grants) ? hint : `${hint} · needs ${accessNames(grants)} access`;
 }
 
 /**
@@ -323,14 +421,15 @@ export function commandHits(
   query: string,
   actions: {
     copyLink: () => void;
-    setToken: () => void;
+    signIn: () => void;
     clearRecents: () => void;
     showKeys: () => void;
     /** Step into the list of themes; the palette stays open. */
     changeTheme: () => void;
     /** The name of the theme in effect, for the row's hint. */
     themeName: string;
-    switchProject: () => void;
+    /** Open the project switcher; null where the engine serves no company to switch in. */
+    switchProject: (() => void) | null;
     hash: string;
   },
 ): Hit[] {
@@ -376,18 +475,21 @@ export function commandHits(
       hint: actions.hash,
       go: actions.copyLink,
     },
+    // WHO THIS BROWSER ACTS AS is a sign-in, never a token typed into a page
+    // any script could read back: the session cookie is the only credential
+    // the dashboard holds, and a Tier A token is exchanged for one there.
     {
-      id: "cmd-token",
+      id: "cmd-sign-in",
       icon: "key",
-      label: "Set the API token",
-      hint: "who this browser acts as",
-      go: actions.setToken,
+      label: "Sign in as somebody else",
+      hint: "or with an API token",
+      go: actions.signIn,
     },
     {
       id: "cmd-clear-recents",
       icon: "clock",
       label: "Clear recents",
-      hint: "this browser only",
+      hint: "yours, in this browser",
       go: actions.clearRecents,
     },
     // THE LEGEND HAS A ROW, because `?` is a key and the reader looking for
@@ -399,7 +501,7 @@ export function commandHits(
       hint: "every key, and where it works",
       go: actions.showKeys,
     },
-    switchProjectHit(actions.switchProject),
+    ...(actions.switchProject ? [switchProjectHit(actions.switchProject)] : []),
   );
   return query ? ranked(out, query, (h) => [h.label], out.length) : out;
 }

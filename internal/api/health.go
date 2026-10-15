@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
@@ -28,6 +29,22 @@ const (
 	StatusShuttingDown = "shutting_down"
 )
 
+// The answers [Health.Identity] gives.
+//
+// `ready` once a person is enrolled, `unclaimed` while nobody is — a fresh
+// install, waiting for its first person to be invited or created onto a human
+// seat its company declares; a service account alone signs nobody in with a
+// password, so it does not end the wait — and `unknown` where this node could
+// not read its identity estate, which is never folded into `unclaimed`: a
+// dashboard told nobody is in would give an empty company's guidance to one
+// that may have started. A created person ends the wait as their create
+// lands, before they have spent their first password link.
+const (
+	IdentityReady     = "ready"
+	IdentityUnclaimed = "unclaimed"
+	IdentityUnknown   = "unknown"
+)
+
 // Health is what the /health endpoint and the dashboard's health push both
 // carry — WHOLE, on both.
 //
@@ -46,11 +63,14 @@ const (
 // happening, a read that did not happen, an evaluation that has not run — and
 // each says which.
 //
-// PUBLIC, like every probe: /health is unguarded and the push reaches an
-// anonymous tab. That is why the fleet and the alarm table appear here as
-// COUNTS — how many nodes, how many alarms and the one longest unanswered —
-// and never as their rows: which nodes hold what, and what each alarm
-// measured, are the operator-only `fleet` and `work_retention` answers.
+// PUBLIC on /health, like every probe — an orchestrator has no credential, so
+// the route is on the guard's exemption list — while the push goes to every
+// resolved socket (stream.KindHealth is NeedEverybody, the overview's). The
+// probe is the wider audience and this body is shaped for it: the fleet and
+// the alarm table appear here as COUNTS — how many nodes, how many alarms and
+// the one longest unanswered — and never as their rows: which nodes hold what
+// and what each alarm measured are the `fleet` and `work_retention` answers,
+// each an admin's.
 type Health struct {
 	Status string `json:"status"`
 
@@ -101,6 +121,14 @@ type Health struct {
 	AppliedEpoch int64    `json:"applied_epoch"`
 	Seats        []string `json:"seats"`
 
+	// IdentityDutySeconds maps each identity duty this node armed to the
+	// interval it runs at, in seconds — `{}` on a node that armed none.
+	// Always an object, for Seats' reason: the engine always knows what
+	// it armed, so a null would be a claim this body never has to make. It
+	// is where an operator reads that the retention sweep is running at
+	// all, and at which interval.
+	IdentityDutySeconds map[string]float64 `json:"identity_duty_seconds"`
+
 	// StallLagSeconds is how far behind this node's watched duty is,
 	// present only when it is behind at all: when its last beat is older
 	// than the beat interval it keeps (a second at the shipped lease TTL),
@@ -118,6 +146,19 @@ type Health struct {
 	// served it, so the only evidence of a seat out of service for a week
 	// was a log line re-raised every twenty heartbeats.
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
+
+	// Identity is whether this company has its first person —
+	// [IdentityReady], [IdentityUnclaimed] or [IdentityUnknown]. See
+	// [Identity] for why it is on this body.
+	//
+	// ABSENT where the API was given no [Identity] seam — a suite about
+	// something else. `crewlet run` always wires it, over the identity
+	// estate every data node applies from boot, company or none — which a
+	// node serving this API always is — so a node with no company answers
+	// for the fleet's estate. IT DOES NOT MOVE Status
+	// — a company waiting for its first person is not a node that should
+	// leave rotation.
+	Identity string `json:"identity,omitempty"`
 
 	// Nodes is how many nodes hold a presence lease: the fleet this node's
 	// fan-outs divide their work by. ABSENT WHEN THE PRESENCE READ FAILED,
@@ -143,14 +184,20 @@ type Health struct {
 // HealthAlarms is the alarm table as a public health body can carry it: how
 // many, and which has stood longest.
 type HealthAlarms struct {
-	// Count is how many alarms are firing. Zero is a real zero: the table
-	// was evaluated and nothing holds.
+	// Count is how many alarms are firing, one per kind however many logs
+	// it stands on, which is the count the gauge gives. Zero is a real
+	// zero: the table was evaluated and nothing holds.
 	Count int `json:"count"`
 
 	// Worst names the alarm that has been firing LONGEST
-	// ([statelog.Tracker.Standing]) — the condition that has gone
+	// ([statelog.Tracker.Standing]): the condition that has gone
 	// unanswered longest, since the table asserts no severity of its own.
 	// Absent when nothing is firing.
+	//
+	// A KIND, and no log beside it: an alarm is one per kind, listing the
+	// logs it stands on ([statelog.Alarm.Domains]), and which logs those
+	// are is the admin-only `work_retention` answer this public body
+	// points at rather than restates.
 	Worst string `json:"worst,omitempty"`
 }
 
@@ -241,7 +288,9 @@ func (a *App) health(ctx context.Context) Health {
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
 		SpendHistorySeconds: int(usage.History.Seconds()),
+		IdentityDutySeconds: identityDutySeconds(state),
 	}
+	a.identityOf(ctx, &body)
 	body.StallLagSeconds, body.UnprovenSeconds = stallAndStranded(state)
 	body.Nodes, body.Alarms = fleetCounts(fleet)
 	if coverage, seeded := a.state.SeededFrom(); seeded {
@@ -304,6 +353,18 @@ func heldSeats(state RuntimeState) []string {
 	return state.Seats
 }
 
+// identityDutySeconds is the identity duties a node armed, by name, at the
+// interval each runs at in seconds — an empty object on a node that armed
+// none, never null: the engine always knows what it armed. See
+// [Health.IdentityDutySeconds].
+func identityDutySeconds(state RuntimeState) map[string]float64 {
+	out := make(map[string]float64, len(state.IdentityDuties))
+	for name, every := range state.IdentityDuties {
+		out[name] = every.Seconds()
+	}
+	return out
+}
+
 // stallAndStranded are the two fields present only when there is something to
 // say. A field that is always present and always 0 trains a reader to skip it,
 // which is the one line of the body that must be read when it appears.
@@ -335,10 +396,29 @@ func fleetCounts(fleet FleetState) (*int, *HealthAlarms) {
 	if fleet.Alarms != nil {
 		alarms = &HealthAlarms{Count: len(fleet.Alarms)}
 		if len(fleet.Alarms) > 0 {
-			alarms.Worst = fleet.Alarms[0]
+			// The first is the one standing longest
+			// ([statelog.Tracker.Standing]).
+			alarms.Worst = string(fleet.Alarms[0])
 		}
 	}
 	return nodes, alarms
+}
+
+// identityOf fills in whether the company has its first person, leaving it out
+// where the API was given nothing to ask.
+func (a *App) identityOf(ctx context.Context, body *Health) {
+	if a.identity == nil {
+		return
+	}
+	enrolled, err := a.identity(ctx)
+	switch {
+	case err != nil:
+		body.Identity = IdentityUnknown
+	case enrolled:
+		body.Identity = IdentityReady
+	default:
+		body.Identity = IdentityUnclaimed
+	}
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.
@@ -409,6 +489,15 @@ func judgeReadiness(node string, configured bool, state RuntimeState, work *Work
 	return body, http.StatusServiceUnavailable
 }
 
+// NodeStatus is the node posture this body reports — [Health.Status] — which
+// is what a socket's own posture is decided from ([framePosture]).
+//
+// A METHOD, so the live channel can carry this body WHOLE and still decide its
+// posture from the same reading: internal/api/stream cannot name this type
+// (this package imports it), and a second, narrower type declared there is how
+// the push came to carry three fields of a body whose rest a query answered.
+func (h Health) NodeStatus() string { return h.Status }
+
 // streamHealth is the shared tick's view of the same facts: the WHOLE body.
 //
 // A CONTEXT OF ITS OWN, and this is one of the few places that is right: the
@@ -416,7 +505,7 @@ func judgeReadiness(node string, configured bool, state RuntimeState, work *Work
 // bounded rather than Background alone, because the posture and presence reads
 // underneath reach the coordination plane and a push tick must not outlive the
 // interval that will fire the next one.
-func (a *App) streamHealth() any {
+func (a *App) streamHealth() stream.Health {
 	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
 	defer cancel()
 	return a.health(ctx)

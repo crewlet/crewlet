@@ -198,14 +198,17 @@ func (b Blocks) Empty() bool {
 
 // Request is one turn's worth of context to prefetch against.
 type Request struct {
-	// Seat is the agent whose prompt this is.
+	// Seat is the agent whose prompt this is. Its handle is what its
+	// episodes, skills and counterparty profiles are keyed on (see
+	// internal/learning's package doc).
 	Seat *org.Role
 
-	// AgentID is the seat's derived runtime id, which is what the diary
-	// and the episode store are keyed on.
+	// AgentID is the seat's derived runtime id, which is what the diary and
+	// the onboarding marker are keyed on.
 	AgentID string
 
-	// Org is the company, for the knowledge search's read scope.
+	// Org is the company, for the knowledge search's read scope and the
+	// onboarding hint.
 	Org *org.Organization
 
 	// Task is the trigger as the turn describes it to its executor: the
@@ -236,7 +239,7 @@ type Request struct {
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke. Several on a coalesced trigger, and every one of them gets a
 	// profile: a turn woken by four people is not a turn about the last
-	// of them.
+	// of them. A colleague is named by their handle.
 	Senders []learning.Subject
 
 	// RequiresRecon says the trigger is a POINTER rather than the
@@ -561,7 +564,7 @@ func recoverKnowledge(b *Blocks) {
 	}
 }
 
-// recoverThread is [recoverCounted] for the thread block, which reports four
+// recoverThread is [recoverInto] for the thread block, which reports four
 // facts beside its prose.
 //
 // ALL OF THEM GO WITH IT. A render that panicked half way surfaced nothing,

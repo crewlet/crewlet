@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -74,6 +75,10 @@ type RouterOptions struct {
 	// answers in-process.
 	Seams ServerSeams
 
+	// Envelopes sign every request this node sends and verify every reply
+	// it is sent — required: see [Envelopes].
+	Envelopes *Envelopes
+
 	// Now is the clock the suspect cooldown and the admission cache read,
 	// injected for tests. Nil is the wall clock.
 	Now func() time.Time
@@ -106,6 +111,7 @@ type Router struct {
 	local     LocalBackends
 	session   *Session
 	seams     ServerSeams
+	env       *Envelopes
 	now       func() time.Time
 
 	// readBudget and writeBudget are [ReadAttempt] and [writeAttempt], and
@@ -144,6 +150,8 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	case opts.Self == "":
 		return nil, errors.New("estate: a router needs this node's id — it is " +
 			"what a serving node's log names, and what the router never asks")
+	case opts.Envelopes == nil:
+		return nil, errNoEnvelopes
 	}
 	now := opts.Now
 	if now == nil {
@@ -151,7 +159,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	}
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
-		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
+		local: opts.Local, session: opts.Session, seams: opts.Seams, env: opts.Envelopes, now: now,
 		readBudget: ReadAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
 		suspect: map[string]time.Time{},
 	}, nil
@@ -383,12 +391,12 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		return nil, fmt.Errorf("estate: %s: read who holds the estate: %w", spec.name, err)
 	}
 	for _, node := range r.order(nodes) {
-		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false)
+		rep, got, err := r.askFor(ctx, spec, actor, x, node, budget, false)
 		if err != nil {
 			return nil, err
 		}
-		if !answered {
-			if err := r.silent(ctx, spec, node, w); err != nil {
+		if !got.answered() {
+			if err := r.unheard(ctx, spec, node, got, w); err != nil {
 				return nil, err
 			}
 			continue
@@ -403,7 +411,14 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	if w.fallback != nil {
 		return w.fallback.value, w.fallback.err
 	}
-	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; ")}
+	// WHO WAS ASKED AND WHAT EACH SAID GOES TO THE LOG HERE, the one place
+	// that knows it: every reader of the refusal tells its caller in fixed
+	// words (internal/agent/builtin's Condition), because the detail names
+	// nodes and their copies' faults, and a model's prompt or a person's
+	// screen can act on neither.
+	detail := strings.Join(w.reasons, "; ")
+	log.WarnContext(ctx, "estate_unserved", "op", spec.name, "detail", detail)
+	return nil, &ErrUnserved{Detail: detail}
 }
 
 // lastResort asks the copies the walk passed over for lagging their logs —
@@ -422,13 +437,13 @@ func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x e
 	lagging := w.lagging
 	w.lagging = nil
 	for _, node := range lagging {
-		rep, answered, askErr := r.askFor(ctx, spec, actor, x, node, budget, true)
+		rep, got, askErr := r.askFor(ctx, spec, actor, x, node, budget, true)
 		if askErr != nil {
 			return nil, true, askErr
 		}
-		if !answered {
-			if silentErr := r.silent(ctx, spec, node, w); silentErr != nil {
-				return nil, true, silentErr
+		if !got.answered() {
+			if unheardErr := r.unheard(ctx, spec, node, got, w); unheardErr != nil {
+				return nil, true, unheardErr
 			}
 			continue
 		}
@@ -473,32 +488,66 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 // generation its log abandoned. err is set only where the request could not be
 // made at all.
 func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
-	node string, budget time.Duration, acceptLagging bool) (reply, bool, error) {
+	node string, budget time.Duration, acceptLagging bool) (reply, heard, error) {
 
 	floors := r.floorsFor(spec)
-	rep, answered, err := r.ask(ctx, node, request{
+	rep, got, err := r.ask(ctx, node, request{
 		Op: spec.name, Args: x.encoded, Actor: actor,
 		Floors: floors, From: r.self, AcceptLagging: acceptLagging,
 	}, budget)
 	if err != nil {
-		return reply{}, false, fmt.Errorf("estate: %s: %w", spec.name, err)
+		return reply{}, got, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
-	if answered {
+	if got.answered() {
 		r.session.Forget(named(floors, rep.Obsolete)...)
 		x.record(rep)
 	}
-	return rep, answered, nil
+	return rep, got, nil
 }
 
-// silent is what a node that did not answer costs the walk: nothing more for
-// a class that may be repeated, the request itself for a once-write — which
-// that node may have run — and the caller's own ending.
-func (r *Router) silent(ctx context.Context, spec *opSpec, node string, w *walk) error {
+// heard is what came back from one node: nothing at all, a reply this node may
+// believe, or one it may not — whose reason is the string.
+type heard struct {
+	// replied is whether anything came back.
+	replied bool
+
+	// unbelieved is why what came back is not believed, empty for a reply
+	// that verified and answers this request ([Envelopes.openReply]).
+	unbelieved string
+}
+
+// answered reports a reply this node believes.
+func (h heard) answered() bool { return h.replied && h.unbelieved == "" }
+
+// unheard is what a node that gave no reply this node believes costs the walk:
+// nothing more for a class that may be repeated, the request itself for a
+// once-write — which that node may have run, whatever it said or did not say
+// — and the caller's own ending.
+//
+// A REPLY THAT IS NOT BELIEVED IS NO ANSWER, never an answer of "did not run":
+// a refusal the fleet signed for another request is exactly what somebody
+// would replay to make a once-write run twice. But the node that sent it is
+// not SILENT — it is up, and its presence lease says so — so it is not
+// suspected, which would only move it down the order for something its key
+// configuration, not its health, explains.
+func (r *Router) unheard(ctx context.Context, spec *opSpec, node string, h heard, w *walk) error {
+	if h.replied {
+		log.WarnContext(ctx, "estate_reply_refused", "node", node, "op", spec.name,
+			"detail", h.unbelieved)
+	}
 	if spec.class == opOnceWrite {
+		if h.replied {
+			return fmt.Errorf("%w (%s, asked of %s: %s)", ErrOutcomeUnknown, spec.name,
+				node, h.unbelieved)
+		}
 		return fmt.Errorf("%w (%s, asked of %s)", ErrOutcomeUnknown, spec.name, node)
 	}
 	if ctx.Err() != nil {
 		return fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
+	}
+	if h.replied {
+		w.note("%s: %s", node, h.unbelieved)
+		return nil
 	}
 	w.note("%s: no answer", node)
 	return nil
@@ -599,36 +648,40 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 	return r.session.Floors([]string{spec.floorStream})
 }
 
-// ask sends one request to one node. answered is false for a node that said
-// nothing — suspected, and reported to the placement — and err is set only
-// where the request could not be made at all, which no other node would fare
-// better with.
+// ask sends one request to one node, signed and bound to an id of its own.
+// heard says whether anything came back and whether it is believed: a node
+// that said nothing is suspected and reported to the placement, and one whose
+// reply does not verify, or answers another request, is heard and not
+// believed. err is set only where the request could not be made at all, which
+// no other node would fare better with, or where the fleet signed a reply this
+// build cannot decode.
 func (r *Router) ask(ctx context.Context, node string, req request, budget time.Duration) (
-	reply, bool, error) {
+	reply, heard, error) {
 
 	attempt, cancel := attemptContext(ctx, budget)
 	defer cancel()
+	req.ID = signedask.NewID()
 	req.Deadline = deadlineOf(attempt)
-	raw, err := json.Marshal(req)
+	sealed, err := r.env.sealRequest(req)
 	if err != nil {
-		return reply{}, false, fmt.Errorf("encode the request: %w", err)
+		return reply{}, heard{}, err
 	}
-	replies, err := r.queue.Ask(attempt, Subject(node), raw, 1)
+	replies, err := r.queue.Ask(attempt, Subject(node), sealed, 1)
 	if err != nil {
 		// THE ASK COULD NOT BE MADE AT ALL — a queue that is not live,
 		// a request over the size limit.
-		return reply{}, false, err
+		return reply{}, heard{}, err
 	}
 	if len(replies) == 0 {
 		r.markSuspect(node)
-		return reply{}, false, nil
+		return reply{}, heard{}, nil
 	}
-	var rep reply
-	if err := json.Unmarshal(replies[0], &rep); err != nil {
-		return reply{}, false, fmt.Errorf("%s answered something this build cannot decode: %w",
+	rep, why, err := r.env.openReply(replies[0], req.ID)
+	if err != nil {
+		return reply{}, heard{}, fmt.Errorf("%s answered something this build cannot decode: %w",
 			node, err)
 	}
-	return rep, true, nil
+	return rep, heard{replied: true, unbelieved: why}, nil
 }
 
 // order is the order the data nodes are asked in: sticky first, then

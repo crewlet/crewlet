@@ -74,6 +74,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -107,10 +109,11 @@ const (
 	RoleSeats NodeRole = "seats"
 
 	// RoleWorkers runs the company-wide singleton duties behind
-	// worker:{duty} leases — the scheduler tick, the retention sweep, the
-	// sandbox waiter, skill clustering and curation, seat-subscription
-	// creation. Exactly one node does each at a time; a fleet with none of
-	// these does none of them.
+	// worker:{duty} leases — the scheduler tick, the maintenance sweep, the
+	// sandbox waiter, the integration reconcile, the learning passes, the
+	// state logs' trim, the embedding duty and the identity sweep. Exactly
+	// one node does each at a time; a fleet with none of these does none of
+	// them.
 	RoleWorkers NodeRole = "workers"
 )
 
@@ -528,9 +531,27 @@ func labelsFromMeta(raw any) map[string]string {
 	}
 }
 
-// Seat pairs a seat handle with where that seat is allowed to run.
+// Seat is one seat as the host deals with it: what it is called, what it IS,
+// and where it is allowed to run.
 type Seat struct {
-	Handle    string
+	// ID is the seat's durable identity, and it is what every durable name
+	// for this seat is built from — its lease resource, its mailbox subject
+	// and its consumer group: the agent id derived from its handle
+	// (ADR-0013).
+	//
+	// CARRIED RATHER THAN RESOLVED, which is the whole reason it is a field
+	// here. A host has to be able to RELEASE a seat, and releasing it means
+	// naming its lease and detaching its mailbox — on exactly the paths
+	// where the company view may be gone: a shutdown, a failed apply, an
+	// acquire whose hook raised. A resolver would answer "unknown" there and
+	// leave the seat held by a node that is no longer serving it.
+	ID uuid.UUID
+
+	// Handle is what the seat answers to, and it is what every log line,
+	// every hook and every screen names it by. ID is derived from it
+	// (ADR-0013), and the lease and the mailbox are named by the ID.
+	Handle string
+
 	Placement SeatPlacement
 }
 

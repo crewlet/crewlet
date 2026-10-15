@@ -42,9 +42,14 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type {
   WorkActivityRecord,
   WorkChange,
+  WorkChecklistRow,
   WorkFieldDef,
   WorkFieldValue,
   WorkGroup,
+  WorkInboxNotice,
+  WorkItemDetail,
+  WorkItemRef,
+  WorkLink,
   WorkProjectRow,
   WorkProjectTag,
   WorkStatus,
@@ -57,6 +62,132 @@ import type {
 import { CHANGES, GROUP_AXES, type WorkViewShape } from "~/contract/work.ts";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info";
+
+// ---------------------------------------------------------------------------
+// Where an item is
+// ---------------------------------------------------------------------------
+
+/**
+ * What it takes to address a task: its id, the key it carries, and whether
+ * that key is somebody else's.
+ *
+ * Every row shape the engine lists a task in carries the three, under the
+ * names of the key they qualify — `key`/`key_collision` on a row, a hit and a
+ * link, `subject_key`/`subject_key_collision` on a feed record and a notice
+ * (whose id is its `task`, not its subject), `task_key`/`task_key_collision` on
+ * a checklist item. The adapters below turn each into this, so a screen never
+ * pairs an id with the wrong flag by hand.
+ */
+export interface ItemRef {
+  id: string;
+  key?: string;
+  key_collision?: boolean;
+}
+
+/**
+ * The address that opens a task: its KEY, unless another task claimed that
+ * key first, and then its ID.
+ *
+ * A KEY TWO TASKS HOLD OPENS THE ONE THAT CLAIMED IT, on every node — the
+ * engine resolves a key through its directory before it looks at a row, so
+ * every link, chat message and comment written against the claimant keeps
+ * reaching it. The task that did not claim it is flagged `key_collision`, and
+ * a link, a peek, a selection or a tool call built from its key lands on the
+ * claimant: every screen drew two `ENG-7`s and both opened the same task. Its
+ * id is the one address that reaches it, and the engine's item route takes an
+ * id as readily as a key.
+ *
+ * THE KEY EVERYWHERE ELSE, because it is what a person reads, pastes into chat
+ * and types into a tool call — a page full of uuids is a page nobody can talk
+ * about. And the id when a row carries no key at all, since an empty segment
+ * addresses nothing.
+ *
+ * THE ONE PLACE THIS IS WRITTEN. The engine states the same sentence as
+ * `tracker.ItemAddress`.
+ */
+export function itemAddress(ref: ItemRef): string {
+  return ref.key && !ref.key_collision ? ref.key : ref.id;
+}
+
+/** Where a task's page is: `#/work/{address}`. See [itemAddress]. */
+export function itemPath(ref: ItemRef): string[] {
+  return ["work", itemAddress(ref)];
+}
+
+/**
+ * Where a project's page is: `#/work/{KEY}`.
+ *
+ * A PROJECT KEY IS ITS ADDRESS — no two projects hold one — so this is the
+ * route and nothing more. It is a function rather than an array written at the
+ * call site so that no route into the tracker is spelled with a key by hand:
+ * an item's route is the one shape that must never be.
+ */
+export function projectPath(key: string): string[] {
+  return ["work", key];
+}
+
+/** A feed record's subject, as a task to address. */
+export function subjectItem(row: {
+  subject_id: string;
+  subject_key?: string;
+  subject_key_collision?: boolean;
+}): ItemRef {
+  return { id: row.subject_id, key: row.subject_key, key_collision: row.subject_key_collision };
+}
+
+/**
+ * The task an inbox notice is about, as a task to address.
+ *
+ * ITS `task`, NEVER ITS SUBJECT. A notice about a task commit is about its own
+ * subject, but a `prioritised` notice's subject is the PERSON whose list a
+ * lead reordered, and its key is the task's — read as a subject, the one
+ * notice whose key could open another task had a person's handle for an id,
+ * and its link went to `#/work/{handle}`. A notice naming no task keeps its
+ * key as its only address, and the engine never flags one.
+ */
+export function noticeItem(notice: WorkInboxNotice): ItemRef {
+  return {
+    id: notice.task ?? "",
+    key: notice.subject_key,
+    key_collision: notice.subject_key_collision,
+  };
+}
+
+/** The task a checklist item sits on. */
+export function checklistTask(row: WorkChecklistRow): ItemRef {
+  return { id: row.task, key: row.task_key, key_collision: row.task_key_collision };
+}
+
+/** The other end of an item's link. */
+export function linkedItem(link: WorkLink): ItemRef {
+  return { id: link.other, key: link.key, key_collision: link.key_collision };
+}
+
+/** The task an item answer is about — its flag is on the ANSWER, beside `blocked`. */
+export function detailItem(detail: WorkItemDetail): ItemRef {
+  return { id: detail.task.id, key: detail.task.key, key_collision: detail.key_collision };
+}
+
+/**
+ * The task a TURN is charged to. A turn's work item is the turn's own record,
+ * not a tracker row, so it carries no `key_collision`: its key may be one
+ * another task claimed first, and asked for or opened by that key the claimant
+ * answers. So a native task is addressed by its id, which every route and
+ * question about a task takes, and a vendor item — whose id is the vendor's,
+ * which none of them takes — by its key. The key is still what a turn SHOWS.
+ */
+export function turnItem(ref: WorkItemRef): ItemRef {
+  return ref.backend === "native" && ref.id ? { id: ref.id } : { id: ref.id, key: ref.key };
+}
+
+/**
+ * Whether an answer about the task with this `id` and `key` is the answer to a
+ * question asked by `address` — the id or the key ([itemAddress]) — rather
+ * than one still held for the task a seat was on a moment ago.
+ */
+export function answersAddress(address: string, id: string, key: string): boolean {
+  return address !== "" && (address === id || address === key);
+}
 
 // ---------------------------------------------------------------------------
 // The closed sets
@@ -530,23 +661,19 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  * PERSON by handle, rather than somebody's own prose: a reorder of somebody's
  * list (`tracker.prioritisedWake`, "<person> put ENG-1 at position 1 of your
  * priorities"). Every other excerpt is a comment or a description, whose
- * words are whoever wrote them — and a purge's line names the operator's
- * CREDENTIAL (`tracker.purgeExcerpt`; the purge route binds no seat), which
- * no screen renames and every row draws as "An operator".
+ * words are whoever wrote them — and a purge's line names the credential's
+ * login (`tracker.purgeExcerpt`), which no screen renames.
  */
 export const ENGINE_SENTENCES: ReadonlySet<string> = new Set(["prioritised"]);
 
 /**
  * Who made a change, as the handle the engine's own sentence names them by:
- * the person a bound token acted as, else the author where the author is a
- * seat — never a credential's id.
+ * the author where the author is a seat — an agent, or a person the identity
+ * directory binds to one, whom the engine records AS that seat
+ * (`iam.ActorFor`) — and nobody for an `operator`, whose name is a login no
+ * chart holds.
  */
-export function authorOf(change: {
-  actor?: string;
-  actor_kind?: string;
-  actor_seat?: string;
-}): string {
-  if (change.actor_seat) return change.actor_seat;
+export function authorOf(change: { actor?: string; actor_kind?: string }): string {
   return change.actor_kind === "operator" ? "" : (change.actor ?? "");
 }
 
@@ -680,13 +807,13 @@ export function reapplySentence(projects: readonly string[]): string {
 function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext): string {
   if (record.subject_kind !== "person" || !text) return text;
   const owner = record.subject_id;
-  // THE HANDLE IS THE ONLY IDENTITY THAT CAN MATCH HERE, and the other one is
-  // named rather than compared. A viewer has two — `/viewer` returns the
-  // operator id a token maps to AND the seat handle bound to it
-  // (`lib/viewer.ts`) — but a person subject's id is the SEAT HANDLE
-  // (`tracker.PersonSubject`), so a comparison against the operator id could
-  // never be true and would be a branch with no reachable case. An operator
-  // with no seat bound to them owns no queue for this to be about.
+  // THE RECORD'S OWNER IS THE ONLY IDENTITY THAT CAN MATCH HERE. A person
+  // subject's id is the name their own record is kept under
+  // (`tracker.PersonSubject`, `iam.RecordOwner`) — their seat when the
+  // directory binds them to one, their login when it does not — which is what
+  // `/viewer` answers as `owner` (`lib/viewer.ts`) and what a surface passes
+  // as [LabelContext.viewer]. Compared against the seat handle alone, an
+  // unbound reader's own queue read as somebody else's.
   if (!owner || owner === ctx.viewer) return text;
   const name = ctx.seatName?.(owner) ?? owner;
   // THE POSSESSIVE FIRST, so "your priorities" does not become "<name> s
@@ -1579,21 +1706,18 @@ export function buildItemsParams(args: {
 /**
  * The work one person is waiting on an answer for, as `work_items` asks it.
  *
- * `viewer` IS THAT PERSON, and it is what makes the question whole. A question
- * somebody put through their own credential is authored by the TOKEN rather
- * than their seat, and the engine gives an `asked_by` its second name only for
- * the reader it knows both names of — the viewer (`forViewer` in
- * `internal/tracker/expand.go`), resolved from the chart. Asked without it,
- * "Asked by me" held every question a person asked as a colleague and none
- * they asked through their assistant. On somebody else's day the viewer is
- * THEM, for the same reason: the person asked about owns the two names, never
- * the credential in the reader's hand.
+ * `asked_by` ALONE. A question is recorded under its asker's own record name
+ * (`iam.ActorFor`): the seat for a person the directory binds to one, the
+ * login for anybody else — so one name finds every question a person asked,
+ * through a colleague's turn or their own assistant alike, and there is no
+ * second name for a `viewer=` to supply. The engine refuses that key on
+ * every question: whose record a read is about is never a typed name.
  *
  * ONE PLACE for the list the section draws and the count its tab carries, so
  * the two cannot ask different questions.
  */
-export function askedByParams(handle: string): { asked_by: string; viewer: string } {
-  return { asked_by: handle, viewer: handle };
+export function askedByParams(handle: string): { asked_by: string } {
+  return { asked_by: handle };
 }
 
 /** [buildItemsParams] before its lock, which is every other rule it has. */
@@ -2292,8 +2416,8 @@ export function drawnRows(
       // A LABEL BOARD DRAWS ONE TASK IN EVERY COLUMN IT IS TAGGED INTO, and the
       // stepper visits it where it is first drawn — the engine's own rule for
       // `around=` — rather than twice.
-      if (seen.has(row.key)) continue;
-      seen.add(row.key);
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
       out.push(row);
     }
   }

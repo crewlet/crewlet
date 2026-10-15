@@ -39,18 +39,6 @@ import (
 //	          notification, because being told what to do next by somebody
 //	          else is news and re-ordering your own list is not.
 //
-// # WHOSE record it is, which is not who wrote it
-//
-// All three authorities are about a PERSON, and a person is not the same thing
-// as the credential in their hand: a write made through somebody's own API
-// token is attributed to the TOKEN with author kind `operator`, deliberately,
-// because a tracker whose author field is chosen by the writer is not an audit
-// trail (see internal/api/operator). So the subject these verbs key on is
-// [Writer.Record] — the seat the credential is bound to — while the author on
-// every record they publish stays [Writer.Actor]. Keyed on the actor instead,
-// a founder marking their own inbox through their own assistant wrote a second
-// person record named after their credential.
-//
 // # Why every verb reads the stored row first
 //
 // The three write disjoint parts of one document, so each has to carry the
@@ -78,35 +66,35 @@ import (
 // A VALUE RATHER THAN A BOOL on the writer, because "may I set this person's
 // priorities" is a question about a PAIR — who is asking and about whom — and
 // the answer for one pair says nothing about another.
+//
+// # It states the DECISION, not its inputs
+//
+// Both fields used to be inputs: `Lead` from an org-chart lookup, and
+// `Person` from "the actor is not a seat" — which existed because an
+// operator's actor was an API TOKEN's name, never a handle in the chart, so
+// `Lead` answered false for every operator by construction and the one shipped
+// surface for `set_priorities` refused the founder every time.
+//
+// Both are gone because the premise is: an actor is a PRINCIPAL now, an
+// operator holds permissions, and [authz.ClassOwnOrLead] answers "the owner,
+// their lead, or the admin path" in one place for every surface. What is left
+// here is the half a chart cannot know — which VERB each answer unlocks — and one
+// invariant no caller may waive: a seat never writes a colleague's record.
 type PersonAuthority struct {
-	// Lead reports whether the actor leads the handle being written.
-	// Resolved by the caller from the org chart, because this package has
-	// no chart.
-	Lead bool
+	// Authorized reports a caller the authority table admitted for this
+	// person's record: the owner, whoever leads them, or an admin.
+	Authorized bool
 
-	// Person reports an actor acting as a HUMAN or through a person's own
-	// credential, rather than as a seat.
+	// Agent reports a caller acting AS A SEAT rather than as a human.
 	//
-	// # Why this is a second authority rather than a special case of Lead
-	//
-	// Because it is a different question, and the chart cannot answer it.
-	// An operator's actor is an API TOKEN's name — it is not a handle in
-	// the chart, so no ancestor walk can ever match it, and `Lead` is
-	// false for every operator by construction.
-	//
-	// Without it the ONE shipped surface for this verb could not use it.
-	// `set_priorities` is registered on the operator MCP alone; an
-	// operator could therefore never satisfy `own || Lead`, so a founder
-	// re-ordering an agent's queue through the only tool that exists got
-	// "<token> is not <handle> and does not lead them" every time — while
-	// omitting the handle silently wrote a PERSON RECORD FOR THE TOKEN.
-	//
-	// The rule this restores is the design's own: a person's priorities
-	// are written by the owner, by lead-or-above, by a human, or by an
-	// operator. A SEAT is the one party that may not, which is the whole
-	// point — an agent re-ordering a colleague's list is a hand-off in
-	// disguise, bypassing the guarded take and the reassignment budget.
-	Person bool
+	// THE ONE RULE THIS PACKAGE KEEPS OF ITS OWN, because it is about the
+	// gesture and not about anybody's authority: an agent re-ordering a
+	// colleague's queue is a hand-off in disguise, and it bypasses the
+	// guarded take and the reassignment budget. A seat that LEADS the
+	// person is admitted by the table and refused here, which is the
+	// intended reading — the relation is real and the gesture is still
+	// not an agent's.
+	Agent bool
 }
 
 // MaxSnoozeAhead bounds how far into the future an item may be snoozed.
@@ -188,10 +176,10 @@ func (g InboxGesture) Empty() bool {
 
 // MarkInbox applies one inbox gesture to a person's own record.
 //
-// ONLY ON BEHALF OF THAT PERSON — see the file head — so the handle must be
-// the one this writer IS, and the refusal says so rather than silently writing
-// nothing. Which handle that is comes from [Writer.Record]: a person acting
-// through their own credential is the seat it is bound to, not the token.
+// ONLY ON BEHALF OF THAT PERSON, or by the admin path — see
+// [Writer.ownRecord]. The handle is whoever's record it is as
+// [iam.RecordOwner] names it: a bound person's seat, a credential's own login
+// otherwise.
 //
 // RESOLVED INSIDE THE DECIDE: every notice named is looked up there for the
 // position it sits at, and the gesture is applied to the lists that snapshot
@@ -200,9 +188,9 @@ func (g InboxGesture) Empty() bool {
 // [ErrInboxFull] rather than trimmed, and one that changes nothing publishes
 // nothing.
 func (w *Writer) MarkInbox(ctx context.Context, opID, handle string,
-	gesture InboxGesture) (WriteResult, error) {
+	gesture InboxGesture, authority PersonAuthority) (WriteResult, error) {
 
-	if err := w.ownRecord(handle, "inbox"); err != nil {
+	if err := w.ownRecord(handle, "inbox", authority); err != nil {
 		return WriteResult{}, err
 	}
 	if err := checkInboxGesture(gesture, w.Now()); err != nil {
@@ -318,32 +306,33 @@ type PinGesture struct {
 // against the set it would LEAVE, because that is the set a strip renders: a
 // delta that is small on its own can still be the thirty-third pin.
 func (w *Writer) WritePins(ctx context.Context, opID, handle string,
-	gesture PinGesture) (WriteResult, error) {
+	gesture PinGesture, authority PersonAuthority) (WriteResult, error) {
 
-	if err := w.ownRecord(handle, "pins"); err != nil {
+	if err := w.ownRecord(handle, "pins", authority); err != nil {
 		return WriteResult{}, err
 	}
+	named := handle
 	gesture.Views = gesture.Views.mapped(strings.TrimSpace)
 	switch {
 	case gesture.Views.Empty() && gesture.Favorites.Empty():
 		return WriteResult{}, invalid("this pin gesture for %s names "+
-			"nothing to pin, unpin, star or unstar", handle)
+			"nothing to pin, unpin, star or unstar", named)
 	case gesture.Views.both(), gesture.Favorites.both():
 		return WriteResult{}, invalid("this pin gesture for %s states "+
 			"a whole set and a change to it at once — a caller states one or "+
-			"the other, because whichever won would discard the other", handle)
+			"the other, because whichever won would discard the other", named)
 	}
 	for _, view := range gesture.Views.values() {
 		if strings.TrimSpace(view) == "" {
 			return WriteResult{}, invalid("a pinned view of %s names "+
-				"no view, and a pin with no view points at nothing", handle)
+				"no view, and a pin with no view points at nothing", named)
 		}
 	}
 	for _, favorite := range gesture.Favorites.values() {
 		if favorite.Kind == "" || favorite.ID == "" {
 			return WriteResult{}, invalid("a favourite of %s names "+
 				"kind %q and id %q, and a star with neither points at nothing",
-				handle, favorite.Kind, favorite.ID)
+				named, favorite.Kind, favorite.ID)
 		}
 	}
 	return w.writePerson(ctx, opID, handle, func(_ *sql.Tx, post *Person,
@@ -355,10 +344,10 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 		case len(views) > MaxPinnedViews:
 			return invalid("%s would pin %d views and the maximum "+
 				"is %d — a strip where everything is first has no first; "+
-				"unpin one first", handle, len(views), MaxPinnedViews)
+				"unpin one first", named, len(views), MaxPinnedViews)
 		case len(favorites) > MaxFavorites:
 			return invalid("%s would star %d things and the maximum "+
-				"is %d; unstar one first", handle, len(favorites), MaxFavorites)
+				"is %d; unstar one first", named, len(favorites), MaxFavorites)
 		}
 		post.PinnedViews, post.Favorites = views, favorites
 		return nil
@@ -409,24 +398,20 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	authority PersonAuthority) (WriteResult, error) {
 
 	priorities = cleanHandles(priorities)
-	// THE PERSON, NOT THE CREDENTIAL. A founder re-ordering their own
-	// queue through their own assistant is writing their OWN list, so it
-	// clears the stamp and wakes nobody — measured through the token it
-	// read as somebody else setting their queue, and the founder was
-	// notified that they had been given instructions by themselves.
-	own := w.Record() == handle
+	own := w.Actor == handle
+	actor, named := w.Actor, handle
 	switch {
-	case !own && !authority.Lead && !authority.Person:
+	case !own && (!authority.Authorized || authority.Agent):
 		return WriteResult{}, forbidden("%s is a seat, is not %s and does not "+
 			"lead them, so it cannot set what %s does next — an agent "+
 			"re-ordering a colleague's list is a hand-off in disguise, and it "+
 			"bypasses the guarded take and the reassignment budget. A lead, a "+
 			"human or an operator may",
-			w.Actor, handle, handle)
+			actor, named, named)
 	case len(priorities) > MaxPriorities:
 		return WriteResult{}, invalid("%s's priority list carries "+
 			"%d items and the maximum is %d — a list longer than that is not "+
-			"an order, it is the backlog again", handle, len(priorities),
+			"an order, it is the backlog again", named, len(priorities),
 			MaxPriorities)
 	}
 	return w.writePersonNotifying(ctx, opID, handle, ChangePrioritised,
@@ -438,7 +423,7 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 				return nil, fmt.Errorf("tracker: %s's priority list is at "+
 					"version %d and this reorder was made against %d — read "+
 					"it again and decide from what it says now: %w",
-					handle, post.Version, *ifMatch, ErrStaleVersion)
+					named, post.Version, *ifMatch, ErrStaleVersion)
 			}
 			post.Priorities = priorities
 			// THE STAMP IS WHAT MAKES THIS AUTHORITY VISIBLE ON THE
@@ -457,18 +442,12 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 				// own delivery per call.
 				return nil, nil
 			}
-			// THE PERSON WHO CHOSE IT, NOT THE CREDENTIAL THEY HELD —
-			// the same reading `own` takes above. The stamp is a fact
-			// shown to the person whose queue it is ("Jane put this
-			// order in place"), and a lead reordering a report's queue
-			// from the dashboard writes through their bound token: keyed
-			// on [Writer.Actor] the stamp named the token's id, which is
-			// a secret's label rather than anybody the report knows,
-			// and no screen can resolve it back to a seat. The HISTORY
-			// row this write leaves still names the token with author
-			// kind `operator` — attribution stays the credential; this
-			// is who the queue says decided it.
-			post.PrioritiesSetBy, post.PrioritiesSetAt = w.Record(), at
+			// THE PERSON WHO CHOSE IT, which is the actor: a person
+			// acting through their own credential writes AS the seat the
+			// identity directory binds them to ([iam.ActorFor]), so the
+			// stamp names somebody the report can find in the chart and
+			// never a credential's label.
+			post.PrioritiesSetBy, post.PrioritiesSetAt = w.Actor, at
 			// AND THE WAKE, which is the other half of the same
 			// authority: the stamp is seen by somebody who opens the
 			// screen, and a SEAT has no screen. Being told what to do
@@ -507,6 +486,16 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 		// card. Silence is the honest degradation.
 		return nil, nil
 	}
+	// THE EXCERPT NAMES THE TASK AS ITS READER WOULD OPEN IT, because it is
+	// the line a seat is handed as "what changed": a duplicate of a key
+	// named by the key alone sends the seat to the task that claimed it.
+	// The snapshot's own flag is derived again by [Writer.decide], from the
+	// same snapshot, so the two cannot disagree.
+	collision, err := keyHeldByAnother(ctx, tx, top.Key, top.ID)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read whether key %s opens task %s: %w",
+			top.Key, top.ID, err)
+	}
 	return &Notify{
 		Kind: ChangePrioritised,
 		Snapshot: Snapshot{
@@ -523,36 +512,38 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			StatusGroup: top.StatusGroup,
 			Assignee:    top.Assignee,
 			// THE PERSON, as the stamp names them — see the write above.
-			// A seat woken with "3f9c… put ENG-42 at position 1" is told
-			// its instruction came from a credential it cannot ask.
-			PrioritisedBy: w.Record(),
+			PrioritisedBy: w.Actor,
 			Position:      1,
 		},
 		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
-			w.Record(), top.Key),
+			w.Actor,
+			ItemNamed(top.ID, top.Key, collision)),
 	}, nil
 }
 
 // ownRecord refuses a write on somebody else's half of a person record.
 //
-// AGAINST [Writer.Record] RATHER THAN THE ACTOR, so a person writing through
-// their own credential passes: the record is keyed on who they ARE and the
-// author still names the token they used. Measured the other way, a bound
-// founder's assistant could only ever write the credential's own record and
-// never the founder's.
+// THE OWNER, OR THE ADMIN PATH, AND NEVER AN AGENT. The owner arm is a
+// comparison this package can make on its own; the second is the authority
+// table's answer, and it exists because a departed person's queue has to be
+// unstickable by somebody. What it is NOT is a lead path: a lead re-orders
+// what their report works on ([WritePriorities]) and marking somebody's mail
+// read is a gesture nobody asked a lead to make, which is exactly the line
+// [authz.ClassOwnRecord] draws.
 //
-// THE REFUSAL NAMES THE RECORD THIS WRITER MAY WRITE, not the actor, because
-// those are now two different strings for exactly the caller this message is
-// for — and a refusal naming a token would send a reader looking for a person
-// by that name.
-func (w *Writer) ownRecord(handle, what string) error {
-	if w.Record() == handle {
+// BOTH SIDES ARE HANDLES — the writer's actor ([Writer.As]) and the record's
+// handle as each verb resolved it — and the refusal names both.
+func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error {
+	switch {
+	case w.Actor == handle:
+		return nil
+	case authority.Authorized && !authority.Agent:
 		return nil
 	}
 	return forbidden("%s cannot write %s's %s — it is written on behalf of "+
 		"the person whose it is, and somebody else's hand in it is the one "+
 		"thing it must never allow",
-		w.Record(), handle, what)
+		w.Actor, handle, what)
 }
 
 // checkInboxGesture refuses a gesture no record could honour, before anything
@@ -757,10 +748,12 @@ func applyInboxGesture(p *Person, g InboxGesture,
 		what    string
 	}{{p.Read, "read"}, {p.Unread, "unread"}, {p.Snoozed, "snoozed"}} {
 		if len(part.entries) > MaxInboxEntries {
-			return fmt.Errorf("tracker: %s's %s list would hold %d notices "+
-				"and the maximum is %d — mark everything you have seen with "+
-				"`read_through`, which moves the position the lists are kept "+
-				"against: %w", p.Handle, part.what, len(part.entries),
+			// THE LIST AND NOT THE PERSON: the caller named whose inbox
+			// this is in the call.
+			return fmt.Errorf("tracker: this inbox's %s list would hold %d "+
+				"notices and the maximum is %d — mark everything you have "+
+				"seen with `read_through`, which moves the position the lists "+
+				"are kept against: %w", part.what, len(part.entries),
 				MaxInboxEntries, ErrInboxFull)
 		}
 	}
@@ -892,15 +885,14 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 				// the ones it was handed, which is what makes the
 				// comparison with the copy honest.
 				//
-				// ONLY ON A RECORD THAT EXISTS. The first write is what
-				// creates a person, and the record's existence is itself
-				// a fact a read turns on: a bound person's seat record,
-				// once written, is the one answered instead of the one
-				// their credential left.
+				// ONLY ON A RECORD THAT EXISTS: the first write is what
+				// creates a person's record, and a record that exists
+				// is itself a fact a read turns on — its defaults are
+				// the stored ones from then on, not the shipped ones.
 				return statelog.Decision{Version: int64(post.Version)}, nil
 			}
 			post.UpdatedAt = at
-			return w.decide(stamp, subject, OpPatch, kind, scope, opID, post, notify, at)
+			return w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID, post, notify, at)
 		},
 	})
 }

@@ -54,8 +54,8 @@ export function nodeTone(view: NodeView | undefined): TreeCardTone | undefined {
 }
 
 /** A seat's handle as written beside its name, or what stands in for one not reported yet. */
-export function handleLabel(handle: string | undefined): string {
-  return handle ? `@${handle}` : "Handle after the check";
+export function handleLabel(handle: string): string {
+  return `@${handle}`;
 }
 
 /** A seat's primary manager, "No manager", or what stands in while no check of this draft has said. */
@@ -65,16 +65,15 @@ export function managerLabel(manager: string | null | undefined): string {
 }
 
 /**
- * The live state of a saved agent seat. Looked up by the handle and name the
- * SAVED company gives it, because that is what the running seat is called
- * until this draft is saved and applied.
+ * The live state of a saved agent seat. Looked up by the handle the SAVED
+ * company gives it — the roster row's `id` — because that is what the running
+ * seat answers to until this draft is saved and applied; never by its name,
+ * which two seats may share.
  */
 export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
   if (!view.running || !view.saved) return null;
-  const { handle, name } = view.saved;
-  const agent =
-    (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
-    api.agents.find((a) => a.role === name);
+  const { handle } = view.saved;
+  const agent = handle ? api.agents.find((a) => a.id === handle) : undefined;
   return (
     <span className="bnode-state">
       <StateBadge agent={agent} />

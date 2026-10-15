@@ -12,7 +12,6 @@ const identityDoc = `{
   "name": "Acme",
   "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
   "integrations": {
-    "public_base_url": "https://engine.example.com",
     "atlassian": {"org_id": "${ORG_ID}", "api_key": "${ORG_KEY}"},
     "jira": {"cloud_id": "c1", "site_url": "https://acme.atlassian.net",
              "email": "${OPS_EMAIL}", "token": "${OPS_TOKEN}"},
@@ -59,11 +58,7 @@ func detailOf(t *testing.T, s *surface, kind string) string {
 func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// Every seat credential sealed, because the identity is shown only over
 	// a seat that works: a derived name is what the engine WOULD create
 	// rather than proof it did.
@@ -74,7 +69,7 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 		"SRE_DATADOG":   "dd-key",
 		"SRE_MM":        "mm-token",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "test", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -103,11 +98,7 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 func TestASeatWithNothingSealedNamesNoAccount(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a company mid-setup"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 
 	for _, kind := range []string{"gitlab", "datadog", "mattermost", "jira"} {
 		got := detailOf(t, s, kind)

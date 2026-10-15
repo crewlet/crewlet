@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -18,7 +19,7 @@ import (
 // reduced coverage rather than an outage. What a writer stamps is the LOWEST
 // version that reads the record, computed by [Encode] from
 // [versionedFields]; internal/tracker's RecordVersion states why, and
-// the rule is one rule across both strict domains.
+// the rule is one rule across every strict domain.
 //
 // It moves ONLY with the table, and exactly to the table's highest version:
 // statelogtest's declaration case refuses a build that reads a version no
@@ -29,9 +30,7 @@ import (
 //
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
-//   - 2: the seat behind an operator's token ([MutationRecord.ActorSeat]),
-//     which a history row stores and a wake is not sent to.
-const RecordVersion = 2
+const RecordVersion = 1
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -56,12 +55,7 @@ const baseRecordVersion = 1
 // framework's ([statelog.VersionedField]). A field no tag has shipped is still
 // a field two builds of one rolling upgrade disagree about, so "nothing has
 // been released" does not exempt a new field from its row.
-var versionedFields = statelog.RecordFields{
-	// A history row stores it, so a build with no column for it must retain
-	// the record rather than apply it without the person. That holds on every
-	// op, because every op that changes a page writes a history row.
-	{Name: "MutationRecord.ActorSeat", Since: 2, Path: []string{"actor_seat"}},
-}
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -153,8 +147,10 @@ type RecordEnvelope struct {
 	// never for this struct.
 	V int `json:"v"`
 
-	// OpID is a uuid7: the idempotency key, the Nats-Msg-Id, and the ops
-	// table's key. EMPTY on a barrier, deliberately — an op id is what
+	// OpID is an operation id in the state log's grammar
+	// ([statelog.NewOpID]) — a uuid7 carrying the instant it was minted,
+	// and an optional name after it: the idempotency key, the Nats-Msg-Id,
+	// and the ops table's key. EMPTY on a barrier, deliberately — an op id is what
 	// invites a message id, and a duplicate ack is served out of the
 	// dedupe window with no quorum round trip at all, which is the one
 	// thing a read barrier must never be.
@@ -240,18 +236,8 @@ type MutationRecord struct {
 	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
-
-	// ActorSeat is the person an operator's token was bound to when it wrote
-	// this, and empty for every other actor, whose Actor is already a seat.
-	//
-	// RECORD-CARRIED, on the tracker's rule (replicated migration 0026): the
-	// binding is configuration and can change, and what a history row says
-	// is who wrote it THEN. Actor stays the token, which is the audit trail;
-	// this is who a row draws and who the change does not wake.
-	ActorSeat string `json:"actor_seat,omitempty"`
-
-	TurnID string   `json:"turn_id,omitempty"`
-	Chain  []string `json:"chain,omitempty"`
+	TurnID     string     `json:"turn_id,omitempty"`
+	Chain      []string   `json:"chain,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.
@@ -383,7 +369,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 		}
 	}
 	var rec MutationRecord
-	extra, err := decodeInto(payload, &rec, recordFields, env.V)
+	extra, err := jsoncarry.Decode(payload, &rec, recordFields)
 	if err != nil {
 		return MutationRecord{RecordEnvelope: env}, fmt.Errorf("pages: decode "+
 			"the record on %s: %w", env.Subject, err)
@@ -399,10 +385,10 @@ func Decode(payload []byte) (MutationRecord, error) {
 // node that read a record it only half understood and republished it — the
 // reanchor path does exactly that — must not strip the half it did not.
 //
-// It goes through the same [encode] every document shape here uses, rather
-// than a second merge of its own: a carried field LOSES to a known one, and
-// two implementations of that rule are one place where a stale carried copy
-// undoes the write that set it.
+// It goes through the same [jsoncarry.Encode] every document shape here uses,
+// rather than a second merge of its own: a carried field LOSES to a known one,
+// and two implementations of that rule are one place where a stale carried
+// copy undoes the write that set it.
 //
 // A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
 // unset and this stamps [versionedFields]' minimum over the bytes it is about
@@ -421,7 +407,7 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 	if stamp {
 		rec.V = baseRecordVersion
 	}
-	data, err := encode(rec, rec.Extra)
+	data, err := jsoncarry.Encode(rec, rec.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("pages: encode the record on %s: %w",
 			rec.Subject, err)
@@ -440,7 +426,7 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 	case rec.V >= minimum:
 	case stamp:
 		rec.V = minimum
-		if data, err = encode(rec, rec.Extra); err != nil {
+		if data, err = jsoncarry.Encode(rec, rec.Extra); err != nil {
 			return nil, fmt.Errorf("pages: encode the record on %s: %w",
 				rec.Subject, err)
 		}
@@ -456,11 +442,9 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 
 // recordFields is every top-level name this build writes.
 //
-// DERIVED from the struct rather than typed again, on [fieldSet]'s terms: the
-// omitempty names have to be listed because a zero value does not marshal
-// them, and a name missing here is decoded into the struct AND carried as
-// unknown — so the next encode writes the stale carried copy back over what
-// the caller set.
-var recordFields = fieldSet(MutationRecord{}, "op_id", "created_at", "gen",
-	"writer", "expect", "mutation", "actor", "actor_kind", "operator_id",
-	"actor_seat", "turn_id", "chain", "notify")
+// READ OFF THE STRUCT'S OWN TAGS ([jsoncarry.Names]) rather than typed again:
+// a name missing here is decoded into the struct AND carried as unknown — so
+// the next encode writes the stale carried copy back over what the caller set
+// — and a list kept by hand beside a zero value's marshalling is what missed
+// the omitempty ones, which a zero value does not marshal.
+var recordFields = jsoncarry.Names(MutationRecord{})

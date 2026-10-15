@@ -50,7 +50,6 @@
 import { useMemo } from "react";
 import { usePanelAlign } from "~/lib/media.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import {
   ColumnChooser,
@@ -556,7 +555,7 @@ export function Projects() {
         </Popover>
       </div>
 
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {/* A COMPANY WITH NO PROJECTS, SAID ON WHATEVER SEGMENT THE READER IS
             ON — and they land on Active. The census is what makes it sayable
             from anywhere: `active + archived === 0` is the company having

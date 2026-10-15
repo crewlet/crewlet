@@ -3,7 +3,7 @@ package setupapi_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,21 +13,24 @@ import (
 	"testing"
 	"time"
 
-	"errors"
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -38,6 +41,26 @@ import (
 )
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+
+// testCipher is a keyring of one fresh key, as a node's own is: what the app
+// state is sealed under.
+func testCipher(t *testing.T) secrets.Cipher {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
+	})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	return cipher
+}
+
+// testAuthor is who a row a case seeds directly records.
+var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
 
 // A company with no Datadog block at all: the state an operator pressing
 // Connect for the first time is in.
@@ -56,22 +79,33 @@ const companyDoc = `{
 type vault struct {
 	mu     sync.Mutex
 	values map[string]string
-	order  []string
-	fail   error
+	// authors is who each row records, which is what a case about
+	// attribution asserts.
+	authors map[string]secrets.Author
+	fail    error
 }
 
-func (v *vault) Set(_ context.Context, name, value, by, source string, _ time.Time) error {
+func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
+	_ string, _ time.Time) error {
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.fail != nil {
 		return v.fail
 	}
 	if v.values == nil {
-		v.values = map[string]string{}
+		v.values, v.authors = map[string]string{}, map[string]secrets.Author{}
 	}
 	v.values[name] = value
-	v.order = append(v.order, name+"|"+by+"|"+source)
+	v.authors[name] = by
 	return nil
+}
+
+// author is who the row under name records.
+func (v *vault) author(name string) secrets.Author {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.authors[name]
 }
 
 func (v *vault) get(name string) (string, bool) {
@@ -85,52 +119,96 @@ type surface struct {
 	mux     *http.ServeMux
 	config  *configapi.Service
 	vault   *vault
-	company func() *config.Company
+	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
+	// cipher is the keyring the config surface seals under, which a
+	// revision the case plants is sealed under too.
+	cipher secrets.Cipher
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
+	// webhookBase and webhookBaseKey are this fixture's vendor address and
+	// the Tier A key it is read from, kept so that [surface.withPass], which
+	// rebuilds the service, hands over the same address the surface was
+	// built with rather than none.
+	webhookBase, webhookBaseKey string
 	// setup is the service itself, kept so a test can reach the app flow
 	// the webhook callback is served.
 	setup *setupapi.Service
+
+	// grants are what the caller [surface.as] attaches carries: every one,
+	// unless a case about authority narrows them, so a case about what the
+	// surface DOES is never quietly a case about who may.
+	grants []iam.Grant
+
+	// caller replaces the Tier A token [surface.as] attaches, for a case
+	// about who a write is recorded as.
+	caller *iam.Principal
 }
 
-func newSurface(t *testing.T) *surface { return newSurfaceWithApps(t, nil) }
+func newSurface(t *testing.T) *surface {
+	return newSurfaceWithApps(t, nil, fixtureWebhookBase)
+}
 
-// newConfigSurface is the config write path over a store of the test's own.
+// newSurfaceWithNoExternalURL is a deployment that has no address a vendor can
+// reach — the state `api.external_url` being unset produces, which config
+// refuses once a port is set but an embedder building the service directly can
+// still reach.
+func newSurfaceWithNoExternalURL(t *testing.T) *surface {
+	return newSurfaceWithApps(t, nil, "")
+}
+
+// newConfigSurface is the config write path over a store of the test's own,
+// sealing under a keyring of its own — which it returns, because a revision
+// the case plants has to be sealed under it to be read back.
 //
 // writers, when given, are the token ids Tier A names as the company
 // document's only writers (`api.auth.company_writers`).
-func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB) {
+func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, secrets.Cipher) {
 	t.Helper()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
+	cipher := testCipher(t)
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(),
-		// A DEPLOYMENT THE COMPANY CAN RUN ON: an embedded stream that
-		// persists, so the cross-tier rule has nothing to refuse.
-		Bootstrap: &config.Bootstrap{
-			Stream: config.Stream{StoreDir: t.TempDir()},
-			API:    config.API{Auth: config.APIAuth{CompanyWriters: writers}},
+		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Holders: func(context.Context, []string, time.Time) (
+			map[string]configapi.SeatHolder, error) {
+
+			return nil, nil
 		},
-		Now: func() time.Time { return pinned },
+		CompanyWriters: writers,
+		Now:            func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
-	return cfg, db
+	return cfg, db, cipher
 }
 
 // newService builds the service over whatever a case names, filling each
 // required dependency it leaves unset with an inert one, so a case names only
 // what it is about.
+// fixtureWebhookBase is the vendor address a fixture's service carries — its
+// `api.external_url`, on a deployment with one listener.
+//
+// IT IS PASSED EXPLICITLY AT EVERY SITE rather than defaulted inside
+// [newService], because "" is a real posture a case has to be able to ask for:
+// a deployment with no address a vendor can reach offers no manifest and
+// refuses every writing pass, and a helper that filled the field in would make
+// that case unreachable.
+const fixtureWebhookBase = "https://engine.example.com"
+
+// oneListener is the Tier A key a one-listener deployment's vendor address
+// is read from.
+const oneListener = "api.external_url"
+
 func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
 	v := &vault{}
 	if opts.Company == nil {
-		opts.Company = func() *config.Company { return nil }
+		opts.Company = companySource(t, nil)
 	}
 	if opts.Config == nil {
-		opts.Config, _ = newConfigSurface(t)
+		opts.Config, _, _ = newConfigSurface(t)
 	}
 	if opts.Secrets == nil {
 		opts.Secrets = v
@@ -142,8 +220,8 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 		opts.Passes = setup.NewRunner(nil, nil, func() time.Time { return pinned })
 	}
 	if opts.Sink == nil {
-		opts.Sink = func(operator string) (provision.TokenSink, error) {
-			return provision.NewSecretStoreSink(sinkStore{v}, operator), nil
+		opts.Sink = func(by iam.Actor) (provision.TokenSink, error) {
+			return provision.NewSecretStoreSink(sinkStore{v}, authorOf(by)), nil
 		}
 	}
 	if opts.Status == nil {
@@ -154,6 +232,12 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	}
 	if opts.StateClaims == nil {
 		opts.StateClaims = coordmemory.NewFleet()
+	}
+	if opts.StateCipher == nil {
+		opts.StateCipher = testCipher(t)
+	}
+	if opts.WebhookBaseKey == "" {
+		opts.WebhookBaseKey = oneListener
 	}
 	svc, err := setupapi.New(opts)
 	if err != nil {
@@ -171,34 +255,38 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	cfg, _ := newConfigSurface(t)
+	cfg, _, _ := newConfigSurface(t)
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
-			Company:     func() *config.Company { return nil },
-			Config:      cfg,
-			Secrets:     v,
-			Resolve:     v.get,
-			Passes:      setup.NewRunner(nil, nil, nil),
-			Sink:        func(string) (provision.TokenSink, error) { return nil, nil },
-			Status:      &statusStore{},
-			SlackApps:   func() map[string]string { return nil },
-			StateClaims: coordmemory.NewFleet(),
+			Company:        companySource(t, nil),
+			Config:         cfg,
+			Secrets:        v,
+			Resolve:        v.get,
+			Passes:         setup.NewRunner(nil, nil, nil),
+			Sink:           func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
+			Status:         &statusStore{},
+			SlackApps:      func() map[string]string { return nil },
+			StateCipher:    testCipher(t),
+			StateClaims:    coordmemory.NewFleet(),
+			WebhookBaseKey: oneListener,
 		}
 	}
 	if _, err := setupapi.New(complete()); err != nil {
 		t.Fatalf("the premise is wrong: a complete set was refused: %v", err)
 	}
 	for field, strip := range map[string]func(*setupapi.Options){
-		"Company":     func(o *setupapi.Options) { o.Company = nil },
-		"Config":      func(o *setupapi.Options) { o.Config = nil },
-		"Secrets":     func(o *setupapi.Options) { o.Secrets = nil },
-		"Resolve":     func(o *setupapi.Options) { o.Resolve = nil },
-		"Passes":      func(o *setupapi.Options) { o.Passes = nil },
-		"Sink":        func(o *setupapi.Options) { o.Sink = nil },
-		"Status":      func(o *setupapi.Options) { o.Status = nil },
-		"SlackApps":   func(o *setupapi.Options) { o.SlackApps = nil },
-		"StateClaims": func(o *setupapi.Options) { o.StateClaims = nil },
+		"Company":        func(o *setupapi.Options) { o.Company = nil },
+		"Config":         func(o *setupapi.Options) { o.Config = nil },
+		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
+		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
+		"Passes":         func(o *setupapi.Options) { o.Passes = nil },
+		"Sink":           func(o *setupapi.Options) { o.Sink = nil },
+		"Status":         func(o *setupapi.Options) { o.Status = nil },
+		"SlackApps":      func(o *setupapi.Options) { o.SlackApps = nil },
+		"StateCipher":    func(o *setupapi.Options) { o.StateCipher = nil },
+		"StateClaims":    func(o *setupapi.Options) { o.StateClaims = nil },
+		"WebhookBaseKey": func(o *setupapi.Options) { o.WebhookBaseKey = "" },
 	} {
 		opts := complete()
 		strip(&opts)
@@ -216,77 +304,156 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 // newSurfaceWithApps is the same surface with the engine's answer to which
 // Slack app each seat authenticates as. Nil is a node whose Slack transport is
 // not running, or seats that have not come up.
-func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
+func newSurfaceWithApps(t *testing.T, apps map[string]string, webhookBase string) *surface {
 	t.Helper()
-	return newManagedSurface(t, apps)
+	return newManagedSurface(t, apps, webhookBase)
 }
 
 // newManagedSurface is newSurfaceWithApps on a deployment naming writers as
 // the company document's only writers; none is an unmanaged document.
-func newManagedSurface(t *testing.T, apps map[string]string, writers ...string) *surface {
+func newManagedSurface(t *testing.T, apps map[string]string, webhookBase string,
+	writers ...string) *surface {
+
 	t.Helper()
-	cfg, db := newConfigSurface(t, writers...)
+	return buildSurface(t, apps, webhookBase, oneListener, writers...)
+}
+
+// buildSurface is every fixture surface: the vendor address and the Tier A
+// key it is read from, the Slack apps the engine reports, and the company
+// document's writers.
+func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBaseKey string,
+	writers ...string) *surface {
+
+	t.Helper()
+	cfg, db, cipher := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
-		status: &statusStore{},
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
+		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
 	// engine hands it over: a screen bound to the company this process
 	// booted on would describe one that is no longer running.
-	s.company = func() *config.Company {
+	s.company = func() (*config.Company, *org.Organization) {
 		doc, err := cfg.Document(t.Context())
 		if err != nil {
-			return nil
+			return nil, nil
 		}
-		return doc
+		// THE ORG THE DOCUMENT DESCRIBES, which is what the engine builds
+		// from the revision it applies.
+		o, err := doc.Organization()
+		if err != nil {
+			return doc, nil
+		}
+		return doc, o
 	}
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
-		Resolve:   v.get,
-		Status:    s.status,
-		SlackApps: func() map[string]string { return apps },
-		// The keyring a GitHub App state is signed from.
-		StateKeys: []string{"test-material"},
-		Now:       func() time.Time { return pinned },
+		Resolve:        v.get,
+		Status:         s.status,
+		SlackApps:      func() map[string]string { return apps },
+		WebhookBase:    webhookBase,
+		WebhookBaseKey: webhookBaseKey,
+		Now:            func() time.Time { return pinned },
 	})
-	s.setup.Routes(s.mux)
-	cfg.Routes(s.mux)
+	mount(t, s.mux, s.setup, cfg)
 	return s
+}
+
+// mount registers the surfaces a case serves, failing it on a route mounted
+// without a policy.
+func mount(t *testing.T, mux *http.ServeMux, surfaces ...interface {
+	Routes(authz.Mux) error
+}) {
+	t.Helper()
+	for _, surface := range surfaces {
+		if err := surface.Routes(mux); err != nil {
+			t.Fatalf("Routes: %v", err)
+		}
+	}
+}
+
+// as attaches the caller the guard would have resolved — the operator `ops`,
+// carrying [surface.grants] — because every route here is decided on a grant,
+// and a request carrying no principal is refused before it reaches one.
+func (s *surface) as(req *http.Request) *http.Request {
+	grants := s.grants
+	if grants == nil {
+		grants = iam.AllGrants
+	}
+	if s.caller != nil {
+		return req.WithContext(iam.WithPrincipal(req.Context(), *s.caller))
+	}
+	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+	// token, so a case here is decided on its grants alone.
+	return req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: grants,
+		ReauthAt: time.Now().Add(time.Hour),
+	}))
 }
 
 func (s *surface) do(t *testing.T, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	return s.doAs(t, "", method, path, body, headers)
+	return s.serve(s.as(request(method, path, body, headers)))
 }
 
-// doAs is do carrying the operator id the guard would have attached; "" is
-// none, which is what every case that is not about who asks sends.
-func (s *surface) doAs(t *testing.T, operator, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+// doAs is do as p — the principal the guard would have resolved — for a case
+// about who asks rather than what the surface does.
+func (s *surface) doAs(t *testing.T, p iam.Principal, method, path, body string,
+	headers map[string]string) *httptest.ResponseRecorder {
+
 	t.Helper()
+	req := request(method, path, body, headers)
+	return s.serve(req.WithContext(iam.WithPrincipal(req.Context(), p)))
+}
+
+// request is one request to the surface, JSON when it carries a body.
+func request(method, path, body string, headers map[string]string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	if operator != "" {
-		req = req.WithContext(auth.WithOperator(req.Context(), operator))
-	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	return req
+}
+
+func (s *surface) serve(req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, req)
 	return rec
 }
 
-// seed imports the company so there is something to patch.
+// seed stores the company so there is something to patch.
 func (s *surface) seed(t *testing.T) {
 	t.Helper()
-	res := s.do(t, http.MethodPut, "/config", companyDoc,
-		map[string]string{"X-Summary": "first import"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	s.seedDocument(t, companyDoc)
+}
+
+// seedDocument stores one document as the active revision, sealed as every
+// writer stores one.
+func (s *surface) seedDocument(t *testing.T, document string) {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(document))
+	if err != nil {
+		t.Fatalf("parse the fixture: %v", err)
+	}
+	stored, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := secrets.Seal(s.cipher, stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
+		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
+		Summary: "first import", Payload: payload, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 }
 
@@ -374,96 +541,58 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 	}
 }
 
-// The base every inbound third-party app is built on is answered ONCE, not repeated in
-// each tool: it is one setting, and asking for it seven times would ask the
-// operator to keep seven copies consistent.
-func TestThePublicBaseIsAnsweredOnce(t *testing.T) {
+// The base every inbound third-party app is built on is answered ONCE, not
+// repeated in each tool: it is one setting, and asking for it seven times
+// would ask the operator to keep seven copies consistent.
+//
+// ONE FIELD WHERE THERE WERE FOUR. This used to be a Tier B pointer, so the
+// answer also carried `present`, `resolved` and the variable's `reference` —
+// three fields describing a state a `${VAR}` nobody exported produced.
+// The address is Tier A and required on a node serving this listing, so it
+// has one and those three describe nothing.
+//
+// AND IT IS THE VENDOR'S, named by the key it is read from: once a public
+// listener is set, vendors reach it rather than the person's address, so the
+// listing names `api.public.external_url` — the setting an operator would
+// have to change — rather than the one that answers those routes 404.
+func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	t.Parallel()
+	const public = "https://hooks.example.com"
+	for _, tc := range []struct {
+		name      string
+		s         func(*testing.T) *surface
+		value, at string
+	}{
+		{"one listener", newSurface, fixtureWebhookBase, oneListener},
+		{"a public listener", func(t *testing.T) *surface {
+			return buildSurface(t, nil, public, "api.public.external_url")
+		}, public, "api.public.external_url"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := tc.s(t)
+			s.seed(t)
+			body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
+			base, _ := body["external_url"].(map[string]any)
+			if base == nil {
+				t.Fatal("the listing carries no external url")
+			}
+			if base["value"] != tc.value || base["config_path"] != tc.at {
+				t.Errorf("external_url = %v, want %s read from %s", base, tc.value, tc.at)
+			}
+		})
+	}
 	s := newSurface(t)
 	s.seed(t)
-
 	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
-	base, _ := body["public_base_url"].(map[string]any)
-	if base == nil {
-		t.Fatal("the listing carries no public base")
-	}
-	if base["present"] != false {
-		t.Errorf("present = %v on a company that names none", base["present"])
-	}
-	if base["config_path"] != "integrations.public_base_url" {
-		t.Errorf("config_path = %v", base["config_path"])
-	}
 	tools, _ := body["tools"].([]any)
 	if len(tools) == 0 {
 		t.Fatal("the listing serves no tools")
 	}
 	for _, tool := range tools {
-		if _, repeated := tool.(map[string]any)["public_base_url"]; repeated {
-			t.Error("a tool repeats the public base")
+		if _, repeated := tool.(map[string]any)["external_url"]; repeated {
+			t.Error("a tool repeats the external url")
 		}
-	}
-}
-
-// SET AND SET TO SOMETHING ARE DIFFERENT FACTS, and the answer says which.
-//
-// `present` alone is what a screen read, so a `${VAR}` pointing at a variable
-// nobody exported rendered as "third-party apps reach this engine at" followed
-// by nothing — the one banner that exists to say where deliveries land, saying
-// nothing, on exactly the misconfiguration it should have named.
-//
-// The VARIABLE is what makes it actionable: "set it" is advice, "export
-// PUBLIC_BASE_URL" is an instruction. It is a name rather than a value, and
-// this surface is guarded in full.
-func TestAnUnresolvedPublicBaseNamesItsVariable(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
-  "name": "Acme",
-  "integrations": {"public_base_url": "${PUBLIC_BASE_URL}"},
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
-}`, map[string]string{"X-Summary": "pointing at a variable"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
-
-	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
-	base, _ := body["public_base_url"].(map[string]any)
-	if base["present"] != true {
-		t.Errorf("present = %v on a company that names one", base["present"])
-	}
-	if base["resolved"] != false {
-		t.Errorf("resolved = %v, want a positive no — the variable is unset",
-			base["resolved"])
-	}
-	if base["reference"] != "PUBLIC_BASE_URL" {
-		t.Errorf("reference = %v, want the variable to export", base["reference"])
-	}
-	if base["value"] != "" {
-		t.Errorf("value = %v, want nothing — it resolves to nothing", base["value"])
-	}
-}
-
-// AND A LITERAL NAMES NO VARIABLE, because there is none to export.
-func TestALiteralPublicBaseNamesNoVariable(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
-  "name": "Acme",
-  "integrations": {"public_base_url": "https://engine.example.com"},
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
-}`, map[string]string{"X-Summary": "a literal"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
-
-	base, _ := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))["public_base_url"].(map[string]any)
-	if base["resolved"] != true || base["value"] != "https://engine.example.com" {
-		t.Errorf("base = %v, want a literal that resolves to itself", base)
-	}
-	if base["reference"] != "" {
-		t.Errorf("reference = %v on a literal", base["reference"])
 	}
 }
 
@@ -627,6 +756,8 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 	if !slices.Contains(paths, "integrations.datadog.route_to") {
 		t.Errorf("problems name %v, want integrations.datadog.route_to: %s", paths, res.Body)
 	}
+	// AND THE HIERARCHY THE REFUSED DOCUMENT DERIVES, so the screen can
+	// place the problems on the company it would have produced.
 	if _, ok := body["derived"].(map[string]any); !ok {
 		t.Errorf("the refusal carries no derived hierarchy: %s", res.Body)
 	}
@@ -918,6 +1049,18 @@ func (s *surface) withPass(
 	t *testing.T, passes ...*recordingPass,
 ) (*statusStore, *setup.Runner) {
 	t.Helper()
+	return s.withPassSink(t, func(by iam.Actor) (provision.TokenSink, error) {
+		return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
+	}, passes...)
+}
+
+// withPassSink is [surface.withPass] with the sink factory a writing pass is
+// handed, for the case about one that cannot be built.
+func (s *surface) withPassSink(
+	t *testing.T, sink func(iam.Actor) (provision.TokenSink, error),
+	passes ...*recordingPass,
+) (*statusStore, *setup.Runner) {
+	t.Helper()
 	status := &statusStore{}
 	wired := make([]setup.Pass, 0, len(passes))
 	for _, pass := range passes {
@@ -928,25 +1071,30 @@ func (s *surface) withPass(
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,
-		Resolve: s.vault.get,
-		Passes:  runner,
-		Sink: func(operator string) (provision.TokenSink, error) {
-			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
-		},
-		Status:    status,
-		StateKeys: []string{"test-material"},
-		Now:       func() time.Time { return pinned },
+		Resolve:        s.vault.get,
+		Passes:         runner,
+		Sink:           sink,
+		Status:         status,
+		Now:            func() time.Time { return pinned },
+		WebhookBase:    s.webhookBase,
+		WebhookBaseKey: s.webhookBaseKey,
 	})
-	s.setup.Routes(s.mux)
-	s.config.Routes(s.mux)
+	mount(t, s.mux, s.setup, s.config)
 	return status, runner
 }
 
 // sinkStore adapts the vault to what a secret-store sink needs.
 type sinkStore struct{ v *vault }
 
-func (s sinkStore) Set(ctx context.Context, name, value, by, source string, at time.Time) error {
+func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, at time.Time) error {
+
 	return s.v.Set(ctx, name, value, by, source, at)
+}
+
+// authorOf is a party as the secret store records it.
+func authorOf(by iam.Actor) secrets.Author {
+	return secrets.Author{Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID}
 }
 
 func (s sinkStore) Get(_ context.Context, name string) (string, error) {
@@ -969,7 +1117,6 @@ func (s sinkStore) Unset(_ context.Context, name string) (bool, error) {
 func (s *surface) seedGitHub(t *testing.T) {
 	t.Helper()
 	res := s.do(t, http.MethodPatch, "/config", `{"integrations":{
-		"public_base_url":"https://engine.example.com",
 		"github":{"enabled":true,"webhook_secret":"${GH_SECRET}",
 		"provisioning":{"org":"acme"}}}}`,
 		map[string]string{
@@ -981,7 +1128,7 @@ func (s *surface) seedGitHub(t *testing.T) {
 	}
 	// The secret has to RESOLVE, or the requirement is outstanding and the
 	// pass is refused before it runs, which is a different test.
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1017,13 +1164,79 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 	}
 }
 
+// AND THE KEY ITS ADDRESS IS READ FROM, beside it, on a check as on a writing
+// pass. A vendor with no address reports `ingress_blocked` naming the setting
+// to fill in, and behind a public listener that setting is
+// `api.public.external_url`: a pass handed only the address named
+// `api.external_url` — the person's, set, and answering 404 for every webhook
+// route — on exactly the deployments whose vendor address it is not.
+func TestAPassIsHandedTheKeyItsAddressIsReadFrom(t *testing.T) {
+	t.Parallel()
+	const public, key = "https://hooks.example.com", "api.public.external_url"
+	for _, route := range []string{"provision", "check"} {
+		t.Run(route, func(t *testing.T) {
+			t.Parallel()
+			s := buildSurface(t, nil, public, key)
+			s.seed(t)
+			pass := &recordingPass{}
+			s.withPass(t, pass)
+			s.seedGitHub(t)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/github/"+route, `{}`, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", res.Code, res.Body)
+			}
+			in, calls := pass.last()
+			if calls != 1 {
+				t.Fatalf("the pass ran %d times", calls)
+			}
+			if in.WebhookBase != public || in.WebhookBaseKey != key {
+				t.Errorf("the pass was handed %q read from %q, want %q read from %q",
+					in.WebhookBase, in.WebhookBaseKey, public, key)
+			}
+		})
+	}
+}
+
+// A SINK THAT CANNOT BE BUILT IS THIS NODE'S FAULT, AND THE PASS NEVER STARTS.
+//
+// It was answered as a deployment's posture — 503 no_keyring, "run crewlet
+// secrets keygen" — for a node with no keyring. Every node holds the keyring
+// a sink seals under now, so the only way to get here is a process assembled
+// without its secret store: a fault no wait and no setting clears, and one a
+// pass must not start over, because what it mints would have nowhere to go.
+func TestAProvisionPassWhoseSinkCannotBeBuiltIsAFault(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	status, _ := s.withPassSink(t, func(iam.Actor) (provision.TokenSink, error) {
+		return nil, errors.New("engine: no company secret store")
+	}, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", res.Code, res.Body)
+	}
+	if code := decode(t, res)["error"]; code != "internal_error" {
+		t.Errorf("error = %v, want internal_error", code)
+	}
+	if _, calls := pass.last(); calls != 0 {
+		t.Errorf("the pass ran %d times with nowhere to seal what it mints", calls)
+	}
+	if _, ok := status.get(integration.KindGitHub); ok {
+		t.Error("a pass that never started recorded a status")
+	}
+}
+
 // A CHECK IS THE SAME PASS WITH NO SINK — and WITH the address.
 //
 // THE SINK IS THE PERMISSION TO WRITE, which is what it has always actually
 // been: every vendor gates its registration on having one. The address is a
 // FACT, and withholding it made a check report the wrong one. A vendor reads
 // an empty base as "this deployment has no public base URL" and emits
-// ingress_blocked against integrations.public_base_url owed by an admin, and
+// ingress_blocked against api.external_url owed by an admin, and
 // a check persists its findings through the same fold the loop uses — so
 // pressing Check on a healthy company wrote "every monitor that fires reaches
 // nobody" into the live status row and flipped the card to Action required
@@ -1061,9 +1274,9 @@ func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 // while reporting success is the failure it exists to stop. A check has
 // nothing to register, so it runs and reports the absence — which is a true
 // finding, and the one an operator needs.
-func TestACheckWithNoPublicBaseRunsAndReportsIt(t *testing.T) {
+func TestACheckWithNoExternalURLRunsAndReportsIt(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	s := newSurfaceWithNoExternalURL(t)
 	s.seed(t)
 	pass := &recordingPass{}
 	s.withPass(t, pass)
@@ -1075,7 +1288,7 @@ func TestACheckWithNoPublicBaseRunsAndReportsIt(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("seed = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1103,7 +1316,7 @@ func TestAPassIsRefusedWhileSomethingIsOutstanding(t *testing.T) {
 	s.withPass(t, pass)
 	// enabled, and with a secret that resolves to nothing.
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",
+		`{"integrations":{
 		  "github":{"enabled":true,"webhook_secret":"${GH_MISSING}"}}}`,
 		map[string]string{
 			"Content-Type": "application/merge-patch+json",
@@ -1130,11 +1343,11 @@ func TestAPassIsRefusedWhileSomethingIsOutstanding(t *testing.T) {
 	}
 }
 
-// WITHOUT A PUBLIC BASE A PASS REGISTERS NOTHING, so it is refused by name
+// WITHOUT AN EXTERNAL URL A PASS REGISTERS NOTHING, so it is refused by name
 // rather than run to report success having done nothing.
-func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
+func TestAProvisionPassNeedsAnExternalURL(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	s := newSurfaceWithNoExternalURL(t)
 	s.seed(t)
 	pass := &recordingPass{}
 	s.withPass(t, pass)
@@ -1146,7 +1359,7 @@ func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("seed = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1154,7 +1367,7 @@ func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
 	if got.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409: %s", got.Code, got.Body)
 	}
-	if decode(t, got)["error"] != "no_public_base_url" {
+	if decode(t, got)["error"] != "no_external_url" {
 		t.Errorf("error = %v", decode(t, got)["error"])
 	}
 	if _, calls := pass.last(); calls != 0 {
@@ -1380,6 +1593,67 @@ func TestAPerSeatSubmissionLeavesTheOtherSeatsAlone(t *testing.T) {
 	}
 }
 
+// A SETUP WRITE THROUGH A PERSON'S TOKEN IS THE PERSON'S, WITH THE TOKEN BESIDE
+// THEM — on the sealed rows and on the revision each write stores, a seat's
+// included.
+//
+// A write handed one name records it as both the author and the credential,
+// and the name was the credential's: `pat:<id>` authored the seat, of kind
+// operator, and nothing in the history said whose token it was once the
+// token's row was swept. Mutation: hand the seat write the credential as its
+// author and the seat's revision fails; record the secret under the
+// credential and the sealed half does.
+func TestASetupWriteThroughATokenIsItsOwners(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	s := newSurface(t)
+	s.seed(t)
+	s.caller = &iam.Principal{
+		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	want := iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat}
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/slack/inputs", `{
+		"seat": "sre-lead",
+		"values": {"bot_token": "xoxb-one", "signing_secret": "sig-one"}
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	if got := s.activeAuthor(t); got != want {
+		t.Errorf("the seat's revision is written as %+v, want %+v", got, want)
+	}
+	if got := s.vault.author("SLACK_BOT_TOKEN_SRE_LEAD"); got != authorOf(want) {
+		t.Errorf("the sealed row records %+v, want %+v", got, authorOf(want))
+	}
+
+	// A SETTINGS WRITE is the same party on the revision it stores.
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com",
+			"api_key": "dd-api", "app_key": "dd-app"},
+		"generate": ["webhook_token"]
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("datadog status = %d: %s", res.Code, res.Body)
+	}
+	if got := s.activeAuthor(t); got != want {
+		t.Errorf("the revision records %+v, want %+v", got, want)
+	}
+}
+
+// activeAuthor is who the active revision records as its author.
+func (s *surface) activeAuthor(t *testing.T) iam.Actor {
+	t.Helper()
+	active, found, err := s.configs.Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("Active: %v (found=%v)", err, found)
+	}
+	return iam.Actor{Name: active.CreatedBy, Kind: active.CreatedByKind,
+		OperatorID: active.OperatorID}
+}
+
 // A submission naming a seat that takes no per-seat setup is refused by name
 // rather than written somewhere unexpected.
 func TestAnUnknownSeatIsRefused(t *testing.T) {
@@ -1422,7 +1696,7 @@ func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		s.mux.ServeHTTP(httptest.NewRecorder(), req)
+		s.mux.ServeHTTP(httptest.NewRecorder(), s.as(req))
 	}()
 
 	// IN FLIGHT FIRST. Cancelling before the pass is entered proves nothing:
@@ -1568,33 +1842,6 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 	}
 }
 
-// A MISSING KEYRING SAYS SO, rather than internal_error.
-//
-// A node whose bootstrap names no key fails at the seal with
-// secrets.ErrNoKeyring, a sentinel that exists to be recognised. It once fell
-// through to the generic case, so a screen that could have said "set
-// secrets.keys" said internal_error and left an operator reading engine logs
-// to find a one-line fix.
-func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seed(t)
-	s.vault.fail = fmt.Errorf("setup: seal DATADOG_APP_KEY: %w", secrets.ErrNoKeyring)
-
-	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
-	if res.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
-	}
-	body := decode(t, res)
-	if body["error"] != "no_keyring" {
-		t.Fatalf("error = %v, want no_keyring", body["error"])
-	}
-	if hint, _ := body["hint"].(string); !strings.Contains(hint, "secrets.keys") {
-		t.Errorf("hint = %q, want it to name what to set", hint)
-	}
-}
-
 // A MINTED SECRET IS ONE THE ENGINE'S OWN VERIFIER ACCEPTS.
 //
 // GitLab computes its HMAC over the DECODED bytes of a `whsec_` value and
@@ -1684,7 +1931,7 @@ func firstRunes(s string, n int) string {
 func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
@@ -1695,10 +1942,7 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	     "mcp_env": {"gitlab": {"GITLAB_TOKEN": "${CODER_GITLAB_TOKEN}"}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
-	}`, map[string]string{"X-Summary": "one agent opted in, one not"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	// A SURFACE THAT PROVISIONS, which is what makes the two states above
 	// different from each other at all.
@@ -1972,5 +2216,70 @@ func (v *vault) forget(names ...string) {
 	defer v.mu.Unlock()
 	for _, name := range names {
 		delete(v.values, name)
+	}
+}
+
+// EVERY ROUTE HERE IS ADMIN'S, reading it included.
+//
+// These routes decided nothing: the guard in front of them answers only
+// whether somebody resolved, which meant "the operator" while an operator token
+// was the only credential. A person signed in holding a read-only permission
+// alone could then seal credentials into the fleet's store and point the
+// company document at them. So every route is stated against a caller holding
+// admin and against one holding EVERY APP — the most a caller can carry
+// without admin — which is refused naming admin alone (ADR-0033: which
+// credentials a company has not configured is a map of what to attack, and no
+// app opens it). A submission CARRYING a credential, a provisioning pass and a
+// GitHub App each also ask `secrets.write`, which admin opens too; refused on
+// the route, none of them reaches it, and nothing is sealed.
+func TestEverySetupRouteIsAdmins(t *testing.T) {
+	t.Parallel()
+	sealing := `{
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com",
+			"api_key": "dd-api", "app_key": "dd-app"},
+		"generate": ["webhook_token"]
+	}`
+	for _, c := range []struct {
+		name         string
+		method, path string
+		body         string
+	}{
+		{"the listing", http.MethodGet, "/setup/integrations", ""},
+		{"a credential", http.MethodPost, "/setup/integrations/datadog/inputs", sealing},
+		{"no credential", http.MethodPost, "/setup/integrations/datadog/inputs",
+			`{"values": {"site": "datadoghq.com"}}`},
+		// A PASS IS HANDED A SINK THAT MINTS AND SEALS, so it is a
+		// credential write whether or not this one mints anything — and
+		// it is refused before its body is read.
+		{"a provisioning pass", http.MethodPost,
+			"/setup/integrations/datadog/provision", `{}`},
+		{"a GitHub App", http.MethodPost, "/setup/integrations/github/app",
+			`{"seat": "sre-lead"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			admitted := newSurface(t)
+			admitted.seed(t)
+			admitted.grants = []iam.Grant{iam.GrantAdmin}
+			if res := admitted.do(t, c.method, c.path, c.body, nil); res.Code == http.StatusForbidden {
+				t.Errorf("holding admin: refused %s", res.Body)
+			}
+
+			s := newSurface(t)
+			s.seed(t)
+			s.grants = slices.Clone(iam.Apps)
+			res := s.do(t, c.method, c.path, c.body, nil)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("holding every app and not admin: %d %s, want 403",
+					res.Code, res.Body)
+			}
+			grants, _ := decode(t, res)[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+				t.Errorf("refused naming %v, want [admin]", grants)
+			}
+			if _, sealed := s.vault.get("DATADOG_WEBHOOK_TOKEN"); sealed {
+				t.Error("a refused submission sealed a value")
+			}
+		})
 	}
 }

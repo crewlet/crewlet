@@ -51,6 +51,7 @@ test("a refusal resolves with the engine's status and body", async () => {
   const answer = await configTransport.send(
     {
       method: "PATCH",
+      path: "/config",
       query: { dry_run: "true" },
       contentType: "application/merge-patch+json",
       headers: { "If-Match": '"r1"' },
@@ -102,6 +103,7 @@ test("the dry run and the save carry exactly the request the model built", async
   await configTransport.send(
     {
       method: "PUT",
+      path: "/config",
       query: { dry_run: "true" },
       contentType: "application/json",
       headers: { "If-None-Match": "*" },
@@ -217,10 +219,11 @@ describe("the warnings a change introduces", () => {
 
 describe("one reading of a /config refusal", () => {
   test.each([
-    [401, { error: "invalid_token" }, { kind: "guarded" }],
-    [403, {}, { kind: "guarded" }],
-    // A MANAGED DOCUMENT ACCEPTED THE TOKEN, so it is not `guarded`: the
-    // remedy is where the company is written, not which token is held.
+    [401, { error: "invalid_token" }, { kind: "guarded", code: "invalid_token" }],
+    [403, {}, { kind: "guarded", code: "" }],
+    [403, { error: "step_up_required" }, { kind: "guarded", code: "step_up_required" }],
+    // A MANAGED DOCUMENT ACCEPTED THE CREDENTIAL, so it is not `guarded`:
+    // the remedy is where the company is written, not a grant to ask for.
     [
       403,
       { error: "config_managed", managed_by: ["gitops"], detail: "managed", hint: "there" },
@@ -268,6 +271,158 @@ describe("one reading of a /config refusal", () => {
     expect(classifyConfigRefusal({ status: 503, body: { error: "unavailable" } }).kind).toBe(
       "unreachable",
     );
+  });
+
+  // A 409 THAT NO NEWER REVISION CLEARS. A write taking a human seat out of
+  // the company while something holds it is refused `seat_held`; read as a
+  // revision race it offered to update the draft onto the revision it was
+  // built on, for ever. It is a problem per seat, and the engine names the
+  // ONE thing holding each — whose remedy turns on what it is: a person is
+  // moved or removed (never unbound, which the engine refuses for a person),
+  // a service account unbound, an open invitation cancelled.
+  test("a held seat is a problem on that seat naming what holds it and how to free it", () => {
+    const refusal = classifyConfigRefusal({
+      status: 409,
+      body: {
+        error: "seat_held",
+        detail: "configapi: this write removes a human seat something holds",
+        held: {
+          sre: { person: "p-2", kind: "person", login: "sam.ito", stage: "active" },
+          dev: { person: "p-1", kind: "person", stage: "suspended" },
+          ops: { person: "m-1", kind: "machine", login: "ci:release" },
+          qa: { invitation: "inv-9", expires_at: "2026-10-14T09:00:00Z" },
+        },
+        hint: "free each seat first",
+      },
+    });
+    expect(refusal).toMatchObject({ kind: "problems", code: "seat_held", derived: null });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    const tail = ", then save again. The seat's page in the org chart says what holds it.";
+    expect(refusal.problems.map((p) => [p.kind, p.seat, p.message])).toEqual([
+      [
+        "seat_held",
+        "dev",
+        // No login: the id names them, in the sentence and in both commands.
+        `@dev is held by p-1: move them to another human seat (crewlet iam bind p-1 SEAT) or remove them (crewlet iam remove p-1) first${tail}`,
+      ],
+      [
+        "seat_held",
+        "ops",
+        `@ops is held by the service account ci:release: unbind it first (crewlet iam unbind m-1)${tail}`,
+      ],
+      [
+        "seat_held",
+        "qa",
+        `@qa is held by the open invitation inv-9: cancel it first (crewlet iam cancel-invite inv-9)${tail}`,
+      ],
+      [
+        "seat_held",
+        "sre",
+        `@sre is held by sam.ito: move them to another human seat (crewlet iam bind p-2 SEAT) or remove them (crewlet iam remove p-2) first${tail}`,
+      ],
+    ]);
+    // A PERSON IS NEVER TOLD TO UNBIND: the one remedy the engine refuses.
+    expect(refusal.problems.filter((p) => p.seat !== "ops").map((p) => p.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("unbind")]),
+    );
+    // A body naming no seat still refuses, in the engine's own sentence.
+    const bare = classifyConfigRefusal({
+      status: 409,
+      body: { error: "seat_held", detail: "held" },
+    });
+    expect(bare).toMatchObject({
+      kind: "problems",
+      problems: [{ kind: "seat_held", message: "held" }],
+    });
+  });
+
+  // A LEAD'S WRITE IS REFUSED PART BY PART. The engine names each part that
+  // reaches outside what the caller leads (`refused`), and the caller holds
+  // what they need for the rest: a problem per part, on the seat or unit it
+  // is, not a refusal of the person.
+  test("a write refused part by part is a problem on each seat and unit it names", () => {
+    const refusal = classifyConfigRefusal({
+      status: 403,
+      body: {
+        error: "unauthorized",
+        refused: [
+          {
+            kind: "seat",
+            id: "qa",
+            side: "after",
+            place: "sales",
+            why: "manages",
+            value: "seller",
+          },
+          { kind: "unit", id: "platform", side: "after", place: "platform", why: "self" },
+          { kind: "unit", id: "tooling", why: "key", value: "project" },
+          { kind: "setting", id: "mission" },
+          {
+            kind: "seat",
+            id: "ghost",
+            op: "added",
+            side: "before",
+            place: "sales",
+            why: "named",
+            value: "ghost",
+          },
+          { kind: "unit", id: "ops", side: "after", why: "duplicate", value: "ops" },
+          { kind: "unit", id: "tooling", side: "after", why: "lead", value: "nobody" },
+          { kind: "seat", id: "qa", side: "after", why: "manages", value: "ceo" },
+        ],
+      },
+    });
+    expect(refusal).toMatchObject({ kind: "problems", code: "unauthorized", derived: null });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.kind, p.seat, p.unit, p.message])).toEqual([
+      [
+        "refused",
+        "qa",
+        undefined,
+        "@qa would manage seller, in sales, outside the units you lead.",
+      ],
+      [
+        "refused",
+        undefined,
+        "platform",
+        "Unit platform's own lead and place decide who may change it, so changing them takes Admin access.",
+      ],
+      [
+        "refused",
+        undefined,
+        "tooling",
+        "Unit tooling: project is how another system finds it, and changing it takes Admin access.",
+      ],
+      ["refused", undefined, undefined, "The company's mission setting takes Admin access."],
+      [
+        "refused",
+        "ghost",
+        undefined,
+        "@ghost: a lead or manages entry in sales already names ghost, outside the units you lead, so adding it takes Admin access.",
+      ],
+      [
+        "refused",
+        undefined,
+        "ops",
+        "ops answers to two seats or units, and only Admin access can change them.",
+      ],
+      [
+        "refused",
+        undefined,
+        "tooling",
+        "Unit tooling's lead would be nobody, which names no seat inside the units you lead.",
+      ],
+      [
+        "refused",
+        "qa",
+        undefined,
+        "@qa would manage ceo, which names nothing inside the units you lead.",
+      ],
+    ]);
+    // A 403 naming no part is a refusal of the person, as before.
+    expect(
+      classifyConfigRefusal({ status: 403, body: { error: "unauthorized", refused: [] } }),
+    ).toEqual({ kind: "guarded", code: "unauthorized" });
   });
 
   test("a refusal with no problems of its own gets one from its detail", () => {
