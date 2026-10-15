@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/otlpenv"
@@ -337,5 +338,52 @@ func TestARefusedExportIsAnsweredAsOTLPAsks(t *testing.T) {
 			t.Errorf("%v: answered %d %q Retry-After %q, want %d %q %q", tc.err, rec.Code, body.Error,
 				rec.Header().Get("Retry-After"), tc.status, tc.code, tc.retryAfter)
 		}
+	}
+}
+
+// deadlineRecorder is a recorder that can carry a read deadline, which is
+// what http.NewResponseController looks for, and records the one it was set.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (d *deadlineRecorder) SetReadDeadline(t time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.deadline = t
+	return nil
+}
+
+// AN EXPORT'S BODY IS READ UNDER A DEADLINE, as every other route's is. The
+// route read its body with no bound in time — the server sets none, and each
+// route bounds its own read — while a token is a day's credential readable in
+// a box: a holder could open connections and send each body a byte at a time,
+// holding a handler and a connection slot apiece for as long as it liked.
+//
+// Mutation: read the body straight off the request and no deadline is set.
+func TestAnExportsBodyIsReadUnderADeadline(t *testing.T) {
+	t.Parallel()
+	receiver := otlpReceiver(t, "")
+	a := newApp(t, api.Options{OtelReceiver: receiver})
+	rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest(http.MethodPost,
+		"/otlp/"+tokenFor(t, receiver, otlpTrace)+"/v1/traces", strings.NewReader(spans(t)))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+
+	before := time.Now()
+	a.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	rec.mu.Lock()
+	deadline := rec.deadline
+	rec.mu.Unlock()
+	if deadline.IsZero() {
+		t.Fatal("the export's body was read with no deadline")
+	}
+	if got := deadline.Sub(before); got < httpjson.BodyReadTimeout || got > httpjson.BodyReadTimeout+5*time.Second {
+		t.Errorf("the read deadline was set %v out, want %v", got, httpjson.BodyReadTimeout)
 	}
 }

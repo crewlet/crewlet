@@ -2,7 +2,6 @@ package api
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,16 +68,17 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, sandbox.MaxOtelPayload+1))
+	// THROUGH THE ONE BODY READER, which bounds the read in TIME as well as
+	// size (httpjson.BodyReadTimeout). This route read its body with no
+	// deadline of its own — the server sets none, by design, so each route
+	// bounds its own read — and a token is a day's credential readable
+	// inside a box, so a holder could open connections and send each body a
+	// byte at a time, holding a handler and a connection slot apiece for as
+	// long as it cared to. ReadBody answers past the cap with the shared
+	// spelling of a 413, and a body cut off or too slow with a 400.
+	body, err := httpjson.ReadBody(w, r, sandbox.MaxOtelPayload)
 	if err != nil {
-		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeUnreadableBody)
-		return
-	}
-	if len(body) > sandbox.MaxOtelPayload {
-		// The SHARED spelling of a 413. This route answered "payload too
-		// large" as text/plain while two others answered JSON with two
-		// different codes.
-		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
+		httpjson.Refuse(w, err)
 		return
 	}
 
