@@ -2507,6 +2507,89 @@ func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 	<-errs
 }
 
+// A LOG BUSIER THAN A FETCH WAIT STILL DRAINS: a run the broker had nothing
+// left behind, committed whole, is as much the end of the log as a fetch the
+// broker answers with nothing.
+//
+// On a log that gains a record more often than [statelog.FetchWait], every
+// fetch is answered with one, so a latch set only on an empty fetch was never
+// set while the company stayed busy: a data node restarted into it stayed a
+// LAGGING copy — asked last for every request, never a snapshot's donor —
+// until its company went quiet for half a second. The records here arrive five
+// to a fetch wait, and the loop must say it drained while they still do.
+func TestALogBusierThanAFetchWaitStillDrains(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	const records = 60
+	every := statelog.FetchWait / 5
+	stop, feeding := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(feeding)
+		for seq := uint64(1); seq <= records; seq++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(every):
+			}
+			h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq), fmt.Sprintf("op-%d", seq), 1))
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	defer func() {
+		close(stop)
+		<-feeding
+		cancel()
+		<-errs
+	}()
+	for !h.runner.Drained() {
+		select {
+		case <-feeding:
+			t.Fatalf("the loop said it drained only once the records stopped coming, %v apart: "+
+				"a busy log's copy never drains", every)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	if h.runner.Committed().Seq == 0 {
+		t.Fatal("the loop said it drained before it had applied a record the log held")
+	}
+}
+
+// A LOOP HOLDING A RECORD ABOVE A HOLE HAS NOT DRAINED, however empty the
+// broker's answers: the record it holds is one its rows do not, waiting for the
+// one below it the broker will deliver again, so its rows are a prefix of the
+// log rather than the whole of it. The latch used to be set on any empty fetch
+// with nothing in the run, the reorder buffer's records forgotten.
+func TestALoopHoldingARecordAboveAHoleHasNotDrained(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1)) // above a hole at 2
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-errs
+	}()
+	// EMPTY FETCHES, several: each is a FetchWait the broker answered with
+	// nothing while 3 sat in the buffer.
+	for start := time.Now(); time.Since(start) < 3*statelog.FetchWait; time.Sleep(2 * time.Millisecond) {
+		if h.runner.Drained() {
+			t.Fatalf("the loop said it drained at checkpoint %d, holding 3 above the hole at 2",
+				h.runner.Committed().Seq)
+		}
+	}
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	waitForDrain(t, h, true, "the loop to drain once the hole closed")
+	if got := h.runner.Committed().Seq; got != 3 {
+		t.Fatalf("the loop said it drained at checkpoint %d, want 3", got)
+	}
+}
+
 // THE FIRST DRAIN OF A RUN IS TOLD, ONCE, AND ONLY ONCE THE LATCH READS IT.
 //
 // What waits on the drain is a loop of somebody else's — a node's snapshot

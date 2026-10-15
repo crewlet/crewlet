@@ -339,8 +339,9 @@ type Runner struct {
 	// sequence; whether its rows have ever been the WHOLE state is a fact
 	// about a series, and a reader sampling the lag on a timer can miss
 	// every instant a busy log is empty. This loop cannot: a fetch the
-	// broker answers with nothing, while it holds nothing itself, is that
-	// instant.
+	// broker answers with nothing, or a run committed whole with nothing
+	// pending behind it — while it holds nothing itself, the reorder
+	// buffer included — is that instant ([Runner.nextRun]'s level).
 	//
 	// RESET WHEN THE LOOP RESTARTS, beside `stopped` and `fault`, because
 	// an adoption installs a peer's rows under a new history — what this
@@ -1697,7 +1698,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.recovered(ctx)
 			pause = 0
 		}
-		run, err := r.nextRun(ctx, tail, &buffer)
+		run, level, err := r.nextRun(ctx, tail, &buffer)
 		if err != nil {
 			// A FETCH THAT FAILED may be a broker restored under this
 			// running node, which takes the consumer with it: whatever
@@ -1714,11 +1715,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		if len(run) == 0 {
 			// THE BROKER ANSWERED, with nothing: whatever was wrong
-			// is not wrong now. It is also the one moment this node
-			// can prove its rows are the WHOLE state rather than a
-			// prefix of it — nothing is pending and nothing is in
-			// hand — so it is where the drain latch is set.
-			r.markDrained()
+			// is not wrong now. It is also a moment this node can
+			// prove its rows are the WHOLE state rather than a prefix
+			// of it — nothing is pending and nothing is in hand — so
+			// the drain latch is set here, unless the reorder buffer
+			// holds records above a hole.
+			if level {
+				r.markDrained()
+			}
 			r.recovered(ctx)
 			pause = 0
 			continue
@@ -1752,6 +1756,18 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.recovered(ctx)
 		pause = 0
 		tail = run[len(consumed):]
+		if level && len(tail) == 0 {
+			// THE OTHER MOMENT, and on a busy log the only one: a run
+			// closed because the broker had nothing more to deliver,
+			// committed whole, leaves nothing pending and nothing in
+			// hand. Latched only on an empty fetch, an applier on a
+			// log that gains a record more often than [FetchWait] —
+			// every fetch answered with one — never drained: a data
+			// node restarted into a busy company stayed a LAGGING
+			// copy, asked last for every request and never a
+			// snapshot's donor, for as long as the company stayed busy.
+			r.markDrained()
+		}
 	}
 }
 
@@ -2248,24 +2264,31 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 // time, and committing whatever one fetch happened to contain makes the commit
 // rate a property of the fetch size instead of the budget. On a barrier-heavy
 // stream that is one commit — and one fsync — per two dozen records.
-func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuffer) ([]Record, error) {
-	run := tail
+//
+// LEVEL says the run, once committed whole, leaves this node holding
+// everything the log held when the run closed: the broker said it had nothing
+// more to deliver — an empty fetch, or no record pending behind a run — and
+// the reorder buffer holds nothing above a hole. It is what latches
+// [Runner.Drained], and a run that closed for any other reason (the budget, a
+// waiter, a Pending the broker did not answer) says nothing either way.
+func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuffer) (run []Record, level bool, err error) {
+	run = tail
 	for {
 		if len(run) > 0 {
-			pending, err := r.fetch.Pending(ctx)
-			if err != nil || pending == 0 {
-				//nolint:nilerr // Pending is a HINT and its failure
-				// closes the batch rather than the applier: it says
-				// only whether another fetch could add anything, and
-				// what the run already holds is decoded, contiguous
-				// and safe to commit either way. A broker that cannot
-				// answer it fails the next Fetch too — and THAT call
-				// is the one that reports, because it is the one whose
-				// failure means the loop cannot proceed.
-				return run, nil
+			pending, perr := r.fetch.Pending(ctx)
+			if perr != nil || pending == 0 {
+				// Pending is a HINT and its failure closes the batch
+				// rather than the applier: it says only whether another
+				// fetch could add anything, and what the run already
+				// holds is decoded, contiguous and safe to commit either
+				// way. A broker that cannot answer it fails the next
+				// Fetch too — and THAT call is the one that reports,
+				// because it is the one whose failure means the loop
+				// cannot proceed.
+				return run, perr == nil && len(buffer.held) == 0, nil
 			}
 			if r.budgetWouldBind(run) {
-				return run, nil
+				return run, false, nil
 			}
 		}
 		wait := FetchWait
@@ -2287,28 +2310,32 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			wait = ApplyLinger
 			if target, waiting := r.waiters.minimum(); waiting && r.have(run, target) {
 				r.count(metrics.StatelogLingerYields)
-				return run, nil
+				return run, false, nil
 			}
 		}
 		batch, err := r.fetch.Fetch(ctx, FetchMessages, FetchBytes, wait)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return nil, false, ctx.Err()
 			}
-			return nil, fmt.Errorf("statelog: fetch from %s: %w", r.spec.Name, err)
+			return nil, false, fmt.Errorf("statelog: fetch from %s: %w", r.spec.Name, err)
 		}
 		records, err := r.decode(ctx, batch)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		ready, err := buffer.admit(records, r.Committed(), r.spec.Replay, run)
 		if err != nil {
-			return nil, r.stop(ctx, err)
+			return nil, false, r.stop(ctx, err)
 		}
 		run = append(run, ready...)
 		if len(batch) == 0 {
 			if len(run) == 0 {
-				return nil, nil
+				// THE BROKER ANSWERED, WITH NOTHING — level, unless the
+				// buffer holds records above a hole: those are records
+				// this node has not applied, waiting for one the broker
+				// will deliver again.
+				return nil, len(buffer.held) == 0, nil
 			}
 			// THE LINGER EXPIRED WITH RECORDS IN HAND, so the run
 			// commits. A pull that handed over nothing while the
@@ -2319,7 +2346,7 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			// happens only after this commit. A loop that kept pulling
 			// here waited for a delivery its own commit was the
 			// precondition of, and did so for ever.
-			return run, nil
+			return run, false, nil
 		}
 	}
 }
