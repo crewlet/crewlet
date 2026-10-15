@@ -1177,8 +1177,8 @@ func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing
 			"INJECTED": "value\nADMIN_TOKEN=forged",
 		},
 	}
-	if _, err := box.envArgs(nil); err != nil {
-		t.Fatalf("envArgs: %v", err)
+	if _, err := box.execArgv("true", ExecOptions{}); err != nil {
+		t.Fatalf("execArgv: %v", err)
 	}
 	blob, err := os.ReadFile(box.layout.envFile())
 	if err != nil {
@@ -1201,11 +1201,11 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 		runtime: "/usr/bin/docker", container: "c",
 		env: map[string]string{"PHASE": "run"},
 	}
-	if _, err := box.envArgs(map[string]string{"SETUP_ONLY": "yes"}); err != nil {
-		t.Fatalf("envArgs: %v", err)
+	if _, err := box.execArgv("true", ExecOptions{Env: map[string]string{"SETUP_ONLY": "yes"}}); err != nil {
+		t.Fatalf("execArgv: %v", err)
 	}
-	if _, err := box.envArgs(nil); err != nil {
-		t.Fatalf("envArgs: %v", err)
+	if _, err := box.execArgv("true", ExecOptions{}); err != nil {
+		t.Fatalf("execArgv: %v", err)
 	}
 	blob, _ := os.ReadFile(box.layout.envFile())
 	if strings.Contains(string(blob), "SETUP_ONLY") {

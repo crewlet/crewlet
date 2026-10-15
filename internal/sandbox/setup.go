@@ -114,6 +114,13 @@ func SetupEnv(steps []SetupStep) map[string]string {
 // recipe can reference the engine's identity facts and its own configured
 // tokens at provisioning time.
 //
+// In a LOGIN SHELL, as the coding job is, with env over its profile
+// ([ExecOptions.Login]): a step that installs or configures a tool has to find
+// the one the agent will find — the CLI a version manager puts on PATH only in
+// a login shell — and see the variables the agent will see. A local box ran
+// its steps in a plain shell while its job ran in a login one, so a step's
+// `npm` could be another `npm` than the job's.
+//
 // Returns a [SetupError] on the FIRST failed command so the caller tears the
 // box down: the coding agent's brief promises this environment, so a partial
 // application must never reach a run.
@@ -131,6 +138,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 			result, err := box.Exec(ctx, cmd, ExecOptions{
 				Env:        env,
 				TimeoutSec: step.timeout().Seconds(),
+				Login:      true,
 			})
 			if err != nil {
 				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error()}
