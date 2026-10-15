@@ -71,6 +71,14 @@ var (
 	// (verify.go). Definite for this node now; a git node that serves the
 	// repository holds one. The API answers it 404.
 	ErrNotHeld = errors.New("cache: this node holds no copy of the repository")
+
+	// ErrPastBound is a check of a repository's copy that ran past the bound
+	// what the copy holds gives it (CheckBudget) and was ended there: a disk
+	// or a node far slower than the bound allows for, or a check wedged on
+	// one. Never a finding about the copy — what the check found before it
+	// was ended is in its report — and the check is had again by asking
+	// again. Wrapped naming the bound and the bytes it was over.
+	ErrPastBound = errors.New("cache: the check ran past its bound")
 )
 
 // ErrPackMissing is a pack a row names that the object store could not hand

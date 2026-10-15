@@ -338,19 +338,21 @@ func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 }
 
 // verificationView is a verification as the API answers it: the operation's
-// id, its repository and repair, where it is and when, the report — what the
-// check found, everything once it is done and what it found before it failed
-// once it failed — and, failed, why, in the read surface's vocabulary.
+// id, its repository and repair, where it is and when — and, while it checks
+// the copy, when the node ends that check by — the report — what the check
+// found, everything once it is done and what it found before it failed once
+// it failed — and, failed, why, in the read surface's vocabulary.
 type verificationView struct {
-	ID      string              `json:"id"`
-	Repo    string              `json:"repo"`
-	Repair  bool                `json:"repair"`
-	State   host.VerifyState    `json:"state"`
-	Started time.Time           `json:"started"`
-	Ended   time.Time           `json:"ended,omitzero"`
-	Report  *cache.VerifyReport `json:"report,omitempty"`
-	Error   string              `json:"error,omitempty"`
-	Detail  string              `json:"detail,omitempty"`
+	ID       string              `json:"id"`
+	Repo     string              `json:"repo"`
+	Repair   bool                `json:"repair"`
+	State    host.VerifyState    `json:"state"`
+	Started  time.Time           `json:"started"`
+	Deadline time.Time           `json:"deadline,omitzero"`
+	Ended    time.Time           `json:"ended,omitzero"`
+	Report   *cache.VerifyReport `json:"report,omitempty"`
+	Error    string              `json:"error,omitempty"`
+	Detail   string              `json:"detail,omitempty"`
 }
 
 // viewOf is v as the API answers it. A failure's sentence is the caller's to
@@ -361,6 +363,9 @@ type verificationView struct {
 func viewOf(v host.Verification) verificationView {
 	out := verificationView{ID: v.ID.String(), Repo: v.Repo, Repair: v.Repair, State: v.State,
 		Started: v.Started.UTC(), Ended: v.Ended.UTC()}
+	if v.State == host.VerifyRunning {
+		out.Deadline = v.Deadline.UTC()
+	}
 	if v.State != host.VerifyRunning && (v.Report.Repo != "" || v.Report.Name != "") {
 		report := v.Report
 		out.Report = &report

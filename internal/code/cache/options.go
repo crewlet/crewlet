@@ -111,6 +111,9 @@ type knobs struct {
 	// verifyFsck runs as Verify's fsck is about to ask for its maintenance
 	// slot in the incarnation at dir.
 	verifyFsck func(dir string)
+	// checkBudget, when set, is the bound of a check pass over a copy holding
+	// the bytes it is given, in place of CheckBudget's.
+	checkBudget func(bytes int64) time.Duration
 	// adopting runs while an adoption holds its share of the repository's
 	// directory, before it links: a case holds adoptions there together.
 	adopting func(repo string)

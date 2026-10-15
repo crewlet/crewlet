@@ -1214,6 +1214,142 @@ func BenchmarkMidx(b *testing.B) {
 	}
 }
 
+// BenchmarkVerify is an operator's check of a repository this node holds
+// (Cache.AdmitVerify, then Verification.Run), the figures a check's bound is
+// set from (CheckBudget):
+//
+//   - op=check is a check of a copy that is whole: its sync answered at
+//     once, the listing, every bundle hashed against its row, packed-refs,
+//     and git's connectivity check.
+//   - op=repair is the same with one pack damaged before each run — its
+//     largest, the last bytes of its last object overwritten with the timer
+//     stopped — so the check finds it, the rebuild links every other pack in
+//     and downloads that one from a store in the process, and the rebuilt
+//     copy is checked again.
+//   - op=hash is the hashing alone: every bundle's three files back to back,
+//     the share of a check VerifyHashPerMiB charges by the mebibyte, beside
+//     the connectivity check's own gitproc.PackWorkDeadline.
+//
+// size=small is five pushes of medianPush, a repository a team began this
+// week; size=100MB and size=1GB are BenchmarkMidx's source composition — every
+// commit four files of one directory, 64 packs — the gigabyte only under
+// CREWLET_BENCH_LARGE=1. ms/MiB is the operation over the copy's bytes.
+func BenchmarkVerify(b *testing.B) {
+	quiet(b)
+	for _, arm := range []struct {
+		name  string
+		bytes int64
+	}{{"small", 0}, {"100MB", 100_000_000}, {"1GB", 1_000_000_000}} {
+		b.Run("size="+arm.name, func(b *testing.B) {
+			if arm.bytes >= 1_000_000_000 {
+				large(b, "a 1 GB history fast-imported, packed, stored and synced")
+			}
+			w := newSyncWorld(b, onMemory)
+			w.processes = runtime.NumCPU()
+			var (
+				repo           string
+				total, objects int64
+			)
+			if arm.bytes == 0 {
+				repo, total = w.coldRepo(b, coldShape{packs: 5})
+			} else {
+				var src string
+				repo, src, _, _, total, objects = w.midxRepo(b, arm.bytes)
+				if err := os.RemoveAll(src); err != nil {
+					b.Fatal(err)
+				}
+			}
+			// THE CLOCK STANDS STILL, so the maintainer never finds the
+			// repository due and no run of its own shares the disk with a
+			// check.
+			clk := newClock()
+			c := w.open(b, clk.on, func(o *cache.Options) { o.MaxBytes, o.Logger = 1<<40, nil })
+			s, err := c.Sync(b.Context(), repo, linearizable)
+			if err != nil {
+				b.Fatalf("syncing the repository: %v", err)
+			}
+			s.Release()
+			for _, op := range []string{"hash", "check", "repair"} {
+				b.Run("op="+op, func(b *testing.B) {
+					b.SetBytes(total)
+					for b.Loop() {
+						if op == "hash" {
+							if _, err := cache.HashPacks(b.Context(), w.dir(b, c, repo)); err != nil {
+								b.Fatalf("hashing the packs: %v", err)
+							}
+							continue
+						}
+						if op == "repair" {
+							b.StopTimer()
+							damageLargestPack(b, w.dir(b, c, repo))
+							b.StartTimer()
+						}
+						v, err := c.AdmitVerify(repo)
+						if err != nil {
+							b.Fatalf("admitting the check: %v", err)
+						}
+						report, err := v.Run(b.Context(), cache.VerifyRun{Repair: op == "repair"})
+						v.Release()
+						switch {
+						case err != nil:
+							b.Fatalf("a %s: %v", op, err)
+						case len(report.Problems) != 0, op == "repair" && !report.Rebuilt:
+							b.Fatalf("a %s answered %+v", op, report)
+						}
+						if op == "repair" {
+							// The damaged incarnation's directory is in trash/
+							// once its last pin is gone: emptied now, or a
+							// gigabyte arm fills the disk a repair at a time.
+							b.StopTimer()
+							cache.JanitorPass(c)
+							b.StartTimer()
+						}
+					}
+					b.ReportMetric(float64(b.Elapsed())/float64(b.N)/1e6/(float64(total)/(1<<20)), "ms/MiB")
+					if objects > 0 {
+						b.ReportMetric(float64(objects), "objects")
+					}
+				})
+			}
+		})
+	}
+}
+
+// damageLargestPack overwrites eight bytes just before the trailer of the
+// largest pack in the incarnation directory dir — its last object's, which
+// only the hash of the bundle can find — as a disk going bad would.
+func damageLargestPack(b *testing.B, dir string) {
+	b.Helper()
+	packs, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.pack"))
+	if err != nil || len(packs) == 0 {
+		b.Fatalf("the packs in %s: %v (%d)", dir, err, len(packs))
+	}
+	var largest string
+	var size int64
+	for _, p := range packs {
+		info, err := os.Stat(p)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if info.Size() > size {
+			largest, size = p, info.Size()
+		}
+	}
+	if err := os.Chmod(largest, 0o600); err != nil {
+		b.Fatal(err)
+	}
+	f, err := os.OpenFile(largest, os.O_WRONLY, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, size-28); err != nil {
+		b.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		b.Fatal(err)
+	}
+}
+
 // memorySteps are what BenchmarkMidx's memory arms price, in the order they
 // run: each git process a cache runs over a whole repository, with what it
 // finds in the incarnation when it starts.

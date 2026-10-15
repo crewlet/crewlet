@@ -200,7 +200,10 @@
 // ([ErrNotHeld]): a check builds no copy, which would be a whole download of
 // the repository. It stops no maintenance run — one in flight finishes, the
 // files it holds while it runs admitted — and none starts on the repository
-// while it is admitted. Asked to repair, it rebuilds the repository — linking
+// while it is admitted. Each pass of it is bounded by what the copy holds
+// ([CheckBudget]) and ended there ([ErrPastBound]), so a check wedged on a
+// disk holds neither its slot nor the operator who asked. Asked to repair, it
+// rebuilds the repository — linking
 // in every pack it has just found whole and downloading only the rest, so one
 // damaged pack costs one GET — and checks the rebuild the same way; a rebuild
 // it has seen whole has ended the damage it was for, so that incarnation's
@@ -445,4 +448,16 @@
 // size, the packs' pages it maps included, was about one and a half to two
 // times its anonymous memory over the 100 MB (VmHWM: 243 MiB for the bitmap),
 // which the kernel takes back under pressure.
+//
+// A CHECK (BenchmarkVerify, at three runs and two over the gigabyte, which
+// only CREWLET_BENCH_LARGE=1 builds) of a whole copy takes 9.5 ms over five
+// pushes of 150 KB, 0.89 s over the 100 MB and 8.6 s over the gigabyte of the
+// composition above — 9.4 and 8.9 ms a mebibyte, git's connectivity check
+// nearly all of it: hashing every bundle back to back reads at about 1.1 GB/s
+// from the page cache with the CPU's SHA extensions (0.95 ms a mebibyte at
+// both sizes). A repair of one damaged pack — the check, the rebuild linking
+// every other pack in and downloading that one from a store in the process,
+// the check again — 30 ms, 1.5 s and 18.4 s. CheckBudget gives a pass about
+// 1.1 s a mebibyte, the connectivity check's gitproc.PackWorkDeadline and the
+// hashing's VerifyHashPerMiB.
 package cache
