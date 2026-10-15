@@ -154,6 +154,13 @@ type CLI interface {
 	// its work, for one that finishes but never exits: lines is the stream's
 	// last complete lines. Asked only when [Output.Terminal] is set.
 	Finished(lines string) bool
+
+	// Telemetry is the environment that switches this CLI's own
+	// OpenTelemetry export on, beside the endpoint the engine mints for a
+	// run — or nil for a CLI that exports nothing ([sandbox.Runner.Telemetry]).
+	// Every variable it names is the CLI's own vocabulary, which is why it
+	// is declared here and not in the sandbox package.
+	Telemetry() map[string]string
 }
 
 // Output is where a CLI's stdout lands in the box, and how it is read back.
@@ -225,6 +232,9 @@ func New(cli CLI) *Runner {
 
 // Name is the coding agent's config name.
 func (r *Runner) Name() string { return r.cli.Name() }
+
+// Telemetry is the CLI's own declaration ([CLI.Telemetry]).
+func (r *Runner) Telemetry() map[string]string { return r.cli.Telemetry() }
 
 // Install prepares the box: the artefact directory and the ask shim.
 //

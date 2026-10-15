@@ -580,6 +580,19 @@ type Runner interface {
 	// on a job in any state: one that has finished says so, and one that
 	// has said nothing yet reads as nothing rather than as an error.
 	Follow(handle RunHandle) LiveReading
+
+	// Telemetry is the environment that switches this agent's OWN
+	// OpenTelemetry export on, for a run the engine hands an endpoint to
+	// export to ([OtelReceiver.RunEnv]) — or nil for an agent that exports
+	// nothing the receiver can take.
+	//
+	// DECLARED BY THE RUNNER, because whether a CLI exports at all, which
+	// signals, and what its content switches are called are facts about
+	// that CLI — and this package stays tool-agnostic. Nil is also what
+	// decides that NO endpoint is minted for the run: a token handed to a
+	// box whose agent will never use it is a credential nothing needs.
+	// Fresh on every call, so a caller may add to it.
+	Telemetry() map[string]string
 }
 
 // RunRequest is one coding run's inputs.

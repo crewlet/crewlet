@@ -174,6 +174,11 @@ telemetry flush to a call's exit.
   `ANTHROPIC_BASE_URL` names: a trace id, a span id and the flag — what the
   engine's own `anthropic` entries send on every call.
 
+An entry in **agent mode** is the other case: Claude Code runs in a box, where
+the engine's tracer cannot follow it, so there its runner switches the CLI's
+own traces on and the box exports them through the engine's OTLP receiver —
+see [Code sandbox](code-sandbox.md#durability-completion-and-observability).
+
 ---
 
 ## Two modes: a text model, or the agent itself

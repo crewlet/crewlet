@@ -70,6 +70,16 @@ A few things worth knowing when deploying Crewlet:
   engine host (`/etc/claude-code/` on Linux) can switch its telemetry on for
   every seat, outside the engine's control
   (`docs/concepts/subscription-llm-backends.md#trace-context`).
+- **A coding box exports its agent's traces, through the engine.** With
+  `CREWLET_SANDBOX_OTEL_RECEIVER_URL` set, a Claude Code run in a box is
+  switched on to export its own spans to the engine's `/otlp/` receiver,
+  which forwards them to your collector with the collector's credential added
+  outside the box. Traces only: its metrics and its log events — its content
+  channel — are switched off, and so is every switch that would put a prompt,
+  a tool's arguments or output, or an answer on a span. A box image can bake
+  none of that back on, but `role.sandbox.env` can, deliberately: it wins over
+  every variable the engine sets in a box
+  (`docs/concepts/code-sandbox.md#durability-completion-and-observability`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.

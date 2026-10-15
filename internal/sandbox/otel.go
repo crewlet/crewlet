@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +109,31 @@ type OtelReceiverOptions struct {
 // retries anyway, so a dropped batch costs a gap in a trace rather than data
 // nobody can reconstruct.
 const OtelForwardTimeout = 10 * time.Second
+
+// OtelAnswerWithin is how long a box's exporter is told to wait for the
+// receiver to answer one export ([OtelTimeoutVar]), and what a runner derives
+// its agent's own export waits from.
+//
+// TIED TO [OtelForwardTimeout] rather than picked, because the receiver
+// answers only once it has forwarded. An exporter that gives up sooner
+// abandons an export the receiver is still forwarding, and its disconnect
+// cancels the forward — the batch is lost for having been slow rather than
+// refused. The specification's default exporter timeout is ten seconds, the
+// forward's own bound, so which of the two gave up first was a race.
+const OtelAnswerWithin = OtelForwardTimeout + otelAnswerMargin
+
+// otelAnswerMargin is what an answer takes beyond the forward itself: reading
+// the payload off the box's connection, decoding it, and the reply. Two
+// seconds carries the largest payload the route accepts (four mebibytes) at
+// sixteen megabits a second, far below any network a box shares with the
+// engine that mints its endpoint.
+const otelAnswerMargin = 2 * time.Second
+
+// OtelTimeoutVar is the standard variable an OTLP exporter reads its
+// per-export wait from, in milliseconds. Written into a box's environment
+// ([OtelReceiver.RunEnv]); the engine's own exporters take theirs from the
+// SDK, which reads the same variable from this process's environment.
+const OtelTimeoutVar = "OTEL_EXPORTER_OTLP_TIMEOUT"
 
 // NewOtelReceiver builds the receiver.
 func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
@@ -258,9 +284,15 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 //
 // The ENDPOINT carries the run's own token in its path, so
 // OTEL_EXPORTER_OTLP_HEADERS stays EMPTY — set explicitly rather than left
-// unset, because the exporter reads it from the ambient environment
-// otherwise, and a box inherits whatever the engine host exported. An empty
-// value is the difference between "no credential" and "the engine's".
+// unset, because an exporter reads it from the box's own environment
+// otherwise, and a box image or template can bake one in (a Dockerfile's ENV,
+// an E2B template's environment): a value written there would be sent to the
+// engine with every export. An empty value is the difference between "no
+// credential" and somebody else's.
+//
+// The PROTOCOL is http/protobuf, the one the receiver's route speaks, and the
+// TIMEOUT is [OtelAnswerWithin], so the exporter waits as long as the receiver
+// may take to answer — see there.
 //
 // The RESOURCE ATTRIBUTES are non-secret routing facts — which turn, which
 // seat — so a span from inside a box lands under the turn that started it
@@ -274,6 +306,10 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 // engine's own spans of that trace record nothing. It used to be `-01` for
 // every run, so a trace the operator's sampler had decided against was
 // exported from inside the box with no parent above it.
+//
+// What switches an agent's export ON is not here: that is the runner's to
+// declare ([Runner.Telemetry]), and the launch adds it only beside an
+// endpoint this minted.
 func (r *OtelReceiver) RunEnv(ctx context.Context, trace events.TraceContext,
 	turnID, handle string, ttl time.Duration,
 ) map[string]string {
@@ -287,6 +323,7 @@ func (r *OtelReceiver) RunEnv(ctx context.Context, trace events.TraceContext,
 		otlpenv.EndpointVar: r.EndpointFor(trace.TraceID, ttl),
 		otlpenv.ProtocolVar: string(otlpenv.HTTPProtobuf),
 		otlpenv.HeadersVar:  "",
+		OtelTimeoutVar:      strconv.FormatInt(OtelAnswerWithin.Milliseconds(), 10),
 		"OTEL_RESOURCE_ATTRIBUTES": strings.Join([]string{
 			"crewlet.turn_id=" + turnID,
 			"crewlet.agent_handle=" + handle,
