@@ -3,6 +3,7 @@ package codetest_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,6 +22,43 @@ func TestMain(m *testing.M) {
 		os.Exit(status)
 	}
 	os.Exit(m.Run())
+}
+
+// twoMembers is a cluster of two members, and nothing else: RunFleet must
+// refuse it before it asks anything more of it.
+type twoMembers struct{ codetest.Cluster }
+
+func (twoMembers) Members() []string { return []string{"m0", "m1"} }
+
+// inRefusedRun marks the run of this binary that RunFleet is expected to
+// fail: the parent case's child.
+const inRefusedRun = "CODETEST_RUNFLEET_OVER_TWO_MEMBERS"
+
+// A FLEET SUITE HANDED TWO MEMBERS REFUSES TO RUN, saying why: two members have
+// no quorum without each other, so the first case that kills one would leave a
+// code log nobody can write, and every case after it would fail for that one.
+// RunFleet refuses through t.Fatal, which ends the test that calls it — so
+// the call is made in a child run of this binary, whose failure and words are
+// what the case reads.
+func TestRunFleetRefusesTwoMembers(t *testing.T) {
+	if os.Getenv(inRefusedRun) != "" {
+		codetest.RunFleet(t, func(*testing.T) codetest.Cluster { return twoMembers{} })
+		return
+	}
+	//nolint:gosec // os.Args[0] is this test binary, run again on the one case.
+	child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestRunFleetRefusesTwoMembers$",
+		"-test.v")
+	child.Env = append(os.Environ(), inRefusedRun+"=1")
+	out, err := child.CombinedOutput()
+	if err == nil {
+		t.Fatalf("RunFleet over a cluster of two members passed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "two members have no quorum without each other") {
+		t.Errorf("RunFleet over a cluster of two members failed without saying why:\n%s", out)
+	}
+	if strings.Contains(string(out), "=== RUN   TestRunFleetRefusesTwoMembers/") {
+		t.Errorf("RunFleet ran a case on a cluster of two members:\n%s", out)
+	}
 }
 
 // okOnPending is a host's estate that LIES: a proposal the committer answered

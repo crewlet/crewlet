@@ -532,12 +532,14 @@ var allowedReplicatedWriter = []allowance{
 			"VACUUM INTO and the manifest — never to write a row.",
 	},
 	{
-		Prefix: "internal/code/codetest/solo.go", Kind: holder,
-		Why: "THE CODE HOST SUITE'S ONE-NODE TOPOLOGY: the engine's own " +
-			"composition for the code domain in one process. It opens the " +
-			"replicated estate through storetest.OpenEstate and hands the " +
-			"write handle to the framework's applier and write authority, " +
-			"as internal/engine/statelog.go does. It writes no row of its own.",
+		Prefix: "internal/code/codetest/datanode.go", Kind: holder,
+		Why: "THE CODE HOST SUITES' DATA NODE: StartDataNode is the engine's " +
+			"own composition of one data node's code domain, used by both " +
+			"topologies — SoloNode's one node and each member of " +
+			"internal/code/codecluster's fleet. It opens the replicated " +
+			"estate through storetest.OpenEstate and hands the write handle " +
+			"only to the framework's applier and write authority, as " +
+			"internal/engine/statelog.go does. It writes no row of its own.",
 	},
 	{
 		Prefix: "cmd/crewlet/ops.go", Kind: holder,

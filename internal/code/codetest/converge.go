@@ -69,6 +69,11 @@ func converged(ctx context.Context, f Fleet) error {
 	if err != nil {
 		return fmt.Errorf("the repositories: %w", err)
 	}
+	return convergedOn(ctx, f, names...)
+}
+
+// convergedOn is converged's check over the repositories called names alone.
+func convergedOn(ctx context.Context, f Fleet, names ...string) error {
 	var errs []error
 	for _, name := range names {
 		rows, err := f.Rows(ctx, name, Linearizable)
