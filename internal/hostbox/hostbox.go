@@ -31,20 +31,33 @@ const DirMode os.FileMode = 0o700
 // FileMode is the mode for every file they create, for the same reason.
 const FileMode os.FileMode = 0o600
 
-// PassthroughEnv is the host environment a child process may inherit.
+// PassthroughEnv is the host environment a child process may inherit — the
+// ONE list both consumers start from: a text-mode CLI call
+// (internal/providers/llm/cliagent) and a direct local box
+// (internal/sandbox).
 //
 // An ALLOWLIST, not a denylist, and that polarity is the whole point: the
-// engine's own environment holds the org's chat token, its database DSN and
-// possibly a metered API key, none of which a coding agent has any business
-// reading. A denylist would leak every variable nobody thought to name.
+// engine's own environment holds the org's chat token, the keyring that
+// decrypts its secret store (CREWLET_SECRET_KEY_<ID>) and possibly a metered
+// API key, none of which a coding agent has any business reading. A denylist
+// would leak every variable nobody thought to name.
 //
 // What is on it is what a process needs to run at all — where to find
-// binaries, how to talk TLS, how to reach the network — never what to
-// authenticate as. Credentials reach a child only through the run environment
-// config deliberately put there.
+// binaries, how to render text, what terminal it is on, whom to trust for TLS
+// and how to reach the network — never what to authenticate as. Credentials
+// reach a child only through the run environment config deliberately put
+// there.
+//
+// ONE LIST, because there were two and they drifted: the CLI backend kept its
+// own copy, which lacked ALL_PROXY, TERM and LC_NUMERIC while this one lacked
+// LANGUAGE — so a host that reaches the network only through a SOCKS proxy
+// broke every text-mode call and no local box, from one setting.
 var PassthroughEnv = []string{
 	"PATH",
 	"LANG",
+	// GNU gettext's priority list of languages, consulted ahead of LC_ALL
+	// and LANG by a CLI that translates its own messages.
+	"LANGUAGE",
 	"LC_ALL",
 	"LC_CTYPE",
 	"LC_NUMERIC",

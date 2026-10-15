@@ -87,12 +87,18 @@ memory inside the CLI would make turns non-reproducible and would carry
 one task's context into the next.
 
 **Between the seat and the host.** The child process gets an
-**allowlisted** environment — `PATH`, locale, TLS trust, proxy settings,
-plus whatever the profile and your `cli.env` declare — never
-the process environment. Inheriting the engine's environment would hand every seat
-the org's `SLACK_BOT_TOKEN` and database DSN. It would also, for a
-subscription backend, silently bill a metered `ANTHROPIC_API_KEY` that
-happened to be exported.
+**allowlisted** environment, plus whatever the profile and your `cli.env`
+declare — never the process environment. What it inherits from the engine
+host is `PATH`; the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`,
+`LC_NUMERIC`), `TERM` and `TZ`; TLS trust (`SSL_CERT_FILE`, `SSL_CERT_DIR`,
+`CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`); and the
+proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, in
+either case) — the same list a [local sandbox box](code-sandbox.md#local-sandboxes)
+starts from, so a host whose network is reachable only through a proxy
+reaches it from both. Inheriting the engine's environment would hand every
+seat the org's `SLACK_BOT_TOKEN` and the `CREWLET_SECRET_KEY_<ID>` keyring
+that decrypts the secret store. It would also, for a subscription backend,
+silently bill a metered `ANTHROPIC_API_KEY` that happened to be exported.
 
 **Working directory.** Each call runs in an empty, per-call scratch
 directory that is removed afterwards — so a CLI that reads `AGENTS.md` /
