@@ -99,6 +99,26 @@ func (e *Engine) dataRoster(context.Context) ([]string, error) {
 	return presenceRoster{view: e.dataView}.LiveDataNodes()
 }
 
+// RoutedDataNodes is every live data node this node's estate router asks, by
+// id and sorted — its placement's own answer ([Engine.estatePlacement]), so
+// the order a keyed operation is asked in (rendezvous.Order over these) is
+// computed from exactly this — or why the view it reads cannot say, never
+// "none".
+//
+// A LISTING, so a node that claimed its presence since the view last listed is
+// not in it yet: the view hears the claim and lists again within about a
+// second ([coord.LeaseView]), and until then routes without it — a push the
+// joining node's repositories would send there is committed by its runner-up,
+// which the broker's compare-and-set keeps correct and which is not the one
+// group commit the keyed order exists for. A fleet booted at once is that
+// second from each member naming the others, every first listing having been
+// taken before any presence lease existed. A caller that must see the fleet's
+// routing whole — a test asserting where pushes meet — waits for this to name
+// every member.
+func (e *Engine) RoutedDataNodes() ([]string, error) {
+	return e.estatePlacement().Holders()
+}
+
 // newDataView builds the watched view of the fleet's presence leases, or nil
 // where there is no coordination.
 //
