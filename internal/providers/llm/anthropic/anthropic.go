@@ -96,7 +96,11 @@
 // It ends by the SDK's reading, which is not always the engine's. A key the
 // API refused, an `error` event and a stream cut before `message_stop` end in
 // ERROR with the API's `error.type`, and a stream that stalls part-way is a
-// `client_timeout_error`. But a stall BEFORE THE FIRST BYTE reaches the SDK only
+// `client_timeout_error` over HTTP/1.1 and HTTP/2 alike — the SDK reads the
+// body through the idle watchdog's wrapper, which reports a read the stall
+// failed as the stall where Go's HTTP/2 client, the protocol the real API
+// speaks, reports a bare cancellation (see httpapi.IdleWatchdog). But a stall
+// BEFORE THE FIRST BYTE reaches the SDK only
 // as a cancelled context — the idle watchdog's — which it takes for the
 // caller's own doing and leaves with no status: the engine's timeout is on the
 // phase event, and on `llm.round` when the round fails.

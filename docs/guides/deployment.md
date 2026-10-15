@@ -1420,7 +1420,10 @@ is pinned off, so it records metadata only, chiefly:
 It ends by the SDK's reading, which is not always the engine's. A key the API
 refused, an `error` event and a stream cut before its end are an error carrying
 the API's `error.type` (`rate_limit_error`, `overloaded_error`, `api_error`), and
-a stream that goes silent part-way is a `client_timeout_error`. A stream that is
+a stream that goes silent part-way is a `client_timeout_error` — over HTTP/1.1
+and HTTP/2 alike, though Go's HTTP/2 client, which is what reaches the real API,
+reports the cancelled read as the application stopping, so the engine's watched
+body hands the SDK the stall in its place. A stream that is
 silent **before its first byte** reaches the SDK only as a cancelled request,
 which it leaves with no status: the engine's timeout is on the phase event, and
 on `llm.round` when the round fails.
