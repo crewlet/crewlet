@@ -511,6 +511,43 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 }
 
+// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the two
+// that are facts about the whole fleet are not: a full log refuses every
+// node's barrier, and a capacity window holds every node. Each code is named
+// here, so a code added to the set is a decision this table has to make —
+// and a code from a newer build, which nobody here can judge, is final.
+func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
+	t.Parallel()
+	want := map[statelog.ReadRefusal]bool{
+		statelog.RefuseBehind:               true,
+		statelog.RefuseDeferred:             true,
+		statelog.RefuseDeferredScopeUnknown: true,
+		statelog.RefuseStalled:              true,
+		statelog.RefuseBelowFloor:           true,
+		statelog.RefuseFloorUnknown:         true,
+		statelog.RefuseEvicted:              true,
+		statelog.RefuseBrokerUnreachable:    true,
+		statelog.RefuseNoQuorum:             true,
+		statelog.RefuseWrongStream:          true,
+		statelog.RefuseTooStale:             true,
+		statelog.RefuseLogFull:              false,
+		statelog.RefuseMaintenance:          false,
+	}
+	for _, code := range statelog.ReadRefusals {
+		elsewhere, judged := want[code]
+		if !judged {
+			t.Errorf("%q is a refusal this table does not judge: say whether another node may serve it", code)
+			continue
+		}
+		if got := code.Elsewhere(); got != elsewhere {
+			t.Errorf("%q says another node may serve it: %v, want %v", code, got, elsewhere)
+		}
+	}
+	if statelog.ReadRefusal("made_up").Elsewhere() {
+		t.Error("a refusal code this build does not know says another node may serve it")
+	}
+}
+
 // A POINT READ REFUSES ON A DEFERRED SCOPE AND A SET READ CLAIMS NOTHING.
 //
 // The two are different in kind. A point read is about an object whose row may

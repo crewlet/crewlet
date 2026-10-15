@@ -114,6 +114,13 @@ func TestAReadsOwnWaitsEndWhileItsAskerListens(t *testing.T) {
 // database is one no read may touch.
 func laggingLinearizableRead(t *testing.T) func(context.Context) error {
 	t.Helper()
+	return laggingReadOn(t, committedAppender{})
+}
+
+// laggingReadOn is [laggingLinearizableRead] appending its barriers to log, so
+// a case can count them across the nodes of a fleet.
+func laggingReadOn(t *testing.T, log statelog.Appender) func(context.Context) error {
+	t.Helper()
 	domain := tracker.Domain{}
 	spec := domain.Stream()
 	reserve, err := statelog.NewReserve(spec.Name,
@@ -122,7 +129,7 @@ func laggingLinearizableRead(t *testing.T) func(context.Context) error {
 		t.Fatal(err)
 	}
 	encode := func(env statelog.Envelope) ([]byte, error) { return json.Marshal(env) }
-	index, err := statelog.NewReadIndex(domain, spec, committedAppender{}, reserve, encode,
+	index, err := statelog.NewReadIndex(domain, spec, log, reserve, encode,
 		func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatal(err)

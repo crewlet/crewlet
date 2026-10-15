@@ -141,7 +141,11 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		out.Detail = outOfService(s.self, wrong)
 		return encodeReply(out)
 	}
-	reason, detail, obsolete := ready(ctx, s.self, spec, b, req.Floors, req.AcceptLagging)
+	var spent statelog.Spent
+	if req.Spent != nil {
+		spent = *req.Spent
+	}
+	reason, detail, obsolete := ready(ctx, s.self, spec, b, req.Floors, req.AcceptLagging, spent)
 	for _, gone := range obsolete {
 		out.Obsolete = append(out.Obsolete, gone.Stream)
 	}
@@ -159,7 +163,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		written = &writtenItems{}
 		req.Actor.Provenance.Written = written
 	}
-	result, err := spec.serve(ctx, b, req.Actor, req.Args)
+	result, err := spec.serve(readSpent(ctx, spec, spent), b, req.Actor, req.Args)
 	out.Written = written.list()
 	switch {
 	case errors.Is(err, errNoHalf):
@@ -224,8 +228,13 @@ func encodeResult(result any) ([]byte, error) {
 // `behind` while that applier was faulted. This node's own router never sends
 // one; the check is the server's own, so the rule does not depend on every
 // asker keeping it.
+//
+// A FLOOR THE REQUEST ALREADY WAITED OUT on a node asked before this one
+// ([statelog.Spent.Waited]) is not waited for again: this node serves if it
+// has applied it and is behind at once if it has not, so a walk past N nodes
+// behind one floor waits one read budget rather than N.
 func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []statelog.Position,
-	acceptLagging bool) (reason unservedReason, detail string, obsolete []statelog.Position) {
+	acceptLagging bool, spent statelog.Spent) (reason unservedReason, detail string, obsolete []statelog.Position) {
 
 	if !spec.ungated && !acceptLagging && b.Answers != nil && !b.Answers(ctx) {
 		return unservedLagging, fmt.Sprintf("%s's copy of %s lags its log — it has "+
@@ -240,12 +249,18 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 		if floor.Seq == 0 || floor.Stream != spec.floorStream {
 			continue
 		}
-		bound, gone, behind := waitFloor(ctx, b, floor)
+		waited := spent.WaitedFor(floor)
+		bound, gone, behind := waitFloor(ctx, b, floor, waited)
 		if gone {
 			obsolete = append(obsolete, floor)
 			continue
 		}
 		if behind != nil {
+			if waited {
+				return unservedBehind, fmt.Sprintf("%s has not applied %s, which a node "+
+					"asked before it already waited a whole bound for — so it waited for "+
+					"nothing", self, floor), obsolete
+			}
 			return unservedBehind, fmt.Sprintf("%s has not applied %s within %s: %v",
 				self, floor, bound, behind), obsolete
 		}
@@ -256,16 +271,21 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 // waitFloor waits for this node to apply one floor, within the read budget —
 // and, on a request asked across the wire, within what its asker's attempt
 // left ([statelog.WithReplyMargin]), so a node that runs out says it is behind
-// while the asker is still listening.
+// while the asker is still listening — or not at all where the request
+// already waited it out (waited), when it only checks.
 //
 // It answers the bound it waited within and the error to report as "behind",
 // or obsolete when the floor names a generation this node's log has
 // abandoned: a position nobody will ever reach again, which the asker should
 // stop carrying rather than refuse every read on.
-func waitFloor(ctx context.Context, b Backend, floor statelog.Position) (bound statelog.WaitBound,
-	obsolete bool, behind error) {
+func waitFloor(ctx context.Context, b Backend, floor statelog.Position, waited bool) (
+	bound statelog.WaitBound, obsolete bool, behind error) {
 
-	bounded, cancel, bound := statelog.WaitWithin(ctx, statelog.ReadBudget)
+	budget := statelog.ReadBudget
+	if waited {
+		budget = 0
+	}
+	bounded, cancel, bound := statelog.WaitWithin(ctx, budget)
 	defer cancel()
 	err := b.Committed(bounded, floor)
 	switch {
@@ -276,6 +296,18 @@ func waitFloor(ctx context.Context, b Backend, floor statelog.Position) (bound s
 	default:
 		return bound, false, err
 	}
+}
+
+// readSpent is ctx carrying what the request it runs has already paid for on
+// the nodes asked before this one ([statelog.WithSpent]) — for a READ, whose
+// barrier and waits are what was paid; a write's waits are its write
+// authority's own, for its own record, and nothing a read refused elsewhere
+// paid for describes them.
+func readSpent(ctx context.Context, spec *opSpec, spent statelog.Spent) context.Context {
+	if spec.class != opRead {
+		return ctx
+	}
+	return statelog.WithSpent(ctx, spent)
 }
 
 // encodeReply never fails: every field of a reply is plain data, and an

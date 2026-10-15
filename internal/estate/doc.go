@@ -110,7 +110,29 @@
 // is out of service, it runs no native backend, that copy lags its log, or it
 // could not reach the
 // caller's floor in time — did not execute anything, so every class moves on
-// from it. When no data node runs the operation, it is refused as [ErrUnserved],
+// from it. So does a READ a copy refuses for a reason about ITSELF
+// ([statelog.ReadRefusal.Elsewhere]): its applier did not reach the barrier a
+// linearizable read appended (`behind`), it stalled, it cannot decode a record,
+// it is evicted or below the floor, it lost its broker or its quorum — another
+// node's copy may serve the read at once, so the next one is asked and the
+// refusal is the answer only where nobody does better. Returned as the answer,
+// a git fetch through a data node whose applier fell a second behind was told
+// 503 while two peers could serve it. `log_full` and `maintenance` hold for
+// every node alike, and are answered from the first node that gives them.
+//
+// A WALK PAYS FOR A READ ONCE, whatever its length: a refusal says what the
+// read had paid for ([statelog.Refused.Spent]) — the read index its barrier
+// established, the position it waited its whole bound for, a log its barrier
+// ran out on — and every node asked after it is handed that ([request.Spent],
+// [statelog.WithSpent]): it waits for the read index rather than append a
+// barrier of its own, waits for no position already waited out (a floor
+// included, which a node behind it answers [unservedBehind] for), and appends
+// no second barrier to a log without a quorum. Asked afresh, every node of a
+// fleet one burst put behind together appended a barrier to the log they were
+// all behind on and waited a whole read budget for it, so one final `behind`
+// cost a barrier and two seconds per data node.
+//
+// When no data node runs the operation, it is refused as [ErrUnserved],
 // naming who was asked and what each said — never an empty answer, which would
 // say the company has none of what was asked for.
 //

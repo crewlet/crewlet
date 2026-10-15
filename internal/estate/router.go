@@ -577,6 +577,30 @@ type walk struct {
 	// the key's order for a keyed one, whose committer the last resort
 	// must not jump either.
 	lagging []string
+
+	// spent is what the request has already paid for on the nodes it asked
+	// — the read index one node's barrier established, every position one
+	// node waited its whole bound for, every log a barrier ran out on — and
+	// every node asked after them is handed it ([statelog.Spent]), so a walk
+	// of N nodes appends at most one barrier and waits at most one bound
+	// for a position rather than N of each.
+	spent statelog.Spent
+}
+
+// paid adds what one node's refusal of a read had paid for to what the walk
+// carries.
+func (w *walk) paid(err error) {
+	var refused *statelog.Refused
+	if errors.As(err, &refused) {
+		w.spent = w.spent.Merge(refused.Spent)
+	}
+}
+
+// waitedOut is a node behind the floors it was handed ([unservedBehind]):
+// its one way to say so is a floor wait that ran its whole bound, so every
+// node asked after it waits for none of them.
+func (w *walk) waitedOut(floors []statelog.Position) {
+	w.spent = w.spent.Merge(statelog.Spent{Waited: floors})
 }
 
 func (w *walk) note(format string, args ...any) {
@@ -660,7 +684,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 			}
 			continue
 		}
-		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false)
+		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false, w.spent)
 		if err != nil {
 			return nil, err
 		}
@@ -699,7 +723,7 @@ func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x e
 			}
 			continue
 		}
-		rep, answered, askErr := r.askFor(ctx, spec, actor, x, node, budget, true)
+		rep, answered, askErr := r.askFor(ctx, spec, actor, x, node, budget, true, w.spent)
 		if askErr != nil {
 			return nil, true, askErr
 		}
@@ -734,19 +758,52 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 		return nil, false, nil
 	}
 	b.ServerSeams = r.seams
-	value, refusal, why, ran := r.runLocal(ctx, spec, b, x, acceptLagging)
+	value, refusal, why, ran := r.runLocal(ctx, spec, b, x, acceptLagging, w.spent)
 	switch {
 	case why != "":
-		if refusal == unservedLagging {
+		switch refusal {
+		case unservedLagging:
 			w.lagging = append(w.lagging, r.self)
+		case unservedBehind:
+			w.waitedOut(r.floorsFor(spec))
 		}
 		w.note("%s: %s", r.self, why)
 	case unvouched(spec, value, ran):
 		w.fallback = &held{value: value, err: ran}
+	case refusedHere(spec, ran):
+		w.fallback = &held{err: ran}
+		w.paid(ran)
+		w.note("%s: %v", r.self, ran)
 	default:
 		return value, true, ran
 	}
 	return nil, false, nil
+}
+
+// refusedHere is a READ a copy refused for a reason about ITSELF — behind the
+// barrier its linearizable read appended, stalled, holding a record it cannot
+// decode, below the floor, evicted, cut off from its broker or from a quorum —
+// which another data node may serve ([statelog.ReadRefusal.Elsewhere]). The
+// node ran nothing, so the walk asks the next one and keeps the refusal as its
+// answer only where no node does better. Returned as the answer instead, a
+// git fetch through a data node whose applier fell a second behind was told
+// 503 while two peers' copies could have served it, and so was every seat's
+// linearizable read on that node.
+//
+// WHAT THE REFUSAL HAD PAID FOR GOES WITH THE READ ([statelog.Refused.Spent],
+// [walk.spent]): the next node is asked at the read index the refusing one
+// established and waits for no position it already waited out. Asked afresh,
+// each node appended a barrier of its own and waited a whole read budget for
+// it, so on a fleet one burst put behind together the one final `behind`
+// cost a barrier and two seconds per data node — barriers every node's
+// applier then applied, on the very log they were all behind on.
+//
+// A READ ONLY: a write is refused by the write authority's own answers
+// (statelog.Unavailable), whose class rules say what may be repeated, and a
+// read is safe to ask anywhere.
+func refusedHere(spec *opSpec, err error) bool {
+	var refused *statelog.Refused
+	return spec.class == opRead && errors.As(err, &refused) && refused.Code.Elsewhere()
 }
 
 // askFor asks one data node to run the operation, carrying this node's floor
@@ -754,13 +811,17 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 // generation its log abandoned. err is set only where the request could not be
 // made at all.
 func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
-	node string, budget time.Duration, acceptLagging bool) (reply, bool, error) {
+	node string, budget time.Duration, acceptLagging bool, spent statelog.Spent) (reply, bool, error) {
 
 	floors := r.floorsFor(spec)
-	rep, answered, err := r.ask(ctx, node, spec.lane.subject(node), request{
+	req := request{
 		Op: spec.name, Args: x.encoded, Actor: actor,
 		Floors: floors, From: r.self, AcceptLagging: acceptLagging,
-	}, budget, r.wholeAttempt(spec))
+	}
+	if !spent.IsZero() {
+		req.Spent = &spent
+	}
+	rep, answered, err := r.ask(ctx, node, spec.lane.subject(node), req, budget, r.wholeAttempt(spec))
 	if err != nil {
 		return reply{}, false, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
@@ -796,6 +857,8 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 		switch rep.Unserved {
 		case unservedLagging:
 			w.lagging = append(w.lagging, node)
+		case unservedBehind:
+			w.waitedOut(r.floorsFor(spec))
 		case unservedOutOfService:
 			r.markOutOfService(node, spec.copies)
 		case unservedNoBackend:
@@ -813,13 +876,24 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 		w.note("%s: %s", node, rep.Detail)
 		return nil, false, nil
 	}
+	var failure error
+	if rep.Err != nil {
+		failure = decodeError(rep.Err)
+		if refusedHere(spec, failure) {
+			// NOT ANSWERED-BY, so not the node asked first next time:
+			// it ran nothing, and what made it refuse is its own.
+			w.fallback = &held{err: failure}
+			w.paid(failure)
+			w.note("%s: %v", node, failure)
+			return nil, false, nil
+		}
+	}
 	op := ""
 	if x.key != "" {
 		op = spec.name
 	}
 	r.markAnswered(node, spec.copies, op)
-	if rep.Err != nil {
-		failure := decodeError(rep.Err)
+	if failure != nil {
 		if unvouched(spec, nil, failure) {
 			w.fallback = &held{err: failure}
 			w.note("%s: unvouched", node)
@@ -873,19 +947,20 @@ func (r *Router) wholeAttempt(spec *opSpec) time.Duration {
 	return r.timing.WriteAttempt
 }
 
-// runLocal runs one operation in-process on this node's own copy. why is set,
-// and nothing ran, when the copy could not take it — the same answers a remote
-// node gives, and the router moves on from each — with refusal the reason a
-// remote node would have answered.
+// runLocal runs one operation in-process on this node's own copy, held to
+// what the walk has already paid for on the nodes it asked first (spent) as a
+// remote node is. why is set, and nothing ran, when the copy could not take it
+// — the same answers a remote node gives, and the router moves on from each —
+// with refusal the reason a remote node would have answered.
 func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, x exchange,
-	acceptLagging bool) (value any, refusal unservedReason, why string, err error) {
+	acceptLagging bool, spent statelog.Spent) (value any, refusal unservedReason, why string, err error) {
 
-	reason, detail, obsolete := ready(ctx, r.self, spec, b, r.floorsFor(spec), acceptLagging)
+	reason, detail, obsolete := ready(ctx, r.self, spec, b, r.floorsFor(spec), acceptLagging, spent)
 	r.session.Forget(obsolete...)
 	if reason != "" {
 		return nil, reason, detail, nil
 	}
-	value, err = x.local(ctx, b)
+	value, err = x.local(readSpent(ctx, spec, spent), b)
 	switch {
 	case errors.Is(err, errNoHalf):
 		return nil, unservedNoBackend, ranNothingDetail(r.self, spec.name, err), nil

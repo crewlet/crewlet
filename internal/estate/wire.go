@@ -159,6 +159,15 @@ type request struct {
 	// although its copy does ([unservedLagging]) — held to the floors above
 	// and to the read's own level, which are what make its answer sound.
 	AcceptLagging bool `json:"accept_lagging,omitempty"`
+
+	// Spent is what the request already paid for on the nodes the asker
+	// asked before this one ([statelog.Spent]): the read index one of them
+	// established, which this node's linearizable read waits for rather than
+	// append a barrier of its own; every position one of them waited its
+	// whole bound for, which this node waits for no longer; every log a
+	// barrier ran out on, which it appends no second barrier to. Absent on a
+	// request's first ask.
+	Spent *statelog.Spent `json:"spent,omitempty"`
 }
 
 // unservedReason is why a node answered without running an operation.

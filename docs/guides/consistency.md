@@ -254,6 +254,27 @@ Four of them are worth coming back to **this** node for — `behind`,
 distinction is in the code rather than in a retry loop's guesswork: a caller
 that retried `deferred` would loop forever.
 
+Coming back to this node and asking another are different questions. Eleven of
+the thirteen are about **this node** — its copy, its view of the log, its side
+of a partition — so another data node may serve the same read at once: a
+node that cannot decode a record will never serve it, while a peer that can
+does. The estate's router therefore asks the next data node a read refused
+for any of them, and answers with the refusal only where no node does better.
+Asking costs a question per node and nothing more, because the refusal says
+what the read already paid for and the router hands it to every node it asks
+next: a `linearizable` read waits for the barrier the first node appended
+rather than appending one of its own — as linearizable, since that barrier
+was appended after the read began — a position one node waited its whole
+read budget for is not waited for again (served if the node holds it,
+`behind` at once if not), and a log whose barrier ran its whole five seconds
+without committing gets no second one (`no_quorum` at once). So a fleet that
+one burst put behind together refuses a read after one barrier and one read
+budget, rather than a barrier and two seconds per data node.
+Two are about **the whole fleet** — `log_full`, since every node appends its
+barrier to the one log at the one ceiling, and `maintenance`, since every node
+of a fleet in a capacity window is in one — and those are answered as they
+come, from the first node that gives them.
+
 Every refusal is about **one domain's copy**. A node whose tracker copy refuses
 `stalled` or `below_floor` still answers knowledge-base reads from its own
 pages, and the estate's router sends a seat's call on the tracker to a data
