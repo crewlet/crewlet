@@ -93,8 +93,9 @@ type Call struct {
 
 	Spent Spent
 
-	// Trace is the trace the call was made under. A coalesced record
-	// carries its first call's.
+	// Trace is the trace the call was made under — its `llm.auxiliary`
+	// span's. A record coalesces only calls of one trace (see [key]) and
+	// carries its first call's span.
 	Trace events.TraceContext
 }
 
@@ -104,8 +105,16 @@ type Publisher interface {
 }
 
 // key is one bucket's identity: every dimension a record is filed under.
+//
+// THE TRACE IS ONE OF THEM. A record is filed under a trace (its first call's
+// `llm.auxiliary` span), and a bucket that took calls from two traces filed the
+// second one's spend under the first: a person's two questions a moment apart,
+// or two background ticks inside one flush, read as one call's cost in one
+// trace and none in the other. Within a turn, a reflection pass or a
+// background tick every call shares the trace already, so this splits nothing
+// a record ever meant to hold together.
 type key struct {
-	stage, who, turn, purpose, model, provider, day string
+	stage, who, turn, purpose, model, provider, day, trace string
 }
 
 // bucket is one key's calls since its last flush.
@@ -174,6 +183,7 @@ func (l *Ledger) Add(c Call) {
 	k := key{
 		stage: string(c.Use.Stage), who: c.Seat.who(), turn: c.Use.TurnID,
 		purpose: string(c.Use.Purpose), model: c.Model, provider: c.ProviderKey, day: c.Day,
+		trace: c.Trace.TraceID,
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -1277,8 +1277,9 @@ reflection pass runs in `learning.reflect` under the turn it reflects on, a
 background pass in a root of its own, and a person's question on the operator
 surface in that call's `tool.call`. Where nothing above an auxiliary call
 holds a span even so, `llm.auxiliary` is the root. The call's `auxiliary_spend`
-record names the call's own span either way, so the record and the spans of the
-call it records are always one trace.
+record is filed under the call's own span either way — a record coalesces only
+calls of one trace, and names the first one's — so the record and the spans of
+the calls it counts are always one trace.
 
 The engine's span attributes are deliberately thin: the seat, the phase, the
 model, the round, the tool and its outcome, an auxiliary call's stage and

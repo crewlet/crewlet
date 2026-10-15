@@ -366,10 +366,10 @@ agent_phase_completed      # one phase's durable record: prompts, response,
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider
-                           # entry, company day — coalesced over one flush of
-                           # the node's ledger: calls, failed_calls, tokens,
-                           # first call's start and last call's end, under
-                           # its first call's `llm.auxiliary` span. No
+                           # entry, company day, trace — coalesced over one
+                           # flush of the node's ledger: calls, failed_calls,
+                           # tokens, first call's start and last call's end,
+                           # under its first call's `llm.auxiliary` span. No
                            # prompt, no response, no `failed` key. STORED AND
                            # NOT FED: it never takes a row of the activity
                            # feed, and it moves no seat's state
