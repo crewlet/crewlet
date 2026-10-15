@@ -478,7 +478,11 @@ type Request struct {
 	Effort Effort
 
 	// OnDelta, when set, asks the backend to stream and calls this as text
-	// arrives. Nil — the common case — takes the ordinary unary path.
+	// arrives. Nil — the common case — asks for the answer alone, which is
+	// not the same as asking for no stream: the Anthropic backend streams
+	// every call whether or not anybody listens, because the vendor requires
+	// a stream for an output cap as large as the one it sends, and calls
+	// nothing; the others take their unary path.
 	//
 	// A REQUEST FIELD rather than a second method on [Provider], because
 	// streaming is a property of one call and not of a backend: thirteen
