@@ -289,18 +289,20 @@ func TestAnObjectLongerThanAPartGoesUpInParts(t *testing.T) {
 // part or the body stopped arriving — because an upload nobody completes or
 // aborts is billed for its parts and shown by no listing. A body CUT SHORT is
 // one that stopped, at a part's end or inside one: read as the end, it was
-// completed as an object of the parts that had arrived.
+// completed as an object of the parts that had arrived. The part is refused
+// the way the client takes as final — a throttle or a server error it would
+// ask again until the part's deadline.
 func TestAFailedUploadIsAbandoned(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
 	body := bytes.Repeat([]byte{7}, 3*part)
 
-	srv.FailPart(2)
+	srv.FailPart(2, http.StatusForbidden, "AccessDenied")
 	if err := b.Put(t.Context(), "refused", bytes.NewReader(body), objstore.PutMeta{}); err == nil {
 		t.Fatal("an upload whose second part was refused succeeded")
 	}
-	srv.FailPart(0)
+	srv.FailPart(0, 0, "")
 
 	for _, stop := range []struct {
 		name string
@@ -366,24 +368,34 @@ func TestAPartIsGivenItsShareOfTheLink(t *testing.T) {
 // requests — which an upload does only once it has the refusal. The body hands
 // over the first two parts freely and waits at the third for that report, so
 // a read the upload begins after the report is one it began knowing it had
-// failed. An upload that never acts on the refusal is never reported, and the
-// body gives up waiting after a minute — far past the SDK's retries of the
-// refused part — so it fails this case rather than hanging it.
+// failed; and the refusal of part 1 is itself held back until the body has
+// reached its third part ([s3fake.Server.PartHook]), so it arrives while the
+// upload is reading. An upload that never acts on the refusal is never
+// reported, and the body gives up waiting after a minute, so it fails this
+// case rather than hanging it.
 func TestARefusedPartEndsItsUploadAtOnce(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
-	srv.FailPart(1)
-	body := &gatedBody{body: make([]byte, 8*part), at: 2 * part, gate: srv.HoldPart(2)}
+	srv.FailPart(1, http.StatusForbidden, "AccessDenied")
+	reached := make(chan struct{})
+	srv.PartHook = func(number int32) {
+		if number == 1 {
+			select {
+			case <-reached:
+			case <-time.After(time.Minute):
+			}
+		}
+	}
+	body := &gatedBody{body: make([]byte, 8*part), at: 2 * part, gate: srv.HoldPart(2), reached: reached}
 
 	err := b.Put(t.Context(), "refused", body, objstore.PutMeta{})
-	if apiErr, ok := errors.AsType[smithy.APIError](err); !ok || apiErr.ErrorCode() != "InternalError" {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); !ok || apiErr.ErrorCode() != "AccessDenied" {
 		t.Fatalf("an upload whose first part was refused = %v; want the refusal itself", err)
 	}
 	if !body.waited {
 		t.Fatal("the upload heard of the refusal before it asked for its third part, so " +
-			"nothing staged a refusal arriving while it reads: the SDK retries a refused part " +
-			"for seconds, and the first two parts are handed over at once")
+			"nothing staged a refusal arriving while it reads")
 	}
 	if !body.opened {
 		t.Fatalf("the upload read on for a minute after its first part was refused, " +
@@ -401,15 +413,16 @@ func TestARefusedPartEndsItsUploadAtOnce(t *testing.T) {
 	}
 }
 
-// gatedBody hands over body, and at offset at waits for gate to close — for a
-// minute at most, opened saying which ended the wait — before it hands over
-// the rest, a kibibyte a read. after counts the reads begun once the wait was
-// over: the read that waited was asked for before, and answers with what it
-// was asked for.
+// gatedBody hands over body, and at offset at closes reached — where it is
+// given one — and waits for gate to close — for a minute at most, opened
+// saying which ended the wait — before it hands over the rest, a kibibyte a
+// read. after counts the reads begun once the wait was over: the read that
+// waited was asked for before, and answers with what it was asked for.
 type gatedBody struct {
 	body           []byte
 	at             int
 	gate           <-chan struct{}
+	reached        chan struct{}
 	read           int
 	waited, opened bool
 	after          int
@@ -427,6 +440,9 @@ func (g *gatedBody) Read(p []byte) (int, error) {
 	} else {
 		if !g.waited {
 			g.waited = true
+			if g.reached != nil {
+				close(g.reached)
+			}
 			select {
 			case <-g.gate:
 				g.opened = true
@@ -625,13 +641,20 @@ func (s *secondCrossingReader) Read(p []byte) (int, error) {
 // loopback with a certificate of its own, as real S3 is reached over TLS.
 //
 // NOT PARALLEL, because it sets the environment, and the process's
-// environment is what Open reads the bundle from. The refused half takes a
-// couple of seconds: the SDK retries a handshake that failed.
+// environment is what Open reads the bundle from.
+//
+// THE REFUSAL IS AT ONCE: a certificate the node does not trust is refused the
+// same way every time, so it is never asked again — where every other failure
+// to reach the bucket is, until the request's deadline. Asked again, the check
+// at open would end at its deadline with the refusal reduced to text beside
+// it, so the refused half runs under a deadline of a few seconds.
 func TestABucketBehindAPrivateAuthorityIsReachedThroughItsBundle(t *testing.T) {
 	srv := s3fake.StartTLS(t, "files")
 
 	t.Setenv("AWS_CA_BUNDLE", "")
-	_, err := s3obj.Open(t.Context(), fakeConfig(srv, "crewlet/"))
+	refusedCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err := s3obj.Open(refusedCtx, fakeConfig(srv, "crewlet/"))
 	var unverified *tls.CertificateVerificationError
 	if !errors.As(err, &unverified) {
 		t.Fatalf("Open with no bundle = %v; want the bucket's certificate refused", err)
@@ -738,9 +761,12 @@ func TestABatchDeletionIsOneRequestNamingWhatItCouldNotRemove(t *testing.T) {
 // A BATCH THE BUCKET REFUSES AS A REQUEST IS ErrNoBatch, AND ONLY THAT IS: a
 // gateway that does not offer the verb answers it with a client error or 501,
 // having removed nothing, and its caller deletes each name instead. A throttle
-// — 503 SlowDown, or 429 — and a server error are the bucket failing: read as
-// a missing verb, they would have the caller send a request for every key to a
-// prefix that has just said to slow down.
+// — 503 SlowDown, or 429 — and a server error are the bucket SLOWING, never a
+// missing verb: the batch is asked again until the bucket answers it or the
+// caller's deadline passes, and is never ErrNoBatch — read as one, the caller
+// would send a request for every key to a prefix that has just said to slow
+// down. And a batch the bucket slowed for a while is deleted once it has
+// answered.
 func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -759,12 +785,21 @@ func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
 		t.Run(c.code, func(t *testing.T) {
 			t.Parallel()
 			srv := s3fake.Start(t, "files")
-			b := open(t, srv, "crewlet/")
+			b := openRetrying(t, srv, "crewlet/", nil)
 			if err := b.Put(t.Context(), "files/a", bytes.NewReader([]byte("a")), objstore.PutMeta{}); err != nil {
 				t.Fatal(err)
 			}
 			srv.RefuseBatches(c.status, c.code)
-			err := b.DeleteBatch(t.Context(), []string{"files/a"})
+			ctx := t.Context()
+			if !c.noBatch {
+				// A BUCKET SLOWING FOR GOOD is asked again until the
+				// caller's deadline, which a case cannot wait out at
+				// the production thirty seconds.
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 300*time.Millisecond)
+				defer cancel()
+			}
+			err := b.DeleteBatch(ctx, []string{"files/a"})
 			if err == nil {
 				t.Fatalf("a batch the bucket refused with %d %s succeeded", c.status, c.code)
 			}
@@ -772,8 +807,27 @@ func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
 				t.Fatalf("DeleteBatch refused with %d %s = %v; ErrNoBatch %v, want %v",
 					c.status, c.code, err, got, c.noBatch)
 			}
+			if !c.noBatch && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("a batch the bucket kept slowing with %d %s = %v; want it asked again "+
+					"until its deadline", c.status, c.code, err)
+			}
 			if got := srv.Keys(); !slices.Equal(got, []string{"crewlet/files/a"}) {
 				t.Fatalf("a refused batch left the bucket holding %q", got)
+			}
+			if c.noBatch {
+				return
+			}
+
+			// A FRESH CLIENT, so the batch is not held behind the limiter
+			// the refusals above engaged.
+			srv.RefuseBatches(0, "")
+			srv.FailNext(1, c.status, c.code)
+			if err := openRetrying(t, srv, "crewlet/", nil).DeleteBatch(t.Context(), []string{"files/a"}); err != nil {
+				t.Fatalf("a batch the bucket slowed once with %d %s = %v; want it deleted",
+					c.status, c.code, err)
+			}
+			if got := srv.Keys(); len(got) != 0 {
+				t.Fatalf("a batch the bucket answered at last left it holding %q", got)
 			}
 		})
 	}

@@ -117,20 +117,21 @@
 // answer is the finding. The second looks wait in the order their first looks
 // ended, a reference at a time or a range at a time ([lookAgain]).
 //
-// ONE OBJECT IS NEVER THE AUDIT'S FAILURE. A question the store fails — after
-// its client's own retries — is set aside for its second look rather than
-// failing the audit, and an object the store fails both times is UNANSWERED
-// once the store answers a question after it: an S3-compatible gateway that
-// answers one object with a server error every time, or refuses it, is one
-// the company cannot read the file from, and an audit that failed instead
-// never named it — every day it stopped there, and each retry asked the store
-// about every object before it again. What fails an audit is the STORE
-// failing: [failedInARow] questions failed with none answered between, which
-// a store that has gone away does to the first window of questions it is
-// sent — or, when the audit's last questions are failures nothing answered
-// after, one more question about an object the store had answered for failing
-// too ([auditor.confirm]), so a store that went away as the walk ended is
-// never taken for one refusing each object it was asked about last.
+// ONE OBJECT IS NEVER THE AUDIT'S FAILURE. A question the store fails — its
+// client having asked again until the question's deadline — is set aside for
+// its second look rather than failing the audit, and an object the store
+// fails both times is UNANSWERED once the store answers a question after it:
+// an S3-compatible gateway that answers one object with a server error every
+// time, or refuses it, is one the company cannot read the file from, and an
+// audit that failed instead never named it — every day it stopped there, and
+// each retry asked the store about every object before it again. What fails
+// an audit is the STORE failing: [failedInARow] questions failed with none
+// answered between, which a store that has gone away does to the first
+// window of questions it is sent — or, when the audit's last questions are
+// failures nothing answered after, one more question about an object the
+// store had answered for failing too ([auditor.confirm]), so a store that
+// went away as the walk ended is never taken for one refusing each object it
+// was asked about last.
 //
 // THE ESTATE IS READ A PAGE AT A TIME, BY ONE GOROUTINE, IN KEY ORDER — every
 // required table's keyset walk merged into one order ([Source.Required],
@@ -159,11 +160,11 @@
 // A RANGE WHOSE LISTING FAILED TAKES ITS SECOND LOOK AS A RANGE: what the
 // listing had not reached waits, with the key it comes after, for ONE listing
 // more, and only an object that listing passes over is then asked about by
-// name. A listing fails once the SDK's retries are spent, which is what a
-// bucket throttling the prefix does to it; asking by name there sent a HEAD for
-// each of the range's nine hundred objects to the prefix that had just said to
-// slow down. A re-listing that fails too leaves its objects UNANSWERED by the
-// rule below, and a store that keeps no order after all is asked by name.
+// name. A listing fails once its deadline passes with the bucket still
+// throttling or failing it; asking by name there sent a HEAD for each of the
+// range's nine hundred objects to the prefix that had just said to slow down.
+// A re-listing that fails too leaves its objects UNANSWERED by the rule below,
+// and a store that keeps no order after all is asked by name.
 //
 // WHAT AN AUDIT FOUND OUTLIVES THE AUDIT THAT FAILED AFTER IT, and the duty
 // moving: the report keeps the last audit that ran to its end beside the
@@ -331,15 +332,17 @@ const judgeBatch = 500
 //     (`files/`). Thirty-two out reach that only if a request averaged under
 //     5.8 ms — a listing of a thousand keys or a HEAD of a second look alike
 //     — which leaves the rest of the rate to the company's own downloads,
-//     each a GET on the same prefix. A throttled request is the SDK's to
-//     retry with backoff, and its retry quota stops the retrying once a run
-//     of throttles drains it. Against a bucket held 20 ms away, and 50, the
-//     backend's benchmark listed 31,400–33,000 names a second and
-//     15,600–16,900 one listing at a time — two million objects in one to two
-//     minutes — and answered 47 HEADs a second and 19 for each one out:
-//     1,380–1,450 and about 610 with thirty-two out, which is what a
-//     directory bucket, asked by HEAD, costs — 23–24 minutes and 55 for two
-//     million objects, rather than twelve hours and twenty-nine.
+//     each a GET on the same prefix. A throttle slows the whole client
+//     (internal/objstore/s3obj), every request of the node's waiting its
+//     turn and the throttled one asked again until its deadline, so the
+//     audit's thirty-two slow with everything else the node sends the
+//     prefix. Against a bucket held 20 ms away, and 50, the backend's
+//     benchmark listed 31,400–33,000 names a second and 15,600–16,900 one
+//     listing at a time — two million objects in one to two minutes — and
+//     answered 47 HEADs a second and 19 for each one out: 1,380–1,450 and
+//     about 610 with thirty-two out, which is what a directory bucket, asked
+//     by HEAD, costs — 23–24 minutes and 55 for two million objects, rather
+//     than twelve hours and twenty-nine.
 //   - It is the shared transport's warm connections to one host
 //     (httpx.MaxIdleConnsPerHost), so every question rides a connection
 //     already open rather than paying a TLS handshake of its own.

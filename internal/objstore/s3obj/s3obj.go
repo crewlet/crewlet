@@ -100,6 +100,45 @@
 // every range of it — is bounded by the deadline its caller must carry
 // ([objstore.CheckRead]).
 //
+// THE DEADLINE IS ALSO THE ONLY END OF A REQUEST'S ATTEMPTS: one the bucket
+// throttles, fails with a server error, or cannot be reached for is asked
+// again, after a jittered backoff ([fullJitter]), until it is answered or its
+// deadline passes — never for a count of attempts, which `AWS_MAX_ATTEMPTS`
+// cannot put back — and a request its deadline ends names the bucket's last
+// answer beside it. Only a refusal asking again cannot change is final at
+// once: a client error, a certificate the node does not trust. A READ'S
+// deadline is the longest — its whole budget, hours for a large object — so
+// what ends a read whose first request the bucket keeps failing is the
+// store's stall watchdog instead, which watches the open of a read as it
+// watches each piece after ([objstore.ReadStall]): such a read ends in a
+// minute, the bucket's last answer named.
+//
+// # A throttle slows the whole client
+//
+// One backend serves every reader and writer of the node's `files/` prefix —
+// the git cache's syncs, the collector's audit and deletions, the backup's
+// copy, the API's files — so the moment the bucket answers one request with a
+// throttle (S3's `503 SlowDown`, a gateway's `429`), the client's [gate]
+// slows EVERY request it sends: it lets out at once seven tenths of the
+// node's width — the most attempts it has had out at once since its last cut,
+// whether or not they were out when the throttle came back, so a throttle
+// answered to a lone HEAD between two syncs holds the next sync back no more
+// than one answered at its start — the rest waiting in line under their own
+// contexts, and one more each round the bucket answers. It is lifted once the
+// bucket has gone [throttleQuiet] without a throttle.
+// A 503 naming a gateway's own failure is no throttle ([isThrottle]): it is
+// asked again like any server error and slows nothing else.
+//
+// THERE IS NO CLIENT-WIDE RETRY QUOTA: the SDK's spent five of five hundred
+// tokens a retry, so under a sustained `SlowDown` every request after the
+// hundredth retry failed at once. What bounds the requests asking again is
+// who sends them: every caller but the API's files is a closed loop of its
+// own width, so a retry holds the slot its request held; a person's upload or
+// download is bounded by its own deadline, and by the gate once the bucket
+// has throttled — and a server error that is no throttle is asked again by
+// every request open at the time, each at the backoff, until its deadline
+// ([newRetryer]).
+//
 // # What it costs the node, measured
 //
 // `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
@@ -166,6 +205,16 @@
 //     paced to 4 MB/s (BenchmarkUploadBesideSlowReads, 20 ms) ran at 407–472
 //     MB/s, each download holding one spare, where reads that held four each
 //     left it a part at a time at 166–192.
+//   - A THROTTLE BEFORE A BURST (BenchmarkAThrottledBurst, on four vCPUs of a
+//     2.1 GHz Xeon, 2026-10-15): five hundred heads by thirty-two loops
+//     against a bucket 150 ms away took 2.43 seconds, and 2.72–2.74 from a
+//     fresh client whose first answer was a `SlowDown` — the gate cut to
+//     twenty-two and climbing back a place a round — where the SDK's adaptive
+//     mode, which this client used before its gate, took 9.6–9.7. A lone head
+//     throttled between two bursts cost the same, 2.72–2.73, where a cut of
+//     what was out at that moment had left one place and took 4.99–5.00; a
+//     throttle answered to the check at open, before the client has had more
+//     than one attempt out, still leaves it one place, and took 5.00–5.02.
 //
 // OVER PLAIN HTTP THE SDK SIGNS EVERY BODY: it hashes each byte it uploads to
 // put the digest in the signature, where over https it sends UNSIGNED-PAYLOAD
@@ -224,6 +273,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -341,10 +391,13 @@ const spareParts = 3 * partsInFlight
 // kilobytes — a page of a listing, the start or the abandonment of an upload.
 //
 // THIRTY SECONDS: each is one small request and its answer, a fraction of a
-// second against any healthy provider — a batch deletion a second or two —
-// and thirty is room for the SDK's own retries of one that failed, while a
-// bucket that has stopped answering ends a request rather than holding the
-// handler that sent it.
+// second against any healthy provider — a batch deletion a second or two.
+// A request the bucket throttles or fails is asked again until this deadline
+// and never for a count of attempts ([newRetryer]), and thirty seconds is
+// about six attempts at the backoff ([fullJitter]: a random share of two,
+// four, eight, sixteen and then twenty seconds, half of each on average) —
+// while a bucket that has stopped answering ends a request rather than
+// holding the handler that sent it.
 const callBudget = 30 * time.Second
 
 // completeBudget bounds the request that assembles a multipart upload.
@@ -410,6 +463,11 @@ type Backend struct {
 	// spare is the node's allowance of part buffers beyond each upload's
 	// first ([spareParts]): a token in it is one taken.
 	spare chan struct{}
+
+	// gate is how many attempts the client lets the bucket hold at once:
+	// every request of the node's, slowed together once the bucket has
+	// throttled one ([gate]).
+	gate *gate
 }
 
 // cutParts sizes every part but the last at n bytes, and the buffers that
@@ -449,7 +507,19 @@ func (b *Backend) returnSpares(n int) {
 
 // Open builds the client and checks the bucket is reachable with these
 // credentials, so a wrong key fails the boot rather than the first upload.
+//
+// A bucket that refuses the check — a wrong key, a bucket that is not there —
+// fails it at once; one that throttles, fails or does not answer is asked
+// again for [callBudget], as every request is ([newRetryer]).
 func Open(ctx context.Context, cfg Config) (*Backend, error) {
+	return open(ctx, cfg, fullJitter{}, time.Now)
+}
+
+// open is [Open] with the client's backoff and the clock its [gate] measures
+// its quiet minute on given, so this package's cases can ask a bucket again
+// in milliseconds and move a clock past a quiet minute rather than wait one
+// out (export_test.go).
+func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, now func() time.Time) (*Backend, error) {
 	if cfg.Bucket == "" || cfg.Region == "" {
 		return nil, errors.New("s3obj: an S3 store needs a bucket and a region")
 	}
@@ -474,6 +544,7 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 	if err != nil {
 		return nil, err
 	}
+	g := newGate(now)
 	client := s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
 		// (internal/httpx), never a pool of the SDK's.
@@ -490,8 +561,20 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 		// checksum could stand in for.
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		// NOTHING COUNTS ATTEMPTS ([newRetryer]). RetryMaxAttempts is
+		// zeroed as well as the retryer's own count, because the SDK
+		// copies AWS_MAX_ATTEMPTS — or a shared profile's max_attempts —
+		// into it and, after every option here has run, wraps the
+		// retryer in that count: an operator's environment would
+		// silently put back the cap that failed requests a bucket would
+		// have answered.
+		o.Retryer = newRetryer(backoff)
+		o.RetryMaxAttempts = 0
+		// A THROTTLE SLOWS THE WHOLE CLIENT ([gate]), and a request its
+		// deadline ends names the bucket's last answer.
+		o.APIOptions = append(o.APIOptions, paced(g))
 	})
-	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix}
+	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, gate: g}
 	b.cutParts(PartBytes)
 	headCtx, cancel := context.WithTimeout(ctx, callBudget)
 	defer cancel()

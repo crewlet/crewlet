@@ -262,10 +262,10 @@ func TestARangeOutOfOrderTurnsTheAuditToAskingByName(t *testing.T) {
 // A LISTING THAT FAILS SETS ITS RANGE ASIDE, and the audit runs on: the range
 // takes its second look AS A RANGE once the walk is over — ONE listing more —
 // and only an object that listing passes over is asked about by name. A
-// listing fails once the SDK's retries are spent, which is what a bucket
-// throttling the prefix does; a HEAD for each object of the range, as there
-// once was, sent the prefix that had just said to slow down a request for
-// every object the listing would have answered in one.
+// listing fails once its deadline passes with the bucket still throttling or
+// failing it — nothing counts its attempts; a HEAD for each object of the
+// range, as there once was, sent the prefix that had just said to slow down
+// a request for every object the listing would have answered in one.
 func TestAFailedListingSetsItsRangeAside(t *testing.T) {
 	t.Parallel()
 	h, r := newRangedHarness(t)

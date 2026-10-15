@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -18,6 +19,90 @@ import (
 // so a case reaches the multipart path with a body it can afford — see
 // [Backend.partBytes].
 func CutParts(b *Backend, n int) { b.cutParts(n) }
+
+// OpenRetrying is [Open] with the client's attempts paced by backoff — nil is
+// the production [fullJitter] — and its gate's quiet minute ([throttleQuiet])
+// measured on now — nil is time.Now — so a case asks a bucket again in
+// milliseconds rather than seconds, and moves a clock past a quiet minute
+// rather than waiting one out. Everything else about the client is Open's
+// own: the environment it reads included.
+func OpenRetrying(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, now func() time.Time) (*Backend, error) {
+	if backoff == nil {
+		backoff = fullJitter{}
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return open(ctx, cfg, backoff, now)
+}
+
+// ClientRetryer is the retryer b's client retries every request with, read off
+// the client itself — after everything the SDK wraps around the retryer it
+// was given.
+func ClientRetryer(b *Backend) aws.Retryer { return b.client.Options().Retryer }
+
+// FullJitter is [fullJitter], the production backoff, for the case that holds
+// its spread.
+var FullJitter retry.BackoffDelayer = fullJitter{}
+
+// ThrottleQuiet and ThrottleShare are [throttleQuiet] and [throttleShare], for
+// the cases that lift and cut a gate.
+const (
+	ThrottleQuiet = throttleQuiet
+	ThrottleShare = throttleShare
+)
+
+// Attempt is one attempt b's gate let out, held until a case answers it as it
+// chooses.
+type Attempt struct {
+	g *gate
+	p pass
+}
+
+// Enter waits, under ctx, for b's gate to let an attempt out — as every
+// attempt the client sends does.
+func Enter(ctx context.Context, b *Backend) (Attempt, error) {
+	p, err := b.gate.enter(ctx)
+	return Attempt{g: b.gate, p: p}, err
+}
+
+// Leave gives the attempt's place back, the bucket having answered it err.
+func (a Attempt) Leave(err error) { a.g.leave(a.p, err) }
+
+// LetOut is how many of most attempts b's gate lets out at once, none waiting
+// for a place: each is held until all have been asked for, then given back
+// as an attempt its context ended, which tells the gate nothing. A gate
+// nothing has slowed lets out all of them.
+func LetOut(b *Backend, most int) int {
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	var held []pass
+	for range most {
+		p, err := b.gate.enter(ended)
+		if err != nil {
+			break
+		}
+		held = append(held, p)
+	}
+	for _, p := range held {
+		b.gate.leave(p, context.Canceled)
+	}
+	return len(held)
+}
+
+// Out is how many attempts b's gate has out now.
+func Out(b *Backend) int {
+	b.gate.mu.Lock()
+	defer b.gate.mu.Unlock()
+	return b.gate.out
+}
+
+// Waiting is how many attempts are waiting in line at b's gate now.
+func Waiting(b *Backend) int {
+	b.gate.mu.Lock()
+	defer b.gate.mu.Unlock()
+	return len(b.gate.queue)
+}
 
 // MaxParts is [maxParts], for the case that pins the part arithmetic.
 const MaxParts = maxParts

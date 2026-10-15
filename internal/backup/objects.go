@@ -786,20 +786,26 @@ func (p *objectPass) carry(ctx context.Context, ref reference) (bool, error) {
 // two and four between them, seven in all with a fifth of each spread either
 // way — longer than a broker election's five seconds, which is what a stat on
 // the bucket stream fails across, and than the connection reset or the stall
-// a GET from a bucket ends in now and then. Nothing below retries for it: a
-// store's own client retries a request only until its response begins, and
-// [objstore.ReadStall] or a reset part way through a body is final. And it is
-// worth retrying at a backup's scale where it would not be at a request's: a
-// first copy is two million reads over hours, refused whole — with no
-// manifest, and every object read again by the next attempt — for the first
-// one that fails.
+// a GET from a bucket ends in now and then. What these attempts answer is a
+// read that ENDED: the bucket's own client asks a request it was refused again
+// until the request's deadline — which for a read is the store's stall on its
+// open ([objstore.ReadStall], a minute) — and a stall or a reset part way
+// through a body is final, so each attempt here is a read begun again, from
+// the object's first byte. And it is worth retrying at a backup's scale where
+// it would not be at a request's: a first copy is two million reads over
+// hours, refused whole — with no manifest, and every object read again by the
+// next attempt — for the first one that fails.
 //
 // NO LONGER THAN ONE BUDGET IN ALL: every attempt runs inside the object's
 // own read budget ([objstore.ReadBudget]; a stat's is [objstore.ReadBase]), so
 // a retry never lets one object hold its slot longer than a single read could.
-// IN THE SAME SLOT, so the bound on what is out at once still holds; a store
-// that has stopped answering ends the pass once the first object out has spent
-// its attempts.
+// So against a bucket that keeps failing one object's GET — each attempt
+// asked again by the client until the stall ends it — the four are fewer: a
+// small object's two-minute budget holds two opens the stall ends, and the
+// copy is refused about two minutes after that object's first GET. IN THE
+// SAME SLOT, so the bound on what is out at once still holds; a store that
+// has stopped answering ends the pass once the first object out has spent its
+// budget.
 const fetchAttempts = 4
 
 // fetchRetryBase and fetchRetryCeiling pace [fetchAttempts] — see there.

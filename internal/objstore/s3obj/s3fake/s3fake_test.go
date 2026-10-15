@@ -488,3 +488,115 @@ func TestAnObjectPutFromOutsideIsOneTheBucketServes(t *testing.T) {
 		t.Fatalf("the listing after a later put from outside = %q, want %q", got, want)
 	}
 }
+
+// THE NEXT REQUESTS ARE REFUSED AS ASKED, AND THE REST ANSWERED AS EVER: what
+// [s3fake.Server.FailNext] arms is a bucket that throttles for a while and
+// recovers, so each of the next n requests — a HEAD, a put — is answered the
+// S3 error named and changes nothing, a HEAD's with no body as S3 answers
+// one, and every request after them is handled as if none had been refused.
+// Each refused request is still counted, as the round trip it cost.
+func TestTheNextRequestsAreRefusedAndTheRestAnswered(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	do := func(method string, body string) (*http.Response, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+"/files/k", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		defer resp.Body.Close()
+		answer, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, string(answer)
+	}
+
+	srv.FailNext(2, http.StatusServiceUnavailable, "SlowDown")
+	if resp, answer := do(http.MethodHead, ""); resp.StatusCode != http.StatusServiceUnavailable || answer != "" {
+		t.Fatalf("the first refused request, a HEAD, answered %d %q; want 503 with no body",
+			resp.StatusCode, answer)
+	}
+	if resp, answer := do(http.MethodPut, "refused"); resp.StatusCode != http.StatusServiceUnavailable ||
+		!strings.Contains(answer, "<Code>SlowDown</Code>") {
+		t.Fatalf("the second refused request, a put, answered %d %q; want 503 SlowDown",
+			resp.StatusCode, answer)
+	}
+	if keys := srv.Keys(); len(keys) != 0 {
+		t.Fatalf("a refused put stored %q", keys)
+	}
+	if resp, _ := do(http.MethodPut, "stored"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the request after the refused ones answered %d, want 200", resp.StatusCode)
+	}
+	if resp, answer := do(http.MethodGet, ""); resp.StatusCode != http.StatusOK || answer != "stored" {
+		t.Fatalf("the object put after the refusals reads %d %q, want \"stored\"", resp.StatusCode, answer)
+	}
+	if got := srv.Requests(); got != 4 {
+		t.Fatalf("four requests, two of them refused, counted as %d", got)
+	}
+	if got := srv.RequestsOf("PutObject"); got != 2 {
+		t.Fatalf("two puts, one of them refused, counted as %d", got)
+	}
+}
+
+// A PART IS REFUSED AS ASKED, ONCE ITS HOOK LETS IT GO: every upload of the
+// part [s3fake.Server.FailPart] names is answered the S3 error named, a part of
+// another number as ever — and [s3fake.Server.PartHook] runs with the part's
+// number before either is answered, so a case decides when a refusal arrives.
+func TestAPartIsRefusedAsAskedOnceItsHookLetsItGo(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	id := srv.Begin("parts")
+	srv.FailPart(2, http.StatusForbidden, "AccessDenied")
+	release := make(chan struct{})
+	heard := make(chan int32, 2)
+	srv.PartHook = func(number int32) {
+		heard <- number
+		if number == 2 {
+			<-release
+		}
+	}
+	put := func(number string) chan int {
+		answered := make(chan int, 1)
+		go func() {
+			status := 0
+			defer func() { answered <- status }()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPut,
+				srv.URL+"/files/parts?partNumber="+number+"&uploadId="+id, strings.NewReader("a part"))
+			if err != nil {
+				return
+			}
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				return
+			}
+			_ = resp.Body.Close()
+			status = resp.StatusCode
+		}()
+		return answered
+	}
+
+	if status := <-put("3"); status != http.StatusOK {
+		t.Fatalf("a part of a number nobody refuses answered %d, want 200", status)
+	}
+	if n := <-heard; n != 3 {
+		t.Fatalf("the hook heard part %d, want 3", n)
+	}
+	refused := put("2")
+	if n := <-heard; n != 2 {
+		t.Fatalf("the hook heard part %d, want 2", n)
+	}
+	select {
+	case status := <-refused:
+		t.Fatalf("the refused part was answered (%d) while its hook still held it", status)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if status := <-refused; status != http.StatusForbidden {
+		t.Fatalf("the refused part answered %d, want 403", status)
+	}
+}

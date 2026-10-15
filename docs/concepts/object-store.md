@@ -293,6 +293,34 @@ promises, and its size is the provider's problem rather than any node's disk.
   carries bytes up, and five minutes for completing an upload made in parts. A
   read is bounded by the reader's own deadline (see
   [Writing and reading](#writing-and-reading)).
+- **A throttle slows the node down rather than failing its requests.** One
+  client on each node carries every upload, download, git sync, collection and
+  backup copy, and the moment the bucket answers one of them with a throttle —
+  S3's `503 SlowDown`, MinIO's `SlowDownRead` or `SlowDownWrite`, or any `429`
+  — that client lets the bucket hold only seven tenths of the most requests the
+  node has had out at once since it was last slowed, the rest waiting their
+  turn in the order they came, and one more each round the bucket answers; it
+  stops holding anything back once the bucket has gone a minute without a
+  throttle. It is the node's width that is cut rather than what happens to be
+  out when the throttle comes back, so a throttle answered to one lone request
+  between two git syncs holds the next sync back no more than one answered at
+  its start; only a node throttled at the check it makes when it starts, before
+  it has sent anything else, starts from one request at a time. A 503 that names a fault of
+  the gateway's own — MinIO answering an object it cannot rebuild from its
+  drives — is no throttle and slows nothing else; a 503 to a `HEAD` is read as
+  one whatever the gateway meant, since its answer has no body to say. A
+  request the bucket throttles, fails with a server error or cannot be reached
+  for is asked again, after a random wait of up to twenty seconds, until its
+  deadline above — never for a number of attempts, which `AWS_MAX_ATTEMPTS`
+  does not change — and one its deadline ends says so and names the bucket's
+  last answer; a download the bucket keeps failing ends at the stall limit,
+  a minute, rather than at its deadline. A refusal that asking again cannot
+  change — a key the bucket refuses, a bucket that is not there, a certificate
+  the node does not trust — fails at once, the check at boot included; a
+  bucket that does not answer at all holds that check for its thirty seconds.
+  A server error that is no throttle is asked again by every request open at
+  the time, a person's upload and download among them, each until its own
+  deadline.
 - **The prefix is optional**, and with or without one the engine touches only
   names under its own `files/` corner: another application's objects in the
   same bucket are never listed as the engine's, judged or deleted.
@@ -435,9 +463,10 @@ judged against the replicated estate the data node holds:
   keeps one, S3 does not), or as no object it can read at all (on `nats`,
   metadata that does not decode, which the store answers definitely rather
   than as a failure) is **damaged**; and one the store **fails** to answer
-  about — after its client's own retries — is **unanswered**. Anything but an
-  answer that it holds the object whole, or holds it wrong, is asked about
-  once more before it is called anything: at the end of the pass, or, once a
+  about — its client asking again until the question's deadline — is
+  **unanswered**. Anything but an answer that it holds the object whole, or
+  holds it wrong, is asked about once more before it is called anything: at
+  the end of the pass, or, once a
   hundred thousand others are waiting for theirs, at once. Each is a file that
   cannot be counted on to download, and raises [`objects_missing`](#alarms)
   naming the first hundred such files by name, as `PROJECT/path`, with what
@@ -452,10 +481,10 @@ judged against the replicated estate the data node holds:
   one more question about an object it had answered for failing too. A store
   that went away mid-audit is retried ten minutes later, and none of the
   questions it failed is taken for a finding. On S3 a **listing that fails** —
-  once the client's retries are spent, which is what a bucket throttling the
-  prefix makes of it — is set aside with the range it was for, and that range
-  is listed **once more** at the end of the pass rather than asked about object
-  by object: only what that listing passes over is then asked about by name,
+  its deadline passing with the bucket still throttling or failing it — is set
+  aside with the range it was for, and that range is listed **once more** at
+  the end of the pass rather than asked about object by object: only what that
+  listing passes over is then asked about by name,
   and a range whose second listing fails too is unanswered, file by file.
 
 A node whose copy of the tracker or of the code log is out of service does

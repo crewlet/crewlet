@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 )
 
 func newStore(t *testing.T, backend objstore.Backend) *objstore.Store {
@@ -493,6 +496,52 @@ func TestAReadThatBeginsNothingIsEndedAtTheStall(t *testing.T) {
 	got, err := readAll(t, s, o)
 	if err != nil || !bytes.Equal(got, body) {
 		t.Fatalf("a read whose backend began its stream inside the stall = %d bytes, %v", len(got), err)
+	}
+}
+
+// A BUCKET THAT KEEPS FAILING A READ'S FIRST REQUEST ENDS IT AT THE STALL,
+// never at the read's budget, and names what the bucket answered. The S3
+// backend's client asks a request the bucket refuses again until the
+// request's deadline, with no count of attempts, and the first range of a read
+// is a request answered before Get hands a stream back — so before the store
+// watched the open, a gateway that answers one object with a server error
+// every time held each read of it, and the git cache's slot it was read in,
+// for the read's whole budget: two minutes for this object, hours for a pack
+// near its ceiling.
+func TestABucketThatKeepsFailingAReadsOpenEndsItAtTheStall(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	backend, err := s3obj.Open(t.Context(), s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+		AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newStore(t, backend)
+	o := put(t, s, patterned(3*objstore.MiB, 5))
+	const stall = 200 * time.Millisecond
+	objstore.SetStall(s, stall)
+	srv.FailNext(1_000_000, http.StatusInternalServerError, "InternalError")
+
+	ended := make(chan error, 1)
+	go func() {
+		r, err := s.Open(t.Context(), o)
+		if err == nil {
+			_ = r.Close()
+		}
+		ended <- err
+	}()
+	select {
+	case err := <-ended:
+		if err == nil || !strings.Contains(err.Error(), "stalled") || !strings.Contains(err.Error(), "500") {
+			t.Fatalf("a read of an object the bucket fails every time = %v; want it ended as "+
+				"stalled, naming the bucket's 500", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("a read of an object the bucket fails every time was still asking after ten "+
+			"seconds, with a %v stall; want it ended at the stall, never at its budget of %v",
+			stall, objstore.ReadBudget(o.Size))
 	}
 }
 
