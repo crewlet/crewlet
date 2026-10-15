@@ -77,9 +77,9 @@ type Sources struct {
 	// be handed without being told.
 	Events FleetEvents
 
-	// Usage is the replicated estate's usage domain: every node's company
-	// days, for every NAMED spend window and its series (ADR-0020). Not
-	// this node's event log, which answered for this node alone and only
+	// Usage is the replicated estate's usage domain: every data node's
+	// company days, for every NAMED spend window and its series (ADR-0020).
+	// Not this node's event log, which answered for this node alone and only
 	// thirty days back. Nil leaves `token_series` unregistered and a named
 	// `tokens` window empty.
 	Usage usage.Estate
@@ -590,7 +590,7 @@ func Register(r *Registry, s Sources) {
 		// merged duration quantiles and a day-by-day series. A screen
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
-		// WHO READ A PAGE, from every node's days — see pagereads.go.
+		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on Doclet's pages: a
 		// read is recorded with its backend, so a company on Confluence
 		// has readers too. Doclet's, as the pages are.
