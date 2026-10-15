@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/crewlet/crewlet/internal/otlpenv"
@@ -605,6 +607,67 @@ func TestAGRPCUpstreamOverTLSPresentsTheClientCertificate(t *testing.T) {
 		t.Fatalf("the collector received %d traces exports over mutual TLS, want one", traces)
 	}
 }
+
+// A GRPC UPSTREAM THAT COMPRESSES IS SENT GZIP, as the engine's own gRPC
+// exporter sends it — and one that does not is sent plain. The mutual-TLS case
+// above runs with gzip on and would pass whether or not the call was
+// compressed, so this reads the compression the collector's transport saw.
+//
+// Mutation: drop the gzip call option from the gRPC dial and the first case
+// arrives uncompressed; apply it unconditionally and the second does not.
+func TestAGRPCUpstreamIsCompressedAsTheDestinationSays(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ compression, want string }{
+		{"gzip", "gzip"},
+		{"", ""},
+	} {
+		seen := &compressionSeen{}
+		collector, endpoint := startGRPCCollector(t, "http", grpc.StatsHandler(seen))
+		env := map[string]string{otlpenv.EndpointVar: endpoint, otlpenv.ProtocolVar: "grpc"}
+		if tc.compression != "" {
+			env[otlpenv.CompressionVar] = tc.compression
+		}
+		accept(t, receiverTo(t, env), protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
+		if traces, _, _ := collector.counts(); traces != 1 {
+			t.Fatalf("compression %q: the collector received %d traces exports, want one", tc.compression, traces)
+		}
+		if got := seen.compressions(); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("compression %q: the collector's transport saw %q, want [%q]", tc.compression, got, tc.want)
+		}
+	}
+}
+
+// compressionSeen is a gRPC stats handler recording the compression each
+// inbound call declared — the one place a server can see it, since the
+// payload reaches the service already decompressed.
+type compressionSeen struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (c *compressionSeen) compressions() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.seen)
+}
+
+func (c *compressionSeen) HandleRPC(_ context.Context, s stats.RPCStats) {
+	if h, ok := s.(*stats.InHeader); ok {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.seen = append(c.seen, h.Compression)
+	}
+}
+
+func (*compressionSeen) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context {
+	return ctx
+}
+
+func (*compressionSeen) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	return ctx
+}
+
+func (*compressionSeen) HandleConn(context.Context, stats.ConnStats) {}
 
 // A CLOSED RECEIVER STILL ANSWERS AND FORWARDS NOTHING, and closing twice is
 // harmless: the engine closes it at its teardown, after its listeners.
