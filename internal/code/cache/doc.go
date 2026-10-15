@@ -211,7 +211,9 @@
 //
 // # Background work never takes a person's slot
 //
-// The maintainer writes a multi-pack-index with its bitmap and a commit-graph
+// The maintainer writes a multi-pack-index with its bitmap — the bitmap
+// carrying git's lookup table, so a request that opens it loads only the
+// bitmaps it asks for (ServeConfig) — and a commit-graph
 // once a repository's packs have gathered and stood still for
 // [MidxDebounce] — or the oldest has waited [MidxMaxWait], so a repository
 // that is never still is indexed too — in the pool's maintenance lane: half
@@ -411,7 +413,12 @@
 // MidxMinInterval rather than MidxDutyCycle paces every repository under about
 // 3 GB of packs, and gitproc.PackWorkDeadline gives the gigabyte sixteen
 // minutes, about 48 times its run; the index a full round writes, with no
-// bitmap, 0.12 s, 1.1 s and 6.1 s. Pushes of 4 KiB landed beside the
+// bitmap, 0.12 s, 1.1 s and 6.1 s. The bitmap's lookup table pays every
+// request that opens it: over the gigabyte (three runs, medians) the pack a
+// blobless clone's lazy fetch of one blob is served takes 5.0 ms with it and
+// 6.2 ms without, and the pack a fetch of one new commit 8.2 and 9.0 ms —
+// the difference what each spent reading the entry of every commit with a
+// bitmap before it answered. Pushes of 4 KiB landed beside the
 // maintainer's index cost counting a clone's objects about 0.06 ms each at
 // 100 MB and 0.09 ms at 1 GB (4.5 ms with none and 12.0 with 128; 6.9 and
 // 17.9 ms), and a clone's whole pack-objects nothing it shows up to 128 (1.06

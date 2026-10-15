@@ -20,6 +20,19 @@ import (
 //     carry and one base for it — which bounds a transfer's memory
 //     (gitproc.TransfersPerProcess counts on it).
 //   - pack.useBitmaps: the maintainer's bitmap is used.
+//   - pack.writeBitmapLookupTable: the bitmap the maintainer writes carries
+//     git's lookup table (2.38) — the commits it holds a bitmap for, and
+//     where — so a request loads the bitmaps it asks for, where without it
+//     every upload-pack that opens the bitmap first reads every commit's
+//     entry: over a gigabyte (BenchmarkMidx's lookup arms, three runs,
+//     medians) the pack-objects run that answers a blobless clone's lazy
+//     fetch of one blob takes 5.0 ms with it and 6.2 ms without, and the one
+//     that answers a fetch of one new commit 8.2 and 9.0 ms — the git
+//     process, not the request around it. Only a bitmap write reads the
+//     key, so no other process in a cache is changed by it, and a bitmap
+//     written without the table is read as git always read one.
+//     Unconditional, never a knob: every request that opens the bitmap is
+//     the cheaper for it, and no git at the 2.40 floor lacks it.
 //   - uploadpack.allowFilter: partial clones (--filter=blob:none), and the
 //     uploadpackfilter keys after it: ONLY THE FILTERS A BITMAP CAN ANSWER.
 //     uploadpackfilter.allow=false refuses every filter the keys after it do
@@ -56,6 +69,7 @@ func (c *Cache) ServeConfig() []gitproc.KV {
 		{Key: "pack.allowPackReuse", Value: c.git.PackReuse()},
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*c.limits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
+		{Key: "pack.writeBitmapLookupTable", Value: strconv.FormatBool(!c.noLookupTable.Load())},
 		{Key: "uploadpack.allowFilter", Value: "true"},
 		{Key: "uploadpackfilter.allow", Value: "false"},
 		{Key: "uploadpackfilter.blob:none.allow", Value: "true"},

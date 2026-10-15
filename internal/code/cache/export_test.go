@@ -223,6 +223,13 @@ func ForgetMaintenance(c *Cache, repoID string) error {
 	return nil
 }
 
+// SetBitmapLookupTable sets whether a bitmap the maintainer writes from now
+// on carries its lookup table (ServeConfig's pack.writeBitmapLookupTable): on
+// in production, off for BenchmarkMidx's arm without it. A bitmap already
+// written keeps what it was written with; ForgetMaintenance and a pass write
+// it again.
+func SetBitmapLookupTable(c *Cache, on bool) { c.noLookupTable.Store(!on) }
+
 // SetMaintenanceMemory sets what the maintenance runs beside the largest may
 // be charged at together. Before any pass.
 func SetMaintenanceMemory(c *Cache, n int64) { c.maintMemory = n }

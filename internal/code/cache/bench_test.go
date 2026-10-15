@@ -1113,9 +1113,20 @@ const stalePushBytes = 4 << 10
 // clone or a fetch is served.
 func packOut(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir string, revs ...string) {
 	b.Helper()
+	packOutFiltered(b, pool, c, dir, "", revs...)
+}
+
+// packOutFiltered is packOut for a request that asked for filter ("" for
+// none), which upload-pack hands pack-objects as --filter.
+func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filter string, revs ...string) {
+	b.Helper()
+	args := []string{"pack-objects", "--revs", "--stdout", "--delta-base-offset", "-q"}
+	if filter != "" {
+		args = append(args, "--filter="+filter)
+	}
 	_, err := pool.Run(b.Context(), gitproc.Cmd{
 		Dir:      dir,
-		Args:     []string{"pack-objects", "--revs", "--stdout", "--delta-base-offset", "-q"},
+		Args:     args,
 		Config:   c.ServeConfig(),
 		Stdin:    strings.NewReader(strings.Join(revs, "\n") + "\n"),
 		Stdout:   io.Discard,
@@ -1141,6 +1152,14 @@ func packOut(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir string, revs 
 //   - memory/step=… (100MB and 1GB) is the memory each git process the cache
 //     runs over the whole repository holds — the figures its memory budget
 //     charges by (memoryArms says which).
+//   - lookup=on|off (1GB, and 5GB under CREWLET_BENCH_LARGE) is the
+//     maintainer's bitmap written with its lookup table (ServeConfig's
+//     pack.writeBitmapLookupTable) and without it, the maintainer run again
+//     between the two with the timer stopped: op=blob is the pack a
+//     blobless clone's lazy fetch of one blob is served (its --filter
+//     included), op=fetch the pack a fetch of main's newest commit is
+//     (main~1..main) — two requests that open the bitmap to answer a few
+//     objects.
 //   - stale=k (100MB and 1GB) is once k pushes of stalePushBytes have
 //     landed outside the maintainer's index: op=count counts main's objects
 //     from the bitmap, the walk a bitmap that many pushes behind leaves a
@@ -1200,6 +1219,9 @@ func BenchmarkMidx(b *testing.B) {
 					b.ReportMetric(float64(objects), "objects")
 					b.ReportMetric(float64(len(commits)), "commits")
 				})
+			}
+			if arm.bytes >= 1_000_000_000 {
+				w.lookupArms(b, c, s, repo)
 			}
 			if !stale {
 				// No memory arms over 5 GB: its bitmap holds some 10 GB
@@ -1377,6 +1399,62 @@ func damageLargestPack(b *testing.B, dir string) {
 	if err := f.Close(); err != nil {
 		b.Fatal(err)
 	}
+}
+
+// lookupArms are BenchmarkMidx's lookup=off|on arms over repo, synced in s:
+// the maintainer's bitmap written without its lookup table and with it, each
+// by a maintainer pass, and under each the two requests a node serves most
+// that open the bitmap to answer a handful of objects — a blobless clone's
+// lazy fetch of one blob, and a fetch of main's newest commit.
+//
+// EACH ARM'S SETUP IS ITS OWN SUB-BENCHMARK'S, so a -bench pattern that
+// selects neither arm pays for neither maintainer run — a minute at the
+// gigabyte and five at 5 GB of setup nobody reads — and the production
+// setting is put back however many arms ran: every arm after these writes its
+// own bitmap, under the setting every node runs with.
+func (w *syncWorld) lookupArms(b *testing.B, c *cache.Cache, s cache.Synced, repo string) {
+	b.Helper()
+	defer cache.SetBitmapLookupTable(c, true)
+	for _, on := range []bool{false, true} {
+		name := "lookup=off"
+		if on {
+			name = "lookup=on"
+		}
+		b.Run(name, func(b *testing.B) {
+			cache.SetBitmapLookupTable(c, on)
+			if err := cache.ForgetMaintenance(c, repo); err != nil {
+				b.Fatal(err)
+			}
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				b.Fatalf("the maintainer ran %v, want the repository", ran)
+			}
+			b.Run("op=blob", func(b *testing.B) {
+				blob := w.lazyBlob(b, c, s)
+				for b.Loop() {
+					packOutFiltered(b, w.pool, c, s.Dir, "blob:none", blob)
+				}
+			})
+			b.Run("op=fetch", func(b *testing.B) {
+				for b.Loop() {
+					packOut(b, w.pool, c, s.Dir, "refs/heads/main", "^refs/heads/main~1")
+				}
+			})
+		})
+	}
+}
+
+// lazyBlob is the blob BenchmarkMidx's op=blob arms fetch as a blobless
+// clone's checkout would: main's first file.
+func (w *syncWorld) lazyBlob(b *testing.B, c *cache.Cache, s cache.Synced) string {
+	b.Helper()
+	res, err := w.pool.Run(b.Context(), gitproc.Cmd{
+		Dir: s.Dir, Args: []string{"rev-parse", "--verify", "refs/heads/main:d000/f00000"},
+		Config: c.ServeConfig(), Class: gitproc.ClassRead, Deadline: time.Minute,
+	})
+	if err != nil {
+		b.Fatalf("the blob a lazy fetch asks for: %v", err)
+	}
+	return strings.TrimSpace(string(res.Stdout))
 }
 
 // memorySteps are what BenchmarkMidx's memory arms price, in the order they

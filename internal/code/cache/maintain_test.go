@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -248,6 +249,65 @@ func bitmapOf(t *testing.T, packDir string) string {
 		t.Fatalf("%s holds bitmaps %v, want one", packDir, found)
 	}
 	return found[0]
+}
+
+// THE MAINTAINER'S BITMAP CARRIES ITS LOOKUP TABLE: a table of the commits it
+// holds a bitmap for, so a reader loads the bitmap of a commit only when it is
+// asked for one. Without it every upload-pack that opens the bitmap reads
+// every commit's entry before it answers — a blobless clone's lazy fetch of
+// one blob included. Read from the file git wrote: the header's option word,
+// bytes 6 and 7 big-endian, carries BITMAP_OPT_LOOKUP_TABLE (0x10). And the
+// arm BenchmarkMidx prices it against is a bitmap WITHOUT the table, so the
+// switch it flips is held here to writing one.
+func TestTheMaintainersBitmapCarriesItsLookupTable(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range 3 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	packDir := filepath.Join(s.Dir, "objects", "pack")
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	if opts := bitmapOptions(t, bitmapOf(t, packDir)); opts&bitmapLookupTable == 0 {
+		t.Errorf("the maintainer's bitmap's options are %#04x: no lookup table (%#04x)", opts, bitmapLookupTable)
+	}
+
+	cache.SetBitmapLookupTable(c, false)
+	if err := cache.ForgetMaintenance(c, repo); err != nil {
+		t.Fatal(err)
+	}
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	if opts := bitmapOptions(t, bitmapOf(t, packDir)); opts&bitmapLookupTable != 0 {
+		t.Errorf("with the table switched off the bitmap's options are %#04x: the benchmark's arm without "+
+			"the table would price the table", opts)
+	}
+}
+
+// bitmapLookupTable is git's BITMAP_OPT_LOOKUP_TABLE, a bit of a bitmap
+// header's option word.
+const bitmapLookupTable = 0x10
+
+// bitmapOptions is the option word of the bitmap at path: after the "BITM"
+// signature and the version, bytes 6 and 7, big-endian.
+func bitmapOptions(t *testing.T, path string) uint16 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) < 8 || string(raw[:4]) != "BITM" {
+		t.Fatalf("%s is no bitmap: it begins %q", path, raw[:min(len(raw), 8)])
+	}
+	return binary.BigEndian.Uint16(raw[6:8])
 }
 
 // inode is path's inode number: whether a file is the same file, not merely
