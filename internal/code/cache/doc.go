@@ -96,7 +96,11 @@
 // of its wants the cache lacks, which sends the fetch to one linearizable
 // sync — asked of the wants as a STREAM, read from wherever the host holds the
 // request (a partial clone's checkout names every blob it lacks in one
-// request, which the host spools), and ended at the first absent one.
+// request, which the host spools), and ended at the first absent one. A
+// check that met DAMAGE on the way answers the damage, never an absent id
+// (gitproc.Result.Damage): cat-file calls an object behind a truncated index
+// `missing` and exits 0, and taken as absent the fetch's upload-pack refuses
+// that want in band, past the first byte the host's repair can retry under.
 //
 // # The byte path is shaped for S3
 //

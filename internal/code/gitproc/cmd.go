@@ -174,6 +174,15 @@ type Result struct {
 	Exit   int           // the exit status; -1 when a signal ended the process
 	Took   time.Duration // start to reap
 	Waited time.Duration // in the lane, before start
+	// Damage is [ErrCorrupt] or [ErrMissingObject] when a line of Stderr
+	// names one — the highest kind, as [ExitError.Kind] is chosen — and nil
+	// when none does, WHATEVER THE OUTCOME: git answers some questions over
+	// damage it reports only on stderr and exits 0 (cat-file --batch-check
+	// says an object in a pack whose index is truncated is `missing`, past
+	// `index file … is too small`), so a caller that takes an answer as what
+	// the repository holds asks this first. Like the kind, it describes the
+	// repository the process read.
+	Damage error
 	// CPU is the user and system time the process tree spent, the whole of
 	// it, counted when the run ends: the process and every descendant it
 	// waited for (upload-pack's pack-objects, receive-pack's index-pack), as

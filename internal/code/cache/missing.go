@@ -71,12 +71,24 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 	// a thousand ids (gitproc's measured section), seconds at the hundred
 	// thousand wants a ref-heavy clone may ask about, all of it silence on
 	// the client's connection before upload-pack starts.
-	_, err := c.git.Run(ctx, gitproc.Cmd{
+	res, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: s.Dir, Args: []string{"cat-file", "--batch-check", "--buffer"}, Config: c.ServeConfig(),
 		Stdin: in, Stdout: lines, Class: gitproc.ClassRead,
 		Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
 	})
 	switch {
+	case res.Damage != nil && (err == nil || errors.Is(err, errFoundMissing)):
+		// AN ANSWER READ OVER DAMAGE IS THE DAMAGE'S: cat-file calls an
+		// object in a pack whose index it cannot read `missing` and exits
+		// 0, only its stderr naming the index. Taken as absent, the
+		// fetch's upload-pack refuses that want IN BAND (`not our ref`),
+		// past the first byte no repair can retry under — so damage named
+		// on any line is the check's answer, whatever it said of the ids,
+		// and the host repairs the incarnation under it
+		// (cache.DamageReason). A pack whose files are gone prints nothing
+		// and is an absent id: the linearizable sync installs it again.
+		return "", fmt.Errorf("cache: which objects of %s are missing: git cat-file read a damaged repository: %w: %s",
+			s.entry.id, res.Damage, res.LastLine())
 	case errors.Is(err, errFoundMissing):
 		return missing, nil
 	case err == nil:

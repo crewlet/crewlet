@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -56,7 +57,7 @@ func (e *ExitError) Error() string {
 		ended = "was ended by a signal"
 	}
 	msg := fmt.Sprintf("gitproc: git %s %s — %s", e.Command, ended, strings.TrimPrefix(e.Kind.Error(), "gitproc: "))
-	if last := lastLine(e.Result.Stderr); last != "" {
+	if last := e.Result.LastLine(); last != "" {
 		msg += ": " + textcut.Ellipsis(last, 512)
 	}
 	return msg
@@ -65,9 +66,10 @@ func (e *ExitError) Error() string {
 // Unwrap is the kind, so errors.Is(err, ErrCorrupt) and its siblings hold.
 func (e *ExitError) Unwrap() error { return e.Kind }
 
-// lastLine is the last non-empty line of s.
-func lastLine(s string) string {
-	s = strings.TrimRight(s, "\n")
+// LastLine is the last non-empty line of Stderr, trimmed: what a message
+// about the run quotes of git's own words.
+func (r Result) LastLine() string {
+	s := strings.TrimRightFunc(r.Stderr, unicode.IsSpace)
 	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
 		s = s[i+1:]
 	}
@@ -221,6 +223,15 @@ func (s *stderrSink) finish() {
 }
 
 func (s *stderrSink) kind() error { return kindOf(s.rank) }
+
+// damage is the kind when it is damage to the repository — ErrCorrupt or
+// ErrMissingObject — and nil otherwise (Result.Damage).
+func (s *stderrSink) damage() error {
+	if k := s.kind(); errors.Is(k, ErrCorrupt) || errors.Is(k, ErrMissingObject) {
+		return k
+	}
+	return nil
+}
 
 // tail is the last StderrTail bytes git wrote, marked where it was cut —
 // including a cut the buffer's own trimming made, which leaves fewer bytes

@@ -242,6 +242,70 @@ func TestClassifiesWhatRealGitSays(t *testing.T) {
 	}
 }
 
+// AN ANSWER READ OVER DAMAGE SAYS SO, whatever the exit status: cat-file
+// --batch-check calls the tip of a pack whose index is truncated `missing`
+// and exits 0, only its stderr naming the index, so Result.Damage is what
+// tells that answer from an object the repository does not hold — a removed
+// pack, which prints nothing. A failed run carries its kind there too, and a
+// refusal that is no damage (`not our ref`) carries none.
+func TestAResultNamesTheDamageItsProcessRead(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	p := realPool(t, gitproc.Options{})
+	batchCheck := func(dir string) gitproc.Cmd {
+		c := read(dir, "cat-file", "--batch-check")
+		c.Stdin = strings.NewReader(f.tip() + "\n")
+		return c
+	}
+	for _, tc := range []struct {
+		name    string
+		damage  func(t *testing.T, newer string)
+		cmd     func(dir string) gitproc.Cmd
+		stdout  string // what the answer says of the tip; "" for a failed run
+		want    error  // Result.Damage
+		wantErr error
+	}{
+		{"an index truncated, answered", func(t *testing.T, newer string) { truncate(t, newer+".idx", 100) },
+			batchCheck, f.tip() + " missing\n", gitproc.ErrCorrupt, nil},
+		{"a pack removed, answered", func(t *testing.T, newer string) {
+			for _, ext := range []string{".pack", ".idx", ".rev"} {
+				if err := os.Remove(newer + ext); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, batchCheck, f.tip() + " missing\n", nil, nil},
+		{"no damage, answered", func(*testing.T, string) {}, batchCheck, f.tip() + " commit ", nil, nil},
+		{"an index truncated, failed", func(t *testing.T, newer string) { truncate(t, newer+".idx", 100) },
+			func(dir string) gitproc.Cmd { return read(dir, "rev-list", "--objects", f.tip()) }, "",
+			gitproc.ErrCorrupt, gitproc.ErrCorrupt},
+		{"a want refused, failed", func(*testing.T, string) {}, func(dir string) gitproc.Cmd {
+			return gitproc.Cmd{
+				Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir},
+				Stdin: strings.NewReader(pkt("want 0123456789012345678901234567890123456789\n") + "0000" + pkt("done\n")),
+				Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+			}
+		}, "", nil, gitproc.ErrNotOurRef},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, newer := f.bare(t)
+			tc.damage(t, newer)
+			res, err := p.Run(t.Context(), tc.cmd(dir))
+			switch {
+			case tc.wantErr == nil && err != nil:
+				t.Fatalf("%v (stderr %q), want an answer", err, res.Stderr)
+			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+				t.Fatalf("%v (stderr %q), want %v", err, res.Stderr, tc.wantErr)
+			}
+			if tc.stdout != "" && !strings.HasPrefix(string(res.Stdout), tc.stdout) {
+				t.Errorf("answered %q, want %q", res.Stdout, tc.stdout)
+			}
+			if (res.Damage == nil) != (tc.want == nil) || !errors.Is(res.Damage, tc.want) {
+				t.Errorf("Result.Damage = %v (stderr %q), want %v", res.Damage, res.Stderr, tc.want)
+			}
+		})
+	}
+}
+
 func lastStderrLine(s string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])

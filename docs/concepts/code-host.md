@@ -583,8 +583,10 @@ failing on one damaged copy cost one repair. How depends on the damage:
   a copy that read leaves still refused — something that keeps writing into
   it, or a filesystem that does not keep what it is given — is rebuilt as
   below.
-- **Its packs.** When git finds a pack or an index it cannot read, or an
-  object a row names that no pack holds, the repository is read whole again
+- **Its packs.** When git finds a pack or an index it cannot read — failing
+  on it, or answering around it and saying so only in its messages, as the
+  check of which of a fetch's wants the copy lacks does — or an object a row
+  names that no pack holds, the repository is read whole again
   from the rows and the object store into a new directory beside the damaged
   one, which replaces it once it is complete. Requests already reading the old
   copy finish on it.
