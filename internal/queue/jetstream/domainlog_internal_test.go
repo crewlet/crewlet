@@ -987,3 +987,155 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 		}
 	})
 }
+
+// silentLeaderStream is a stream handle whose LEADER never answers the first
+// lost requests made of it: each of them waits out its own context, as a
+// request does that reached a member still believing in a leader the cluster
+// has just lost, and every request after them is answered at once — by the
+// leader the cluster elected meanwhile.
+//
+// EMBEDS THE INTERFACE, for [notYetVisibleJS]'s reason.
+type silentLeaderStream struct {
+	jetstream.Stream
+	lost  atomic.Int32
+	calls atomic.Int32
+}
+
+// unanswered counts a request, and makes it one of the lost ones while any
+// are left: it waits out ctx, as a request nobody answers does.
+func (s *silentLeaderStream) unanswered(ctx context.Context) error {
+	s.calls.Add(1)
+	if s.lost.Add(-1) < 0 {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *silentLeaderStream) Info(ctx context.Context, _ ...jetstream.StreamInfoOpt) (*jetstream.StreamInfo, error) {
+	if err := s.unanswered(ctx); err != nil {
+		return nil, err
+	}
+	return &jetstream.StreamInfo{State: jetstream.StreamState{FirstSeq: 1, LastSeq: 7, Bytes: 640},
+		Config: jetstream.StreamConfig{Name: "CREWLET_CODE_LOG", MaxBytes: 1 << 20}}, nil
+}
+
+func (s *silentLeaderStream) GetLastMsgForSubject(ctx context.Context, subject string) (*jetstream.RawStreamMsg, error) {
+	if err := s.unanswered(ctx); err != nil {
+		return nil, err
+	}
+	return &jetstream.RawStreamMsg{Subject: subject, Sequence: 7}, nil
+}
+
+func (s *silentLeaderStream) GetMsg(ctx context.Context, seq uint64, _ ...jetstream.GetMsgOpt) (*jetstream.RawStreamMsg, error) {
+	if err := s.unanswered(ctx); err != nil {
+		return nil, err
+	}
+	return &jetstream.RawStreamMsg{Subject: "crewlet.code.repo.r", Sequence: seq}, nil
+}
+
+// shortReads is the production timing with a read's term and its re-ask short
+// enough for a case to wait out two lost requests in a fraction of a second.
+func shortReads() jsprovision.Timing {
+	t := jsprovision.Clustered(true).Timing()
+	t.ReadTerm, t.ReAsk = 50*time.Millisecond, 5*time.Millisecond
+	return t
+}
+
+// A READ OF A DOMAIN LOG THAT ITS LEADER NEVER ANSWERED IS ASKED AGAIN, within
+// the caller's budget, rather than waited on for the whole of it.
+//
+// A domain log allows no direct get, so its info, its last message on a
+// subject and its record at a sequence are answered by the stream's leader or
+// by nobody — and a member that still believes in a leader the cluster has
+// just lost stays silent. Held for its caller's whole context, one such
+// request cost the committer's thirty-second budget: the gate reserve's usage
+// reading before a push's record, `context deadline exceeded`, a push nothing
+// decided reported `unknown`, while a request sent a second later was answered
+// by the new leader at once. Each read here is lost twice and then answered,
+// inside a budget a whole-context wait would have spent on the first.
+func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		read func(ctx context.Context, l *DomainLog) error
+	}{
+		{"stats", func(ctx context.Context, l *DomainLog) error {
+			stats, err := l.Stats(ctx)
+			if err == nil && (stats.LastSeq != 7 || stats.MaxBytes != 1<<20) {
+				err = errors.New("the stats are not the answer the leader gave")
+			}
+			return err
+		}},
+		{"last_on_a_subject", func(ctx context.Context, l *DomainLog) error {
+			seq, ok, err := l.LastSeq(ctx, "crewlet.code.repo.r")
+			if err == nil && (!ok || seq != 7) {
+				err = errors.New("the last sequence is not the answer the leader gave")
+			}
+			return err
+		}},
+		{"record_at_a_sequence", func(ctx context.Context, l *DomainLog) error {
+			_, _, _, ok, err := l.At(ctx, 3)
+			if err == nil && !ok {
+				err = errors.New("the record the leader answered with was reported gone")
+			}
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := &silentLeaderStream{}
+			s.lost.Store(2)
+			l := &DomainLog{stream: s, state: s, name: "CREWLET_CODE_LOG",
+				q: &Queue{timing: shortReads()}, turn: make(chan struct{}, 1)}
+			// A BUDGET FOUR TERMS LONG: room for two lost requests, their
+			// re-asks and the answer, and none for a wait on the first.
+			ctx, cancel := context.WithTimeout(t.Context(), 4*shortReads().ReadTerm)
+			defer cancel()
+			if err := c.read(ctx, l); err != nil {
+				t.Fatalf("a read its leader lost twice: %v", err)
+			}
+			if got := s.calls.Load(); got != 3 {
+				t.Fatalf("the read was asked %d times, want 3 — two lost, one answered", got)
+			}
+		})
+	}
+}
+
+// A STATE READ WAITS FOR ITS TURN ONLY AS LONG AS ITS OWN CONTEXT ALLOWS.
+//
+// Two state reads share one handle, so they take turns — and under a mutex a
+// caller waited its turn for as long as the holder's context ran, whatever its
+// own allowed: the gate reserve's five-second reading queued behind a read with
+// the committer's thirty-second budget and spent that budget there.
+func TestAStateReadWaitsForItsTurnOnlyAsLongAsItsContext(t *testing.T) {
+	t.Parallel()
+	s := &silentLeaderStream{}
+	l := &DomainLog{stream: s, state: s, name: "CREWLET_CODE_LOG",
+		q: &Queue{timing: shortReads()}, turn: make(chan struct{}, 1)}
+	release, err := l.stateTurn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	const budget = 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
+	read := make(chan error, 1)
+	go func() {
+		_, err := l.Stats(ctx)
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a state read whose turn another held = %v, want its own deadline", err)
+		}
+	case <-time.After(20 * budget):
+		t.Fatalf("the read was still waiting after %v for a turn its context allowed %v for",
+			20*budget, budget)
+	}
+	if got := s.calls.Load(); got != 0 {
+		t.Fatalf("the read asked the broker %d times without its turn", got)
+	}
+}
