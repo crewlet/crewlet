@@ -89,18 +89,27 @@ func (w *IdleWatchdog) Stop() {
 }
 
 // Err is the attempt's error as the caller should see it: the stall, when the
-// watchdog is what ended the attempt — the SDK only reports the cancelled
-// context it caused, which reads as the caller giving up — and err unchanged
-// otherwise, nil included. A cancellation that came from the CALLER's own
-// context is the caller's, and is never reported as a stall.
+// watchdog is what ended the attempt, and err unchanged otherwise, nil
+// included. A cancellation that came from the CALLER's own context is the
+// caller's, and is never reported as a stall.
+//
+// WHERE THE SILENCE FELL decides what the SDK hands back, measured on Go 1.27
+// against both SDKs. Before the response's first byte, the request fails in
+// the transport, which reports the cancellation as a bare context.Canceled
+// rather than its cause — which every classifier reads as the caller giving
+// up, a fatal and wrong answer — so the stall replaces it here. Part-way
+// through a stream, the failure is a READ of the body, and a body read on a
+// cancelled request returns the context's cause: the stall itself, already.
+// That one passes through as it is, or the message a person reads names the
+// stall twice.
 func (w *IdleWatchdog) Err(err error) error {
-	if err != nil && errors.Is(context.Cause(w.ctx), ErrStalled) {
-		// The SDK's own error rides as TEXT, not wrapped: it answers
-		// errors.Is(context.Canceled), which every classifier reads as the
-		// caller's own cancellation.
-		return fmt.Errorf("%w (%s)", w.stall, err.Error())
+	if err == nil || !errors.Is(context.Cause(w.ctx), ErrStalled) || errors.Is(err, ErrStalled) {
+		return err
 	}
-	return err
+	// The SDK's own error rides as TEXT, not wrapped: it answers
+	// errors.Is(context.Canceled), which every classifier reads as the
+	// caller's own cancellation.
+	return fmt.Errorf("%w (%s)", w.stall, err.Error())
 }
 
 type watchedBody struct {

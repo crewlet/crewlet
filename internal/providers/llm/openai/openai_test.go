@@ -1509,6 +1509,11 @@ func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
 		if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
 			t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
 		}
+		// Once: part-way through, the SDK already reports the stall, and
+		// naming it again doubled it.
+		if n := strings.Count(err.Error(), "stream went silent"); n != 1 {
+			t.Fatalf("err = %q names the stall %d times, want once", err, n)
+		}
 		if elapsed := time.Since(start); elapsed > 4*timeout {
 			t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
 		}

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -60,9 +61,10 @@ func TestALongStreamThatKeepsTalkingIsNeverCutOff(t *testing.T) {
 }
 
 // SILENCE ENDS THE ATTEMPT, as a TIMEOUT: retryable on the next member of the
-// chain and never a reason to bench the key. The SDK only ever sees the
-// cancelled context the watchdog caused, which on its own reads as the CALLER
-// giving up — fatal, and wrong — so Err must swap it for the stall.
+// chain and never a reason to bench the key. Silent before its first byte, a
+// request fails with the bare cancellation the watchdog caused, which on its
+// own reads as the CALLER giving up — fatal, and wrong — so Err must swap it
+// for the stall.
 func TestSilenceEndsTheAttemptAsATimeout(t *testing.T) {
 	t.Parallel()
 	ctx, w := WatchIdle(context.Background(), 30*time.Millisecond)
@@ -81,6 +83,32 @@ func TestSilenceEndsTheAttemptAsATimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "30ms") {
 		t.Fatalf("err = %q, want it to name the bound", err)
+	}
+}
+
+// A STALL THE SDK ALREADY REPORTED IS NAMED ONCE. Part-way through a stream
+// the failure is a read of the body, and a body read on a cancelled request
+// returns the context's cause — the stall itself, which the SDK hands back
+// wrapped in its own words. Swapped for the stall again, the message a person
+// reads said "stream went silent" twice over.
+//
+// Mutation: drop the errors.Is(err, ErrStalled) pass-through from Err.
+func TestAStallTheSDKAlreadyReportedIsNamedOnce(t *testing.T) {
+	t.Parallel()
+	ctx, w := WatchIdle(context.Background(), 30*time.Millisecond)
+	defer w.Stop()
+	<-ctx.Done()
+
+	read := fmt.Errorf("reading the stream: %w", context.Cause(ctx))
+	err := w.Err(read)
+	if !errors.Is(err, read) {
+		t.Fatalf("err = %v, want the SDK's own report of the stall unchanged", err)
+	}
+	if n := strings.Count(err.Error(), "stream went silent"); n != 1 {
+		t.Fatalf("err = %q names the stall %d times, want once", err, n)
+	}
+	if kind := FromTransport(err, "p", "m").Kind; kind != llm.KindTimeout {
+		t.Fatalf("a stall classified %s, want timeout", kind)
 	}
 }
 
