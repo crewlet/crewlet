@@ -2059,3 +2059,47 @@ test("one subject is shown, not hidden behind a count", () => {
   expect(screen.queryByText(/all 1/)).toBeNull();
   expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
 });
+
+import { PublicBaseNotice } from "./Integrations.tsx";
+
+// AN ADDRESS THAT RESOLVED AND IS STILL NONE SAYS WHY.
+//
+// A variable holding a query, a fragment, userinfo or no scheme resolves —
+// `resolved: true` — and gives no address, so a notice reading `resolved`
+// alone announced "apps reach this engine at" followed by an empty code span:
+// the one screen that says where deliveries land, saying nothing, on exactly
+// the misconfiguration it should name. The engine's `problem` is the sentence.
+test("a public base that resolves to no address names the problem", () => {
+  const problem = "integrations.public_base_url, resolved from PUBLIC_BASE_URL, carries a query";
+  render(
+    <PublicBaseNotice
+      base={{
+        value: "",
+        present: true,
+        resolved: true,
+        config_path: "integrations.public_base_url",
+        reference: "PUBLIC_BASE_URL",
+        problem,
+      }}
+    />,
+  );
+  expect(screen.getByText(problem)).toBeTruthy();
+  expect(screen.queryByText(/reach this engine at/)).toBeNull();
+});
+
+// AND A USABLE ONE IS ANNOUNCED, so the rule is a check rather than a refusal
+// of everything.
+test("a usable public base is announced", () => {
+  render(
+    <PublicBaseNotice
+      base={{
+        value: "https://engine.example.com",
+        present: true,
+        resolved: true,
+        config_path: "integrations.public_base_url",
+        problem: "",
+      }}
+    />,
+  );
+  expect(screen.getByText("https://engine.example.com")).toBeTruthy();
+});

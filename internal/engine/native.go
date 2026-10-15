@@ -978,8 +978,13 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 // pagesParserOptions is what the knowledge base's parser is built from: the lead
 // map, and the base its notifications link a person to — the DASHBOARD's, since
 // the link is opened by whoever the change woke, never by a vendor.
+//
+// A dashboard base this process cannot use composes no link, and is reported
+// once per apply by [Engine.refreshSkillVariables] rather than once per
+// parser built.
 func pagesParserOptions(env *config.Resolver, c *Company) pages.ParserOptions {
-	return pages.ParserOptions{Leads: containerLeads(c.Org), BaseURL: dashboardBase(env, c)}
+	base, _ := dashboardBase(env, c)
+	return pages.ParserOptions{Leads: containerLeads(c.Org), BaseURL: base}
 }
 
 // reconcileNative swaps the native parsers for a newly applied epoch.

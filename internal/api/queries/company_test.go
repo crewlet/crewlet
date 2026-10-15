@@ -2357,7 +2357,7 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
 		Company:    func() *config.Company { return cfg },
-		PublicBase: func() string { return "https://now.example.com" },
+		PublicBase: func() (string, error) { return "https://now.example.com", nil },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
 				{Kind: integration.KindSlack, Endpoint: "https://old.example.com"},
@@ -2406,7 +2406,7 @@ func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
 		Company: func() *config.Company { return cfg },
 		// What the node's own chain reads the reference as, which is what
 		// the passes registered with.
-		PublicBase: func() string { return "https://now.example.com" },
+		PublicBase: func() (string, error) { return "https://now.example.com", nil },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
 				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
@@ -2462,6 +2462,44 @@ func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 		}
 		if got := entry["endpoint"]; got != "https://now.example.com" {
 			t.Errorf("endpoint = %v, want the recorded address regardless", got)
+		}
+		return
+	}
+	t.Fatal("no slack row")
+}
+
+// AND A BASE THIS NODE CANNOT USE SAYS NOTHING TOO. A reference that resolved
+// to nothing, or to a value that is no address, is no evidence about where the
+// surface ought to be registered: the seam answered "" for both and the
+// comparison read it as an address, reporting every healthy registration as
+// moved on exactly the node that could not read the setting.
+//
+// Mutation: compare against the base whatever the error, and the row says
+// false.
+func TestAnUnusablePublicBaseLeavesTheAnswerNull(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "${PUBLIC_URL}"
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		PublicBase: func() (string, error) {
+			return cfg.Integrations.WebhookBase(func(string) (string, bool) { return "", false })
+		},
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "slack" {
+			continue
+		}
+		if got := entry["endpoint_current"]; got != nil {
+			t.Errorf("endpoint_current = %v, want null: this node cannot read the address", got)
 		}
 		return
 	}

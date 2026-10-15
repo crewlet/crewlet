@@ -1873,6 +1873,23 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 		t.Errorf("the finding's subject is %q, which is not the field to set",
 			findings[0].Subject)
 	}
+
+	// AND A BASE THE COMPANY NAMES AND THIS NODE CANNOT USE IS NOT CALLED
+	// UNSET: the finding opens with why, naming the variable to correct.
+	res, err = github.Reconcile(t.Context(), github.Options{
+		Config: &config.GitHub{Enabled: true},
+		WebhookBaseErr: &config.BaseError{
+			Field: "integrations.public_base_url", Variables: []string{"CREWLET_PUBLIC_URL"},
+			Unresolved: []string{"CREWLET_PUBLIC_URL"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("a pass with no credential failed: %v", err)
+	}
+	if got := res.Findings(); len(got) != 1 || !strings.Contains(got[0].Detail, "CREWLET_PUBLIC_URL") ||
+		strings.Contains(got[0].Detail, "is unset") {
+		t.Errorf("findings = %+v, want the variable named rather than the field called unset", got)
+	}
 }
 
 // AN ARCHIVED REPOSITORY IS NOT AN INGRESS BLOCK.

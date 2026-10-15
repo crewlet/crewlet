@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -26,8 +28,8 @@ func TestPeopleAreLinkedToTheDashboardAndVendorsToThePublicBase(t *testing.T) {
 	if got := pagesParserOptions(env, c).BaseURL; got != "https://crewlet.example.com" {
 		t.Errorf("a page change links on %q, want the dashboard's address", got)
 	}
-	if got := c.Config.Integrations.WebhookBase(env.LookupOK); got != "https://hooks.example.com" {
-		t.Errorf("a webhook is registered on %q, want the vendors' address", got)
+	if got, err := c.Config.Integrations.WebhookBase(env.LookupOK); got != "https://hooks.example.com" || err != nil {
+		t.Errorf("a webhook is registered on %q (%v), want the vendors' address", got, err)
 	}
 }
 
@@ -45,5 +47,48 @@ func TestNoDashboardBaseComposesNoLink(t *testing.T) {
 	}
 	if got := pagesParserOptions(env, c).BaseURL; got != "" {
 		t.Errorf("a page change links on %q, want no link", got)
+	}
+}
+
+// A DASHBOARD BASE THE COMPANY NAMES AND THIS NODE CANNOT USE composes no link
+// either — a variable holding a query would otherwise put
+// `https://crewlet.example.com?tenant=a/work/ENG-1` in front of a person — and
+// says why, naming the variable and never the value, which is what the apply's
+// dashboard_base_unusable warning carries.
+func TestAnUnusableDashboardBaseComposesNoLinkAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	env := config.NewResolver(config.MapSource{"DASHBOARD_URL": "https://crewlet.example.com?tenant=sk-secret"})
+	c := &Company{Config: &config.Company{Integrations: config.Integrations{DashboardBaseURL: "${DASHBOARD_URL}"}}}
+	if vars := skillVariables(env, c); vars != nil {
+		t.Errorf("skill variables = %v, want none: the dashboard base is no address", vars)
+	}
+	if got := pagesParserOptions(env, c).BaseURL; got != "" {
+		t.Errorf("a page change links on %q, want no link", got)
+	}
+	_, err := dashboardBase(env, c)
+	var base *config.BaseError
+	if !errors.As(err, &base) || !strings.Contains(err.Error(), "DASHBOARD_URL") || strings.Contains(err.Error(), "sk-secret") {
+		t.Errorf("dashboardBase error = %v, want a BaseError naming DASHBOARD_URL and not the value", err)
+	}
+}
+
+// A DISCONNECT REFUSES OVER A BASE IT CANNOT READ. It finds this deployment's
+// hooks by their address, so withdrawing by an address nobody can read would
+// finish the disconnect over hooks still delivering here; an unset base has
+// nothing registered and finishes.
+//
+// Mutation: hand the teardown "" whatever the error, and the unusable case
+// finishes.
+func TestATeardownRefusesOverABaseItCannotRead(t *testing.T) {
+	t.Parallel()
+	unset := &Company{Config: &config.Company{}}
+	if base, err := teardownBase(unset, config.NewResolver()); base != "" || err != nil {
+		t.Errorf("an unset base: %q, %v; want nothing to withdraw", base, err)
+	}
+	named := &Company{Config: &config.Company{Integrations: config.Integrations{PublicBaseURL: "${CREWLET_PUBLIC_URL}"}}}
+	_, err := teardownBase(named, config.NewResolver())
+	if !errors.Is(err, config.ErrBaseUnresolved) || !strings.Contains(err.Error(), "CREWLET_PUBLIC_URL") ||
+		!strings.Contains(err.Error(), "force the disconnect") {
+		t.Errorf("an unresolved base: %v, want a refusal naming the variable and the way out", err)
 	}
 }

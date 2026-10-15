@@ -354,9 +354,13 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: github teardown: %w", err)
 	}
+	base, err := teardownBase(company, env)
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: github teardown: %w", err)
+	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
+		WebhookBase: base,
 	}); err != nil {
 		return provision.Removed{}, err
 	}
@@ -514,7 +518,7 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 		// register the webhook, on the same terms as every other surface,
 		// and the token is what the definition carries so the route it
 		// posts to accepts the delivery.
-		WebhookBase:  in.WebhookBase,
+		WebhookBase: in.WebhookBase, WebhookBaseErr: in.WebhookBaseErr,
 		WebhookToken: strings.TrimSpace(env.Value(cfg.WebhookToken)),
 	})
 	if err != nil {
@@ -542,6 +546,10 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 	if err != nil && in.RemoveSeats {
 		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
+	base, err := teardownBase(company, env)
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
+	}
 	return datadog.Teardown(ctx, datadog.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
 		Creds: datadog.Credentials{
@@ -553,7 +561,7 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 		// webhook is addressed by name, and the teardown refuses to
 		// delete one pointing anywhere but here — the same expression
 		// gitlabPass.Teardown passes for the same reason.
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
+		WebhookBase: base,
 	})
 }
 
@@ -786,7 +794,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	}
 	res, err := jira.Reconcile(ctx, jira.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		Sink: in.Sink, WebhookBase: in.WebhookBase,
+		Sink: in.Sink, WebhookBase: in.WebhookBase, WebhookBaseErr: in.WebhookBaseErr,
 		// AND WHEN EACH SEAT'S ATLASSIAN CREDENTIAL WAS SEALED, which is
 		// the only thing that separates "Atlassian has not finished
 		// granting this brand new account" from "this credential is
@@ -833,10 +841,30 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) (provis
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: jira teardown: %w", err)
 	}
+	hooks, err := teardownBase(company, env)
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: jira teardown: %w", err)
+	}
 	return provision.Removed{}, jira.Teardown(ctx, jira.Options{
-		Client: client, Config: cfg,
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
+		Client: client, Config: cfg, WebhookBase: hooks,
 	})
+}
+
+// teardownBase is the address a disconnect finds this deployment's hooks by:
+// the webhook base, "" when the company names none — nothing was registered
+// without one, so there is nothing to withdraw — and a REFUSAL when it names
+// one this process cannot use. Withdrawing by an address nobody can read
+// would finish the disconnect over hooks still delivering to this deployment,
+// and a refused disconnect is recoverable where that is not: the error names
+// the variable to correct, and a forced disconnect remains.
+func teardownBase(company *Company, env *config.Resolver) (string, error) {
+	base, err := company.Config.Integrations.WebhookBase(env.LookupOK)
+	if err != nil {
+		return "", fmt.Errorf("%w — the hooks this deployment registered cannot be "+
+			"found without its address: correct it, or force the disconnect and "+
+			"remove the hooks by hand", err)
+	}
+	return base, nil
 }
 
 // confluencePass adapts confluence.Reconcile to the pass contract.
@@ -871,7 +899,8 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	}
 	res, err := confluence.Reconcile(ctx, confluence.Options{
 		Client: client, Config: cfg, Value: env.Value,
-		Sink: in.Sink, WebhookBase: in.WebhookBase, Recreate: in.Recreate,
+		Sink: in.Sink, WebhookBase: in.WebhookBase, WebhookBaseErr: in.WebhookBaseErr,
+		Recreate: in.Recreate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
@@ -958,6 +987,7 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: in.Sink,
 		WebhookBase:      in.WebhookBase,
+		WebhookBaseErr:   in.WebhookBaseErr,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		// ROTATE ONLY WHEN ASKED, and NEVER DECOMMISSION from here.
@@ -1127,6 +1157,7 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		// a sink is permission to mint, and a person asked for both.
 		Sink:             in.Sink,
 		WebhookBase:      in.WebhookBase,
+		WebhookBaseErr:   in.WebhookBaseErr,
 		RecreateWebhooks: in.Recreate,
 	})
 	if err != nil {

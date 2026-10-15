@@ -1769,11 +1769,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// whole ${VAR}, and what a surface registered is the address
 			// that reference RESOLVED to -- so the screen has to compare
 			// like with like or report every such company as moved.
-			PublicBase: func() string {
+			PublicBase: func() (string, error) {
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				company := companyConfig(e)
 				if company == nil {
-					return ""
+					return "", nil
 				}
 				return company.Integrations.WebhookBase(e.LookupSecret)
 			},

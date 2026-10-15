@@ -283,12 +283,17 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// surface registered is what a `${VAR}` public base resolved to,
 		// and comparing that against the reference itself would report
 		// every such company as moved for ever. A process that cannot
-		// resolve says null rather than false, for the reason above.
+		// resolve — or resolves to a value that is no address — says null
+		// rather than false, for the reason above: it read "" and answered
+		// false, calling a healthy registration stale on exactly the node
+		// that could not read the setting.
 		row["endpoint"] = nil
 		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
 			row["endpoint"] = state.Endpoint
 			if s.PublicBase != nil {
-				endpointCurrent = boolPtr(state.Endpoint == s.PublicBase())
+				if base, err := s.PublicBase(); err == nil {
+					endpointCurrent = boolPtr(state.Endpoint == base)
+				}
 			}
 		}
 		row["endpoint_current"] = endpointCurrent

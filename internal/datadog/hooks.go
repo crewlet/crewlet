@@ -169,10 +169,9 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 		out.Blocked = &Unregistered{
 			Kind:    integration.FindingIngressBlocked,
 			Subject: "integrations.public_base_url",
-			Detail: "no webhook was registered at Datadog: this deployment has " +
-				"no public base URL, so there is no address to point one at " +
-				"and every monitor that fires reaches nobody. Set " +
-				"integrations.public_base_url",
+			Detail: "no webhook was registered at Datadog: " +
+				config.NoWebhookBase(opts.WebhookBaseErr) + ", so there is no " +
+				"address to point one at and every monitor that fires reaches nobody",
 		}
 		return out
 	}

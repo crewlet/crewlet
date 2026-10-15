@@ -1914,6 +1914,69 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
 }
 
 /**
+ * What the screen says about the address every inbound integration is built
+ * on, which takes FOUR answers rather than two.
+ *
+ * Unset is advice. A `${VAR}` nobody exported is `resolved: false`, and the
+ * variable is the instruction. A value that resolved and is still no address —
+ * a query, a fragment, userinfo, no scheme — is `resolved: true` with a
+ * `problem`: read from `resolved` alone it announced "apps reach this engine
+ * at" and then nothing, which is the one silence this notice exists to end.
+ * Only a usable address is announced.
+ */
+export function PublicBaseNotice({ base }: { base: SetupListing["public_base_url"] | null }) {
+  if (!base) return null;
+  if (!base.present) {
+    return (
+      <Callout variant="warning">
+        <span className="col" style={{ gap: 4 }}>
+          <span>No public address is set, so apps can’t deliver here.</span>
+          <span className="t-caption">
+            Set <InlineCode>{base.config_path}</InlineCode> to this deployment’s HTTPS address.
+          </span>
+        </span>
+      </Callout>
+    );
+  }
+  // SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the engine
+  // answers `resolved` beside `present` as a three-valued field.
+  if (base.resolved === false) {
+    return (
+      <Callout variant="warning">
+        <span className="col" style={{ gap: 4 }}>
+          <span>
+            <InlineCode>{base.config_path}</InlineCode> points to{" "}
+            <InlineCode>{base.reference ? `\${${base.reference}}` : "a reference"}</InlineCode>,
+            which isn’t set, so apps can’t deliver here.
+          </span>
+          <span className="t-caption">Set it and re-activate the revision.</span>
+        </span>
+      </Callout>
+    );
+  }
+  if (base.problem) {
+    return (
+      <Callout variant="warning">
+        <span className="col" style={{ gap: 4 }}>
+          <span>
+            <InlineCode>{base.config_path}</InlineCode> gives no usable address, so apps can’t
+            deliver here.
+          </span>
+          <span className="t-caption">{base.problem}</span>
+        </span>
+      </Callout>
+    );
+  }
+  return (
+    <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+      <span>
+        Third-party apps reach this engine at <InlineCode>{base.value}</InlineCode>
+      </span>
+    </Callout>
+  );
+}
+
+/**
  * What each tool still needs, from /setup.
  *
  * A SECOND READ, and it has to be: /integrations is an ordinary read served
@@ -3154,45 +3217,7 @@ export function Integrations({ kind }: { kind?: string }) {
       {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
           is one setting, and a screen that asked for it per integration would
           ask the operator to keep seven copies consistent. */}
-      {setup.base && !setup.base.present && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>No public address is set, so apps can’t deliver here.</span>
-            <span className="t-caption">
-              Set <InlineCode>{setup.base.config_path}</InlineCode> to this deployment’s HTTPS
-              address.
-            </span>
-          </span>
-        </Callout>
-      )}
-      {/* SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the
-          engine answers `resolved` beside `present` as a three-valued field.
-          The banner read `present` alone, so a `${VAR}` pointing at an
-          environment variable nobody exported rendered as "Third-party apps
-          reach this engine at" followed by an empty code span — the one
-          screen that exists to say where deliveries land, saying nothing, on
-          exactly the misconfiguration it should name. */}
-      {setup.base?.present && setup.base.resolved !== false && (
-        <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-          <span>
-            Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
-          </span>
-        </Callout>
-      )}
-      {setup.base?.present && setup.base.resolved === false && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              <InlineCode>{setup.base.config_path}</InlineCode> points to{" "}
-              <InlineCode>
-                {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
-              </InlineCode>
-              , which isn’t set, so apps can’t deliver here.
-            </span>
-            <span className="t-caption">Set it and re-activate the revision.</span>
-          </span>
-        </Callout>
-      )}
+      <PublicBaseNotice base={setup.base} />
       {managed !== null && (
         <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
           {managed}

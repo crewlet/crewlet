@@ -209,6 +209,13 @@ type Options struct {
 	// the deliveries go somewhere nobody is looking.
 	WebhookBase string
 
+	// WebhookBaseErr is why WebhookBase is empty when the deployment NAMES a
+	// base this process cannot use (config.Integrations.WebhookBase's error),
+	// nil when it names none: the run's no-ingress report opens with it
+	// (config.NoWebhookBase), so it names the variable to correct rather
+	// than calling a filled-in field unset.
+	WebhookBaseErr error
+
 	// SigningSecret is the value the hook is registered with, resolved.
 	//
 	// Empty means the config's ${VAR} answered nothing, and the run MINTS
@@ -591,10 +598,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// look exactly that way: no findings, so [integration.Classify]
 		// reported READY on a company whose GitLab delivers nothing. See
 		// [Result.NoIngress].
-		res.NoIngress = "no webhook is registered on this GitLab, so merge " +
-			"requests, pipelines, issues and comments reach no seat: set " +
-			"integrations.public_base_url to this deployment's public address " +
-			"and the next pass registers one, or register it by hand"
+		res.NoIngress = config.NoWebhookBase(opts.WebhookBaseErr) + ", so no " +
+			"webhook is registered on this GitLab and merge requests, pipelines, " +
+			"issues and comments reach no seat: give this deployment's public " +
+			"address there and the next pass registers one, or register it by hand"
 		res.Notes = append(res.Notes, res.NoIngress)
 	}
 

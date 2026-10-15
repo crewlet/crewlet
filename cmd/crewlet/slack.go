@@ -87,7 +87,10 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	// RESOLVED ONCE. Four places below build a URL from it, and four
 	// separate reads of the flag is how one of them ends up using the flag
 	// while the others use the document.
-	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	base, err := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	if err != nil {
+		return err
+	}
 
 	plans := slack.PlanFor(organization)
 	if *ledgerPath == "" {
@@ -127,15 +130,11 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	if base == "" {
-		// THREE WAYS TO BE EMPTY, and they need different work. The flag
-		// is one source and integrations.public_base_url is the other,
-		// and the second can be SET and still resolve to nothing — a
-		// whole ${VAR} this process cannot see becomes "" rather than a
-		// literal, deliberately, because registering the text of a
-		// variable is worse than registering nothing. The message named
-		// only the flag, so an operator who had set the field went
-		// looking for a flag they did not need.
-		return errors.New(noPublicBase(&company.Integrations))
+		// NEITHER SOURCE NAMES ONE: a field that is set and gives this
+		// process no address was refused above, naming its variable, so
+		// what is left is the flag and the field both unset, and the
+		// message names both.
+		return errors.New(noPublicBase())
 	}
 
 	ctx := context.Background()

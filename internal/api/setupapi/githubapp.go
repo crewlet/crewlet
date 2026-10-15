@@ -244,13 +244,20 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tier, _ := github.ParseTier(seatTier(seat))
-	base := s.publicBase()
+	base, baseErr := s.publicBase()
 	if base == "" {
-		httpjson.FailWith(w, http.StatusConflict, codeNoPublicURL, map[string]string{
-			"hint": "set integrations.public_base_url first: the app is created " +
-				"with its delivery address baked in, and only the operator can " +
-				"change that afterwards, so creating one now would need doing again",
-		})
+		// THE SAME REFUSAL WHICHEVER WAY THE ADDRESS IS MISSING, but its
+		// hint says which: a base the company names and this node cannot
+		// use names its variable, where "set it first" sent an operator
+		// to a field they could see was filled in.
+		hint := "set integrations.public_base_url first: the app is created " +
+			"with its delivery address baked in, and only the operator can " +
+			"change that afterwards, so creating one now would need doing again"
+		if baseErr != nil {
+			hint = baseErr.Error() + ". The app is created with its delivery " +
+				"address baked in, so correct it first"
+		}
+		httpjson.FailWith(w, http.StatusConflict, codeNoPublicURL, map[string]string{"hint": hint})
 		return
 	}
 
@@ -515,16 +522,18 @@ func (s *Service) apiBaseOf(company *config.Company) string {
 	return api
 }
 
-// publicBase is the address a third-party app reaches this engine on.
+// publicBase is the address a third-party app reaches this engine on, "" with
+// a nil error when the company names none, and the reason when it names one
+// this process cannot use ([config.BaseError]).
 //
 // RESOLVED, because every address built from it here is baked into an app at
 // GitHub — the delivery URL, the redirect and the setup URL — and only a
 // person can change those afterwards. A `${PUBLIC_URL}` copied in literally
 // creates an app nothing can ever deliver to.
-func (s *Service) publicBase() string {
+func (s *Service) publicBase() (string, error) {
 	company := s.company()
 	if company == nil {
-		return ""
+		return "", nil
 	}
 	return company.Integrations.WebhookBase(s.resolve)
 }

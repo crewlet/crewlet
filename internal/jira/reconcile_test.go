@@ -1206,6 +1206,24 @@ func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) 
 		t.Fatalf("an instance with no address to deliver to reported no ingress "+
 			"problem: %+v", res.Findings())
 	}
+
+	// AND A BASE THE COMPANY NAMES AND THIS NODE CANNOT USE IS NOT CALLED
+	// UNSET: the finding opens with why, naming the variable to correct.
+	res, err = run(t, inst, func(o *jira.Options) {
+		o.WebhookBaseErr = &config.BaseError{
+			Field: "integrations.public_base_url", Variables: []string{"CREWLET_PUBLIC_URL"},
+			Unresolved: []string{"CREWLET_PUBLIC_URL"},
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingIngressBlocked &&
+			(!strings.Contains(f.Detail, "CREWLET_PUBLIC_URL") || strings.Contains(f.Detail, "is unset")) {
+			t.Errorf("finding = %+v, want the variable named rather than the field called unset", f)
+		}
+	}
 }
 
 // AND A CLOUD COMPANY IS STILL SILENT, which is the half that has to survive

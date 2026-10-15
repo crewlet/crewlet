@@ -601,45 +601,82 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 	}
 }
 
-// A REFUSAL NAMES WHAT TO CHANGE, and there are three different answers.
+// A REFUSAL NAMES WHAT TO CHANGE, and there are three different answers. The
+// value comes from the flag OR from integrations.public_base_url, and that
+// field can be SET and still give no address — a ${VAR} this process cannot
+// see, or one holding a value that is not a bare origin. Each of those names
+// its variable; only "both unset" names the two sources.
 //
-// The message said "no -public-url" and named nothing else, which was already
-// only one of the ways to reach it: the value comes from the flag OR from
-// integrations.public_base_url, and that field can be SET and still resolve to
-// nothing — a whole ${VAR} this process cannot see becomes "" rather than the
-// text of the variable. An operator who had set the field went looking for a
-// flag they did not need.
+// AND THE FLAG IS JUDGED TOO. It was taken as typed, so `-public-url
+// 'https://x?k=v'` registered `https://x?k=v/webhooks/…` — a request for `/` —
+// at the vendor. No refusal repeats the value.
+//
+// Mutation: return the flag without CheckOrigin, and its cases build an
+// address; drop the error from the document's resolution, and its cases run
+// read-only as though nothing were configured.
 func TestTheMissingPublicBaseRefusalNamesTheRightThing(t *testing.T) {
 	t.Parallel()
-	t.Run("nothing is set", func(t *testing.T) {
-		got := noPublicBase(&config.Integrations{})
-		if !strings.Contains(got, "-public-url") ||
-			!strings.Contains(got, "integrations.public_base_url") {
-			t.Errorf("the refusal names only one of the two sources: %q", got)
+	const secret = "sk-in-the-base"
+	if got := noPublicBase(); !strings.Contains(got, "-public-url") ||
+		!strings.Contains(got, "integrations.public_base_url") {
+		t.Errorf("the refusal names only one of the two sources: %q", got)
+	}
+	values := map[string]string{"QUERY_URL": "https://crewlet.example.com?tenant=" + secret}
+	resolve := func(name string) (string, bool) { v, ok := values[name]; return v, ok }
+
+	for name, tc := range map[string]struct {
+		flag  string
+		in    *config.Integrations
+		names []string
+	}{
+		"a reference that resolved to nothing": {
+			in:    &config.Integrations{PublicBaseURL: "${CREWLET_PUBLIC_URL}"},
+			names: []string{"CREWLET_PUBLIC_URL", "integrations.public_base_url", "-public-url"},
+		},
+		"a reference that resolved to a query": {
+			in:    &config.Integrations{PublicBaseURL: "${QUERY_URL}"},
+			names: []string{"QUERY_URL", "integrations.public_base_url", "a query"},
+		},
+		"a flag carrying a query": {
+			flag: "https://crewlet.example.com?k=" + secret, names: []string{"-public-url", "a query"},
+		},
+		"a flag with no scheme": {
+			flag: "crewlet.example.com/" + secret, names: []string{"-public-url", "http"},
+		},
+		"a flag carrying userinfo": {
+			flag: "https://ops:" + secret + "@crewlet.example.com", names: []string{"-public-url", "userinfo"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := webhookBase(tc.flag, tc.in, resolve)
+			if got != "" || err == nil {
+				t.Fatalf("webhookBase = %q, %v; want a refusal", got, err)
+			}
+			for _, named := range tc.names {
+				if !strings.Contains(err.Error(), named) {
+					t.Errorf("%q does not name %s", err, named)
+				}
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("the refusal repeats the value: %v", err)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		flag string
+		in   *config.Integrations
+		want string
+	}{
+		{"", nil, ""},
+		{"", &config.Integrations{}, ""},
+		{"  https://tunnel.example.com/ ", &config.Integrations{PublicBaseURL: "${QUERY_URL}"}, "https://tunnel.example.com"},
+		{"", &config.Integrations{PublicBaseURL: "https://crewlet.example.com/"}, "https://crewlet.example.com"},
+	} {
+		if got, err := webhookBase(tc.flag, tc.in, resolve); got != tc.want || err != nil {
+			t.Errorf("webhookBase(%q) = %q, %v; want %q", tc.flag, got, err, tc.want)
 		}
-	})
-	t.Run("a reference that resolved to nothing", func(t *testing.T) {
-		got := noPublicBase(&config.Integrations{PublicBaseURL: "${CREWLET_PUBLIC_URL}"})
-		if !strings.Contains(got, "CREWLET_PUBLIC_URL") {
-			t.Errorf("the refusal does not name the variable to set: %q", got)
-		}
-		if !strings.Contains(got, "integrations.public_base_url") {
-			t.Errorf("the refusal does not name the field it came from: %q", got)
-		}
-	})
-	t.Run("a literal that resolved to nothing", func(t *testing.T) {
-		got := noPublicBase(&config.Integrations{PublicBaseURL: "  "})
-		// A blank literal is indistinguishable from unset once trimmed,
-		// so it takes the unset message rather than inventing a third.
-		if !strings.Contains(got, "-public-url") {
-			t.Errorf("a blank field produced %q", got)
-		}
-	})
-	t.Run("a nil block", func(t *testing.T) {
-		if got := noPublicBase(nil); got == "" {
-			t.Error("a nil integrations block produced no refusal at all")
-		}
-	})
+	}
 }
 
 // THE DOCUMENT DECIDES WHERE ACCOUNTS ARE OWNED, and the flag overrides it

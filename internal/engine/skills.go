@@ -55,7 +55,7 @@ import (
 // rooted path a person cannot click and say nothing at all.
 func skillVariables(env *config.Resolver, c *Company) map[string]string {
 	declared := c.Config.SkillVariables
-	base := dashboardBase(env, c)
+	base, _ := dashboardBase(env, c) // unusable is reported once per apply, by refreshSkillVariables
 	if len(declared) == 0 && base == "" {
 		return nil
 	}
@@ -79,11 +79,13 @@ func skillVariables(env *config.Resolver, c *Company) map[string]string {
 // verbatim, and a raw read would put the seven characters of a reference into
 // every link.
 //
-// EMPTY when nothing resolves, which every consumer here reads as "compose no
-// link" rather than as a relative one.
-func dashboardBase(env *config.Resolver, c *Company) string {
+// EMPTY when the company names none and when the one it names gives this
+// process no address — which every consumer here reads as "compose no link"
+// rather than as a relative one — and the error says which, for the one place
+// that reports it ([Engine.refreshSkillVariables]).
+func dashboardBase(env *config.Resolver, c *Company) (string, error) {
 	if c == nil || c.Config == nil {
-		return ""
+		return "", nil
 	}
 	return c.Config.Integrations.DashboardBase(env.LookupOK)
 }
@@ -94,8 +96,21 @@ func dashboardBase(env *config.Resolver, c *Company) string {
 // then surfaces immediately — the registry re-checks every registered skill
 // against the new map — rather than on that skill's next edit, which might
 // be never.
+//
+// It is also where a dashboard base the company NAMES and this process cannot
+// use is reported, once per apply: a reference that resolved to nothing, or a
+// value that is not a bare origin ([config.BaseError]). Every link a person
+// would follow is then composed on nothing, and a skill renders
+// ${crewlet_base_url} literally — whose own warning says the variable is
+// undefined, which sends an operator to a field they can see is filled in.
 func (e *Engine) refreshSkillVariables(c *Company) {
-	e.skills.SetVariables(skillVariables(e.resolver(), c))
+	env := e.resolver()
+	if _, err := dashboardBase(env, c); err != nil {
+		log.Warn("dashboard_base_unusable", "error", err.Error(),
+			"hint", "no link for a person is composed until it is corrected; "+
+				"the error names the field and the variable, never the value")
+	}
+	e.skills.SetVariables(skillVariables(env, c))
 }
 
 // auditSkills reports every skill whose trigger names a tool the current

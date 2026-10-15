@@ -545,7 +545,7 @@ them, because every node opens the fleet's
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `public_base_url` answers `present` and `resolved` separately — set and set to something are different facts, and a `${VAR}` nobody exported is `present: true, resolved: false` with the variable named in `reference` |
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `public_base_url` answers `present` and `resolved` separately — set and set to something are different facts, and a `${VAR}` nobody exported is `present: true, resolved: false` with the variable named in `reference`. `problem` says why the setting gives no address when it is set and does not — the reference resolved to nothing, or to a value that is not a bare origin (a query, a fragment, userinfo, no scheme), which is `resolved: true` and still no address — naming the field and the variable, never the value; empty for a usable address |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
@@ -1069,7 +1069,8 @@ accounts.
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the third-party app and must not run against a
 half-configured integration), `409 no_public_base_url` when nothing has told
-the engine what address third-party apps reach it on, and `409 pass_in_flight`
+the engine what address third-party apps reach it on — or what it was told is
+no address, in which case the `hint` names the variable to correct — and `409 pass_in_flight`
 when another pass for the same third-party app is already running. That last
 one is a refusal rather than a queue on purpose: minting twice is not something
 a retry should paper over.
