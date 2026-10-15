@@ -1,22 +1,25 @@
 // Package codetest is THE ONE SUITE EVERY CODE-HOST TOPOLOGY PASSES — real git
-// against the real HTTP handlers, through a real code log — and the
-// single-node topology it is built over (SoloNode). A twin that agreed only
-// with itself would certify nothing; so every case asserts what a person's git
-// prints and what every cache then holds, never what a fake recorded.
+// against the real HTTP handlers, through a real code log — and the blocks
+// every topology is built from. A twin that agreed only with itself would
+// certify nothing; so every case asserts what a person's git prints and what
+// every cache then holds, never what a fake recorded.
 //
 // # The topology is the engine's own composition
 //
-// SoloNode is one data node and one or more git nodes over its estate, built
-// the way the engine builds one domain (internal/engine's statelog.go): an
-// embedded broker, the code log provisioned on it, the replicated estate a
-// real applier writes, the write authority with the domain's own fence and
-// gates, the read authority with a REAL barrier — so `linearizable` is the read
-// a node serves — the committer, the lifecycle store and the retention pass.
-// Each git node is a cache, a git pool, a code host and an HTTP server that
+// A data node (StartDataNode) is built the way the engine builds one domain
+// (internal/engine's statelog.go), over a broker client it is handed: the code
+// log provisioned on it, the replicated estate a real applier writes, the
+// write authority with the domain's own fence and gates, the read authority
+// with a REAL barrier — so `linearizable` is the read a node serves — the
+// committer, the lifecycle store and the retention pass. A git node
+// (StartGitNode) is a cache, a git pool, a code host and an HTTP server that
 // mounts the host's three routes behind the API's own guard, so a person's
 // git meets the 401 challenge and Basic credential it meets in production.
-// Nothing here imports a cluster: a package that runs the suite shares a
-// runner with every other (internal/solo's roster).
+// SoloNode is one data node on an embedded broker of its own and one or more
+// git nodes over its estate; internal/code/codecluster builds three members
+// from the same two blocks, so the two topologies certify one composition.
+// Nothing here imports a cluster: a package that runs the one-data-node suite
+// shares a runner with every other (internal/solo's roster).
 //
 // # A case is a person's git, and what every cache then holds
 //
@@ -27,6 +30,19 @@
 // named, before any push case muddies it. After every case each git node's
 // cache, synced at the log's head, must hold exactly the repository's rows —
 // its refs, its HEAD, its packs — which is the cache's one rule (ADR-0036).
+//
+// RunFleet runs the cases only a fleet can — a push decided by its
+// repository's committer whichever node received it, a committer that dies
+// after appending, a push a gate dropped, a committer that stops or is
+// evicted, the crash matrix with another node committing — on ONE Cluster its
+// caller hands it, since standing a fleet up costs far more than a case. So
+// between cases it holds the fleet SETTLED — every member running, level with
+// the log and drained, the routers past the half minute they remember a
+// refusal, every cache holding exactly the rows — and once a case leaves it
+// otherwise, the cases after it are not run on it, said by name rather than
+// failed for the first one's fault. It refuses a cluster of fewer than three
+// members: two have no quorum without each other, so the first case that
+// stops one would leave a code log nobody can write.
 //
 // # The suite's own checks are held able to fail
 //

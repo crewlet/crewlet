@@ -222,7 +222,9 @@ internal/
 │                         #   pipeline in a scratch, the hook relay, and `ok`
 │                         #   told only from a push's applied row. codetest/
 │                         #   is the one suite every code-host topology
-│                         #   passes, and SoloNode the topology it runs over
+│                         #   passes — Run on one data node (SoloNode), and
+│                         #   RunFleet on the three-member fleet codecluster/
+│                         #   stands up, routing through the estate router
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   node at query time, with coverage on every answer
 ├── search/               # Both halves of knowledge search — the BM25 index
