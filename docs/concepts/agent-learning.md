@@ -488,7 +488,10 @@ the engine's auxiliary seam, stating whose cost the call is — its **stage**
 (`turn`, `reflection`, `background`, `operator`), its **purpose** and the turn it
 serves — and the seam both charges the call and records it as an
 `auxiliary_spend` event, so a worker added later is charged and counted in every
-spend figure without anyone wiring either. A call whose attribution names no
+spend figure without anyone wiring either. The seam also opens the call's
+`llm.auxiliary` [span](../guides/deployment.md#how-traces-flow), which the
+provider's own spans of the call nest under and the record is filed under, so a
+call's spans and its spend are one trace whatever its caller holds. A call whose attribution names no
 stage or purpose is refused before a model is resolved. Because an auxiliary
 call's size is known only from its answer, each one is **recorded** after it
 returns, past the ceiling included; where a gate reads the room left first, it

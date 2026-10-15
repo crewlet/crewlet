@@ -114,6 +114,16 @@
 // OTEL_* environment's alone, and it resolves the global provider on every
 // call, so whatever [Configure] installed is what records it.
 //
+// EVERY MODEL CALL HAS A PARENT, because the vendor's span is only as useful
+// as the span above it: a call made where no span was open made the SDK's span
+// — and the Claude API's beneath it — the root of a trace nobody else was in,
+// while the call's spend record minted a different one through [TraceOf]. So a
+// call is made in a span of the engine's own whatever its caller holds:
+// `llm.round` in a turn's tool loop, and `llm.auxiliary` around every call on a
+// seat's auxiliary chain, opened by the one seam every such call passes
+// (internal/engine's auxiliary seam), which files the call's spend record under
+// it.
+//
 // A PROCESS THE ENGINE STARTS is handed its parent in its ENVIRONMENT —
 // TRACEPARENT and TRACESTATE, the propagator's fields upper-cased
 // ([ProcessEnv]) — by the same propagator that writes the header, so a coding
