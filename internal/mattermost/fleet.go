@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -676,6 +677,24 @@ func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any,
 	}
 	claimed := err == nil
 
+	// THE TRACE A POST STARTS, as `webhook.receive` is a webhook
+	// delivery's: one span per post, and both events below are published
+	// inside it, so the delivery row and the wake are ONE trace and the
+	// skip or the turn the wake causes is filed where the row points.
+	// Published on the socket loop's bare context instead, each event
+	// minted a root of its own and the two were decided apart.
+	//
+	// Opened only past the claim, as the webhook edge opens its span, so
+	// a node that lost the post to a peer opens nothing. A ROOT whatever
+	// ctx holds: the loop's context descends from whatever armed the
+	// seat's socket, through WithoutCancel, which keeps its values — a
+	// span there would parent every post the socket ever reads.
+	ctx, span := tracing.StartRoot(ctx, "mattermost", "mattermost.receive",
+		attribute.String("crewlet.source", Backend),
+		attribute.String("crewlet.seat", s.seat.Handle),
+		attribute.Bool("crewlet.replayed", replayed))
+	defer span.End()
+
 	// WHAT ARRIVED, for the record — before the seat's identity is added
 	// below, which is this engine's annotation rather than the server's.
 	arrived, _ := json.Marshal(body)
@@ -694,6 +713,7 @@ func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any,
 	}, tracing.TraceOf(ctx))
 	ev.Source = Backend
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
+		tracing.Fail(span, err)
 		// NOTHING IS KEPT, so the post is read again. WithoutCancel on
 		// the release: a pump ending because its context did is often
 		// WHY the publish failed, and a claim left standing would refuse

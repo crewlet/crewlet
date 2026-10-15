@@ -770,6 +770,15 @@ to one seat, whichever node read it — and its row lists them as
 published rather than written, so a node without `data` reaches a data node's
 event log through custody like everything else it publishes.
 
+**Each post is one trace.** The node that wins the claim opens a
+`mattermost.receive` span — a root of its own, the socket's counterpart of a
+webhook's `webhook.receive` — and publishes both the wake and the
+`inbound_delivery` record inside it. So the `socket:posted` row's trace is the
+trace the post's outcome lands in: the `NotificationSkipped` that says why it
+reached nobody, or the turn it woke, beneath that span. A replayed post is the
+same, and says so (`crewlet.replayed`). A node that lost the claim opens no
+span. See [Deployment — How traces flow](../guides/deployment.md#how-traces-flow).
+
 ### Outbound
 
 All Mattermost capabilities — messaging, threading, search, reactions — come
