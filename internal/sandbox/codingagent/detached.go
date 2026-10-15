@@ -161,6 +161,12 @@ type CLI interface {
 	// Every variable it names is the CLI's own vocabulary, which is why it
 	// is declared here and not in the sandbox package.
 	Telemetry() map[string]string
+
+	// Admit reports whether this CLI will run a job built from spec in a box
+	// whose job runs as the engine's own user on its host (asEngine) — the
+	// CLI's own refusals, asked before the launch builds anything
+	// ([sandbox.Runner.Admit]).
+	Admit(spec sandbox.Spec, asEngine bool) error
 }
 
 // Output is where a CLI's stdout lands in the box, and how it is read back.
@@ -235,6 +241,9 @@ func (r *Runner) Name() string { return r.cli.Name() }
 
 // Telemetry is the CLI's own declaration ([CLI.Telemetry]).
 func (r *Runner) Telemetry() map[string]string { return r.cli.Telemetry() }
+
+// Admit is the CLI's own ([CLI.Admit]).
+func (r *Runner) Admit(spec sandbox.Spec, asEngine bool) error { return r.cli.Admit(spec, asEngine) }
 
 // Install prepares the box: the artefact directory and the ask shim.
 //

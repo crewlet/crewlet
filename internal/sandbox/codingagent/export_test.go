@@ -31,3 +31,6 @@ const (
 	LiveWindow  = liveWindow
 	LiveBacklog = liveBacklog
 )
+
+// ClaudeCodeAs is the Claude Code CLI on an engine running as uid.
+func ClaudeCodeAs(uid int) ClaudeCode { return ClaudeCode{uid: func() int { return uid }} }

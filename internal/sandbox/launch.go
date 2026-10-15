@@ -199,6 +199,20 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if !held {
 		return LaunchResult{}, notHeld(ctx, req.Turn.AgentHandle, req.Turn.TurnID, "launching a run")
 	}
+	// THE AGENT'S OWN TERMS, before a row or a box exists: a pairing the
+	// agent would refuse at its first breath is refused here by a sentence
+	// naming what to change ([Runner.Admit]), and costs the launch nothing.
+	runner, err := m.RunnerFor(req.Spec.CodingAgent)
+	if err != nil {
+		return LaunchResult{}, err
+	}
+	provider, err := m.Provider(req.Spec.Placement)
+	if err != nil {
+		return LaunchResult{}, err
+	}
+	if err = runner.Admit(req.Spec, provider.RunsAsEngine()); err != nil {
+		return LaunchResult{}, fmt.Errorf("sandbox: %s cannot run here: %w", req.Spec.CodingAgent, err)
+	}
 
 	// The row FIRST, so a crash between here and the box leaves a record
 	// rather than nothing. It opens in [StatusLaunching] and stays there
@@ -278,6 +292,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// question, and it was the one nobody filled in: every coding run
 		// went out uncapped while the field looked wired.
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
+		Placement:  req.Spec.Placement,
 		LLM:        req.LLM,
 		MCPServers: req.MCPServers,
 	})

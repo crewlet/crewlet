@@ -122,6 +122,10 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 // Kind implements [Provider].
 func (p *E2BProvider) Kind() string { return E2BKind }
 
+// RunsAsEngine is false: a job runs in a remote VM, as the template's own
+// unprivileged user.
+func (p *E2BProvider) RunsAsEngine() bool { return false }
+
 // templateFor is the image one run gets: the company's, then the coding
 // agent's own.
 //
