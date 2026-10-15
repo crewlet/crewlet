@@ -171,7 +171,8 @@ func (p AuxPurpose) Valid() bool {
 
 // AuxiliarySpend is what one key's auxiliary calls cost over one flush of a
 // node's ledger: one stage, one seat or person, one turn where there is one,
-// one purpose, one model, one provider entry, one company day.
+// one purpose, one model, one provider entry, one company day — and one trace,
+// which the envelope carries: its first call's `llm.auxiliary` span.
 //
 // THE DAY IS ON THE RECORD, and the envelope's timestamp is the bucket's LAST
 // CALL rather than the flush: the counters charged each call in the windows

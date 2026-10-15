@@ -140,6 +140,46 @@ func TestALedgersBucketNeverStraddlesTwoDays(t *testing.T) {
 	}
 }
 
+// A BUCKET NEVER HOLDS TWO TRACES. A record is filed under one trace, so two
+// calls of one key in two traces — a person's two questions a moment apart —
+// are two records, each in its own call's trace; two calls of one trace are
+// still one, under the first call's span.
+//
+// Mutation, red here: drop the trace from the bucket's key.
+func TestALedgersBucketNeverHoldsTwoTraces(t *testing.T) {
+	t.Parallel()
+	pub := &recorder{}
+	l := auxspend.NewLedger(pub)
+	first, second := events.NewTrace(), events.NewTrace()
+	again := first
+	again.SpanID = "00f067aa0ba902b7"
+	for i, tr := range []events.TraceContext{first, second, again} {
+		c := call(types.AuxAnswerKnowledge, "", time.Duration(i)*time.Second, 100, 10)
+		c.Use.Stage = types.AuxStageOperator
+		c.Trace = tr
+		l.Add(c)
+	}
+	l.Flush(t.Context())
+
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.got) != 2 {
+		t.Fatalf("published %d records, want one per trace", len(pub.got))
+	}
+	calls := map[string]int{}
+	for _, ev := range pub.got {
+		rec, _ := events.DataAs[*types.AuxiliarySpend](ev)
+		calls[ev.TraceID] = rec.Calls
+		if ev.TraceID == first.TraceID && ev.SpanID != first.SpanID {
+			t.Errorf("the first trace's record names span %s, want its first call's %s",
+				ev.SpanID, first.SpanID)
+		}
+	}
+	if calls[first.TraceID] != 2 || calls[second.TraceID] != 1 {
+		t.Errorf("calls by trace = %v, want 2 in the first and 1 in the second", calls)
+	}
+}
+
 // A TURN'S BUCKETS FLUSH AS IT ENDS, and nobody else's: its page reads what its
 // context and its rewrites cost when it reads the turn, while every other
 // bucket waits for the timer it was going to be flushed by.

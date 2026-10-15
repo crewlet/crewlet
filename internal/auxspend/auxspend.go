@@ -43,7 +43,7 @@
 // # One record per key per flush
 //
 // A [Ledger] holds a bucket per (stage, seat or person, turn, purpose, model,
-// provider entry, company day) and publishes each as one record when it
+// provider entry, company day, trace) and publishes each as one record when it
 // flushes — every [FlushInterval]; for one turn's buckets, before the turn's
 // end and before its reflection pass's sentinel are published; and at the
 // node's stop. A compaction of seventy rewrites is one record; an
@@ -51,7 +51,10 @@
 // was. The DAY IS IN THE KEY, so a bucket closes at midnight on the company's
 // clock rather than straddling it, and the record is stamped with its last
 // call's instant — the day the counters charged it in — however late its flush
-// ran.
+// ran. The TRACE IS IN THE KEY for the same reason the day is: a record is
+// filed under one trace, so it holds only calls of that trace, and a person's
+// two questions a moment apart are two records in their two traces rather than
+// one record in the first.
 //
 // # What a crash costs
 //
