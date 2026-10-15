@@ -107,8 +107,11 @@ func (c ClaudeCode) userID() int {
 // claudeCodeContentSwitches are Claude Code's switches for putting CONTENT on
 // what it exports — the prompt, a tool's arguments and output, the model's
 // answer, the raw API bodies. Each defaults to off, and each is declared off
-// anyway, because a box image or template can bake one on and a run's content
-// belongs in the engine's event store rather than in a telemetry backend.
+// anyway, because a box image or template can bake one on — in its
+// environment, its login profile or a settings file in its home, all of which
+// the declaration is put over — and a run's content belongs in the engine's
+// event store rather than in a telemetry backend. A MANAGED settings file is
+// the one place that outranks it ([ClaudeCode.Telemetry]).
 var claudeCodeContentSwitches = []string{
 	"OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_DETAILS", "OTEL_LOG_TOOL_CONTENT",
 	"OTEL_LOG_ASSISTANT_RESPONSES", "OTEL_LOG_RAW_API_BODIES",
@@ -122,7 +125,13 @@ var claudeCodeContentSwitches = []string{
 // exporter, which has no default — an empty exporter list exports nothing.
 // CLAUDE_CODE_PROPAGATE_TRACEPARENT sends each Messages call's `traceparent`
 // to a gateway or a cloud platform too, as the engine's own SDK does whatever
-// its base URL; with the first-party API it is sent regardless.
+// its base URL; with the first-party API it is sent regardless. THE SAME GATE
+// sends it on every MCP tool call to an HTTP server rendered into the box —
+// the engine's tool bridge, which nests a bridged call under the box's tool
+// span by it, and a vendor's server just the same, which can log the trace id
+// (measured against 2.1.300). One gate for both, opened by the beta alone on
+// the first-party API, so no switch keeps it from the one and gives it to the
+// other: an operator is told so instead (SECURITY.md).
 //
 // TRACES ONLY. Its log events are its content channel — prompts, tool
 // arguments and tool output once their switches are on — and its metrics

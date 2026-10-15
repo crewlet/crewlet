@@ -69,17 +69,41 @@ A few things worth knowing when deploying Crewlet:
   collector's credential — but Claude Code's own managed settings on the
   engine host (`/etc/claude-code/` on Linux) can switch its telemetry on for
   every seat, outside the engine's control
-  (`docs/concepts/subscription-llm-backends.md#trace-context`).
+  (`docs/concepts/subscription-llm-backends.md#trace-context`). With in-box
+  telemetry on (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`, below), a Claude Code
+  run in a coding box sends it too: on each Messages call to Anthropic or the
+  gateway its `ANTHROPIC_BASE_URL` names, and on each MCP tool call to every
+  HTTP MCP server `role.sandbox.mcp.servers` renders into the box — a
+  vendor's included — naming the turn's trace and the box's tool span, which
+  that server can log and correlate across the seats and turns that share a
+  trace. One Claude Code switch governs both, and on the first-party API its
+  tracing beta sends the header without it, so neither can be kept from one
+  and given to the other; list only servers you would show the trace id to
+  (`docs/concepts/code-sandbox.md#durability-completion-and-observability`).
 - **A coding box exports its agent's traces, through the engine.** With
   `CREWLET_SANDBOX_OTEL_RECEIVER_URL` set, a Claude Code run in a box is
   switched on to export its own spans to the engine's `/otlp/` receiver,
   which forwards them to your collector with the collector's credential added
   outside the box. Traces only: its metrics and its log events — its content
   channel — are switched off, and so is every switch that would put a prompt,
-  a tool's arguments or output, or an answer on a span. A box image can bake
-  none of that back on, but `role.sandbox.env` can, deliberately: it wins over
-  every variable the engine sets in a box. The box holds a token in its
-  endpoint, readable by whatever runs there, valid for a day after the launch:
+  a tool's arguments or output, or an answer on a span. The engine sets that
+  where a box image's or template's own settings cannot undo it — the run
+  environment over the image's `ENV` and over the login profile the box's
+  setup steps and coding job run under, and the same values as Claude Code
+  flag settings over a
+  `~/.claude/settings.json` in the box — but NOT over a Claude Code MANAGED
+  settings file (`/etc/claude-code/managed-settings.json` on Linux), which
+  Claude Code applies above every other layer: an image or template that
+  ships one, or the engine host's own for a `direct` box, can switch content
+  capture and log events back on or send the export to another collector.
+  Do not ship one in a box image or template. `role.sandbox.env` wins over
+  every one of those telemetry variables, deliberately, so a seat can switch
+  its agent's export off or point it at a collector of its own; it does not
+  win over what a box sets for its own isolation — a local box's `HOME` (and
+  a `direct` box's XDG directories and `TMPDIR`), a container launch's
+  `IS_SANDBOX=1` (`docs/concepts/code-sandbox.md#credentials-and-the-run-environment`).
+  The box holds a token in its endpoint, readable by whatever runs there,
+  valid for a day after the launch:
   with it, code in the box can send spans in the trace its run was launched in
   into your telemetry backend through the receiver until it expires, and
   nothing else — never the backend's credential, never a metric or a log
