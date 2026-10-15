@@ -41,16 +41,18 @@ func newOtelForwarder(d otlpenv.Destination) (otelForwarder, error) {
 	}
 	switch d.Protocol {
 	case otlpenv.HTTPProtobuf:
-		client := httpx.Client(OtelForwardTimeout)
+		f := &otelHTTPForwarder{d: d, client: httpx.Client(OtelForwardTimeout)}
 		if tlsConfig != nil {
 			// A TRANSPORT OF ITS OWN only where the TLS genuinely differs
 			// — a private authority, a client certificate — which is the
 			// one case httpx.Customized exists for.
-			client = httpx.Customized(OtelForwardTimeout, func(t *http.Transport) {
+			f.client = httpx.Customized(OtelForwardTimeout, func(t *http.Transport) {
 				t.TLSClientConfig = tlsConfig
 			})
+			f.owned = true
 		}
-		return &otelHTTPForwarder{d: d, client: client}, nil
+		f.stop, f.cancel = context.WithCancel(context.Background())
+		return f, nil
 	case otlpenv.GRPC:
 		return newOtelGRPCForwarder(d, tlsConfig)
 	}
@@ -59,14 +61,59 @@ func newOtelForwarder(d otlpenv.Destination) (otelForwarder, error) {
 }
 
 // otelHTTPForwarder POSTs an export as OTLP/HTTP protobuf.
+//
+// IT HONOURS [OtelReceiver.Close] AS THE GRPC FORWARDER DOES: a closed
+// forwarder sends nothing — every export after the close is refused with
+// [errOtelReceiverClosed], which the receiver logs — and the close ends the
+// sends in flight rather than waiting out a slow upstream, then releases the
+// connections of a transport the forwarder built for itself. Its close used to
+// do nothing, so a receiver closed at teardown went on posting exports with
+// the backend's credential while the gRPC one stopped, and the test that said
+// otherwise ran the gRPC forwarder only.
 type otelHTTPForwarder struct {
 	d      otlpenv.Destination
 	client *http.Client
+	// owned reports a transport this forwarder built — one destination's
+	// TLS material — whose idle connections close releases. The shared
+	// transport is every outbound client's, and closing its idle
+	// connections would cost each of them its pool.
+	owned bool
+
+	// stop ends every send in flight when the forwarder closes.
+	stop   context.Context
+	cancel context.CancelFunc
+
+	mu     sync.Mutex
+	closed bool
+	sends  sync.WaitGroup
+}
+
+// begin admits one send, or refuses it once the forwarder is closed: the send
+// runs under a context the close ends too, and done is how it says it has.
+func (f *otelHTTPForwarder) begin(ctx context.Context) (context.Context, func(), error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return nil, nil, errOtelReceiverClosed
+	}
+	f.sends.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	unhook := context.AfterFunc(f.stop, cancel)
+	return ctx, func() {
+		unhook()
+		cancel()
+		f.sends.Done()
+	}, nil
 }
 
 // send writes the message as the engine's own HTTP exporter would: protobuf,
 // gzipped when the destination compresses, with the destination's headers.
 func (f *otelHTTPForwarder) send(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
+	ctx, done, err := f.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	body, err := proto.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -112,7 +159,24 @@ func (f *otelHTTPForwarder) send(ctx context.Context, req *coltracepb.ExportTrac
 	return out, nil
 }
 
-func (f *otelHTTPForwarder) close() error { return nil }
+// close refuses every later send, ends the ones in flight and waits for them
+// to return, then releases an owned transport's connections. A second close
+// does nothing.
+func (f *otelHTTPForwarder) close() error {
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return nil
+	}
+	f.closed = true
+	f.mu.Unlock()
+	f.cancel()
+	f.sends.Wait()
+	if f.owned {
+		f.client.CloseIdleConnections()
+	}
+	return nil
+}
 
 // gzipBody is body compressed whole.
 func gzipBody(body []byte) ([]byte, error) {

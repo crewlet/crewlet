@@ -16,6 +16,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -646,24 +647,124 @@ func (*compressionSeen) TagConn(ctx context.Context, _ *stats.ConnTagInfo) conte
 
 func (*compressionSeen) HandleConn(context.Context, stats.ConnStats) {}
 
-// A CLOSED RECEIVER STILL ANSWERS AND FORWARDS NOTHING, and closing twice is
-// harmless: the engine closes it at its teardown, after its listeners.
+// A CLOSED RECEIVER STILL ANSWERS AND FORWARDS NOTHING, over every protocol,
+// and closing twice is harmless: the engine closes it at its teardown, after
+// its listeners. The HTTP forwarder's close did nothing, so a closed receiver
+// on the default protocol went on posting exports with the backend's
+// credential while this case — run over gRPC alone — said it stopped; and a
+// transport built for a destination's own TLS kept its connections open.
+//
+// Mutation: make the HTTP forwarder's close a no-op again and the http cases
+// receive the second export; skip releasing an owned transport and the https
+// case keeps its connection.
 func TestAClosedReceiverForwardsNothing(t *testing.T) {
 	t.Parallel()
-	collector, endpoint := startGRPCCollector(t, "http")
-	receiver := receiverTo(t, map[string]string{
-		otlpenv.EndpointVar: endpoint, otlpenv.ProtocolVar: "grpc",
-	})
-	accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
+	for _, protocol := range []string{"grpc", "http/protobuf", "https with its own authority"} {
+		t.Run(protocol, func(t *testing.T) {
+			t.Parallel()
+			var received func() int
+			var open func() int
+			env := map[string]string{}
+			switch protocol {
+			case "grpc":
+				collector, endpoint := startGRPCCollector(t, "http")
+				received = collector.counts
+				env[otlpenv.EndpointVar], env[otlpenv.ProtocolVar] = endpoint, "grpc"
+			default:
+				upstream := newOtelUpstream()
+				server := httptest.NewUnstartedServer(upstream)
+				conns := &connCounter{}
+				server.Config.ConnState = conns.track
+				if protocol == "http/protobuf" {
+					server.Start()
+				} else {
+					server.StartTLS()
+					env[otlpenv.CertificateVar] = pemOf(t, t.TempDir(), "collector.pem",
+						"CERTIFICATE", server.Certificate().Raw)
+					open = conns.open
+				}
+				t.Cleanup(server.Close)
+				received = func() int { return len(upstream.saw()) }
+				env[otlpenv.EndpointVar] = server.URL
+			}
+			receiver := receiverTo(t, env)
+
+			accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
+			if err := receiver.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := receiver.Close(); err != nil {
+				t.Fatalf("a second close: %v", err)
+			}
+			accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
+			if got := received(); got != 1 {
+				t.Errorf("the collector received %d exports, want only the one before the close", got)
+			}
+			if open != nil {
+				deadline := time.Now().Add(5 * time.Second)
+				for open() != 0 && time.Now().Before(deadline) {
+					time.Sleep(10 * time.Millisecond)
+				}
+				if n := open(); n != 0 {
+					t.Errorf("%d connection(s) to the collector outlived the close", n)
+				}
+			}
+		})
+	}
+}
+
+// connCounter counts a server's open connections.
+type connCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *connCounter) track(_ net.Conn, state http.ConnState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch state {
+	case http.StateNew:
+		c.n++
+	case http.StateClosed, http.StateHijacked:
+		c.n--
+	}
+}
+
+func (c *connCounter) open() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// A CLOSE ENDS A FORWARD IN FLIGHT rather than waiting out a slow collector:
+// teardown is bounded by the engine's stop, not by OtelForwardTimeout per
+// export a box happened to send just before it.
+//
+// Mutation: wait for the sends in flight without ending them and the close
+// takes the forward's whole timeout.
+func TestACloseEndsAForwardInFlight(t *testing.T) {
+	t.Parallel()
+	upstream := &blockingUpstream{arrived: make(chan struct{}, 1), release: make(chan struct{})}
+	server := httptest.NewServer(upstream)
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { upstream.once.Do(func() { close(upstream.release) }) })
+	receiver := receiverTo(t, map[string]string{otlpenv.EndpointVar: server.URL})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := receiver.Accept(t.Context(), launchedFrom.TraceID, protobufExport(t, spansIn(launchedFrom.TraceID)))
+		done <- err
+	}()
+	<-upstream.arrived
+	started := time.Now()
 	if err := receiver.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := receiver.Close(); err != nil {
-		t.Fatalf("a second close: %v", err)
+	if took := time.Since(started); took > sandbox.OtelForwardTimeout/2 {
+		t.Errorf("the close took %v: it waited out the forward", took)
 	}
-	accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
-	if traces := collector.counts(); traces != 1 {
-		t.Errorf("the collector received %d exports, want only the one before the close", traces)
+	if err := <-done; err != nil {
+		t.Errorf("the export in flight was refused rather than answered: %v", err)
 	}
 }
 
