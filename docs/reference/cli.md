@@ -1596,7 +1596,11 @@ pass `-no-smoke`, it sends **one real round** in the shape
 a phase sends — a tool offered, no tool choice forced, the instruction naming
 it, the entry's own thinking, streamed, at effort `low` — and certifies that a
 call to that tool came back. The Models API read bills nothing, so it runs
-under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
+under `-no-smoke` too. The report's **endpoint** line is the entry's `base_url`
+without its userinfo, query or fragment — where every call goes, and never a
+password or key written into the URL, since a report is what gets pasted into a
+ticket; a `base_url` that is not a URL with a scheme and a host is not printed
+at all. `doctor` exits non-zero when any entry has a problem,
 and an entry that does not build at all (a `${VAR}` model that resolved to
 nothing, a dial its resolved model refuses) is reported as one beside the
 others. `openai` entries are not examined.

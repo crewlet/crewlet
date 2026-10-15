@@ -114,7 +114,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		Provider: opts.Key,
 		Model:    p.model,
 		Profile:  p.profileLine(),
-		Endpoint: p.baseURL,
+		Endpoint: endpointLine(p.baseURL),
 		Keys:     p.keysLine(),
 		Shape:    p.shapeLine(),
 	}
@@ -188,10 +188,12 @@ func (p *Provider) modelInfo(ctx context.Context, id string) (*sdk.ModelInfo, er
 			Err: fmt.Errorf("every one of the %d credentials is cooling: %w", p.pool.Size(), credential.ErrExhausted)}
 	}
 	defer lease.Release()
-	// Escaped, because an id the table does not know is whatever the entry
-	// wrote — a gateway alias may carry anything — and the SDK puts it into
-	// the path as given.
-	info, err := p.client.Models.Get(ctx, url.PathEscape(id), sdk.ModelGetParams{},
+	// AS WRITTEN, never escaped here: the SDK escapes the id into the path
+	// itself (url.PathEscape), and an id the table does not know is whatever
+	// the entry wrote — a gateway alias may carry a space, a `#`, a `%`.
+	// Escaped twice, a space reached the endpoint as a literal `%20`, which
+	// names no model, and an entry the endpoint serves read "not served".
+	info, err := p.client.Models.Get(ctx, id, sdk.ModelGetParams{},
 		option.WithAPIKey(lease.Key()), option.WithRequestTimeout(modelsTimeout))
 	if err != nil {
 		return nil, p.classify(err)
@@ -214,6 +216,31 @@ func notServed(err error) bool {
 	default:
 		return false
 	}
+}
+
+// endpointLine is base_url as the report prints it: where every call goes,
+// without what the URL may carry for a gateway's own authentication.
+//
+// The USERINFO is left out — a gateway's password is often written there, and
+// a report is what an operator pastes into a ticket — and so are the query and
+// the fragment, the other places a URL carries a key. Neither of those is ever
+// sent anyway: the SDK resolves each request's path against base_url, which
+// replaces the query and drops the fragment, so what remains is exactly where
+// the calls go. A base_url that is not a URL with a host is not printed at all,
+// because nothing then says which part of it is a credential.
+func endpointLine(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return "not shown — base_url is not a URL with a scheme and a host, so no part of it " +
+			"can be told apart from a credential"
+	}
+	hidden := ""
+	if u.User != nil {
+		u.User = nil
+		hidden = " (its userinfo is not shown)"
+	}
+	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
+	return u.String() + hidden
 }
 
 // servedLine is the model record, as the report prints it.
