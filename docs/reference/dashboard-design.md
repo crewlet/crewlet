@@ -3515,8 +3515,8 @@ tone: its last error, a pause, another stop, or a coding run parked on a
 question — answerable from the notice.
 
 **The Overview is the seat's week and its charter.** Four figures, all ONE
-answer (`seat_activity` with `previous`, every node's usage rows summed): turns
-over seven company days with the change against the week before, the
+answer (`seat_activity` with `previous`, every data node's usage rows summed):
+turns over seven company days with the change against the week before, the
 engine's first-pass rate over the turns it REVIEWED (a week nobody reviewed has
 no rate, never 0%) with how many reviews sent work back, the median turn with
 its p90, and tokens — the seat's capped window nearest its ceiling, over that

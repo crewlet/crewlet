@@ -34,7 +34,7 @@ an answer somebody acts on.
 What it is deliberately **not** is a Jira. There is **no workflow engine and
 no permission scheme**, and nothing has to be configured before a company can
 file its first ticket: declaring a unit with a project key in the config
-creates the project, on every node, with no gesture from anybody.
+creates the project, on every data node, with no gesture from anybody.
 
 What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an

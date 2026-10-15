@@ -727,7 +727,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
 		// spelling the rows hold rather than the one somebody typed —
-		// every node applies this payload, and a node that re-derived
+		// every data node applies this payload, and a node that re-derived
 		// the slug itself would be a second implementation of the
 		// grammar.
 		tags, err := normaliseTags(project, *patch.Tags)

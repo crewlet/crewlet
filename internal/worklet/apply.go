@@ -131,12 +131,12 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// removal permanent rather than a race a redelivery can undo.
 	//
 	// A TURN IS GATED TOO, on its task's marker — a turn's subject id IS its
-	// task's id. A turn is additive and carries no expectation, so nothing
-	// at the broker orders it against a purge of the same task: a turn
-	// decided while the task existed can land after the purge that removed
-	// it. Ungated, its spend update found no row and stopped the applier on
-	// EVERY node, since every node applies the same log in the same order —
-	// a fleet-wide wedge from one ordinary race. Gated, it is read past and
+	// task's id. A turn is additive and carries no expectation, so nothing at
+	// the broker orders it against a purge of the same task: a turn decided
+	// while the task existed can land after the purge that removed it. Ungated,
+	// its spend update found no row and stopped the applier on EVERY data node,
+	// since every data node applies the same log in the same order — a
+	// fleet-wide wedge from one ordinary race. Gated, it is read past and
 	// counted as a hit on the marker like any other late write.
 	if taskID, ok := markedTask(rec.Subject); ok {
 		var author sql.NullString

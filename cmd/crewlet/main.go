@@ -2278,13 +2278,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// "this node has no event log" and "the company has done
 		// nothing".
 		Sources: queries.Sources{
-			// THE FLEET'S turn-level history: every live node's own
+			// THE FLEET'S turn-level history: every live data node's own
 			// store, asked at query time, with the nodes that did not
 			// answer named on every answer (ADR-0021). The ENGINE's,
 			// because the roster is its lease view and the answerer it
 			// registered is the other half of the same protocol.
 			Events: e.History(),
-			// EVERY NODE'S company days, for every named spend window
+			// EVERY DATA NODE'S company days, for every named spend window
 			// and its series — the replicated usage domain (ADR-0020),
 			// resolved per read so an adoption's reopened estate is the
 			// one answered from.
@@ -2624,10 +2624,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// to open sees the seeded snapshot rather than an empty one it will never
 	// be sent a correction for.
 	//
-	// THE FLEET'S HISTORY, read from every live node's store through the
-	// engine's history reader: each node's store holds what that node
-	// published, so a seed read from this one alone showed a restarted node
-	// only its own share of the company.
+	// THE FLEET'S HISTORY, read from every live data node's store through
+	// the engine's history reader: each one holds what that node published
+	// and the custody batches it keeps, so a seed read from this one alone
+	// showed a restarted node only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
 	_, composed := companyConfig(e)
 	err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())

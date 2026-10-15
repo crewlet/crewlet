@@ -1087,8 +1087,8 @@ var (
 //
 // READ FROM THE REPLICATED ROWS rather than from coordination, because that is
 // where an eviction actually lives: it is a record on the log like any other,
-// so every node's copy is identical and the applier's own gate depends on this
-// same table. A second copy in a bucket would give the fleet two answers.
+// so every data node's copy is identical and the applier's own gate depends on
+// this same table. A second copy in a bucket would give the fleet two answers.
 //
 // A read failure yields NO tombstones, which is the conservative direction: an
 // evicted node stays counted and pins the floor, rather than the trim

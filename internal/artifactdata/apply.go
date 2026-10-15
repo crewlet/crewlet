@@ -24,9 +24,9 @@ import (
 //     the broker's ([statelog.ApplyOptions.StoredAt]).
 //  2. IT DECIDES EVERY WRITE, AND A REFUSAL IS A ROW. Schema, field rules,
 //     guards, caps and the stamped limits are judged here, in log order, so
-//     every node reaches one verdict; a write refused is applied as its history
+//     every data node reaches one verdict; a write refused is applied as its history
 //     row with the verdict and the reason, never as an error, which would stall
-//     the log on every node.
+//     the log on every data node.
 //  3. EVERY RECORD IS APPLIED ONCE. Its history row is keyed by its position,
 //     and an apply that finds its own row already there writes nothing.
 
@@ -413,7 +413,7 @@ func (a *Applier) note(c applyContext, artifact string, deltas []DocDelta, h his
 }
 
 // createStore inserts a store's catalogue row at its first record: its number
-// is that record's position, the same on every node.
+// is that record's position, the same on every data node.
 func createStore(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow) (int, error) {
 	s.no, s.nextCollection, s.nextPath = c.packed, 1, 1
 	s.createdAt = c.at()
@@ -617,7 +617,7 @@ func writeDoc(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, d *d
 // applyPurge removes a store permanently: every row it holds, in its own
 // statement list (the estate keeps no foreign key), and the deletion marker,
 // written whether or not the store has rows, so a record about it that
-// arrives later is gated on every node alike.
+// arrives later is gated on every data node alike.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, artifact string) (int, error) {
 	actor := c.record.actor()
 	res, err := tx.ExecContext(ctx, `

@@ -1080,19 +1080,19 @@ func reanchoredDetail(c ReanchorCase) string {
 // perfectly suited to.
 //
 // It is ANOTHER node's record when two nodes opened the generation
-// independently — the register could not be read and both forced, or each
-// read it before the other's row said anything — and carrying on from it was
-// the defect. Both committed a checkpoint in the generation, each over its own
+// independently — the register could not be read and both forced, or each read
+// it before the other's row said anything — and carrying on from it was the
+// defect. Both committed a checkpoint in the generation, each over its own
 // rows: two histories under one number, which the identity claim forbids and
-// nothing on the log could ever reconcile, since every node applies the same
-// records into whichever rows it holds. So the record is READ BACK and its
-// writer compared with this node's, whatever the guard allowed: no force and
-// no unreadable register reaches past it, because nothing the operator could
-// know makes two openings of one generation safe. The duplicate case needs the
-// read too — the broker checks its window before the expectation on a
-// clustered stream, so a message id that collided with a peer's would be
-// acknowledged as though it had landed; the domains' message ids name their
-// writer, and this does not rely on it.
+// nothing on the log could ever reconcile, since every data node applies the
+// same records into whichever rows it holds. So the record is READ BACK and its
+// writer compared with this node's, whatever the guard allowed: no force and no
+// unreadable register reaches past it, because nothing the operator could know
+// makes two openings of one generation safe. The duplicate case needs the read
+// too — the broker checks its window before the expectation on a clustered
+// stream, so a message id that collided with a peer's would be acknowledged as
+// though it had landed; the domains' message ids name their writer, and this
+// does not rely on it.
 //
 // # It answers where the record is
 //

@@ -478,7 +478,7 @@ func gateCoverage(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gate
 					"answers (%q, %v) and the reader (%q, %v) — a reader that "+
 					"misses a drop resolves the write as a record applied "+
 					"without its ledger row, and one that reports a drop the "+
-					"applier never made refuses a write every node applied",
+					"applier never made refuses a write every data node applied",
 					label, dropped, gated, reason, reported))
 			}
 		}

@@ -857,7 +857,7 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 // objects (which become unnamed, and the collector reclaims their files after
 // its grace), its assets, shares, pins, reads, source claim and history. The
 // MARKER IS WRITTEN WHETHER OR NOT THE ROW IS HERE, so a record about the
-// artifact that arrives later is gated on every node alike. A purge writes no
+// artifact that arrives later is gated on every data node alike. A purge writes no
 // history row of its own: the history goes with the artifact, and the marker
 // names the purge's operation, which is what its writer reads back.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id string) (int, error) {
@@ -1236,7 +1236,7 @@ func planObjects(ctx context.Context, tx *sql.Tx, id string, adds, removes []art
 		if after < 0 {
 			// A REFERENCE COUNT BELOW ZERO is rows that disagree with the
 			// versions they count, which no record can produce: stopping
-			// here is the honest answer, and every node stops on it alike.
+			// here is the honest answer, and every data node stops on it alike.
 			return objectPlan{}, nil, fmt.Errorf("artifactsdomain: %s's object %s "+
 				"would be named %d times: the reference table disagrees with the "+
 				"versions it counts", id, k, after)

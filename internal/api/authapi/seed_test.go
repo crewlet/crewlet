@@ -17,7 +17,7 @@ import (
 //
 // The seed is the one credential this estate keeps as a secret, and it went
 // into the credential set in the clear — so into the person's document, their
-// credential row and the trail entry, on every node, in every snapshot and
+// credential row and the trail entry, on every data node, in every snapshot and
 // every backup, and readable off the cluster port by whoever could read a
 // stream. The enrolment now seals it under the fleet keyring, bound to the
 // person and the credential it is enrolled as, before the write is formed: nothing the writer

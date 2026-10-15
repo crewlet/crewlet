@@ -27,7 +27,7 @@ knowledge:
 
 | | `doclet` | `confluence` |
 |---|---|---|
-| Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
+| Where pages live | the fleet's own ordered log, applied into every data node's database | a Confluence site |
 | How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval — an index over the codes, then an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
 | Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
@@ -68,8 +68,9 @@ The driver this engine ships has **no approximate-nearest-neighbour index** —
 `internal/store/caps.go` measures for one once per process and reports what it
 found on every open — and the alternatives to building one were a full exact
 scan of every vector on every query, or embedding a search library with its
-own index format, file and backup story on every node. Instead the search is
-**two stages**, which is the shape every production vector engine uses anyway:
+own index format, file and backup story on every data node. Instead the
+search is **two stages**, which is the shape every production vector engine
+uses anyway:
 
 1. **Stage one** ranks a narrow table of **1-bit sign codes** — one bit per
    dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
@@ -306,8 +307,8 @@ Embedding a document costs a provider call, and it is the one thing in the
 search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
-source once and publishes a record; every data node applies it. The company pays the
-bill once and holds the answer everywhere.
+source once and publishes a record; every data node applies it. The company
+pays the bill once and every data node holds the answer.
 
 The duty ticks **every minute** and embeds at most **1 024 sources in at most
 32 provider requests** per tick, 128 sources a request at most — so a tick on a
@@ -519,11 +520,11 @@ independence is the point:
   function of the id rather than of anything derived from it.
 
 **A single node reads every bucket**, exactly as it did before the column
-existed. A fleet above 10 000 documents divides them: each live node scans a
-contiguous range, returns its best candidates *with scores*, and the asking node
-merges. There is no routing plan to compute and nothing to configure — the
-division is a sorted roster and a remainder, and every node computes the same
-one. See [Search](../guides/search.md) for the merge order, why BM25 stays
+existed. A fleet above 10 000 documents divides them: each live data node scans
+a contiguous range, returns its best candidates *with scores*, and the asking
+data node merges. There is no routing plan to compute and nothing to configure —
+the division is a sorted roster of the data nodes and a remainder, and every
+node computes the same one. See [Search](../guides/search.md) for the merge order, why BM25 stays
 comparable across a divided scan, and what a partial answer names.
 
 The count is fixed for the life of a deployment and is deliberately not
@@ -623,7 +624,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 ### Doclet backend: the engine's own pages
 
-`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside the tracker's and the vector index's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every data node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside the tracker's and the vector index's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
 A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
@@ -737,8 +738,8 @@ Two properties differ from the vendor path and both are visible:
   that is not there, or two pages filed under each other, are pages no walk of
   the container ever reaches. An empty parent is the container's top.
   Two moves that are each sound can still race — A under B on one node, B
-  under A on another — and so can a move and its parent's purge. Every node
-  then files the page where it can, identically: a move whose parent it can no
+  under A on another — and so can a move and its parent's purge. Every data
+  node then files the page where it can, identically: a move whose parent it can no
   longer hold leaves the page where it was, a create lands at the top, and a
   `pages_parent_salvaged` warning names the page. **Purging a page re-files
   its children** under its own parent (or the top) rather than leaving them

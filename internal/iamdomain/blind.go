@@ -21,8 +21,8 @@ import (
 //
 // An email address is the thing a person signs in with, so something has to
 // resolve one to a person on every sign-in. The obvious column holds the
-// address in the clear, and then the address is in every node's database, in
-// every snapshot a node donates, in every backup, and in every record a
+// address in the clear, and then the address is in every data node's database,
+// in every snapshot a node donates, in every backup, and in every record a
 // directory decision publishes onto the log.
 //
 // # A keyed hash, and why keyed rather than plain

@@ -15,9 +15,9 @@ and a unit of the org chart that owns it. Every task filed into it gets a key
 of the form `ENG-412`, minted from the project's own counter.
 
 **Projects come from the org chart.** Declaring a unit with a project key in
-the company config creates the project on the next apply, on every node, with
-no gesture from anybody. That is what lets a fresh company file its first task
-in its first minute.
+the company config creates the project on the next apply, on every data node,
+with no gesture from anybody. That is what lets a fresh company file its first
+task in its first minute.
 
 A project's name, purpose and unit follow the configuration that was
 **activated last**, whichever node applies what when: each project is stamped
@@ -382,9 +382,9 @@ of the next data node after one did not answer is still counted once.
 **Removed versus purged.** A task in the trash is still charged: removing a
 task hides it and destroys nothing, and the work was done on it. A **purged**
 task is not — the charge is refused, and a charge that was already on its way
-when the purge landed is dropped on every node rather than stopping them. The
-tokens are still on the seat's own counters and in the spend history; only the
-task's share is gone, with the task.
+when the purge landed is dropped on every data node rather than stopping them.
+The tokens are still on the seat's own counters and in the spend history; only
+the task's share is gone, with the task.
 
 **A task lists its own turns.** Every charged segment is a row the task keeps
 for good — in the replicated estate, beside the counters it added to — so the
@@ -526,7 +526,7 @@ refused naming the rule. The check is at the write because that is where it can
 be refused: by the time a record is applied the value is durable, and the
 applier deliberately salvages — a value it cannot decode writes no row and the
 change carries on, because refusing it would let one malformed field stop that
-task's every later edit on every node.
+task's every later edit on every data node.
 
 | Type | Accepts | Refuses |
 |---|---|---|
@@ -1158,7 +1158,7 @@ commit may move several of these, and the row names each one it moved:
 
 Three things the values are deliberately not. They are the **stored** form — a
 status slug, a whole timestamp, an item's id — rather than what a screen shows,
-because the same row is written identically by every node in a fleet and a
+because the same row is written identically by every data node in a fleet and a
 rendering would depend on the reader's time zone and on the company's current
 vocabulary; the dashboard resolves them. Nothing is **cut**: a row is a line in
 a log rather than a copy of the object, so a set records only what joined and
@@ -1299,9 +1299,9 @@ second restore brings back whatever is still in the trash with a parent that
 is already back. A restore of an item that is not in the trash and has nothing
 in the trash with it says there is nothing to restore.
 
-Neither is `purge`, which destroys every row on every node and has no inverse.
-That one is `crewlet worklet purge`, with a typed confirmation and a required
-reason, and it is deliberately not a tool at all.
+Neither is `purge`, which destroys every row on every data node and has no
+inverse. That one is `crewlet worklet purge`, with a typed confirmation and a
+required reason, and it is deliberately not a tool at all.
 
 Five of those count as a **delivery**: create, update, comment, merge and move. A turn
 woken by an assignment answers by moving the task, commenting on it, or filing
@@ -2021,11 +2021,11 @@ than what it is about:
 
 | Wake | Who hears it | What it asks |
 |---|---|---|
-| `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
+| `purged` | the lead of the project the task was filed in | nothing — the task is gone from every data node and nothing restores it |
 
 `purge_task` is the one operation in this engine with no inverse, and for a
 long time it told **nobody**: a task, its comments and its revisions were
-destroyed on every node and the person accountable for that project heard
+destroyed on every data node and the person accountable for that project heard
 nothing. The wake names the key, who ran it and their
 stated reason — and nothing else. It quotes neither the title nor the body,
 because the record outlives the rows: an excerpt of what was purged would keep
@@ -2037,8 +2037,8 @@ from a message that was lost. It names the tool that answers its own question �
 `my_work` — rather than pointing at the object it is written on, because a
 person's handle is not a task key and a pointer at one costs a round and a
 failed tool call to discover. A `purged` wake sends you nowhere for the sharper
-version of the same reason: the row is gone from every node, so the tool would
-answer `not_found`.
+version of the same reason: the row is gone from every data node, so the tool
+would answer `not_found`.
 
 ## A person's own state
 
@@ -2357,7 +2357,7 @@ anybody was woken — the applier deliberately holds no roster, because two node
 briefly on different epochs would then write different rows for one record.
 
 **Inbox rows age out; the history does not.** `tracker.worklet.inbox_retention_days`
-(default 365, 30..3650) is how long an entry lives. A sweep on every node
+(default 365, 30..3650) is how long an entry lives. A sweep on every data node
 deletes what is past the horizon — per data node rather than once across the fleet,
 because each data node applies the log into its own copy. It is **live**: a
 revision that changes it reaches every data node's applier at its next batch and its
@@ -2493,9 +2493,10 @@ Three different gestures, and the difference matters:
   **Removed items**, which is the same parameter reached the same way: a trash
   of one project's bugs is a narrowing like any other, where a tab would have
   been a place you leave your arrangement to get to.
-- **Delete** writes a marker. Every node drops every record about that task for
-  ever, which is what stops a redelivery months later resurrecting it — and it
-  is also how a write that names the task is told it is **gone for good**:
+- **Delete** writes a marker. Every data node drops every record about that
+  task for ever, which is what stops a redelivery months later resurrecting
+  it — and it is also how a write that names the task is told it is **gone for
+  good**:
   an update, a removal, a restore, a second purge, a dependency of it or on it,
   a subtask filed under it and a merge naming it are all refused as purged,
   never as "not on this node", which is the answer for a task this node has

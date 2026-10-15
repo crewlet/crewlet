@@ -33,8 +33,9 @@ memory included, to a directory the caller names operates the deployment
 rather than reading the company.
 
 The path is on the **engine's host**, not yours — this writes files where the
-node runs and downloads nothing. Any node produces one, whatever its roles:
-every node holds its own store and, on the embedded topology, its own broker.
+node runs and downloads nothing. Any node that serves the API produces one —
+which is every node with `ingress`, and so a data node: it holds both of its
+store's files and, on the embedded topology, its own broker.
 A node that dialled an **external** NATS cluster is the exception, and it says
 so: its copy carries the store estates alone, and the stream half is backed up
 at the cluster (`nats account backup`) from the same moment.
@@ -46,7 +47,7 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md) and every node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day)), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md) and every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day)), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
@@ -136,8 +137,8 @@ What is worth knowing about it:
   estate the node holds that is closed at that instant (an adoption
   replacing its file, or one whose reopen failed) **refuses the backup, naming
   it**, rather than writing a manifest without it; take it again once the node
-  reports the estate serving. A node without `data` holds none and backs up
-  its own file alone.
+  reports the estate serving. A node without `data` holds none, and is never
+  asked for a backup: the route is `ingress`'s, which requires `data`.
 - **The objects come from the object store, not from this node's disk.** On
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream
   snapshot the backup takes anyway carries them, so no object is copied on its
@@ -289,27 +290,38 @@ peers hold too.
 
 A node is **two** database files, and they answer differently.
 
-The **replicated estate** is a copy of state every data node holds: the tracker's
-projects, tasks, comments and history, the knowledge base's pages and
+The **replicated estate** is a copy of state every data node holds: the
+tracker's projects, tasks, comments and history, the knowledge base's pages and
 revisions, the vectors search reads, the org chart's units and seats, the
-identity directory's people, credentials and sessions, and every node's usage
-history — each derived from its
-own ordered log by an applier that runs identically everywhere. Any healthy node's copy of it is the
+identity directory's people, credentials and sessions, and every data node's
+usage history — each derived from its own ordered log by an applier that runs
+identically on every data node. Any healthy data node's copy of it is the
 company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what
-only *that node* did: its audit event log, its scheduled-run history, its share
-of the config revision history. Those exist nowhere else and no peer's backup
-contains them.
+only *that node* did: its audit event log (and, on a data node, the events it
+keeps in [custody](deployment.md#custody-the-rows-of-a-node-without-data) for
+the nodes without `data`), its scheduled-run history, its share of the config
+revision history. Those exist nowhere else and no peer's backup contains them.
+A node without `data` keeps none of them: its node estate is scratch, deleted
+at every boot, and each of its events is in the data node keeping it.
 
 So:
 
-- **For the company's state — one node is enough.** Everything a restore needs
-  to bring the company back is on the stream estate and the replicated estate,
-  and a single node's backup captures both.
-- **For the complete audit trail — take one per node**, on the same schedule,
-  and keep them together. The event log is per-node history with no second
-  copy, so a fleet-wide audit trail is the union of every node's.
+- **For the company's state — one data node is enough.** Everything a restore
+  needs to bring the company back is on the stream estate and the replicated
+  estate, and a single data node's backup captures both. Every backup is a
+  data node's: `crewlet backup` asks a node's API, only a node with `ingress`
+  serves one, and `ingress` requires `data`.
+- **For the complete audit trail — take one per data node**, on the same
+  schedule, and keep them together. The event log is per-node history with no
+  second copy, so a fleet-wide audit trail is the union of every data node's.
+  A node without `data` keeps no event log of its own: each of its events is
+  kept in exactly one data node's
+  ([custody](deployment.md#custody-the-rows-of-a-node-without-data)), so that
+  node's backup is where it is. A data node that does not run `ingress` serves
+  no API for `crewlet backup` to ask, so its audit trail is backed up only if
+  it runs `ingress` too.
 
 There is no fleet-wide barrier and deliberately no attempt at one: each node's
 copy is its own moment, and the estate that has to be internally consistent —
@@ -366,11 +378,11 @@ is the freshest backup imaginable.
 
 **The backup interval IS the recovery point for history below the trim
 floor.** Above that floor the log holds every record on R replicas and every
-node holds the applied rows, so losing a node loses nothing. Below it the log
-holds nothing, and each node's own database file is the only copy of that
-history — N of them, independent, none replicated. A schedule of six hours is
-therefore a six-hour RPO for that half of the company's past, and no replica
-count changes it. See [Retention](retention.md).
+data node holds the applied rows, so losing a node loses nothing. Below it the
+log holds nothing, and each data node's replicated estate is the only copy of
+that history — one per data node, independent, none replicated. A schedule of
+six hours is therefore a six-hour RPO for that half of the company's past, and
+no replica count changes it. See [Retention](retention.md).
 
 **A finished backup announces itself to the fleet.** When the manifest is
 written, the taker publishes what the copy reaches — per stream, with the
@@ -540,7 +552,7 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   empty store gets the same protection, for the day it is running in and for
   a day a redelivered custody batch names. What the restored log lost is not
   recovered: a figure the fleet held more of counts the node's new rows only
-  once the node's own count passes it. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
+  once the node's own count passes it. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
 - **Config converges on its own.** The current revision's payload rides the
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any
@@ -633,8 +645,8 @@ carries, so everybody signing in again once lets them straight back:
   the one they held, and a service account unbound since is bound again.
 
 The restored estate cannot list any of these: its own trail
-([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every node's event
-log stop at the moment the artefact was taken, exactly like the rows they
+([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every data node's
+event log stop at the moment the artefact was taken, exactly like the rows they
 describe. So re-apply each one from a record kept **outside** the estate — your
 own off-boarding and access-change records, or the engine's logs if you ship
 them off the host — with `crewlet iam remove`, `suspend`, `grant`, `bind`
@@ -657,7 +669,7 @@ schedule. Somebody removed after it was taken is the first case above, and the
 reason a backup is what an erasure has to outlast: until every backup taken
 before the trim passed a removed person's records is deleted, the person can be
 read — and restored — from it by whoever holds the keyring. See
-[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
+[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows).
 
 ## What not to do
 

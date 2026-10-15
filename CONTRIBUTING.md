@@ -1124,9 +1124,9 @@ an older build:
   a state-log record this build cannot read is deferred and kept, never
   dropped — except a gate record above the version it reads, or one whose
   envelope it cannot decode at all, which stops the applier rather than
-  apply it wrong — which is why every node names the version it reads on
-  its position heartbeat, a writer of a gate above the base version waits on
-  that census before publishing one, and an envelope never refuses what a
+  apply it wrong — which is why every data node names the version it reads
+  on its position heartbeat, a writer of a gate above the base version waits
+  on that census before publishing one, and an envelope never refuses what a
   newer build may add to it; and a bump of the seat-host lease protocol makes
   the newer node refuse to claim beside a live lower lease. That contract
   runs FORWARD, to the builds after this one, and never obliges this tree to

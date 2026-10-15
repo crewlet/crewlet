@@ -45,7 +45,7 @@ import (
 // member asks next — and a publisher that was not told its batch was stored
 // sends it again. Written by two data nodes, a batch is two copies of one
 // history, and every figure derived from a node's own log counts it twice: the
-// usage domain sums each node's day, so a stateless node's spend would be
+// usage domain sums each data node's day, so a stateless node's spend would be
 // billed once per data node that wrote it. So after writing a batch a keeper
 // CLAIMS it in coordination, create-only ([coord.Custody]): the claim's winner
 // keeps the batch, any other writer deletes its copy, and the delivery is

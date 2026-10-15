@@ -1029,8 +1029,8 @@ type Fires interface {
 // delivers a batch whose acknowledgement was lost AGAIN, to whichever member
 // asks next — so without a decision a batch can land in two logs, and every
 // figure derived from a node's own log counts it twice: the usage domain sums
-// each node's day, so a stateless node's spend would be billed once per data
-// node that happened to write it.
+// each data node's day, so a stateless node's spend would be billed once per
+// data node that happened to write it.
 //
 // # Create-only, written AFTER the rows, and the loser deletes
 //

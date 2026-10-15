@@ -560,7 +560,7 @@ func readHeadTx(ctx context.Context, tx *sql.Tx, id string) (Head, bool, error) 
 }
 
 // readShares reads the shares of every artifact named, in one statement per
-// artifact batch, ordered by audience so a head reads the same on every node.
+// artifact batch, ordered by audience so a head reads the same on every data node.
 func readShares(ctx context.Context, tx *sql.Tx, ids []string) (map[string][]artifacts.Share, error) {
 	out := map[string][]artifacts.Share{}
 	if len(ids) == 0 {
@@ -992,7 +992,7 @@ func prefixed(prefix, columns string) string {
 // HeldObjects answers which of the digests asked about THIS artifact already
 // names, each with the object that holds it: the carry plan's one question,
 // and nothing wider (a carry never crosses an artifact). Where two of the
-// artifact's objects hold one digest, the lowest key answers, on every node.
+// artifact's objects hold one digest, the lowest key answers, on every data node.
 func (r *Reader) HeldObjects(ctx context.Context, id artifacts.ID, hashes []objstore.Hash) (
 	map[objstore.Hash]objstore.Object, error) {
 

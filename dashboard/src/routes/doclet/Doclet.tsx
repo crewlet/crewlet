@@ -18,11 +18,11 @@
  * # What a search here reads, Doclet's truth
  *
  * On Doclet a search reads THIS NODE'S OWN COPY of the pages: the replicated
- * rows every node applies from the pages log, the lexical index this node
- * keeps over them, and the replicated vectors, the same fan-out a seat's
- * `search_knowledge` runs. It is as current as this
- * node's place on that log. On Confluence the search IS live, at query time,
- * against the site.
+ * rows every data node applies from the pages log, the lexical index this
+ * node keeps over them, and the replicated vectors, the same fan-out a seat's
+ * `search_knowledge` runs, divided across the live data nodes by bucket. It is
+ * as current as this node's place on that log. On Confluence the search IS
+ * live, at query time, against the site.
  *
  * # Three modes, and what was served
  *

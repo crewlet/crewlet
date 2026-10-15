@@ -145,7 +145,7 @@ const (
 	SearchSlice = SearchPrefix + "slice"
 
 	// ObservePrefix prefixes the observability read scatter's subjects —
-	// the fleet's turn-level history, asked of every node's own event
+	// the fleet's turn-level history, asked of every data node's own event
 	// store at query time (internal/eventfan, ADR-0021).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a history read is the

@@ -149,8 +149,8 @@ type Writer struct {
 // the surface that asked, and is announced there.
 //
 // ONLY ON A DEFINITE OUTCOME. An applied or a pending write is durable at its
-// position and every node will apply it; an `unknown` one may or may not have
-// landed, and the durable half of the trail — the `iam_history` row the
+// position and every data node will apply it; an `unknown` one may or may not
+// have landed, and the durable half of the trail — the `iam_history` row the
 // applier writes — is what answers that. A live row claiming a change that did
 // not happen would be the one false line in the feed.
 //
@@ -658,7 +658,7 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 // the framework may run a decide AGAIN against a fresh snapshot, so the
 // mutation the encode below reads has to be the one the last run produced.
 // Taken by value, every one of those wrote into a copy nothing encoded and
-// published an empty payload that every node then failed to decode.
+// published an empty payload that every data node then failed to decode.
 func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 	pattern statelog.Pattern, decide func(*sql.Tx) error) statelog.Request {
 
@@ -716,7 +716,7 @@ func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 // gate decodes — and which the publisher-side reader reads too only for the
 // body it is handed ([markedPerson]): a record this node appended and a removal
 // raced is named `deleted` there, but a person removed BEFORE the snapshot
-// would have had the record appended only to be dropped by every node — a
+// would have had the record appended only to be dropped by every data node — a
 // second removal of somebody already removed among them. Refused here, it is
 // refused as what it is before anything is appended, with the reason the
 // resolution would have given for a person's own subject.

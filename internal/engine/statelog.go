@@ -2271,9 +2271,10 @@ func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 //
 // A node's checkpoint is a sequence on each domain's log. It can replay from
 // there as long as the log still HOLDS the record after it — and it may not:
-// the trim deletes records every node has applied, and a node that was down
-// long enough, or that has never run at all, wakes up below the floor. There
-// is nothing on the log for it to read, and no amount of waiting produces one.
+// the trim deletes records every data node it counts has applied, and a node
+// that was down long enough, or that has never run at all, wakes up below the
+// floor. There is nothing on the log for it to read, and no amount of waiting
+// produces one.
 //
 // So the check is per domain: is the record after this node's checkpoint at or
 // above the first sequence the stream still holds? That is
@@ -4324,7 +4325,7 @@ func (s *stateLog) beat(ctx context.Context, interval time.Duration,
 // publishPositions writes one row describing every domain this node runs.
 //
 // EVERY DOMAIN IN ONE ROW, which is the register's own shape: the trim asks
-// "what has every node applied" about all of them at once, and a row per
+// "what has every data node applied" about all of them at once, and a row per
 // domain would be N writes saying one thing.
 //
 // AND THE SNAPSHOT THIS NODE HOLDS, stamped from what its own snapshot loop

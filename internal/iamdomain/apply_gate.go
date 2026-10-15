@@ -19,7 +19,8 @@ import (
 // because none of them is ever deferred.
 
 // applyInvalidation moves the fleet-wide generation every session bearer
-// carries, which ends every session in the company as each node applies it.
+// carries, which ends every session in the company as each data node applies
+// it.
 //
 // ONE ROW, MONOTONE, and the guard is what makes a redelivery harmless: a
 // record naming a generation at or below the one already stored writes

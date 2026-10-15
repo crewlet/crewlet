@@ -686,7 +686,8 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 //
 // A KEY RESOLVES THROUGH THE DIRECTORY FIRST, so a key two tasks hold opens the
 // one that claimed it — the task every earlier reference was written against —
-// on every node, rather than whichever row an index happened to return first.
+// on every data node, rather than whichever row an index happened to return
+// first.
 // The task row is the fallback for a key whose claim has not been written yet.
 func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
 	var id string

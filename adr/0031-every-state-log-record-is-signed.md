@@ -10,8 +10,9 @@
 
 The broker has no authentication of its own. It binds no listener on the
 default topology, but a fleet clusters its embedded members over a port, and a
-record on a state log is not a message — it is what the next node APPLIES.
-Rows every peer derives identically, a seat's environment, a person's grants.
+record on a state log is not a message — it is what every data node APPLIES.
+Rows every data node derives identically, a seat's environment, a person's
+grants.
 An unsigned record on such a log is an instruction anyone who can reach the
 cluster port may write.
 

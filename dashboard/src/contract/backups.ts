@@ -28,7 +28,7 @@ export type BackupOutcome = "applied" | "failed";
 
 /**
  * Whose word the trim takes for what is backed up
- * (`stream.tracker_retention.backup_floor`): every node's verified copy
+ * (`stream.tracker_retention.backup_floor`): every data node's verified copy
  * (`engine`), or the operator's acknowledgement alone (`operator`).
  */
 export type BackupPolicy = "engine" | "operator";

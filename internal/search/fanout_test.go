@@ -365,7 +365,7 @@ func TestASlowPeerCostsItsBucketsAndNotTheAnswer(t *testing.T) {
 
 // A PARTICIPANT STILL BUILDING ITS INDEX IS ABSENT, NOT SHORT.
 //
-// Every node holds the whole corpus, but the LEXICAL INDEX over it is each
+// Every data node holds the whole corpus, but the LEXICAL INDEX over it is each
 // node's own — built by that node's own walk, on its own schedule. So a node
 // that joined a minute ago holds every document and can find none of them, and
 // handed a bucket range it answers almost nothing. Counted as an answer, the

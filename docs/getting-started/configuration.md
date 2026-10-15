@@ -1048,19 +1048,22 @@ stream:
                                     #   up for a large one
   # usage_log_max_bytes: 1073741824
                                     #   the usage log's ceiling, the compacted
-                                    #   stream every node publishes its own
+                                    #   stream every data node publishes its own
                                     #   company days to — spend, turns, page
                                     #   reads, schedule fires — so history is
                                     #   answered fleet-wide and outlives the
-                                    #   node that spent it (64 MiB..64 GiB).
+                                    #   node that spent it (64 MiB..64 GiB). A
+                                    #   node without `data` publishes none: its
+                                    #   events are kept by a data node in
+                                    #   custody and counted in that node's day.
                                     #   NOT DERIVED FROM THE DISK either: unset
                                     #   takes a flat 1 GiB. SIZED BY A CENSUS,
                                     #   not a rate: one message per (node, day,
-                                    #   seat or schedule) for 181 days, about
-                                    #   217 MB for three nodes of forty seats
-                                    #   and twenty schedules, and about 12 MB
-                                    #   for one node of ten seats — set it
-                                    #   toward the 64 MiB floor for a small
+                                    #   seat, schedule or person) for 181 days,
+                                    #   about 217 MB for three nodes of forty
+                                    #   seats and twenty schedules, and about
+                                    #   12 MB for one node of ten seats — set
+                                    #   it toward the 64 MiB floor for a small
                                     #   company. Crossing it refuses the append
                                     #   and the log_headroom alarm names
                                     #   `usage`

@@ -22,8 +22,8 @@ import (
 // # Why the row's id is a digest and not a uuid
 //
 // The applier is a PURE FUNCTION of the log: a uuid minted here would differ
-// on every node, in a table that claims byte-identical state. So the id is a
-// digest of the record's own operation id and the position it applied at —
+// on every data node, in a table that claims byte-identical state. So the id is
+// a digest of the record's own operation id and the position it applied at —
 // both of which every node sees identically — which also makes the row
 // naturally idempotent under redelivery.
 

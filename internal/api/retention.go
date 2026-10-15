@@ -159,13 +159,13 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 //
 // An acknowledgement is filed under a STREAM — [coord.BackupPoint.Streams] is
 // what the trim's backup term looks its reach up in — while the published
-// floors are keyed by DOMAIN and every node's positions heartbeat by domain
-// too, and neither record carries a stream name at all. So there was no lookup
-// to perform in them, and what the two sources here actually did was take the
-// FIRST row of whichever one answered. That is not "the fleet's generation":
-// a reanchor moves ONE domain's, so on an estate where the tracker has been
-// re-anchored and the pages log has not, the two numbers differ and which one
-// came back was whichever key the store happened to list first.
+// floors are keyed by DOMAIN and every data node's positions heartbeat by
+// domain too, and neither record carries a stream name at all. So there was no
+// lookup to perform in them, and what the two sources here actually did was
+// take the FIRST row of whichever one answered. That is not "the fleet's
+// generation": a reanchor moves ONE domain's, so on an estate where the tracker
+// has been re-anchored and the pages log has not, the two numbers differ and
+// which one came back was whichever key the store happened to list first.
 //
 // # And a generation that is too HIGH is not a refused acknowledgement
 //

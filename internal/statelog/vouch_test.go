@@ -127,7 +127,7 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 			t.Fatalf("the retry answered %q and the subject's last record is %d, "+
 				"want unknown and still %d — the broker no longer remembers the "+
 				"operation, so a retry this node decides again lands as a SECOND "+
-				"record every node applies", res.Outcome, last, first.Position.Seq)
+				"record every data node applies", res.Outcome, last, first.Position.Seq)
 		}
 	})
 
@@ -174,10 +174,10 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 // The broker's duplicate window is the only other thing that could collapse
 // it, and it is two minutes wide. Past it, a retry used to take a snapshot
 // that already held the first application, decide again on top of it and
-// publish a second copy every node applied: a second comment, a counter moved
-// twice, an update conditioned on the version its own first copy moved refused
-// as stale. The ledger is read in the snapshot's own transaction, before the
-// domain is asked anything.
+// publish a second copy every data node applied: a second comment, a counter
+// moved twice, an update conditioned on the version its own first copy moved
+// refused as stale. The ledger is read in the snapshot's own transaction,
+// before the domain is asked anything.
 func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 	t.Parallel()
 
@@ -213,7 +213,7 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 		}
 		if got := h.appends.appends.Load() - appended; got != 0 {
 			t.Errorf("the retry reached the broker %d time(s) past its duplicate "+
-				"window, which lands a second copy every node applies", got)
+				"window, which lands a second copy every data node applies", got)
 		}
 	})
 

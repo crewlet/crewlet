@@ -156,7 +156,7 @@ const (
 	// transfer or a purge. Routed to the artifact's room, and a HINT: the
 	// artifact, what moved, the head version and the record's position,
 	// never content, so a screen re-reads through the questions that decide
-	// what it may see. Pushed by every node from its own applier
+	// what it may see. Pushed by every data node from its own applier
 	// ([Service.ArtifactsMoved]).
 	KindArtifactChanged Kind = "artifact_changed"
 

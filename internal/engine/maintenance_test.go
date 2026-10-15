@@ -102,9 +102,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"counterparty_profiles",
 		"events",
 		// THE IDENTITY ESTATE'S TWO, which sort here, swept on every
-		// node by the same per-node jobs every other domain's are: every
-		// node runs every domain in the register, whatever its roles, so
-		// every node holds rows in them to sweep.
+		// data node by the same per-node jobs every other domain's are:
+		// every data node runs every domain in the register, whatever its
+		// other roles, so every data node holds rows in them to sweep.
 		//
 		// The estate's OTHER retention — the authentication trail's two
 		// horizons — is deliberately NOT here: it is a record on the

@@ -66,7 +66,7 @@ const (
 type Sources struct {
 	State *livestate.LiveState
 
-	// Events is the FLEET's turn-level history: every node's own event
+	// Events is the FLEET's turn-level history: every data node's own event
 	// store, asked at query time, with a [eventfan.Coverage] beside every
 	// answer saying which nodes it came from (ADR-0021).
 	//
@@ -535,7 +535,7 @@ func Register(r *Registry, s Sources) {
 		// push names a version of a heavy field newer than the copy it
 		// holds — the push that carried it was dropped. From the projection
 		// alone, so it costs what a push does; `agent` reads the seat's
-		// history from every node as well. Everybody's, as the `agents`
+		// history from every data node as well. Everybody's, as the `agents`
 		// push is, and masked as that push is: only a reader the seat's
 		// trail is open to — its lead, or an admin — receives the body.
 		r.Register("live_call", Everybody(), s.liveCall)
@@ -965,9 +965,9 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// in the store addressable by id.
 		"next": next,
 		// WHICH NODES THE HISTORY CAME FROM. A seat moves between nodes,
-		// so its history is on every node that ever held it; null when it
-		// could not be read at all, which is not the same as a seat that
-		// has never run.
+		// so its history is on every data node it ran on or that kept its
+		// events in custody; null when it could not be read at all, which
+		// is not the same as a seat that has never run.
 		"coverage": coverage,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an

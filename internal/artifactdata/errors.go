@@ -10,7 +10,7 @@ import (
 
 // The sentinels. A write the APPLIER refuses is not one of these: it is a
 // [WriteResult] whose verdict says why, because the record landed and its
-// refusal is a fact every node recorded. These are what is refused before
+// refusal is a fact every data node recorded. These are what is refused before
 // anything is appended, and what a read cannot answer.
 var (
 	// ErrNotFound reports a store, a collection or a document that does
