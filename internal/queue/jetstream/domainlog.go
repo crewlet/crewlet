@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -59,14 +58,22 @@ type DomainLog struct {
 	// calls `Info` on the shared handle, so its `s.info` is written once
 	// at open and read immutably thereafter.
 	//
-	// The mutex is still needed HERE, because two state reads share this
-	// handle. Its callers are the readiness checks, the trim tick and the
-	// operator report — none of them hot. NOT A READ'S: a read's readiness
-	// is served the log's ends from memory, refreshed from here at most once
-	// a second whatever the read rate, because asked per read this mutex
-	// queued every read of a domain behind one state round trip at a time.
-	state   jetstream.Stream
-	stateMu sync.Mutex
+	// The turn is still needed HERE, because two state reads share this
+	// handle. Its callers are the readiness checks, the trim tick, the gate
+	// reserve's usage reading and the operator report — none of them hot.
+	// NOT A READ'S: a read's readiness is served the log's ends from memory,
+	// refreshed from here at most once a second whatever the read rate,
+	// because asked per read this turn queued every read of a domain behind
+	// one state round trip at a time.
+	//
+	// A ONE-SLOT CHANNEL RATHER THAN A MUTEX, so a caller waits for its turn
+	// only as long as its own context allows ([DomainLog.stateTurn]): each
+	// caller bounds its read by a budget of its own — the reserve's is a
+	// barrier's five seconds — and a mutex queued it behind whoever held
+	// the handle for as long as THAT caller's context ran, the committer's
+	// whole thirty-second budget included.
+	state jetstream.Stream
+	turn  chan struct{}
 }
 
 // DomainLog opens the append surface for a stream this node has provisioned.
@@ -88,7 +95,41 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 		return nil, fmt.Errorf("jetstream: open the log %q's state reader: %w",
 			stream, err)
 	}
-	return &DomainLog{js: q.js, stream: s, state: state, name: stream, q: q}, nil
+	return &DomainLog{js: q.js, stream: s, state: state, name: stream, q: q,
+		turn: make(chan struct{}, 1)}, nil
+}
+
+// stateTurn takes the state handle's one turn, waiting for it no longer than
+// ctx allows; on a nil error the caller hands it back with the release.
+func (l *DomainLog) stateTurn(ctx context.Context) (release func(), err error) {
+	select {
+	case l.turn <- struct{}{}:
+		return func() { <-l.turn }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("jetstream: wait to read %q's state: %w", l.name, ctx.Err())
+	}
+}
+
+// stateInfo is the stream's info read through the state handle, whose turn
+// the caller holds.
+//
+// ASKED AS A READ ([jsprovision.Timing.Read]): each request given the read
+// term, and asked again while nobody answers. A stream's info is answered by
+// its LEADER, and a member that still believes in a leader the cluster has
+// just lost stays silent rather than answer — so a request sent in the window
+// after a leader died is never answered at all, the new leader's election
+// notwithstanding, and one request held for its caller's whole context waited
+// out the committer's thirty-second budget for a reply nobody was going to
+// send, where asked again it was answered by the new leader a second or two
+// later.
+func (l *DomainLog) stateInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
+	var info *jetstream.StreamInfo
+	err := l.q.provisioning().Read(ctx, func(ctx context.Context) error {
+		var ierr error
+		info, ierr = l.state.Info(ctx)
+		return ierr
+	}, nil)
+	return info, err
 }
 
 // openProvisioned resolves a stream THIS NODE HAS JUST PROVISIONED, waiting
@@ -174,8 +215,16 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 // broker's not-found as an error would make every caller re-derive that
 // distinction, and the first one to forget it would take the trimmed-anchor
 // branch on a broker that was merely unreachable.
+//
+// ASKED AS A READ, for [DomainLog.stateInfo]'s reason: a domain log allows no
+// direct get, so this is answered by the stream's leader or by nobody.
 func (l *DomainLog) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
-	msg, err := l.stream.GetLastMsgForSubject(ctx, subject)
+	var msg *jetstream.RawStreamMsg
+	err := l.q.provisioning().Read(ctx, func(ctx context.Context) error {
+		var gerr error
+		msg, gerr = l.stream.GetLastMsgForSubject(ctx, subject)
+		return gerr
+	}, nil)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrMsgNotFound) {
 			return 0, false, nil
@@ -237,10 +286,16 @@ func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) 
 // an ordinary answer rather than an error: a trimmed record is exactly what
 // the retention gate exists to produce, and a caller distinguishing "gone" from
 // "the broker is unreachable" is the whole reason it is not one error value.
+// Asked as a read, for [DomainLog.LastSeq]'s reason.
 func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	payload []byte, storedAt time.Time, ok bool, err error) {
 
-	msg, err := l.stream.GetMsg(ctx, seq)
+	var msg *jetstream.RawStreamMsg
+	err = l.q.provisioning().Read(ctx, func(ctx context.Context) error {
+		var gerr error
+		msg, gerr = l.stream.GetMsg(ctx, seq)
+		return gerr
+	}, nil)
 	switch {
 	case errors.Is(err, jetstream.ErrMsgNotFound):
 		return "", nil, time.Time{}, false, nil
@@ -288,9 +343,12 @@ type LogStats struct {
 
 // Stats reads the log's ends, its size and its ceiling in one round trip.
 func (l *DomainLog) Stats(ctx context.Context) (LogStats, error) {
-	l.stateMu.Lock()
-	info, err := l.state.Info(ctx)
-	l.stateMu.Unlock()
+	release, err := l.stateTurn(ctx)
+	if err != nil {
+		return LogStats{}, err
+	}
+	info, err := l.stateInfo(ctx)
+	release()
 	if err != nil {
 		return LogStats{}, fmt.Errorf("jetstream: read %q's state: %w", l.name, err)
 	}
@@ -360,10 +418,13 @@ func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 // silently reset every field an operator had set, or that the node which
 // created the stream set from its own Tier A.
 func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
-	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
+	release, err := l.stateTurn(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
-	info, err := l.state.Info(ctx)
+	info, err := l.stateInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("jetstream: read %q's configuration before changing "+
 			"its ceiling: %w", l.name, err)
