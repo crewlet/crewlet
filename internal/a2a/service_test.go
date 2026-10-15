@@ -367,10 +367,14 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 func TestAnAskAndItsAnswerAreOneTraceWithTheAsker(t *testing.T) {
 	t.Parallel()
 	svc, _, rec := service(t, dir{"bob": true, "alice": true})
-	asker := events.TraceContext{TraceID: "0af7651916cd43dd8448eb211c80319c",
-		SpanID: "b7ad6b7169203331", Unsampled: true}
-	id, err := svc.Open(tracing.WithRemote(context.Background(), asker),
-		a2a.Ask{Requester: "alice", Target: "bob", Brief: "?"})
+	// The asker's `a2a_ask` call: a span of its own, in a trace whose root
+	// decided against sampling.
+	ctx, call := tracing.Start(tracing.WithRemote(context.Background(), events.TraceContext{
+		TraceID: "0af7651916cd43dd8448eb211c80319c", SpanID: "b7ad6b7169203331", Unsampled: true,
+	}), "test", "tool.call")
+	defer call.End()
+	asker := tracing.TraceOf(ctx)
+	id, err := svc.Open(ctx, a2a.Ask{Requester: "alice", Target: "bob", Brief: "?"})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

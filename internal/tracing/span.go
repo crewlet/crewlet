@@ -54,8 +54,10 @@ import (
 // reconstructs the tree from the span records themselves. Crewlet's event
 // envelope has a `parent_span_id` column that predates any of this and that
 // the dashboard's tree reads directly, so the parent has to be remembered
-// alongside. [Start] writes it for a span it opens and [WithRemote] for a
-// span it restores, and nothing else writes it.
+// alongside. [Start] writes it for the span it opens, and it is read only
+// beside a span opened in this process: a RESTORED context holds no span of
+// its own, and the parent of whatever is published there is the restored span
+// itself, which the context already names (see [TraceOf]).
 type parentKey struct{}
 
 // Start opens a span and makes its ids available to everything below it — the
@@ -103,13 +105,31 @@ func StartRoot(ctx context.Context, component, name string, attrs ...attribute.K
 // and its SAMPLING DECISION, so whatever restores the trace on the far side of
 // the queue continues it as decided rather than re-deciding it.
 //
-// # A fresh root when there is no span
+// # Three shapes, one per thing a context can hold
 //
-// Rather than empty strings. Every one of this engine's event publishers used
-// to call [events.NewTrace] for exactly this case, and an event with no trace
-// id is one the store cannot group and the dashboard cannot place. So the
-// no-span answer is the same answer it always was — a freshly minted root —
-// and the call sites simply stopped having to know which case they were in.
+// A SPAN OPENED HERE: its own id, and its parent's.
+//
+// A RESTORED SPAN — a context [WithRemote] made, or one an inbound
+// `traceparent` was extracted onto, with no span opened beneath it yet — names
+// a span that belongs to somebody else: the one the arriving event was
+// published in, or beneath. An event published there is published BENEATH
+// that span by code that opened none, which is [events.TraceContext.Beneath]'s
+// shape: no span id, and the restored span as the parent. Reported as the
+// restored span's own id instead, as it once was, every such event claimed a
+// span that had already ended on another node, and the dashboard filed it
+// among that span's events. The shape is also one [WithRemote] restores to the
+// same span, so restoring what this reports continues exactly the trace it was
+// reported from.
+//
+// NOTHING: a fresh root, rather than empty strings. Every one of this
+// engine's event publishers used to call [events.NewTrace] for exactly this
+// case, and an event with no trace id is one the store cannot group and the
+// dashboard cannot place. So the no-span answer is a freshly minted root and
+// the call sites simply stopped having to know which case they were in. It
+// carries a TRACE id and no span id, because no span has one: an id minted
+// for the root named a span nobody opened, and the first thing restored
+// beneath it — the turn a change-feed wake started — was exported under a
+// parent no backend ever received.
 //
 // A minted root is DECIDED like any other root: by the operator's root rule
 // ([rootSampler]), asked about the minted trace id. Every rule it can hold
@@ -117,28 +137,20 @@ func StartRoot(ctx context.Context, component, name string, attrs ...attribute.K
 // and this deciding a span-less one cannot disagree about the same id, and a
 // ratio of 0.1 governs the traces a schedule's span roots and the ones an
 // event published outside any span roots alike.
-//
-// # A restored trace with no span keeps its trace
-//
-// [WithRemote] given a trace id and no span id — an event published beneath a
-// span by code that opens none, such as a chat wake — restores the trace with
-// no parent span. That context holds no VALID span, and minting there would
-// file the event under a trace nobody else is in, so it reports the restored
-// trace and decision back unchanged instead.
 func TraceOf(ctx context.Context) events.TraceContext {
 	sc := trace.SpanContextFromContext(ctx)
-	parent, _ := ctx.Value(parentKey{}).(string)
 	switch {
+	case sc.IsRemote() && sc.TraceID().IsValid():
+		tc := events.TraceContext{TraceID: sc.TraceID().String(), Unsampled: !sc.IsSampled()}
+		if sc.SpanID().IsValid() {
+			tc.ParentSpanID = sc.SpanID().String()
+		}
+		return tc
 	case sc.IsValid():
+		parent, _ := ctx.Value(parentKey{}).(string)
 		return events.TraceContext{
 			TraceID:      sc.TraceID().String(),
 			SpanID:       sc.SpanID().String(),
-			ParentSpanID: parent,
-			Unsampled:    !sc.IsSampled(),
-		}
-	case sc.IsRemote() && sc.TraceID().IsValid():
-		return events.TraceContext{
-			TraceID:      sc.TraceID().String(),
 			ParentSpanID: parent,
 			Unsampled:    !sc.IsSampled(),
 		}
@@ -167,6 +179,25 @@ func sampledRoot(ctx context.Context, hex string) bool {
 // opened beneath it become children of the span that caused them rather than
 // new roots.
 //
+// # The span it restores is the one the event was published beneath
+//
+// An event published INSIDE a span names that span (tc.SpanID), and whatever
+// continues it is that span's child. An event published BENEATH a span by code
+// that opened none of its own — the notification service's wake, a sandbox
+// coordinator's announcement, everything [events.TraceContext.Beneath] shapes
+// — has no span id and names the span it was published beneath as its parent
+// (tc.ParentSpanID), and whatever continues it is THAT span's child just the
+// same. Restored as a trace with a zero span id, as it once was, the turn a
+// delivery woke had no parent at all: a second root of the webhook's trace at
+// every backend and in the dashboard's tree, under a diagram promising it was
+// the delivery's child.
+//
+// A trace with neither is a root nobody spanned — [TraceOf] minted it where no
+// span was open — and it is restored as a trace with no span, so what opens
+// beneath it roots that trace rather than starting another. The SDK does not
+// count such a context as a parent; [continued], the provider's root sampler,
+// keeps its decision anyway.
+//
 // # The decision it arrived with is the one it keeps
 //
 // The restored context is marked REMOTE and carries the trace's own sampling
@@ -174,37 +205,32 @@ func sampledRoot(ctx context.Context, hex string) bool {
 // parent-based, so a span opened beneath it is sampled exactly when the trace
 // it continues was: a node that re-decided a trace already in flight is how a
 // tree ends up with children under a parent nobody exported, or with half its
-// spans missing. A trace id with NO span id is a context the SDK does not treat
-// as a parent at all — see [continued], the root sampler that keeps its
-// decision anyway.
+// spans missing.
 //
 // It is also the decision a process this engine starts is handed: the
 // TRACEPARENT a coding box receives is this context rendered by the propagator
 // ([Traceparent]), so the box's flag follows the turn rather than claiming
 // sampled for every run.
 //
-// # Its parent is the trace's own
+// # It opens nothing, and claims nothing
 //
-// The context's parent id is set to tc.ParentSpanID, so [TraceOf] on the
-// restored context reports tc back unchanged. Left alone, it kept whatever the
-// caller's context held before — a stale parent from a span that has nothing
-// to do with this trace.
+// The restored span is somebody else's, so the context names it only as a
+// parent: [TraceOf] reports an event published here as beneath it, and the
+// log binding carries the trace id and no span id, for the same reason — a
+// line logged before a span opens here was not logged in a span on another
+// node. Both replace whatever the caller's context held, so nothing beneath a
+// restore keeps a stale span of the caller's.
 //
-// An unusable id returns ctx unchanged rather than erroring. This is fed by the
-// wire: every event this build publishes carries a trace — [TraceOf] mints one
-// where there is no span — so one with none is foreign or hand-built, and the
-// honest answer for it is a new root, not a refusal to run the turn.
+// An unusable trace id returns ctx unchanged rather than erroring. This is fed
+// by the wire: every event this build publishes carries a trace — [TraceOf]
+// mints one where there is no span — so one with none is foreign or
+// hand-built, and the honest answer for it is a new root, not a refusal to run
+// the turn. An unusable span id is the same answer one level down: the trace
+// is joined, with no parent.
 func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 	traceID, err := trace.TraceIDFromHex(tc.TraceID)
 	if err != nil {
 		return ctx
-	}
-	spanID, err := trace.SpanIDFromHex(tc.SpanID)
-	if err != nil {
-		// A trace id with no span id still names the trace, and joining it
-		// with no parent beats starting an unrelated one. The dashboard's
-		// tree already tolerates a root with no parent span.
-		spanID = trace.SpanID{}
 	}
 	flags := trace.FlagsSampled
 	if tc.Unsampled {
@@ -212,17 +238,28 @@ func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 	}
 	sc := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    traceID,
-		SpanID:     spanID,
+		SpanID:     publishedBeneath(tc),
 		TraceFlags: flags,
 		Remote:     true,
 	})
-	parent := ""
-	if id, err := trace.SpanIDFromHex(tc.ParentSpanID); err == nil {
-		parent = id.String()
-	}
 	ctx = trace.ContextWithSpanContext(ctx, sc)
-	ctx = context.WithValue(ctx, parentKey{}, parent)
-	return logging.WithTrace(ctx, sc.TraceID().String(), sc.SpanID().String())
+	return logging.WithTrace(ctx, sc.TraceID().String(), "")
+}
+
+// publishedBeneath is the span an event of trace tc was published in or
+// beneath: its own span where it names one, else the parent it names — zero
+// for a root nobody spanned, and for an id that does not parse.
+//
+// Its own span wins where it names one, because that span published it: the
+// parent beside it is the span ABOVE that one, which nothing continuing the
+// event hangs under directly.
+func publishedBeneath(tc events.TraceContext) trace.SpanID {
+	if tc.SpanID != "" {
+		id, _ := trace.SpanIDFromHex(tc.SpanID)
+		return id
+	}
+	id, _ := trace.SpanIDFromHex(tc.ParentSpanID)
+	return id
 }
 
 // WithRemoteFrom is [WithRemote] for a caller that hands back trace context of
@@ -254,7 +291,8 @@ func WithRemoteFrom(ctx context.Context, tc events.TraceContext, carrier propaga
 }
 
 // Traceparent renders tc as the W3C `traceparent` value a process this engine
-// starts reads its parent from — "" when tc names no span a child could hang
+// starts reads its parent from: the span tc was published in or beneath, as
+// [WithRemote] restores it — "" when tc names no span a child could hang
 // under. Only tc decides what is rendered: whatever span ctx holds is replaced
 // by tc's before the propagator reads it.
 //
@@ -385,7 +423,9 @@ func errorType(err error) string {
 	return fmt.Sprintf("%s.%s", t.PkgPath(), t.Name())
 }
 
-// Active reports whether ctx carries a usable span context.
+// Active reports whether ctx carries a usable span context — a span opened
+// here, or one restored from elsewhere, beneath which [TraceOf] reports an
+// event as published.
 //
 // It exists for one shape: a caller that wants the ACTIVE span's ids when
 // there is one, and a known fallback rather than a fresh root when there is

@@ -256,18 +256,23 @@ func providerSampler(rule sdktrace.Sampler) sdktrace.Sampler {
 // context holds no valid parent span — and it keeps one decision ParentBased
 // cannot see.
 //
-// [WithRemote] given a trace id and no span id restores the trace with a ZERO
-// span id, because the event it came from was published beneath a span by
-// code that opened none of its own: a chat wake, a sandbox run's
-// announcements. The SDK keeps the trace id for the span opened beneath it,
+// [WithRemote] given a trace id and NO SPAN AT ALL — neither one the event was
+// published in nor one it was published beneath — restores the trace with a
+// ZERO span id, because no span was ever opened for it: [TraceOf] minted the
+// root where none was open, as for the wake a committed record causes through
+// the change feed. The SDK keeps the trace id for the span opened beneath it,
 // but a span context with no span id is not VALID, so ParentBased treats the
 // span as a root and asks the root rule — which would RE-DECIDE a trace that
 // is already in flight, the one thing every sampler here exists to refuse.
 // Under a ratio that is only usually harmless (the rule is a function of the
-// same trace id), and under anything else it is a split tree: an unsampled
-// webhook trace whose turn exports, or the reverse. So a context that is
-// remote and names a trace keeps the decision it was restored with, and only a
-// genuinely new trace reaches the rule.
+// same trace id), and under anything else it is a split tree: a trace decided
+// unsampled whose turn exports, or the reverse. So a context that is remote and
+// names a trace keeps the decision it was restored with, and only a genuinely
+// new trace reaches the rule.
+//
+// Every trace that names a span — the one its event was published in, or the
+// one it was published beneath — is restored to that span, which ParentBased
+// counts as a parent and follows on its own.
 type continued struct{ rule sdktrace.Sampler }
 
 func (c continued) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {

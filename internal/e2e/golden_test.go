@@ -1495,49 +1495,71 @@ func TestAnOnboardingRefusalEndsTheTurnBeforeTheExecutor(t *testing.T) {
 // internal/tracing for one reason: every component's own tests stop
 // at a seam and substitute the thing on the other side, so "does anything
 // actually connect these" is the one question none of them asks.
+//
+// BOTH SHAPES OF WAKE, each in a trace of its own: one published inside the
+// span that caused it, and one the notification service RELAYED — published
+// beneath the delivery's `webhook.receive` with no span of its own, which is
+// the commonest wake there is. The turn hangs under that span either way. The
+// relayed one used to start a second root of the delivery's trace: nothing the
+// turn published named the span the delivery arrived in.
 func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 	t.Parallel()
-	n := start(t)
-
-	waitFor(t, "the seat to be claimed", func() bool {
-		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
-	})
-
-	// A trace this test can recognise, in the shape a real tracer emits —
-	// WATCHED before the wake, because the recorder keeps only the lines of a
-	// trace somebody asked for, and a line logged before the ask is gone.
-	const (
-		traceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
-		triggerSpan = "00f067aa0ba902b7"
-	)
-	logs.watch(t, traceID)
-	n.wakeInTrace(t, "ceo", "How did the week go?",
-		events.TraceContext{TraceID: traceID, SpanID: triggerSpan})
-
-	waitFor(t, "the turn to complete", func() bool {
-		rows, err := n.engine.Backends().Store.Events().List(t.Context(),
-			store.ListQuery{Limit: 200})
-		if err != nil {
-			return false
-		}
-		for _, r := range rows {
-			if r.Type == "agent_turn_completed" {
-				return true
-			}
-		}
-		return false
-	})
-
-	rows, err := n.engine.Backends().Store.Events().List(t.Context(),
-		store.ListQuery{Limit: 200})
-	if err != nil {
-		t.Fatalf("list events: %v", err)
+	// The span that caused each wake, in the shape a real tracer emits. A
+	// node each, so each turn is its seat's first, exactly as one wake on a
+	// fresh company is: the lines this company's turn logs in its trace are
+	// its onboarding pass and the provider's one-time notice, so a seat's
+	// SECOND turn can log none at all, and the log half below would assert
+	// which turn of the seat it read rather than the engine.
+	const triggerSpan = "00f067aa0ba902b7"
+	for _, shape := range []struct {
+		name    string
+		traceID string
+		wake    events.TraceContext
+	}{
+		{"published in the span", "4bf92f3577b34da6a3ce929d0e0e4736",
+			events.TraceContext{TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", SpanID: triggerSpan}},
+		{"relayed beneath the span", "5ce03a4688c45eb7b4df03ae1f1f5847",
+			events.TraceContext{TraceID: "5ce03a4688c45eb7b4df03ae1f1f5847", ParentSpanID: triggerSpan}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			n := start(t)
+			waitFor(t, "the seat to be claimed", func() bool {
+				return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+			})
+			// WATCHED before the wake, because the recorder keeps only the
+			// lines of a trace somebody asked for, and a line logged before
+			// the ask is gone.
+			logs.watch(t, shape.traceID)
+			n.wakeInTrace(t, "ceo", "How did the week go?", shape.wake)
+			checkTurnJoinsTrace(t, n, shape.traceID, triggerSpan)
+		})
 	}
+}
+
+// checkTurnJoinsTrace holds the turn a wake in traceID woke to that trace,
+// beneath triggerSpan — the span the wake was published in or beneath — in its
+// events and in the lines it logged.
+func checkTurnJoinsTrace(t *testing.T, n *node, traceID, triggerSpan string) {
+	t.Helper()
+	inTrace := func() []store.EventRecord {
+		rows, err := n.engine.Backends().Store.Events().List(t.Context(),
+			store.ListQuery{TraceID: traceID, Limit: 200})
+		if err != nil {
+			return nil
+		}
+		return rows
+	}
+	waitFor(t, "the turn to complete", func() bool {
+		return slices.ContainsFunc(inTrace(), func(r store.EventRecord) bool {
+			return r.Type == "agent_turn_completed"
+		})
+	})
 
 	var checked int
 	spans := map[string]bool{}
 	var sawTurnParent bool
-	for _, r := range rows {
+	for _, r := range inTrace() {
 		switch r.Type {
 		case "agent_phase_completed", "agent_turn_completed":
 		default:
@@ -1595,6 +1617,12 @@ func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 	for _, line := range lines {
 		if strings.Contains(line, `"span_id":"`) {
 			withSpan++
+		}
+		// No line is logged in the trigger's span, which ended elsewhere:
+		// the restore binds its trace and no span of it.
+		if strings.Contains(line, `"span_id":"`+triggerSpan+`"`) {
+			t.Errorf("a line claims the trigger's span %s as the one it was "+
+				"logged in: %s", triggerSpan, line)
 		}
 	}
 	if withSpan == 0 {

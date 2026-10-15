@@ -16,7 +16,7 @@ import (
 // drop the trace check's write in Watch (the watched half).
 func TestOnlyAWatchedTraceIsKept(t *testing.T) {
 	t.Parallel()
-	watched, ignored := events.NewTrace(), events.NewTrace()
+	watched, ignored := tracingtest.Remote(), tracingtest.Remote()
 	tracingtest.Watch(t, watched.TraceID)
 	for _, tc := range []events.TraceContext{watched, ignored} {
 		_, span := tracing.Start(tracing.WithRemote(context.Background(), tc), "test", "tracingtest.probe")

@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -205,16 +204,22 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 // run — the parent the box's own TRACEPARENT names — rather than as the root
 // of a trace of its own. Driven through the real launcher and the real bridge,
 // because the trace reaches the session through one field of LaunchExecutor
-// and nothing else can show it was set.
+// and nothing else can show it was set. Launched, as every run is, from inside
+// a span of this node's — the executor's phase — beneath a turn restored from
+// elsewhere.
 //
 // Mutation, red here: open the session without the run's trace.
 func TestABridgedCallIsFiledInItsRunsTrace(t *testing.T) {
 	t.Parallel()
-	launch := events.NewTrace()
-	tracingtest.Watch(t, launch.TraceID)
+	turn := tracingtest.Remote()
+	tracingtest.Watch(t, turn.TraceID)
 	read := newHeldTool("read_page")
 	close(read.release)
-	run := launchBridgedIn(tracing.WithRemote(t.Context(), launch), t, "t-traced", read)
+	ctx, phase := tracing.Start(tracing.WithRemote(t.Context(), turn), "engine", "agent.turn.execute")
+	defer phase.End()
+	launch := tracing.TraceOf(ctx)
+	launch.ParentSpanID = ""
+	run := launchBridgedIn(ctx, t, "t-traced", read)
 	if got := run.row(t, "t-traced").Trace(); got != launch {
 		t.Fatalf("the run's row names trace %+v, want the launching span's %+v", got, launch)
 	}

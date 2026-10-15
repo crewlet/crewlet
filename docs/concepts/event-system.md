@@ -469,11 +469,11 @@ type Event struct {
     Source    string
     Payload   map[string]any   // free-form extras; typed fields live in Data
 
-    // OpenTelemetry trace context — captured at construction from the
-    // active span.
+    // OpenTelemetry trace context — passed at construction, from the
+    // span the publisher is in (tracing.TraceOf).
     TraceID        string // W3C 32-char hex, groups causally related events
-    SpanID         string // W3C 16-char hex, identifies this event in the trace
-    ParentSpanID   string // links to the event/span that caused this one
+    SpanID         string // W3C 16-char hex, the span that published this event; empty when no span did
+    ParentSpanID   string // the span above it: the publisher's parent, or the span a span-less publisher was beneath
     TraceUnsampled bool   // the trace's sampling decision; omitted when sampled
 
     // Turn-engine bookkeeping, so an agent woken by a colleague handoff
@@ -707,9 +707,11 @@ event that read an *ambient* span at construction would be one whose trace
 depends on which frame happened to build it.
 
 `TraceOf` never returns empty. Inside a span it reports that span's ids and
-decision; with no span open it mints a fresh root — decided by the node's
-sampler, as a root that opens a span is — which is what every publisher in the
-engine used to do by hand. So there is no "events published outside a span lose their
+decision; on a trace restored from elsewhere, before any span opens on it, it
+reports the event as published *beneath* the restored span; and with no span
+open at all it mints a fresh root — a trace id and nothing else, decided by the
+node's sampler as a root that opens a span is — which is what every publisher
+in the engine used to do by hand. So there is no "events published outside a span lose their
 trace" case any more — the older behaviour, where such an event got an empty
 `trace_id` and became unreachable from the work it belonged to, is gone.
 
@@ -717,6 +719,17 @@ trace" case any more — the older behaviour, where such an event got an empty
 the span above. A turn does not republish its trigger's span id as its own;
 that made every event in a turn look like the same span and collapsed the
 dashboard's tree onto the wake that started it.
+
+**An event no span emitted has no `span_id`.** Code that publishes without
+opening a span of its own — the notification service relaying a delivery into
+a wake, the sandbox coordinator announcing a run, the dispatcher before the
+turn's span opens — files its event *beneath* the span it acts for: no
+`span_id`, and that span as `parent_span_id`. A root minted where no span was
+open has neither, because no span ever had an id for it; an id invented for it
+would be a parent no collector ever receives. Whatever continues such an event
+hangs under the span it names — the turn a relayed wake starts is the child of
+the delivery's `webhook.receive` — or, for a root nobody spanned, roots the
+same trace with the decision it was minted with.
 
 **When a delivery addressed to somebody is dropped** — its payload cannot be read, its source was disconnected, nothing parses its source, its parser refuses the payload, no seat matches its recipient, the routing gate refuses it, or the rate valve is shut — a `NotificationSkipped` event is emitted with the reason, visible in the trace so you can see why a webhook didn't reach an agent. Its `reason` is always one of a fixed set of phrases, so a reader can match it exactly; what the gate said about this particular delivery — the parser's error, for a payload its parser refused — is in `detail`, beside it. A chat parser's own filtering is **not** a skip: an agent's own post, a thread reply the seat does not follow, a system post or a deleted one concerns nobody, so it is logged at debug (`slack_event_skipped`, `mattermost_post_skipped`) rather than recorded — recording each would bury the drops that matter under the ordinary traffic of a busy channel.
 

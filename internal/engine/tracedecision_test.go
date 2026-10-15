@@ -28,11 +28,14 @@ import (
 //
 // BOTH SHAPES OF WAKE: one published from inside a span, and the notification
 // service's, published BENEATH the webhook's span with no span id of its own —
-// the commonest trigger there is, and a context the SDK does not count as a
-// parent at all.
+// the commonest trigger there is. AND IN BOTH THE TURN IS THAT SPAN'S CHILD:
+// the span-less wake was restored with no span at all, so the turn it woke
+// was a second root of the webhook's trace, naming no parent in any event it
+// published.
 //
-// Mutation: have triggerTrace copy the three ids by hand, as it did, and the
-// unsampled cases go red.
+// Mutations: have triggerTrace copy the three ids by hand, as it did, and the
+// unsampled cases go red; have WithRemote ignore a span-less wake's parent and
+// the span-less cases do.
 func TestATurnContinuesItsTriggersSamplingDecision(t *testing.T) {
 	t.Parallel()
 	const traceID, spanID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
@@ -80,6 +83,10 @@ func TestATurnContinuesItsTriggersSamplingDecision(t *testing.T) {
 				}
 				if trace.TraceID != traceID {
 					t.Errorf("the turn is in trace %s, want its trigger's %s", trace.TraceID, traceID)
+				}
+				if trace.ParentSpanID != spanID {
+					t.Errorf("the turn's parent is %q, want the span its trigger was "+
+						"published from %s", trace.ParentSpanID, spanID)
 				}
 				if recorded == unsampled {
 					t.Errorf("a trigger decided unsampled=%v ran a turn recording=%v",

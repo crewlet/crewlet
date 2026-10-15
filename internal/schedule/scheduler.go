@@ -706,9 +706,9 @@ func runID(e Entry, label, runner string) string {
 //
 // A REAL SPAN, not a bare minted id. A scheduled fire is a genuine root —
 // nothing caused it but the clock — so it is the one place in the engine that
-// legitimately starts a trace of its own. Minting only ids would leave the
-// turn this fire wakes hanging under a parent span that was never exported,
-// which every collector renders as a tree with its root missing.
+// legitimately starts a trace of its own. A minted trace names no span, so the
+// turn this fire wakes would be its trace's root, and nothing at the collector
+// would say a schedule fired it, which one, or when.
 //
 // The span is INSTANTANEOUS on purpose: it represents the fire, not the work.
 // The turn runs asynchronously, off the event this trace is stamped onto, and

@@ -1897,12 +1897,15 @@ func delegationOf(evs []*events.Event) (int, []string) {
 // # A span of its own
 //
 // The record is published after the dispatcher restored the trigger's trace
-// and before the turn opens its span, so the context holds the TRIGGER'S span
-// — and read through TraceOf there, the record claimed the trigger's span id
-// as its own, the very fault every event a turn publishes is held against. So
-// the merge is a span: `notifications.coalesce`, a child of the trigger's span
-// and a sibling of the turn it feeds, as instantaneous as `schedule.fire`
-// because it stands for the merge rather than for any work.
+// and before the turn opens its span, so the context holds the trigger's
+// restored span and no span of this node's. Read through TraceOf there, the
+// record once claimed the trigger's span id as its own, the very fault every
+// event a turn publishes is held against; it would now be filed beneath the
+// trigger with no span — honest, and invisible at a collector, which receives
+// spans rather than events. So the merge is a span: `notifications.coalesce`,
+// a child of the span the trigger was published in or beneath and a sibling of
+// the turn it feeds, as instantaneous as `schedule.fire` because it stands for
+// the merge rather than for any work.
 func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string,
 	routing inbox.Routing,
 ) {
@@ -2017,7 +2020,9 @@ func notificationSourceOf(evs []*events.Event) string {
 //
 // The whole of the event's trace, its SAMPLING DECISION included, so the turn
 // continues the trigger's trace as its root decided it — see
-// [events.TraceContext.Unsampled].
+// [events.TraceContext.Unsampled] — and its PARENT, because a wake the
+// notification service relayed names no span of its own, only the delivery's
+// span it was published beneath, and that is the span the turn hangs under.
 //
 // An empty result is a fresh root, through WithRemote. No wake this build
 // publishes carries none — an A2A ask carries the asker's trace and its answer
