@@ -787,8 +787,8 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 	if ChangeKind(meta[MetaChangeKind]) == ChangePurged {
 		// A DIFFERENT INSTRUCTION FROM A REMOVAL, because the remedies
 		// differ: a removed task is in the trash and `restore_task`
-		// brings it back, and a purged one is gone from every node with
-		// no gesture that returns it. Telling a lead to "record any
+		// brings it back, and a purged one is gone from every data node
+		// with no gesture that returns it. Telling a lead to "record any
 		// progress worth keeping" is right in both; telling them the
 		// task can come back is right in only one.
 		b.WriteString("\n## How to handle this" +
