@@ -25,11 +25,13 @@ type unanswering struct {
 	url  string
 	mu   sync.Mutex
 	held []time.Duration
+	// recorded is signalled once per request whose hold has been recorded.
+	recorded chan struct{}
 }
 
 func newUnanswering(t *testing.T) *unanswering {
 	t.Helper()
-	c := &unanswering{}
+	c := &unanswering{recorded: make(chan struct{}, 64)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -37,10 +39,29 @@ func newUnanswering(t *testing.T) *unanswering {
 		c.mu.Lock()
 		c.held = append(c.held, time.Since(start))
 		c.mu.Unlock()
+		select {
+		case c.recorded <- struct{}{}:
+		default:
+		}
 	}))
 	t.Cleanup(server.Close)
 	c.url = server.URL
 	return c
+}
+
+// heldLongest is the longest any request was held open, once at least one
+// hold has been recorded or within has passed.
+//
+// WAITED FOR, because the exporter giving up and the server noticing are two
+// events: the server learns the client hung up from its own read of the
+// connection, after the exporter's shutdown has already returned, so reading
+// straight away sometimes found no hold recorded at all.
+func (c *unanswering) heldLongest(within time.Duration) time.Duration {
+	select {
+	case <-c.recorded:
+	case <-time.After(within):
+	}
+	return c.longest()
 }
 
 // longest is the longest any request was held open.
@@ -145,7 +166,7 @@ func TestOneTimeoutBoundsEveryLayerOfAnExport(t *testing.T) {
 					"answers, want %v to %v — the timeout the environment set",
 					took.Round(time.Millisecond), tc.within[0], tc.within[1])
 			}
-			if held := collector.longest(); held < tc.attempt {
+			if held := collector.heldLongest(2 * time.Second); held < tc.attempt {
 				t.Errorf("the collector held an attempt open for %v at most, want at least "+
 					"%v — an attempt was bounded by something other than the resolution",
 					held.Round(time.Millisecond), tc.attempt)
