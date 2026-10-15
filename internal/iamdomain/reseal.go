@@ -24,9 +24,9 @@ import (
 // a person's values move the only way anything here changes: a RECORD, one
 // per person holding a value under a key other than the active one, which is
 // an ordinary content update ([Writer.UpdatePerson]) whose document carries the
-// same name, address and seeds sealed afresh. Every node applies it and holds
-// the new ciphertext; the old key can then be dropped without a single value
-// in any row becoming unreadable.
+// same name, address and seeds sealed afresh. Every data node applies it and
+// holds the new ciphertext; the old key can then be dropped without a single
+// value in any row becoming unreadable.
 //
 // # What is not moved, and why that is enough
 //

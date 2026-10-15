@@ -37,8 +37,9 @@ import (
 // DerivationVersion is the rule set this build derives its columns at.
 //
 // Bumped by ANY change to what a derived column holds, the first one a column
-// adds included: the bump is what re-derives every node's rows in this Go, so
-// a node holding rows derived under another rule set converges on this one.
+// adds included: the bump is what re-derives every data node's rows in this
+// Go, so a node holding rows derived under another rule set converges on this
+// one.
 const DerivationVersion = 1
 
 var _ statelog.Deriver = (*Applier)(nil)
@@ -55,7 +56,7 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // the group: a company that adds `shipped` or renames `done` must not change
 // what a reopen is. An unknown slug is in no group and so is never finished,
 // which reads a status this build does not know as unfinished on BOTH sides —
-// the same answer the history row's delta gives it on every node.
+// the same answer the history row's delta gives it on every data node.
 func reopened(from, to Status) bool {
 	return from.Group().Finished() && !to.Group().Finished()
 }

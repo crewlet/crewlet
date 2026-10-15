@@ -412,8 +412,8 @@ func (q ListQuery) at() time.Time { return askedAt(q.At) }
 // that are one: an answer assembled from several reads — a turn's rows, its
 // count, its ending and its traces — floored each read at its own reading of
 // the clock, so a row crossing the floor between them made the count come
-// back short of the rows beside it; and a fleet asks every node one
-// question, so every node must floor it at the ASKER'S instant or the merged
+// back short of the rows beside it; and a fleet asks every data node one
+// question, so every one must floor it at the ASKER'S instant or the merged
 // answer is a union of different windows, each node's as of its own clock.
 //
 // A READ GROUPING ITS ROWS BY A COLUMN SELECTS THEM IN A DERIVED TABLE —
@@ -811,12 +811,12 @@ func qualifiedListColumns(joined bool) string {
 // `at` is the instant the question is asked at, and the HISTORY FLOOR sits
 // [EventHistory] before it. A PARAMETER rather than a clock this function
 // reads, because one answer compiles it more than once — the axis's bars and
-// its facet counts — and a fleet asks every node one question: read here,
+// its facet counts — and a fleet asks every data node one question: read here,
 // each compilation floored its rows at its own instant, so the counts beside
 // one axis described different sets, and a node answering a scatter a second
 // after the asker pinned its window dropped that second's rows from a bar the
-// answer said it covered. The caller reads the clock once (or takes the
-// instant its query pinned) and hands the same one to every half.
+// answer said it covered. The caller reads the clock once (or takes the instant
+// its query pinned) and hands the same one to every half.
 func (q ListQuery) predicate(at time.Time) (from string, where []string, args []any, col func(string) string) {
 	// The RelatedAgent filter is a JOIN rather than another WHERE clause,
 	// because "involves this agent" is one fact spread over five places on

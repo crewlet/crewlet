@@ -66,7 +66,7 @@ type BackupsAnswer struct {
 	Points []BackupPointRow `json:"points"`
 
 	// History is every backup a person asked a node for, newest first,
-	// from the runtime audit every node keeps for the event-retention
+	// from the runtime audit every data node keeps for the event-retention
 	// window — failures included, which the register cannot hold.
 	History []BackupRunRow `json:"history"`
 

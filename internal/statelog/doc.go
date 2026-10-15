@@ -13,7 +13,7 @@
 // journal_mode=WAL is the database engine's own local transaction journal:
 // per file, invisible to any peer, and a thing the store manages without
 // anybody here knowing. This is an APPLICATION log — a fleet-wide, ordered
-// record of committed mutations from which every node derives its own SQL
+// record of committed mutations from which every data node derives its own SQL
 // state. The two are different layers and the only thing they share is a
 // word.
 //
@@ -208,13 +208,13 @@
 // A build retains what it can file: the envelope must decode. A kind whose
 // envelope an older build REFUSES — one that validated a field a newer build
 // widened — is a stop on that build, not a deferral, and no version number on
-// the record changes that. So every node's position heartbeat names, per log,
-// the highest record version its build reads ([NodePosition].RecordVersion),
-// and [Readers] reads it across the trim's own counted set: a writer about to
-// publish such a kind waits until every node that applies the log reads it —
-// a node that has not reported yet reading as one that reads nothing newer.
-// No record this build writes is such a kind: the advertisement is what a
-// successor's writer of one reads.
+// the record changes that. So every data node's position heartbeat names, per
+// log, the highest record version its build reads
+// ([NodePosition].RecordVersion), and [Readers] reads it across the trim's own
+// counted set: a writer about to publish such a kind waits until every node
+// that applies the log reads it — a node that has not reported yet reading as
+// one that reads nothing newer. No record this build writes is such a kind: the
+// advertisement is what a successor's writer of one reads.
 //
 // # A record is stamped with the lowest version that reads it
 //

@@ -16,13 +16,13 @@ import (
 //
 // # Every data node runs one, and no node runs anybody else's
 //
-// Unlike the embedding duty beside it this is not a fleet singleton: a node's
-// event log holds only what ITS seats did, so the node is the only thing that
-// can derive its own day, and the node in every subject it writes is what
-// keeps N writers from ever meeting on one. A node without `data` keeps no
-// event log of its own — its events are written by a data node that keeps
-// them in custody (internal/observe) — so its seats' day is derived, and
-// published, inside that keeper's, and it runs no publisher at all. Without it the domain is
+// Unlike the embedding duty beside it this is not a fleet singleton: a data
+// node's event log holds only what ITS seats did and the events it keeps in
+// custody for a node without `data` (internal/observe), so the node is the only
+// thing that can derive its own day, and the node in every subject it writes
+// is what keeps N writers from ever meeting on one. A node without `data` keeps
+// no event log of its own, so its seats' day is derived, and published, inside
+// its keeper's, and it runs no publisher at all. Without it the domain is
 // registered, applied and replicated over an empty stream — and every spend
 // answer is exactly as partial as it was before the domain existed, while
 // every surface reports a healthy log.

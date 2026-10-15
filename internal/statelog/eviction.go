@@ -59,8 +59,8 @@ type Tombstone struct {
 // # Why every domain answers for its own log
 //
 // An eviction is a record on a log like any other, keyed on a position in that
-// log's own sequence space, so every node applies it into that domain's table
-// and every node's copy is identical — which is what makes the applier's
+// log's own sequence space, so every data node applies it into that domain's
+// table and every node's copy is identical — which is what makes the applier's
 // eviction gate hold when coordination cannot be reached at all. The trim reads
 // the same rows for a different question: a node stops being counted on a log
 // once its tombstone THERE is older than the fence window. Asked of another

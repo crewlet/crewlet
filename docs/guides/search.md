@@ -3,10 +3,12 @@
 How the knowledge search is answered, what it costs, and what a fleet can do
 about it when the corpus outgrows one node's CPU.
 
-Search is answered from **this node's own tables**. Every node holds the whole
-corpus — see [Scaling](../concepts/scaling.md) — so there is no lookup that has
-to leave the machine and no answer that depends on a peer being up. What a
-fleet can divide is the **work**, not the data.
+Search is answered from **a data node's own tables**. Every data node holds the
+whole corpus — see [Scaling](../concepts/scaling.md) — so a data node answers
+with no lookup that has to leave the machine and no answer that depends on a
+peer being up; a node without the `data` role holds none of it and asks a data
+node instead ([When the estate does not answer](#when-the-estate-does-not-answer)).
+What a fleet can divide is the **work**, not the data.
 
 ---
 
@@ -157,15 +159,15 @@ and `search_slow` fires. A fleet divides the scan, below.
 
 ## When a fleet divides the scan
 
-Above **10 000 documents**, a company running more than one node divides the
-buckets between them. Each node scans its own contiguous range, returns its
-best candidates *with their scores*, and the node that asked merges them.
+Above **10 000 documents**, a company running more than one data node divides
+the buckets between them. Each scans its own contiguous range, returns its best
+candidates *with their scores*, and the asking data node merges them.
 
 The division is computed, not configured, and every node computes the same one:
-sort the live node ids, give each a contiguous range, hand the remainder to the
-first few. 64 buckets over three nodes is 22, 21, 21.
+sort the live data nodes' ids, give each a contiguous range, hand the remainder
+to the first few. 64 buckets over three data nodes is 22, 21, 21.
 
-Below that floor a search is answered by the asking node alone. The floor is
+Below that floor a search is answered by the asking data node alone. The floor is
 not a preference — a broker round trip is about a millisecond, and a semantic
 scan of 10 000 documents measures 49 ms at p95 on an idle node and 125 ms with
 eight searches in flight. Under it the scan's fixed cost dominates (its
@@ -183,7 +185,7 @@ exactly 1.000 at every width.
 
 ```mermaid
 sequenceDiagram
-    participant S as Seat (asking node)
+    participant S as Seat's data node (asking)
     participant A as node-a
     participant B as node-b
     S->>S: scan buckets 0-21
@@ -225,21 +227,21 @@ identical order a search fanned out no ways does.
 **The scores are comparable, for a different reason per method.** Semantic
 similarity is comparable by construction — one model, one metric, one vector
 space. BM25 would not be comparable if each node computed its statistics from
-its own slice, and it does not: every node holds the whole corpus, so document
-frequency and the document count come from that node's complete tables whatever
-buckets it scanned. **The scan is bucket-limited; the statistics are global.**
+its own slice, and it does not: every data node holds the whole corpus, so
+document frequency and the document count come from that node's complete tables
+whatever buckets it scanned. **The scan is bucket-limited; the statistics are global.**
 
 ---
 
 ## When part of the corpus is not scanned
 
 A node that is restarting, overloaded or gone does not answer its assignment.
-The asking node holds the whole corpus and could have answered alone — which is
+The asking data node holds the whole corpus and could have answered alone — which is
 exactly why a short answer must say so, because a search that returns one fewer
 result looks identical to a corpus with one fewer document.
 
 There is a second way not to cover an assignment, and it is the quieter one.
-Every node holds the whole corpus, but the **lexical index over it is each
+Every data node holds the whole corpus, but the **lexical index over it is each
 node's own** — built by that node's own walk, in its own database, on its own
 schedule. A node that joined a few minutes ago therefore holds every document
 and can find none of them. Such a node answers its range and says so, and the
@@ -273,10 +275,10 @@ meaning with — an alarm red for the life of a deployment is one nobody reads.
 The answer itself still says `no_embeddings`, because the person reading it is
 the one who can configure a provider.
 
-**The asking node always scans its own range itself**, never through the
+**The asking data node always scans its own range itself**, never through the
 broker. A search that returned nothing because the broker hiccupped would be a
-fleet-wide outage of a read every node can serve alone, so only the *peers'*
-ranges can go missing.
+fleet-wide outage of a read every data node can serve alone, so only the
+*peers'* ranges can go missing.
 
 ### When the estate does not answer
 
@@ -321,8 +323,8 @@ until that lap finishes the node reports `building`.
    search worse and cheaper at the same time, which does not look like a
    slowdown.
 2. **Check the corpus against the fleet.** `search_slow` fires against the
-   interactive p95 target. Adding a node divides the buckets again with no
-   configuration and no rebuild.
+   interactive p95 target. Adding a data node divides the buckets again with
+   no configuration and no rebuild; a node without `data` takes no range.
 3. **Check `recall_below_floor`.** A corpus whose vectors are behind is
    answering semantically from a fraction of itself.
 4. **Check the first stage.** `crewlet search eval` says whether searches are

@@ -1,6 +1,6 @@
 # Read Consistency
 
-Every node of a Crewlet fleet holds its own copy of the company's work. The
+Every data node of a Crewlet fleet holds its own copy of the company's work. The
 copies are built by applying one ordered log, so they converge — but at any
 instant they are at different points along it. This page is about the one
 question that follows: **how fresh does this particular answer have to be?**

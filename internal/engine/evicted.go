@@ -81,14 +81,14 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 // node whose own rows cannot say, and for one whose rows the fleet may have
 // left behind.
 //
-// TWO SOURCES BECAUSE EITHER MAY BE THE ONLY ONE. Every live node publishes
-// its own generation per domain in the position register, and the trim
-// publishes the one it concluded at; a fleet whose peers are all restarting
-// has the floor and no positions, and one that has never trimmed has positions
-// and no floor. The MAXIMUM is taken because a re-anchor moves the fleet one
-// node at a time: the highest anybody reports is the space the company is
-// moving into, and an artefact from below it is one this node would have to
-// adopt again.
+// TWO SOURCES BECAUSE EITHER MAY BE THE ONLY ONE. Every live data node
+// publishes its own generation per domain in the position register, and the
+// trim publishes the one it concluded at; a fleet whose peers are all
+// restarting has the floor and no positions, and one that has never trimmed has
+// positions and no floor. The MAXIMUM is taken because a re-anchor moves the
+// fleet one node at a time: the highest anybody reports is the space the
+// company is moving into, and an artefact from below it is one this node would
+// have to adopt again.
 //
 // MINUS EVERY EVICTED NODE — its row and any floor it published — for the
 // reason this file gives. Only a node ABOVE the caller's own generation for

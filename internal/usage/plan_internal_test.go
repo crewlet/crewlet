@@ -17,9 +17,9 @@ import (
 // record, so each runs once per changed object per tick on every data node.
 // With no statistics the planner prefers the one-column day index over a
 // primary key that does not cover what a statement reads, and a statement that
-// takes it walks every node's day — every seat's spend cells, every person's —
-// to read one object. Each statement here is the package's own text, so the
-// plan read is the plan run.
+// takes it walks every data node's day — every seat's spend cells, every
+// person's — to read one object. Each statement here is the package's own text,
+// so the plan read is the plan run.
 //
 // Mutation: drop either `INDEXED BY` from the spend reads, or from the person
 // guard, and its plan names `_day_idx (day=?)`.

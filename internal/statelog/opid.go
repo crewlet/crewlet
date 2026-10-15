@@ -79,8 +79,8 @@ import (
 //
 // # A domain with no ledger mints outside the grammar
 //
-// The two compacted domains — the vectors (`vec-<hex>`) and each node's usage
-// days (`usage-<hex>`) — publish under ids that are a digest of the object and
+// The two compacted domains — the vectors (`vec-<hex>`) and each data node's
+// usage days (`usage-<hex>`) — publish under ids that are a digest of the object and
 // the value written, and carry no instant. That is not the caller's own
 // string the paragraph above prices: neither domain keeps an operation ledger
 // ([Domain.OpsTable] is empty), so there is no watermark for an instant to be

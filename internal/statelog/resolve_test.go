@@ -403,10 +403,10 @@ func land(t *testing.T, h *harness, opID string) {
 //
 // A node whose rows were a restored copy's age goes on writing in the old
 // generation until it learns of the move; its record lands after the
-// reanchor's own and is overtaken on every node, and writes no ledger row. The
-// domain's gates know nothing of that rule — it is the framework's, on the
-// checkpoint — so a resolution that asked only them found no gate and a ledger
-// that vouched, and called the write a record applied without its row.
+// reanchor's own and is overtaken on every data node, and writes no ledger
+// row. The domain's gates know nothing of that rule — it is the framework's,
+// on the checkpoint — so a resolution that asked only them found no gate and a
+// ledger that vouched, and called the write a record applied without its row.
 //
 // WHICH generation and sequence it asks is the whole of the rule, and each is
 // the record's: the generation this call stamped its own append with, and the

@@ -91,7 +91,7 @@ func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext
 
 	// THE VERSION GUARD IS A SKIP, not an error: a redelivered record is
 	// ordinary traffic, and a constraint violation inside this transaction
-	// would abort it identically on every node and stall the fleet's log.
+	// would abort it identically on every data node and stall the fleet's log.
 	//
 	// THE UNIQUE COLUMNS ARE THE DIRECTORY'S, and this statement leaves
 	// them out: a content record that wrote one would be a record
@@ -247,8 +247,8 @@ func credentialsCreated(ctx context.Context, tx *sql.Tx, id string) (
 // One fact in two places is only safe while every writer moves both.
 //
 // The document is re-derived from the row this transaction reads and the stage
-// the record states, which is still a pure function of the log: every node
-// holds the same row at this position and writes the same bytes.
+// the record states, which is still a pure function of the log: every data
+// node holds the same row at this position and writes the same bytes.
 func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 

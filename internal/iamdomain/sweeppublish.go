@@ -15,13 +15,13 @@ import (
 // THE PUBLISHER HALF OF THE SWEEP: what a sweep record says, and when one is
 // published at all.
 //
-// sweep.go is the half every node runs. This is the half ONE node runs, under
-// the fleet-singleton duty the engine arms, and it is the only place in the
-// whole retention path that reads a clock — once per tick, here, and never at
-// apply. What it reads the clock FOR is to turn "ninety days" into a POSITION:
-// the newest trail row of a class whose broker instant is older than the
-// horizon, read off this node's own rows through the index the migration ships
-// for exactly that (`iam_history_class_idx`). From then on only positions
+// sweep.go is the half every data node runs. This is the half ONE node runs,
+// under the fleet-singleton duty the engine arms, and it is the only place in
+// the whole retention path that reads a clock — once per tick, here, and never
+// at apply. What it reads the clock FOR is to turn "ninety days" into a
+// POSITION: the newest trail row of a class whose broker instant is older than
+// the horizon, read off this node's own rows through the index the migration
+// ships for exactly that (`iam_history_class_idx`). From then on only positions
 // travel, so two nodes whose clocks disagree by a year delete the same rows.
 //
 // # Resolved once, published per bucket
@@ -33,7 +33,7 @@ import (
 //
 // # A bucket with nothing due publishes nothing, and "due" has SLACK
 //
-// A sweep record is a record on the log every node applies, the snapshot
+// A sweep record is a record on the log every data node applies, the snapshot
 // carries and the trim has to wait for. Published unconditionally it is
 // sixty-four records a tick — six thousand a day at an hourly tick, which is
 // more than the rest of this domain writes at the reference company and would
@@ -145,7 +145,7 @@ type SweepReport struct {
 	Plan SweepPlan
 
 	// Published are the buckets whose record is DURABLE — applied here or
-	// pending here, which every node will apply either way.
+	// pending here, which every data node will apply either way.
 	Published []Bucket
 
 	// Unknown are the buckets whose publish established nothing. They are
