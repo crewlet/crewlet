@@ -5,12 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -69,8 +70,7 @@ func (t *OtelTokens) Validate(token string) string { return t.signer.Validate(to
 type OtelReceiver struct {
 	base     string
 	tokens   *OtelTokens
-	upstream string
-	headers  map[string]string
+	upstream map[otlpenv.Signal]otlpenv.Destination
 	http     *http.Client
 }
 
@@ -84,15 +84,17 @@ type OtelReceiverOptions struct {
 	// Tokens mints and verifies. Required.
 	Tokens *OtelTokens
 
-	// UpstreamEndpoint is the real OTLP backend. Empty accepts and drops,
-	// which is a working configuration rather than a broken one: the
-	// engine's own per-turn span still carries the trace, and a deployment
-	// with no backend should not have every export fail.
-	UpstreamEndpoint string
-
-	// UpstreamHeaders is the backend's ingest credential, applied HERE and
-	// never handed to the sandbox. That is the whole point of the hop.
-	UpstreamHeaders map[string]string
+	// Upstream is the real OTLP backend, PER SIGNAL, as [otlpenv] resolved
+	// it — the same destinations the engine's own exporters resolve, which
+	// is what makes a box's spans land beside the turn that started them.
+	// Its headers are the backend's ingest credential, applied HERE and
+	// never handed to the sandbox; that is the whole point of the hop.
+	//
+	// A signal with no destination, or one that does not export, ACCEPTS
+	// AND DROPS, which is a working configuration rather than a broken one:
+	// the engine's own per-turn span still carries the trace, and a
+	// deployment with no backend should not have every export fail.
+	Upstream map[otlpenv.Signal]otlpenv.Destination
 
 	HTTP *http.Client
 }
@@ -120,15 +122,17 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	if client == nil {
 		client = httpx.Client(OtelForwardTimeout)
 	}
-	headers := make(map[string]string, len(opts.UpstreamHeaders))
-	for k, v := range opts.UpstreamHeaders {
-		headers[k] = v
+	// COPIED, headers included, so a caller that goes on to change its
+	// map cannot change where — or with what credential — this forwards.
+	upstream := make(map[otlpenv.Signal]otlpenv.Destination, len(opts.Upstream))
+	for s, d := range opts.Upstream {
+		d.Headers = maps.Clone(d.Headers)
+		upstream[s] = d
 	}
 	return &OtelReceiver{
 		base:     strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		tokens:   opts.Tokens,
-		upstream: strings.TrimRight(strings.TrimSpace(opts.UpstreamEndpoint), "/"),
-		headers:  headers,
+		upstream: upstream,
 		http:     client,
 	}, nil
 }
@@ -144,30 +148,60 @@ func (r *OtelReceiver) EndpointFor(traceID string, ttl time.Duration) string {
 // Validate reports the trace a token is scoped to, or empty.
 func (r *OtelReceiver) Validate(token string) string { return r.tokens.Validate(token) }
 
-// Forwards reports whether an accepted payload goes anywhere.
+// Upstream is where this receiver forwards one signal: the destination it was
+// built with, or the zero one — which exports nothing — for a signal it was
+// not. A copy, so a caller cannot change what the receiver sends.
+func (r *OtelReceiver) Upstream(signal otlpenv.Signal) otlpenv.Destination {
+	d := r.upstream[signal]
+	d.Headers = maps.Clone(d.Headers)
+	return d
+}
+
+// Forwards reports whether an accepted payload of this signal goes anywhere.
 //
 // The receiver with no upstream is a real configuration — accept and drop —
 // so this is what an operator surface asks rather than inferring it from a
 // nil.
-func (r *OtelReceiver) Forwards() bool { return r.upstream != "" }
+func (r *OtelReceiver) Forwards(signal otlpenv.Signal) bool {
+	return r.upstream[signal].Exports()
+}
+
+// Forwarding is every signal an accepted payload goes somewhere for, in
+// [otlpenv.Signals] order.
+func (r *OtelReceiver) Forwarding() []otlpenv.Signal {
+	var out []otlpenv.Signal
+	for _, s := range otlpenv.Signals {
+		if r.Forwards(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // Forward sends a validated payload to the real backend.
+//
+// TO THE SIGNAL'S OWN DESTINATION, which is the endpoint the engine's exporter
+// would send that signal to — its OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT when
+// one is set, the base with the signal path otherwise. Forwarding everything
+// to the base with the path appended is what dropped every box's spans on a
+// deployment that set only the traces endpoint.
 //
 // FAILURES ARE LOGGED, NEVER RETURNED as something the caller reports to the
 // box. An exporter that gets a 5xx retries, and retries against a backend
 // that is down turn one outage into two: the coding run's own traffic
 // multiplies while nothing it carries is recoverable anyway.
-func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, contentType string) {
-	if r.upstream == "" {
+func (r *OtelReceiver) Forward(ctx context.Context, signal otlpenv.Signal, body []byte, contentType string) {
+	upstream := r.upstream[signal]
+	if !upstream.Exports() {
 		return
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		r.upstream+"/v1/"+signal, bytes.NewReader(body))
+		upstream.Endpoint, bytes.NewReader(body))
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
 		return
 	}
-	for k, v := range r.headers {
+	for k, v := range upstream.Headers {
 		req.Header.Set(k, v)
 	}
 	if contentType != "" {
@@ -185,33 +219,6 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 		log.WarnContext(ctx, "sandbox_otel_forward_refused",
 			"signal", signal, "status", resp.StatusCode)
 	}
-}
-
-// OtelSignals are the OTLP paths this receiver accepts.
-//
-// NAMED rather than taking whatever the last path segment says: the segment
-// is forwarded into an upstream URL, so an unchecked one is a caller choosing
-// part of the address the engine's own credential is sent to.
-var OtelSignals = []string{"traces", "metrics", "logs"}
-
-// ValidSignal reports a signal this receiver forwards.
-func ValidSignal(signal string) bool { return slices.Contains(OtelSignals, signal) }
-
-// ParseOtelHeaders reads the OTEL_EXPORTER_OTLP_HEADERS `k=v,k2=v2` form.
-//
-// It is the UPSTREAM backend's auth, added on the trusted side. Parsed here
-// rather than passed through as a string so the one place it is read is the
-// one place it is understood.
-func ParseOtelHeaders(raw string) map[string]string {
-	out := map[string]string{}
-	for pair := range strings.SplitSeq(raw, ",") {
-		key, value, ok := strings.Cut(pair, "=")
-		if key = strings.TrimSpace(key); !ok || key == "" {
-			continue
-		}
-		out[key] = strings.TrimSpace(value)
-	}
-	return out
 }
 
 // OtelSigningKey derives the token key every process must share.
@@ -268,9 +275,9 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, ttl time.D
 		return nil
 	}
 	env := map[string]string{
-		"OTEL_EXPORTER_OTLP_ENDPOINT": r.EndpointFor(traceID, ttl),
-		"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-		"OTEL_EXPORTER_OTLP_HEADERS":  "",
+		otlpenv.EndpointVar: r.EndpointFor(traceID, ttl),
+		otlpenv.ProtocolVar: string(otlpenv.HTTPProtobuf),
+		otlpenv.HeadersVar:  "",
 		"OTEL_RESOURCE_ATTRIBUTES": strings.Join([]string{
 			"crewlet.turn_id=" + turnID,
 			"crewlet.agent_handle=" + handle,
@@ -288,18 +295,14 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, ttl time.D
 // ENV RATHER THAN TIER A, and deliberately: the receiver's address is a
 // property of the DEPLOYMENT's network — which host a sandbox can reach the
 // engine on — rather than of the company or of this node's identity, and the
-// upstream pair is the standard OTel spelling every collector's own
-// documentation uses. An operator wiring a collector should not have to
-// translate it into a Crewlet-shaped block.
+// upstream is the standard OTel spelling every collector's own documentation
+// uses, resolved by [otlpenv] exactly as the engine's own exporters resolve
+// it. An operator wiring a collector should not have to translate it into a
+// Crewlet-shaped block.
 const (
 	// OtelReceiverURLVar is the engine API base a SANDBOX can reach. Unset
 	// means no in-box telemetry, which is the ordinary configuration.
 	OtelReceiverURLVar = "CREWLET_SANDBOX_OTEL_RECEIVER_URL"
-
-	// OtelUpstreamEndpointVar and OtelUpstreamHeadersVar are the real
-	// backend, applied on the trusted side only.
-	OtelUpstreamEndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
-	OtelUpstreamHeadersVar  = "OTEL_EXPORTER_OTLP_HEADERS"
 )
 
 // BuildOtelReceiver is THE construction path, called by every engine.
@@ -312,6 +315,12 @@ const (
 // the failure the signed, stateless token exists to prevent. A node with the
 // variable unset builds none, and its route is absent rather than refusing.
 //
+// THE UPSTREAM IS RESOLVED BY [otlpenv.ResolveAll], the resolver the engine's
+// exporters use, for every signal — so a value that can never work (an
+// endpoint that is not an http(s) URL, a protocol or an exporter this build
+// does not have) is refused here by name, as the engine's own exporter refuses
+// it, rather than accepted and forwarded nowhere.
+//
 // keyMaterial is the Tier A keyring, which every process already loads. Nil
 // or empty takes a per-process key: correct for a single process, and warned
 // about because it cannot work across two.
@@ -323,10 +332,21 @@ func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelRece
 	if base == "" {
 		return nil, nil
 	}
+	upstream, err := otlpenv.ResolveAll(env)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: the OTLP receiver's upstream: %w", err)
+	}
+	var resolved []otlpenv.Destination
+	for _, s := range otlpenv.Signals {
+		resolved = append(resolved, upstream[s])
+	}
+	for _, d := range otlpenv.DroppedOf(resolved...) {
+		log.Warn("sandbox_otel_header_dropped", "var", d.Var, "entry", d.Entry,
+			"header", d.Header, "reason", d.Reason)
+	}
 	return NewOtelReceiver(OtelReceiverOptions{
-		BaseURL:          base,
-		Tokens:           NewOtelTokens(OtelTokenOptions{Key: OtelSigningKey(keyMaterial)}),
-		UpstreamEndpoint: strings.TrimSpace(env(OtelUpstreamEndpointVar)),
-		UpstreamHeaders:  ParseOtelHeaders(env(OtelUpstreamHeadersVar)),
+		BaseURL:  base,
+		Tokens:   NewOtelTokens(OtelTokenOptions{Key: OtelSigningKey(keyMaterial)}),
+		Upstream: upstream,
 	})
 }

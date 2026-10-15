@@ -251,24 +251,37 @@ makes a running fleet re-read them.
 
 ## OpenTelemetry (Optional)
 
-All read directly by the engine.
+Read by `crewlet run` at startup, never by `crewlet validate`. The endpoint, header,
+protocol and exporter variables are resolved by **one resolver** for every reader in the
+engine, so its own exporters and the [sandbox OTLP forwarder](../concepts/code-sandbox.md)
+send each signal to the same place with the same credential. A value that can never work
+is refused at startup, naming the variable to change; a telemetry *typo* that has a safe
+reading (a sampler ratio, an export interval) warns and carries on.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's **base** URL. The engine appends the signal path, so do **not** include `/v1/traces` here. | `http://localhost:4318` |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The traces endpoint in full, used verbatim. Overrides the base above when you need a non-standard path. | `https://collector.example.com/otlp/v1/traces` |
-| `OTEL_EXPORTER_OTLP_HEADERS` | `k=v,k2=v2` headers for the OTLP backend (e.g. auth). Also used engine-side as the upstream auth for forwarded sandbox telemetry — never handed to the sandbox itself. | `authorization=Bearer%20...` |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | How the **engine** talks to the collector: `http/protobuf` (default) or `grpc`. Anything else is refused at startup, naming the two that work. | `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's **base** URL. Each signal's path — `/v1/traces`, `/v1/metrics`, `/v1/logs` — is appended to it, after a trailing slash is trimmed, so do **not** include `/v1/traces` here. It must be an `http://` or `https://` URL with a host and nothing but a path: the scheme decides TLS, and userinfo, a query or a fragment is refused at startup, because the OTLP exporter would drop them without a word — put a credential in `OTEL_EXPORTER_OTLP_HEADERS`. Unset, with no signal endpoint either, nothing is exported. | `http://localhost:4318` |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The traces endpoint in full, used verbatim (a URL with no path is sent to `/`). Overrides the base for traces alone. Same URL rules. | `https://collector.example.com/otlp/v1/traces` |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | The same, for metrics. | `https://collector.example.com/otlp/v1/metrics` |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | The same, for logs. The engine exports no logs of its own; this is where the sandbox forwarder sends a coding box's. | `https://collector.example.com/otlp/v1/logs` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `name=value` pairs, comma-separated, sent with every export — the backend's ingest credential. Each value is **percent-decoded** and then trimmed, so write a space as `%20`, a comma as `%2C` and a literal `%` as `%25`. An entry that cannot be used — no `=`, a name that is not a valid header name, broken percent-encoding — is dropped, as the OpenTelemetry SDK drops it, with an `otel_header_dropped` warning naming the variable and the entry's position, never its value. Applied engine-side to forwarded sandbox telemetry too, and never handed to the sandbox. | `authorization=Bearer%20sk-...` |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_METRICS_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS` | One signal's headers, in the same form. When set they **replace** the base set for that signal rather than adding to it — even when none of their entries is usable. | `authorization=Bearer%20sk-traces` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | How the **engine** talks to the collector: `http/protobuf` (default) or `grpc`, in any case. Anything else — `http/json` included — is refused at startup, naming the two that work. | `grpc` |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`, `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | One signal's protocol, overriding the base. Same values. | `http/protobuf` |
+| `OTEL_TRACES_EXPORTER` | `otlp` (default) or `none`. `none` switches trace export off whatever the endpoint says — the engine's own spans and the traces the sandbox forwarder would pass on alike. Span ids still flow into every event either way. Anything else, a list included, is refused at startup. | `none` |
+| `OTEL_METRICS_EXPORTER` | The same, for metrics: `none` with an endpoint set is "traces yes, metrics no". | `none` |
+| `OTEL_LOGS_EXPORTER` | The same, for the logs the sandbox forwarder passes on. | `none` |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Metric export period in milliseconds. Default `60000`. A value that is not a positive whole number warns and takes the default. | `15000` |
 | `OTEL_SERVICE_NAME` | The service everything is reported under. Defaults to `crewlet`; set it when two companies share one collector. Wins over a `service.name` in `OTEL_RESOURCE_ATTRIBUTES`. | `crewlet-acme` |
 | `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes, `key=value` pairs with percent-encoded values. They **win** over the engine's own `service.name` (`crewlet`), `service.version` (the build) and `service.instance.id` (the node id), so naming `service.instance.id` here replaces the node id a fleet's spans are told apart by. An entry with no `=` is skipped with an `otel_resource_attributes_partial` warning and the rest kept. | `deployment.environment.name=prod` |
 | `OTEL_TRACES_SAMPLER` | Which traces this node records, decided where a trace **starts**: `parentbased_always_on` (the default), `parentbased_always_off` or `parentbased_traceidratio`, in any case. Only parent-based samplers are accepted — `always_on`, `always_off` and `traceidratio` are refused at startup with the `parentbased_` spelling to use, and any other sampler (`jaeger_remote`, `xray`, …) is refused naming the three that work. | `parentbased_traceidratio` |
 | `OTEL_TRACES_SAMPLER_ARG` | The ratio, `0`–`1`, for `parentbased_traceidratio` (default `1`). Set **alone**, with no `OTEL_TRACES_SAMPLER`, it means `parentbased_traceidratio`. The other two samplers take no ratio and warn that it is ignored. An unparseable or out-of-range value (`NaN` included) warns and falls back to sampling everything rather than refusing to boot. | `0.1` |
 
 > **The base and the signal endpoint are different settings.** `OTEL_EXPORTER_OTLP_ENDPOINT`
-> is a base that the exporter appends `/v1/traces` to; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
-> is the complete URL. Putting `/v1/traces` on the base is the common mistake — it also
-> reaches the sandbox forwarder, which appends `/v1/{signal}` of its own, so the
-> collector sees `/v1/traces/v1/traces`.
+> is a base that `/v1/traces` is appended to; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+> is the complete URL. Putting `/v1/traces` on the base is the common mistake — the
+> collector then sees `/v1/traces/v1/traces`, from the engine and from the sandbox
+> forwarder alike.
 
 **Sampling is parent-based**, always. The sampler decides a trace where it starts; a
 trace that arrives already decided — an inbound W3C `traceparent` on a webhook — keeps
@@ -282,13 +295,20 @@ Only W3C **trace context** propagates — `traceparent` and `tracestate` — and
 sent on: this engine writes none, so the only baggage it could carry is what a third
 party put on a webhook.
 
-When `OTEL_EXPORTER_OTLP_ENDPOINT` (or the traces endpoint) is set, the engine
-exports spans to it — Jaeger, Grafana Tempo, or any OTLP backend. Without it,
-spans are still created and their ids still flow into every event, the event
-store and the dashboard's trace view; nothing is shipped anywhere. The engine's
-exporter and the [sandbox OTLP forwarder](../concepts/code-sandbox.md) read the
-**same** endpoint and headers on purpose, so a coding agent's spans land in the
-same backend as the turn that started it and nest underneath it.
+When an endpoint is set, the engine exports spans and metrics to it — Jaeger, Grafana
+Tempo, or any OTLP backend. Without one, spans are still created and their ids still flow
+into every event, the event store and the dashboard's trace view; nothing is shipped
+anywhere. The engine's exporters and the sandbox forwarder resolve the endpoints, headers
+and exporter switches **identically**, on purpose, so a coding agent's spans land in the
+same backend as the turn that started it and nest underneath it. The forwarder re-sends a
+box's export over OTLP/HTTP to that destination whatever the resolved protocol says.
+
+The OpenTelemetry SDK's exporters also read `OTEL_EXPORTER_OTLP_COMPRESSION`,
+`OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and their
+per-signal forms) themselves, for the engine's own exports; the sandbox forwarder applies
+none of them. `OTEL_EXPORTER_OTLP_INSECURE` has no effect, because the endpoint's scheme
+decides TLS.
 
 ---
 
@@ -300,7 +320,7 @@ Used only when `providers.sandbox` is configured so sandbox-enabled roles can au
 |----------|-------------|-----------------|
 | `E2B_API_KEY` | E2B API key, referenced by `providers.sandbox.api_key`. **Required for self-hosted clusters too** — every call authenticates with it, sent as `X-API-KEY`; the cluster domain only changes *which* API is talked to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted cluster's key management |
 | `E2B_DOMAIN` | Self-hosted / local cluster domain, referenced by `providers.sandbox.domain`. Omit for the vendor cloud. The engine reads it **through the config field**, never from the environment directly, so a stale export cannot silently reroute a box. | Your self-hosted E2B deployment |
-| `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read by every node: the externally-reachable base URL of whichever node serves your webhooks (an `ingress` one) (e.g. `http://host.docker.internal:80`). With Tier A `api.public.port` set, the receiver is served on that public listener only, so this names it. When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route and sandbox runs export telemetry through it (forwarded to `OTEL_EXPORTER_OTLP_*` when configured). Unset = no sandbox telemetry. | Your engine's public address |
+| `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read by every node: the externally-reachable base URL of whichever node serves your webhooks (an `ingress` one) (e.g. `http://host.docker.internal:80`). With Tier A `api.public.port` set, the receiver is served on that public listener only, so this names it. When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route, a sandbox run's OTLP exports go through it, and each signal is forwarded to the destination the [OpenTelemetry variables](#opentelemetry-optional) resolve for it — accepted and dropped for a signal with none. Unset = no sandbox telemetry. | Your engine's public address |
 | `CREWLET_MCP_BRIDGE_URL` | Read by every node that runs seats: the base URL of **this node's own** HTTP listener, as a sandbox can dial it. A session lives in the process that opened it, so on a fleet each node sets its own value; a load balancer in front of several nodes, or a peer that runs only `ingress`, answers `401` to every call. When set, the engine mounts its `/mcp/{token}` tool bridge, which is what lets a subscription CLI in **agent mode** call its seat's own tools from inside a box (see [Code sandbox § The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). Unset = no bridge, and agent mode is refused for the seat rather than started without tools; set on a node with no listener (`api.port: 0`), agent mode is refused naming `api.port`. With Tier A `api.public.port` set the bridge is served on that public listener only, on every node, so this names this node's public port; without it, a node without the `ingress` role serves the bridge beside its probes, on `api.port`, and nothing else. | This node's own address, as a sandbox reaches it |
 
 Inside each sandbox run the engine **injects** `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL` — the running agent's identity facts, readable by `role.sandbox.setup` recipes (e.g. to configure `git config user.name`/`user.email`). They are outputs of the engine, not inputs you set.

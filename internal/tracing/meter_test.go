@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -63,7 +64,7 @@ func TestEveryInstrumentRegistersAgainstTheProvider(t *testing.T) {
 	}
 	mp, err := configureMeter(t.Context(), Options{
 		Env: func(string) string { return "" },
-	}, resource.Empty(), rec)
+	}, resource.Empty(), otlpenv.Destination{Signal: otlpenv.Metrics}, rec)
 	if err != nil {
 		t.Fatalf("configureMeter: %v", err)
 	}
@@ -88,30 +89,6 @@ func TestEveryInstrumentRegistersAgainstTheProvider(t *testing.T) {
 	if got, want := len(rec.Read()), len(metrics.Catalogue()); got != want {
 		t.Errorf("%d series after recording into every instrument, want %d: an "+
 			"instrument that did not register drops silently", got, want)
-	}
-}
-
-// THE EXPORTER IS SWITCHED OFF BY THE SPEC'S OWN VARIABLE, so an operator who
-// wants traces and not metrics says so in the standard way rather than in one
-// this engine invented.
-func TestMetricsExporterCanBeDeclined(t *testing.T) {
-	t.Parallel()
-	env := map[string]string{
-		EndpointVar:        "http://collector.example.com:4318",
-		MetricsExporterVar: "none",
-	}
-	opts := Options{Env: func(k string) string { return env[k] }}
-	if metricsEnabled(opts) {
-		t.Error("OTEL_METRICS_EXPORTER=none did not switch the exporter off")
-	}
-	delete(env, MetricsExporterVar)
-	if !metricsEnabled(opts) {
-		t.Error("an endpoint alone did not switch the exporter on")
-	}
-	if got, want := metricsEndpoint(opts),
-		"http://collector.example.com:4318/v1/metrics"; got != want {
-		t.Errorf("endpoint = %q, want %q — the same base the traces half reads, "+
-			"because a company has one telemetry backend", got, want)
 	}
 }
 

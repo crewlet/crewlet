@@ -1266,19 +1266,27 @@ To export traces to Jaeger, Grafana Tempo, or any OTLP-compatible backend:
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# if the backend wants a credential — percent-encode the space:
+export OTEL_EXPORTER_OTLP_HEADERS='authorization=Bearer%20sk-...'
 ```
 
-That is the collector's **base** URL — the engine appends `/v1/traces` itself.
-Do not include the signal path here; use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
-when you need to give the full URL. Getting this wrong also reaches the sandbox
-forwarder, which appends a signal path of its own, and the collector sees
-`/v1/traces/v1/traces`.
+That is the collector's **base** URL — the engine appends `/v1/traces` (and
+`/v1/metrics`) itself. Do not include the signal path here; use
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` when you need to give the full URL. Getting
+this wrong also reaches the sandbox forwarder, which resolves the same way, and the
+collector sees `/v1/traces/v1/traces`. The endpoint must be an `http://` or
+`https://` URL — `localhost:4318` with no scheme, or one carrying a password or a
+query string, is refused at startup naming the variable, because the exporter
+would otherwise drop the part it cannot use and export nowhere. Header values are
+percent-decoded, so the space in `Bearer%20…` arrives as a space.
 
-When either is set the engine installs a batching exporter at startup and
+When an endpoint is set the engine installs a batching exporter at startup and
 flushes it during shutdown, after the drain, so the spans a shutdown itself
-produces are exported rather than dropped. Without it, spans are still created
+produces are exported rather than dropped. Without one, spans are still created
 and their ids still reach every event, the event store and the dashboard's
 trace view — there is simply nothing shipping them anywhere.
+`OTEL_TRACES_EXPORTER=none` and `OTEL_METRICS_EXPORTER=none` switch one signal
+off while the endpoint stays set.
 
 The sampler is the standard `OTEL_TRACES_SAMPLER`, and it is always parent-based:
 `parentbased_always_on` (the default), `parentbased_always_off`, or
@@ -1287,12 +1295,13 @@ that would re-decide a trace already in flight — `always_on`, `traceidratio` �
 refused at startup with the parent-based spelling to use. Only W3C trace context
 propagates; baggage is neither accepted nor sent.
 
-The full set of variables, including the protocol, the service name, the resource
-attributes and the sampler, is in
+The full set of variables, including per-signal endpoints, headers and protocols,
+the resource attributes and the service name, is in
 [Environment Variables](../reference/environment-variables.md#opentelemetry-optional).
-The engine's exporter and the sandbox OTLP forwarder read the **same** endpoint
-and headers on purpose: a coding agent's spans land in the same backend as the
-turn that started them, nested underneath it.
+The engine's exporters and the sandbox OTLP forwarder resolve the endpoints,
+headers and exporter switches through **one** resolver, on purpose: a coding
+agent's spans land in the same backend as the turn that started them, nested
+underneath it.
 
 #### Correlating logs with traces
 

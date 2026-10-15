@@ -18,16 +18,22 @@
 //
 // # Why the environment configures it and Tier A does not — ADR-0010
 //
-// The same call `internal/sandbox/otel.go` already made and wrote down: the
-// OTLP endpoint and headers are "the standard OTel spelling every collector's
-// own documentation uses. An operator wiring a collector should not have to
-// translate it into a Crewlet-shaped block." That receiver reads
-// OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS to find the real
-// backend, and this exporter reads THE SAME PAIR on purpose: a company has one
-// telemetry backend, and the whole point of the trace context the receiver
-// stamps into a sandbox is that the box's spans nest under the engine's. Two
-// settings would let an operator split them across two backends, where the
-// parent/child link resolves on neither.
+// The OTLP endpoint, headers, protocol and exporter switches are the standard
+// OTEL_* variables, "the standard OTel spelling every collector's own
+// documentation uses. An operator wiring a collector should not have to
+// translate it into a Crewlet-shaped block." The sandbox OTLP receiver reads
+// the same variables to find the backend it forwards a coding box's
+// telemetry to, and on purpose: a company has one telemetry backend, and the
+// whole point of the trace context the receiver stamps into a sandbox is that
+// the box's spans nest under the engine's. Two settings would let an operator
+// split them across two backends, where the parent/child link resolves on
+// neither.
+//
+// SHARING THE NAMES WAS NOT ENOUGH, and that is why both halves now resolve
+// through [github.com/crewlet/crewlet/internal/otlpenv] rather than reading
+// the environment themselves: with one set of names they still disagreed
+// about the signal endpoint, the protocol and how a header value is decoded.
+// TestTheExporterAndTheReceiverResolveOneDestination holds them together.
 //
 // A second reason, specific to this engine: Tier A is the root of trust and
 // resolves with EnvOnly, and it holds to the rule that two keys setting one
@@ -105,29 +111,16 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 var log = logging.Get("tracing")
 
-// Environment variables this package reads. The OTLP pair is shared with
-// [sandbox.OtelReceiver] by design — see the package doc — and is named there
-// so the two cannot drift apart.
+// Environment variables this package reads beyond the OTLP destinations, which
+// are [otlpenv]'s — endpoint, headers, protocol and the exporter switches,
+// resolved there for the reason the package doc gives.
 const (
-	// EndpointVar is the OTLP base endpoint. Unset means spans are created
-	// and not exported, which is the ordinary single-node configuration.
-	EndpointVar = sandbox.OtelUpstreamEndpointVar
-
-	// HeadersVar carries the backend's ingest credential, in the standard
-	// `k=v,k2=v2` form.
-	HeadersVar = sandbox.OtelUpstreamHeadersVar
-
-	// ProtocolVar selects the OTLP transport. The spec's default is
-	// http/protobuf. This was DOCUMENTED as read long before anything read
-	// it.
-	ProtocolVar = "OTEL_EXPORTER_OTLP_PROTOCOL"
-
 	// SamplerVar names the sampler. Only the parent-based ones are accepted
 	// — see [rootSamplerFor] for why the others are refused.
 	SamplerVar = "OTEL_TRACES_SAMPLER"
@@ -146,51 +139,7 @@ const (
 	// ResourceAttributesVar adds resource attributes, and wins over every
 	// value this package supplies — see [resourceFor].
 	ResourceAttributesVar = "OTEL_RESOURCE_ATTRIBUTES"
-
-	// TracesEndpointVar is the SIGNAL-SPECIFIC endpoint, used verbatim when
-	// set. The spec gives the two variables different meanings and this is
-	// the half that already names a path — see [tracesEndpoint].
-	TracesEndpointVar = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 )
-
-// tracesEndpoint resolves the URL spans are POSTed to.
-//
-// # The two variables mean different things, and conflating them doubles the path
-//
-// The OTLP spec is explicit: OTEL_EXPORTER_OTLP_ENDPOINT is a BASE and the
-// exporter appends the signal path to it, while
-// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is the full URL and is used as given.
-// The SDK's WithEndpointURL implements the second meaning only — handed a
-// path-less base it targets "/" rather than "/v1/traces" — so the base has to
-// be completed here.
-//
-// This is the same rule [sandbox.OtelReceiver] already follows when it
-// forwards (it appends "/v1/"+signal to the trimmed upstream), which is what
-// keeps one setting correct for both halves. It is also why the deployment
-// guide's example had to change: it told operators to set the BASE variable
-// to a URL ending in /v1/traces, which the receiver turned into
-// /v1/traces/v1/traces at the collector.
-func tracesEndpoint(opts Options) string {
-	if signal := opts.env(TracesEndpointVar); signal != "" {
-		return signal
-	}
-	base := strings.TrimRight(opts.env(EndpointVar), "/")
-	if base == "" {
-		return ""
-	}
-	return base + "/v1/traces"
-}
-
-// The protocols this build can speak, and the closed set a typo is checked
-// against so an unknown value names the two that work.
-const (
-	ProtocolHTTP = "http/protobuf"
-	ProtocolGRPC = "grpc"
-)
-
-// Protocols is the closed set, shared with the validator so an operator's
-// typo is told what it could have been.
-var Protocols = []string{ProtocolHTTP, ProtocolGRPC}
 
 // The samplers [SamplerVar] may name. All three are parent-based, which is the
 // point: see the package doc.
@@ -283,8 +232,8 @@ type Options struct {
 	// Env reads an environment variable. Nil means os.Getenv; a test passes
 	// its own so it never has to mutate the process.
 	//
-	// It reads every variable this package resolves itself: the OTLP
-	// destination and the sampler. The two RESOURCE variables are the
+	// It reads every variable this package or [otlpenv] resolves: the OTLP
+	// destinations and the sampler. The two RESOURCE variables are the
 	// exception — the SDK's own detector reads them, from the process
 	// environment, because their parse is the SDK's and a copy of it here
 	// would be one more reading of one setting.
@@ -308,6 +257,15 @@ func (o Options) env(name string) string {
 	return strings.TrimSpace(o.Env(name))
 }
 
+// destination is where this node's exporter sends one signal: [otlpenv]'s
+// answer, and deliberately nothing of this package's own on top of it. The
+// sandbox receiver asks the same question for the same signals, and
+// TestTheExporterAndTheReceiverResolveOneDestination holds the two answers
+// equal.
+func (o Options) destination(s otlpenv.Signal) (otlpenv.Destination, error) {
+	return otlpenv.Resolve(o.env, s)
+}
+
 // Configure builds the TracerProvider, installs it and the W3C propagator
 // globally, and returns the flush the process must run before it exits.
 //
@@ -315,11 +273,11 @@ func (o Options) env(name string) string {
 // unreachable collector is not detected here (the exporter connects lazily and
 // retries), and an unparseable sampler ratio WARNS and falls back, on the same
 // never-fail-on-a-typo rule the log level follows. It DOES return an error for
-// a value the operator typed that can never work — a protocol this build does
-// not speak, a sampler that is not parent-based — because silently exporting
-// nowhere, or sampling by a rule nobody chose, is how a promise like this
-// stops being true without anyone noticing. Each error names the variable to
-// change.
+// a value the operator typed that can never work — an endpoint that is not an
+// http(s) URL, a protocol or an exporter this build does not have, a sampler
+// that is not parent-based — because silently exporting nowhere, or sampling
+// by a rule nobody chose, is how a promise like this stops being true without
+// anyone noticing. Each error names the variable to change.
 //
 // WHEN IT DOES RETURN AN ERROR IT CHANGES NOTHING. Both providers are built
 // before either is installed, so a failure leaves the process tracing through
@@ -353,6 +311,10 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	if err != nil {
 		return nil, err
 	}
+	traces, err := opts.destination(otlpenv.Traces)
+	if err != nil {
+		return nil, err
+	}
 	res, err := resourceFor(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -363,10 +325,9 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 		sdktrace.WithSampler(sdktrace.ParentBased(sampler)),
 	}
 
-	endpoint := tracesEndpoint(opts)
-	var exporter sdktrace.SpanExporter
-	if endpoint != "" {
-		if exporter, err = newExporter(ctx, opts, endpoint); err != nil {
+	if traces.Exports() {
+		var exporter sdktrace.SpanExporter
+		if exporter, err = newExporter(ctx, traces); err != nil {
 			return nil, err
 		}
 		// A BATCH processor, not a simple one: a simple processor exports
@@ -412,7 +373,11 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 			return nil, abandon(ctx, tp, err)
 		}
 	}
-	mp, err := configureMeter(ctx, opts, res, rec)
+	metricsAt, err := opts.destination(otlpenv.Metrics)
+	if err != nil {
+		return nil, abandon(ctx, tp, err)
+	}
+	mp, err := configureMeter(ctx, opts, res, metricsAt, rec)
 	if err != nil {
 		return nil, abandon(ctx, tp, err)
 	}
@@ -427,12 +392,18 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	otel.SetTracerProvider(tp)
 	root.Store(&rootRule{sampler: sampler})
 
-	// Logged AFTER the commit, so the line is a record of what is running
+	// Logged AFTER the commit, so the lines are a record of what is running
 	// rather than an announcement the next statement can still retract.
+	// The endpoint is printed as resolved: [otlpenv] refuses one carrying
+	// userinfo or a query, the two places a URL holds a credential.
+	for _, d := range otlpenv.DroppedOf(traces, metricsAt) {
+		log.WarnContext(ctx, "otel_header_dropped", "var", d.Var,
+			"entry", d.Entry, "header", d.Header, "reason", d.Reason)
+	}
 	log.InfoContext(ctx, "tracing_configured",
-		"exporting", endpoint != "", "endpoint", endpoint,
-		"protocol", protocol(opts), "service", serviceName(res),
-		"sampler", sampler.Description())
+		"exporting", traces.Exports(), "declined", traces.Declined,
+		"endpoint", traces.Endpoint, "protocol", traces.Protocol,
+		"service", serviceName(res), "sampler", sampler.Description())
 
 	return func(ctx context.Context) error {
 		// BOTH, and the traces error wins when both fail: it is the one
@@ -486,38 +457,35 @@ func shutdownTracer(ctx context.Context, tp *sdktrace.TracerProvider) error {
 	return nil
 }
 
-func newExporter(ctx context.Context, opts Options, endpoint string) (sdktrace.SpanExporter, error) {
-	headers := sandbox.ParseOtelHeaders(opts.env(HeadersVar))
-
-	switch p := protocol(opts); p {
-	case ProtocolGRPC:
+// newExporter builds the span exporter for a resolved destination.
+//
+// The endpoint and the headers are passed EXPLICITLY, although the SDK would
+// read the same variables itself: an explicit option replaces what the SDK
+// read, so the exporter sends exactly what [otlpenv] resolved — which is what
+// the sandbox receiver forwards with — rather than the SDK's own reading of
+// the environment, which is the second opinion the resolver exists to remove.
+func newExporter(ctx context.Context, d otlpenv.Destination) (sdktrace.SpanExporter, error) {
+	switch d.Protocol {
+	case otlpenv.GRPC:
 		exp, err := otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpointURL(endpoint),
-			otlptracegrpc.WithHeaders(headers))
+			otlptracegrpc.WithEndpointURL(d.Endpoint),
+			otlptracegrpc.WithHeaders(d.Headers))
 		if err != nil {
-			return nil, fmt.Errorf("otlp grpc exporter for %s=%q: %w", EndpointVar, endpoint, err)
+			return nil, fmt.Errorf("otlp grpc exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
 		return exp, nil
-	case ProtocolHTTP:
+	case otlpenv.HTTPProtobuf:
 		exp, err := otlptracehttp.New(ctx,
-			otlptracehttp.WithEndpointURL(endpoint),
-			otlptracehttp.WithHeaders(headers))
+			otlptracehttp.WithEndpointURL(d.Endpoint),
+			otlptracehttp.WithHeaders(d.Headers))
 		if err != nil {
-			return nil, fmt.Errorf("otlp http exporter for %s=%q: %w", EndpointVar, endpoint, err)
+			return nil, fmt.Errorf("otlp http exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
 		return exp, nil
-	default:
-		return nil, fmt.Errorf("%s=%q is not a protocol this build speaks; use one of %s",
-			ProtocolVar, p, strings.Join(Protocols, ", "))
 	}
-}
-
-// protocol resolves the transport, defaulting to the spec's own default.
-func protocol(opts Options) string {
-	if p := opts.env(ProtocolVar); p != "" {
-		return p
-	}
-	return ProtocolHTTP
+	// [otlpenv.Resolve] refuses any other protocol, so reaching here is a
+	// protocol added to the closed set with no exporter built for it.
+	return nil, fmt.Errorf("tracing: no span exporter is built for protocol %q", d.Protocol)
 }
 
 // serviceName is the service.name the resource settled on, for the log line —

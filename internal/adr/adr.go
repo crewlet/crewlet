@@ -102,16 +102,6 @@ var Unenforced = []Exemption{
 			"moves whenever a lease payload's fields change, asserts the " +
 			"opposite of the decision: a field is explicitly not a bump.",
 	},
-	{
-		ID: "ADR-0010",
-		Why: "The engine's exporter and the sandbox forwarder agree because " +
-			"they read the same standard environment variables directly, " +
-			"which is the point — so there is no shared helper for a walk to " +
-			"hold them against. A test that both resolve one endpoint from " +
-			"one environment is the right gate and is worth building the day " +
-			"a third reader appears; with two, it would assert what the " +
-			"variable names already do.",
-	},
 }
 
 // Exemption is one record that no gate holds, and the case for that.

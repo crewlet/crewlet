@@ -14,25 +14,19 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The metric half of the standard OTel environment.
-const (
-	// MetricsEndpointVar overrides the base for metrics alone, exactly as
-	// its traces sibling does.
-	MetricsEndpointVar = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
-
-	// MetricsExporterVar is the spec's own switch: `otlp` or `none`. It is
-	// honoured because an operator who wants traces and not metrics has a
-	// standard way to say so, and inventing a second one would be the
-	// two-keys-for-one-value state Tier A refuses everywhere else.
-	MetricsExporterVar = "OTEL_METRICS_EXPORTER"
-
-	// MetricsIntervalVar is the export period in milliseconds.
-	MetricsIntervalVar = "OTEL_METRIC_EXPORT_INTERVAL"
-)
+// MetricsIntervalVar is the export period in milliseconds — the one variable
+// of the metric half that is not a destination, which [otlpenv] resolves for
+// metrics exactly as it does for traces: the same base endpoint and headers,
+// OTEL_EXPORTER_OTLP_METRICS_* beside them, and OTEL_METRICS_EXPORTER=none as
+// the operator saying "traces yes, metrics no" in the specification's own
+// words. A company has one telemetry backend, and two settings would let an
+// operator split signals across two of them where a correlation resolves on
+// neither.
+const MetricsIntervalVar = "OTEL_METRIC_EXPORT_INTERVAL"
 
 // defaultMetricInterval is the spec's own default, kept.
 //
@@ -40,32 +34,6 @@ const (
 // export per node per minute at this catalogue's width is tens of kilobytes —
 // small enough that nothing here is worth tuning against.
 const defaultMetricInterval = 60 * time.Second
-
-// metricsEndpoint resolves the metrics endpoint from the same pair the traces
-// exporter reads, for the reason stated at the top of this package: a company
-// has one telemetry backend, and two settings would let an operator split
-// signals across two of them where a correlation resolves on neither.
-func metricsEndpoint(opts Options) string {
-	if signal := opts.env(MetricsEndpointVar); signal != "" {
-		return signal
-	}
-	base := strings.TrimRight(opts.env(EndpointVar), "/")
-	if base == "" {
-		return ""
-	}
-	return base + "/v1/metrics"
-}
-
-// metricsEnabled reports whether the exporter is switched on.
-//
-// The endpoint decides, and `OTEL_METRICS_EXPORTER=none` overrides it — which
-// is the operator saying "traces yes, metrics no" in the spec's own words.
-func metricsEnabled(opts Options) bool {
-	if strings.ToLower(strings.TrimSpace(opts.env(MetricsExporterVar))) == "none" {
-		return false
-	}
-	return metricsEndpoint(opts) != ""
-}
 
 // metricInterval is the export period, with a bad value WARNED and defaulted
 // on the same never-fail-on-a-typo rule the sampler ratio follows.
@@ -103,18 +71,19 @@ func metricInterval(opts Options) time.Duration {
 // there. A half that installed itself would be a global written by a call that
 // can still return an error to a caller with no handle to undo it.
 func configureMeter(
-	ctx context.Context, opts Options, res *resource.Resource, rec *metrics.Recorder,
+	ctx context.Context, opts Options, res *resource.Resource,
+	at otlpenv.Destination, rec *metrics.Recorder,
 ) (*sdkmetric.MeterProvider, error) {
+	// Read once: a bad value warns, and a second read would warn twice.
+	interval := metricInterval(opts)
 	providerOpts := []sdkmetric.Option{sdkmetric.WithResource(res)}
-	if metricsEnabled(opts) {
-		endpoint := metricsEndpoint(opts)
-		exp, err := newMetricExporter(ctx, opts, endpoint)
+	if at.Exports() {
+		exp, err := newMetricExporter(ctx, at)
 		if err != nil {
 			return nil, err
 		}
 		providerOpts = append(providerOpts, sdkmetric.WithReader(
-			sdkmetric.NewPeriodicReader(exp,
-				sdkmetric.WithInterval(metricInterval(opts)))))
+			sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(interval))))
 	}
 
 	// THE HISTOGRAM BOUNDARIES ARE THE RECORDER'S, so a bucket on a
@@ -149,9 +118,9 @@ func configureMeter(
 	}
 
 	log.InfoContext(ctx, "metrics_configured",
-		"exporting", metricsEnabled(opts),
-		"endpoint", metricsEndpoint(opts),
-		"interval", metricInterval(opts),
+		"exporting", at.Exports(), "declined", at.Declined,
+		"endpoint", at.Endpoint, "protocol", at.Protocol,
+		"interval", interval,
 		"instruments", len(metrics.Catalogue()))
 
 	return mp, nil
@@ -281,31 +250,29 @@ func attrSet(in map[string]string) []attribute.KeyValue {
 	return out
 }
 
-// newMetricExporter builds the OTLP metric exporter for the configured
-// protocol.
-func newMetricExporter(
-	ctx context.Context, opts Options, endpoint string,
-) (sdkmetric.Exporter, error) {
-	headers := sandbox.ParseOtelHeaders(opts.env(HeadersVar))
-	switch p := protocol(opts); p {
-	case ProtocolGRPC:
+// newMetricExporter builds the OTLP metric exporter for a resolved
+// destination, passing the endpoint and headers explicitly for the reason
+// [newExporter] gives.
+func newMetricExporter(ctx context.Context, d otlpenv.Destination) (sdkmetric.Exporter, error) {
+	switch d.Protocol {
+	case otlpenv.GRPC:
 		exp, err := otlpmetricgrpc.New(ctx,
-			otlpmetricgrpc.WithEndpointURL(endpoint),
-			otlpmetricgrpc.WithHeaders(headers))
+			otlpmetricgrpc.WithEndpointURL(d.Endpoint),
+			otlpmetricgrpc.WithHeaders(d.Headers))
 		if err != nil {
-			return nil, fmt.Errorf("otlp grpc metric exporter for %q: %w", endpoint, err)
+			return nil, fmt.Errorf("otlp grpc metric exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
 		return exp, nil
-	case ProtocolHTTP:
+	case otlpenv.HTTPProtobuf:
 		exp, err := otlpmetrichttp.New(ctx,
-			otlpmetrichttp.WithEndpointURL(endpoint),
-			otlpmetrichttp.WithHeaders(headers))
+			otlpmetrichttp.WithEndpointURL(d.Endpoint),
+			otlpmetrichttp.WithHeaders(d.Headers))
 		if err != nil {
-			return nil, fmt.Errorf("otlp http metric exporter for %q: %w", endpoint, err)
+			return nil, fmt.Errorf("otlp http metric exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
 		return exp, nil
-	default:
-		return nil, fmt.Errorf("%s=%q is not one of %s",
-			ProtocolVar, p, strings.Join(Protocols, ", "))
 	}
+	// [otlpenv.Resolve] refuses any other protocol, so reaching here is a
+	// protocol added to the closed set with no exporter built for it.
+	return nil, fmt.Errorf("tracing: no metric exporter is built for protocol %q", d.Protocol)
 }

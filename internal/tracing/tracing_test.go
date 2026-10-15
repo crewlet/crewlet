@@ -13,7 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/otlpenv"
 )
 
 // envOf builds an Options.Env over a literal map, so no test mutates the
@@ -195,14 +195,14 @@ func TestStartingASpanBindsItForLogging(t *testing.T) {
 // than exporting nowhere in silence.
 func TestAnUnknownProtocolIsRefusedByName(t *testing.T) {
 	_, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
-		EndpointVar: "http://localhost:4318",
-		ProtocolVar: "http",
+		otlpenv.EndpointVar: "http://localhost:4318",
+		otlpenv.ProtocolVar: "http",
 	})})
 	if err == nil {
 		t.Fatal("an unknown protocol was accepted")
 	}
-	for _, want := range Protocols {
-		if !strings.Contains(err.Error(), want) {
+	for _, want := range otlpenv.Protocols {
+		if !strings.Contains(err.Error(), string(want)) {
 			t.Errorf("the error does not name %q: %v", want, err)
 		}
 	}
@@ -258,21 +258,6 @@ func TestASamplerRatioOfZeroIsRespected(t *testing.T) {
 	}
 }
 
-// THE ENGINE AND THE SANDBOX RECEIVER MUST READ ONE SETTING. The receiver
-// stamps a TRACEPARENT into a box whose parent is the engine's own span; if
-// the two halves exported to different backends, that parent/child link would
-// resolve on neither.
-func TestTheExporterSharesTheReceiversEnvironment(t *testing.T) {
-	if EndpointVar != sandbox.OtelUpstreamEndpointVar {
-		t.Errorf("endpoint var %q has drifted from the receiver's %q",
-			EndpointVar, sandbox.OtelUpstreamEndpointVar)
-	}
-	if HeadersVar != sandbox.OtelUpstreamHeadersVar {
-		t.Errorf("headers var %q has drifted from the receiver's %q",
-			HeadersVar, sandbox.OtelUpstreamHeadersVar)
-	}
-}
-
 // Shutdown must tolerate an already-cancelled context: the cancellation is
 // what woke the drain, and a flush that inherited it would return instantly
 // having exported nothing.
@@ -290,39 +275,13 @@ func TestShutdownFlushesUnderACancelledContext(t *testing.T) {
 	}
 }
 
-// The two OTLP endpoint variables mean different things, and treating the base
-// as a full URL is what produced `/v1/traces/v1/traces` at a collector when an
-// operator followed the deployment guide.
-func TestTheEndpointVariablesKeepTheirSpecMeanings(t *testing.T) {
-	for _, tc := range []struct{ name, base, signal, want string }{
-		{"base gets the signal path", "http://localhost:4318", "",
-			"http://localhost:4318/v1/traces"},
-		{"a trailing slash does not double up", "http://localhost:4318/", "",
-			"http://localhost:4318/v1/traces"},
-		{"the signal variable is used verbatim", "http://localhost:4318",
-			"https://collector.example.com/otlp/v1/traces",
-			"https://collector.example.com/otlp/v1/traces"},
-		{"neither set exports nothing", "", "", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := tracesEndpoint(Options{Env: envOf(map[string]string{
-				EndpointVar:       tc.base,
-				TracesEndpointVar: tc.signal,
-			})})
-			if got != tc.want {
-				t.Errorf("tracesEndpoint = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 // A collector that is not reachable must not fail the boot: the exporter
 // connects lazily and retries, and refusing to start a company because a
 // telemetry backend is down would make tracing a liability.
 func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
 	shutdown, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
 		// Nothing listens here, and nothing should try until a span ends.
-		EndpointVar: "http://127.0.0.1:1",
+		otlpenv.EndpointVar: "http://127.0.0.1:1",
 	})})
 	if err != nil {
 		t.Fatalf("an unreachable collector failed the boot: %v", err)
@@ -338,14 +297,14 @@ func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
 
 // A CONFIGURE THAT FAILS MUST NOT HAVE INSTALLED ANYTHING.
 //
-// The failure below is the one an operator can actually reach: a metrics
-// endpoint with a protocol this build does not speak. The traces half never
-// looks at the protocol (it has no endpoint of its own here), so the refusal
-// comes from the metrics half — AFTER the TracerProvider has been built, and
-// after it was built with a sampler. Left installed, that provider is
-// published to every span site in the process while the caller holds no flush
-// for it; its batch processor and exporter run on for the life of a boot that
-// failed.
+// The failure below is the one an operator can actually reach: a protocol
+// this build does not speak, written in the METRICS half's own variable. The
+// traces half resolves its own destination and never reads that variable, so
+// the refusal comes from the metrics half — AFTER the TracerProvider has been
+// built, and after it was built with a sampler. Left installed, that provider
+// is published to every span site in the process while the caller holds no
+// flush for it; its batch processor and exporter run on for the life of a
+// boot that failed.
 //
 // Mutation: install the provider where it is built (`otel.SetTracerProvider(tp)`
 // immediately after `sdktrace.NewTracerProvider`) and this goes red on the
@@ -359,14 +318,14 @@ func TestAFailedConfigureLeavesTheInstalledProviderAlone(t *testing.T) {
 	before, beforeRoot := otel.GetTracerProvider(), rootSampler()
 
 	_, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
-		MetricsEndpointVar: "http://127.0.0.1:1/v1/metrics",
-		ProtocolVar:        "otlp",
-		SamplerVar:         samplerAlwaysOff,
+		otlpenv.EndpointVar:           "http://127.0.0.1:1",
+		otlpenv.Metrics.ProtocolVar(): "otlp",
+		SamplerVar:                    samplerAlwaysOff,
 	})})
 	if err == nil {
 		t.Fatal("a protocol this build cannot speak was accepted by the metrics half")
 	}
-	if !strings.Contains(err.Error(), ProtocolVar) {
+	if !strings.Contains(err.Error(), otlpenv.Metrics.ProtocolVar()) {
 		t.Errorf("the error does not name the variable to change: %v", err)
 	}
 	if got := otel.GetTracerProvider(); got != before {

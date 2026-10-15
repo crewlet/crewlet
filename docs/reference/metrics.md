@@ -9,12 +9,17 @@ neither:
 
 | Variable | What it does |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector. Metrics are posted to `<endpoint>/v1/metrics`. |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Overrides the base for metrics alone. |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default) or `grpc`. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Sent with every export — an API key, a tenant. |
-| `OTEL_METRICS_EXPORTER` | `none` switches the export off and leaves traces on. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's base. Metrics are posted to `<endpoint>/v1/metrics`. |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | The metrics URL in full, used verbatim — overrides the base for metrics alone. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | `http/protobuf` (default) or `grpc`; the metrics one wins. |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_METRICS_HEADERS` | Sent with every export — an API key, a tenant — with percent-encoded values. The metrics one replaces the base set rather than adding to it. |
+| `OTEL_METRICS_EXPORTER` | `none` switches the export off and leaves traces on. Anything but `otlp` or `none` is refused at startup. |
 | `OTEL_METRIC_EXPORT_INTERVAL` | Export period in milliseconds. Default 60000. |
+
+Every rule these are read by — the endpoint's form, header decoding, what is
+refused at startup — is in
+[Environment Variables](environment-variables.md#opentelemetry-optional), and the
+traces half reads them by the same rules.
 
 **The provider is installed whether or not you are collecting.** Every
 instrument exists either way, so no code path in the engine branches on

@@ -280,6 +280,9 @@ internal/
 ├── tracing/              # OpenTelemetry: one provider, W3C trace-context
 │                         #   propagation, a parent-based sampler, and the
 │                         #   bridge to the envelope's trace fields
+├── otlpenv/              # The standard OTLP environment, resolved once per
+│                         #   signal for the engine's exporters and the
+│                         #   sandbox forwarder alike
 ├── fleetsecrets/         # The company's credential store: this package owns
 │                         #   the key, coordination owns the bytes
 ├── runtoken/             # The signed, self-describing credential a per-run
