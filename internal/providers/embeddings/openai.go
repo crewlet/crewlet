@@ -104,7 +104,11 @@ type Config struct {
 	// embedder that names none runs on is a configuration rule
 	// (config.EmbeddingProvider.ResolvedKey), decided where the document
 	// and the secret store are both in reach.
-	APIKey  string
+	APIKey string
+
+	// BaseURL is the endpoint, trimmed. Empty takes DefaultBaseURL, and one
+	// that is not an http:// or https:// URL with a host is refused by New
+	// ([httpapi.BaseURL]).
 	BaseURL string
 
 	// Limits is what the model accepts, resolved from the configuration
@@ -156,9 +160,9 @@ func New(cfg Config) (*Provider, error) {
 	}
 	key := strings.TrimSpace(cfg.APIKey)
 
-	baseURL := strings.TrimSpace(cfg.BaseURL)
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
+	baseURL, err := httpapi.BaseURL(cfg.BaseURL, DefaultBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("embeddings: %w", err)
 	}
 
 	// NOTHING FROM THE PROCESS ENVIRONMENT — the chat backend's rule and its

@@ -1,8 +1,9 @@
 // Package httpapi is what the HTTP-speaking LLM backends share: how a status
 // and a set of response headers become the contract's classified error, how
 // what a provider said about refusing a request is shown on it ([Said]), how a
-// tool call's arguments survive the JSON round trip, and how a streamed
-// response is bounded by its silence rather than its length ([IdleWatchdog]).
+// tool call's arguments survive the JSON round trip, how a streamed response
+// is bounded by its silence rather than its length ([IdleWatchdog]), and which
+// endpoint a backend hands its SDK ([BaseURL]).
 //
 // It exists because the alternative is two copies. llm.go records what two
 // copies cost — three backends with three subtly different ideas of

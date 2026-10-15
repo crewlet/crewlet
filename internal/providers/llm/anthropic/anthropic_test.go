@@ -3011,3 +3011,16 @@ func TestABaseURLsQueryIsNeverSent(t *testing.T) {
 		}
 	}
 }
+
+// AN ENDPOINT NO CALL CAN BE SENT ON IS REFUSED AT NEW, without a word of it:
+// the SDK would defer its parse error to every call and print the whole URL,
+// a gateway password in its userinfo included ([httpapi.BaseURL]).
+//
+// Mutation: hand the SDK cfg.BaseURL directly, and New builds.
+func TestNewRefusesAnEndpointWithoutRepeatingIt(t *testing.T) {
+	t.Parallel()
+	_, err := New(Config{Model: "claude-opus-5-5", BaseURL: "https://u:gw-password@gw.example.com/v1\x7f"})
+	if err == nil || strings.Contains(err.Error(), "gw-password") {
+		t.Fatalf("New = %v, want a refusal that does not repeat the password", err)
+	}
+}
