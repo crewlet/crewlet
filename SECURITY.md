@@ -78,7 +78,12 @@ A few things worth knowing when deploying Crewlet:
   channel — are switched off, and so is every switch that would put a prompt,
   a tool's arguments or output, or an answer on a span. A box image can bake
   none of that back on, but `role.sandbox.env` can, deliberately: it wins over
-  every variable the engine sets in a box
+  every variable the engine sets in a box. The box holds a token in its
+  endpoint, readable by whatever runs there, valid for a day after the launch:
+  with it, code in the box can send its own run's spans and arbitrary metrics
+  into your telemetry backend through the receiver until it expires — never the
+  backend's credential, and never a span into another run's trace, which the
+  receiver refuses
   (`docs/concepts/code-sandbox.md#durability-completion-and-observability`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see

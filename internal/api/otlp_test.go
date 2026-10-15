@@ -58,7 +58,8 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 // which is the only way a caller ever gets one.
 func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) string {
 	t.Helper()
-	endpoint := receiver.RunEnv(t.Context(), events.TraceContext{TraceID: traceID},
+	endpoint := receiver.RunEnv(t.Context(),
+		events.TraceContext{TraceID: traceID, SpanID: "00f067aa0ba902b7"},
 		"turn-1", "engineer", time.Hour)
 	token := strings.TrimPrefix(
 		endpoint[otlpenv.EndpointVar], "https://engine.internal/otlp/")
@@ -83,7 +84,13 @@ func postOTLPAs(a *api.App, path, body, contentType, encoding string) *http.Resp
 	return rec.Result()
 }
 
-// spans is a traces export of one span, as a box's exporter sends it.
+// otlpTrace is the trace the tokens in these cases are minted for, and the
+// trace the export below is in: the receiver forwards only what is in its
+// token's trace.
+var otlpTrace = strings.Repeat("ab", 16)
+
+// spans is a traces export of one span in otlpTrace, as a box's exporter
+// sends it.
 func spans(t *testing.T) string {
 	t.Helper()
 	body, err := proto.Marshal(&coltracepb.ExportTraceServiceRequest{
@@ -119,7 +126,7 @@ func TestAnExportWithAValidTokenIsForwarded(t *testing.T) {
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 
 	body := spans(t)
-	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces", body)
+	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, otlpTrace)+"/v1/traces", body)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
@@ -141,7 +148,7 @@ func TestAnExportTheReceiverCannotReadIsRefused(t *testing.T) {
 	t.Parallel()
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
-	path := "/otlp/" + tokenFor(t, receiver, "trace-abc") + "/v1/traces"
+	path := "/otlp/" + tokenFor(t, receiver, otlpTrace) + "/v1/traces"
 
 	var bomb bytes.Buffer
 	zw := gzip.NewWriter(&bomb)
@@ -170,17 +177,17 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 	t.Parallel()
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
-	good := tokenFor(t, receiver, "trace-abc")
+	good := tokenFor(t, receiver, otlpTrace)
 
 	for _, tc := range []struct{ name, token string }{
 		{"no token at all", "not-a-token"},
-		{"a tampered trace", strings.Replace(good, "trace-abc", "trace-xyz", 1)},
+		{"a tampered trace", strings.Replace(good, otlpTrace, strings.Repeat("cd", 16), 1)},
 		{"a truncated signature", good[:len(good)-4]},
 		// A token minted with somebody else's key. This is the case that
 		// matters most: anyone who can reach the endpoint can mint one of
 		// their own, and only the signature stops it counting.
 		{"another key's token", sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
-			Key: []byte("attacker-key")}).Mint("trace-abc", time.Hour)},
+			Key: []byte("attacker-key")}).Mint(otlpTrace, time.Hour)},
 	} {
 		res := postOTLP(a, "/otlp/"+tc.token+"/v1/traces", "spans")
 		if res.StatusCode != http.StatusUnauthorized {
@@ -196,7 +203,7 @@ func TestAnUnknownSignalIsRefused(t *testing.T) {
 	t.Parallel()
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
-	token := tokenFor(t, receiver, "trace-abc")
+	token := tokenFor(t, receiver, otlpTrace)
 
 	for _, signal := range []string{"profiles", "admin", "TRACES"} {
 		res := postOTLP(a, "/otlp/"+token+"/v1/"+signal, "x")
@@ -219,7 +226,7 @@ func TestTheExportRouteNeedsNoAPIToken(t *testing.T) {
 		Bootstrap: closedToReads(),
 	})
 
-	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces", spans(t))
+	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, otlpTrace)+"/v1/traces", spans(t))
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d — a sandbox cannot carry an API token, so this "+
 			"route has to authenticate by its own path", res.StatusCode)
@@ -240,7 +247,7 @@ func TestAnOversizedExportIsRefused(t *testing.T) {
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 
-	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces",
+	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, otlpTrace)+"/v1/traces",
 		strings.Repeat("x", (4<<20)+1))
 	if res.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", res.StatusCode)

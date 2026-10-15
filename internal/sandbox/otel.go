@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -34,9 +35,20 @@ import (
 // # Why the token is in the PATH and signed rather than stored
 //
 // The box needs to authenticate itself, and every header it could carry is a
-// header a leaked box carries too. So the credential is a per-run,
-// trace-scoped, short-lived token in the URL — which means the exporter needs
-// no header configuration at all.
+// header a leaked box carries too. So the credential is a per-run token in
+// the URL — which means the exporter needs no header configuration at all —
+// scoped to the run's trace and expiring a day after it was minted
+// ([OtelTokenLifetime]).
+//
+// # What the scope holds, and what it does not
+//
+// The token names the trace the run was launched in, and the receiver holds
+// every export to it ([OtelReceiver.Accept]): a span, or a log record naming
+// a trace, in any other trace is refused and never forwarded. So a token
+// copied out of a box cannot put a span into somebody else's trace. It CAN, for
+// its day, send its own trace's spans and any metrics it likes to the company's
+// backend — junk, through the receiver, never the backend's credential — and
+// that is the exposure the lifetime bounds.
 //
 // The token itself is [runtoken], which is where the format, the signature
 // and the expiry live — the MCP bridge carries the same credential shape for
@@ -46,9 +58,10 @@ import (
 // OtelTokens mints and validates per-run OTLP tokens.
 //
 // A thin type over the shared signer, kept because the SUBJECT is this
-// receiver's own: an OTLP token is scoped to a TRACE, and naming that at the
-// type boundary is what stops a caller passing a run id and getting a token
-// the receiver will happily validate into the wrong thing.
+// receiver's own: an OTLP token is scoped to a TRACE — the receiver refuses
+// what it carries from any other ([OtelReceiver.Accept]) — and naming that at
+// the type boundary is what stops a caller passing a run id and getting a
+// token whose every span is refused.
 type OtelTokens struct{ signer *runtoken.Signer }
 
 // OtelTokenOptions configure [NewOtelTokens]. See [runtoken.Options].
@@ -252,13 +265,49 @@ func (r *OtelReceiver) Forwarding() []otlpenv.Signal {
 // a backend that is down turn one outage into two: the coding run's own
 // traffic multiplies while nothing it carries is recoverable anyway. So an
 // export that decodes is answered as accepted whatever the backend did.
+//
+// AND HELD TO ITS TOKEN'S TRACE. A span — or a log record naming a trace — in
+// any other trace is removed before the forward and reported back to the box
+// as a partial success, which an exporter neither retries nor fails its batch
+// for. The token is minted for the trace the run was launched in, and the box
+// is handed that trace's TRACEPARENT, so every span a coding agent records
+// descends from it (measured: every Claude Code span of a run, tool calls
+// included); what names another trace was written by something in the box
+// other than the agent, into somebody else's trace. Metrics name no trace and
+// are not scoped. See [OtelTokens].
 func (r *OtelReceiver) Accept(ctx context.Context, trace string, e OtelExport) (OtelReply, error) {
 	decoded, err := decodeExport(e)
 	if err != nil {
 		return OtelReply{}, err
 	}
-	r.forwardTo(ctx, e.Signal, decoded.request)
-	return encodeReply(otelCodecs[e.Signal].response(), decoded.mediaType)
+	codec := otelCodecs[e.Signal]
+	resp := codec.response()
+	kept := int64(1)
+	if codec.scope != nil {
+		var removed int64
+		removed, kept = codec.scope(decoded.request, traceBytes(trace))
+		if removed > 0 {
+			why := fmt.Sprintf("%d record(s) name a trace other than the one this "+
+				"endpoint was minted for, and were not forwarded", removed)
+			resp = codec.partial(removed, why)
+			log.WarnContext(ctx, "sandbox_otel_out_of_scope", "signal", e.Signal,
+				"trace_id", trace, "removed", removed)
+		}
+	}
+	if kept > 0 {
+		r.forwardTo(ctx, e.Signal, decoded.request)
+	}
+	return encodeReply(resp, decoded.mediaType)
+}
+
+// traceBytes is a token's trace as the id OTLP carries, or nil for a subject
+// that is not one — which then scopes every record out, rather than none.
+func traceBytes(trace string) []byte {
+	id, err := hex.DecodeString(trace)
+	if err != nil || len(id) != 16 {
+		return nil
+	}
+	return id
 }
 
 // forwardTo sends a decoded export upstream, bounded by [OtelForwardTimeout].
@@ -353,10 +402,13 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 func (r *OtelReceiver) RunEnv(ctx context.Context, trace events.TraceContext,
 	turnID, handle string, ttl time.Duration,
 ) map[string]string {
-	if trace.TraceID == "" {
-		// NO TRACE, NO ENDPOINT. A token scoped to an empty trace would
+	if trace.TraceID == "" || trace.SpanID == "" {
+		// NO PARENT, NO ENDPOINT. A token scoped to an empty trace would
 		// authenticate every run's export as every other run's, which is
-		// the one property the scoping exists for.
+		// the one property the scoping exists for; and a run with a trace
+		// but no span to nest under is handed no TRACEPARENT, so its
+		// agent would root traces of its own — every span of which the
+		// receiver refuses as out of the token's scope.
 		return nil
 	}
 	env := map[string]string{
