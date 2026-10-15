@@ -249,7 +249,10 @@ func TestStopEndsTheTurnAtTheNextRoundAndDoesNotReRunIt(t *testing.T) {
 			return turn.Result{}, nil
 		},
 	}
-	trigger := events.New(types.TaskAssigned{TaskID: "t-1"}, events.TraceContext{})
+	// Published INSIDE a span, whose id the stop record must not claim.
+	trigger := events.New(types.TaskAssigned{TaskID: "t-1"}, events.TraceContext{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", SpanID: "00f067aa0ba902b7", Unsampled: true,
+	})
 
 	got := d.Dispatch(t.Context(), "ceo", []*events.Event{trigger})
 	if got.Outcome != queue.OutcomeAck {
@@ -263,6 +266,12 @@ func TestStopEndsTheTurnAtTheNextRoundAndDoesNotReRunIt(t *testing.T) {
 	for _, ev := range observed {
 		if s, ok := events.DataAs[*types.AgentTurnStopped](ev); ok {
 			stopped = s
+			// BENEATH THE TRIGGER: the dispatcher opened no span, and the
+			// turn's has ended. Mutation, red here: file it under the
+			// trigger's trace as it is.
+			if got, want := ev.Trace(), trigger.Trace().Beneath(); got != want {
+				t.Errorf("agent_turn_stopped is filed under %+v, want beneath its trigger: %+v", got, want)
+			}
 		}
 	}
 	if stopped == nil || stopped.StoppedBy != "jane-token" || stopped.StoppedBySeat != "jane" ||

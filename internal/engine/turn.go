@@ -919,8 +919,10 @@ func (d *Dispatcher) stopped(ctx context.Context, handle string, req Request, ca
 		if d.Identify != nil {
 			role, agentID = d.Identify(handle)
 		}
+		// BENEATH THE TRIGGER: the turn's own span has ended, and this
+		// frame opened none — see [recordTrace].
 		d.Observe(ctx, turnStoppedEvent(handle, role, agentID, req.RunID, req.WorkKey,
-			pause, triggerTrace(req.Events)))
+			pause, recordTrace(req.Events)))
 	}
 	return queue.Ack()
 }
@@ -982,7 +984,7 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 		return
 	}
 	role, agentID := d.Identify(handle)
-	if rec := panicBreach(role, agentID, req.RunID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
+	if rec := panicBreach(role, agentID, req.RunID, req.WorkKey, recordTrace(req.Events), panicked); rec != nil {
 		d.Observe(ctx, rec)
 	}
 }
@@ -1047,7 +1049,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 			// it was cut at 200 bytes, which a wrapped error spends on
 			// its outer operations before it reaches what failed.
 			Reason: events.ClipDiagnostic(reason + ", so it was not redelivered: " + cause.Error()),
-		}, triggerTrace([]*events.Event{ev}))
+		}, recordTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
@@ -1987,7 +1989,7 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
 			Reason:      reason,
-		}, triggerTrace([]*events.Event{ev}))
+		}, recordTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
@@ -2037,6 +2039,21 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 		return ev.Trace()
 	}
 	return events.TraceContext{}
+}
+
+// recordTrace is the trace of a record the DISPATCHER publishes about a
+// partition of triggers — one skipped, abandoned, stopped, or whose turn
+// panicked: the trigger's trace, beneath the span the trigger names.
+//
+// BENEATH, never the trigger's own ids. The dispatcher opens no span, and the
+// record was not published by the span the trigger names: copied verbatim, it
+// claimed that span as its own — the asker's `a2a_ask` call, a schedule's
+// fire — and the dashboard filed a dispatcher's record among that span's
+// events, while a trigger relayed beneath a span (a chat wake) happened to
+// come out right. The turn's own span, where one ran, has ended by the time
+// any of these is written.
+func recordTrace(evs []*events.Event) events.TraceContext {
+	return triggerTrace(evs).Beneath()
 }
 
 // ReplyFor says who is waiting for the turn a partition wakes, and how they

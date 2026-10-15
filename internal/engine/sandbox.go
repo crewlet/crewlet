@@ -445,7 +445,10 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 			agentID = id
 		}
 	}
-	if breach := panicBreach(role, agentID, run.TurnID, run.WorkKey, run.Trace(), panicked); breach != nil {
+	// BENEATH THE RUN'S SPAN, as every record the coordinator writes about a
+	// run is: the resume's own span, if it opened, ended with the panic, and
+	// the span the row names launched the run rather than published this.
+	if breach := panicBreach(role, agentID, run.TurnID, run.WorkKey, run.Trace().Beneath(), panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
