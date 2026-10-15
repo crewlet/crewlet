@@ -1,5 +1,5 @@
-// Package eventfan answers the fleet's turn-level history by asking every node
-// its own event store at query time, and says which nodes answered.
+// Package eventfan answers the fleet's turn-level history by asking every data
+// node its own event store at query time, and says which nodes answered.
 //
 // # Why this is a scatter and not a table (ADR-0021)
 //
@@ -38,8 +38,8 @@
 // This is the cost the decision accepts, and it is stated on every answer
 // rather than hidden: a node that has left the fleet, or that did not answer
 // inside [FleetReadBudget], is NAMED in the answer's [Coverage], and the answer
-// is complete only when every live node answered. A short answer that did not
-// say so would be indistinguishable from a quiet company.
+// is complete only when every live data node answered. A short answer that did
+// not say so would be indistinguishable from a quiet company.
 //
 // # The merges are exact, and each says why
 //

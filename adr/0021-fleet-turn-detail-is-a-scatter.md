@@ -50,3 +50,16 @@ alarm, and accepted: an operator who needs that detail past a node's life
 exports it to an OTLP sink. It does not decide the aggregates (ADR-0020), and it
 does not change how events are written: still once, inline, on the publishing
 node.
+
+## Amendment — the answerers are the data nodes
+
+ADR-0025 left a node without `data` no event store: each of its events is
+written into exactly one data node's by custody. So "every live node" above now
+reads "every live data node". The scatter's roster is the data nodes, read off
+the presence leases. A node without `data` neither asks nor is asked: it holds
+no event store, and serving the API — the only thing that asks — takes `data`,
+so every answer is assembled by a data node and `coverage` names data nodes
+only, the asker always among them. A complete answer still misses nothing a
+stateless node published, because the data node that keeps each of its events
+answers for it — and a batch two data nodes hold for a moment is counted once,
+by the asker asking which node keeps each row a node named.

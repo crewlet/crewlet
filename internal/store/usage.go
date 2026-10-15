@@ -24,7 +24,8 @@ import (
 // written to, and the dispatch ledger its scheduler claimed fires in. Nothing
 // here reads the replicated estate, and nothing here decides what a record
 // looks like — [internal/usage] folds these values into one record per
-// (node, day, object) and publishes it, and every node's applier writes it.
+// (node, day, object) and publishes it, and every data node's applier writes
+// it.
 // Keeping the SQL here is what lets the estate boundary's static walk see it,
 // and keeping the record there is what keeps this package from knowing about
 // a stream.

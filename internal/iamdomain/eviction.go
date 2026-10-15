@@ -86,12 +86,12 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 // passed.
 //
 // THIS DOMAIN'S OWN TABLE, because an eviction is a record on this log: every
-// node applies it into `iam_evictions`, and every node's copy is identical,
-// which is what makes the applier's gate hold when coordination cannot be
-// reached. The trim read the tracker's table instead, filtered on this log's
-// stream name, and found nothing for as long as the fleet existed — so an
-// evicted node was counted here for ever, and this log grew toward its ceiling
-// behind a machine that was never coming back.
+// node applies it into `iam_evictions`, and every data node's copy is
+// identical, which is what makes the applier's gate hold when coordination
+// cannot be reached. The trim read the tracker's table instead, filtered on
+// this log's stream name, and found nothing for as long as the fleet existed —
+// so an evicted node was counted here for ever, and this log grew toward its
+// ceiling behind a machine that was never coming back.
 //
 // THROUGH THE REPLICATED ESTATE'S HANDLE, for the reason [Fence.Evicted]
 // gives: no file is open while an adoption swaps it, and
@@ -139,10 +139,10 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 
 // EvictNode installs the gate that drops a node's records on this log.
 //
-// THE POSITION IS THE LOG'S OWN, and nothing else is: every node reaches the
-// same verdict about every record from the order they all already have, with
-// no clock and no coordination read — which is what makes it the fence that
-// holds when coordination cannot be reached at all.
+// THE POSITION IS THE LOG'S OWN, and nothing else is: every data node reaches
+// the same verdict about every record from the order they all already have,
+// with no clock and no coordination read — which is what makes it the fence
+// that holds when coordination cannot be reached at all.
 //
 // UNJUDGED HERE. Whether the node may be evicted is a fleet question this
 // package holds none of the inputs to, and it is asked ONCE, before the first
@@ -258,8 +258,8 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // landed.
 //
 // THE OPERATOR IS THE AUTHOR, on the record and on the `by` the audit row a
-// replay writes on every node carries — who moved the log is the one fact a
-// later reader of `iam_log_generations` is asking. A reanchor nobody named is
+// replay writes on every data node carries — who moved the log is the one fact
+// a later reader of `iam_log_generations` is asking. A reanchor nobody named is
 // the node's own, and is recorded as the node's writer is ([generationActor]).
 // The credential is not on the record: a generation writes no trail row, so
 // nothing would read it.

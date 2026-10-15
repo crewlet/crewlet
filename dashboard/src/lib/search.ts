@@ -169,10 +169,11 @@ export function modeUnavailable(
  * What a ranked search did NOT cover, in a sentence — or null when it covered
  * everything it was asked to, or ran nothing (which [servedNote] says).
  *
- * A SEARCH SLICE IS NOT A NODE'S EVENTS. Every node holds the whole corpus and
- * scans a range of its buckets; a node that did not answer is a range nobody
- * scanned, so the sentence is about PAGES THAT MAY MATCH AND ARE NOT LISTED —
- * never "what that node published", which is the history answers' shape.
+ * A SEARCH SLICE IS NOT A NODE'S EVENTS. Every data node holds the whole corpus
+ * and scans a range of its buckets; a node that did not answer is a range
+ * nobody scanned, so the sentence is about PAGES THAT MAY MATCH AND ARE NOT
+ * LISTED — never "what that node published", which is the history answers'
+ * shape.
  */
 export function searchCoverageNote(
   answer: Pick<SearchOutcome, "served_mode" | "coverage"> | null | undefined,

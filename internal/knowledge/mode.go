@@ -141,7 +141,7 @@ func (d Degradation) Valid() bool {
 // THE SHAPE EVERY FLEET ANSWER CARRIES — `nodes`, `complete` — plus the one
 // figure a bucket-divided search has and a history read does not: how many of
 // the corpus's buckets went unscanned. A search divides CPU rather than data
-// (every node holds the whole corpus), so a node that did not answer costs
+// (every data node holds the whole corpus), so a node that did not answer costs
 // the answer a slice of RELEVANCE, and that is only visible if it is said. A
 // short result set is otherwise indistinguishable from a short corpus.
 //

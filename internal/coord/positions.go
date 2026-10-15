@@ -126,8 +126,8 @@ type DomainPosition struct {
 // A second domain costs a MAP ENTRY here. The alternative — a bucket per
 // domain — costs a bucket, its retention decision, its replica count and a
 // place in every sweep, for a fact that is always read together anyway: the
-// trim asks "what has every node applied", and it asks it about every domain
-// at once.
+// trim asks "what has every data node applied", and it asks it about every
+// domain at once.
 type NodePositions struct {
 	NodeID        string    `json:"node_id"`
 	At            time.Time `json:"at"`

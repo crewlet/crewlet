@@ -101,7 +101,7 @@ type TrimFloor struct {
 	// asks "what may be gone" reads it.
 	TrimTo uint64 `json:"trim_to"`
 
-	// Floor is the first sequence every node must hold: every record below
+	// Floor is the first sequence every data node must hold: every record below
 	// it may have been removed, by this tick or any earlier one at this
 	// generation. It is never lower than TrimTo, never lower than the
 	// previous row's Floor at the same generation, and never lower than

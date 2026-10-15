@@ -461,8 +461,8 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 // work per seat read as drifting. And it was compared with the barriers THIS
 // NODE appended, which on a fleet is only this node's share of the reads — the
 // rate the log receives, from every node, is what its sizing is about, and it
-// is what every node's applier sees. The vector log, which no read appends to,
-// is held to nothing.
+// is what every data node's applier sees. The vector log, which no read
+// appends to, is held to nothing.
 //
 // AND THE ENGINE'S OWN READS ARE PART OF WHAT A LOG TAKES. The object store's
 // collector pins the tracker's estate on a fixed cadence, whatever the seats

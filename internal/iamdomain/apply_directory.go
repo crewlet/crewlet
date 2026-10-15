@@ -233,8 +233,8 @@ func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 // however many holders come and go after it. See [Reader.SeatHolders].
 //
 // The FIRST bind's operation id, and the guard is what makes it the first: a
-// removal is a gate no node defers, so every node has its tombstone before any
-// later bind, and every node stamps the same id.
+// removal is a gate no node defers, so every data node has its tombstone
+// before any later bind, and every data node stamps the same id.
 func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 	seat string) (int64, error) {
 
@@ -263,7 +263,7 @@ func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // decide. It is the document's own value, written whatever it holds — the
 // writer's decides are what refuse an invitation naming no seat
 // ([Writer.Invite]), and an applier that refused a record would stop the log
-// on every node. [Applier.Rederive] recomputes it from the same decode
+// on every data node. [Applier.Rederive] recomputes it from the same decode
 // whenever a checkpoint's rule set differs from this build's.
 func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 	at applyContext, invitation Invitation) (int, error) {
@@ -338,7 +338,8 @@ func (a *Applier) writeCancellation(ctx context.Context, tx *sql.Tx,
 //
 // THE IDENTIFIERS ARE RELEASED IN THE SAME STATEMENT LIST rather than by a
 // cascade, because a cascade is a delete nobody committed: the deletion is
-// part of this record's own effect and is therefore identical on every node.
+// part of this record's own effect and is therefore identical on every data
+// node.
 //
 // AND EVERY SEALED VALUE OF THEIRS IS ERASED, in the same transaction: the
 // rows it deletes take their name, address and seeds with them, and the rows

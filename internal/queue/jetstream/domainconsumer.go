@@ -23,10 +23,10 @@ import (
 //
 // # Why it is DURABLE and per NODE, not per fleet
 //
-// Every node applies every record — that is what makes N identical SQL copies
-// — so this is not a work queue and there is no group to share. Each node
-// keeps its own consumer, named after itself, and its own position within it.
-// A shared consumer would deliver each record to exactly one node, which is
+// Every data node applies every record — that is what makes N identical SQL
+// copies — so this is not a work queue and there is no group to share. Each
+// node keeps its own consumer, named after itself, and its own position within
+// it. A shared consumer would deliver each record to exactly one node, which is
 // the opposite of replication.
 //
 // # And why the CONSUMER's position is not the checkpoint
@@ -202,8 +202,9 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 
 	if nodeID == "" {
 		return nil, fmt.Errorf("jetstream: a domain consumer has no node id — " +
-			"every node reads the whole log, so the consumer is named after " +
-			"the node and a shared name would deliver each record to one of them")
+			"every data node reads the whole log, so the consumer is named " +
+			"after the node and a shared name would deliver each record to " +
+			"one of them")
 	}
 	name := domainConsumerName(stream, nodeID)
 	config := domainConsumerConfig(name, after)
@@ -1130,8 +1131,8 @@ func (c *DomainConsumer) Name() string { return c.name }
 //
 // # Why this exists beside the per-node one
 //
-// [DomainConsumer] is replication: every node reads every record, so each has
-// its own. This is the opposite shape — one consumer SHARED by the fleet,
+// [DomainConsumer] is replication: every data node reads every record, so
+// each has its own. This is the opposite shape — one consumer SHARED by the fleet,
 // where a record is handled by whichever node gets there first — and it is
 // what a change feed needs.
 //

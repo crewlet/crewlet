@@ -27,7 +27,7 @@ import (
 // a third-party HTTP round trip inside the transaction that saves somebody's
 // page. It would also charge the company once per NODE, for a value every node
 // needs and nobody can compute differently. So it is a fleet singleton that
-// publishes a record, and the record is what every node applies.
+// publishes a record, and the record is what every data node applies.
 //
 // # What it costs, from the constants below
 //
@@ -538,7 +538,8 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 	case d.Standing == nil:
 		return nil, fmt.Errorf("search: the embed duty cannot read the vector " +
 			"log's standing — it publishes nothing about the index without " +
-			"knowing this node has applied the log and every node reads the records")
+			"knowing this node has applied the log, and every data node " +
+			"applies what it publishes")
 	case d.Budget == nil:
 		return nil, fmt.Errorf("search: the embed duty has no tick budget — " +
 			"EmbedDeps.Budget is the bound its caller holds the tick to, which " +

@@ -42,8 +42,9 @@ type LexicalQuery struct {
 // ranked it on.
 //
 // THE SCORE IS COMPARABLE ACROSS PARTICIPANTS, which is what the fan-out merges
-// its slices on: every node holds the whole corpus, so the statistics behind
-// this number are global however few buckets the scan read — see [FanOut].
+// its slices on: every data node holds the whole corpus, so the statistics
+// behind this number are global however few buckets the scan read — see
+// [FanOut].
 type LexicalHit struct {
 	Source    string
 	ID        string

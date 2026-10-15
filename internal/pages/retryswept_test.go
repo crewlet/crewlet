@@ -19,10 +19,10 @@ import (
 // retention sweep removed it, which the sweep records exactly as staged below
 // (the ledger empty, its cutoff as the watermark — [roundTrip.markLedgerLost]).
 // Decided again on rows that already hold the comment, it is a second record
-// every node applies: a second history entry and a second wake for one remark.
-// What stops it is the instant the operation id carries, which is the one the
-// key was MINTED at and so the same on every repeat — never the repeat's own
-// clock, which is after the loss by construction.
+// every data node applies: a second history entry and a second wake for one
+// remark. What stops it is the instant the operation id carries, which is the
+// one the key was MINTED at and so the same on every repeat — never the
+// repeat's own clock, which is after the loss by construction.
 func TestAKeyedCommentRepostedAfterItsLedgerRowWasSweptIsNotPostedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

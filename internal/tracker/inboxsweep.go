@@ -23,9 +23,9 @@ import (
 // log replay rebuilding an expired inbox, and no row ever aged out afterwards.
 //
 // So every routed change wrote a row per recipient and kept it for the life of
-// the deployment — on every node, since each applies the same log. That is the
-// exact failure the maintenance package doc names about the `<domain>_ops`
-// tables, one table over.
+// the deployment — on every data node, since each applies the same log. That
+// is the exact failure the maintenance package doc names about the
+// `<domain>_ops` tables, one table over.
 //
 // # [maintenance.NodeLocal], and the table's class is why
 //

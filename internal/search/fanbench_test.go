@@ -19,7 +19,7 @@ import (
 //
 // It measures the DIVISION, not the transport. Every participant runs the same
 // [search.NodeScanner] against the same node's tables — which is the truth of
-// the deployment anyway, since every node holds the whole corpus — so what
+// the deployment anyway, since every data node holds the whole corpus — so what
 // varies across cells is only how many buckets each participant reads. Putting
 // a broker in the loop here would fold a LAN's variance into a number about
 // SQL, and the round trip it would measure is already an explicit term in

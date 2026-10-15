@@ -224,7 +224,7 @@ func (Domain) OpsTable() string { return "pages_ops" }
 // less complete and says so.
 func (Domain) ReadinessInput() bool { return true }
 
-// ClaimsIdentity reports that every node's Replicated tables must be
+// ClaimsIdentity reports that every data node's Replicated tables must be
 // byte-identical.
 //
 // TRUE. N copies of one SQL state, derived from one ordered log by one

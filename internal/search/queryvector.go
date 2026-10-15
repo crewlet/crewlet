@@ -20,7 +20,7 @@ import (
 // the same space, and until this existed nothing computed one: both callers of
 // the fan-out passed text, sources and a limit, so every search skipped its
 // semantic slice and answered lexical-only while the corpus was embedded, paid
-// for and replicated to every node.
+// for and replicated to every data node.
 //
 // # Why it is cached, and how much
 //

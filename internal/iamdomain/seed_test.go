@@ -11,8 +11,8 @@ import (
 //
 // A second factor's seed is the one credential this estate keeps as a secret,
 // and every row it touches — the credential's own, the person's document, the
-// trail entry the write leaves — is replicated to every node, snapshotted,
-// backed up and donated. Sealed by the writer under the fleet keyring, the
+// trail entry the write leaves — is replicated to every data node,
+// snapshotted, backed up and donated. Sealed by the writer under the fleet keyring, the
 // applier writes it through as bytes it cannot read, so none of the three holds
 // the seed; and the credential's row opens back to it as that credential.
 //

@@ -1655,8 +1655,8 @@ type SessionStart struct {
 	// A SIGN-IN IS THE ONE PLACE IN THIS ESTATE IT IS CORRECT — never a
 	// session that replaces another, which is opened from a page that
 	// lists them — and the reason is that
-	// the bearer minted from this record carries its POSITION: every node
-	// validates against its own applier, and a node below that position
+	// the bearer minted from this record carries its POSITION: every data
+	// node validates against its own applier, and a node below that position
 	// serves reads on the signature and the epoch alone
 	// ([session.RowBehind]). So the row this node would wait for is a row
 	// nothing in the answer reads, and what the wait costs is 250-500 ms

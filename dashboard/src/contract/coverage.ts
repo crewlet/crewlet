@@ -3,8 +3,9 @@
  * history answer carries (`events`, `event`, `event_series`, `trace`, `turn`,
  * `turns`, `phases`, a seat's `llm_history`, and the integrations' traffic).
  *
- * The fleet's turn-level detail is NOT replicated: each node keeps the events
- * it published, and a read asks every live node at query time (ADR-0021). So
+ * The fleet's turn-level detail is NOT replicated: each data node keeps the
+ * events it published and the events it keeps in custody for a node without
+ * `data`, and a read asks every live data node at query time (ADR-0021). So
  * an answer can be missing a node — one that left, or one that did not answer
  * inside the read budget — and this is where it says so, by name. A short
  * answer that did not would read exactly like a quiet company.

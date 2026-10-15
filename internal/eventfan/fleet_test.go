@@ -1223,7 +1223,7 @@ func idsOf(rows []store.EventRecord) []string {
 // has learned it is not its own: until the first settles it, both logs hold the
 // same rows. Summed as two counts, one dropped notification was two. So each
 // node counts what it keeps and names what it holds unsettled, and the asker
-// asks every node which of the named rows it keeps — while both copies are
+// asks every data node which of the named rows it keeps — while both copies are
 // unsettled, once the keeper has settled and the other has not, and once both
 // have — and counts each row once, asked from either node.
 //

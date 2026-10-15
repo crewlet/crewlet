@@ -158,7 +158,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	// THE SEED IS SEALED BEFORE IT ENTERS ANY RECORD, under the fleet
 	// keyring and bound to this person and this credential: the record is
-	// replicated to every node, snapshotted, backed up and donated to
+	// replicated to every data node, snapshotted, backed up and donated to
 	// joining peers, and a seed in the clear there is a second factor
 	// everybody with a copy holds. Nothing past this line carries it in the
 	// clear.

@@ -109,7 +109,7 @@ type Voids interface {
 //     violation — is false either way.
 //
 // And whatever lands is not a local mistake: the recovery that follows a
-// rebuild follows the new log from its head, so every node applies it as
+// rebuild follows the new log from its head, so every data node applies it as
 // though it continued a history it was never arbitrated in. So every pattern
 // refuses, not only the retry at zero the floor theorem names.
 //

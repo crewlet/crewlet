@@ -611,9 +611,9 @@ func TestTheSweepPublisherFindsABucketDueForWhatWasSpent(t *testing.T) {
 //
 // Every reader reads it as aged out — it holds nothing, lists as open nowhere
 // and redeems nobody — so kept by the sweep it was the one dead invitation
-// whose sealed address stayed in every node's estate for good. The publisher
-// finds its bucket due on it alone, and the apply collects it beside an
-// outstanding invitation in the same bucket, which stays.
+// whose sealed address stayed in every data node's estate for good. The
+// publisher finds its bucket due on it alone, and the apply collects it beside
+// an outstanding invitation in the same bucket, which stays.
 //
 // Mutation: read a zero expiry as `never` in the publisher's probe and nothing
 // is published; in the apply's delete and the row outlives the sweep.

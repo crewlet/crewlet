@@ -5,7 +5,7 @@
  *
  * # Every list here is the engine's
  *
- * The readers are `page_reads` (every node's days), the links the page
+ * The readers are `page_reads` (every data node's days), the links the page
  * answer's `linked_from` (this node's index), the revisions its history.
  * Nothing is counted in the browser. A list that could not be read says so:
  * `linked_from_status` names an index still on its first pass or a read that

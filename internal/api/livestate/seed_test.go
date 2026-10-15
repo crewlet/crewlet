@@ -307,7 +307,7 @@ func TestSeedingNothingMovesNothing(t *testing.T) {
 
 func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 	t.Parallel()
-	// The seed reads every live node's store. Which ones answered is what
+	// The seed reads every live data node's store. Which ones answered is what
 	// says whether the history a restarted node shows is the fleet's or is
 	// missing a node, and a projection that kept it to itself would make a
 	// short feed indistinguishable from a quiet company.

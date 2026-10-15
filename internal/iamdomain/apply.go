@@ -51,8 +51,9 @@ var applyLog = logging.Get("iam.apply")
 // record here that is not a row. A suspension withdraws the seat's contact
 // identities from this node's notify registry with no configuration change at
 // all, and closes every dashboard socket the person holds open; the apply is
-// the only thing that sees either happen on EVERY node — the change feed
-// relays a record to one. So a committed batch hands the engine a [Moved]
+// the only thing that sees either happen on EVERY data node — the change feed
+// relays a record to one, and a node without `data`, which applies nothing,
+// re-reads the directory through a data node instead. So a committed batch hands the engine a [Moved]
 // saying whose standing it moved, and each listener re-reads the rows it
 // needs.
 
@@ -459,7 +460,7 @@ type applyContext struct {
 	packed int64
 
 	// brokerAt is the BROKER's own instant for this record, which is what
-	// makes a derived timestamp byte-identical on every node rather than a
+	// makes a derived timestamp byte-identical on every data node rather than a
 	// clock each one read for itself.
 	brokerAt time.Time
 

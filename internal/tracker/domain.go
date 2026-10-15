@@ -205,7 +205,7 @@ func (Domain) OpsTable() string { return "tracker_ops" }
 // less complete and says so.
 func (Domain) ReadinessInput() bool { return true }
 
-// ClaimsIdentity reports that every node's Replicated tables must be
+// ClaimsIdentity reports that every data node's Replicated tables must be
 // byte-identical.
 //
 // TRUE, and it is the claim the whole design rests on: N copies of one SQL

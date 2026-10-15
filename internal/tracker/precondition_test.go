@@ -125,7 +125,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	}
 	if detail.Task.Reassignments != 1 {
 		t.Errorf("reassignments = %d after a reset and one hand-off, want 1 — "+
-			"the counter is a value the writer decides and every node applies, "+
+			"the counter is a value the writer decides and every data node applies, "+
 			"never one each node derives for itself", detail.Task.Reassignments)
 	}
 	if detail.Task.Assignee != after {
