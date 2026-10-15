@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -47,16 +48,15 @@ func (a *App) mountOTLP(mux httpjson.Router, receiver *sandbox.OtelReceiver) {
 		func(w http.ResponseWriter, r *http.Request) {
 			a.serveOTLP(w, r, receiver)
 		}))
-	log.Info("sandbox_otlp_receiver_mounted", "forwards", receiver.Forwards())
+	log.Info("sandbox_otlp_receiver_mounted", "forwards", receiver.Forwarding())
 }
 
 func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbox.OtelReceiver) {
-	signal := r.PathValue("signal")
-	// THE SIGNAL IS CHECKED AGAINST A CLOSED SET, because it is
-	// concatenated into the upstream URL — an unchecked segment lets a
-	// caller choose part of the address the engine's OWN credential is
-	// sent to.
-	if !sandbox.ValidSignal(signal) {
+	signal := otlpenv.Signal(r.PathValue("signal"))
+	// THE SIGNAL IS CHECKED AGAINST A CLOSED SET, because it selects the
+	// upstream the engine's OWN credential is sent to — an unchecked
+	// segment would let a caller choose part of that address.
+	if !signal.Valid() {
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoRoute)
 		return
 	}

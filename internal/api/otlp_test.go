@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -21,13 +22,23 @@ import (
 // telemetry backend, and every case below is about that token being checked
 // before anything else happens.
 
-// otlpReceiver builds a receiver whose tokens a test can mint.
+// otlpReceiver builds a receiver whose tokens a test can mint, forwarding to
+// the base endpoint upstream ("" forwards nothing).
 func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	t.Helper()
+	destinations, err := otlpenv.ResolveAll(func(name string) string {
+		if name == otlpenv.EndpointVar {
+			return upstream
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("test-key")}),
-		UpstreamEndpoint: upstream,
+		BaseURL:  "https://engine.internal",
+		Tokens:   sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("test-key")}),
+		Upstream: destinations,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +52,7 @@ func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) stri
 	t.Helper()
 	endpoint := receiver.RunEnv(traceID, "span", "turn-1", "engineer", time.Hour)
 	token := strings.TrimPrefix(
-		endpoint["OTEL_EXPORTER_OTLP_ENDPOINT"], "https://engine.internal/otlp/")
+		endpoint[otlpenv.EndpointVar], "https://engine.internal/otlp/")
 	if token == "" {
 		t.Fatal("the run got no endpoint")
 	}
@@ -110,16 +121,16 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 	}
 }
 
-// AN UNKNOWN SIGNAL IS REFUSED, because the segment is concatenated into the
-// upstream URL — an unchecked one lets a caller choose part of the address
-// the engine's own credential is sent to.
+// AN UNKNOWN SIGNAL IS REFUSED, because the segment selects the upstream the
+// engine's own credential is sent to — an unchecked one lets a caller choose
+// part of that address.
 func TestAnUnknownSignalIsRefused(t *testing.T) {
 	t.Parallel()
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 	token := tokenFor(t, receiver, "trace-abc")
 
-	for _, signal := range []string{"profiles", "admin"} {
+	for _, signal := range []string{"profiles", "admin", "TRACES"} {
 		res := postOTLP(a, "/otlp/"+token+"/v1/"+signal, "x")
 		if res.StatusCode != http.StatusNotFound {
 			t.Errorf("signal %q: status = %d, want 404", signal, res.StatusCode)

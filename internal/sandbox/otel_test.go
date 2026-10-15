@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -107,11 +108,23 @@ func TestOtelTokensAreScopedToTheirRun(t *testing.T) {
 	}
 }
 
+// upstreamOf resolves a receiver's upstream from a literal environment, the
+// way BuildOtelReceiver resolves it from the process's.
+func upstreamOf(t *testing.T, kv map[string]string) map[otlpenv.Signal]otlpenv.Destination {
+	t.Helper()
+	upstream, err := otlpenv.ResolveAll(func(name string) string { return kv[name] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return upstream
+}
+
 // otelUpstream is a stand-in for the real telemetry backend.
 type otelUpstream struct {
 	mu       sync.Mutex
 	paths    []string
 	headers  http.Header
+	seen     []http.Header
 	bodies   [][]byte
 	status   int
 	received chan struct{}
@@ -127,6 +140,7 @@ func (u *otelUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.paths = append(u.paths, r.URL.Path)
 	u.headers = r.Header.Clone()
+	u.seen = append(u.seen, r.Header.Clone())
 	u.bodies = append(u.bodies, body)
 	status := u.status
 	u.mu.Unlock()
@@ -149,6 +163,10 @@ func (u *otelUpstream) saw() []string {
 
 // THE BACKEND'S CREDENTIAL IS ADDED ON THE WAY OUT, and the payload reaches
 // it unchanged. That hop is the whole reason the receiver exists.
+//
+// The credential is written as the documentation writes it, percent-encoded,
+// and must arrive DECODED: the receiver once sent `Bearer%20ingest-secret`
+// verbatim and the backend refused every forwarded export.
 func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 	t.Parallel()
 	upstream := newOtelUpstream()
@@ -156,19 +174,21 @@ func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
-		UpstreamEndpoint: server.URL,
-		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Upstream: upstreamOf(t, map[string]string{
+			otlpenv.EndpointVar: server.URL,
+			otlpenv.HeadersVar:  "Authorization=Bearer%20ingest-secret",
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !receiver.Forwards() {
+	if !receiver.Forwards(otlpenv.Traces) {
 		t.Fatal("a receiver with an upstream reports it forwards nothing")
 	}
 
-	receiver.Forward(context.Background(), "traces", []byte("payload"), "application/x-protobuf")
+	receiver.Forward(context.Background(), otlpenv.Traces, []byte("payload"), "application/x-protobuf")
 	if got := upstream.saw(); len(got) != 1 || got[0] != "/v1/traces" {
 		t.Fatalf("forwarded to %v", got)
 	}
@@ -197,11 +217,67 @@ func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receiver.Forwards() {
-		t.Fatal("a receiver with no upstream claims to forward")
+	for _, signal := range otlpenv.Signals {
+		if receiver.Forwards(signal) {
+			t.Fatalf("a receiver with no upstream claims to forward %s", signal)
+		}
+		// Must not panic or block.
+		receiver.Forward(context.Background(), signal, []byte("payload"), "")
 	}
-	// Must not panic or block.
-	receiver.Forward(context.Background(), "traces", []byte("payload"), "")
+}
+
+// EACH SIGNAL GOES WHERE THE ENGINE'S OWN EXPORTER SENDS IT, with that
+// signal's headers. The receiver used to append `/v1/<signal>` to the base
+// endpoint whatever else was set, so a deployment that configured only
+// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT exported the engine's spans and dropped
+// every box's — accepted, answered 200, and sent nowhere.
+//
+// Mutation: forward to the base with the signal path appended and the traces
+// export lands on /base/v1/traces; merge a signal's headers into the base set
+// and x-tenant reaches the metrics request.
+func TestEachSignalIsForwardedToItsOwnDestination(t *testing.T) {
+	t.Parallel()
+	upstream := newOtelUpstream()
+	server := httptest.NewServer(upstream)
+	t.Cleanup(server.Close)
+
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Upstream: upstreamOf(t, map[string]string{
+			otlpenv.EndpointVar:          server.URL + "/base/",
+			otlpenv.Traces.EndpointVar(): server.URL + "/custom/traces",
+			otlpenv.HeadersVar:           "x-tenant=acme",
+			otlpenv.Metrics.HeadersVar(): "x-metrics-key=m%201",
+			otlpenv.Logs.ExporterVar():   "none",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	receiver.Forward(ctx, otlpenv.Traces, []byte("spans"), "application/x-protobuf")
+	receiver.Forward(ctx, otlpenv.Metrics, []byte("points"), "application/x-protobuf")
+	receiver.Forward(ctx, otlpenv.Logs, []byte("records"), "application/x-protobuf")
+
+	if got := upstream.saw(); len(got) != 2 || got[0] != "/custom/traces" ||
+		got[1] != "/base/v1/metrics" {
+		t.Fatalf("forwarded to %v, want [/custom/traces /base/v1/metrics] — and "+
+			"no logs, which OTEL_LOGS_EXPORTER=none declined", got)
+	}
+	upstream.mu.Lock()
+	traces, metrics := upstream.seen[0], upstream.seen[1]
+	upstream.mu.Unlock()
+	if traces.Get("X-Tenant") != "acme" || traces.Get("X-Metrics-Key") != "" {
+		t.Errorf("traces carried %v, want the base headers alone", traces)
+	}
+	if metrics.Get("X-Metrics-Key") != "m 1" || metrics.Get("X-Tenant") != "" {
+		t.Errorf("metrics carried %v, want their own headers alone, decoded", metrics)
+	}
+	if got := receiver.Forwarding(); len(got) != 2 {
+		t.Errorf("Forwarding() = %v, want traces and metrics", got)
+	}
 }
 
 // A FAILING BACKEND IS NOT THE BOX'S PROBLEM. An exporter that gets a 5xx
@@ -216,16 +292,16 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
-		UpstreamEndpoint: server.URL,
+		BaseURL:  "https://engine.internal",
+		Tokens:   sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Upstream: upstreamOf(t, map[string]string{otlpenv.EndpointVar: server.URL}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Forward returns nothing at all: there is no error for a caller to
 	// mistakenly report to the sandbox.
-	receiver.Forward(context.Background(), "traces", []byte("payload"), "")
+	receiver.Forward(context.Background(), otlpenv.Traces, []byte("payload"), "")
 }
 
 // THE RUN ENVIRONMENT CARRIES AN ENDPOINT AND NO CREDENTIAL.
@@ -240,22 +316,24 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 		BaseURL: "https://engine.internal/",
 		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
 		// A real upstream, whose credential must NOT appear below.
-		UpstreamEndpoint: "https://collector.example",
-		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
+		Upstream: upstreamOf(t, map[string]string{
+			otlpenv.EndpointVar: "https://collector.example",
+			otlpenv.HeadersVar:  "Authorization=Bearer%20ingest-secret",
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	env := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer", time.Hour)
-	endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	endpoint := env[otlpenv.EndpointVar]
 	if !strings.HasPrefix(endpoint, "https://engine.internal/otlp/") {
 		t.Fatalf("the box exports to %q, which is not the engine", endpoint)
 	}
 	if strings.Contains(endpoint, "collector.example") {
 		t.Fatal("the box was pointed at the real backend")
 	}
-	headers, set := env["OTEL_EXPORTER_OTLP_HEADERS"]
+	headers, set := env[otlpenv.HeadersVar]
 	if !set || headers != "" {
 		t.Errorf("OTEL_EXPORTER_OTLP_HEADERS = %q (set: %v); an unset value is "+
 			"inherited from the engine host's own environment", headers, set)
@@ -317,43 +395,6 @@ func TestAReceiverNeedsAnAddressTheBoxCanReach(t *testing.T) {
 	}
 }
 
-// ONLY THE SIGNALS THIS RECEIVER FORWARDS ARE ACCEPTED.
-//
-// The signal is concatenated into the upstream URL, so an unchecked one lets
-// a caller choose part of the address the engine's OWN credential is sent to.
-func TestOnlyKnownSignalsAreAccepted(t *testing.T) {
-	t.Parallel()
-	for _, good := range []string{"traces", "metrics", "logs"} {
-		if !sandbox.ValidSignal(good) {
-			t.Errorf("%q is not accepted", good)
-		}
-	}
-	for _, bad := range []string{"", "traces/../../admin", "TRACES", "profiles", ".."} {
-		if sandbox.ValidSignal(bad) {
-			t.Errorf("%q was accepted as a signal", bad)
-		}
-	}
-}
-
-// THE UPSTREAM HEADER FORM IS OTEL'S OWN, so an operator pastes what their
-// collector's documentation gave them.
-func TestUpstreamHeadersParseTheStandardForm(t *testing.T) {
-	t.Parallel()
-	got := sandbox.ParseOtelHeaders("api-key=abc123, x-tenant = acme ,,malformed")
-	if got["api-key"] != "abc123" {
-		t.Errorf("api-key = %q", got["api-key"])
-	}
-	if got["x-tenant"] != "acme" {
-		t.Errorf("x-tenant = %q", got["x-tenant"])
-	}
-	if _, present := got["malformed"]; present {
-		t.Error("a pair with no = was read as a header")
-	}
-	if len(sandbox.ParseOtelHeaders("")) != 0 {
-		t.Error("an empty value produced headers")
-	}
-}
-
 // THE RECEIVER IS BUILT FROM THE ENVIRONMENT, ONCE, and an unset address
 // means no receiver rather than a broken one.
 func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
@@ -367,8 +408,8 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	}
 
 	env[sandbox.OtelReceiverURLVar] = "https://engine.internal"
-	env[sandbox.OtelUpstreamEndpointVar] = "https://collector.example"
-	env[sandbox.OtelUpstreamHeadersVar] = "api-key=abc"
+	env[otlpenv.Traces.EndpointVar()] = "https://collector.example/v1/traces"
+	env[otlpenv.HeadersVar] = "api-key=abc"
 	got, err = sandbox.BuildOtelReceiver(lookup, []string{"k1:material"})
 	if err != nil {
 		t.Fatal(err)
@@ -376,8 +417,64 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	if got == nil {
 		t.Fatal("a configured receiver URL built nothing")
 	}
-	if !got.Forwards() {
-		t.Error("a configured upstream reports no forwarding")
+	// ONLY THE SIGNAL THAT HAS A DESTINATION FORWARDS: the traces endpoint
+	// is not a base, so metrics and logs have nowhere to go.
+	if !got.Forwards(otlpenv.Traces) {
+		t.Error("a configured traces endpoint reports no forwarding")
+	}
+	if got.Forwards(otlpenv.Metrics) || got.Forwards(otlpenv.Logs) {
+		t.Errorf("signals with no destination forward: %v", got.Forwarding())
+	}
+	if h := got.Upstream(otlpenv.Traces).Headers; h["api-key"] != "abc" {
+		t.Errorf("the upstream headers are %v", h)
+	}
+}
+
+// THE RECEIVER KEEPS ITS OWN COPY OF THE CREDENTIAL. The upstream's headers
+// are the backend's ingest credential, and a map shared with the caller — in
+// either direction — is one a later write elsewhere changes under every box's
+// forward.
+func TestTheReceiverKeepsItsOwnCopyOfTheCredential(t *testing.T) {
+	t.Parallel()
+	upstream := upstreamOf(t, map[string]string{
+		otlpenv.EndpointVar: "https://collector.example",
+		otlpenv.HeadersVar:  "authorization=Bearer%20ingest-secret",
+	})
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL:  "https://engine.internal",
+		Tokens:   sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Upstream: upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream[otlpenv.Traces].Headers["authorization"] = "changed by the caller"
+	receiver.Upstream(otlpenv.Traces).Headers["authorization"] = "changed by a reader"
+	if got := receiver.Upstream(otlpenv.Traces).Headers["authorization"]; got != "Bearer ingest-secret" {
+		t.Errorf("the receiver's credential is now %q", got)
+	}
+}
+
+// AN UPSTREAM THAT CAN NEVER WORK REFUSES THE BOOT, naming the variable — the
+// same refusal the engine's own exporter gives for the same value, because the
+// two resolve through one function. Accepting it would answer every box's
+// export 200 and forward it nowhere.
+func TestAnUnusableUpstreamRefusesTheReceiver(t *testing.T) {
+	t.Parallel()
+	for name, value := range map[string]string{
+		otlpenv.EndpointVar:        "localhost:4318",
+		otlpenv.ProtocolVar:        "http",
+		otlpenv.Logs.ExporterVar(): "console",
+	} {
+		env := map[string]string{
+			sandbox.OtelReceiverURLVar: "https://engine.internal",
+			name:                       value,
+		}
+		_, err := sandbox.BuildOtelReceiver(func(k string) string { return env[k] }, nil)
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s=%q built a receiver, or was refused without its name: %v",
+				name, value, err)
+		}
 	}
 }
 
