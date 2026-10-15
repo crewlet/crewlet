@@ -27,7 +27,7 @@ const (
 	// WritePaceBytes is how fast a walk may publish.
 	//
 	// A walk competes with the company's own writes for the SAME serial
-	// applier on every node, so its cost is not its own latency — it is
+	// applier on every data node, so its cost is not its own latency — it is
 	// how long every other write on the fleet waits behind it. 1.4 MiB/s
 	// is a tenth of the log's own steady rate at the design corpus, which
 	// keeps a full re-spread of a large project inside a minute while

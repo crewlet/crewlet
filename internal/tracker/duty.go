@@ -992,14 +992,14 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // only the node holding this fleet-singleton duty ever writes a 0.
 //
 // That divergence is bounded rather than harmless: the column is deliberately
-// outside the identity claim (see [Domain.ClaimsIdentity]), nothing reads it
-// as a fleet-wide fact, and the duplicate itself is repaired by a published
-// record every node applies. Making the clear deterministic — every applier
+// outside the identity claim (see [Domain.ClaimsIdentity]), nothing reads it as
+// a fleet-wide fact, and the duplicate itself is repaired by a published record
+// every data node applies. Making the clear deterministic — every applier
 // clearing the flag when it applies the duty's repair, re-probing under this
 // same guard, and this local write going away — is a change to what a record
-// owns, which the apply path's own comment has weighed and declined once
-// before ("a company-wide aggregate on every drag is the per-minute scan no
-// index answers"), so it wants its own change rather than this one.
+// owns, which the apply path's own comment has weighed and declined once before
+// ("a company-wide aggregate on every drag is the per-minute scan no index
+// answers"), so it wants its own change rather than this one.
 //
 // The guard below is also why this clears nothing on the tick that publishes
 // a repair: the repair has not been applied yet, so the NOT EXISTS still

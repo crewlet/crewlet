@@ -29,8 +29,8 @@ import (
 //
 // AND THE IDENTITY ESTATE'S WRITER WAS THE SAME: until its writes were
 // stamped, an identity record carried no writer at all, so an evicted node's
-// session invalidations applied on every node while its tracker writes were
-// dropped.
+// session invalidations applied on every data node while its tracker writes
+// were dropped.
 //
 // So the evictions here land on each log first — as a peer would publish them
 // — while this node's appliers are halted, which is what a node that has not

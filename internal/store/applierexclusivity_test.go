@@ -594,7 +594,7 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/artifactdata/configure.go", Kind: mechanism,
 		Why: "The datastore applier's schema change: the collections and the " +
 			"bounded migration it rewrites are decided from the record and the " +
-			"store's own rows, in log order, identically on every node.",
+			"store's own rows, in log order, identically on every data node.",
 	},
 	{
 		Prefix: "internal/artifactdata/history.go", Kind: mechanism,

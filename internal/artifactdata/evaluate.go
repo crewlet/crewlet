@@ -13,12 +13,12 @@ import (
 )
 
 // THE DECISION A WRITE GETS: a pure function of the batch, the stamped
-// authority and the rows this transaction reads, so every node reaches the same
+// authority and the rows this transaction reads, so every data node reaches the same
 // verdict for every record.
 //
 // It is TOTAL. Every input a record can carry, hostile or merely wrong, ends in
 // a verdict rather than an error: an error from the applier stops the log on
-// every node at once (the datastore's whole company read-only until a build
+// every data node at once (the datastore's whole company read-only until a build
 // ships), while a verdict is one refused write. The only errors here are the
 // store's own (a read that failed), which the framework retries.
 

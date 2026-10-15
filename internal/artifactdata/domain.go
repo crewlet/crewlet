@@ -200,7 +200,7 @@ func (Domain) OpsTable() string { return "artifactdata_ops" }
 // its own readers, and the estate router decides through a peer that serves.
 func (Domain) ReadinessInput() bool { return false }
 
-// ClaimsIdentity reports that every node's Replicated tables must be
+// ClaimsIdentity reports that every data node's Replicated tables must be
 // byte-identical.
 func (Domain) ClaimsIdentity() bool { return true }
 

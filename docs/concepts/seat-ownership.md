@@ -152,7 +152,7 @@ far along they are:
 
 **Lag is never one of them, at any size.** A node a million records behind
 keeps its seats and works through the backlog; a node one record behind — which
-is every node for the moment between a write landing on the log and its own
+is every data node for the moment between a write landing on the log and its own
 applier reaching it — is not in a different state from one that is level. The
 distinction is what the `apply_lag` [alarm](../reference/alarms.md) says: being
 behind is worth looking at, and it is not what moves work.

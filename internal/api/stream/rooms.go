@@ -54,7 +54,7 @@ import (
 // held before would push documents, judged on a share that may just have been
 // withdrawn, to a reader nobody vouched for.
 //
-// # Every node pushes from its own appliers
+// # Every data node pushes from its own appliers
 //
 // Every node serving the API is a data node and applies both artifact logs, so
 // each pushes to its own sockets from its own appliers after each commit, and

@@ -49,8 +49,8 @@ type TaskRow struct {
 	// THE COLUMN, never re-derived here: the applier derives it from the
 	// directory on every apply that moves the directory or who holds the
 	// key ([Applier.maintainKeys]), each of which names the key, so it is
-	// the same on every node and follows the claim wherever a purge hands
-	// it.
+	// the same on every data node and follows the claim wherever a purge
+	// hands it.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Title string `json:"title"`

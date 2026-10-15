@@ -18,7 +18,8 @@ import (
 // correction landed, and indistinguishable from an applier that had diverged.
 //
 // So the publisher resolves each horizon to a POSITION, once, and publishes
-// it. Every node then deletes exactly the same rows, whatever its clock says.
+// it. Every data node then deletes exactly the same rows, whatever its clock
+// says.
 //
 // # Per bucket, and why the division is the point
 //
@@ -144,7 +145,7 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 			// aged out, because every reader reads it as aged out
 			// ([InvitationRow.Spent], [openInvitation]): kept, it was the
 			// one row every reader calls dead whose sealed address stayed
-			// in every node's estate for good. No writer of any build has
+			// in every data node's estate for good. No writer of any build has
 			// formed one — the issue refuses it — so this moves no row a
 			// node on another build holds, and two builds sweep the same
 			// rows.
@@ -156,7 +157,7 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 			// WHAT WAS SPENT, and not only what lapsed: a redeemed
 			// invitation is as unpresentable as an expired one, and kept
 			// it would be every address anybody was ever invited at,
-			// sealed, in every node's estate.
+			// sealed, in every data node's estate.
 			{"redeemed invitations", `
 				DELETE FROM iam_invites WHERE rowid IN (
 					SELECT rowid FROM iam_invites
@@ -198,16 +199,16 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 //
 // # One ordered pick, spent person by person
 //
-// The pick is ordered by (person, credential), so every node takes the same
-// subset under the budget, and it is spent a whole person at a time — the
+// The pick is ordered by (person, credential), so every data node takes the
+// same subset under the budget, and it is spent a whole person at a time — the
 // person's document and every row collected for them — because a person half
 // collected would hold rows its document no longer lists. A person with more
 // due than the whole budget is collected in part, first to last, or they could
 // never be collected at all.
 //
 // A DOCUMENT THIS BUILD CANNOT READ IS LEFT ALONE, credentials and all: failing
-// the apply would stop this domain's log on every node at once, and the rows it
-// derived are the ones every node of this build keeps identically.
+// the apply would stop this domain's log on every data node at once, and the
+// rows it derived are the ones every data node of this build keeps identically.
 func collectCredentials(ctx context.Context, tx *sql.Tx, at applyContext,
 	bucket, expired, budget int64) (int64, error) {
 
