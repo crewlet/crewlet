@@ -351,14 +351,16 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 		t.Fatalf("Reply: %v", err)
 	}
 	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
-	if reply.Trace() != ask.Trace() {
-		t.Errorf("reply trace = %+v, want the ask's %+v", reply.Trace(), ask.Trace())
+	// BENEATH THE ASK'S SPAN, never claiming it: the asker's call did not
+	// publish the reply. Mutation, red here: copy the ask's trace as it is.
+	if want := ask.Trace().Beneath(); reply.Trace() != want {
+		t.Errorf("reply trace = %+v, want beneath the ask's span: %+v", reply.Trace(), want)
 	}
 }
 
 // THE WHOLE EXCHANGE IS ONE TRACE: the ask wakes its target in the asker's
 // trace — the `a2a_ask` call's span, its decision included — and the answer,
-// which inherits the ask's, wakes the asker back in the same one. The wake
+// filed beneath that span, wakes the asker back in the same one. The wake
 // went out with no trace at all, so the answering turn and the asker's next
 // each rooted a trace of their own, decided by their own nodes, while the
 // channel's own records sat in the asker's.
@@ -388,8 +390,8 @@ func TestAnAskAndItsAnswerAreOneTraceWithTheAsker(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
-	if got := rec.onlyTo(topics.AgentInbox("alice"))[0].Trace(); got != asker {
-		t.Errorf("the answer wakes the asker under %+v, want the asker's own %+v", got, asker)
+	if got, want := rec.onlyTo(topics.AgentInbox("alice"))[0].Trace(), asker.Beneath(); got != want {
+		t.Errorf("the answer wakes the asker under %+v, want beneath the asker's own call: %+v", got, want)
 	}
 }
 

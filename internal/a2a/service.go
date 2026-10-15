@@ -178,8 +178,9 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		request.WorkItem, request.WorkItemBasis = &named, ask.WorkItemBasis
 	}
 	// THE ASKER'S TRACE — the `a2a_ask` call's span — so the answering turn
-	// is a child of the ask that caused it, and the answer, which carries the
-	// ask's trace on ([Answer.CausedBy]), wakes the asker inside the same one:
+	// is a child of the ask that caused it, and the answer, which is filed
+	// beneath the ask's span ([Answer.CausedBy]), wakes the asker inside the
+	// same one:
 	// the whole exchange reads as one trace, as the channel's own records
 	// above already do. It went out with none, so each half of every
 	// exchange rooted a trace of its own, decided by its own node.
@@ -215,9 +216,10 @@ type Answer struct {
 	// echo is the only way that context survives the round trip.
 	Question string
 
-	// CausedBy is the ask this answers. Its trace context is copied onto
-	// the reply so the whole exchange — the ask, the answering turn's
-	// phases, the reply, and the turn it wakes — reads as ONE trace.
+	// CausedBy is the ask this answers. The reply is filed BENEATH the span
+	// the ask was published in, in the ask's trace and under its decision,
+	// so the whole exchange — the ask, the answering turn's phases, the
+	// reply, and the turn it wakes — reads as ONE trace.
 	CausedBy *events.Event
 
 	DelegationDepth int
@@ -267,11 +269,15 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 		return err
 	}
 
-	// The ask's whole trace, its sampling decision included, through the one
-	// reader of an envelope's trace rather than field by field.
+	// BENEATH THE ASK'S SPAN, its sampling decision included, through the
+	// one reader of an envelope's trace rather than field by field. Not the
+	// ask's ids as they are: that span is the asker's `a2a_ask` call, which
+	// did not publish this reply, and a wake naming it as its own span sat
+	// among that call's events in the dashboard's tree. The asker's next
+	// turn hangs under the same span either way.
 	var caused events.TraceContext
 	if ans.CausedBy != nil {
-		caused = ans.CausedBy.Trace()
+		caused = ans.CausedBy.Trace().Beneath()
 	}
 	wake := events.New(types.A2AMessage{
 		ChannelID: ans.ChannelID, Sender: ans.Sender,
