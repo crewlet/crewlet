@@ -12,12 +12,18 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // `crewlet llm` — the operator's window onto the subscription CLI backends.
@@ -94,6 +100,30 @@ Flags:
 `
 
 func runLLM(args []string, stdout, stderr io.Writer) error {
+	return llmCommand(args, stdout, stderr, traceDoctor)
+}
+
+// traceDoctor is how `crewlet llm doctor` is traced: as `crewlet run` is, from
+// the `OTEL_*` environment, flushed as the command exits. The doctor's checks
+// are real calls through the engine's own providers — the Anthropic SDK spans
+// each one and the Claude API nests its own spans beneath it — so they are
+// traced like a node's or not at all. See [traceProcess].
+//
+// NO NODE ID: the command is not a node, and a span claiming one's
+// `service.instance.id` would file the doctor's calls as that node's work.
+func traceDoctor(ctx context.Context) (func(), error) {
+	return traceProcess(ctx, tracing.Options{Version: version.String()}, logging.Get("cli"))
+}
+
+// doctorSpan is the root each examined entry's checks run in.
+const doctorSpan = "llm.doctor"
+
+// llmCommand is `crewlet llm` with the process's tracing handed in, because
+// configuring it is the PROCESS's to do — [tracing.Configure] replaces the
+// global providers and its flush terminates them — and a test is not the
+// process: run in-process, the doctor would swap the providers under every
+// other case in the binary.
+func llmCommand(args []string, stdout, stderr io.Writer, trace func(context.Context) (func(), error)) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -144,6 +174,15 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	defer closeResolver()
 
 	if sub == "doctor" {
+		// FIRST, before any entry is built: an `OTEL_*` value that can
+		// never work is refused by name here exactly as `crewlet run`
+		// refuses it, rather than after the billed calls it would have
+		// traced.
+		flush, traceErr := trace(ctx)
+		if traceErr != nil {
+			return traceErr
+		}
+		defer flush()
 		entries, buildErr := doctorEntries(company, resolver, *companyPath)
 		if buildErr != nil {
 			return buildErr
@@ -357,6 +396,26 @@ func doctorEntries(company *config.Company, resolver *config.Resolver, companyPa
 // examined reports whether doctor has a report for this entry's type.
 func (e doctorEntry) examined() bool { return e.diagnose != nil }
 
+// examine diagnoses the entry inside a ROOT span of its own, [doctorSpan],
+// naming the entry (`crewlet.provider`) and marked failed when the report has
+// problems.
+//
+// A span, because every model call the engine makes has a parent and the
+// doctor's are no exception: the SDK's span of each call and the Claude API's
+// spans beneath it nest under the check that made them, rather than each
+// rooting a trace of its own. A ROOT per entry, rather than one span over the
+// run, because each entry is examined on its own and a trace per entry is
+// what a person reading one entry's calls at the Console wants.
+func (e doctorEntry) examine(ctx context.Context, smoke bool) diagnosis {
+	ctx, span := tracing.StartRoot(ctx, "cli", doctorSpan, attribute.String("crewlet.provider", e.key))
+	defer span.End()
+	d := e.diagnose(ctx, smoke)
+	if !d.Healthy() {
+		span.SetStatus(codes.Error, "doctor reported problems")
+	}
+	return d
+}
+
 // buildFailure is the report for an entry that did not build.
 type buildFailure struct {
 	key string
@@ -399,7 +458,7 @@ func doctorLLM(ctx context.Context, entries []doctorEntry, key string, smoke boo
 		if i > 0 {
 			fmt.Fprintln(stdout)
 		}
-		d := e.diagnose(ctx, smoke)
+		d := e.examine(ctx, smoke)
 		d.Render(stdout)
 		if !d.Healthy() {
 			unhealthy++
