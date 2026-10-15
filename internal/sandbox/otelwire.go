@@ -3,8 +3,8 @@ package sandbox
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/hex"
-	"encoding/json"
+	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +16,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // The wire half of the receiver: what a box's export IS, read off its body.
@@ -48,17 +49,19 @@ import (
 // writes that message to the upstream in the upstream's own protocol and
 // compression — the one [otlpenv] resolved, which is the engine's own — exactly
 // as the engine's exporter would. Decoding is also what lets a malformed export
-// be refused as malformed, which the specification asks of a receiver.
+// be refused as malformed, which the specification asks of a receiver. What
+// decoding COSTS is bounded before it happens — see otelcost.go.
 
-// MaxOtelPayload bounds one export: what the route reads off the wire, and
-// what a compressed export may inflate to.
+// MaxOtelPayload bounds one export's BYTES: what the route reads off the wire,
+// and what a compressed export may inflate to.
 //
-// An OTLP batch is small — spans and metric points, not artefacts — and the
-// exporter inside the box splits its own batches. The route needs no other
-// credential to reach, so an unbounded read is a box choosing this process's
-// memory; and the bound is on the DECODED size too, because four mebibytes of
-// gzip can inflate a thousandfold, and a compressed export must not be able to
-// make the engine hold more than an uncompressed one may send.
+// An OTLP batch is small — spans, not artefacts — and the exporter inside the
+// box splits its own batches. The route needs no other credential to reach, so
+// an unbounded read is a box choosing this process's memory; and the bound is
+// on the inflated size too, because four mebibytes of gzip can inflate a
+// thousandfold. It is NOT a bound on what decoding those bytes holds, which a
+// message of empty messages makes a hundred and forty times larger: that is
+// [MaxOtelDecoded]'s, measured before anything is decoded.
 const MaxOtelPayload = 4 << 20
 
 // The ways the receiver refuses an export it was handed. Each is what the
@@ -74,8 +77,9 @@ var (
 	// signal and media type say it is.
 	ErrOtelMalformed = errors.New("sandbox: an OTLP export that does not decode")
 
-	// ErrOtelTooLarge is an export past [MaxOtelPayload] once decompressed.
-	ErrOtelTooLarge = errors.New("sandbox: an OTLP export past the receiver's bound once decompressed")
+	// ErrOtelTooLarge is an export past [MaxOtelPayload] once decompressed,
+	// or one that would decode to more than [MaxOtelDecoded].
+	ErrOtelTooLarge = errors.New("sandbox: an OTLP export past the receiver's bound once decompressed or decoded")
 )
 
 // OtelExport is one traces export a box made, as the route received it.
@@ -133,24 +137,41 @@ type decodedExport struct {
 	mediaType string
 }
 
-// decodeExport reads an export into the OTLP message it is.
-func decodeExport(e OtelExport) (decodedExport, error) {
-	mediaType, _, err := mime.ParseMediaType(e.ContentType)
+// decodeExport reads an export into the OTLP message it is, holding what that
+// costs in hold — measured first, and reserved before anything that grows with
+// the export is allocated (see otelcost.go).
+func decodeExport(ctx context.Context, e OtelExport, hold *otelHold) (decodedExport, error) {
+	mediaType, gzipped, err := exportForm(e)
 	if err != nil {
-		return decodedExport{}, fmt.Errorf("%w: Content-Type %q", ErrOtelUnsupported, e.ContentType)
+		return decodedExport{}, err
 	}
-	body, err := inflate(e.Body, e.ContentEncoding)
+	if mediaType == otlpJSON {
+		// jsontext holds a token at a time, and one string can be most of
+		// the export: what measuring may hold is reserved before it.
+		reserve := int64(len(e.Body))
+		if gzipped {
+			reserve = MaxOtelPayload
+		}
+		if err = hold.to(ctx, reserve); err != nil {
+			return decodedExport{}, err
+		}
+	}
+	cost, err := measureExport(e.Body, gzipped, mediaType)
+	if err != nil {
+		return decodedExport{}, err
+	}
+	if err = hold.to(ctx, cost.weight()); err != nil {
+		return decodedExport{}, err
+	}
+	plain, err := plainOf(e.Body, gzipped, mediaType, cost)
 	if err != nil {
 		return decodedExport{}, err
 	}
 	req := &coltracepb.ExportTraceServiceRequest{}
-	switch mediaType {
-	case otlpProtobuf:
-		err = proto.Unmarshal(body, req)
-	case otlpJSON:
-		err = unmarshalOTLPJSON(body, req)
-	default:
-		return decodedExport{}, fmt.Errorf("%w: Content-Type %q", ErrOtelUnsupported, mediaType)
+	if mediaType == otlpJSON {
+		err = protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(plain, req)
+	} else {
+		err = proto.Unmarshal(plain, req)
 	}
 	if err != nil {
 		return decodedExport{}, fmt.Errorf("%w: traces as %s: %w", ErrOtelMalformed, mediaType, err)
@@ -158,37 +179,118 @@ func decodeExport(e OtelExport) (decodedExport, error) {
 	return decodedExport{request: req, mediaType: mediaType}, nil
 }
 
-// inflate undoes a Content-Encoding, holding the result to [MaxOtelPayload].
+// plainOf is the bytes an export's message is decoded from, once its cost is
+// reserved: a protobuf body as it came or inflated, or an OTLP/JSON body
+// rewritten for protojson.
+//
+// The JSON is REWRITTEN, not handed to protojson as it is, and the difference
+// is silent: OTLP/JSON writes trace and span ids as hex, where the protobuf
+// JSON mapping reads a bytes field as base64 — and a 32-character hex string is
+// valid base64, so protojson accepts it and decodes a different, 24-byte id.
+// Every span would arrive under a trace nobody started. So the export is
+// streamed through the same walk that measured it ([measureJSON]), each id
+// written as base64 and each member the message does not have left out, and
+// the rest is the mapping's: enums as integers or names, lowerCamelCase or the
+// proto names, 64-bit integers as strings or numbers. A field this build's
+// message does not have is skipped rather than refused, as the protobuf
+// decoder skips one, so a box speaking a newer OTLP is not refused for its
+// additions.
+func plainOf(body []byte, gzipped bool, mediaType string, cost otelCost) ([]byte, error) {
+	if mediaType == otlpProtobuf && !gzipped {
+		return body, nil
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, cost.plain))
+	_, err := readPlain(body, gzipped, mediaType, func(r io.Reader) (otelCost, error) {
+		if mediaType == otlpJSON {
+			return measureJSON(r, jsontext.NewEncoder(buf, jsontext.AllowDuplicateNames(true)))
+		}
+		_, err := buf.ReadFrom(r)
+		return otelCost{}, err
+	})
+	return buf.Bytes(), err
+}
+
+// exportForm is the media type an export is in, and whether it is gzipped —
+// each refused as [ErrOtelUnsupported] unless the receiver reads it.
+func exportForm(e OtelExport) (mediaType string, gzipped bool, err error) {
+	mediaType, _, err = mime.ParseMediaType(e.ContentType)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: Content-Type %q", ErrOtelUnsupported, e.ContentType)
+	}
+	if mediaType != otlpProtobuf && mediaType != otlpJSON {
+		return "", false, fmt.Errorf("%w: Content-Type %q", ErrOtelUnsupported, mediaType)
+	}
+	gzipped, err = contentEncoding(e.ContentEncoding)
+	return mediaType, gzipped, err
+}
+
+// measureExport weighs an export by streaming its plain bytes through the
+// walk for its media type.
+func measureExport(body []byte, gzipped bool, mediaType string) (otelCost, error) {
+	return readPlain(body, gzipped, mediaType, func(r io.Reader) (otelCost, error) {
+		if mediaType == otlpJSON {
+			return measureJSON(r, nil)
+		}
+		return measureProtobuf(r)
+	})
+}
+
+// contentEncoding reports whether an export is gzipped.
 //
 // gzip is the one compression the OTLP/HTTP specification asks a receiver to
 // read, and the one an OTLP exporter applies; anything else is refused rather
 // than guessed at.
-func inflate(body []byte, encoding string) ([]byte, error) {
+func contentEncoding(encoding string) (gzipped bool, err error) {
 	switch strings.ToLower(strings.TrimSpace(encoding)) {
 	case "", "identity":
-		return body, nil
+		return false, nil
 	case "gzip":
-	default:
-		return nil, fmt.Errorf("%w: Content-Encoding %q", ErrOtelUnsupported, encoding)
+		return true, nil
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("%w: its gzip stream: %w", ErrOtelMalformed, err)
+	return false, fmt.Errorf("%w: Content-Encoding %q", ErrOtelUnsupported, encoding)
+}
+
+// readPlain hands read the export's plain bytes — the body, or the body
+// inflated as it is read, never whole — held to [MaxOtelPayload], and
+// classifies what went wrong: more than the bound is too large, whatever read
+// made of it; a gzip stream that does not decode, or a body read refuses, is
+// malformed.
+//
+// A gzip stream is read to its END, which is where its checksum is checked —
+// a body cut short or corrupted fails here rather than measuring or decoding
+// as a shorter export.
+func readPlain(body []byte, gzipped bool, mediaType string, read func(io.Reader) (otelCost, error)) (otelCost, error) {
+	var src io.Reader = bytes.NewReader(body)
+	if gzipped {
+		zr, err := gzip.NewReader(src)
+		if err != nil {
+			return otelCost{}, fmt.Errorf("%w: its gzip stream: %w", ErrOtelMalformed, err)
+		}
+		src = zr
 	}
-	// Read to its END, which is where the stream's checksum is checked — a
-	// body cut short or corrupted fails here rather than decoding as a
-	// shorter export. A read stopped at the bound is refused for its size.
-	out, err := io.ReadAll(io.LimitReader(zr, MaxOtelPayload+1))
-	if len(out) > MaxOtelPayload {
-		return nil, ErrOtelTooLarge
+	counted := &countingReader{r: io.LimitReader(src, MaxOtelPayload+1)}
+	cost, err := read(counted)
+	switch {
+	case counted.n > MaxOtelPayload:
+		return otelCost{}, errOtelPlainTooLarge
+	case errors.Is(err, ErrOtelTooLarge):
+		return otelCost{}, err
+	case err != nil:
+		return otelCost{}, fmt.Errorf("%w: traces as %s: %w", ErrOtelMalformed, mediaType, err)
 	}
-	if err == nil {
-		err = zr.Close()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%w: its gzip stream: %w", ErrOtelMalformed, err)
-	}
-	return out, nil
+	return cost, nil
+}
+
+// countingReader counts what has been read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // encodeReply writes a response in the media type its export came in.
@@ -208,66 +310,10 @@ func encodeReply(resp proto.Message, mediaType string) (OtelReply, error) {
 	return OtelReply{ContentType: mediaType, Body: body}, nil
 }
 
-// otlpIDFields are the members OTLP/JSON writes as HEX where the protobuf JSON
+// otlpIDFields are the fields OTLP/JSON writes as HEX where the protobuf JSON
 // mapping writes base64: a span's and a link's trace and span ids, and a
-// span's parent. Every one is named one of these, in either spelling a
-// receiver must accept, and nothing else in a traces export is.
-var otlpIDFields = map[string]bool{
-	"traceId": true, "spanId": true, "parentSpanId": true,
+// span's parent — named by their proto names, which [measureJSON] matches
+// whichever spelling a member used.
+var otlpIDFields = map[protoreflect.Name]bool{
 	"trace_id": true, "span_id": true, "parent_span_id": true,
-}
-
-// unmarshalOTLPJSON reads an OTLP/JSON body.
-//
-// NOT protojson ALONE, and the difference is silent: OTLP/JSON writes trace and
-// span ids as hex, where the protobuf JSON mapping reads a bytes field as
-// base64 — and a 32-character hex string is valid base64, so protojson accepts
-// it and decodes a different, 24-byte id. Every span would arrive under a
-// trace nobody started. So the ids are rewritten to base64 first, and the rest
-// is the mapping's: enums as integers or names, lowerCamelCase or the proto
-// names, 64-bit integers as strings or numbers. A field this build's message
-// does not have is skipped rather than refused, as the protobuf decoder skips
-// one, so a box speaking a newer OTLP is not refused for its additions.
-func unmarshalOTLPJSON(body []byte, into proto.Message) error {
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.UseNumber()
-	var doc any
-	if err := dec.Decode(&doc); err != nil {
-		return err
-	}
-	if err := hexIDsToBase64(doc); err != nil {
-		return err
-	}
-	rewritten, err := json.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(rewritten, into)
-}
-
-// hexIDsToBase64 rewrites every id member under v in place.
-func hexIDsToBase64(v any) error {
-	switch v := v.(type) {
-	case map[string]any:
-		for k, child := range v {
-			if s, ok := child.(string); ok && otlpIDFields[k] {
-				raw, err := hex.DecodeString(s)
-				if err != nil {
-					return fmt.Errorf("%s %q is not hex", k, s)
-				}
-				v[k] = raw // encoding/json writes a []byte as base64
-				continue
-			}
-			if err := hexIDsToBase64(child); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for _, child := range v {
-			if err := hexIDsToBase64(child); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

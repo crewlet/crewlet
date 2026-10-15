@@ -42,3 +42,33 @@ func ReadLimit(box Sandbox) int {
 	}
 	panic(fmt.Sprintf("ReadLimit: %T reads by no cap this package holds", box))
 }
+
+// SetOtelBudget gives a receiver a decoding budget of n bytes, so a case can
+// fill it with a few small exports rather than a quarter of a gibibyte.
+func SetOtelBudget(r *OtelReceiver, n int64) { r.budget = newOtelBudget(n) }
+
+// MeasureOtel is what the receiver measures an export to cost before it
+// decodes it — its plain size and what decoding it holds — and the weight it
+// reserves from the budget for it.
+func MeasureOtel(e OtelExport) (plain, decoded, weight int64, err error) {
+	mediaType, gzipped, err := exportForm(e)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	cost, err := measureExport(e.Body, gzipped, mediaType)
+	return cost.plain, cost.decoded, cost.weight(), err
+}
+
+// OtelTraceMessageSizes is the Go size the receiver weighs each message of a
+// traces export at, by its descriptor's full name.
+func OtelTraceMessageSizes() map[string]int64 {
+	out := map[string]int64{}
+	for name, size := range otelStructSizes {
+		out[string(name)] = size
+	}
+	return out
+}
+
+// OtelUnknownStructSize is what a message with no generated Go type is
+// weighed at.
+const OtelUnknownStructSize = otelUnknownStructSize

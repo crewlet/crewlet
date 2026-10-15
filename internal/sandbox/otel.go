@@ -105,6 +105,8 @@ type OtelReceiver struct {
 	upstream otlpenv.Destination
 	// forward is nil when the upstream does not export.
 	forward otelForwarder
+	// budget is what every export decoding at once may hold together.
+	budget *otelBudget
 }
 
 // OtelReceiverOptions configure [NewOtelReceiver].
@@ -152,11 +154,12 @@ const OtelForwardTimeout = 10 * time.Second
 const OtelAnswerWithin = OtelForwardTimeout + otelAnswerMargin
 
 // otelAnswerMargin is what an answer takes beyond the forward itself: reading
-// the payload off the box's connection, decoding it, and the reply. Two
-// seconds carries the largest payload the route accepts (four mebibytes) at
-// sixteen megabits a second, far below any network a box shares with the
-// engine that mints its endpoint.
-const otelAnswerMargin = 2 * time.Second
+// the payload off the box's connection, decoding it, and the reply — two
+// seconds, which carries the largest payload the route accepts (four
+// mebibytes) at sixteen megabits a second, far below any network a box shares
+// with the engine that mints its endpoint — and waiting for the decoding
+// budget, which is [otelBudgetWait]'s one second.
+const otelAnswerMargin = 2*time.Second + otelBudgetWait
 
 // OtelTimeoutVar is the standard variable an OTLP exporter reads its
 // per-export wait from, in milliseconds. Written into a box's environment
@@ -195,6 +198,7 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 		base:     strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		tokens:   opts.Tokens,
 		upstream: upstream,
+		budget:   newOtelBudget(otelBudgetBytes),
 	}
 	if upstream.Exports() {
 		f, err := newOtelForwarder(upstream)
@@ -249,6 +253,12 @@ func (r *OtelReceiver) Forwards() bool { return r.upstream.Exports() }
 // exporter takes as final rather than retrying. See otelwire.go for why the
 // receiver decodes at all.
 //
+// AND WEIGHED BEFORE IT IS DECODED: what decoding it would hold is measured
+// first, refused past [MaxOtelDecoded], and reserved from the receiver's
+// budget until the forward is done — or answered [ErrOtelBusy] when the
+// budget is held by other exports for longer than the receiver can wait. See
+// otelcost.go.
+//
 // TO THE TRACES DESTINATION, which is the endpoint the engine's span exporter
 // sends to — OTEL_EXPORTER_OTLP_TRACES_ENDPOINT when it is set, the base with
 // `/v1/traces` otherwise. Forwarding to the base with the path appended,
@@ -271,7 +281,9 @@ func (r *OtelReceiver) Forwards() bool { return r.upstream.Exports() }
 // The scope is that TRACE, which other seats' turns and runs can share — see
 // [OtelTokens] and the package doc.
 func (r *OtelReceiver) Accept(ctx context.Context, trace string, e OtelExport) (OtelReply, error) {
-	decoded, err := decodeExport(e)
+	hold := r.budget.hold()
+	defer hold.release()
+	decoded, err := decodeExport(ctx, e, hold)
 	if err != nil {
 		return OtelReply{}, err
 	}

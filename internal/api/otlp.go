@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -94,28 +96,45 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 	// operator can see it, and is never the box's problem. What IS the
 	// box's is an export the receiver cannot read, which is answered as
 	// the OTLP/HTTP specification asks: 415 for a media type or an encoding
-	// it does not speak, 413 for one that inflates past the bound, 400 for
-	// one that does not decode — each final, so the exporter drops the
-	// batch rather than sending it again.
+	// it does not speak, 413 for one that inflates or would decode past the
+	// bound, 400 for one that does not decode — each final, so the exporter
+	// drops the batch rather than sending it again. And one the receiver
+	// cannot decode NOW, because the exports already in flight hold its
+	// budget, is a 503 with a Retry-After: the one answer an exporter
+	// retries, because waiting is what fixes it.
 	reply, err := receiver.Accept(r.Context(), traceID, sandbox.OtelExport{
 		Body:            body,
 		ContentType:     r.Header.Get("Content-Type"),
 		ContentEncoding: r.Header.Get("Content-Encoding"),
 	})
-	switch {
-	case errors.Is(err, sandbox.ErrOtelUnsupported):
-		httpjson.Fail(w, http.StatusUnsupportedMediaType, httpjson.CodeInvalidBody)
-		return
-	case errors.Is(err, sandbox.ErrOtelTooLarge):
-		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
-		return
-	case err != nil:
+	if err != nil {
+		refuseOTLP(w, err)
 		log.Debug("sandbox_otlp_refused", "trace_id", traceID, "error", err.Error())
-		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
 	w.Header().Set("Content-Type", reply.ContentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(reply.Body)
 	log.Debug("sandbox_otlp_received", "trace_id", traceID, "bytes", len(body))
+}
+
+// codeOverloaded is an export the receiver had no room to decode while it
+// was decoding others: nothing is wrong with it, and the same export sent
+// again shortly is accepted.
+const codeOverloaded = httpjson.Code("overloaded")
+
+// refuseOTLP answers an export the receiver did not accept, as the OTLP/HTTP
+// specification asks of each refusal.
+func refuseOTLP(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, sandbox.ErrOtelBusy):
+		w.Header().Set("Retry-After", strconv.Itoa(int(sandbox.OtelBusyRetryAfter/time.Second)))
+		httpjson.Fail(w, http.StatusServiceUnavailable, codeOverloaded)
+	case errors.Is(err, sandbox.ErrOtelUnsupported):
+		httpjson.Fail(w, http.StatusUnsupportedMediaType, httpjson.CodeInvalidBody)
+	case errors.Is(err, sandbox.ErrOtelTooLarge):
+		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
+	default:
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
+	}
 }

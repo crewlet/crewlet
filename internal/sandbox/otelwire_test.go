@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/crewlet/crewlet/internal/otlpenv"
@@ -193,9 +194,12 @@ func TestAnExportThatInflatesPastTheBoundIsRefused(t *testing.T) {
 	const inflated = 128 << 20
 	var bomb bytes.Buffer
 	zw := gzip.NewWriter(&bomb)
-	zeros := make([]byte, 1<<20)
-	for range inflated / len(zeros) {
-		if _, err := zw.Write(zeros); err != nil {
+	// VALID PROTOBUF THROUGHOUT — a field this build does not know,
+	// repeated, which a decoder keeps — so it is the export's size and
+	// nothing else that refuses it.
+	field := protowire.AppendBytes(protowire.AppendTag(nil, 15, protowire.BytesType), make([]byte, 64<<10))
+	for range inflated / len(field) {
+		if _, err := zw.Write(field); err != nil {
 			t.Fatal(err)
 		}
 	}
