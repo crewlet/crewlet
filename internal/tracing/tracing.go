@@ -576,17 +576,20 @@ func newExporter(ctx context.Context, d otlpenv.Destination) (sdktrace.SpanExpor
 	if err != nil {
 		return nil, err
 	}
+	// An error names the endpoint's VARIABLE and never its value, which is
+	// where a misplaced credential sits — otlpenv's rule for every message
+	// about an endpoint.
 	switch d.Protocol {
 	case otlpenv.GRPC:
 		exp, err := otlptracegrpc.New(ctx, opts.traceGRPC()...)
 		if err != nil {
-			return nil, fmt.Errorf("otlp grpc exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
+			return nil, fmt.Errorf("otlp grpc exporter for %s: %w", d.EndpointVar, err)
 		}
 		return exp, nil
 	case otlpenv.HTTPProtobuf:
 		exp, err := otlptracehttp.New(ctx, opts.traceHTTP()...)
 		if err != nil {
-			return nil, fmt.Errorf("otlp http exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
+			return nil, fmt.Errorf("otlp http exporter for %s: %w", d.EndpointVar, err)
 		}
 		return exp, nil
 	}
