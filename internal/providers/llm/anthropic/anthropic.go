@@ -61,11 +61,45 @@
 //     to be the full prompt count, so all three are added. Getting this wrong
 //     under-bills every cached round, which is most of them.
 //
-// And one that is the SDK's rather than the vendor's: ITS API ERROR IS NEVER
-// SHOWN. Its Error() is the request method and URL — userinfo included, so a
-// gateway's password in base_url — and the raw response body, which can echo
-// the key it rejected. A classified failure says what the engine composes
-// instead (httpapi.FromStatus) and what the endpoint said, redacted ([detail]).
+// And two that are the SDK's rather than the vendor's.
+//
+// ITS API ERROR IS NEVER SHOWN. Its Error() is the request method and URL —
+// userinfo included, so a gateway's password in base_url — and the raw
+// response body, which can echo the key it rejected. A classified failure says
+// what the engine composes instead (httpapi.FromStatus) and what the endpoint
+// said, redacted ([detail]).
+//
+// ITS SPAN IS THE ATTEMPT'S, AND IT IS PINNED. The SDK opens one OpenTelemetry
+// CLIENT span, `anthropic.messages.create` (scope `com.anthropic.sdk.go`),
+// around every call it makes — one per credential the pool tries, since its
+// retries are off, and one more for the unary retry of an endpoint found not
+// to stream — beneath whatever span the caller's context holds, which is the
+// tool loop's `llm.round`. Each attempt sends that span's `traceparent`
+// through the global propagator, and that is the parent the Claude API files
+// its own SERVER spans under when the organisation has a telemetry destination
+// configured: the API's spans join the engine's trace with nothing configured
+// here. The sampling flag travels with it, so an unsampled round records no
+// SDK span and the API, told -00, emits none either. [New] pins the switches,
+// because the SDK otherwise reads four ANTHROPIC_OPEN_TELEMETRY* variables on
+// every call.
+//
+// With content off, the span records the request's model, max_tokens, effort
+// and thinking type; the response's id, model, stop reason and usage (its
+// `gen_ai.usage.input_tokens` is the full prompt count, cache included — the
+// figure `llm.round` carries as `crewlet.input_tokens`, so a collector summing
+// both counts every round twice); the status code; `server.address` and
+// `url.full`, which is the scheme, the host and port, the base_url's own path
+// and the route — never the userinfo, nor a query the endpoint does not
+// define; and `anthropic.request.id`, `anthropic.organization.id` and
+// `anthropic.workspace.id` from the response's headers.
+//
+// It ends by the SDK's reading, which is not always the engine's. A key the
+// API refused, an `error` event and a stream cut before `message_stop` end in
+// ERROR with the API's `error.type`, and a stream that stalls part-way is a
+// `client_timeout_error`. But a stall BEFORE THE FIRST BYTE reaches the SDK only
+// as a cancelled context — the idle watchdog's — which it takes for the
+// caller's own doing and leaves with no status: the engine's timeout is on the
+// phase event, and on `llm.round` when the round fails.
 package anthropic
 
 import (
@@ -259,7 +293,42 @@ func New(cfg Config) (*Provider, error) {
 		// those is a second credential source the pool does not know about
 		// — an ambient auth token would answer every call while the pool
 		// dutifully rotated keys nothing was using.
+		//
+		// It is NOT every variable the SDK reads. Its OpenTelemetry
+		// switches — ANTHROPIC_OPEN_TELEMETRY,
+		// ANTHROPIC_OPEN_TELEMETRY_PROPAGATION,
+		// ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE and
+		// ANTHROPIC_OPEN_TELEMETRY_TRACES_MAX_CONTENT_BYTES — are read on
+		// every call, whatever this option says, and only an option passed
+		// in code outranks one. Hence the three below.
 		option.WithoutEnvironmentDefaults(),
+		// THE SDK'S SPANS ARE PINNED, not left to a vendor variable
+		// (ADR-0010: tracing is the standard OTEL_* environment's, and
+		// nothing branches on whether it is on). One CLIENT span per call
+		// to the API — per HTTP attempt, since retries are off — beneath
+		// llm.round, so a rotation shows as one failed span and one that
+		// answered; and the `traceparent` each attempt sends is what the
+		// API's own SERVER span nests under. Left to the environment,
+		// ANTHROPIC_OPEN_TELEMETRY=false would cut every Claude span out of
+		// the trace and ..._PROPAGATION=false would orphan the API's. And
+		// the spans carry metadata only: a span carries duration and an
+		// event carries content, so prompts and answers stay in the event
+		// store, and an ambient ..._TRACES_CONTENT_MODE=content cannot ship
+		// a seat's whole conversation to a collector — which also leaves
+		// ..._TRACES_MAX_CONTENT_BYTES nothing to bound.
+		//
+		// NO WithTracerProvider: the SDK resolves the global provider on
+		// every call, and the global is what internal/tracing's Configure
+		// replaces. A provider captured here is whichever one was global
+		// when this entry was built — the exporter-less default, for an
+		// entry built before Configure ran — and its spans would reach
+		// nobody. And no conversation id: a turn's calls already share its
+		// trace through their parents, and a request carries no turn
+		// identity to name one by (internal/agent/turnctx keeps it explicit,
+		// never ambient).
+		option.WithOpenTelemetryTraces(true),
+		option.WithOpenTelemetryPropagation(true),
+		option.WithOpenTelemetryTracesContentMode(option.OpenTelemetryContentModeMetadataOnly),
 		option.WithBaseURL(baseURL),
 		// NO CLIENT-WIDE REQUEST TIMEOUT: every call streams and is bounded
 		// by its silence ([Provider.streamOnce]); a total bound here would

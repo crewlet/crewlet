@@ -1198,13 +1198,16 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// records: agent_turn_progress reports the round's content twice
 		// per round, and never how long it took.
 		//
-		// This is also the ONLY layer of the provider stack that is
-		// spanned. Below it sit the fallback chain, each member's backend
-		// and the credential pool's rotation, which on a three-member
-		// chain over a four-key pool would nest up to twelve spans per
-		// round and tell a reader nothing they could act on. Which member
-		// and which credential answered is on the completion, and reaches
-		// the record through the phase event.
+		// The engine spans NOTHING below it: the fallback chain, its
+		// members and the credential pool open no span of their own. On
+		// the Anthropic backend the attempts are spanned all the same, by
+		// its SDK — one CLIENT span per HTTP attempt beneath this one, so a
+		// refused key shows in error beside the key that answered, and the
+		// parent the Claude API's own spans nest under (see
+		// internal/providers/llm/anthropic). The other backends' attempts
+		// are not spanned. Which member and which credential answered is
+		// on the completion either way, and reaches the record through the
+		// phase event.
 		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
 			attribute.String("crewlet.phase", cfg.Surface.Phase()),
 			attribute.Int("crewlet.round", roundsUsed))
@@ -1329,6 +1332,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			}
 			return nil, err
 		}
+		// crewlet.* rather than the GenAI conventions' gen_ai.usage.*, on
+		// purpose: the Anthropic SDK's span beneath this one carries those
+		// for the same call, and so do the Claude API's own spans, which is
+		// already two copies a collector must not add together. Under the
+		// conventional names this round would be a third.
 		roundSpan.SetAttributes(
 			attribute.String("crewlet.model", completion.Model),
 			attribute.Int("crewlet.input_tokens", completion.InputTokens),

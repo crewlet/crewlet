@@ -52,6 +52,17 @@ A few things worth knowing when deploying Crewlet:
   `${VAR}` — a model key, a webhook secret, an endpoint. Do not issue a token
   to anyone you would not let change what the company does
   (`docs/concepts/configuration.md#managed-configuration`).
+- **Trace context leaves the process with every Claude call.** Each call an
+  `anthropic` provider makes carries a W3C `traceparent` (and a `tracestate`,
+  when the trace has one) naming the turn's trace, to Anthropic or to whatever
+  gateway `base_url` names — an identifier rather than content, but one a
+  gateway can log and correlate. The Claude API nests its own spans under it
+  and exports them to the OTLP destination an organization admin configures in
+  the Claude Console, outside Crewlet; in that destination's full-content mode
+  those spans carry prompts and answers, so its endpoint and credentials
+  deserve the care the event store does. The engine's own spans of those calls
+  carry metadata only, whatever an inherited `ANTHROPIC_OPEN_TELEMETRY_*`
+  variable says (`docs/guides/deployment.md#spans-from-claude`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.
