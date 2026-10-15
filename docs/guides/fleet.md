@@ -594,7 +594,10 @@ The consequences worth stating plainly:
   you drain for good, or a node whose volume you discard, is a node whose
   turns, phases and events no screen can show again — the spend, turn
   counts and page reads it recorded survive it, in the replicated `usage`
-  domain. Export to an OTLP sink first if you need that detail kept. See
+  domain. An OTLP exporter does not keep them: it carries spans and metrics,
+  never events, so a trace backend holds the node's turns as timing alone. If
+  you need the events kept, take a [`crewlet backup`](backup.md#one-node-or-every-node)
+  of the node before it goes. See
   [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history).
 - **Mid-rollout, a history read can name a node as speaking another
   protocol.** The history scatter carries a version, and a node on a build

@@ -1098,10 +1098,13 @@ any node that did not answer in the answer's `coverage` (see
 [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
 A node that has LEFT the fleet takes its turn-level detail with it; the
 aggregates — spend, turn counts, page reads — survive it in the replicated
-`usage` domain. A deployment that wants to keep every node's detail past its
-departure exports to an external sink over OTLP rather than pointing the
-nodes at one database, which the exclusive file ownership rules out by
-construction.
+`usage` domain. No exporter keeps the rest: [OTLP export](#otlp-export) carries
+spans and metrics, never events, so a trace backend keeps a departed node's
+turns as timing and none of what they said, and pointing the nodes at one
+database is ruled out by the exclusive file ownership by construction. A
+deployment that wants a node's events past its departure takes a
+[`crewlet backup`](backup.md#one-node-or-every-node) of that node before it
+leaves — its event log has no second copy.
 
 #### Custody: the rows of a node without `data`
 
