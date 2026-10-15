@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // In-sandbox telemetry, without handing the box a secret.
@@ -266,16 +268,23 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 //
 // TRACEPARENT is what nests them: the engine's per-turn span is the parent,
 // and without it the box's spans form a second, unrelated trace that nobody
-// finds.
-func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, ttl time.Duration) map[string]string {
-	if traceID == "" {
+// finds. Its FLAG is the turn's own sampling decision, rendered by the
+// propagator ([tracing.Traceparent]) — `-00` for a run launched from an
+// unsampled turn, which a box's SDK reads as "record nothing", exactly as the
+// engine's own spans of that trace record nothing. It used to be `-01` for
+// every run, so a trace the operator's sampler had decided against was
+// exported from inside the box with no parent above it.
+func (r *OtelReceiver) RunEnv(ctx context.Context, trace events.TraceContext,
+	turnID, handle string, ttl time.Duration,
+) map[string]string {
+	if trace.TraceID == "" {
 		// NO TRACE, NO ENDPOINT. A token scoped to an empty trace would
 		// authenticate every run's export as every other run's, which is
 		// the one property the scoping exists for.
 		return nil
 	}
 	env := map[string]string{
-		otlpenv.EndpointVar: r.EndpointFor(traceID, ttl),
+		otlpenv.EndpointVar: r.EndpointFor(trace.TraceID, ttl),
 		otlpenv.ProtocolVar: string(otlpenv.HTTPProtobuf),
 		otlpenv.HeadersVar:  "",
 		"OTEL_RESOURCE_ATTRIBUTES": strings.Join([]string{
@@ -283,9 +292,8 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, ttl time.D
 			"crewlet.agent_handle=" + handle,
 		}, ","),
 	}
-	if spanID != "" {
-		// W3C traceparent: version-traceid-spanid-flags, sampled.
-		env["TRACEPARENT"] = "00-" + traceID + "-" + spanID + "-01"
+	if parent := tracing.Traceparent(ctx, trace); parent != "" {
+		env[TraceparentVar] = parent
 	}
 	return env
 }
@@ -304,6 +312,11 @@ const (
 	// means no in-box telemetry, which is the ordinary configuration.
 	OtelReceiverURLVar = "CREWLET_SANDBOX_OTEL_RECEIVER_URL"
 )
+
+// TraceparentVar is the variable a box reads its parent span from — the
+// OpenTelemetry convention for carrying W3C trace context into a process's
+// environment, which Claude Code reads when it runs non-interactively.
+const TraceparentVar = "TRACEPARENT"
 
 // BuildOtelReceiver is THE construction path, called by every engine.
 //

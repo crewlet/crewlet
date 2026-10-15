@@ -63,6 +63,14 @@
 // the same commit, for the trace this engine roots WITHOUT a span — an event
 // published outside one — which has no provider to ask.
 //
+// AND THE DECISION TRAVELS WITH THE TRACE. A context.Context does not survive
+// a publish, so the decision rides beside the ids: [TraceOf] writes it into
+// the envelope ([events.TraceContext.Unsampled], `trace_unsampled` on the
+// wire), [WithRemote] restores it, and a sandbox run's row and the TRACEPARENT
+// its box is handed ([Traceparent]) carry it. Before it travelled, everything
+// restored read as sampled — the queue's far side, a resumed run, a box — so
+// a ratio of 0.1 decided the webhook's span and nothing after the first hop.
+//
 // # What is deliberately NOT spanned
 //
 // THE REST API'S OWN ROUTES. `/events`, `/config`, `/secrets` and the dashboard
@@ -185,6 +193,46 @@ var root atomic.Pointer[rootRule]
 // id asked twice gets one answer.
 func rootSampler() sdktrace.Sampler { return root.Load().sampler }
 
+// providerSampler is the sampler every TracerProvider this package builds
+// runs: parent-based, with [continued] around the root rule.
+func providerSampler(rule sdktrace.Sampler) sdktrace.Sampler {
+	return sdktrace.ParentBased(continued{rule: rule})
+}
+
+// continued is the provider's ROOT sampler — what ParentBased asks when the
+// context holds no valid parent span — and it keeps one decision ParentBased
+// cannot see.
+//
+// [WithRemote] given a trace id and no span id restores the trace with a ZERO
+// span id, because the event it came from was published beneath a span by
+// code that opened none of its own: a chat wake, a sandbox run's
+// announcements. The SDK keeps the trace id for the span opened beneath it,
+// but a span context with no span id is not VALID, so ParentBased treats the
+// span as a root and asks the root rule — which would RE-DECIDE a trace that
+// is already in flight, the one thing every sampler here exists to refuse.
+// Under a ratio that is only usually harmless (the rule is a function of the
+// same trace id), and under anything else it is a split tree: an unsampled
+// webhook trace whose turn exports, or the reverse. So a context that is
+// remote and names a trace keeps the decision it was restored with, and only a
+// genuinely new trace reaches the rule.
+type continued struct{ rule sdktrace.Sampler }
+
+func (c continued) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	psc := trace.SpanContextFromContext(p.ParentContext)
+	if !psc.IsRemote() || !psc.TraceID().IsValid() || psc.TraceID() != p.TraceID {
+		return c.rule.ShouldSample(p)
+	}
+	decision := sdktrace.Drop
+	if psc.IsSampled() {
+		decision = sdktrace.RecordAndSample
+	}
+	return sdktrace.SamplingResult{Decision: decision, Tracestate: psc.TraceState()}
+}
+
+// Description is the rule's own: what an operator chose is what the log line
+// and a test asking which rule is in force should read.
+func (c continued) Description() string { return c.rule.Description() }
+
 // propagator is the one global propagator this package installs: W3C trace
 // context and nothing else. The package doc says why Baggage is not beside it.
 func propagator() propagation.TextMapPropagator { return propagation.TraceContext{} }
@@ -209,7 +257,7 @@ func init() {
 	otel.SetTextMapPropagator(propagator())
 	root.Store(&rootRule{sampler: sdktrace.AlwaysSample()})
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.ParentBased(rootSampler()))))
+		sdktrace.WithSampler(providerSampler(rootSampler()))))
 }
 
 // Shutdown flushes buffered spans and releases the exporter.
@@ -322,7 +370,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 
 	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sampler)),
+		sdktrace.WithSampler(providerSampler(sampler)),
 	}
 
 	if traces.Exports() {

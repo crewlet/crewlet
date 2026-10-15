@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -325,7 +326,7 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer", time.Hour)
+	env := receiver.RunEnv(t.Context(), launchedFrom, "turn-1", "engineer", time.Hour)
 	endpoint := env[otlpenv.EndpointVar]
 	if !strings.HasPrefix(endpoint, "https://engine.internal/otlp/") {
 		t.Fatalf("the box exports to %q, which is not the engine", endpoint)
@@ -346,17 +347,63 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 
 	// THE TOKEN IN THE PATH IS THIS RUN'S, and validates.
 	token := strings.TrimPrefix(endpoint, "https://engine.internal/otlp/")
-	if got := receiver.Validate(token); got != "trace-abc" {
+	if got := receiver.Validate(token); got != launchedFrom.TraceID {
 		t.Errorf("the endpoint's token names %q", got)
-	}
-	// TRACEPARENT is what nests the box's spans under the turn's. Without
-	// it they form a second, unrelated trace that nobody finds.
-	if env["TRACEPARENT"] != "00-trace-abc-span-def-01" {
-		t.Errorf("TRACEPARENT = %q", env["TRACEPARENT"])
 	}
 	if attrs := env["OTEL_RESOURCE_ATTRIBUTES"]; !strings.Contains(attrs, "turn-1") ||
 		!strings.Contains(attrs, "engineer") {
 		t.Errorf("the run's spans name no turn or seat: %q", attrs)
+	}
+}
+
+// launchedFrom is the span a run in these cases is launched from.
+var launchedFrom = events.TraceContext{
+	TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", SpanID: "00f067aa0ba902b7",
+}
+
+// THE BOX'S TRACEPARENT NESTS ITS SPANS UNDER THE TURN'S, AND CARRIES THE
+// TURN'S SAMPLING DECISION.
+//
+// Without TRACEPARENT the box's spans form a second, unrelated trace that
+// nobody finds. With it hardcoded to `-01`, as it was, a run launched from a
+// turn the operator's sampler had decided not to record was exported from
+// inside the box anyway — children under a parent nobody exported. So the flag
+// is the turn's own, both ways, and a run whose launching span has no id hands
+// the box no parent at all rather than a malformed one.
+//
+// Mutation: write `-01` whatever the turn decided and the unsampled case goes
+// red.
+func TestTheBoxsTraceparentFollowsTheTurnsDecision(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsampled := launchedFrom
+	unsampled.Unsampled = true
+	noSpan := events.TraceContext{TraceID: launchedFrom.TraceID}
+	for _, tc := range []struct {
+		name  string
+		trace events.TraceContext
+		want  string
+	}{
+		{"sampled", launchedFrom, "00-" + launchedFrom.TraceID + "-" + launchedFrom.SpanID + "-01"},
+		{"unsampled", unsampled, "00-" + launchedFrom.TraceID + "-" + launchedFrom.SpanID + "-00"},
+		{"no span to nest under", noSpan, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := receiver.RunEnv(t.Context(), tc.trace, "turn-1", "engineer", time.Hour)
+			got, set := env[sandbox.TraceparentVar]
+			if got != tc.want || set != (tc.want != "") {
+				t.Errorf("%s = %q (set: %v), want %q", sandbox.TraceparentVar, got, set, tc.want)
+			}
+			if env[otlpenv.EndpointVar] == "" {
+				t.Error("a run with a trace got no endpoint")
+			}
+		})
 	}
 }
 
@@ -373,7 +420,8 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env := receiver.RunEnv("", "span", "turn-1", "engineer", time.Hour); len(env) != 0 {
+	if env := receiver.RunEnv(t.Context(), events.TraceContext{SpanID: launchedFrom.SpanID},
+		"turn-1", "engineer", time.Hour); len(env) != 0 {
 		t.Fatalf("a trace-less run got %v", env)
 	}
 }
@@ -505,10 +553,14 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
+	env := sandbox.RunEnvFor(t.Context(), manager, sandbox.LaunchRequest{
+		// LAUNCHED FROM AN UNSAMPLED TURN, so the TRACEPARENT below is
+		// read off the launch's own record of the decision — the path
+		// every real launch takes — rather than off the receiver alone.
 		Turn: sandbox.TurnRef{
-			TraceID: "trace-abc", SpanID: "span-def",
-			TurnID: "turn-1", AgentHandle: "engineer",
+			TraceID: launchedFrom.TraceID, SpanID: launchedFrom.SpanID,
+			TraceUnsampled: true,
+			TurnID:         "turn-1", AgentHandle: "engineer",
 		},
 		Spec: sandbox.Spec{
 			CodingAgent: "claude-code",
@@ -523,9 +575,11 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 		t.Errorf("the engine overrode the operator's collector: %q", got)
 	}
 	// AND WHAT THE OPERATOR DID NOT SET IS STILL ADDED, or the run would
-	// lose the trace context that nests its spans under the turn.
-	if env["TRACEPARENT"] != "00-trace-abc-span-def-01" {
-		t.Errorf("TRACEPARENT = %q", env["TRACEPARENT"])
+	// lose the trace context that nests its spans under the turn — with the
+	// turn's own decision as its flag.
+	want := "00-" + launchedFrom.TraceID + "-" + launchedFrom.SpanID + "-00"
+	if got := env[sandbox.TraceparentVar]; got != want {
+		t.Errorf("TRACEPARENT = %q, want %q", got, want)
 	}
 	if env["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("the run environment lost a credential: %q", env["ANTHROPIC_API_KEY"])

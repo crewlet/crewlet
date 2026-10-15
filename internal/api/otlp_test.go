@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -50,7 +51,8 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 // which is the only way a caller ever gets one.
 func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) string {
 	t.Helper()
-	endpoint := receiver.RunEnv(traceID, "span", "turn-1", "engineer", time.Hour)
+	endpoint := receiver.RunEnv(t.Context(), events.TraceContext{TraceID: traceID},
+		"turn-1", "engineer", time.Hour)
 	token := strings.TrimPrefix(
 		endpoint[otlpenv.EndpointVar], "https://engine.internal/otlp/")
 	if token == "" {

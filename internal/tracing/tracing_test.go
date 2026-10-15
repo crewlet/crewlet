@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,33 +106,57 @@ func TestANestedSpanReportsItselfAndItsParent(t *testing.T) {
 
 // A turn woken by an event off the queue must continue the trigger's trace,
 // not start a new one. This is the whole point of carrying ids in the envelope.
+//
+// AND IT KEEPS THE TRIGGER'S DECISION, both ways. This case used to pin that a
+// restored trace is ALWAYS sampled, which was the bug: WithRemote hardcoded the
+// sampled flag, so a trace its root had decided not to sample was exported
+// from its second hop on. Run under the default sampler, which samples every
+// root, so the unsampled half can only pass by honouring the flag it was given.
+//
+// Mutation: put `TraceFlags: trace.FlagsSampled` back in WithRemote and the
+// unsampled half goes red.
 func TestARestoredTraceIsContinuedNotRestarted(t *testing.T) {
 	configure(t, nil)
 
-	// What a publisher wrote into the envelope on another node.
-	origin := events.TraceContext{
-		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
-		SpanID:  "00f067aa0ba902b7",
-	}
+	for _, unsampled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unsampled=%v", unsampled), func(t *testing.T) {
+			// What a publisher wrote into the envelope on another node.
+			origin := events.TraceContext{
+				TraceID:   "4bf92f3577b34da6a3ce929d0e0e4736",
+				SpanID:    "00f067aa0ba902b7",
+				Unsampled: unsampled,
+			}
 
-	ctx := WithRemote(context.Background(), origin)
-	ctx, span := Start(ctx, "test", "agent.turn")
-	defer span.End()
+			ctx := WithRemote(context.Background(), origin)
+			ctx, span := Start(ctx, "test", "agent.turn")
+			defer span.End()
 
-	got := TraceOf(ctx)
-	if got.TraceID != origin.TraceID {
-		t.Errorf("trace id = %s, want the trigger's %s", got.TraceID, origin.TraceID)
-	}
-	if got.ParentSpanID != origin.SpanID {
-		t.Errorf("parent = %s, want the trigger's span %s", got.ParentSpanID, origin.SpanID)
-	}
-	if got.SpanID == origin.SpanID {
-		t.Error("the turn reused the trigger's span id instead of minting its own")
-	}
-	// The upstream sampling decision must be honoured, or half the tree
-	// goes missing at the collector.
-	if !trace.SpanContextFromContext(ctx).IsSampled() {
-		t.Error("a restored remote trace was not treated as sampled")
+			got := TraceOf(ctx)
+			if got.TraceID != origin.TraceID {
+				t.Errorf("trace id = %s, want the trigger's %s", got.TraceID, origin.TraceID)
+			}
+			if got.ParentSpanID != origin.SpanID {
+				t.Errorf("parent = %s, want the trigger's span %s", got.ParentSpanID, origin.SpanID)
+			}
+			if got.SpanID == origin.SpanID {
+				t.Error("the turn reused the trigger's span id instead of minting its own")
+			}
+			// The upstream sampling decision must be honoured, or half the
+			// tree goes missing at the collector — or, the other way, a
+			// continuation is exported under a parent nobody exported.
+			if sampled := trace.SpanContextFromContext(ctx).IsSampled(); sampled == unsampled {
+				t.Errorf("a restored trace decided unsampled=%v continued sampled=%v",
+					unsampled, sampled)
+			}
+			if span.IsRecording() == unsampled {
+				t.Errorf("a restored trace decided unsampled=%v recorded=%v",
+					unsampled, span.IsRecording())
+			}
+			if got.Unsampled != unsampled {
+				t.Errorf("the turn's events carry unsampled=%v, want the trigger's %v",
+					got.Unsampled, unsampled)
+			}
+		})
 	}
 }
 

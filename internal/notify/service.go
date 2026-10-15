@@ -576,10 +576,10 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	}
 
 	// The SAME trace the webhook edge started, so a delivery and the turn
-	// it wakes are one story rather than two unrelated ones.
-	wake := events.New(out, events.TraceContext{
-		TraceID: ev.TraceID, ParentSpanID: ev.SpanID,
-	})
+	// it wakes are one story rather than two unrelated ones — and the same
+	// sampling decision, so the turn is exported exactly when the delivery
+	// that woke it was.
+	wake := events.New(out, ev.Trace().Beneath())
 	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
 	// REPLACES the random one events.New minted rather than riding beside
 	// it, because the id is what the inbox and the fleet completion ledger

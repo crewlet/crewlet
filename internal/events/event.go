@@ -88,6 +88,13 @@ type Event struct {
 	SpanID       string `json:"span_id"`
 	ParentSpanID string `json:"parent_span_id"`
 
+	// TraceUnsampled carries the trace's SAMPLING DECISION across the hop
+	// the three ids cross — see [TraceContext.Unsampled]. Written only when
+	// true, so a sampled event's wire shape is the one it has always had,
+	// and an event from a peer that never wrote the key reads as sampled,
+	// which is what every event meant before the decision travelled.
+	TraceUnsampled bool `json:"trace_unsampled,omitempty"`
+
 	// Turn-engine bookkeeping. Populated on outbound events by the turn
 	// engine and forwarded by the notification and A2A services, so an
 	// agent woken by a colleague handoff inherits the correct depth and
@@ -136,7 +143,7 @@ type Event struct {
 // in an incoming object belongs to Data (if the type is known) or Extra.
 var envelopeKeys = map[string]struct{}{
 	"id": {}, "type": {}, "timestamp": {}, "source": {}, "payload": {},
-	"trace_id": {}, "span_id": {}, "parent_span_id": {},
+	"trace_id": {}, "span_id": {}, "parent_span_id": {}, "trace_unsampled": {},
 	"delegation_depth": {}, "parent_turn_id": {}, "delegation_chain": {},
 	"node": {},
 }
@@ -155,13 +162,14 @@ var envelopeKeys = map[string]struct{}{
 func New[T any, P PayloadPtr[T]](data T, tc TraceContext) *Event {
 	p := P(&data)
 	return &Event{
-		ID:           uuid.New(),
-		Type:         p.EventType(),
-		Timestamp:    time.Now().UTC(),
-		TraceID:      tc.TraceID,
-		SpanID:       tc.SpanID,
-		ParentSpanID: tc.ParentSpanID,
-		Data:         p,
+		ID:             uuid.New(),
+		Type:           p.EventType(),
+		Timestamp:      time.Now().UTC(),
+		TraceID:        tc.TraceID,
+		SpanID:         tc.SpanID,
+		ParentSpanID:   tc.ParentSpanID,
+		TraceUnsampled: tc.Unsampled,
+		Data:           p,
 	}
 }
 
@@ -180,13 +188,14 @@ func NewFrom(data Payload, tc TraceContext) *Event {
 		return nil
 	}
 	return &Event{
-		ID:           uuid.New(),
-		Type:         data.EventType(),
-		Timestamp:    time.Now().UTC(),
-		TraceID:      tc.TraceID,
-		SpanID:       tc.SpanID,
-		ParentSpanID: tc.ParentSpanID,
-		Data:         asPointer(data),
+		ID:             uuid.New(),
+		Type:           data.EventType(),
+		Timestamp:      time.Now().UTC(),
+		TraceID:        tc.TraceID,
+		SpanID:         tc.SpanID,
+		ParentSpanID:   tc.ParentSpanID,
+		TraceUnsampled: tc.Unsampled,
+		Data:           asPointer(data),
 	}
 }
 
@@ -213,6 +222,45 @@ type TraceContext struct {
 	TraceID      string
 	SpanID       string
 	ParentSpanID string
+
+	// Unsampled is the trace's sampling decision: true when the span that
+	// published the event is not recorded for export. It is the W3C
+	// `sampled` flag, inverted so the ZERO VALUE means sampled — which is
+	// what a minted root means under the default sampler, and what every
+	// event a peer wrote without the field meant.
+	//
+	// IT TRAVELS because the decision is made ONCE, where a trace starts,
+	// and every hop after that only follows it. Without it a restored
+	// trace could only be read as sampled: a node that continued an
+	// UNSAMPLED trace off the queue exported the continuation, so the
+	// collector held children under a parent that was never exported, and
+	// every coding box was handed a `traceparent` saying sampled whatever
+	// the turn that launched it had been decided as.
+	Unsampled bool
+}
+
+// Trace reads the envelope's trace context back: the inverse of what [New]
+// stamps, the sampling decision included. Every reader that restores or
+// copies an event's trace goes through it, so a field added to the trace
+// cannot be carried by one of them and dropped by the next.
+func (e *Event) Trace() TraceContext {
+	return TraceContext{
+		TraceID: e.TraceID, SpanID: e.SpanID, ParentSpanID: e.ParentSpanID,
+		Unsampled: e.TraceUnsampled,
+	}
+}
+
+// Beneath is the trace of an event published BENEATH tc's span by code that
+// opens no span of its own — a relay, a coordinator writing about a run: the
+// same trace and the same decision, tc's span as its parent, and no span id,
+// since no span emitted it.
+//
+// The decision is the point of having one rule. Each of these sites used to
+// spell the two ids out by hand, and a third field is exactly what a
+// hand-written copy drops — here, silently turning an unsampled trace sampled
+// one hop later.
+func (tc TraceContext) Beneath() TraceContext {
+	return TraceContext{TraceID: tc.TraceID, ParentSpanID: tc.SpanID, Unsampled: tc.Unsampled}
 }
 
 // The optional interfaces below let a payload contribute to the envelope's
@@ -344,6 +392,7 @@ type envelope struct {
 	TraceID         string         `json:"trace_id"`
 	SpanID          string         `json:"span_id"`
 	ParentSpanID    string         `json:"parent_span_id"`
+	TraceUnsampled  bool           `json:"trace_unsampled,omitempty"`
 	DelegationDepth int            `json:"delegation_depth"`
 	ParentTurnID    string         `json:"parent_turn_id"`
 	DelegationChain []string       `json:"delegation_chain,omitempty"`
@@ -360,9 +409,9 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 	env := envelope{
 		ID: e.ID, Type: e.Type, Timestamp: e.Timestamp, Source: e.Source,
 		Payload: e.Payload, TraceID: e.TraceID, SpanID: e.SpanID,
-		ParentSpanID: e.ParentSpanID, DelegationDepth: e.DelegationDepth,
-		ParentTurnID: e.ParentTurnID, DelegationChain: e.DelegationChain,
-		Node: e.Node,
+		ParentSpanID: e.ParentSpanID, TraceUnsampled: e.TraceUnsampled,
+		DelegationDepth: e.DelegationDepth, ParentTurnID: e.ParentTurnID,
+		DelegationChain: e.DelegationChain, Node: e.Node,
 	}
 	raw, err := json.Marshal(env)
 	if err != nil {
@@ -412,7 +461,8 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	}
 	e.ID, e.Type, e.Timestamp, e.Source = env.ID, env.Type, env.Timestamp, env.Source
 	e.Payload, e.TraceID, e.SpanID = env.Payload, env.TraceID, env.SpanID
-	e.ParentSpanID, e.DelegationDepth = env.ParentSpanID, env.DelegationDepth
+	e.ParentSpanID, e.TraceUnsampled = env.ParentSpanID, env.TraceUnsampled
+	e.DelegationDepth = env.DelegationDepth
 	e.ParentTurnID, e.DelegationChain = env.ParentTurnID, env.DelegationChain
 	e.Node = env.Node
 

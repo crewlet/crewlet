@@ -1996,6 +1996,10 @@ func notificationSourceOf(evs []*events.Event) string {
 // them from different events is how a turn ends up filed under a trace whose
 // root says something it did not react to.
 //
+// The whole of the event's trace, its SAMPLING DECISION included, so the turn
+// continues the trigger's trace as its root decided it — see
+// [events.TraceContext.Unsampled].
+//
 // An empty result is ordinary rather than exceptional: an event its publisher
 // gave no trace context (an A2A wake, an operator's answer to a parked run)
 // carries no ids, and WithRemote turns that into a fresh root.
@@ -2004,9 +2008,7 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 		if ev == nil {
 			continue
 		}
-		return events.TraceContext{
-			TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
-		}
+		return ev.Trace()
 	}
 	return events.TraceContext{}
 }

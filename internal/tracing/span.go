@@ -7,6 +7,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
@@ -20,12 +22,15 @@ import (
 // # Two representations of one fact, and why both stay
 //
 // OTel carries a span in `context.Context`; Crewlet carries `trace_id` /
-// `span_id` / `parent_span_id` in the event envelope, which is what reaches
-// `crewlet_events`, `GET /events/trace/{id}` and the dashboard's trace tree.
-// Neither can replace the other: a `context.Context` does not survive a
-// JetStream publish, and three hex strings do not carry a live span. So this
-// file is the ONE place they are converted, in both directions, and no other
-// package builds a `TraceContext` by hand.
+// `span_id` / `parent_span_id` — and the sampling decision, `trace_unsampled`
+// — in the event envelope, which is what reaches `crewlet_events`,
+// `GET /events/trace/{id}` and the dashboard's trace tree. Neither can replace
+// the other: a `context.Context` does not survive a JetStream publish, and
+// three hex strings do not carry a live span. So this file is the ONE place
+// they are converted, in both directions. Copying a trace from one event, or
+// one run row, to the next is the envelope's own business —
+// [events.Event.Trace] and [events.TraceContext.Beneath] — so a field added to
+// the trace is carried by every hop or by none.
 //
 // # Why a span is allowed in context.Context at all
 //
@@ -46,7 +51,8 @@ import (
 // reconstructs the tree from the span records themselves. Crewlet's event
 // envelope has a `parent_span_id` column that predates any of this and that
 // the dashboard's tree reads directly, so the parent has to be remembered
-// alongside. [Start] is the only writer.
+// alongside. [Start] writes it for a span it opens and [WithRemote] for a
+// span it restores, and nothing else writes it.
 type parentKey struct{}
 
 // Start opens a span and makes its ids available to everything below it — the
@@ -81,8 +87,10 @@ func Start(ctx context.Context, component, name string, attrs ...attribute.KeyVa
 	return ctx, span
 }
 
-// TraceOf renders the active span as the envelope's three fields, so an event
-// published from inside a span carries the ids that span will export under.
+// TraceOf renders the active span as the envelope's fields, so an event
+// published from inside a span carries the ids that span will export under —
+// and its SAMPLING DECISION, so whatever restores the trace on the far side of
+// the queue continues it as decided rather than re-deciding it.
 //
 // # A fresh root when there is no span
 //
@@ -91,17 +99,56 @@ func Start(ctx context.Context, component, name string, attrs ...attribute.KeyVa
 // id is one the store cannot group and the dashboard cannot place. So the
 // no-span answer is the same answer it always was — a freshly minted root —
 // and the call sites simply stopped having to know which case they were in.
+//
+// A minted root is DECIDED like any other root: by the operator's root rule
+// ([rootSampler]), asked about the minted trace id. Every rule it can hold
+// decides on the trace id alone, so the provider deciding a span-rooted trace
+// and this deciding a span-less one cannot disagree about the same id, and a
+// ratio of 0.1 governs the traces a schedule's span roots and the ones an
+// event published outside any span roots alike.
+//
+// # A restored trace with no span keeps its trace
+//
+// [WithRemote] given a trace id and no span id — an event published beneath a
+// span by code that opens none, such as a chat wake — restores the trace with
+// no parent span. That context holds no VALID span, and minting there would
+// file the event under a trace nobody else is in, so it reports the restored
+// trace and decision back unchanged instead.
 func TraceOf(ctx context.Context) events.TraceContext {
 	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() {
-		return events.NewTrace()
-	}
 	parent, _ := ctx.Value(parentKey{}).(string)
-	return events.TraceContext{
-		TraceID:      sc.TraceID().String(),
-		SpanID:       sc.SpanID().String(),
-		ParentSpanID: parent,
+	switch {
+	case sc.IsValid():
+		return events.TraceContext{
+			TraceID:      sc.TraceID().String(),
+			SpanID:       sc.SpanID().String(),
+			ParentSpanID: parent,
+			Unsampled:    !sc.IsSampled(),
+		}
+	case sc.IsRemote() && sc.TraceID().IsValid():
+		return events.TraceContext{
+			TraceID:      sc.TraceID().String(),
+			ParentSpanID: parent,
+			Unsampled:    !sc.IsSampled(),
+		}
 	}
+	tc := events.NewTrace()
+	tc.Unsampled = !sampledRoot(ctx, tc.TraceID)
+	return tc
+}
+
+// sampledRoot asks the root rule about a trace this process roots without a
+// span. The id is one [events.NewTrace] just minted, so it always parses; a
+// parse failure would be a minting bug, and sampling it is the failure an
+// operator can see.
+func sampledRoot(ctx context.Context, hex string) bool {
+	id, err := trace.TraceIDFromHex(hex)
+	if err != nil {
+		return true
+	}
+	return rootSampler().ShouldSample(sdktrace.SamplingParameters{
+		ParentContext: ctx, TraceID: id,
+	}).Decision == sdktrace.RecordAndSample
 }
 
 // WithRemote restores a trace that arrived from somewhere else — an event off
@@ -109,9 +156,28 @@ func TraceOf(ctx context.Context) events.TraceContext {
 // opened beneath it become children of the span that caused them rather than
 // new roots.
 //
-// The restored context is marked REMOTE, which is what makes the sampler treat
-// the upstream decision as authoritative (see [sampler]): a node that re-decided
-// sampling for a trace already in flight is how half a tree goes missing.
+// # The decision it arrived with is the one it keeps
+//
+// The restored context is marked REMOTE and carries the trace's own sampling
+// decision ([events.TraceContext.Unsampled]), and the provider's sampler is
+// parent-based, so a span opened beneath it is sampled exactly when the trace
+// it continues was: a node that re-decided a trace already in flight is how a
+// tree ends up with children under a parent nobody exported, or with half its
+// spans missing. A trace id with NO span id is a context the SDK does not treat
+// as a parent at all — see [continued], the root sampler that keeps its
+// decision anyway.
+//
+// It is also the decision a process this engine starts is handed: the
+// TRACEPARENT a coding box receives is this context rendered by the propagator
+// ([Traceparent]), so the box's flag follows the turn rather than claiming
+// sampled for every run.
+//
+// # Its parent is the trace's own
+//
+// The context's parent id is set to tc.ParentSpanID, so [TraceOf] on the
+// restored context reports tc back unchanged. Left alone, it kept whatever the
+// caller's context held before — a stale parent from a span that has nothing
+// to do with this trace.
 //
 // An unusable id returns ctx unchanged rather than erroring. This is fed by the
 // wire, and some wakes carry no trace — one published outside any span, such
@@ -129,20 +195,49 @@ func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 		// tree already tolerates a root with no parent span.
 		spanID = trace.SpanID{}
 	}
+	flags := trace.FlagsSampled
+	if tc.Unsampled {
+		flags = 0
+	}
 	sc := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID: traceID,
-		SpanID:  spanID,
-		// Sampled, because the upstream that minted this id is the one
-		// that made the decision, and an unsampled parent with sampled
-		// children is a broken tree at the collector. This mirrors what
-		// sandbox/otel.go already hardcodes into the TRACEPARENT it
-		// stamps into a box.
-		TraceFlags: trace.FlagsSampled,
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: flags,
 		Remote:     true,
 	})
+	parent := ""
+	if id, err := trace.SpanIDFromHex(tc.ParentSpanID); err == nil {
+		parent = id.String()
+	}
 	ctx = trace.ContextWithSpanContext(ctx, sc)
+	ctx = context.WithValue(ctx, parentKey{}, parent)
 	return logging.WithTrace(ctx, sc.TraceID().String(), sc.SpanID().String())
 }
+
+// Traceparent renders tc as the W3C `traceparent` value a process this engine
+// starts reads its parent from — "" when tc names no span a child could hang
+// under. Only tc decides what is rendered: whatever span ctx holds is replaced
+// by tc's before the propagator reads it.
+//
+// THROUGH THE PROPAGATOR, from the context [WithRemote] restores, rather than
+// formatted by hand: the flag field is the trace's own decision, and a second
+// encoding of the header beside the one every inbound request is read with is
+// a second place for that decision to be spelled wrong. It was: the sandbox
+// wrote `-01` for every run.
+func Traceparent(ctx context.Context, tc events.TraceContext) string {
+	// THE CALLER'S SPAN IS CLEARED FIRST. WithRemote leaves ctx as it was
+	// for a tc it cannot use, and the propagator would then render the
+	// caller's own span — handing a box the launching frame's parent in
+	// place of the run's, or a parent where the run has none.
+	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
+	carrier := propagation.MapCarrier{}
+	propagator().Inject(WithRemote(ctx, tc), carrier)
+	return carrier.Get(traceparentHeader)
+}
+
+// traceparentHeader is the W3C header [Traceparent] reads back, by the name
+// the trace-context propagator writes it under.
+const traceparentHeader = "traceparent"
 
 // Fail marks a span as failed and records the error.
 //

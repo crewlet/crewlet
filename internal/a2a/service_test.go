@@ -339,6 +339,9 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 	ask := rec.onlyTo(topics.AgentInbox("bob"))[0]
 	ask.TraceID = "0af7651916cd43dd8448eb211c80319c"
 	ask.SpanID = "b7ad6b7169203331"
+	// AND ITS DECISION, unsampled because sampled is the zero value a reply
+	// that dropped it would carry.
+	ask.TraceUnsampled = true
 
 	rec.sent = nil
 	if err := svc.Reply(context.Background(), a2a.Answer{
@@ -347,9 +350,8 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 		t.Fatalf("Reply: %v", err)
 	}
 	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
-	if reply.TraceID != ask.TraceID || reply.SpanID != ask.SpanID {
-		t.Errorf("reply trace = %s/%s, want the ask's %s/%s",
-			reply.TraceID, reply.SpanID, ask.TraceID, ask.SpanID)
+	if reply.Trace() != ask.Trace() {
+		t.Errorf("reply trace = %+v, want the ask's %+v", reply.Trace(), ask.Trace())
 	}
 }
 

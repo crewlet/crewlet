@@ -1249,7 +1249,9 @@ on. Which member and which credential answered is on the phase event.
 run detaches: the phase returns, the process may exit, the seat may move node,
 and the resume can be days later. A live span cannot survive that, so the
 suspending span ends and the resume opens a new one under a reconstructed
-parent — the wait shows up as the gap it actually is.
+parent — the wait shows up as the gap it actually is. The run's record keeps the
+trace's sampling decision beside its ids, so the resumed span is recorded exactly
+when the suspended one was.
 
 #### Dashboard Trace View
 
@@ -1292,8 +1294,13 @@ The sampler is the standard `OTEL_TRACES_SAMPLER`, and it is always parent-based
 `parentbased_always_on` (the default), `parentbased_always_off`, or
 `parentbased_traceidratio` with `OTEL_TRACES_SAMPLER_ARG` as the ratio. A sampler
 that would re-decide a trace already in flight — `always_on`, `traceidratio` — is
-refused at startup with the parent-based spelling to use. Only W3C trace context
-propagates; baggage is neither accepted nor sent.
+refused at startup with the parent-based spelling to use. The decision is made
+once, where a trace starts, and **travels with it**: in the event envelope across
+the queue (`trace_unsampled`), on a suspended coding run's record, and as the
+flag of the `TRACEPARENT` a sandbox is handed — so the turn a delivery wakes, the
+resumed half of a run and a coding box are recorded exactly when the trace they
+continue was, whichever node runs them. Only W3C trace context propagates;
+baggage is neither accepted nor sent.
 
 The full set of variables, including per-signal endpoints, headers and protocols,
 the resource attributes and the service name, is in

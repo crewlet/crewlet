@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracing`
-- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, and `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends
+- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, and `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made
 - **Measured:** the provider is installed unconditionally and only the exporter is switched on, so `trace_id` reaches `crewlet_events` — an indexed column, and what `GET /events/trace/{id}` answers on — with no collector anywhere
 - **Cost-when-tried:** OTel's own built-in default provider is a no-op that passes the parent's span context through, which silently reinstates the bug this package removed. `internal/tracing`'s `init` installs a working one for that reason. And two readers of one set of variable names disagreed three ways while a test asserting the names passed — see "How it is held"
 - **Tag-status:** unreleased
@@ -38,7 +38,10 @@ a tracing backend.
 The sampler is always parent-based, so `OTEL_TRACES_SAMPLER` decides a trace's
 root and a non-parent-based sampler is refused rather than honoured: these
 traces cross processes, and a node re-deciding a trace in flight splits its
-tree. The propagator is W3C trace context alone and `OTEL_PROPAGATORS` is not
+tree. For the same reason the decision crosses every hop the trace does — the
+event envelope, a suspended run's record, a box's `TRACEPARENT` — so whatever
+`OTEL_TRACES_SAMPLER` says on the node that continues a trace, it continues it
+as decided. The propagator is W3C trace context alone and `OTEL_PROPAGATORS` is not
 read: the engine writes no baggage, so the only baggage a context could carry
 is a third party's off a webhook.
 

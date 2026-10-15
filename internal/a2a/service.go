@@ -261,20 +261,21 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 		return err
 	}
 
+	// The ask's whole trace, its sampling decision included, through the one
+	// reader of an envelope's trace rather than field by field.
+	var caused events.TraceContext
+	if ans.CausedBy != nil {
+		caused = ans.CausedBy.Trace()
+	}
 	wake := events.New(types.A2AMessage{
 		ChannelID: ans.ChannelID, Sender: ans.Sender,
 		SenderRole: ans.SenderRole, Question: ans.Question, Content: ans.Content,
-	}, events.TraceContext{})
+	}, caused)
 	wake.Timestamp = now
 	wake.Source = ans.Sender
 	wake.DelegationDepth = ans.DelegationDepth
 	wake.DelegationChain = appendChain(ans.DelegationChain, ans.Sender)
 	wake.ParentTurnID = ans.TurnID
-	if ans.CausedBy != nil {
-		wake.TraceID = ans.CausedBy.TraceID
-		wake.SpanID = ans.CausedBy.SpanID
-		wake.ParentSpanID = ans.CausedBy.ParentSpanID
-	}
 	if err := s.queue.Publish(ctx, topics.AgentInbox(recipient), wake); err != nil {
 		return fmt.Errorf("a2a: wake %s: %w", recipient, err)
 	}

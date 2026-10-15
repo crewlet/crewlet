@@ -286,9 +286,17 @@ reading (a sampler ratio, an export interval) warns and carries on.
 **Sampling is parent-based**, always. The sampler decides a trace where it starts; a
 trace that arrives already decided — an inbound W3C `traceparent` on a webhook — keeps
 its decision whatever the sampler says, because an unsampled parent with sampled children
-is a broken tree at the collector, and these traces cross processes routinely. Sampling
-does not depend on whether anything exports: with no endpoint, spans are created and
-decided exactly as they would be with one, and their ids still flow into every event.
+is a broken tree at the collector, and these traces cross processes routinely. **The
+decision travels with the trace across every hop after that**: it rides in each event's
+envelope (`trace_unsampled`, written only when a trace is not sampled) to the turn a
+delivery wakes, on whichever node runs it; it is kept on a suspended coding run's record,
+so the resumed half — days later, possibly on another node — continues as the first half
+was decided; and it is the flag of the `TRACEPARENT` a sandbox is handed (`-00` for a run
+launched from an unsampled turn). So a node's sampler decides only the traces that node
+starts — a webhook delivery, a schedule's fire, an event published outside any span — and
+a fleet whose nodes are configured differently splits no tree. Sampling does not depend
+on whether anything exports: with no endpoint, spans are created and decided exactly as
+they would be with one, and their ids still flow into every event.
 
 Only W3C **trace context** propagates — `traceparent` and `tracestate` — and
 `OTEL_PROPAGATORS` is not read. W3C baggage is neither read from an inbound request nor

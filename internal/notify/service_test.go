@@ -241,7 +241,11 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	h := newService(t, nil)
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
 
-	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+	in := delivery("tracker")
+	// UNSAMPLED, because sampled is the zero value: a wake that dropped the
+	// webhook's decision would carry exactly that and look correct.
+	in.TraceUnsampled = true
+	if got := h.svc.Handle(t.Context(), in); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
 
@@ -287,9 +291,11 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 		t.Fatalf("conversation identity = %q", got)
 	}
 	// And the trace is the webhook's, so a delivery and the turn it wakes
-	// are one story.
-	if woken[0].TraceID != "" && woken[0].TraceID == events.NewTrace().TraceID {
-		t.Fatal("the wake minted a fresh trace")
+	// are one story: the wake hangs beneath the delivery's span, under the
+	// delivery's sampling decision. This used to compare the wake against a
+	// trace minted on the spot — a check no wake could ever fail.
+	if got, want := woken[0].Trace(), in.Trace().Beneath(); got != want {
+		t.Fatalf("the wake is filed under %+v, want beneath the delivery: %+v", got, want)
 	}
 }
 

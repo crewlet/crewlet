@@ -331,6 +331,55 @@ func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
 	}
 }
 
+// A RUN LAUNCHED FROM AN UNSAMPLED TURN STAYS UNSAMPLED, from the launch's
+// row through the announcement that it started to the completion that resumes
+// it — every event the run is filed under, and the row the resume restores
+// its trace from.
+//
+// Each of these used to spell the run's two ids out by hand, which is the
+// shape that drops a third field: an unsampled turn's run came back sampled at
+// whichever of them forgot, and the resumed turn exported under a parent the
+// collector never received.
+//
+// Mutations: drop the decision from the launch's row write, from
+// [TurnRef.Trace] or from [PendingRun.Trace], and this goes red.
+func TestARunKeepsTheDecisionOfTheTurnThatLaunchedIt(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Turn.TraceUnsampled = true
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got, want := rig.get("t1").Trace(), req.Turn.Trace(); got != want {
+		t.Fatalf("the row records the trace %+v, want the launching turn's %+v", got, want)
+	}
+	rig.suspend("t1")
+	rig.runner.Finish(Result{Success: true})
+	rig.tick()
+
+	// Every event about the run hangs BENEATH the launching span, with its
+	// decision: the started announcement and the completion alike.
+	want := req.Turn.Trace().Beneath()
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	seen := map[string]bool{}
+	for _, p := range rig.queue.published {
+		seen[p.event.Type] = true
+		if got := p.event.Trace(); got != want {
+			t.Errorf("%s on %s is filed under %+v, want %+v",
+				p.event.Type, p.topic, got, want)
+		}
+	}
+	for _, kind := range []string{
+		types.SandboxRunStarted{}.EventType(), types.SandboxRunCompleted{}.EventType(),
+	} {
+		if !seen[kind] {
+			t.Errorf("no %s was published — the premise", kind)
+		}
+	}
+}
+
 // A completion event is a pure control signal — the outcome is read at collect
 // time, so nothing about the result may ride on the wire.
 func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {

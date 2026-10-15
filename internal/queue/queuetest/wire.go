@@ -133,6 +133,9 @@ func (s *suite) runWire(t *testing.T) {
 		sent := newEvent("wire_probe")
 		sent.Source = "someone"
 		sent.TraceID, sent.SpanID = "trace-1", "span-1"
+		// UNSAMPLED, because sampled is the zero value and a backend that
+		// dropped the decision would deliver exactly that.
+		sent.TraceUnsampled = true
 		sent.DelegationDepth = 2
 		sent.DelegationChain = []string{"ceo", "cto"}
 		sent.Payload = map[string]any{"conv": "c1"}
@@ -150,9 +153,8 @@ func (s *suite) runWire(t *testing.T) {
 				t.Errorf("type/source arrived as %q/%q, want %q/%q",
 					got.Type, got.Source, sent.Type, sent.Source)
 			}
-			if got.TraceID != sent.TraceID || got.SpanID != sent.SpanID {
-				t.Errorf("trace linkage arrived as %q/%q, want %q/%q",
-					got.TraceID, got.SpanID, sent.TraceID, sent.SpanID)
+			if got.Trace() != sent.Trace() {
+				t.Errorf("trace linkage arrived as %+v, want %+v", got.Trace(), sent.Trace())
 			}
 			if got.DelegationDepth != sent.DelegationDepth {
 				t.Errorf("delegation depth arrived as %d, want %d",

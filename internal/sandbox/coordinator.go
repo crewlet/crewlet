@@ -1192,9 +1192,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
 		return run.Launch
 	}
-	ev := events.New(runPhase(run, facts, result, c.now()), events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
+	ev := events.New(runPhase(run, facts, result, c.now()), run.Trace().Beneath())
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "sandbox_phase_publish_failed",
@@ -1322,9 +1320,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// against the work it is about.
 		WorkItem: run.WorkItem,
 	}
-	ev := events.New(announcement, events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
+	ev := events.New(announcement, run.Trace().Beneath())
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
 		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
@@ -1824,7 +1820,7 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome, AnsweredBy: by, AnsweredBySeat: bySeat,
 	}
-	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
+	ev := events.New(payload, run.Trace().Beneath())
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(payload.EventType()), ev); err != nil {
 		log.WarnContext(ctx, "sandbox_answer_announce_failed",
@@ -2548,9 +2544,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		CodingAgent: run.CodingAgent,
 		Reason:      ending.Reason, Detail: redact.Secrets(detail),
 	}
-	ev := events.New(failed, events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
+	ev := events.New(failed, run.Trace().Beneath())
 	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(failed.EventType()), ev); err != nil {
