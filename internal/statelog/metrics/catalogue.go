@@ -670,11 +670,16 @@ func Catalogue() []Instrument {
 			Name: CodeCacheRebuildRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason", "rule"},
 			Shows: "Rebuilds this node's git cache refused, by the `reason` " +
-				"the git process gave (`corrupt` or `missing`) and the " +
-				"`rule` that refused it. `unchanged`: the repository's " +
+				"the git process gave (`corrupt`, `missing` or `shape` — a " +
+				"shape only once reading the directory whole in place left " +
+				"the pool still refusing it, since that repair downloads " +
+				"nothing and is never refused) and " +
+				"the `rule` that refused it. `unchanged`: the repository's " +
 				"cache holds exactly what a rebuild that did not end the " +
 				"failure read less than a day ago, and nothing has written " +
-				"into it since, so another would make the same directory; " +
+				"into it since, so another would make the same directory — " +
+				"never for `shape`, whose refusal is itself something " +
+				"written into it; " +
 				"`cooldown`: the last attempt began too recently — ten " +
 				"minutes after the first of a line of attempts that keep " +
 				"failing, twice as long after each one after it, at most a " +
@@ -683,7 +688,8 @@ func Catalogue() []Instrument {
 				"at once rather than downloading the whole repository again. " +
 				"Rising at all is " +
 				"damage no rebuild repairs — a pack the object store lost or " +
-				"holds damaged, rows naming an object no pack holds — which " +
+				"holds damaged, rows naming an object no pack holds, a " +
+				"directory something keeps writing into — which " +
 				"a verify of the repository names; flat while " +
 				"`crewlet.code.cache.rebuilds` rises is damage each rebuild " +
 				"ended.",
@@ -692,13 +698,24 @@ func Catalogue() []Instrument {
 			Name: CodeCacheRebuilds, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
 			Shows: "Repositories this node's git cache read whole from the " +
-				"rows again, by `reason`. `corrupt` and `missing` are a " +
-				"rebuild a git process asked for — it found a pack or an " +
-				"index it could not read, or an object a row names that no " +
-				"pack held — into a new directory beside the damaged one; " +
-				"either rising is disk or object-store damage, which a " +
-				"verify of the repository names — every pack checked against " +
-				"its row, the ref file against the digest written with it, " +
+				"rows again, by `reason`. `corrupt`, `missing` and `shape` " +
+				"are a repair a git process asked for — a request's or a " +
+				"sync's own. `corrupt` and `missing` are a rebuild into a " +
+				"new directory beside the damaged one, downloading every " +
+				"pack again: it found a pack or an index it could not read, " +
+				"or an object a row names that no pack held. `shape` is the " +
+				"pool refusing to run git there because the directory is " +
+				"not the shape the engine writes (its config edited, a " +
+				"commondir, an objects directory not its own, or an " +
+				"alternates file planted in it), repaired IN PLACE — the " +
+				"same directory read whole again, every pack it holds " +
+				"reused and none downloaded — and rebuilt into a new one " +
+				"only when the pool still refuses it after that; " +
+				"any of them rising is disk or object-store damage, or " +
+				"something outside the engine writing into the cache, which " +
+				"a verify of the repository names — every pack checked " +
+				"against its row, the ref file against the digest written " +
+				"with it, the directory's shape, " +
 				"and git's connectivity check. `verify` is that check, asked " +
 				"to repair what it " +
 				"found, rebuilding the repository the same way. `stream` is " +

@@ -85,10 +85,6 @@ func ProtectAfterForce(cmds []code.Command, rules []code.Protection, judged []co
 	return protectAfterForce(cmds, parsed, seen), nil
 }
 
-// RebuildReason is rebuildReason: whether a git process's failure in a cache
-// directory is one a rebuild repairs, and under which reason.
-func RebuildReason(err error) (cache.RebuildReason, bool) { return rebuildReason(err) }
-
 // TestLanding is a landing (land.go) as a case forms one — a push the relay
 // never saw, its pack written into its scratch by the case.
 type TestLanding struct {

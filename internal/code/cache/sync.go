@@ -53,8 +53,15 @@ type waiter struct {
 	// an ordinary round (Cache.run).
 	fresh   statelog.Freshness
 	rebuild bool
-	got     Synced
-	err     error
+	// checks: the caller is a CHECK of the copy (Verification.Run), which a
+	// round whose own git names damage of its incarnation answers with that
+	// damage and the incarnation pinned (damage, got) rather than with the
+	// repair every other caller waits on: a check names damage, and only an
+	// operator's Repair repairs it.
+	checks bool
+	got    Synced
+	err    error
+	damage *damaged
 	// done is closed once the caller has its answer — and its pin, taken
 	// under the entry's mu before the close, so nothing between the round's
 	// end and the caller's wake can retire what it is handed. The caller's
@@ -84,8 +91,18 @@ func newWaiter(fresh statelog.Freshness) *waiter {
 // answered at once. ctx bounds the caller's own wait and nothing else: the
 // round runs on for everyone else.
 func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (Synced, error) {
+	s, _, err := c.sync(ctx, repoID, fresh, false)
+	return s, err
+}
+
+// sync is Sync, and for a CHECK of the copy (checks; Verification.Run) also
+// the damage a round's own git met in the incarnation it answers pinned
+// (waiter.checks, damagedRound) — nil when it met none.
+func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshness, checks bool) (Synced, *damaged,
+	error) {
+
 	if err := c.checkSync(repoID, fresh); err != nil {
-		return Synced{}, err
+		return Synced{}, nil, err
 	}
 	for {
 		e := c.entryFor(repoID)
@@ -97,12 +114,16 @@ func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 		}
 		if s, ok := c.atOnce(e, fresh); ok {
 			e.mu.Unlock()
-			return s, nil
+			return s, nil, nil
 		}
 		w := newWaiter(fresh)
+		w.checks = checks
 		c.join(e, w)
 		e.mu.Unlock()
-		return c.await(ctx, e, w)
+		s, err := c.await(ctx, e, w)
+		// Written before the answer's close, which await waited for, or
+		// never: a caller that left is answered no damage.
+		return s, w.damage, err
 	}
 }
 
@@ -311,12 +332,29 @@ func (c *Cache) start(e *entry) {
 // also recorded on that incarnation (failedRebuild), which is what the next
 // Rebuild of it is refused by.
 //
+// A ROUND WHOSE OWN GIT NAMED DAMAGE OF ITS INCARNATION IS ANSWERED BY THE
+// REPAIR OF IT (damagedRound). The round's git processes before its answer —
+// the peel of the tags it sets, a full round's index — run in the incarnation,
+// and a full round holds what its sweep left to the pool's own shape check, so
+// a failure classified as damage (DamageReason) is the cache's to repair
+// exactly as a host's process's is, under the same rules. Answered with the
+// failure instead, no caller would ever hold a Synced to ask for the repair
+// with, and every round after it would meet the same directory: a cache
+// refused for its shape, with a tag pushed since, failed every sync until a
+// restart.
+//
 // The body runs holding the entry's write lock: nothing changes what the
 // directory holds beside a round (entry.write).
 func (c *Cache) run(e *entry, r *round) {
 	inc, kind, err := c.converging(e, r)
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	var (
+		d    *damaged
+		quit *refused
+	)
+	if r.rebuild == "" && errors.As(err, &d) && !e.dead && e.current == d.inc {
+		quit = c.damagedRound(e, r, d)
+	}
 	requeue := r.rebuild != "" && err != nil && !e.dead
 	if requeue {
 		failedRebuild(r.of, err)
@@ -330,7 +368,106 @@ func (c *Cache) run(e *entry, r *round) {
 	}
 	e.running = nil
 	c.start(e)
+	e.mu.Unlock()
+	if quit != nil {
+		c.report(*quit)
+	}
 }
+
+// damagedRound answers the callers of r, a round whose own git named damage d
+// of the entry's current incarnation; e.mu is held. Every caller of r is
+// answered or handed on here, and what it answers is a refusal to report once
+// e.mu is let go, or nil.
+//
+//   - A CHECK (waiter.checks) is answered with the damage and the incarnation
+//     pinned: it names the damage, and an operator's Repair is what repairs
+//     it — repaired under it instead, a plain check would quietly download the
+//     repository and report the repaired copy clean.
+//   - Every other caller waits on the REPAIR, asked for only when one waits.
+//     A SHAPE refusal met by a round that did not sweep — a delta's peel — is
+//     repaired IN PLACE (markWhole): the incarnation is read whole by the
+//     round queued behind this one, whose sweep puts every shape the pool
+//     refuses right and reuses every pack it holds, so it costs no GET; the
+//     callers are queued for that round. Damage a sweep did not end — a
+//     shape refusal past the sweep of the very round that met it, a pack or
+//     an object git could not read — is a REBUILD, asked for as Rebuild asks
+//     for one (askRebuild: joined if one is queued, refused by the same
+//     rules, counted as an ask of the incarnation's line). A refused rebuild
+//     answers its callers as it answers Rebuild (ErrRebuildRefused); one that
+//     fails answers them as it answers the callers of any round it was queued
+//     over — queued again for an ordinary round, which meets the damage again
+//     and is refused by the window the failed attempt opened.
+func (c *Cache) damagedRound(e *entry, r *round, d *damaged) *refused {
+	c.log.Info("code_sync_damaged", "repo", e.id, "reason", string(d.reason), "swept", d.swept, "error", d.err)
+	var asking []*waiter
+	for _, w := range r.waiters {
+		switch {
+		case w.gone:
+			c.answer(e, w, nil, "", d)
+		case w.checks:
+			w.got, w.damage = c.pin(e, d.inc, SyncNone), d
+			close(w.done)
+		default:
+			asking = append(asking, w)
+		}
+	}
+	r.waiters = nil
+	switch {
+	case len(asking) == 0:
+		return nil
+	case d.reason == RebuildShape && !d.swept:
+		markWhole(d.inc, RebuildShape)
+		for _, w := range asking {
+			c.queue(e, w)
+		}
+		return nil
+	}
+	next, rule := c.askRebuild(e, d.inc, d.reason, true, nil, c.now())
+	if rule == "" {
+		next.waiters = append(next.waiters, asking...)
+		return nil
+	}
+	f := c.refusal(e, d.name, d.reason, rule, c.now())
+	for _, w := range asking {
+		c.answer(e, w, nil, "", f.err())
+	}
+	return &f
+}
+
+// markWhole marks inc to be read WHOLE, IN PLACE, by its next round, for
+// reason; its entry's mu is held. Nothing is answered from it at once until
+// that round has run (atOnce), the round is a full one — its sweep makes the
+// directory its image, reusing every pack it holds — and it counts reason as
+// it converges. The mark is counted on the incarnation (marks), so a round that
+// began before it, whose sweep may predate the damage it answers, converges
+// nothing. No new incarnation, and no GET for a pack the incarnation holds:
+// a directory the pool refuses for its shape lost none of its packs.
+func markWhole(inc *incarnation, reason RebuildReason) {
+	inc.converged = false
+	inc.marks++
+	if inc.reread == "" {
+		inc.reread = reason
+	}
+}
+
+// damaged is a round's own git process, in inc, failing with damage of inc
+// (DamageReason): what converge answers so Cache.run can ask for its repair.
+// It reads as the git failure it wraps.
+type damaged struct {
+	inc    *incarnation
+	name   string // the repository's name, as the round's snapshot read it
+	reason RebuildReason
+	// swept: the round was a full one, whose sweep had already made the
+	// directory its image and held it to the pool's shape check — so a shape
+	// refusal there is one the sweep did not end.
+	swept bool
+	err   error
+}
+
+func (d *damaged) Error() string { return d.err.Error() }
+
+// Unwrap is the git failure, so errors.Is sees gitproc's classification.
+func (d *damaged) Unwrap() error { return d.err }
 
 // converging is converge holding ALL of the entry's write lock, waited for
 // under the cache's lifetime: whatever else holds the lock holds it for a
@@ -410,6 +547,12 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	e.mu.Lock()
 	inc := e.current
 	full := inc == nil || inc.state == nil || !inc.converged
+	// marks is the in-place marks this round's convergence must still find
+	// (markWhole), as epoch is the cache's.
+	var marks uint64
+	if inc != nil {
+		marks = inc.marks
+	}
 	e.mu.Unlock()
 	// A REBUILD reads the repository whole into a new incarnation beside the
 	// current one (replaced), which serves until the new one has converged;
@@ -417,7 +560,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	// old one serving.
 	var replaced, building *incarnation
 	if rebuild != "" {
-		replaced, inc, full = inc, nil, true
+		replaced, inc, full, marks = inc, nil, true, 0
 		defer func() {
 			if err != nil && building != nil {
 				c.abandon(e, building)
@@ -510,7 +653,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			}
 			e.mu.Unlock()
 		}
-		res, err = c.apply(ctx, e, inc, snap, epoch)
+		res, err = c.apply(ctx, e, inc, snap, epoch, marks)
 		var missing *ErrPackMissing
 		switch {
 		case errors.Is(err, errRefsNotOurs) && !snap.full && !askedFull:
@@ -525,6 +668,13 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 				"object", missing.Pack.Object.String(), "damaged", missing.Damaged)
 			return nil, "", err
 		case err != nil:
+			if reason, ok := DamageReason(err); ok && rebuild == "" {
+				// The round's own git, in inc, named its damage — or, on a
+				// full answer, the sweep left a shape the pool refuses:
+				// Cache.run makes the repair of it this round's answer.
+				return nil, "", &damaged{inc: inc, name: snap.repo.Name, reason: reason, swept: snap.full,
+					err: err}
+			}
 			return nil, "", err
 		}
 		if rebuild != "" {
@@ -564,9 +714,12 @@ type applied struct {
 }
 
 // apply makes inc equal to snap — steps 4 to 8 of converge. epoch is the
-// reread mark the round began under: a full answer converges the incarnation
-// only while no mark was made since.
-func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch uint64) (applied, error) {
+// reread mark the round began under, and marks the incarnation's in-place
+// marks then (markWhole): a full answer converges the incarnation only while
+// no mark of either was made since.
+func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch, marks uint64) (applied,
+	error) {
+
 	var res applied
 	if snap.full {
 		// The sweep lists the directory and moves whatever lies outside the
@@ -658,7 +811,7 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	}
 	if snap.full {
 		e.mu.Lock()
-		inc.converged = c.rereads.Load() == epoch
+		inc.converged = c.rereads.Load() == epoch && inc.marks == marks
 		var reason RebuildReason
 		if inc.converged {
 			reason, inc.reread = inc.reread, ""
@@ -666,6 +819,12 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		e.mu.Unlock()
 		if reason != "" && c.metrics != nil {
 			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(reason)})
+		}
+		if reason == RebuildShape {
+			// A log recreated or gone back is logged once, where it is
+			// seen, for every repository it marks; a shape repaired is
+			// one directory something outside the engine wrote into.
+			c.log.Warn("code_cache_reshaped", "repo", e.id, "incarnation", inc.n, "moved", res.trashed)
 		}
 	}
 	return res, nil

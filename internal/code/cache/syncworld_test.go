@@ -402,6 +402,10 @@ type countingObjects struct {
 	gateN    int
 	gate     chan struct{}
 	hold     func(objstore.Key) <-chan struct{}
+	// fail, when set, is the store's answer to an open of an object, nil
+	// to open it; readFail the answer of every read of an object it opened,
+	// nil to read it.
+	fail, readFail func(objstore.Key) error
 }
 
 func (o *countingObjects) Open(ctx context.Context, obj objstore.Object) (io.ReadCloser, error) {
@@ -410,7 +414,7 @@ func (o *countingObjects) Open(ctx context.Context, obj objstore.Object) (io.Rea
 	o.order = append(o.order, obj.Key)
 	o.inFlight++
 	o.most = max(o.most, o.inFlight)
-	gate, hold := o.gate, o.hold
+	gate, hold, fail, readFail := o.gate, o.hold, o.fail, o.readFail
 	if gate != nil && o.inFlight >= o.gateN {
 		close(gate)
 		o.gate = nil
@@ -442,13 +446,32 @@ func (o *countingObjects) Open(ctx context.Context, obj objstore.Object) (io.Rea
 			}
 		}
 	}
+	if fail != nil {
+		if err := fail(obj.Key); err != nil {
+			done()
+			return nil, err
+		}
+	}
 	rc, err := o.inner.Open(ctx, obj)
 	if err != nil {
 		done()
 		return nil, err
 	}
+	if readFail != nil {
+		if err := readFail(obj.Key); err != nil {
+			rc = failedRead{ReadCloser: rc, err: err}
+		}
+	}
 	return &counted{ReadCloser: rc, done: done}, nil
 }
+
+// failedRead is an object the store opened and then failed to read.
+type failedRead struct {
+	io.ReadCloser
+	err error
+}
+
+func (f failedRead) Read([]byte) (int, error) { return 0, f.err }
 
 // holdUntil holds every open until n are open at once, or quiet has passed.
 func (o *countingObjects) holdUntil(n int, quiet time.Duration) {
@@ -556,6 +579,15 @@ func runGit(t testing.TB, pool *gitproc.Pool, dir string, stdin string, args ...
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	res, err := pool.Run(t.Context(), cmd)
+	return string(res.Stdout), err
+}
+
+// runGitOver is runGit in the scratch or view sc, which names its alternate —
+// the incarnation it leans on — as every process run in it must.
+func runGitOver(t testing.TB, pool *gitproc.Pool, sc *cache.Scratch, args ...string) (string, error) {
+	t.Helper()
+	res, err := pool.Run(t.Context(), gitproc.Cmd{Dir: sc.Dir, Alternate: sc.Alternate, Args: args,
+		Class: gitproc.ClassRead, Deadline: time.Minute})
 	return string(res.Stdout), err
 }
 

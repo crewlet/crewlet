@@ -141,8 +141,9 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 		switch {
 		case errors.Is(err, code.ErrSnapshotMoved):
 			if restarts == MaxSnapshotRestarts {
-				return snapshot{}, fmt.Errorf("cache: %s's history moved under %d reads of its snapshot: %w",
-					id, restarts+1, err)
+				// The log moving under every read is the log not read.
+				return snapshot{}, fmt.Errorf("%w: %s's history moved under %d reads of its snapshot: %w",
+					ErrLogRead, id, restarts+1, err)
 			}
 			restarts++
 			c.log.Info("code_sync_restarted", "repo", id, "restart", restarts, "full", since.IsZero())
@@ -162,14 +163,26 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 	}
 }
 
+// logRead is the estate's failure to answer a page, marked as the code log's
+// (ErrLogRead) — but code.ErrRepoNotFound, which is the log's ANSWER that no
+// row holds the repository, and code.ErrSnapshotMoved, its answer that the
+// history moved under the read, which read gives a fresh start; each is
+// passed on as itself.
+func logRead(err error) error {
+	if errors.Is(err, code.ErrRepoNotFound) || errors.Is(err, code.ErrSnapshotMoved) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrLogRead, err)
+}
+
 // readOnce reads every page of one snapshot, or answers the first page's
-// failure as it is.
+// failure as it is — the estate's, as ErrLogRead (logRead).
 func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position,
 	fresh statelog.Freshness) (snapshot, error) {
 
 	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh})
 	if err != nil {
-		return snapshot{}, err
+		return snapshot{}, logRead(err)
 	}
 	snap := snapshot{
 		full: page.Full, position: page.Position, streamCreated: page.StreamCreated,
@@ -185,7 +198,7 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 		}
 		next := code.StateQuery{RepoID: id, Fresh: fresh, Cursor: page.Next}
 		if page, err = c.fetch.RepoState(ctx, next); err != nil {
-			return snapshot{}, err
+			return snapshot{}, logRead(err)
 		}
 	}
 	if snap.full {

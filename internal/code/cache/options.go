@@ -96,6 +96,10 @@ type knobs struct {
 	// peeling runs as a round's peel is about to read the incarnation at
 	// dir.
 	peeling func(dir string)
+	// swept runs as the sweep's first half has made the incarnation at dir
+	// its image, before what it left is held to the pool's shape check: a
+	// case writes into it there, as something outside the engine would.
+	swept func(dir string)
 	// maintaining runs before each step of a maintenance run, with the run's
 	// own context: a case holds a run in flight by blocking here.
 	maintaining func(ctx context.Context, step string)
@@ -136,6 +140,10 @@ type knobs struct {
 	// staged runs once a round has made a bundle's three files, as it hands
 	// the pack to its worker: a case reads the order the round made them in.
 	staged func(object objstore.Key)
+	// stagedWrite, when set, is what every write into a bundle's staged
+	// files answers while it is downloaded — nil to write: a case makes this
+	// node's own disk fail under a download.
+	stagedWrite func(object objstore.Key) error
 	// asking runs as a round's worker is about to ask for its GET, its
 	// bundle's files made: a case holds one pack there while the round's
 	// others are free to ask before it.

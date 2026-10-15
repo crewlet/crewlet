@@ -81,6 +81,16 @@ func BeforePeel(o *Options, f func(dir string)) {
 	o.knobs.peeling = f
 }
 
+// AfterSweep makes every full round call f with the incarnation's directory
+// once its sweep has made it the image, before what it left is held to the
+// pool's shape check.
+func AfterSweep(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.swept = f
+}
+
 // BeforeVerifyWaits makes Verify call f with the incarnation's directory as it
 // is about to wait for the repository's rounds before listing it.
 func BeforeVerifyWaits(o *Options, f func(dir string)) {
@@ -417,6 +427,18 @@ func StagedWith(fn func(object objstore.Key)) func(*Options) {
 			o.knobs = &knobs{}
 		}
 		o.knobs.staged = fn
+	}
+}
+
+// StagedWriteFails makes every write into a bundle's staged files, while the
+// cache Open builds downloads it, answer fn's error for the bundle's object
+// (nil to write).
+func StagedWriteFails(fn func(object objstore.Key) error) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.stagedWrite = fn
 	}
 }
 

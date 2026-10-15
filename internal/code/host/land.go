@@ -170,7 +170,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			todo = append(todo, i)
 		}
 	}
-	forced, stale, err := s.forceChecks(ctx, l.Scratch.Dir, cmds, todo)
+	forced, stale, err := s.forceChecks(ctx, l.Scratch, cmds, todo)
 	if err != nil {
 		return landed{}, unchecked(err)
 	}
@@ -215,7 +215,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	if ref != nil && undecided(cmds) {
 		idx := strings.TrimSuffix(packPath, ".pack") + ".idx"
-		oid, size, found, berr := s.largestBlob(ctx, l.Scratch.Dir, idx, ref.PackBytes(), limits.MaxBlobBytes)
+		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes)
 		if berr != nil {
 			return landed{}, unchecked(berr)
 		}
@@ -227,7 +227,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 				}
 			}
 			detail := fmt.Sprintf("blob %s (%s) is %s, past code.limits.max_blob_bytes (%s)", short(oid),
-				s.pathOf(ctx, l.Scratch.Dir, sent, oid, ref.PackBytes()), humanBytes(size),
+				s.pathOf(ctx, l.Scratch, sent, oid, ref.PackBytes()), humanBytes(size),
 				humanBytes(limits.MaxBlobBytes))
 			for i := range cmds {
 				if cmds[i].Result == "" {
@@ -420,7 +420,7 @@ func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []strin
 	if len(news) > 0 && ref != nil {
 		packBytes := unstored.PackBytes()
 		listing.Go(func() {
-			if introduced, count, err = s.introduced(ctx, l.Scratch.Dir, news, packBytes); err != nil {
+			if introduced, count, err = s.introduced(ctx, l.Scratch, news, packBytes); err != nil {
 				cancel(errListingFailed)
 				return
 			}

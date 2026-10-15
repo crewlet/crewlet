@@ -737,3 +737,84 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 }
+
+// A CHECK NAMES THE DAMAGE ITS OWN SYNC MEETS, AND REPAIRS ONLY WHEN ASKED.
+// The sync that brings the copy to the check's floor is a delta that peels a
+// tag set since; when that peel meets the copy damaged — its shape refused,
+// an object gone from its packs — the check is handed the copy as it stands
+// and names the damage first among its problems. Repaired under it, a plain
+// check downloaded the repository (or put the directory right in place) and
+// reported the repaired copy clean, the damage it was asked to name hidden.
+// Asked to repair, it rebuilds under reason verify, the sync's damage among
+// what it found.
+//
+// Mutation: answer a checking caller of a damaged round as every other
+// (damagedRound), and the plain check names nothing and the copy is repaired.
+func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
+	t.Parallel()
+	for name, d := range map[string]struct {
+		reason cache.RebuildReason
+		spoil  func(t *testing.T, dir string)
+	}{
+		"its shape": {cache.RebuildShape, func(t *testing.T, dir string) {
+			write(t, filepath.Join(dir, "config"), gitproc.RepoConfig+"[core]\n\tsharedRepository = group\n")
+		}},
+		"an object gone from its packs": {cache.RebuildMissing, func(t *testing.T, dir string) {
+			for _, f := range packFiles(t, dir) {
+				if err := os.Remove(filepath.Join(dir, "objects", "pack", f)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t)
+			s := w.sync(t, c, repo)
+			dir := s.Dir
+			s.Release()
+			d.spoil(t, dir)
+			w.tag(t, repo, "v1", true)
+			before := w.objects.total()
+
+			report, err := verify(t.Context(), c, repo, false)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			met := "the sync before the check met the copy damaged (" + string(d.reason) + ")"
+			if report.Rebuilt || len(report.Problems) == 0 || !strings.HasPrefix(report.Problems[0], met) {
+				t.Errorf("a plain check's report = rebuilt %v, problems %q; want the sync's damage first, nothing "+
+					"rebuilt", report.Rebuilt, report.Problems)
+			}
+			if got := cache.Repos(c)[repo]; got != 1 {
+				t.Errorf("a plain check left incarnation %d, want the damaged 1 untouched", got)
+			}
+			// The tag's own pack, installed by the delta before its peel met
+			// the damage, and nothing else.
+			if got := w.objects.total() - before; got != 1 {
+				t.Errorf("a plain check asked the object store for %d objects, want the tag's one pack", got)
+			}
+			for _, reason := range cache.RebuildReasons {
+				if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(reason)); got != 0 {
+					t.Errorf("%s{reason=%s} = %d under a plain check, want none", metrics.CodeCacheRebuilds, reason, got)
+				}
+			}
+
+			report, err = verify(t.Context(), c, repo, true)
+			if err != nil {
+				t.Fatalf("Verify(repair): %v", err)
+			}
+			if !report.Rebuilt || len(report.Problems) != 0 || len(report.Found) == 0 ||
+				!strings.HasPrefix(report.Found[0], met) {
+				t.Errorf("a repairing check's report = rebuilt %v, found %q, problems %q; want the sync's damage "+
+					"found and nothing left", report.Rebuilt, report.Found, report.Problems)
+			}
+			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "verify"); got != 1 {
+				t.Errorf("%s{reason=verify} = %d, want the repair's one", metrics.CodeCacheRebuilds, got)
+			}
+		})
+	}
+}

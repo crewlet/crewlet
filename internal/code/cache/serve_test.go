@@ -69,11 +69,11 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 // advertise is a push advertisement — receive-pack --stateless-rpc
 // --advertise-refs — run in dir through pool with config, its output
 // streamed (at code.MaxRefsPerRepo it outgrows the pool's capture).
-func advertise(t testing.TB, pool *gitproc.Pool, dir string, config []gitproc.KV) string {
+func advertise(t testing.TB, pool *gitproc.Pool, dir, alternate string, config []gitproc.KV) string {
 	t.Helper()
 	var out bytes.Buffer
 	_, err := pool.Run(t.Context(), gitproc.Cmd{
-		Dir: dir, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", dir},
+		Dir: dir, Alternate: alternate, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", dir},
 		Config: config, Stdout: &out, Class: gitproc.ClassTransfer, Deadline: time.Minute,
 	})
 	if err != nil {
@@ -112,17 +112,17 @@ func TestTheAdvertiseConfigIsWhatAViewRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer view.Remove()
-	filtered := advertise(t, w.pool, view.Dir, got)
-	if plain := advertise(t, w.pool, view.Dir, nil); filtered != plain {
+	filtered := advertise(t, w.pool, view.Dir, view.Alternate, got)
+	if plain := advertise(t, w.pool, view.Dir, view.Alternate, nil); filtered != plain {
 		t.Errorf("a view advertises, with the configuration:\n%s\nand without it:\n%s", filtered, plain)
 	}
 
 	tip, _ := w.push(t, repo, "refs/heads/dev", nil)
 	w.sync(t, c, repo)
-	if again := advertise(t, w.pool, view.Dir, got); again != filtered {
+	if again := advertise(t, w.pool, view.Dir, view.Alternate, got); again != filtered {
 		t.Errorf("a view advertised, once its incarnation moved:\n%s\nwant what it did:\n%s", again, filtered)
 	}
-	if plain := advertise(t, w.pool, view.Dir, nil); !strings.Contains(plain, tip+" .have") {
+	if plain := advertise(t, w.pool, view.Dir, view.Alternate, nil); !strings.Contains(plain, tip+" .have") {
 		t.Fatalf("a view without the configuration does not list its alternate's newer tip %s:\n%s", tip, plain)
 	}
 }

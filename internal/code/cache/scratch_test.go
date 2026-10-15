@@ -60,10 +60,10 @@ func TestAScratchIsARepositoryThePoolAccepts(t *testing.T) {
 	if got, want := read(t, filepath.Join(sc.Dir, "objects", "info", "alternates")), s.Dir+"/objects\n"; got != want {
 		t.Errorf("the scratch's alternates is %q, want %q", got, want)
 	}
-	if _, err := runGit(t, w.pool, sc.Dir, "", "rev-parse", "--git-dir"); err != nil {
+	if _, err := runGitOver(t, w.pool, sc, "rev-parse", "--git-dir"); err != nil {
 		t.Errorf("the pool refused to run git in the scratch: %v", err)
 	}
-	if _, err := runGit(t, w.pool, sc.Dir, "", "cat-file", "-e", tip); err != nil {
+	if _, err := runGitOver(t, w.pool, sc, "cat-file", "-e", tip); err != nil {
 		t.Errorf("the cache's tip is not readable through the scratch's alternate: %v", err)
 	}
 
@@ -243,7 +243,7 @@ func TestAnAdvertisementViewIsASnapshotOfTheRefs(t *testing.T) {
 		t.Errorf("the view's packed-refs moved with the cache's:\n%s", got)
 	}
 	res, err := w.pool.Run(t.Context(), gitproc.Cmd{
-		Dir: view.Dir, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
+		Dir: view.Dir, Alternate: view.Alternate, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
 		Class: gitproc.ClassTransfer, Deadline: time.Minute,
 	})
 	if err != nil {

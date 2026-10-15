@@ -581,23 +581,37 @@ func (c *Cache) download(ctx context.Context, id string, s *stagedPack,
 		return fail(c.storeFailure(id, p, err))
 	}
 	seal := code.NewSealWriter(ref)
+	files := []io.Writer{s.files[0], s.files[1], s.files[2]}
+	if c.knobs != nil && c.knobs.stagedWrite != nil {
+		for i := range files {
+			files[i] = failingWriter{err: c.knobs.stagedWrite(p.Object), w: files[i]}
+		}
+	}
 	split := &splitter{seal: seal, parts: []part{
-		{w: s.files[0], left: ref.PackBytes()},
-		{w: s.files[1], left: ref.IndexBytes},
-		{w: s.files[2], left: ref.ReverseBytes},
+		{w: files[0], left: ref.PackBytes()},
+		{w: files[1], left: ref.IndexBytes},
+		{w: files[2], left: ref.ReverseBytes},
 	}}
-	_, err = io.CopyBuffer(split, rc, buf)
-	if cerr := rc.Close(); err == nil {
-		err = cerr
+	// WHOSE FAILURE A COPY'S IS, by which side of it failed — never by
+	// elimination: the store's reader is the object store's (fromStore), and
+	// a write into the staged files is this node's own disk, which told as
+	// the store's sent an operator to the bucket for a full volume here.
+	_, err = io.CopyBuffer(split, fromStore{rc}, buf)
+	if cerr := rc.Close(); err == nil && cerr != nil {
+		err = storeErr{cerr}
 	}
 	// The GET is over: what follows is this node's disk, and the slot is
 	// another download's.
 	giveBack()
+	var store storeErr
 	switch {
 	case errors.Is(err, errBundleTooLong):
 		return fail(c.rejected(id, p, fmt.Errorf("%w: %w", code.ErrBadBundle, err)))
+	case errors.As(err, &store):
+		return fail(c.storeFailure(id, p, store.err))
 	case err != nil:
-		return fail(c.storeFailure(id, p, err))
+		return fail(fmt.Errorf("cache: sync %s: install pack %s: writing its files on this node: %w", id, p.PackID,
+			err))
 	}
 	sealed, err := seal.Seal()
 	if err == nil {
@@ -652,11 +666,44 @@ func syncPath(path string, syncFile func(*os.File) error) error {
 	return err
 }
 
+// fromStore is the object store's reader, its failures marked as the store's
+// (storeErr) — every one but the io.EOF that ends a whole read, which
+// io.CopyBuffer compares by identity.
+type fromStore struct{ r io.Reader }
+
+func (f fromStore) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p)
+	if err != nil && err != io.EOF {
+		err = storeErr{err}
+	}
+	return n, err
+}
+
+// storeErr is a failure of the object store's reader, as a download met it.
+type storeErr struct{ err error }
+
+func (e storeErr) Error() string { return e.err.Error() }
+func (e storeErr) Unwrap() error { return e.err }
+
+// failingWriter is a staged file whose every write answers err: the suite's
+// stand-in for this node's disk failing under a download (knobs.stagedWrite).
+type failingWriter struct {
+	err error
+	w   io.Writer
+}
+
+func (f failingWriter) Write(p []byte) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.w.Write(p)
+}
+
 // storeFailure is what the object store's failure to hand p over means:
 // absent and damaged are DEFINITE (an *ErrPackMissing — logged by the round
 // once it is final, since an absent pack in a round that was not
 // linearizable is asked about again first), anything else the store
-// failing, wrapped.
+// failing, wrapped as ErrStoreRead.
 func (c *Cache) storeFailure(id string, p code.PackRow, err error) error {
 	var damaged bool
 	switch {
@@ -664,7 +711,8 @@ func (c *Cache) storeFailure(id string, p code.PackRow, err error) error {
 	case errors.Is(err, objstore.ErrCorrupt):
 		damaged = true
 	default:
-		return fmt.Errorf("cache: sync %s: install: download pack %s (object %s): %w", id, p.PackID, p.Object, err)
+		return fmt.Errorf("%w: sync %s: install: download pack %s (object %s): %w", ErrStoreRead, id, p.PackID,
+			p.Object, err)
 	}
 	return &ErrPackMissing{Repo: id, Pack: p, Damaged: damaged, Err: err}
 }

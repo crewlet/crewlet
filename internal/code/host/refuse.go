@@ -20,6 +20,17 @@ import (
 // process failed before writing anything: what each failure means to the
 // person, and what to do. attrs go on the line a git process's failure is
 // logged with (a push's push_id).
+//
+// EVERY ANSWER IS IDENTIFIED BY WHAT FAILED, NEVER BY ELIMINATION. The code
+// log's sentence — "the code log could not be read here", the node cut off
+// from the fleet — is for the code log's own failure alone, marked where it
+// is met (cache.ErrLogRead, errLogRead); the object store's failure is its
+// own (cache.ErrStoreRead); and what nothing names — this node's disk, a
+// process that could not start, a failure no case foresaw — is said to be
+// this node's (nodeFailed), with what failed in the sentence. As the last
+// case's answer the code log's sentence sent operators to the fleet's
+// quorum for a full disk, an object store throttle and a refusal in this
+// build alike.
 func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string, err error, attrs ...any) {
 	if s.ended(w, r, name, err) {
 		return
@@ -70,10 +81,16 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 		auth.GitText(w, http.StatusInternalServerError, name+"'s rows cannot be read into a cache on this "+
 			"node (code_bad_snapshot): "+sentence(err.Error())+"; retrying does not end it — an operator "+
 			"must act on this node's code_bad_snapshot line, and a node running a newer build may serve it")
-	case errors.Is(err, cache.ErrRebuildRefused):
+	case errors.Is(err, cache.ErrRebuildRefused), errors.Is(err, errStillDamaged):
+		// THE COPY'S REPAIR DID NOT END ITS DAMAGE: refused, since one that
+		// did not end it will not end it a second time from the same rows
+		// (the error says which rule and names `crewlet code verify`), or
+		// made under this very request and met again (repairing). Another
+		// node's copy is its own, so the retry may go there.
 		retry(w, UnavailableRetryAfter)
-		auth.GitText(w, http.StatusServiceUnavailable, name+"'s cache on this node was rebuilt moments ago "+
-			"and is still damaged: retry in "+seconds(UnavailableRetryAfter)+", or against another node")
+		auth.GitText(w, http.StatusServiceUnavailable, name+"'s cache on this node is still damaged after its "+
+			"last repair ("+sentence(err.Error())+"): retry in "+seconds(UnavailableRetryAfter)+
+			", or against another node")
 	case errors.Is(err, cache.ErrStopped):
 		stopping(w)
 	case errors.Is(err, errSpoolFull):
@@ -84,6 +101,21 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 		retry(w, BusyRetryAfter)
 		auth.GitText(w, http.StatusServiceUnavailable, "every git slot on this node stayed busy for "+
 			seconds(gitproc.SlotWait)+": retry in "+seconds(BusyRetryAfter))
+	// Before the ends below: a capture that outgrew its bound, and a line of
+	// git's that the engine's reader refused, reach the pool as its Stdout
+	// failing (gitproc.ErrOutput) — but neither is this node too loaded to
+	// answer, and no retry ends either.
+	case refusedByCaller(err):
+		s.gitRefused(w, r, name, err, attrs...)
+	case errors.Is(err, gitproc.ErrPartialLine), errors.Is(err, gitproc.ErrLineTooLong):
+		// GIT ANSWERED WHAT THE ENGINE CANNOT READ (gitproc.Lines): output
+		// ending inside a line once git exited as if it had answered, or a
+		// line past gitproc.MaxLine. A process that died mid-line is
+		// reported as that by the pool first, so this is git's answer — a
+		// git failure, as an exit is, which no retry ends.
+		s.log.Warn(failedLine(r), append([]any{"repo", name, "error", err}, attrs...)...)
+		auth.GitText(w, http.StatusInternalServerError, "git's answer on this node could not be read ("+
+			sentence(err.Error())+"); retrying does not end it")
 	case errors.Is(err, gitproc.ErrDeadline), errors.Is(err, gitproc.ErrStalled),
 		errors.Is(err, gitproc.ErrInput), errors.Is(err, gitproc.ErrOutput):
 		s.gitStopped(w, r, name, err, attrs...)
@@ -91,9 +123,40 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 		s.log.Warn(failedLine(r), append([]any{"repo", name, "command", exit.Command, "error", err}, attrs...)...)
 		auth.GitText(w, http.StatusInternalServerError, "git "+exit.Command+" failed on this node ("+
 			kindOf(exit)+"): "+lastLine(exit.Result.Stderr))
-	default:
+	case errors.Is(err, cache.ErrLogRead), errors.Is(err, errLogRead):
 		s.unavailable(w, r, name, err)
+	case errors.Is(err, cache.ErrStoreRead):
+		// THE OBJECT STORE, not the code log: a pack the rows name that the
+		// store did not hand over, for no reason that is an answer about
+		// it — a timeout, a throttle past its retries, the store
+		// unreachable. Another node meets the same store, but may hold the
+		// pack already, so the retry it promises may go anywhere.
+		s.log.Warn("code_object_store_unavailable", append([]any{"repo", name, "path", r.URL.Path,
+			"error", err}, attrs...)...)
+		retry(w, UnavailableRetryAfter)
+		auth.GitText(w, http.StatusServiceUnavailable, name+"'s packs could not be read from the object store "+
+			"here ("+sentence(err.Error())+"): retry in "+seconds(UnavailableRetryAfter)+", or against another node")
+	default:
+		s.nodeFailed(w, r, name, err, attrs...)
 	}
+}
+
+// errLogRead marks the host's own read of the code log failing — a fetch
+// request's bound asked at the log's head (boundOf) — as cache.ErrLogRead
+// marks a sync's: the code log's failure, answered as that.
+var errLogRead = errors.New("host: the code log could not be read")
+
+// nodeFailed answers a request that failed on THIS NODE for a reason nothing
+// before it named — its disk refusing a write into the cache or a spool, a
+// git that could not start, a failure no case foresaw — as that: 503, the
+// failure in the sentence, and a retry that may go to another node, logged as
+// the request's failure (failedLine) with reason node. Not the code log's
+// sentence, which would send the operator to the fleet for this node's disk.
+func (s *Server) nodeFailed(w http.ResponseWriter, r *http.Request, name string, err error, attrs ...any) {
+	s.log.Warn(failedLine(r), append([]any{"repo", name, "reason", "node", "error", err}, attrs...)...)
+	retry(w, UnavailableRetryAfter)
+	auth.GitText(w, http.StatusServiceUnavailable, "this node could not serve "+name+" ("+sentence(err.Error())+
+		"): retry in "+seconds(UnavailableRetryAfter)+", or against another node")
 }
 
 // gitStopped answers a request whose git process THIS NODE ENDED before it
@@ -121,6 +184,48 @@ func (s *Server) gitStopped(w http.ResponseWriter, r *http.Request, name string,
 	auth.GitText(w, http.StatusServiceUnavailable, "git on this node was stopped before it answered, "+why+
 		" ("+sentence(err.Error())+"): retry in "+seconds(BusyRetryAfter)+", or against another node")
 }
+
+// refusedByCaller reports a refusal that is the CALLER'S, never the
+// repository's, the code log's or the client's — a bug in this build, which
+// the request changes nothing about, so no retry ends it:
+//
+//   - the pool refusing the engine's own call to git: malformed
+//     (gitproc.ErrInvalid, ErrNoDeadline), naming configuration or environment
+//     outside its allowlists (ErrConfig, ErrEnv), capturing output a call site
+//     must stream (ErrCaptureFull, whose own message says so), or reaching a
+//     pool that should never have been built — git's HOME not empty
+//     (ErrHome), a git below the floor (*gitproc.ErrTooOld), both refused by
+//     gitproc.New and never by a run;
+//   - the cache refusing the host's call (cache.ErrInvalid): a Synced or a
+//     scratch it did not hand out, an id that is no canonical UUID, an
+//     adoption whose row and scratch disagree;
+//   - a sync asked at a level no reader serves (code.ErrBadLevel).
+func refusedByCaller(err error) bool {
+	var old *gitproc.ErrTooOld
+	return errors.Is(err, gitproc.ErrInvalid) || errors.Is(err, gitproc.ErrNoDeadline) ||
+		errors.Is(err, gitproc.ErrConfig) || errors.Is(err, gitproc.ErrEnv) ||
+		errors.Is(err, gitproc.ErrHome) || errors.As(err, &old) || errors.Is(err, gitproc.ErrCaptureFull) ||
+		errors.Is(err, cache.ErrInvalid) || errors.Is(err, code.ErrBadLevel)
+}
+
+// gitRefused answers a request the engine's own call failed for the caller's
+// fault (refusedByCaller): a 500 naming the refusal, with NO Retry-After — no
+// retry ends a call-site bug, and a client or a balancer obeying a promise of
+// one would ask again for ever — logged at ERROR as code_git_refused, the one
+// line an operator acts on. Never "the code log could not be read": the log
+// was read fine, and the sentence would send the operator to the fleet's
+// quorum for a bug in this build.
+func (s *Server) gitRefused(w http.ResponseWriter, r *http.Request, name string, err error, attrs ...any) {
+	s.log.Error("code_git_refused", append([]any{"repo", name, "path", r.URL.Path, "error", err}, attrs...)...)
+	auth.GitText(w, http.StatusInternalServerError, "this node refused its own call serving this request ("+
+		sentence(err.Error())+"): the engine's call is wrong, and retrying does not end it — an operator "+
+		"must act on this node's code_git_refused line")
+}
+
+// errStillDamaged marks a git process that failed, over a cache, with damage
+// the cache repaired under this very request and met again on the repaired
+// copy (repairing): the repair did not end it.
+var errStillDamaged = errors.New("host: the cache's repair did not end its damage")
 
 // ended answers a request whose OWN context ended — its client hung up, or
 // the host is stopping — and reports whether it did. Whatever failed then
@@ -200,18 +305,4 @@ func kindOf(e *gitproc.ExitError) string {
 func lastLine(stderr string) string {
 	lines := strings.Split(strings.TrimSpace(stderr), "\n")
 	return sentence(lines[len(lines)-1])
-}
-
-// rebuildReason is the cache's name for what a git process in a cache
-// directory failed with, and whether it is one a rebuild repairs: never
-// ErrNotOurRef, which a want the repository never served and a lost pack print
-// alike — the next linearizable sync re-downloads any pack whose file is gone.
-func rebuildReason(err error) (cache.RebuildReason, bool) {
-	switch {
-	case errors.Is(err, gitproc.ErrCorrupt):
-		return cache.RebuildCorrupt, true
-	case errors.Is(err, gitproc.ErrMissingObject):
-		return cache.RebuildMissing, true
-	}
-	return "", false
 }

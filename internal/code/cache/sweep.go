@@ -23,17 +23,21 @@ import (
 //	objects/        pack/ and info/: nothing the engine runs in a cache
 //	                creates a loose object
 //	objects/info/   commit-graph (the maintainer's); an alternates file here
-//	                would chain a push's scratch to another repository
+//	                would serve another repository's objects by id, and the
+//	                pool refuses it (gitproc.ShapeAlternates)
 //	objects/pack/   pack-<cs>.{pack,idx,rev} for every pack the rows name, and
 //	                the multi-pack-index files — unless a pack is removed
 //
 // It runs in TWO HALVES around the install. Everything but the pack files
 // first (tidy), because a git process — the round's peel, its index — runs
 // in the directory before the packs' half could: the pool refuses one whose
-// config is not gitproc.RepoConfig or that holds a commondir or a foreign
-// alternate, and git cannot read a repository whose HEAD is not a symbolic
-// ref, so a cache damaged there would refuse every round that could repair
-// it. objects/pack is listed once, after the install (packStrays), and
+// config is not gitproc.RepoConfig or that holds a commondir or an alternates
+// file — every gitproc.ShapeRule an incarnation can break — and git cannot
+// read a repository whose HEAD is not a symbolic ref, so a cache damaged there
+// would refuse every round that could repair it. This half is what REPAIRS a
+// cache the pool refused for its shape, in place, reusing every pack it holds
+// (markWhole); and what it leaves is held to gitproc.CheckShape, the
+// pool's own predicate. objects/pack is listed once, after the install (packStrays), and
 // whatever there is no pack's file goes at that listing, before the round's
 // index: no reader of any ref reads one, and a dead writer's lock among them
 // — a maintenance run killed with its node — would refuse the index, since git
@@ -79,7 +83,8 @@ var packFileName = regexp.MustCompile(`^pack-([0-9a-f]{40})\.(pack|idx|rev)$`)
 
 // tidy is the sweep's first half: every directory of the image made, every
 // entry outside it but the pack files moved into trash/, config made
-// gitproc.RepoConfig and a HEAD git cannot read made the snapshot's. It
+// gitproc.RepoConfig and a HEAD git cannot read made the snapshot's — and the
+// directory it leaves held to gitproc.CheckShape, whose refusal it answers. It
 // reports whether it moved anything.
 func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 	// The root first: a symbolic link named objects or refs is outside the
@@ -135,7 +140,17 @@ func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 			return t.moved, err
 		}
 	}
-	return t.moved, nil
+	if c.knobs != nil && c.knobs.swept != nil {
+		c.knobs.swept(inc.dir)
+	}
+	// HELD TO THE POOL'S OWN PREDICATE, not a copy of it: what the sweep
+	// leaves is exactly what every git process in the incarnation is checked
+	// against, so a full round never answers a directory the pool refuses —
+	// the image grammar already moved a commondir and an alternates file
+	// out, and config is RepoConfig, so a refusal here is a shape the sweep
+	// could not put right (a filesystem that does not keep what it is
+	// given), which Cache.run answers with a rebuild.
+	return t.moved, gitproc.CheckShape(inc.dir, "")
 }
 
 // ensureDir makes rel under dir when it is missing; something else at its

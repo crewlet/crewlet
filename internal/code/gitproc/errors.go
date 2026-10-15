@@ -26,10 +26,11 @@ var (
 	// directory.
 	ErrInvalid = errors.New("gitproc: a malformed git command")
 
-	// ErrRepoShape: a Cmd.Dir (or a repository its alternates name, at its
-	// real path) that is definitely not a repository the engine wrote by
-	// hand. A file that could not be READ is never this: that is the read's
-	// own error, and says nothing about what the file holds.
+	// ErrRepoShape: a Cmd.Dir (or the alternate the call names, at its real
+	// path) that is definitely not a repository the engine wrote by hand —
+	// always a *ShapeError, which names the rule and the repository. A file
+	// that could not be READ is never this: that is the read's own error,
+	// and says nothing about what the file holds.
 	ErrRepoShape = errors.New("gitproc: not a repository the engine made")
 
 	// ErrHome: the pool's HOME is not an empty directory.

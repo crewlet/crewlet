@@ -186,9 +186,15 @@ type incarnation struct {
 	// at once.
 	converged bool
 	// reread is why its next full round reads it whole again — a log
-	// recreated or gone back under it (Cache.reread) — counted when that
+	// recreated or gone back under it (Cache.reread), or a git process the
+	// pool refused there for its shape (markWhole) — counted when that
 	// round completes; "" for none.
 	reread RebuildReason
+	// marks counts the times it was marked to be read whole IN PLACE
+	// (markWhole): a round converges it only when no mark was made since the
+	// round began, since a round that swept it before the damage a mark
+	// answers did not repair that damage.
+	marks uint64
 	// rebuilds is how many rebuild attempts in a row stand behind this
 	// incarnation without having ended the failure that asked for them: none
 	// for one no rebuild made, one more than its predecessor's for a

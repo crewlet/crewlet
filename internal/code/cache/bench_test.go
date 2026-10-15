@@ -349,23 +349,23 @@ func BenchmarkAdvertise(b *testing.B) {
 			b.Fatal(err)
 		}
 		b.Cleanup(view.Remove)
-		want := advertise(b, w.pool, s.Dir, nil)
+		want := advertise(b, w.pool, s.Dir, "", nil)
 		for _, arm := range []struct {
-			in     string
-			dir    string
-			config []gitproc.KV
+			in, alternate string
+			dir           string
+			config        []gitproc.KV
 		}{
-			{"cache", s.Dir, nil},
-			{"view", view.Dir, nil},
-			{"view-config", view.Dir, c.AdvertiseConfig()},
+			{"cache", "", s.Dir, nil},
+			{"view", view.Alternate, view.Dir, nil},
+			{"view-config", view.Alternate, view.Dir, c.AdvertiseConfig()},
 		} {
 			b.Run(fmt.Sprintf("refs=%d/in=%s", refs, arm.in), func(b *testing.B) {
-				if got := advertise(b, w.pool, arm.dir, arm.config); got != want {
+				if got := advertise(b, w.pool, arm.dir, arm.alternate, arm.config); got != want {
 					b.Fatalf("the advertisement in %s is not the cache's own (%d bytes against %d)",
 						arm.in, len(got), len(want))
 				}
 				for b.Loop() {
-					advertise(b, w.pool, arm.dir, arm.config)
+					advertise(b, w.pool, arm.dir, arm.alternate, arm.config)
 				}
 			})
 		}

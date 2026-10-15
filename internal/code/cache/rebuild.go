@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -16,8 +17,24 @@ import (
 // REQUEST-TIME REPAIR. A git process the host ran in a cache that git itself
 // found damaged — a pack, an index or a multi-pack-index it could not read
 // (gitproc.ErrCorrupt), or an object a row names that no installed pack holds
-// (gitproc.ErrMissingObject) — makes the host REBUILD the cache and retry its
-// request once on the answer.
+// (gitproc.ErrMissingObject) — or that the pool refused to start there because
+// the directory is not the shape the engine writes (gitproc.ErrRepoShape)
+// makes the host REPAIR the cache ([Cache.Rebuild]) and retry its request once
+// on the answer. [DamageReason] is the one reading of such a failure, the
+// host's and the cache's alike.
+//
+// A SHAPE IS REPAIRED IN PLACE. The pool refuses a directory for its shape
+// before git starts, so a shape refusal says nothing against any pack — and
+// the cache already has the repair that costs no GET: a full round, whose
+// sweep puts config right and moves a commondir and an alternates file out,
+// reusing every pack the incarnation holds (sweep.go), and holds what it
+// leaves to the pool's own check. So the incarnation is marked to be read
+// whole (markWhole), as a log recreated or gone back under the cache
+// marks every one, and the request is answered by that round. Only a shape the
+// sweep did NOT end — refused past the very round that swept it — is a
+// rebuild, under the rules below; one per request is otherwise the cost of
+// something outside the engine that keeps editing the directory, and each is
+// a full read of the rows and no download.
 //
 // A REBUILD IS THE NEXT INCARNATION, built BESIDE the one readers hold: a
 // whole read at the log's head, every pack downloaded again — but those an
@@ -70,6 +87,18 @@ const (
 	// gitproc.ErrMissingObject: an object a row names that no installed
 	// pack holds.
 	RebuildMissing RebuildReason = "missing"
+	// RebuildShape is a git process the pool refused to start in the cache,
+	// gitproc.ErrRepoShape: the incarnation's config is not
+	// gitproc.RepoConfig byte for byte, it holds a commondir, or an
+	// alternates file the engine never writes into one — a disk that damaged
+	// the file, or something outside the engine that edited it. Git ran
+	// nothing, so the refusal is all it says, and it is said on EVERY
+	// process the directory is asked to run: no retry, and no delta round
+	// (which never sweeps), ever ends it. The incarnation is read whole IN
+	// PLACE by a full round, whose sweep repairs every shape the pool
+	// refuses and reuses every pack (markWhole), and counted by that round;
+	// only a shape that sweep did not end is rebuilt.
+	RebuildShape RebuildReason = "shape"
 	// RebuildStream is a cache whose log was RECREATED under it — its stream
 	// identity is not the one the cache read from (ADR-0035: a stream the
 	// engine provisions again is stamped anew; a snapshot restore is not a
@@ -88,28 +117,83 @@ const (
 )
 
 // RebuildReasons is every [RebuildReason].
-var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildStream, RebuildRewound, RebuildVerify}
+var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildShape, RebuildStream, RebuildRewound,
+	RebuildVerify}
+
+// gitReasons are the reasons a git process's failure gives (DamageReason):
+// the ones Rebuild takes.
+var gitReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildShape}
 
 // Valid reports whether r is one of [RebuildReasons].
 func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) }
 
-// Rebuild replaces the incarnation failed was handed out of with one read
-// whole at the log's head, and answers it pinned. reason is what the host's
-// git process in failed.Dir was classified as: [RebuildCorrupt]
-// (gitproc.ErrCorrupt) or [RebuildMissing] (gitproc.ErrMissingObject) — never
-// gitproc.ErrNotOurRef, which a lost pack and a want the repository never
-// served print alike. failed stays the caller's to release.
+// DamageReason is the damage a git process whose directory is one of this
+// cache's incarnations failed with names, and whether it is damage the cache
+// repairs ([Cache.Rebuild]): [RebuildCorrupt] for gitproc.ErrCorrupt,
+// [RebuildMissing] for gitproc.ErrMissingObject, [RebuildShape] for
+// gitproc.ErrRepoShape — the pool's refusal to start one there, which names
+// the incarnation, since a process run in it names no alternate. Never
+// gitproc.ErrNotOurRef, which a want the repository never served and a lost
+// pack print alike (the next linearizable sync re-downloads any pack whose
+// file is gone), and never a refusal of the call itself (gitproc.ErrConfig
+// and its siblings), which no directory causes.
+//
+// THE PROCESS'S DIRECTORY decides what its failure describes. One run in a
+// push's scratch or an advertisement view reads the incarnation only as its
+// alternate, and there only its shape is the cache's: the scratch's
+// index-pack reads the CLIENT's pack, so its ErrCorrupt is that pack's
+// (gitproc.ExitError) — such a caller asks [ShapeReason].
+func DamageReason(err error) (RebuildReason, bool) {
+	switch {
+	case errors.Is(err, gitproc.ErrRepoShape):
+		return RebuildShape, true
+	case errors.Is(err, gitproc.ErrCorrupt):
+		return RebuildCorrupt, true
+	case errors.Is(err, gitproc.ErrMissingObject):
+		return RebuildMissing, true
+	}
+	return "", false
+}
+
+// ShapeReason is [DamageReason] for a git process whose directory is a
+// scratch or an advertisement view of an incarnation rather than the
+// incarnation itself, which names the incarnation as its alternate: the
+// pool's refusal of THE ALTERNATE's shape (gitproc.ShapeError.InAlternate) is
+// the cache's to repair, and nothing else such a process says is — a refusal
+// of the scratch's own shape is a directory one request made, which the next
+// makes again.
+func ShapeReason(err error) (RebuildReason, bool) {
+	var shape *gitproc.ShapeError
+	if errors.As(err, &shape) && shape.InAlternate {
+		return RebuildShape, true
+	}
+	return "", false
+}
+
+// Rebuild repairs the incarnation failed was handed out of, and answers the
+// repaired directory pinned. reason is what the host's git process over
+// failed.Dir was refused or classified as ([DamageReason], [ShapeReason]):
+//
+//   - [RebuildShape] reads the incarnation whole IN PLACE (markWhole): the
+//     round that answers is a full one that started after the mark, whose
+//     sweep repairs every shape the pool refuses and reuses every pack the
+//     incarnation holds — no new incarnation, no download, and none of a
+//     rebuild's refusals, since it costs a read of the rows. A shape that
+//     sweep did not end is rebuilt by the round itself (Cache.run).
+//   - [RebuildCorrupt] and [RebuildMissing] replace it with the NEXT
+//     incarnation, read whole at the log's head: one whose rebuild is queued
+//     or running joins it, and one a rebuild could not end the failure of is
+//     refused ([ErrRebuildRefused], see rebuildRefusal).
 //
 // A failed that is no longer its repository's current incarnation — rebuilt
 // or purged since it was pinned — is answered by a linearizable [Cache.Sync]
-// with no rebuild; one whose rebuild is queued or running joins it; and one a
-// rebuild could not end the failure of is refused ([ErrRebuildRefused], see
-// rebuildRefusal). ctx bounds the caller's wait and nothing else: the rebuild
-// runs on for anybody else waiting on it.
+// with no repair. failed stays the caller's to release. ctx bounds the
+// caller's wait and nothing else: the repair runs on for anybody else
+// waiting on it.
 func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason) (Synced, error) {
-	if reason != RebuildCorrupt && reason != RebuildMissing {
-		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process in the cache was "+
-			"classified as, %q or %q, and %q is not", ErrInvalid, RebuildCorrupt, RebuildMissing, reason)
+	if !slices.Contains(gitReasons, reason) {
+		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process over the cache "+
+			"failed with, one of %v, and %q is not", ErrInvalid, gitReasons, reason)
 	}
 	if err := c.handedOut(failed, "a rebuild"); err != nil {
 		return Synced{}, err
@@ -134,43 +218,88 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason
 	e := failed.entry
 	now := c.now()
 	e.mu.Lock()
+	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
 	if e.dead || e.current != failed.inc {
 		// Somebody rebuilt it, or a purge removed it, since this request
 		// pinned it: the current incarnation answers, or the purge does.
 		e.mu.Unlock()
-		return c.Sync(ctx, e.id, statelog.Freshness{Level: statelog.ReadLinearizable})
+		return c.Sync(ctx, e.id, linearizable)
 	}
-	// A line of attempts ends when the asking stops (RebuildQuiet): measured
-	// from the last ask, which this one now is.
-	quiet := !e.lastAsked.IsZero() && now.Sub(e.lastAsked) >= RebuildQuiet
-	e.lastAsked = now
-	r := rebuilding(e, failed.inc)
-	if r == nil {
-		if quiet {
-			failed.inc.rebuilds, failed.inc.unmoved = 0, false
-		}
-		if rule := rebuildRefusal(e, failed.inc, now); refuse && rule != "" {
-			return Synced{}, c.refuseRebuild(e, failed, reason, rule, now)
-		}
-		e.lastRebuild = now
-		r = c.queueRebuild(e, failed.inc, reason, whole)
+	if reason == RebuildShape {
+		// IN PLACE: a linearizable caller joins only the round queued
+		// behind the one running, which starts after the mark and so reads
+		// the incarnation whole.
+		markWhole(failed.inc, RebuildShape)
+		w := newWaiter(linearizable)
+		c.join(e, w)
+		e.mu.Unlock()
+		return c.await(ctx, e, w)
 	}
-	w := newWaiter(statelog.Freshness{Level: statelog.ReadLinearizable})
+	r, rule := c.askRebuild(e, failed.inc, reason, refuse, whole, now)
+	if rule != "" {
+		f := c.refusal(e, failed.Repo.Name, reason, rule, now)
+		e.mu.Unlock()
+		c.report(f)
+		return Synced{}, f.err()
+	}
+	w := newWaiter(linearizable)
 	w.rebuild = true
 	r.waiters = append(r.waiters, w)
 	e.mu.Unlock()
 	return c.await(ctx, e, w)
 }
 
-// The rules a rebuild is refused by: the reasons crewlet.code.cache.rebuild.
-// refusals counts under its rule attribute, and code_cache_rebuild_refused
-// names.
+// askRebuild is a rebuild of inc, the entry's current incarnation, asked for
+// reason now; e.mu is held. It answers the rebuild round to wait on — the one
+// already queued or running for inc, or one it queues — or the rule that
+// refuses one (rebuildRefusal) when refuse says the rules apply. Every ask
+// counts toward the line's quiet, refused or not: a line of attempts ends when
+// the asking stops (RebuildQuiet), measured from the last ask, which this one
+// now is. A SHAPE reaches it only past the sweep of the round that met it
+// (Cache.run), which repairs every shape the pool refuses in place: a
+// directory still refused there is one something keeps writing into, or a
+// filesystem not keeping what it is given.
+func (c *Cache) askRebuild(e *entry, inc *incarnation, reason RebuildReason, refuse bool, whole []string,
+	now time.Time) (*round, refusalRule) {
+
+	quiet := !e.lastAsked.IsZero() && now.Sub(e.lastAsked) >= RebuildQuiet
+	e.lastAsked = now
+	if r := rebuilding(e, inc); r != nil {
+		return r, ""
+	}
+	if quiet {
+		inc.rebuilds, inc.unmoved = 0, false
+	}
+	if reason == RebuildShape {
+		// A SHAPE REFUSAL IS ITSELF PROOF THAT SOMETHING WROTE INTO THE
+		// INCARNATION: no round or rebuild makes a directory the pool
+		// refuses, so one refused for its shape no longer holds what the last
+		// attempt read, and the unchanged rule — another rebuild would make
+		// the same directory — is false of it. The cooldown still holds: a
+		// rebuild is a download of the whole repository, and a directory
+		// something keeps editing past every sweep is not one to download
+		// again on every request.
+		inc.unmoved = false
+	}
+	if rule := rebuildRefusal(e, inc, now); refuse && rule != "" {
+		return nil, rule
+	}
+	e.lastRebuild = now
+	return c.queueRebuild(e, inc, reason, whole), ""
+}
+
+// refusalRule is a rule a rebuild is refused by: the values
+// crewlet.code.cache.rebuild.refusals counts under its rule attribute, and
+// code_cache_rebuild_refused names. A type of its own so the reference text
+// is held to every one declared (the cache's reasons test).
+type refusalRule string
+
 const (
 	// refusedUnchanged: the incarnation holds exactly what a rebuild that
 	// did not end the failure read, less than RebuildBackoffCap ago.
-	refusedUnchanged = "unchanged"
+	refusedUnchanged refusalRule = "unchanged"
 	// refusedCooldown: the last attempt began less than rebuildWindow ago.
-	refusedCooldown = "cooldown"
+	refusedCooldown refusalRule = "cooldown"
 )
 
 // rebuildRefusal is the rule a rebuild of inc is refused by now, or "" when
@@ -198,7 +327,7 @@ const (
 //     something wrote into it since, but nothing a push brings repairs a
 //     damaged stored pack or supplies an object a ref's history lacks, so
 //     each attempt in a row that did not end the failure doubles the wait.
-func rebuildRefusal(e *entry, inc *incarnation, now time.Time) string {
+func rebuildRefusal(e *entry, inc *incarnation, now time.Time) refusalRule {
 	since := now.Sub(e.lastRebuild)
 	switch {
 	case inc.rebuilds == 0:
@@ -222,32 +351,53 @@ func rebuildWindow(n int) time.Duration {
 	return min(w, RebuildBackoffCap)
 }
 
-// refuseRebuild is a rebuild of failed refused by rule: counted every time,
-// and logged at most once a RebuildCooldown a repository — every request that
-// fails on a damaged repository asks again, and one line a request would bury
-// the line that says what to do. Called with e.mu held; it lets go of it.
-func (c *Cache) refuseRebuild(e *entry, failed Synced, reason RebuildReason, rule string, now time.Time) error {
-	since := now.Sub(e.lastRebuild).Round(time.Second)
-	logIt := e.refusedLogged.IsZero() || now.Sub(e.refusedLogged) >= RebuildCooldown
-	if logIt {
+// refused is a rebuild refused by its rule, decided under e.mu (refusal) and
+// reported once it is let go (report): what the refusal is counted under,
+// whether this one is logged, and what its asker is answered (err).
+type refused struct {
+	repo, name string
+	rule       refusalRule
+	reason     RebuildReason
+	since      time.Duration
+	logIt      bool
+}
+
+// refusal is a rebuild of e's repository, which name is the name of, refused
+// by rule now; e.mu is held. Logged at most once a RebuildCooldown a
+// repository — every request that fails on a damaged repository asks again,
+// and one line a request would bury the line that says what to do.
+func (c *Cache) refusal(e *entry, name string, reason RebuildReason, rule refusalRule, now time.Time) refused {
+	f := refused{repo: e.id, name: name, rule: rule, reason: reason, since: now.Sub(e.lastRebuild).Round(time.Second)}
+	if f.logIt = e.refusedLogged.IsZero() || now.Sub(e.refusedLogged) >= RebuildCooldown; f.logIt {
 		e.refusedLogged = now
 	}
-	e.mu.Unlock()
+	return f
+}
+
+// report counts a refusal every time, and logs the ones refusal chose; e.mu
+// is not held.
+func (c *Cache) report(f refused) {
 	if c.metrics != nil {
-		c.metrics.Add(metrics.CodeCacheRebuildRefusals, 1, metrics.Attrs{"reason": string(reason), "rule": rule})
+		c.metrics.Add(metrics.CodeCacheRebuildRefusals, 1,
+			metrics.Attrs{"reason": string(f.reason), "rule": string(f.rule)})
 	}
-	name := failed.Repo.Name
-	if logIt {
-		c.log.Warn("code_cache_rebuild_refused", "repo", e.id, "name", name, "reason", string(reason),
-			"rule", rule, "since", since)
+	if f.logIt {
+		c.log.Warn("code_cache_rebuild_refused", "repo", f.repo, "name", f.name, "reason", string(f.reason),
+			"rule", string(f.rule), "since", f.since)
 	}
-	if rule == refusedUnchanged {
+}
+
+// err is what the asker of a refused rebuild is answered: ErrRebuildRefused,
+// naming the repository, the rule's reason and `crewlet code verify`.
+func (f refused) err() error {
+	if f.rule == refusedUnchanged {
 		return fmt.Errorf("%w: %s (%s) holds exactly what a rebuild %v ago read, and that rebuild did not end the "+
 			"failure: another reads the same rows and objects and makes the same directory — `crewlet code verify %s` "+
-			"names what is damaged", ErrRebuildRefused, name, e.id, since, name)
+			"names what is damaged", ErrRebuildRefused, f.name, f.repo, f.since, f.name)
 	}
 	return fmt.Errorf("%w: %s (%s) was rebuilt %v ago, and a rebuild that did not end the failure will not end it a "+
-		"second time — `crewlet code verify %s` names what is damaged", ErrRebuildRefused, name, e.id, since, name)
+		"second time — `crewlet code verify %s` names what is damaged", ErrRebuildRefused, f.name, f.repo, f.since,
+		f.name)
 }
 
 // rebuilding is the rebuild of inc queued or running on e, or nil; e.mu is
