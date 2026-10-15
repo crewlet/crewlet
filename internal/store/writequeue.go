@@ -34,7 +34,7 @@ import (
 // changes the odds: any writer committing back to back starves a polling
 // waiter, and a fast disk narrows the window rather than closing it.
 //
-// That is not a slow test. Three domains' appliers and the tracker's
+// That is not a slow test. Every domain's applier and the tracker's
 // housekeeping share the replicated estate's one file, and the state log's
 // occupancy model — what [statelog] prices a bulk apply's delay to every
 // other domain against — assumes a writer waits for the work in front of it
