@@ -46,6 +46,60 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the coding agent's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
+// claudeCodeContentSwitches are Claude Code's switches for putting CONTENT on
+// what it exports — the prompt, a tool's arguments and output, the model's
+// answer, the raw API bodies. Each defaults to off, and each is declared off
+// anyway, because a box image or template can bake one on and a run's content
+// belongs in the engine's event store rather than in a telemetry backend.
+var claudeCodeContentSwitches = []string{
+	"OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_DETAILS", "OTEL_LOG_TOOL_CONTENT",
+	"OTEL_LOG_ASSISTANT_RESPONSES", "OTEL_LOG_RAW_API_BODIES",
+}
+
+// Telemetry switches Claude Code's own TRACES on, and only its traces.
+//
+// THREE SWITCHES, because Claude Code exports spans only with all three: its
+// telemetry gate (CLAUDE_CODE_ENABLE_TELEMETRY), the session-tracing beta its
+// spans sit behind (CLAUDE_CODE_ENHANCED_TELEMETRY_BETA), and a traces
+// exporter, which has no default — an empty exporter list exports nothing.
+// CLAUDE_CODE_PROPAGATE_TRACEPARENT sends each Messages call's `traceparent`
+// to a gateway or a cloud platform too, as the engine's own SDK does whatever
+// its base URL; with the first-party API it is sent regardless.
+//
+// TRACES ONLY. Its log events are its content channel — prompts, tool
+// arguments and tool output once their switches are on — and its metrics
+// count the tokens and cost the engine already records for the run, so a
+// collector summing both would count a coding run twice. Both are switched
+// off by name rather than left unset, because an image can set them.
+//
+// THE SAMPLER IS PARENT-BASED, because the decision is the launching turn's
+// and it arrives on TRACEPARENT: an image-baked `always_on` would export the
+// spans of a turn the operator's sampler decided against, under a parent
+// nobody exported.
+//
+// ITS SHUTDOWN WAITS AS LONG AS THE RECEIVER MAY TAKE TO ANSWER. Claude Code
+// flushes its last batch on exit and gives up after two seconds by default,
+// while the receiver forwards that batch before it answers, for up to
+// [sandbox.OtelForwardTimeout] — so against a backend slower than two
+// seconds, every run lost the spans of its own ending, which is the part that
+// says how it ended. The exit is delayed only by an upstream that slow.
+func (ClaudeCode) Telemetry() map[string]string {
+	env := map[string]string{
+		"CLAUDE_CODE_ENABLE_TELEMETRY":         "1",
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA":  "1",
+		"CLAUDE_CODE_PROPAGATE_TRACEPARENT":    "1",
+		"OTEL_TRACES_EXPORTER":                 "otlp",
+		"OTEL_METRICS_EXPORTER":                "none",
+		"OTEL_LOGS_EXPORTER":                   "none",
+		"OTEL_TRACES_SAMPLER":                  "parentbased_always_on",
+		"CLAUDE_CODE_OTEL_SHUTDOWN_TIMEOUT_MS": strconv.FormatInt(sandbox.OtelAnswerWithin.Milliseconds(), 10),
+	}
+	for _, name := range claudeCodeContentSwitches {
+		env[name] = "false"
+	}
+	return env
+}
+
 // Command builds the headless `claude -p` invocation.
 //
 // Pure and deterministic so the exact flags can be pinned by a test. Budget

@@ -1226,14 +1226,18 @@ flowchart TD
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     H["<b>anthropic.messages.create</b> (CLIENT)<br/>the Anthropic SDK's span of each HTTP attempt"]
     J["<b>claude -p</b>, a text-mode cli-agent call<br/><i>spans nothing; forwards the round's traceparent</i>"]
+    K["<b>claude_code.interaction</b> and its children<br/><i>Claude Code in a coding box, exported through the receiver</i>"]
     I["<b>anthropic.messages.create</b> (SERVER) and its children<br/><i>the Claude API's own spans, exported by Anthropic</i>"]
     A --> B --> C --> D
     D --> E
     D --> F
     E --> H
     E -.->|"TRACEPARENT"| J
+    F -.->|"TRACEPARENT (run_sandbox)"| K
+    C -.->|"TRACEPARENT (agent mode)"| K
     H -.->|"traceparent"| I
     J -.->|"traceparent"| I
+    K -.->|"traceparent"| I
     C -.->|"suspend, then resume"| G
 ```
 
@@ -1426,6 +1430,23 @@ exit. Both switches are Claude Code beta behaviour (measured against 2.1.300):
 a release that drops them stops the linking and changes nothing else. A host's
 own Claude Code managed settings can still turn its telemetry on, whatever the
 engine hands it — see [trace context](../concepts/subscription-llm-backends.md#trace-context).
+
+**Claude Code in a box, an exporter.** A coding run — a `run_sandbox` call, or
+an [agent-mode](../concepts/subscription-llm-backends.md) executor — runs
+Claude Code in a box, where the engine's own tracer cannot reach. With
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL` set, the run is handed an endpoint on the
+engine's [OTLP receiver](../concepts/code-sandbox.md#durability-completion-and-observability)
+and a `TRACEPARENT` naming the span that launched it (`tool.call`, or the
+turn's `agent.turn` in agent mode), and Claude Code's runner switches its
+**traces** on: `claude_code.interaction` nests under the launching span, its
+`claude_code.llm_request` and `claude_code.tool` spans beneath that, and the
+Claude API's spans of each call under its `claude_code.llm_request` — all
+reaching the backend the engine exports to, through the receiver, which adds
+the collector's credential outside the box. Its metrics and log events stay
+off: the metrics count what the engine already records for the run, and the
+log events are Claude Code's content channel. With no receiver URL the engine
+switches nothing on in a box, and Claude Code's spans of a run reach a
+collector only if the seat's `role.sandbox.env` points them at one.
 
 #### Correlating logs with traces
 

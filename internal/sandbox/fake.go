@@ -407,6 +407,10 @@ type FakeRunner struct {
 	// LiveGate, when set, is waited on by every read of a live reading
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
+	// Exports, when set, is the telemetry environment the agent declares
+	// ([Runner.Telemetry]); nil declares none, as an agent that exports
+	// nothing does. Set before the runner is used.
+	Exports map[string]string
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -426,6 +430,13 @@ func NewFakeRunner(name string) *FakeRunner {
 
 // Name is the coding agent's key in the runner registry.
 func (r *FakeRunner) Name() string { return r.name }
+
+// Telemetry is [FakeRunner.Exports], copied.
+func (r *FakeRunner) Telemetry() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.Exports)
+}
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {

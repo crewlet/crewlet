@@ -2,8 +2,10 @@ package sandbox_test
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -543,16 +545,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers: map[sandbox.Placement]sandbox.Provider{
-			sandbox.Direct: sandbox.NewFakeProvider(),
-		},
-		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
-		Telemetry: receiver,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager := exportingManager(t, receiver, exporting())
 
 	env := sandbox.RunEnvFor(t.Context(), manager, sandbox.LaunchRequest{
 		// LAUNCHED FROM AN UNSAMPLED TURN, so the TRACEPARENT below is
@@ -569,11 +562,21 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 			Env: map[string]string{
 				"OTEL_EXPORTER_OTLP_ENDPOINT": "https://our-own-collector.example",
 				"ANTHROPIC_API_KEY":           "sk-test",
+				// AND A SWITCH THE RUNNER DECLARED, turned back off: the
+				// operator decides whether the agent exports at all.
+				"CLAUDE_CODE_ENABLE_TELEMETRY": "0",
 			},
 		},
 	})
 	if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"]; got != "https://our-own-collector.example" {
 		t.Errorf("the engine overrode the operator's collector: %q", got)
+	}
+	if got := env["CLAUDE_CODE_ENABLE_TELEMETRY"]; got != "0" {
+		t.Errorf("the runner's switch overrode the operator's: %q", got)
+	}
+	// What the operator did not set of the RUNNER's is still there.
+	if got := env["OTEL_TRACES_EXPORTER"]; got != "otlp" {
+		t.Errorf("the runner's declaration was lost: OTEL_TRACES_EXPORTER = %q", got)
 	}
 	// AND WHAT THE OPERATOR DID NOT SET IS STILL ADDED, or the run would
 	// lose the trace context that nests its spans under the turn — with the
@@ -584,5 +587,139 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	}
 	if env["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("the run environment lost a credential: %q", env["ANTHROPIC_API_KEY"])
+	}
+}
+
+// exporting is a runner declaration shaped like Claude Code's — a switch, an
+// exporter, and one variable the receiver also writes, which the receiver's
+// value must win.
+func exporting() map[string]string {
+	return map[string]string{
+		"CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+		"OTEL_TRACES_EXPORTER":         "otlp",
+		otlpenv.ProtocolVar:            "grpc",
+	}
+}
+
+// exportingManager is a manager over one fake runner declaring declared, with
+// receiver minting each run's endpoint (nil mints none).
+func exportingManager(t *testing.T, receiver *sandbox.OtelReceiver, declared map[string]string) *sandbox.Manager {
+	t.Helper()
+	runner := sandbox.NewFakeRunner("claude-code")
+	runner.Exports = declared
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{
+			sandbox.Direct: sandbox.NewFakeProvider(),
+		},
+		Runners:   map[string]sandbox.Runner{"claude-code": runner},
+		Telemetry: receiver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
+// launchOf is a launch of the fake runner from launchedFrom, with env as the
+// operator's own.
+func launchOf(env map[string]string) sandbox.LaunchRequest {
+	return sandbox.LaunchRequest{
+		Turn: sandbox.TurnRef{
+			TraceID: launchedFrom.TraceID, SpanID: launchedFrom.SpanID,
+			TurnID: "turn-1", AgentHandle: "engineer",
+		},
+		Spec: sandbox.Spec{CodingAgent: "claude-code", TimeoutSec: 900, Env: env},
+	}
+}
+
+// THE RUNNER'S SWITCHES AND THE RECEIVER'S ENDPOINT TRAVEL TOGETHER OR NOT AT
+// ALL.
+//
+// A runner that declares nothing is minted no endpoint — a token in a box
+// whose agent never exports is a credential nothing needs. And a run the
+// receiver mints nothing for gets none of the runner's switches — an agent
+// switched on with no endpoint exports to its own default, Claude Code's
+// localhost:4318, where nothing listens. Where both are there, the receiver's
+// value wins a variable both write: the endpoint's protocol is the route's.
+//
+// Mutation: mint whatever the runner declares, or add the declaration with no
+// receiver, and the matching case goes red.
+func TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := map[string]string{"GITHUB_TOKEN": "ghp-test"}
+
+	t.Run("a runner that exports nothing is minted nothing", func(t *testing.T) {
+		t.Parallel()
+		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, nil), launchOf(operator))
+		if !maps.Equal(env, operator) {
+			t.Errorf("the box got %v, want the operator's environment alone", env)
+		}
+	})
+	t.Run("no receiver, none of the runner's switches", func(t *testing.T) {
+		t.Parallel()
+		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, nil, exporting()), launchOf(operator))
+		if !maps.Equal(env, operator) {
+			t.Errorf("the box got %v with nothing to export to", env)
+		}
+	})
+	t.Run("no trace, none of the runner's switches", func(t *testing.T) {
+		t.Parallel()
+		req := launchOf(operator)
+		req.Turn.TraceID, req.Turn.SpanID = "", ""
+		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), req)
+		if !maps.Equal(env, operator) {
+			t.Errorf("the box got %v with no endpoint minted", env)
+		}
+	})
+	t.Run("both, the receiver's protocol winning", func(t *testing.T) {
+		t.Parallel()
+		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), launchOf(operator))
+		if !strings.HasPrefix(env[otlpenv.EndpointVar], "https://engine.internal/otlp/") {
+			t.Errorf("no endpoint was minted beside the runner's switches: %v", env)
+		}
+		if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["GITHUB_TOKEN"] != "ghp-test" {
+			t.Errorf("a layer was lost: %v", env)
+		}
+		if got := env[otlpenv.ProtocolVar]; got != string(otlpenv.HTTPProtobuf) {
+			t.Errorf("%s = %q: the runner chose the protocol of a route that speaks %s",
+				otlpenv.ProtocolVar, got, otlpenv.HTTPProtobuf)
+		}
+	})
+}
+
+// THE BOX'S EXPORTER WAITS AS LONG AS THE RECEIVER MAY TAKE TO ANSWER.
+//
+// The receiver answers only once it has forwarded, for up to its forward
+// timeout, and an exporter that gives up first cancels the forward with its
+// disconnect: the batch is lost for being slow rather than refused. The
+// specification's default exporter wait is the forward's own ten seconds, so
+// which gave up first was a race.
+//
+// Mutation: leave the variable unset, or set it to the forward timeout, and
+// this goes red.
+func TestTheBoxWaitsForTheReceiversAnswer(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := receiver.RunEnv(t.Context(), launchedFrom, "turn-1", "engineer", time.Hour)[sandbox.OtelTimeoutVar]
+	ms, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("%s = %q, not milliseconds", sandbox.OtelTimeoutVar, raw)
+	}
+	if got := time.Duration(ms) * time.Millisecond; got <= sandbox.OtelForwardTimeout {
+		t.Errorf("the box waits %v for an answer the receiver may take %v to forward",
+			got, sandbox.OtelForwardTimeout)
 	}
 }

@@ -271,7 +271,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 
 	handle, err := runner.Start(ctx, box, RunRequest{
 		Brief: buildBrief(req),
-		Env:   withTelemetry(ctx, m, req),
+		Env:   withTelemetry(ctx, m, runner, req),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -484,6 +484,19 @@ func buildBrief(req LaunchRequest) string {
 
 // withTelemetry adds the run's OTel environment to the spec's.
 //
+// THREE LAYERS, later winning key by key: what the RUNNER declares switches
+// its agent's own export on ([Runner.Telemetry]); what the RECEIVER mints
+// points that export at this engine ([OtelReceiver.RunEnv]); and the spec's
+// own environment — role.sandbox.env and everything the launch derived — is
+// the operator's, and wins over both.
+//
+// NONE OF IT WITHOUT BOTH HALVES. A runner that declares nothing gets no
+// endpoint, because a token minted into a box whose agent will never export is
+// a credential nothing needs; and a run the receiver mints nothing for — no
+// receiver, or no trace — gets none of the runner's switches, because an agent
+// switched on with no endpoint exports to its own default (Claude Code's is
+// localhost:4318), where nothing is listening for it.
+//
 // MERGED HERE rather than in the spec, because the endpoint carries a token
 // scoped to THIS run and minted with a TTL: putting it in the spec would have
 // it persisted with the pending row and re-used by a resume hours later,
@@ -492,23 +505,26 @@ func buildBrief(req LaunchRequest) string {
 // THE OPERATOR'S OWN VALUES WIN. role.sandbox.env is where an operator
 // declares what a box gets, and a deployment that points its coding agents at
 // its own collector directly has said so deliberately — silently overriding
-// it would be the engine choosing where somebody else's telemetry goes.
-func withTelemetry(ctx context.Context, m *Manager, req LaunchRequest) map[string]string {
+// it would be the engine choosing where somebody else's telemetry goes. That
+// includes switching the agent's export off again, by setting the variable
+// the runner declared.
+func withTelemetry(ctx context.Context, m *Manager, runner Runner, req LaunchRequest) map[string]string {
 	if m.telemetry == nil {
 		return req.Spec.Env
 	}
-	added := m.telemetry.RunEnv(ctx, req.Turn.Trace(),
-		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
-	if len(added) == 0 {
+	declared := runner.Telemetry()
+	if len(declared) == 0 {
 		return req.Spec.Env
 	}
-	env := make(map[string]string, len(req.Spec.Env)+len(added))
-	for k, v := range added {
-		env[k] = v
+	minted := m.telemetry.RunEnv(ctx, req.Turn.Trace(),
+		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
+	if len(minted) == 0 {
+		return req.Spec.Env
 	}
-	for k, v := range req.Spec.Env {
-		env[k] = v
-	}
+	env := make(map[string]string, len(declared)+len(minted)+len(req.Spec.Env))
+	maps.Copy(env, declared)
+	maps.Copy(env, minted)
+	maps.Copy(env, req.Spec.Env)
 	return env
 }
 
@@ -532,7 +548,9 @@ func otelTokenTTL(spec Spec) time.Duration {
 	return ttl
 }
 
-// RunEnvFor is [withTelemetry] under a name a test can reach.
+// RunEnvFor is [withTelemetry] under a name a test can reach, with the runner
+// the launch would acquire for the spec's coding agent — or the spec's own
+// environment when the manager has none by that name.
 //
 // EXPORTED FOR THE ONE PROPERTY THAT IS OTHERWISE UNOBSERVABLE: the merge
 // order between the engine's telemetry variables and the operator's own. Both
@@ -540,7 +558,11 @@ func otelTokenTTL(spec Spec) time.Duration {
 // wrong sends somebody else's spans to the engine — silently, because they do
 // arrive somewhere.
 func RunEnvFor(ctx context.Context, m *Manager, req LaunchRequest) map[string]string {
-	return withTelemetry(ctx, m, req)
+	runner, err := m.RunnerFor(req.Spec.CodingAgent)
+	if err != nil {
+		return req.Spec.Env
+	}
+	return withTelemetry(ctx, m, runner, req)
 }
 
 // launchModel is the model a launch points its coding agent at, empty when it

@@ -47,6 +47,11 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the coding agent's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// Telemetry is nil: OpenCode exports no OTLP, so a run of it is handed no
+// endpoint and no token. Its observability is the published transcript and
+// the engine-side lifecycle events.
+func (OpenCode) Telemetry() map[string]string { return nil }
+
 // Command builds the non-interactive `opencode run` invocation.
 //
 // ALWAYS --format json, and that is load-bearing rather than a preference.
