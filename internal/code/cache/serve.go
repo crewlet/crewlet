@@ -13,8 +13,10 @@ import (
 // another idea of it.
 //
 //   - core.multiPackIndex: the multi-pack-index is read when present.
-//   - pack.allowPackReuse: Pool.PackReuse — `multi` on a git that accepts
-//     it (2.44), so a clone sends the packs a cache holds verbatim.
+//   - pack.allowPackReuse: Pool.PackReuse — `multi` on a git that serves
+//     it correctly (2.48, gitproc.MultiPackReuse), so a clone sends the
+//     packs a cache holds verbatim; `true` before, reusing from the
+//     bitmap's preferred pack alone.
 //   - pack.windowMemory: twice the epoch's largest blob (100 MiB at the
 //     defaults) — the delta window must hold the largest blob a push may
 //     carry and one base for it — which bounds a transfer's memory

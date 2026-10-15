@@ -461,35 +461,6 @@ const providerConnBytes = 80_000_000
 // internal/objstore/s3obj's own benchmark's is.
 const realClear = 10 * time.Minute
 
-// fastImport runs one git fast-import session in src, a bare repository,
-// fed by what stream writes as fast-import reads it — so a history of
-// gigabytes is never held in memory.
-func fastImport(b *testing.B, client *gittest.Client, src string, stream func(*bufio.Writer) error) {
-	b.Helper()
-	pr, pw := io.Pipe()
-	wrote := make(chan error, 1)
-	go func() {
-		bw := bufio.NewWriterSize(pw, 1<<20)
-		err := stream(bw)
-		if err == nil {
-			err = bw.Flush()
-		}
-		pw.CloseWithError(err)
-		wrote <- err
-	}()
-	_, stderr, err := client.Try(b, src, pr, "fast-import", "--quiet")
-	// A session that ended early stops reading: closing the reader ends the
-	// stream's next write, so its goroutine ends with the session.
-	_ = pr.Close()
-	werr := <-wrote
-	switch {
-	case err != nil:
-		b.Fatalf("git fast-import in %s: %v\n%s", src, err, stderr)
-	case werr != nil:
-		b.Fatalf("writing the fast-import stream for %s: %v", src, werr)
-	}
-}
-
 // commitsOf is ref's commits in src, oldest first.
 func commitsOf(b *testing.B, client *gittest.Client, src, ref string) []string {
 	b.Helper()
@@ -721,7 +692,7 @@ func coldWorld(b *testing.B, bucket string, firstByte time.Duration) *syncWorld 
 func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
 	b.Helper()
 	src := gittest.Empty(b)
-	fastImport(b, w.client, src, pushStream(shape.packs, shape.size))
+	gittest.FastImport(b, w.client, src, pushStream(shape.packs, shape.size))
 	pushes := eachPush(commitsOf(b, w.client, src, "main"))
 	rows, total := w.storePushes(b, src, pushes)
 	if err := os.RemoveAll(src); err != nil {
@@ -896,7 +867,7 @@ func (l *timedLog) RepoState(ctx context.Context, q code.StateQuery) (code.RepoS
 // answers the commit.
 func (w *syncWorld) nextPush(b *testing.B, src, branch, repo, tip string, n int, size int64) string {
 	b.Helper()
-	fastImport(b, w.client, src, func(bw *bufio.Writer) error {
+	gittest.FastImport(b, w.client, src, func(bw *bufio.Writer) error {
 		bytes, _ := chacha(drawsNext, uint64(n))
 		msg := fmt.Sprintf("next %d\n", n)
 		fmt.Fprintf(bw, "commit %s\ncommitter %s %d +0000\ndata %d\n%sfrom %s\n", branch, benchIdent,
@@ -936,7 +907,7 @@ func BenchmarkDeltaSync(b *testing.B) {
 			src := gittest.Empty(b)
 			// The history's pushes are small: what a delta sync is claimed
 			// not to depend on is how many packs there are, not their bytes.
-			fastImport(b, w.client, src, pushStream(packs, func(int) int64 { return 1 << 10 }))
+			gittest.FastImport(b, w.client, src, pushStream(packs, func(int) int64 { return 1 << 10 }))
 			commits := commitsOf(b, w.client, src, "main")
 			pushes := eachPush(commits)
 			rows, _ := w.storePushes(b, src, pushes)
@@ -1074,7 +1045,7 @@ func (w *syncWorld) history(b *testing.B, size int64) (string, []string) {
 	bytes, draw := chacha(drawsHistory, 0)
 	src := gittest.Empty(b)
 	for s := range midxSessions {
-		fastImport(b, w.client, src, midxStream(s, s*midxCommits(files), cur, bytes, draw))
+		gittest.FastImport(b, w.client, src, midxStream(s, s*midxCommits(files), cur, bytes, draw))
 	}
 	return src, commitsOf(b, w.client, src, "main")
 }
@@ -1726,7 +1697,7 @@ func BenchmarkPeel(b *testing.B) {
 				large(b, "5 000 tagged pushes packed, stored and synced")
 			}
 			src := gittest.Empty(b)
-			fastImport(b, w.client, src, tagStream(packs))
+			gittest.FastImport(b, w.client, src, tagStream(packs))
 			commits := commitsOf(b, w.client, src, "main")
 			pushes := eachPush(commits)
 			var ask strings.Builder
