@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -212,7 +212,7 @@ func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
 				return
 			}
 			sc := trace.SpanContextFromContext(propagator().Extract(context.Background(),
-				propagation.MapCarrier{traceparentHeader: got}))
+				envCarrier{TraceparentVar: got}))
 			if sc.TraceID().String() != tc.trace.TraceID ||
 				sc.SpanID().String() != tc.trace.SpanID ||
 				sc.IsSampled() == tc.trace.Unsampled {
@@ -220,5 +220,67 @@ func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
 					got, sc.TraceID(), sc.SpanID(), sc.IsSampled(), tc.trace)
 			}
 		})
+	}
+}
+
+// A PROCESS IS HANDED THE SPAN IT RUNS BENEATH, decision and vendor state
+// included, under the variable names it reads — and nothing at all where
+// there is no span, rather than a parent invented for it.
+//
+// The span is opened beneath a restored parent of each decision, so the case
+// does not depend on whichever root rule another test left configured.
+//
+// Mutations: inject into a MapCarrier and return it as is (every name is
+// lower-case, so every case goes red); return an empty map instead of nil
+// for no span (the span-less cases); force sampled in WithRemote (the
+// unsampled case).
+func TestAProcessIsHandedTheSpanItRunsBeneath(t *testing.T) {
+	const traceID, parentID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
+	for _, unsampled := range []bool{false, true} {
+		parent := WithRemote(context.Background(),
+			events.TraceContext{TraceID: traceID, SpanID: parentID, Unsampled: unsampled})
+		ctx, span := Start(parent, "test", "llm.round")
+		flags := "-01"
+		if unsampled {
+			flags = "-00"
+		}
+		want := "00-" + traceID + "-" + span.SpanContext().SpanID().String() + flags
+		env := ProcessEnv(ctx)
+		if env[TraceparentVar] != want {
+			t.Errorf("unsampled=%v: %s = %q, want %q", unsampled, TraceparentVar, env[TraceparentVar], want)
+		}
+		if _, set := env[TracestateVar]; set || len(env) != 1 {
+			t.Errorf("unsampled=%v: a trace with no vendor state set %v", unsampled, env)
+		}
+		span.End()
+	}
+
+	state, err := trace.ParseTraceState("vendor=opaque")
+	if err != nil {
+		t.Fatalf("ParseTraceState: %v", err)
+	}
+	withState := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled, TraceState: state,
+	}))
+	if got := ProcessEnv(withState)[TracestateVar]; got != "vendor=opaque" {
+		t.Errorf("%s = %q, want the trace's vendor state", TracestateVar, got)
+	}
+
+	for name, ctx := range map[string]context.Context{
+		"no span":       context.Background(),
+		"a trace alone": WithRemote(context.Background(), events.TraceContext{TraceID: traceID}),
+	} {
+		if env := ProcessEnv(ctx); env != nil {
+			t.Errorf("%s: handed %v, want nothing", name, env)
+		}
+	}
+}
+
+// Every name ProcessEnv can set is listed, because a layer of a child's
+// environment the engine owns is told which names to leave alone from it.
+func TestProcessEnvNamesEveryVariableItSets(t *testing.T) {
+	want := []string{TraceparentVar, TracestateVar}
+	if got := ProcessEnvNames(); !slices.Equal(got, want) {
+		t.Errorf("ProcessEnvNames() = %v, want %v", got, want)
 	}
 }

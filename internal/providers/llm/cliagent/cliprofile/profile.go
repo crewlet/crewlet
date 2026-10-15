@@ -569,6 +569,25 @@ type Profile struct {
 	// that has no api_key_env goes instead.
 	EnvSignIn bool `yaml:"env_sign_in,omitempty"`
 
+	// EnvTraceContext declares that the CLI reads W3C trace context from its
+	// own environment — TRACEPARENT and TRACESTATE ([TraceContextEnv]) — and
+	// carries it onto the model API calls it makes, so the engine hands each
+	// call the trace context of the model round it belongs to and the API's
+	// own spans nest under that round. False, the default, hands it nothing,
+	// which is the right answer for a CLI nobody has measured reading them.
+	//
+	// A DECLARATION OF A VENDOR FACT, measured per CLI like
+	// [Profile.EnvSignIn]: only Claude Code is measured reading them (in
+	// print mode, which is how this backend runs it), so only claude-code
+	// declares it. The variables are the engine's once declared
+	// ([Profile.EngineEnv]): a fixed TRACEPARENT in cli.env would name one
+	// parent for every call the entry ever makes.
+	//
+	// Trace context and nothing else: what the CLI does with it — forward it,
+	// or export spans of its own — is the profile's env to say, and a vendor
+	// CLI on the engine host is never handed a telemetry destination.
+	EnvTraceContext bool `yaml:"env_trace_context,omitempty"`
+
 	// CredentialPaths are the login files, relative to the seat home.
 	// They are what a bundle may carry and what is synced back after a
 	// refresh; anything else in the home is conversation state.

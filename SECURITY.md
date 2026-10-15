@@ -62,7 +62,14 @@ A few things worth knowing when deploying Crewlet:
   those spans carry prompts and answers, so its endpoint and credentials
   deserve the care the event store does. The engine's own spans of those calls
   carry metadata only, whatever an inherited `ANTHROPIC_OPEN_TELEMETRY_*`
-  variable says (`docs/guides/deployment.md#spans-from-claude`).
+  variable says (`docs/guides/deployment.md#spans-from-claude`). A text-mode
+  `claude-code` cli-agent call is handed the same trace context and forwards
+  it, to Anthropic or to the gateway its `ANTHROPIC_BASE_URL` names; it is
+  handed no telemetry destination, so it exports nothing and never holds the
+  collector's credential — but Claude Code's own managed settings on the
+  engine host (`/etc/claude-code/` on Linux) can switch its telemetry on for
+  every seat, outside the engine's control
+  (`docs/concepts/subscription-llm-backends.md#trace-context`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.

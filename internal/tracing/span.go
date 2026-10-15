@@ -3,11 +3,13 @@ package tracing
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
@@ -223,21 +225,84 @@ func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 // formatted by hand: the flag field is the trace's own decision, and a second
 // encoding of the header beside the one every inbound request is read with is
 // a second place for that decision to be spelled wrong. It was: the sandbox
-// wrote `-01` for every run.
+// wrote `-01` for every run. It is [ProcessEnv] over that context, so a box
+// and a CLI the engine starts read one encoding.
 func Traceparent(ctx context.Context, tc events.TraceContext) string {
 	// THE CALLER'S SPAN IS CLEARED FIRST. WithRemote leaves ctx as it was
 	// for a tc it cannot use, and the propagator would then render the
 	// caller's own span — handing a box the launching frame's parent in
 	// place of the run's, or a parent where the run has none.
 	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
-	carrier := propagation.MapCarrier{}
-	propagator().Inject(WithRemote(ctx, tc), carrier)
-	return carrier.Get(traceparentHeader)
+	return ProcessEnv(WithRemote(ctx, tc))[TraceparentVar]
 }
 
-// traceparentHeader is the W3C header [Traceparent] reads back, by the name
-// the trace-context propagator writes it under.
-const traceparentHeader = "traceparent"
+// The variables a process this engine starts reads W3C trace context from:
+// each field the trace-context propagator writes, upper-cased, which is the
+// OpenTelemetry convention for carrying a propagator's fields in a process's
+// ENVIRONMENT rather than in headers — and what Claude Code reads when it
+// runs non-interactively.
+const (
+	TraceparentVar = "TRACEPARENT"
+	TracestateVar  = "TRACESTATE"
+)
+
+// ProcessEnv renders the span ctx holds as the environment a process this
+// engine starts reads its parent from: [TraceparentVar], and [TracestateVar]
+// where the trace carries vendor state. Nil when ctx holds no valid span —
+// a process handed no parent roots a trace of its own, which is honest, where
+// a parent invented for it is not.
+//
+// FROM THE SPAN, decision included: the flag field is the span's own sampling
+// decision, so a process started beneath an unsampled round is told `-00`,
+// and anything it calls that honours the flag records nothing of a trace the
+// engine is not exporting either.
+//
+// THE PROPAGATOR'S OWN ENCODING, through a carrier that names each field as an
+// environment variable, so the header an outbound call carries and the
+// variable a child process reads are spelled by one implementation.
+func ProcessEnv(ctx context.Context) map[string]string {
+	carrier := envCarrier{}
+	propagator().Inject(ctx, carrier)
+	if len(carrier) == 0 {
+		return nil
+	}
+	return carrier
+}
+
+// ProcessEnvNames is every variable [ProcessEnv] can set, sorted — the names a
+// layer of a child's environment that the engine owns must not carry.
+func ProcessEnvNames() []string {
+	names := make([]string, 0, len(propagator().Fields()))
+	for _, field := range propagator().Fields() {
+		names = append(names, envName(field))
+	}
+	slices.Sort(names)
+	return names
+}
+
+// envCarrier is a [propagation.TextMapCarrier] over environment variables:
+// a field is stored under its environment name ([envName]).
+type envCarrier map[string]string
+
+func (c envCarrier) Get(key string) string { return c[envName(key)] }
+func (c envCarrier) Set(key, value string) { c[envName(key)] = value }
+func (c envCarrier) Keys() []string        { return slices.Collect(maps.Keys(c)) }
+
+// envName spells a propagator field as an environment variable: upper-cased,
+// with every character a portable variable name cannot hold made an
+// underscore — `traceparent` is TRACEPARENT.
+func envName(field string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r - 'a' + 'A'
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, field)
+}
 
 // Fail marks a span as failed and records the error.
 //

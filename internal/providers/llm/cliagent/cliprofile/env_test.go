@@ -7,18 +7,18 @@ import (
 	"testing"
 )
 
-// THE ENGINE OWNS THE ISOLATION AND THE PER-CALL CHANNEL, AND NOTHING ELSE.
+// THE ENGINE OWNS THE ISOLATION AND THE PER-CALL CHANNELS, AND NOTHING ELSE.
 //
 // What EngineEnv names is what the backend removes from every lower layer and
 // what config refuses an operator to write, so it must hold every variable a
 // seat's state could be relocated by — the base layout and the vendor's own —
-// plus the system-prompt channel, and no variable a profile legitimately
-// configures.
-func TestTheEngineOwnsTheIsolationAndTheSystemPromptChannel(t *testing.T) {
+// plus the system-prompt channel and, for a CLI that reads it, the call's trace
+// context, and no variable a profile legitimately configures.
+func TestTheEngineOwnsTheIsolationAndThePerCallChannels(t *testing.T) {
 	t.Parallel()
 	base := []string{"HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"}
 	for agent, extra := range map[string][]string{
-		"claude-code": {"CLAUDE_CONFIG_DIR"},
+		"claude-code": {"CLAUDE_CONFIG_DIR", "TRACEPARENT", "TRACESTATE"},
 		"codex":       {"CODEX_HOME"},
 		"gemini-cli":  {"GEMINI_SYSTEM_MD"},
 		"muse-code":   nil,
@@ -80,6 +80,8 @@ func TestAProfileMayNotNameAVariableTheEngineSets(t *testing.T) {
 		{"passthrough HOME", "codex", map[string]any{"passthrough_env": []any{"HOME"}}, "passthrough_env", "HOME"},
 		{"env system prompt", "qwen-code",
 			map[string]any{"env": map[string]any{"QWEN_SYSTEM_MD": "/srv/p.md"}}, "env", "QWEN_SYSTEM_MD"},
+		{"env trace context", "claude-code",
+			map[string]any{"env": map[string]any{"TRACEPARENT": "00-fixed-for-every-call"}}, "env", "TRACEPARENT"},
 		{"token_env", "claude-code", map[string]any{"token_env": "XDG_STATE_HOME"}, "token_env", "XDG_STATE_HOME"},
 		{"api_key_env", "claude-code", map[string]any{"api_key_env": "TMPDIR"}, "api_key_env", "TMPDIR"},
 	} {
@@ -93,7 +95,7 @@ func TestAProfileMayNotNameAVariableTheEngineSets(t *testing.T) {
 			t.Errorf("%s: accepted", tc.name)
 			continue
 		}
-		for _, want := range []string{tc.field + " names " + tc.variable, "engine sets"} {
+		for _, want := range []string{tc.field + " names " + tc.variable, "engine owns"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("%s: error does not say %q: %v", tc.name, want, err)
 			}

@@ -280,6 +280,11 @@ func TestAVariableTheEngineSetsItselfIsRefusedInEveryLayer(t *testing.T) {
 			path:  "providers.llm.sub.cli.env.GEMINI_SYSTEM_MD",
 		},
 		{
+			name:  "a fixed trace context in cli.env, on a CLI handed the round's",
+			lines: []string{"cli: {agent: claude-code, env: {TRACEPARENT: 00-fixed-for-every-call}}"},
+			path:  "providers.llm.sub.cli.env.TRACEPARENT",
+		},
+		{
 			name:  "HOME in the profile's own env",
 			lines: []string{"cli: {agent: claude-code, overrides: {env: {HOME: /srv/shared}}}"},
 			path:  "providers.llm.sub.cli.overrides",
@@ -301,8 +306,8 @@ func TestAVariableTheEngineSetsItselfIsRefusedInEveryLayer(t *testing.T) {
 			if !errors.Is(err, ErrConflict) {
 				t.Errorf("want %v, got %v", ErrConflict, err)
 			}
-			if !strings.Contains(err.Error(), "engine sets") {
-				t.Errorf("the refusal does not say the engine sets the variable itself:\n%v", err)
+			if !strings.Contains(err.Error(), "engine owns") {
+				t.Errorf("the refusal does not say the engine owns the variable:\n%v", err)
 			}
 			assertAdmissionOnly(t, cliEntry(tc.lines...), tc.path)
 		})
@@ -310,10 +315,12 @@ func TestAVariableTheEngineSetsItselfIsRefusedInEveryLayer(t *testing.T) {
 }
 
 // What another CLI's profile owns is an ordinary variable here: only the
-// merged profile's own isolation and channel are the engine's.
+// merged profile's own isolation and channels are the engine's — trace context
+// included, which is the engine's only for a CLI that declares it reads it.
 func TestAnotherCLIsRelocationVariableIsAnOrdinaryVariable(t *testing.T) {
 	t.Parallel()
-	doc := cliEntry("cli: {agent: codex, env: {CLAUDE_CONFIG_DIR: /srv/claude, GEMINI_SYSTEM_MD: /srv/p.md}}")
+	doc := cliEntry("cli: {agent: codex, env: {CLAUDE_CONFIG_DIR: /srv/claude, GEMINI_SYSTEM_MD: /srv/p.md, " +
+		"TRACEPARENT: 00-for-a-cli-handed-none}}")
 	if _, err := ParseCompany([]byte(doc)); err != nil {
 		t.Errorf("a variable codex's profile does not own was refused: %v", err)
 	}

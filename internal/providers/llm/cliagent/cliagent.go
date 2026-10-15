@@ -276,6 +276,18 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		timeout: p.timeout,
 		grace:   p.termGrace,
 	}
+	// THE ROUND'S TRACE CONTEXT, for a CLI that reads it from its own
+	// environment ([cliprofile.Profile.EnvTraceContext]): the span ctx holds
+	// — the tool loop's `llm.round` for a phase's round, the caller's own
+	// for any other call — and a CLI that carries it onto its API requests
+	// puts the model provider's own spans under that span. The
+	// span's own decision travels in the flag, so an unsampled round asks
+	// for nothing to be recorded. No span, nothing — and never a value a
+	// lower layer wrote: both variables are the engine's once the profile
+	// declares them, so buildEnv has removed them already.
+	if p.profile.EnvTraceContext {
+		in.env = append(in.env, traceEnv(ctx)...)
+	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
 	// from the WHOLE of stdout — a fenced block, one JSON document — so

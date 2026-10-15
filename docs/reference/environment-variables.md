@@ -293,9 +293,10 @@ envelope (`trace_unsampled`, written only when a trace is not sampled) to the tu
 delivery wakes, on whichever node runs it; it is kept on a suspended coding run's record,
 so the resumed half — days later, possibly on another node — continues as the first half
 was decided; and it is the flag of the `TRACEPARENT` a sandbox is handed (`-00` for a run
-launched from an unsampled turn); and it is the flag of the `traceparent` every call to
-the Claude API carries, so the API emits no spans for a call made in a trace that is not
-sampled. So a node's sampler decides only the traces that node
+launched from an unsampled turn), and of the one a text-mode Claude Code call is handed
+for its round; and it is the flag of the `traceparent` every call to the Claude API
+carries, from the engine's own SDK or forwarded by Claude Code, so the API emits no spans
+for a call made in a trace that is not sampled. So a node's sampler decides only the traces that node
 starts — a webhook delivery, a schedule's fire, a committed tracker or knowledge-base
 change that wakes a seat, an event published outside any span — and a fleet whose nodes
 are configured differently splits no tree. Sampling does not depend

@@ -293,7 +293,7 @@ func (r *OtelReceiver) RunEnv(ctx context.Context, trace events.TraceContext,
 		}, ","),
 	}
 	if parent := tracing.Traceparent(ctx, trace); parent != "" {
-		env[TraceparentVar] = parent
+		env[tracing.TraceparentVar] = parent
 	}
 	return env
 }
@@ -312,11 +312,6 @@ const (
 	// means no in-box telemetry, which is the ordinary configuration.
 	OtelReceiverURLVar = "CREWLET_SANDBOX_OTEL_RECEIVER_URL"
 )
-
-// TraceparentVar is the variable a box reads its parent span from — the
-// OpenTelemetry convention for carrying W3C trace context into a process's
-// environment, which Claude Code reads when it runs non-interactively.
-const TraceparentVar = "TRACEPARENT"
 
 // BuildOtelReceiver is THE construction path, called by every engine.
 //

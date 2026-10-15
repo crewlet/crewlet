@@ -133,6 +133,47 @@ sequenceDiagram
     W->>W: sync refreshed credential out, prune A/home
 ```
 
+### Trace context
+
+A text-mode call is one model round, and the tool loop spans it
+(`llm.round`). A CLI whose profile declares `env_trace_context` — `claude-code`
+is the one — is handed that span's W3C trace context in `TRACEPARENT`, and in
+`TRACESTATE` when the trace carries vendor state. The engine sets both last,
+like the isolation, so neither `cli.env` nor the profile can pin one parent
+for every call an entry makes, and a call made beneath no span — a
+`crewlet llm doctor` probe — is handed neither. The flag is the round's own
+sampling decision: a round the [sampler](../guides/deployment.md#otlp-export)
+decided against is `-00`.
+
+The `claude-code` profile turns on two of Claude Code's switches, and only
+those: `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`, under which it forwards the
+`traceparent` it was handed on its Messages API requests, and
+`CLAUDE_CODE_PROPAGATE_TRACEPARENT=1`, which sends that header to a gateway
+`ANTHROPIC_BASE_URL` as well as to Anthropic's own endpoint. Its telemetry
+stays off — no `CLAUDE_CODE_ENABLE_TELEMETRY`, and none of the engine's
+`OTEL_*` variables, which the allowlist above does not pass — so the CLI is a
+pure propagator. Measured against Claude Code 2.1.300, the request carries the
+round's `traceparent` unchanged, so the Claude API's own spans nest directly
+under `llm.round` for an organization that
+[sends them to the same backend](../guides/deployment.md#spans-from-claude),
+while the CLI exports nothing, holds no collector credential and adds no
+telemetry flush to a call's exit.
+
+- **Both switches are beta.** A Claude Code release that drops or renames them
+  stops the linking and changes nothing else — the call is the same call.
+  `crewlet llm doctor` prints the profile's `written_for` beside the installed
+  version; `cli.overrides: {env_trace_context: false}` turns the handing-over
+  off.
+- **A host's managed settings are the CLI's, not the engine's.** Claude Code
+  reads telemetry settings from its managed-settings file under
+  `/etc/claude-code/` on Linux whatever its environment says, and a seat's
+  isolation does not reach a system directory. On a host where that file
+  switches Claude Code's telemetry on, every seat's calls export wherever it
+  points, with whatever content it allows.
+- **`traceparent` leaves the engine host**, for Anthropic or for the gateway
+  `ANTHROPIC_BASE_URL` names: a trace id, a span id and the flag — what the
+  engine's own `anthropic` entries send on every call.
+
 ---
 
 ## Two modes: a text model, or the agent itself
@@ -1267,6 +1308,7 @@ key by key; lists and single values replace wholesale.
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
+| `env_trace_context` | The CLI reads W3C trace context (`TRACEPARENT`, `TRACESTATE`) from its own environment, so each call is handed the [trace context](#trace-context) of the model round it belongs to. Declared by `claude-code` only — the one CLI measured reading them. |
 | `credential_paths` | The login files, relative to the seat home. |
 | `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
@@ -1417,13 +1459,16 @@ than on anything the profile says.
 **Nor may any layer name a variable the engine sets itself.** On every call
 the engine sets the seat's isolation — `HOME`, `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `TMPDIR` and the
-profile's `config_env` variables (`CLAUDE_CONFIG_DIR` for `claude-code`) —
-and, on a CLI that reads its system prompt from a file a variable names
-(`system_prompt_env`: `GEMINI_SYSTEM_MD`, `QWEN_SYSTEM_MD`), that variable
-too. It removes whatever the lower layers wrote under each of these and then
-sets its own, so a value written for one in `cli.env`, in the profile's
-`env`, through its `passthrough_env`, or as its `token_env` or `api_key_env`
-never reaches the CLI. A write naming one is refused at the field, naming the
+profile's `config_env` variables (`CLAUDE_CONFIG_DIR` for `claude-code`). On a
+CLI that reads its system prompt from a file a variable names
+(`system_prompt_env`: `GEMINI_SYSTEM_MD`, `QWEN_SYSTEM_MD`) that variable is
+the engine's too, and on a CLI that declares `env_trace_context` so are
+`TRACEPARENT` and `TRACESTATE` ([trace context](#trace-context)). The engine
+removes whatever the lower layers wrote under each of these and then sets its
+own — the per-call ones on a call that has a value for them — so a value
+written for one in `cli.env`, in the profile's `env`, through its
+`passthrough_env`, or as its `token_env` or `api_key_env` never reaches the
+CLI. A write naming one is refused at the field, naming the
 variable; an applied revision is warned about, as an **admission** rule,
 because the engine's value wins and the entry runs isolated. A `cli.env`
 `HOME` that reached the CLI would put every seat on the entry in one home,

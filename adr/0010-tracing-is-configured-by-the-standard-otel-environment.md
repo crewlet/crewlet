@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracing`
-- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables
+- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables, and `internal/providers/llm/cliagent.TestAClaudeCodeCallIsHandedTraceContextAndNoTelemetryDestination`, which holds a vendor CLI on the engine host to receiving the round's trace context and none of the engine's telemetry configuration
 - **Measured:** the provider is installed unconditionally and only the exporter is switched on, so `trace_id` reaches `crewlet_events` — an indexed column, and what `GET /events/trace/{id}` answers on — with no collector anywhere
 - **Cost-when-tried:** OTel's own built-in default provider is a no-op that passes the parent's span context through, which silently reinstates the bug this package removed. `internal/tracing`'s `init` installs a working one for that reason. And two readers of one set of variable names disagreed three ways while a test asserting the names passed — see "How it is held"
 - **Tag-status:** unreleased
@@ -59,6 +59,18 @@ the SDK's options in code — spans on, trace context sent, metadata only — an
 the variables are documented as ignored, as the OpenAI SDK's are. The SDK
 records through the global provider `internal/tracing` installs, resolved on
 every call, so it follows this configuration and no other.
+
+**A vendor CLI the engine starts on its own host is handed trace context, never
+a telemetry destination.** A text-mode `claude-code` call is given the W3C trace
+context of the round it belongs to (`TRACEPARENT`, `TRACESTATE`, rendered by
+`internal/tracing`'s one encoding) and the profile's two propagation switches,
+and nothing of the `OTEL_*` environment — the child's environment is an
+allowlist that carries none of it. So the CLI forwards the round's context to
+the Claude API, whose spans nest under the round, and exports nothing itself:
+handing it the exporter's endpoint and headers would give a vendor's CLI the
+company's collector credential, and its own spans and log events would be a
+second telemetry configuration, with content switches of its own, beside this
+one.
 
 ## Why the obvious alternative is wrong
 
