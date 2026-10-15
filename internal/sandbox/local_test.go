@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -160,6 +161,89 @@ func TestTheChildSeesTheRunEnvAndTheBoxHomeButNotTheEngineSecrets(t *testing.T) 
 	}
 	if !strings.HasPrefix(parts[3], box.Home()) {
 		t.Fatalf("TMPDIR = %q, want it inside the box", parts[3])
+	}
+}
+
+// NO LAYER CAN MOVE A DIRECT BOX'S HOME. The isolation is the only boundary a
+// direct box has, and it used to be applied FIRST: a HOME in role.sandbox.env,
+// a setup step's env or a command's own landed after it and put the coding
+// agent's state — its config, its login, its transcripts — in whatever
+// directory of the engine host it named.
+//
+// Mutation: set the isolation before the run env and every case goes red.
+func TestNoLayerCanMoveADirectBoxsHome(t *testing.T) {
+	t.Parallel()
+	local := newDirect(t)
+	elsewhere := t.TempDir()
+	box := mustCreate(t, local, Spec{Env: map[string]string{
+		"HOME": elsewhere, "XDG_CONFIG_HOME": elsewhere, "TMPDIR": elsewhere,
+		"GITHUB_TOKEN": "declared-by-config",
+	}})
+	result, err := box.Exec(t.Context(), `echo "$HOME|$XDG_CONFIG_HOME|$TMPDIR|$XDG_CACHE_HOME|$GITHUB_TOKEN"`,
+		ExecOptions{Env: map[string]string{"XDG_CACHE_HOME": elsewhere}})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	parts := strings.Split(strings.TrimSpace(result.Stdout), "|")
+	if len(parts) != 5 {
+		t.Fatalf("unexpected output %q", result.Stdout)
+	}
+	for i, name := range []string{"HOME", "XDG_CONFIG_HOME", "TMPDIR", "XDG_CACHE_HOME"} {
+		if !strings.HasPrefix(parts[i], box.Home()) {
+			t.Errorf("%s = %q: a layer moved it out of the box's home %q", name, parts[i], box.Home())
+		}
+	}
+	// What is not the isolation still reaches the child.
+	if parts[4] != "declared-by-config" {
+		t.Errorf("the run env did not reach the child: %q", parts[4])
+	}
+}
+
+// A CONTAINER'S HOME IS ITS MOUNT, whatever a layer says: the exec env file is
+// applied over the container's own HOME, so a role.sandbox.env HOME moved the
+// agent off the bind mount its credential files and state live in.
+//
+// Mutation: drop the container's isolation from the env file and this goes red.
+func TestNoLayerCanMoveAContainersHome(t *testing.T) {
+	t.Parallel()
+	box := &containerBox{
+		layout:    boxLayout{id: "box", root: t.TempDir()},
+		runtime:   "/usr/bin/docker",
+		container: "crewlet-sbx-box",
+		env:       map[string]string{"HOME": "/elsewhere", "GITHUB_TOKEN": "declared-by-config"},
+	}
+	if _, err := box.execArgv("true", ExecOptions{Env: map[string]string{"HOME": "/also-elsewhere"}}); err != nil {
+		t.Fatalf("execArgv: %v", err)
+	}
+	blob, err := os.ReadFile(box.layout.envFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(blob)), "\n")
+	if !slices.Contains(lines, "HOME="+DefaultHome) || slices.Contains(lines, "HOME=/elsewhere") ||
+		slices.Contains(lines, "HOME=/also-elsewhere") {
+		t.Errorf("the env file sets %q, want HOME=%s alone", lines, DefaultHome)
+	}
+	if !slices.Contains(lines, "GITHUB_TOKEN=declared-by-config") {
+		t.Errorf("the run env did not reach the container: %q", lines)
+	}
+}
+
+// WHAT A RUN ENV WRITES OVER THE ISOLATION IS NAMED, so a box created with one
+// warns that the value is not used rather than dropping it in silence.
+//
+// Mutation: report nothing and this goes red.
+func TestTheIsolationAVariableLosesToIsNamed(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{"TMPDIR": "/x", "HOME": "/y", "GITHUB_TOKEN": "t"}
+	if got := isolationKept(env, directIsolation("/box")); !slices.Equal(got, []string{"HOME", "TMPDIR"}) {
+		t.Errorf("a direct box names %v, want [HOME TMPDIR]", got)
+	}
+	if got := isolationKept(env, containerIsolation()); !slices.Equal(got, []string{"HOME"}) {
+		t.Errorf("a container names %v, want [HOME]", got)
+	}
+	if got := isolationKept(map[string]string{"GITHUB_TOKEN": "t"}, directIsolation("/box")); len(got) != 0 {
+		t.Errorf("a run env writing none of it names %v", got)
 	}
 }
 
