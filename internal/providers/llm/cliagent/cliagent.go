@@ -340,9 +340,10 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if err != nil {
 				return nil, p.fail(llm.KindFatal, 0, err)
 			}
-			// APPENDED, so it wins: the child env is assembled from the
-			// allowlist and the profile's own config_env above, and the
-			// last assignment of a name is the one exec applies.
+			// The engine's own variable ([cliprofile.Profile.EngineEnv]),
+			// so buildEnv removed whatever a lower layer wrote under it
+			// and this is the only value: a call with no system prompt
+			// gets none rather than an operator's file.
 			in.env = append(in.env, pair)
 		}
 	}

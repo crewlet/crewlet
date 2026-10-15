@@ -76,8 +76,12 @@ its own place to run:
 **Between seats.** Every seat gets its own `home`. `HOME`,
 `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `TMPDIR` and the
 vendor's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
-all point inside it. Nothing in a CLI's state layout is reachable across
-that boundary.
+all point inside it, and `XDG_CACHE_HOME` beside it. Nothing in a CLI's
+state layout is reachable across that boundary — and nothing you write can
+move it: the engine sets these variables **last**, over the profile's `env`,
+its `passthrough_env` and your `cli.env`, and a document naming one in any of
+those is [refused](#engine-owned-variables) on a write. A `config_env`
+directory has to stay inside the seat home.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
@@ -1248,9 +1252,9 @@ key by key; lists and single values replace wholesale.
 | `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
 | `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
-| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home. |
-| `env` | Fixed child environment. Never a credential, and never `token_env` or `api_key_env`. |
-| `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
+| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and never climbing out of it. |
+| `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable [the engine sets itself](#engine-owned-variables). |
+| `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never a variable the engine sets itself. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
@@ -1399,6 +1403,31 @@ through `cli.auth`. `env` may not name the profile's `token_env` or
 `cli.env` and `cli.auth` are both layered over `env`, so whether a value
 there reached the CLI would turn on the mode and the secret store rather
 than on anything the profile says.
+
+### Engine-owned variables
+
+**Nor may any layer name a variable the engine sets itself.** On every call
+the engine sets the seat's isolation — `HOME`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `TMPDIR` and the
+profile's `config_env` variables (`CLAUDE_CONFIG_DIR` for `claude-code`) —
+and, on a CLI that reads its system prompt from a file a variable names
+(`system_prompt_env`: `GEMINI_SYSTEM_MD`, `QWEN_SYSTEM_MD`), that variable
+too. It removes whatever the lower layers wrote under each of these and then
+sets its own, so a value written for one in `cli.env`, in the profile's
+`env`, through its `passthrough_env`, or as its `token_env` or `api_key_env`
+never reaches the CLI. A write naming one is refused at the field, naming the
+variable; an applied revision is warned about, as an **admission** rule,
+because the engine's value wins and the entry runs isolated. A `cli.env`
+`HOME` that reached the CLI would put every seat on the entry in one home,
+each reading the others' transcripts — and `passthrough_env: [HOME]` would
+put them all in the engine user's own. Which names are the engine's is judged
+against the merged profile: a `config_env` override makes its variable one.
+
+A `config_env` directory is relative to the seat home and has to stay inside
+it, and may not name one of the base variables above: `../../shared` would
+point every seat's vendor state at one directory. That one is a **runnable**
+rule — the profile contradicts itself about where a seat's state lives — so
+it is refused at apply too.
 
 ---
 

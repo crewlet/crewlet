@@ -515,12 +515,15 @@ type Profile struct {
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
 	// under the seat's home. Without it a CLI reads the engine user's real
-	// dotfiles and every seat shares one set of sessions.
+	// dotfiles and every seat shares one set of sessions. Part of the
+	// isolation ([Profile.SeatEnv]), so a directory that climbs out of the
+	// home is refused by [Profile.Validate].
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
 	// Env is fixed child environment the CLI needs. Never a credential,
 	// and never the profile's own token_env or api_key_env, both refused
-	// by [Profile.ValidateCredentials].
+	// by [Profile.ValidateCredentials]; never a variable the engine sets
+	// itself either ([Profile.ValidateEnv]).
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
@@ -529,6 +532,9 @@ type Profile struct {
 	// forwarded before auth.mode is consulted, so a key listed here would
 	// reach every seat whatever the mode said, which is exactly the
 	// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
+	// Nor may it name a variable the engine sets itself
+	// ([Profile.ValidateEnv]): forwarding the host's HOME is the one setting
+	// that would put every seat in the engine user's own home.
 	PassthroughEnv []string `yaml:"passthrough_env,omitempty"`
 
 	// TokenEnv is the variable carrying a long-lived headless
@@ -784,9 +790,20 @@ func (p *Profile) Validate(name string) error {
 		// output is a json profile, and the raw field printed "a  profile".
 		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
 	}
-	for dir := range p.ConfigEnv {
-		if dir == "HOME" {
-			add("config_env may not name HOME — it is set from the seat home already")
+	// A RELOCATION VARIABLE IS PART OF THE ISOLATION ([Profile.SeatEnv]), so
+	// it is held to what the isolation is for: a seat's state stays in that
+	// seat's home. One naming a base variable would give it two values, and
+	// one whose directory climbed out of the home — `../../shared` — would
+	// point every seat's vendor state at ONE directory, the shared-memory
+	// failure the isolation exists to prevent.
+	base := seatBase("", "")
+	for _, env := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
+		if _, owned := base[env]; owned {
+			add("config_env may not name %s — it is set from the seat home already", env)
+			continue
+		}
+		if _, err := UnderRoot(seedValidationRoot, p.ConfigEnv[env]); err != nil {
+			add("config_env.%s %q must be relative and stay inside the seat home", env, p.ConfigEnv[env])
 		}
 	}
 	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {

@@ -510,6 +510,63 @@ func TestEveryHostVariableALocalBoxInheritsReachesTheCLI(t *testing.T) {
 	}
 }
 
+// NO LAYER AN OPERATOR OR A PROFILE WRITES CAN MOVE A SEAT'S HOME.
+//
+// The isolation was applied SECOND, under a comment saying nothing may
+// override it, with the profile's env, its passthrough_env and cli.env all
+// applied after it — so a cli.env HOME put every seat on the entry in one home,
+// each reading the others' transcripts. Config refuses each of these on a
+// write; this is the guarantee behind that refusal, for a revision that was
+// only warned about. Every layer names a different isolation variable, and the
+// engine's own HOME is forwarded by passthrough_env, the worst of them.
+func TestNoLayerCanMoveASeatsHome(t *testing.T) {
+	t.Setenv("HOME", "/home/engine-user")
+	p := fakeProvider(t,
+		map[string]string{
+			"FAKE_DUMP_ENV":   "1",
+			"XDG_CONFIG_HOME": "/srv/shared/.config",
+			"TMPDIR":          "/srv/shared/tmp",
+			"VENDOR_DIR":      "/srv/shared/vendor",
+		},
+		map[string]any{
+			"config_env":      map[string]any{"VENDOR_DIR": ".vendor"},
+			"passthrough_env": []any{"HOME"},
+			"env":             map[string]any{"XDG_STATE_HOME": "/srv/shared/state"},
+		})
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	home := envValue(comp.Content, "HOME")
+	if !strings.Contains(home, string(filepath.Separator)+"seats"+string(filepath.Separator)) {
+		t.Fatalf("HOME = %q, want the seat's own home — a lower layer moved it", home)
+	}
+	for _, name := range []string{"XDG_CONFIG_HOME", "XDG_STATE_HOME", "TMPDIR", "VENDOR_DIR"} {
+		if got := envValue(comp.Content, name); !strings.HasPrefix(got, home+string(filepath.Separator)) {
+			t.Errorf("%s = %q, want a directory inside the seat home %q", name, got, home)
+		}
+	}
+}
+
+// THE SYSTEM-PROMPT CHANNEL IS THE ENGINE'S ON EVERY CALL, including one that
+// has no system prompt. The channel's pair was appended only when there was
+// text to put in it, so a cli.env value under the same name survived every
+// other call and pointed the CLI at the operator's file instead of its own
+// default prompt.
+func TestAnOperatorsFileNeverReachesTheSystemPromptChannel(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t,
+		map[string]string{"FAKE_REPORT_ENV": "VENDOR_SYSTEM_MD", "VENDOR_SYSTEM_MD": "/srv/operator.md"},
+		map[string]any{"system_prompt_env": "VENDOR_SYSTEM_MD"})
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if comp.Content != "VENDOR_SYSTEM_MD present=false" {
+		t.Errorf("a call with no system prompt saw the operator's channel value: %s", comp.Content)
+	}
+}
+
 // The default mode must never let a metered key through, even one an operator
 // put in cli.env — that is the flat-rate-plan-billed-anyway failure the mode
 // exists to prevent.

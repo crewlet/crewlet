@@ -21,8 +21,15 @@
 // which [Load] runs, is whether the merged profile can drive a CLI at all —
 // RUNNABLE, so a node refuses to apply a revision that breaks it.
 // [Profile.ValidateCredentials] is where the profile lets a credential in
-// around cli.auth — ADMISSION, so a write is refused and an applied revision
-// only warned about, since such a profile still runs.
+// around cli.auth, and [Profile.ValidateEnv] where it names a variable the
+// engine sets itself — both ADMISSION, so a write is refused and an applied
+// revision only warned about, since such a profile still runs.
+//
+// It is also where the ISOLATION is spelled ([Profile.SeatEnv]): which
+// variables point a CLI's state inside one seat's home, and therefore which
+// ones no other layer of a child's environment may name
+// ([Profile.EngineEnv]). Here rather than in the backend because both read
+// it — the backend sets them, config refuses a document that names one.
 //
 // It is DATA, not code. Every field is replaceable from YAML because these
 // flags and JSON shapes belong to vendors who rename them between releases,

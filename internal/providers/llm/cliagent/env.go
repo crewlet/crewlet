@@ -2,6 +2,7 @@ package cliagent
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -65,10 +66,22 @@ func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 // in the profile's passthrough_env, or the operator's cli.env.
 //
 // Layered lowest-precedence first, so the reason each layer can override the
-// one below is visible in the order: host allowlist, then the isolation
-// variables (which nothing may override — they ARE the isolation), then the
-// profile's own fixed environment, then the profile's passthrough, then the
-// operator's cli.env, then auth.
+// one below is visible in the order: host allowlist, then the profile's own
+// fixed environment, then the profile's passthrough, then the operator's
+// cli.env, then auth — and THE ISOLATION LAST.
+//
+// Last because it is the one layer nothing may override: it IS the isolation
+// ([cliprofile.Profile.SeatEnv]). It used to come second, under the comment
+// that nothing may override it, with three layers an operator writes applied
+// after it — so a cli.env HOME, or a passthrough_env forwarding the host's,
+// put every seat on the entry in one home and each read the others'
+// transcripts. Every variable the engine owns ([cliprofile.Profile.EngineEnv])
+// is first REMOVED from what the layers below assembled, and the isolation
+// then set: a call's per-call variables — the system prompt's path — are
+// added by [Provider.Complete] on the call that has one, so a value a lower
+// layer wrote never reaches a call that has none. Config refuses a document
+// naming one in any layer, so this is the guarantee behind the refusal rather
+// than the only thing standing between a typo and a shared home.
 //
 // A map of its own, apart from [buildEnv]'s rendering, because it is also
 // what decides whether an entry is signed in ([Provider.signIn]): whether a
@@ -77,20 +90,6 @@ func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 // had, and what drifted from it in both directions.
 func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) map[string]string {
 	env := hostbox.Inherit()
-
-	// The isolation. Every path a CLI could keep state under is pointed
-	// inside the seat's own home; XDG_CACHE_HOME is the one exception,
-	// living beside the home rather than in it, because a cache is warm
-	// across calls and holds no conversation.
-	env["HOME"] = c.Home
-	env["XDG_CONFIG_HOME"] = filepath.Join(c.Home, ".config")
-	env["XDG_DATA_HOME"] = filepath.Join(c.Home, ".local", "share")
-	env["XDG_STATE_HOME"] = filepath.Join(c.Home, ".local", "state")
-	env["XDG_CACHE_HOME"] = c.Cache
-	env["TMPDIR"] = filepath.Join(c.Home, "tmp")
-	for name, rel := range p.ConfigEnv {
-		env[name] = filepath.Join(c.Home, rel)
-	}
 
 	for name, value := range p.Env {
 		env[name] = value
@@ -110,6 +109,11 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	}
 
 	applyAuth(env, p, auth)
+
+	for _, name := range p.EngineEnv() {
+		delete(env, name)
+	}
+	maps.Copy(env, p.SeatEnv(c.Home, c.Cache))
 	return env
 }
 
