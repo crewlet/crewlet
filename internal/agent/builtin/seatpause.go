@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The tools' wire names.
@@ -274,7 +275,7 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Agent: agentID, AgentHandle: seat.Handle(), RoleName: role,
 			ResumedBy: actor.Handle, ResumedBySeat: actor.Seat,
 			PausedBy: current.By, PausedAt: current.At,
-		}, events.TraceContext{}), role)
+		}, tracing.TraceOf(ctx)), role)
 		return jsonResult(map[string]any{
 			"handle": seat.Handle(), "outcome": string(statelog.OutcomeApplied),
 			"paused": false, "changed": true,
@@ -348,12 +349,16 @@ func announceSeatPaused(ctx context.Context, deps SeatPauseDeps, seat *org.Role,
 		Agent: agentID, AgentHandle: seat.Handle(), RoleName: role,
 		PausedBy: p.By, PausedBySeat: p.Seat, Reason: p.Reason,
 		StopRunning: p.StopRunning, PausedAt: p.At,
-	}, events.TraceContext{}), role)
+	}, tracing.TraceOf(ctx)), role)
 }
 
 // announce publishes one record, BEST EFFORT: the pause is the coordination
 // record, and a feed row that could not be published is a missing line, not a
 // pause that did not happen.
+//
+// Every record is filed under the CALL's trace (tracing.TraceOf on the tool's
+// context, which holds its `tool.call` span), so a pause sits beside the audit
+// record of the person who made it rather than in no trace at all.
 func announce(ctx context.Context, pub Announcer, ev *events.Event, role string) {
 	ev.Source = role
 	if err := pub.Publish(ctx, topics.Event(ev.Type), ev); err != nil {

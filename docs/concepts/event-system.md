@@ -229,7 +229,9 @@ config_revision_applied    # one node's outcome, and how far it got
 operator_acted             # an operator tool call that is not a proven read,
                            # from the dashboard (/operator/act) or a person's
                            # assistant (/operator/mcp): tool, transport,
-                           # request id, outcome, position or refusal
+                           # request id, outcome, position or refusal. Filed
+                           # under the call's own `tool.call` span, with
+                           # everything the call published
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -69,6 +70,8 @@ type recordingWork struct {
 	opIDs   []string
 	taskIDs []string
 	outcome statelog.Outcome
+	// under is the span each create was made under.
+	under []trace.SpanContext
 }
 
 type recordingWriter struct {
@@ -86,11 +89,12 @@ func (w recordingWriter) CreateTaskAsking(ctx context.Context, opID string,
 	return w.CreateTask(ctx, opID, task, notify)
 }
 
-func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker.Task,
+func (w recordingWriter) CreateTask(ctx context.Context, opID string, task tracker.Task,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
+	w.w.under = append(w.w.under, trace.SpanContextFromContext(ctx))
 	w.w.actors = append(w.w.actors, w.actor)
 	w.w.opIDs = append(w.w.opIDs, opID)
 	w.w.taskIDs = append(w.w.taskIDs, task.ID)
