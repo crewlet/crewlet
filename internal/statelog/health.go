@@ -620,8 +620,9 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 // # Neither half alone
 //
 // Serving alone refuses a copy that is level but has not yet LEARNED it is:
-// the drained latch is set on the fetch after the last record commits, up to a
-// fetch wait later, and a seat admitted at lag zero in that window would find
+// the drained latch is set once a run commits with nothing pending behind it,
+// or on the empty fetch after one that closed for another reason — up to a
+// fetch wait later — and a seat admitted at lag zero in that window would find
 // every call it made refused by the node that admitted it. Strict alone is
 // seat admission's question, and a request gate that asked it refused a busy
 // company's copy on most instants — a record in flight — so every request
