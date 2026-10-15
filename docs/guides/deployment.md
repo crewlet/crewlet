@@ -1253,8 +1253,10 @@ flowchart TD
 ```
 
 **The engine's own spans are these, and only these:** `webhook.receive` and
-`schedule.fire`, which start work; `agent.turn`, and `agent.turn.resume` for a
-suspended run re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
+`schedule.fire`, which start work; `notifications.coalesce`, the instant a seat's
+batch of deliveries is merged into one turn's trigger, beneath the first
+delivery's span; `agent.turn`, and `agent.turn.resume` for a suspended run
+re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
 `execute`, `review` and `judge`; `llm.round`; `tool.call` — a seat's, and a
 person's on the [operator surface](../reference/api-endpoints.md#the-runtime-audit-sourceoperator),
 where each call is a root naming its transport (`crewlet.transport`); `llm.auxiliary`,

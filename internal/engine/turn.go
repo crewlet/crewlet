@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -1892,12 +1893,26 @@ func delegationOf(evs []*events.Event) (int, []string) {
 // report how many deliveries ARRIVED and not how many turns they became: a
 // seat draining a thread's backlog as one turn looked, from the feed, like a
 // seat that ignored twelve messages.
+//
+// # A span of its own
+//
+// The record is published after the dispatcher restored the trigger's trace
+// and before the turn opens its span, so the context holds the TRIGGER'S span
+// — and read through TraceOf there, the record claimed the trigger's span id
+// as its own, the very fault every event a turn publishes is held against. So
+// the merge is a span: `notifications.coalesce`, a child of the trigger's span
+// and a sibling of the turn it feeds, as instantaneous as `schedule.fire`
+// because it stands for the merge rather than for any work.
 func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string,
 	routing inbox.Routing,
 ) {
 	if !routing.Coalesce || d.Observe == nil || len(routing.Events) == 0 {
 		return
 	}
+	ctx, span := tracing.Start(ctx, "engine", CoalesceSpan,
+		attribute.String("crewlet.seat", handle),
+		attribute.Int("crewlet.count", len(routing.Events)))
+	defer span.End()
 	first, last := routing.Events[0].Timestamp, routing.Events[0].Timestamp
 	for _, ev := range routing.Events {
 		if ev.Timestamp.Before(first) {
@@ -1926,6 +1941,10 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
 }
+
+// CoalesceSpan is the span a merged partition's record is published in. See
+// [Dispatcher.noteCoalesced].
+const CoalesceSpan = "notifications.coalesce"
 
 // noteSkipped records every constituent the completion ledger already worked.
 //
