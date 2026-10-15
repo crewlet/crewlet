@@ -124,8 +124,10 @@ type Config struct {
 	// [llm.Request.Effort] lowers it for that call, and never raises it.
 	ReasoningEffort string
 
-	// HTTPClient overrides the transport. Nil builds one through
-	// httpapi.NewHTTPClient, which the provider then owns and closes.
+	// HTTPClient overrides the transport. Nil takes the engine's shared one
+	// through httpapi.NewHTTPClient, which the provider never owns and never
+	// closes: its pool is every outbound client's, so closing it would drop
+	// their warm connections too.
 	HTTPClient option.HTTPClient
 
 	// Clock is the pool's monotonic time source. Nil takes the default.
