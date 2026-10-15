@@ -1293,8 +1293,12 @@ itself — see [Spans from Claude](#spans-from-claude).
 the SDK's span and the API's are never the root of a trace
 of their own, and the callers that used to hold no span hold one now: a
 reflection pass runs in `learning.reflect` under the turn it reflects on, a
-background pass in a root of its own, and a person's question on the operator
-surface in that call's `tool.call`. Where nothing above an auxiliary call
+background pass in a root of its own, a person's question on the operator
+surface in that call's `tool.call`, and the condensation of a collected coding
+run's report, failure or question — rewritten because it is past what the run's
+record carries — in the run's own trace, beneath the span that launched the run
+and under the run's sampling decision, whichever node collects it and however
+long after the launch. Where nothing above an auxiliary call
 holds a span even so, `llm.auxiliary` is the root. `crewlet llm doctor` is
 traced the way a node is — from the same `OTEL_*` environment, flushed as it
 exits — so the Models API read and the smoke round it sends nest under its

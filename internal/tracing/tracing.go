@@ -129,10 +129,13 @@
 // auxiliary seam), which files the call's spend record under it. The callers that held no span hold one: a reflection pass restores its
 // turn's trace and runs in `learning.reflect` beneath it, a background
 // learning pass roots a trace of its own per tick ([StartRoot]), a person's
-// call on the operator surface runs in a `tool.call` of its own, and a coding
+// call on the operator surface runs in a `tool.call` of its own, a coding
 // box's call back over the tool bridge is filed in its run's trace — under the
 // box's own span where its request names one in that trace
-// ([WithRemoteFrom]). Outside a node, `crewlet llm doctor` — the one command
+// ([WithRemoteFrom]) — and a collected coding run is fitted in its run's trace
+// too, restored off the run's row before the coordinator collects it, so the
+// condensation of a report too long to carry is an `llm.auxiliary` beneath the
+// span that launched the run rather than a root per call. Outside a node, `crewlet llm doctor` — the one command
 // that calls a model — runs [Configure] as `crewlet run` does and examines each
 // entry in a root of its own (`llm.doctor`): left on the provider this
 // package's init installs, it sent a sampled `traceparent` on every call while

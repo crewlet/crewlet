@@ -110,9 +110,12 @@ type Publisher interface {
 // `llm.auxiliary` span), and a bucket that took calls from two traces filed the
 // second one's spend under the first: a person's two questions a moment apart,
 // or two background ticks inside one flush, read as one call's cost in one
-// trace and none in the other. Within a turn, a reflection pass or a
-// background tick every call shares the trace already, so this splits nothing
-// a record ever meant to hold together.
+// trace and none in the other. Within a turn, a reflection pass, a background
+// tick or a collected coding run's condensation every call shares the trace
+// already, so this splits nothing a record ever meant to hold together — and a
+// caller that left its calls on a context with no span splits one rewrite into
+// a record per call, which is how a collected run's condensation was found
+// doing exactly that.
 type key struct {
 	stage, who, turn, purpose, model, provider, day, trace string
 }
