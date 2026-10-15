@@ -471,10 +471,7 @@ func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelRece
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: the OTLP receiver's upstream: %w", err)
 	}
-	for _, d := range otlpenv.DroppedOf(upstream) {
-		log.Warn("sandbox_otel_header_dropped", "var", d.Var, "entry", d.Entry,
-			"header", d.Header, "reason", d.Reason)
-	}
+	otlpenv.ReportDropped(context.Background(), log, otlpenv.ReaderSandboxForwarder, upstream)
 	return NewOtelReceiver(OtelReceiverOptions{
 		BaseURL:  base,
 		Tokens:   NewOtelTokens(OtelTokenOptions{Key: OtelSigningKey(keyMaterial)}),
