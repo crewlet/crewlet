@@ -686,9 +686,11 @@ const maxBundleBytes = 8 << 20
 
 // isTerminal reports whether a writer is a character device.
 //
-// Used by exactly one caller, to refuse printing a credential into a
-// scrollback. A conservative answer: anything this cannot inspect is treated
-// as NOT a terminal, because the alternative refuses a legitimate pipe.
+// Used to refuse printing a credential into a scrollback, and by `crewlet code
+// import` to show git's progress to a person watching it. A conservative
+// answer: anything this cannot inspect is treated as NOT a terminal, because
+// the alternative refuses a legitimate pipe — and shows progress lines to a
+// log nobody reads live.
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {

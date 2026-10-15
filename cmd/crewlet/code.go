@@ -50,11 +50,13 @@ import (
 // The tests serve the writer — a real node — so the two cannot drift
 // unnoticed.
 //
-// export is CLIENT-SIDE: the operator's own git, run with the operator's own
-// environment — their proxy, their configuration — clones the repository
-// through the node's git routes exactly as a person's git does, and writes the
-// bundle on this machine. The engine dials nothing and writes nothing for it
-// ([operatorGit]).
+// export and import are CLIENT-SIDE: the operator's own git, run with the
+// operator's own environment — their proxy, their configuration, their
+// credentials for another host — talks to the node's git routes exactly as a
+// person's git does. export clones a repository and writes the bundle on this
+// machine; import clones another host's repository here and pushes it into
+// one the node serves, in bounded steps (codeimport.go). The engine dials
+// nothing for either ([operatorGit]).
 //
 // credential is git's credential helper for the code host
 // ([codeCredential]), which export configures for every git it runs against a
@@ -69,6 +71,9 @@ const codeUsage = `usage: crewlet code <command>
       node keeps its own cache, so verify each
   export <name> <file.bundle> [<config.yaml>] [-url URL] [-token T] [-git PATH]
       write a repository's every ref and object to one git bundle
+  import <source-url> <name> [<config.yaml>] [-url URL] [-token T] [-git PATH] [-dry-run]
+      push another host's repository into a declared one, in steps under
+      code.limits.max_push_bytes; the same command again resumes it
   credential [-token-env NAME] get|store|erase
       git's credential helper: credential.<url>.helper = !crewlet code credential
 `
@@ -83,6 +88,8 @@ func runCode(args []string, stdout, stderr io.Writer) error {
 		return codeVerify(rest, stdout, stderr)
 	case "export":
 		return codeExport(rest, stdout, stderr)
+	case "import":
+		return codeImport(rest, stdout, stderr)
 	case "credential":
 		return codeCredential(rest, os.Stdin, stdout, stderr, os.Getenv)
 	case "hook":
@@ -1360,6 +1367,10 @@ type operatorGit struct {
 	// after, never over.
 	environ     []string
 	configCount int
+	// terminal reports a controlling terminal, where a git that talks to
+	// another host with the operator's own credentials may ask its person
+	// something ([gitCall].asks).
+	terminal bool
 }
 
 // newOperatorGit is the git export runs: the one -git names or the first on
@@ -1410,7 +1421,19 @@ func newOperatorGit(gitPath string, client *nodeClient, environ []string) (opera
 		}
 	}
 	return operatorGit{path: path, base: client.base, token: client.token, self: self,
-		environ: environ, configCount: count}, nil
+		environ: environ, configCount: count, terminal: controllingTerminal()}, nil
+}
+
+// controllingTerminal reports whether this process has a controlling
+// terminal — the one git and ssh ask a person on, /dev/tty, which opens only
+// where there is one — whatever its standard streams are.
+func controllingTerminal() bool {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	_ = tty.Close()
+	return true
 }
 
 // credentialHelper is the helper a git that talks to the node runs: this
@@ -1490,53 +1513,140 @@ const gitKillGrace = gitproc.KillGrace
 
 // run runs the operator's git under env — on the repository at gitDir where
 // one is named — answering its stdout; a failure quotes the end of its stderr.
-// Its PROCESS GROUP is its own, so an interrupt — the context's — ends git and
-// everything it started, the remote helper among them.
+func (g operatorGit) run(ctx context.Context, env []string, gitDir string, args ...string) ([]byte, error) {
+	return g.call(ctx, gitCall{env: env, gitDir: gitDir}, args...)
+}
+
+// gitCall is how one invocation of the operator's git is run: under env, on
+// the repository at gitDir where one is named, with config's `key=value`
+// settings on its command line where any are given, with stdin where one is
+// given, its stdout into stdout where one is given (captured, bounded by
+// maxGitOutput, and answered where not), and its stderr copied to live as it
+// is written where a person is watching. asks marks a git that talks to
+// ANOTHER HOST with the operator's own credentials, which may ask its person
+// something on the terminal ([operatorGit.call]).
+type gitCall struct {
+	env    []string
+	gitDir string
+	config []string
+	stdin  []byte
+	stdout io.Writer
+	live   io.Writer
+	asks   bool
+}
+
+// call runs the operator's git as c says, answering what it wrote to stdout
+// where nothing else read it — on a failure too, since a push's porcelain
+// lines are its answer whatever its exit — and an error quoting the end of
+// its stderr.
+//
+// ITS PROCESS GROUP IS ITS OWN, so an interrupt — the context's — ends git
+// and everything it started, the remote helper among them, with one signal.
+// EXCEPT FOR A GIT THAT MAY ASK ITS PERSON SOMETHING (c.asks) where this
+// process has a controlling terminal: git — or the ssh it starts — asks for a
+// user name and password no credential helper holds, a host key on a first
+// connection, a key's passphrase with no agent, on /dev/tty; and a process
+// group of its own is a BACKGROUND group to that terminal, which the kernel
+// stops (SIGTTIN) at its first read, so the import waited on a stopped git
+// until somebody pressed Ctrl-C. That git runs in this command's own group
+// instead, exactly as a git the person typed would: in the foreground, its
+// prompt answerable, and a Ctrl-C reaching git and ssh from the terminal as
+// it reaches this command. The context then ends git alone (SIGTERM, then
+// WaitDelay's kill), which is what its remote helper and ssh end with. Where
+// there is no terminal — a CI job, a cron — nothing can be asked, git's
+// prompt fails on its own and says so, and the call keeps its own group.
+// The node-facing calls never prompt (targetEnv: GIT_TERMINAL_PROMPT=0, and
+// this binary as the credential helper), and keep it always.
+//
+// THE READER CAN STOP IT: a stdout writer that fails ends git at its next
+// write, which meets a closed pipe, and that writer's error is the answer —
+// what stopped git, rather than the broken pipe git died of.
 //
 // THE REPOSITORY IS NAMED, never found: `--git-dir`, not a working directory
 // git discovers it from. The operator's configuration is deliberately
 // inherited, and safe.bareRepository=explicit — a hardening git has offered
 // since 2.38 — refuses every bare repository it would discover, the mirror
 // among them ("cannot use bare repository").
-func (g operatorGit) run(ctx context.Context, env []string, gitDir string, args ...string) ([]byte, error) {
+func (g operatorGit) call(ctx context.Context, c gitCall, args ...string) ([]byte, error) {
 	verb := args[0]
-	if gitDir != "" {
-		args = append([]string{"--git-dir=" + gitDir}, args...)
+	lead := make([]string, 0, 1+2*len(c.config))
+	if c.gitDir != "" {
+		lead = append(lead, "--git-dir="+c.gitDir)
 	}
+	for _, kv := range c.config {
+		// -c rather than the environment: the command line's settings are
+		// read after GIT_CONFIG_COUNT's and GIT_CONFIG_PARAMETERS', so they
+		// outrank every setting the operator's environment carries.
+		lead = append(lead, "-c", kv)
+	}
+	args = append(lead, args...)
 	cmd := exec.CommandContext(ctx, g.path, args...)
-	cmd.Env = env
-	procgroup.Set(cmd)
-	cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
+	cmd.Env = c.env
+	if c.asks && g.terminal {
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	} else {
+		procgroup.Set(cmd)
+		cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
+	}
 	cmd.WaitDelay = gitKillGrace
-	stdout := &boundedBuffer{max: maxGitOutput}
+	if c.stdin != nil {
+		cmd.Stdin = bytes.NewReader(c.stdin)
+	}
+	captured := &boundedBuffer{max: maxGitOutput, verb: verb}
+	var out io.Writer = captured
+	if c.stdout != nil {
+		out = c.stdout
+	}
+	reader := &stoppingWriter{w: out}
 	stderr := &tailBuffer{max: gitStderrTail}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd.Stdout, cmd.Stderr = reader, io.Writer(stderr)
+	if c.live != nil {
+		cmd.Stderr = io.MultiWriter(stderr, c.live)
+	}
 	err := cmd.Run()
-	if stdout.overflowed {
-		return nil, fmt.Errorf("git %s wrote more than %s, which this command does not hold", verb,
-			humanBytes(maxGitOutput))
+	if reader.err != nil {
+		return captured.Bytes(), reader.err
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("git %s: interrupted", verb)
+			return captured.Bytes(), fmt.Errorf("git %s: interrupted", verb)
 		}
-		return nil, fmt.Errorf("git %s: %w\n%s", verb, err, strings.TrimRight(stderr.String(), "\n"))
+		return captured.Bytes(), fmt.Errorf("git %s: %w\n%s", verb, err, strings.TrimRight(stderr.String(), "\n"))
 	}
-	return stdout.Bytes(), nil
+	return captured.Bytes(), nil
+}
+
+// stoppingWriter is git's stdout as [operatorGit.call] reads it: the reader's
+// first refusal, kept, so it is the answer rather than the broken pipe git
+// dies of after it.
+type stoppingWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (s *stoppingWriter) Write(p []byte) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	n, err := s.w.Write(p)
+	if err != nil {
+		s.err = err
+	}
+	return n, err
 }
 
 // boundedBuffer is a buffer that refuses what would take it past max — the
 // write fails, so git's next write meets a closed pipe and it stops.
 type boundedBuffer struct {
 	bytes.Buffer
-	max        int
-	overflowed bool
+	max  int
+	verb string
 }
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > b.max {
-		b.overflowed = true
-		return 0, errors.New("output past its bound")
+		return 0, fmt.Errorf("git %s wrote more than %s, which this command does not hold", b.verb,
+			humanBytes(int64(b.max)))
 	}
 	return b.Buffer.Write(p)
 }

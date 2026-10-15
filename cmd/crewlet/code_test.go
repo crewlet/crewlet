@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -64,6 +65,47 @@ type codeHost struct {
 // repository is listed at the log's head.
 func codeNode(t *testing.T, reposYAML string) codeHost {
 	t.Helper()
+	return codeNodeWith(t, codeDeclaration{repos: reposYAML}, nil)
+}
+
+// codeDeclaration is the company's code block as a case writes it: repos, the
+// entries of code.repos (each `- name: …`, indented four spaces), and settings,
+// the block's other lines (indented two spaces — code.limits).
+type codeDeclaration struct {
+	repos, settings string
+}
+
+// company is the company document declaring d: companyYAML, the founder's
+// human seat bound to the token `ops`, and code.native with d.
+func (d codeDeclaration) company() string {
+	doc := companyYAML + `  - name: Founder
+    handle: founder
+    kind: human
+    contact:
+      crewlet_operator_id: ops
+code:
+  native: true
+` + d.settings
+	if strings.TrimSpace(d.repos) != "" {
+		doc += "  repos:\n" + d.repos
+	}
+	return doc
+}
+
+// codeNodeWith is [codeNode] declaring d, with the Tier A tokens tokens names
+// (id → value) beside the founder's — bound to no seat, since the company
+// binds `ops` alone.
+func codeNodeWith(t *testing.T, d codeDeclaration, tokens map[string]string) codeHost {
+	t.Helper()
+	return codeNodeAmended(t, d, tokens, nil)
+}
+
+// codeNodeAmended is [codeNodeWith] with amend applied to its Tier A last —
+// a node of other roles.
+func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
+	amend func(*config.Bootstrap)) codeHost {
+
+	t.Helper()
 	gittest.Require(t)
 	const token = "a-code-token"
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
@@ -72,30 +114,43 @@ func codeNode(t *testing.T, reposYAML string) codeHost {
 		// and the cores it runs on decide nothing about what it serves.
 		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
 		b.Git.MaxTransfers = 4
+		for _, id := range slices.Sorted(maps.Keys(tokens)) {
+			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{ID: id, Token: tokens[id]})
+		}
+		if amend != nil {
+			amend(b)
+		}
 	})
 	n.reconcile()
-	company := companyYAML + `  - name: Founder
-    handle: founder
-    kind: human
-    contact:
-      crewlet_operator_id: ops
-code:
-  native: true
-`
+	h := codeHost{base: n.base, token: token, node: n}
+	h.declare(t, d)
+	cfg := filepath.Join(t.TempDir(), "crewlet.yaml")
+	doc := fmt.Sprintf("api:\n  host: 127.0.0.1\n  port: %d\n  auth:\n    tokens:\n      - id: ops\n"+
+		"        token: %s\n", n.boot.API.Port, token)
+	if err := os.WriteFile(cfg, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.cfg = cfg
+	return h
+}
+
+// declare applies the company declaring d as a new revision and returns once
+// the node serves it and lists every repository d declares at the log's head.
+func (h codeHost) declare(t *testing.T, d codeDeclaration) {
+	t.Helper()
 	var declared []struct {
 		Name string `yaml:"name"`
 	}
-	if strings.TrimSpace(reposYAML) != "" {
-		company += "  repos:\n" + reposYAML
-		if err := yaml.Unmarshal([]byte(reposYAML), &declared); err != nil {
+	if strings.TrimSpace(d.repos) != "" {
+		if err := yaml.Unmarshal([]byte(d.repos), &declared); err != nil {
 			t.Fatalf("the repositories a case declares: %v", err)
 		}
 	}
-	if err := n.settle(n.put(company)); err != nil {
+	if err := h.node.settle(h.node.put(d.company())); err != nil {
 		t.Fatalf("the company: %v", err)
 	}
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		status, body := n.get(t, "/code/repos?read_level=linearizable")
+		status, body := h.node.get(t, "/code/repos?read_level=linearizable")
 		var listing struct {
 			Repos []struct {
 				Name string `json:"name"`
@@ -103,19 +158,12 @@ code:
 		}
 		if status == http.StatusOK && json.Unmarshal([]byte(body), &listing) == nil &&
 			len(listing.Repos) == len(declared) {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the declared repositories were never listed: GET /code/repos = %d %s", status, body)
 		}
 	}
-	cfg := filepath.Join(t.TempDir(), "crewlet.yaml")
-	doc := fmt.Sprintf("api:\n  host: 127.0.0.1\n  port: %d\n  auth:\n    tokens:\n      - id: ops\n"+
-		"        token: %s\n", n.boot.API.Port, token)
-	if err := os.WriteFile(cfg, []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return codeHost{cfg: cfg, base: n.base, token: token, node: n}
 }
 
 // push commits files to a fresh history and pushes it to the repository's
@@ -154,10 +202,18 @@ func mapKeys(m map[string]string) func(func(string) bool) {
 // environment is the CLI's to pass on, and is.
 func hermeticGit(t *testing.T) string {
 	t.Helper()
+	return hermeticGitWith(t, "")
+}
+
+// hermeticGitWith is [hermeticGit] running more — POSIX sh, "$@" git's
+// arguments — before the real git: what an operator's own environment would
+// have set, or a step of git's work a case holds.
+func hermeticGitWith(t *testing.T, more string) string {
+	t.Helper()
 	home := t.TempDir()
 	return gittest.Wrap(t, "export HOME="+shellQuote(home)+
 		" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 "+
-		procgrouptest.GORACE+"="+shellQuote(procgrouptest.StandInRaceOptions()))
+		procgrouptest.GORACE+"="+shellQuote(procgrouptest.StandInRaceOptions())+"\n"+more)
 }
 
 // ---- dispatch ---------------------------------------------------------------
@@ -172,7 +228,7 @@ func TestTheCodeCommandDispatchesItsSubcommands(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) || out != "" {
 		t.Fatalf("`crewlet code` = %v, stdout %q; want the usage and flag.ErrHelp", err, out)
 	}
-	for _, sub := range []string{"status", "verify", "export", "credential"} {
+	for _, sub := range []string{"status", "verify", "export", "import", "credential"} {
 		if !strings.Contains(errOut, "  "+sub+" ") {
 			t.Errorf("the usage does not name %s:\n%s", sub, errOut)
 		}
