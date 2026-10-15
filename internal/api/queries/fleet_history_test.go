@@ -49,9 +49,10 @@ func twoNodes(t *testing.T) (fleet *eventfan.Fleet, a, b *store.EventLog) {
 
 // EVERY HISTORY READ GOES THROUGH THE FLEET.
 //
-// The decision ADR-0021 records: turn-level detail is on the node that
-// published it and nowhere else, so every question that reads it is asked of
-// every node and says which answered. Here the rows are split across two
+// The decision ADR-0021 records: turn-level detail is on the data node that
+// published it or keeps it in custody for a node without `data`, and nowhere
+// else, so every question that reads it is asked of every live data node and
+// says which answered. Here the rows are split across two
 // stores and each question is asked once, through the registry a client
 // reaches — and each answer must hold BOTH nodes' rows and name both nodes.
 //

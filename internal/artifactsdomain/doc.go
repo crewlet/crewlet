@@ -25,7 +25,7 @@
 // moves. The applier writes a carried entry only when its own transaction finds
 // the object named by THIS artifact with that digest and size, and an uploaded
 // entry only when no other artifact or asset names its key; otherwise the
-// record is refused on every node and its writer told the paths. So once no row
+// record is refused on every data node and its writer told the paths. So once no row
 // names a key, no later record can name it (ADR-0027 as extended for carrying),
 // and a carry never crosses an artifact, which keeps a hash lookup from telling a
 // writer whether an artifact they cannot read holds a file.
@@ -35,7 +35,7 @@
 // A publish names the exact unlabelled versions it retires, decided in the
 // writer's snapshot so the artifact keeps at most a hundred unlabelled versions
 // plus every labelled one, and a label's removal retires in the same record what
-// it pushes past that bound. Every node deletes the same rows at the same
+// it pushes past that bound. Every data node deletes the same rows at the same
 // position; no node deletes a durable row on its own authority.
 //
 // # Quotas are stamped
@@ -44,7 +44,7 @@
 // rollback, an asset) stamps the Tier A limits in force into it, refuses early
 // from its own snapshot, and the applier enforces the stamp against the
 // replicated counters, so two writes racing past a quota apply identically on
-// every node: the second is refused everywhere.
+// every data node: the second is refused everywhere.
 //
 // # A work item's artifacts are named by their history
 //
@@ -60,9 +60,9 @@
 //
 // A record the broker accepted that the rows refuse (a head that moved, a
 // carried object gone, a quota crossed) applies as a no-op that writes its
-// history row with the outcome `refused` and the reason, on every node alike,
+// history row with the outcome `refused` and the reason, on every data node alike,
 // and the writer reads its own verdict back by operation id. An error would stall
-// every node's log on a record that is merely late. For the same reason the
+// every data node's log on a record that is merely late. For the same reason the
 // applier applies no rule a later build may change: the media table, the path
 // grammar and every bound in internal/artifacts/limits.go are the writer's.
 //

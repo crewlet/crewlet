@@ -63,7 +63,7 @@ const (
 	// and putting a shared object's every writer on one arbitrated subject
 	// turns a burst of clicks into compare-and-set rounds that exhaust
 	// [casRounds] into "it kept changing". Ordering on the log and deciding
-	// at the applier gives every node the same verdict, because every node
+	// at the applier gives every data node the same verdict, because every data node
 	// applies the same records in the same order with the same code.
 	//
 	// What the publisher does differently from an additive write is
@@ -146,7 +146,7 @@ type Voids interface {
 //     violation — is false either way.
 //
 // And whatever lands is not a local mistake: the recovery that follows a
-// rebuild follows the new log from its head, so every node applies it as
+// rebuild follows the new log from its head, so every data node applies it as
 // though it continued a history it was never arbitrated in. So every pattern
 // refuses, not only the retry at zero the floor theorem names.
 //

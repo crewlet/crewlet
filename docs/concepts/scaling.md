@@ -180,17 +180,20 @@ see [Read Consistency](../guides/consistency.md#reading-your-own-write-back).
 The knowledge index is the one place the *work* is divided, and only the work:
 every indexed document carries a
 [search shard](knowledge-system.md#every-document-carries-a-bucket), and above
-10 000 documents a fleet splits those 64 buckets between its live nodes so each
-scans a range rather than the whole corpus. Every node still **holds** every
-document — what is divided is CPU, so a node that does not answer costs the
-result a slice of relevance rather than a slice of the company, and the answer
-says so. See [Search](../guides/search.md).
+10 000 documents a fleet splits those 64 buckets between its live data nodes so
+each scans a range rather than the whole corpus. Every data node still **holds**
+every document — what is divided is CPU, so a data node that does not answer
+costs the result a slice of relevance rather than a slice of the company, and
+the answer says so. A node without `data` takes no range: it asks a data node,
+which divides the scan. See [Search](../guides/search.md).
 
-That is a deliberate trade and it is the reason the read path is simple: every
-answer can be served locally, a search scans one node's complete tables, and
-there is no routing decision to get wrong. What it costs is that the corpus is
-held once per data node, so the storage forecast scales with the data nodes
-rather than with the fleet — see [Retention](../guides/retention.md).
+That is a deliberate trade and it is the reason the read path is simple: a data
+node answers from its own complete tables, every range a search scans is read
+from one data node's own tables, and the one routing decision there is — which
+data node answers, for a node without `data` or one whose copy is out of
+service — is the router's above. What it costs is that the corpus is held once
+per data node, so the storage forecast scales with the data nodes rather than
+with the fleet — see [Retention](../guides/retention.md).
 
 **Files are the exception, and the only one.** The content of a company's files
 grows without bound, so it is not in any data node's database: each upload is

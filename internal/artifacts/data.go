@@ -83,7 +83,7 @@ type DataWrite struct {
 }
 
 // DataVerdict is what the applier decided about one write, identically on
-// every node.
+// every data node.
 type DataVerdict string
 
 // The verdicts a datastore batch can be given.

@@ -353,7 +353,7 @@ func TestAPurgedStoreStaysPurged(t *testing.T) {
 	if err := n.writer.PurgeArtifactState(t.Context(), jane, "another-step", sheet); err != nil {
 		t.Fatalf("a second purge: %v", err)
 	}
-	// A WRITE RECORD THAT RACED THE PURGE is gated on every node: applied
+	// A WRITE RECORD THAT RACED THE PURGE is gated on every data node: applied
 	// after the marker, it writes nothing.
 	n.holdApplier()
 	late, err := artifactdata.Encode(artifactdata.MutationRecord{

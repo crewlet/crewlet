@@ -587,9 +587,9 @@ type rowMove struct {
 // statement joins on the primary key ([refileStatement]).
 //
 // A statement a row was up to [IVFReassignBatch] of them a batch, on every
-// holder at every rollout and on every node replaying one — and the driver
-// prepares, plans and finalizes every statement it is handed and keeps none,
-// so the batch paid a parse a row.
+// holder at every rollout and on every data node replaying one — and the
+// driver prepares, plans and finalizes every statement it is handed and keeps
+// none, so the batch paid a parse a row.
 func refile(ctx context.Context, tx *sql.Tx, generation int64, batch int, moves []rowMove) error {
 	pairs := make([]byte, 0, 24*len(moves))
 	pairs = append(pairs, '[')

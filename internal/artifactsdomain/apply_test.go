@@ -19,7 +19,7 @@ import (
 // THE APPLIER ALONE, over records formed by hand: the cases a writer that keeps
 // its rules can never produce, which is exactly what the applier's own checks
 // exist for. Each is a refusal the applier makes deterministically, written as
-// the record's history row on every node alike.
+// the record's history row on every data node alike.
 
 // estate is one node's replicated estate and applier, fed records by hand.
 type estate struct {
@@ -161,7 +161,7 @@ func newID() string { return artifacts.IDFor(uuid.NewString()).String() }
 // A CARRIED OBJECT MUST BE NAMED WHERE IT IS CARRIED FROM: the apply
 // writes a carried entry only when its own transaction finds the object named by
 // this artifact, with the digest and size the entry claims; otherwise the
-// record is refused on every node and its writer told the paths to upload.
+// record is refused on every data node and its writer told the paths to upload.
 //
 // Mutation: drop the carry check in planObjects and the dangling carry applies.
 func TestACarriedObjectMustBeNamedWhereItIsCarriedFrom(t *testing.T) {
@@ -291,7 +291,7 @@ func TestARetiredVersionUnnamesOnlyWhatNothingRetainedNames(t *testing.T) {
 
 // THE STAMPED QUOTA IS ENFORCED AT THE APPLY: two creates that each passed
 // their own decide land in log order, and the one past the stamped limit is
-// refused on every node, naming the Tier A key.
+// refused on every data node, naming the Tier A key.
 //
 // Mutation: drop the artifacts-count check in applyCreate and the second
 // create applies.
@@ -432,7 +432,7 @@ func TestAPurgeRemovesEveryRowAndItsMarkerGatesWhatFollows(t *testing.T) {
 }
 
 // HISTORY IS KEPT A YEAR OF BROKER TIME, pruned by the applier in bounded
-// batches as later records apply, in one total order on every node.
+// batches as later records apply, in one total order on every data node.
 //
 // Mutation: drop pruneHistory from Apply and the year-old row survives.
 func TestHistoryIsPrunedAfterAYearOfBrokerTime(t *testing.T) {

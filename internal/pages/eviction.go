@@ -130,10 +130,10 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 // window has passed.
 //
 // THIS DOMAIN'S OWN TABLE, because an eviction is a record on this log: every
-// node applies it into `pages_evictions` and every node's copy is identical,
-// which is what makes the applier's gate hold when coordination cannot be
-// reached. The trim read the tracker's table instead, filtered on this log's
-// stream name, and found nothing for as long as the fleet existed.
+// node applies it into `pages_evictions` and every data node's copy is
+// identical, which is what makes the applier's gate hold when coordination
+// cannot be reached. The trim read the tracker's table instead, filtered on
+// this log's stream name, and found nothing for as long as the fleet existed.
 //
 // THROUGH THE NODE HANDLE'S REPLICATED PEER, for the reason [Fence.Evicted]
 // gives: the peer is nil while an adoption swaps the file, and [store.DB.Read]

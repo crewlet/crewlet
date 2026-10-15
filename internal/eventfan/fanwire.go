@@ -97,9 +97,8 @@ const (
 	QuestionSeatPhases Question = "seat_phases"
 	QuestionTraceRows  Question = "trace_rows"
 	// QuestionPhaseTokens is the per-phase spend records of a window, the
-	// live projection's spend rollup's seed: without every node's, a
-	// restarted node's rollup described only the phases it had published
-	// itself.
+	// live projection's spend rollup's seed: without every data node's, a
+	// restarted node's rollup described only the phases its own store held.
 	QuestionPhaseTokens Question = "phase_tokens"
 	// QuestionNotificationOutcomes is how many notifications each
 	// third-party app had dropped and merged over a window, the integrations
@@ -416,10 +415,12 @@ type keptPart struct {
 // Serve makes this node an answerer for the fleet's history questions, from
 // its own store.
 //
-// EVERY NODE SERVES, whatever its roles and whatever its mode: a node in
-// maintenance still holds its history, and a node that stopped answering while
-// it was being looked at would be a gap in every screen of the company for
-// exactly the window somebody was investigating.
+// EVERY DATA NODE SERVES, whatever its other roles and whatever its mode: a
+// node in maintenance still holds its history, and a node that stopped
+// answering while it was being looked at would be a gap in every screen of the
+// company for exactly the window somebody was investigating. A node without
+// `data` does not serve: its store is scratch and custody keeps its events in
+// a data node's, so it is on no roster that asks.
 func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.EventLog) (queue.Unsubscribe, error) {
 	if q == nil || local == nil || self == "" {
 		return nil, errors.New("eventfan: serve needs a queue, a store and this node's id")

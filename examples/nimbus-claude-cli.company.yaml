@@ -661,7 +661,7 @@ integrations:
 
 # Which tracker and which knowledge base this company runs.  Both are the
 # engine's OWN — work items and pages held in the fleet's own store,
-# replicated to every node, with no third-party account behind either.
+# replicated to every data node, with no third-party account behind either.
 # That is what makes this the SHORT path and still a complete company: the
 # seats file work, assign it, comment on it and publish pages from their
 # first turn, with nothing to sign up for and no credential to mint.
