@@ -19,6 +19,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -1150,6 +1152,24 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// turn row and live row now keys its link on.
 	task := newTask("ENG", "Summarise how the week went")
 	task.Assignee = "ceo"
+	// AND ANSWERED ON THE ITEM, which is what an assignment owes: the
+	// engine reads a task wake as somebody waiting on a tool, so the
+	// endpoint's default — `delivered` citing nothing, honest for the
+	// unaddressed wakes it serves — is refused here until the rounds run
+	// out and the turn ends on an outcome the engine wrote. The seat
+	// comments on the item and submits citing the comment, which is how a
+	// real assignee closes the loop. Queued BEFORE the item is filed,
+	// because its wake can reach the executor before the create returns,
+	// and naming the item by the id this test minted, its key being the
+	// tracker's to assign.
+	const summary = "Three PRs merged, one incident, zero regressions."
+	n.model.callOnExecute(builtin.CommentOnWorkTool, map[string]any{
+		"item": task.ID, "body": summary,
+	})
+	n.model.callOnExecute(runner.SubmitWorkTool, map[string]any{
+		"outcome": string(turn.OutcomeDelivered), "summary": summary,
+		"deliveries": []any{builtin.CommentOnWorkTool},
+	})
 	// WITH ITS WAKE, built the way every create surface builds one: a
 	// record carrying no notification is a change nobody asked to hear about.
 	wake := worklet.Wake{Kind: worklet.ChangeCreated, After: task}.Notify(nil)
@@ -1171,6 +1191,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		return fmt.Sprintf("events %v; live calls' items %v; filed %s (%s); model saw %v",
 			frames.eventTypes(t), items, filed.Key, filed.Outcome, n.model.seen())
 	})
+	// AND THE COMPANY'S TURN DELIVERED, on its own submission citing the
+	// comment rather than on the rescue path.
+	deliveredThrough(t, n, builtin.CommentOnWorkTool)
 	// The meters are published on engine.BudgetReportInterval, so one
 	// carrying the refusal lands within an interval of it at the latest.
 	waitFor(t, "a budget push carrying the refusal", func() bool {

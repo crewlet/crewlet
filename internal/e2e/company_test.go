@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"math"
@@ -14,9 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -637,10 +641,15 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		saw("execute")
 		reply = toolUse("submit_work", map[string]any{
-			// `delivered` with no cited call, which is honest here: this
-			// company registers no delivery tool and nobody is waiting on
-			// the turn, so the answer IS the artifact and the engine
-			// demands a citation only where a tool was the way to deliver.
+			// `delivered` with no cited call, which is honest for the
+			// wakes this default serves: an unaddressed notification
+			// ([node.wake]) owes nobody a tool reply, so the answer IS
+			// the artifact and the engine demands a citation only where a
+			// tool was the way to deliver. A turn somebody IS waiting on —
+			// a task assignment, a message addressed to the seat — is
+			// scripted by its case ([scriptedModel.callOnExecute]), because
+			// this claim is refused there until the rounds run out and the
+			// engine writes the outcome itself.
 			"outcome": "delivered",
 			"summary": "Three PRs merged, one incident, zero regressions.",
 		})
@@ -888,4 +897,67 @@ func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string)
 func hydrated(t *testing.T, e *engine.Engine) func() bool {
 	t.Helper()
 	return func() bool { return e.StateLogHydrated(t.Context()) }
+}
+
+// turnRecordCalling is the executor's record of the turn on this node that
+// called tool successfully, as this node's own event store holds it, or nil
+// while it holds none.
+//
+// WHAT SAYS THE TURN DELIVERED rather than only acted. A script that served
+// its citing submission (the last call a capture queued with
+// [scriptedModel.callOnExecute]) knows what it SENT, and the engine may still
+// have refused it — after which the turn ends on the rescue path, with an
+// outcome the engine wrote rather than one the model chose
+// ([types.AgentPhaseCompleted.RescueFired]). Only the phase record says which.
+//
+// n IS THE NODE WHOSE STORE HOLDS THE TURN'S RECORDS: the node that ran it,
+// whose publish listener stores what it publishes — or, for a node that holds
+// no data, the data member its audit trail lands on.
+func turnRecordCalling(t *testing.T, n *node, tool string) *types.AgentPhaseCompleted {
+	t.Helper()
+	stored := n.engine.Backends().Store.Events()
+	rows, err := stored.List(t.Context(), store.ListQuery{Type: "agent_phase_completed", Limit: 200})
+	if err != nil {
+		return nil
+	}
+	for _, row := range rows {
+		full, err := stored.ByID(t.Context(), row.ID, time.Now())
+		if err != nil {
+			continue
+		}
+		var ev events.Event
+		if json.Unmarshal(full.Payload, &ev) != nil {
+			continue
+		}
+		record, ok := events.DataAs[*types.AgentPhaseCompleted](&ev)
+		if !ok || record.Phase != types.PhaseExecute {
+			continue
+		}
+		if slices.ContainsFunc(record.ToolExecutions, func(call types.ToolExecution) bool {
+			succeeded, _ := call["success"].(bool)
+			return call["name"] == tool && succeeded
+		}) {
+			return record
+		}
+	}
+	return nil
+}
+
+// deliveredThrough fails the case unless the turn whose records n holds that
+// delivered with tool — a post in a room, a comment on a work item — ended on
+// the model's own `delivered` rather than on the rescue path
+// ([turnRecordCalling]).
+func deliveredThrough(t *testing.T, n *node, tool string) {
+	t.Helper()
+	var record *types.AgentPhaseCompleted
+	waitFor(t, n.id+"'s record of the turn that delivered with "+tool, func() bool {
+		record = turnRecordCalling(t, n, tool)
+		return record != nil
+	})
+	if record.RescueFired || record.Decision != string(turn.OutcomeDelivered) {
+		t.Errorf("the turn that delivered with %s ended %q (rescued: %v) after "+
+			"%d rounds — its submission citing that call never landed, so the "+
+			"engine wrote the outcome rather than the turn", tool, record.Decision,
+			record.RescueFired, record.RoundsUsed)
+	}
 }
