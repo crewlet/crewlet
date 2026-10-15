@@ -663,6 +663,7 @@ func TestAConfigKeyOutsideTheAllowlistIsRefused(t *testing.T) {
 		"its other case":           {{Key: "UploadPack.AllowAnySHA1InWant", Value: "true"}},
 		"allowReachableSHA1InWant": {{Key: "uploadpack.allowReachableSHA1InWant", Value: "true"}},
 		"allowTipSHA1InWant":       {{Key: "uploadpack.allowTipSHA1InWant", Value: "true"}},
+		"allowRefInWant":           {{Key: "uploadpack.allowRefInWant", Value: "true"}},
 		"packObjectsHook":          {{Key: "uploadpack.packObjectsHook", Value: "sh"}},
 		"an alias":                 {{Key: "alias.x", Value: "!sh"}},
 		"an include":               {{Key: "include.path", Value: "/etc/x"}},
@@ -694,7 +695,7 @@ func TestAConfigKeyOutsideTheAllowlistIsRefused(t *testing.T) {
 	for _, key := range []string{
 		"core.multiPackIndex", "pack.allowPackReuse", "pack.windowMemory", "pack.useBitmaps",
 		"pack.writeBitmapLookupTable",
-		"uploadpack.allowFilter", "uploadpack.allowRefInWant", "uploadpack.keepAlive",
+		"uploadpack.allowFilter", "uploadpack.keepAlive",
 		"uploadpackfilter.allow", "uploadpackfilter.blob:none.allow", "uploadpackfilter.blob:limit.allow",
 		"uploadpackfilter.tree.maxDepth", "uploadpackfilter.object:type.allow", "uploadpackfilter.combine.allow",
 		"receive.procReceiveRefs", "receive.unpackLimit", "receive.fsckObjects", "receive.maxInputSize",

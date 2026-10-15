@@ -61,15 +61,17 @@
 //
 // # Every answer that names a ref is linearizable; an object id has no level
 //
-// A v0 advertisement, a v2 `ls-refs`, a push's advertisement and a `want-ref`
-// read the code log through a barrier, so a node in a minority answers 503
-// rather than an old head. A v2 capability advertisement names no ref and an
-// object fetch names ids that mean the same bytes everywhere, so both take
-// whatever the cache holds — and a fetch whose wants this node lacks takes ONE
-// linearizable sync (the client's refs came from a node further ahead) before
-// it is served. The barrier is single-flighted per log and the cache's sync per
-// repository, so a burst of CI clones of one repository costs one barrier and
-// one sync.
+// A v0 advertisement, a v2 `ls-refs` and a push's advertisement read the code
+// log through a barrier, so a node in a minority answers 503 rather than an
+// old head. A v2 capability advertisement names no ref and an object fetch
+// names ids that mean the same bytes everywhere, so both take whatever the
+// cache holds — and a fetch whose wants this node lacks takes ONE linearizable
+// sync (the client's refs came from a node further ahead) before it is
+// served. A fetch never names a ref: the host offers no ref-in-want, because
+// git's own upload-pack and fetch-pack disagree on the order of a shallow
+// fetch's sections once a client fetches by want-ref (cache.ServeConfig). The
+// barrier is single-flighted per log and the cache's sync per repository, so a
+// burst of CI clones of one repository costs one barrier and one sync.
 //
 // # A fetch request is spooled, and bounded by the repository it names
 //

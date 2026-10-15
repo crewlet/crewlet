@@ -12,12 +12,14 @@ import (
 )
 
 // AN UPLOAD-PACK REQUEST, READ FOR TWO FACTS: which level the answer needs
-// (an `ls-refs` or a `want-ref` names refs, so it is linearizable; a fetch by
-// object id is not), and which objects it wants (so a node that lacks one
-// syncs once before it answers). Never a refusal: a malformed request is
-// passed to upload-pack, which refuses it in its own words. Read as a STREAM
-// from wherever the request is held — memory and a spool — so a partial
-// clone's request of a million wants is never held whole.
+// (an `ls-refs` names refs, so it is linearizable; a fetch by object id is
+// not), and which objects it wants (so a node that lacks one syncs once before
+// it answers). A fetch never names a ref: the host offers no ref-in-want
+// (cache.ServeConfig says why), and upload-pack refuses a `want-ref` it did not
+// offer. Never a refusal: a malformed request is passed to upload-pack, which
+// refuses it in its own words. Read as a STREAM from wherever the request is
+// held — memory and a spool — so a partial clone's request of a million wants
+// is never held whole.
 
 // The fetch commands a request is recorded as (crewlet.code.fetch.duration's
 // `command`). A closed set: a v2 command this build does not name is recorded
@@ -35,8 +37,6 @@ type negotiation struct {
 	v2 bool
 	// command is the v2 command, or commandFetch for v0.
 	command string
-	// wantRefs is how many `want-ref` lines it carries.
-	wantRefs int
 	// wants is whether it names any object by id.
 	wants bool
 }
@@ -50,9 +50,9 @@ func (n negotiation) recorded() string {
 }
 
 // linearizable reports whether the answer names a ref, and so must be read
-// through the code log's barrier: an `ls-refs`, or a fetch by `want-ref`.
+// through the code log's barrier: an `ls-refs`.
 func (n negotiation) linearizable() bool {
-	return (n.v2 && n.command == commandLsRefs) || n.wantRefs > 0
+	return n.v2 && n.command == commandLsRefs
 }
 
 // parseNegotiation reads a request to its end, or to the first packet it
@@ -61,8 +61,8 @@ func (n negotiation) linearizable() bool {
 // failing is an error.
 //
 // v2: `command=<c>` (the first pkt-line), capability lines to the delimiter,
-// then arguments to the flush — `want <oid>` and `want-ref <ref>`. v0: `want
-// <oid>[ <caps>]` lines to the first flush.
+// then arguments to the flush — `want <oid>` among them. v0: `want <oid>[
+// <caps>]` lines to the first flush.
 func parseNegotiation(src io.Reader, size int64, v2 bool) (negotiation, error) {
 	n := negotiation{v2: v2, command: commandFetch}
 	r := pktReader(src, size)
@@ -86,13 +86,7 @@ func parseNegotiation(src io.Reader, size int64, v2 bool) (negotiation, error) {
 			}
 			continue
 		}
-		if !args {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(line, "want-ref "):
-			n.wantRefs++
-		case wantOID(line) != "":
+		if args && wantOID(line) != "" {
 			n.wants = true
 		}
 	}

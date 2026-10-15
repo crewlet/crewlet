@@ -54,14 +54,26 @@ import (
 //     way. A client loses no way to work: a blobless clone with a sparse
 //     checkout reaches the files a sparse:oid names, fetching them as it
 //     needs them.
-//   - uploadpack.allowRefInWant: protocol v2's want-ref.
 //   - uploadpack.keepAlive: git's own five seconds, stated, because the
 //     pool's stall watchdog relies on a transfer moving that often.
 //
 // NEVER here, and refused by the pool's allowlist anyway: any of
 // uploadpack.allowAnySHA1InWant, allowReachableSHA1InWant and
 // allowTipSHA1InWant — protocol v0 serves only what an advertised tip
-// reaches. And not here because the POOL sets them for every process:
+// reaches — and uploadpack.allowRefInWant, protocol v2's want-ref, which
+// BREAKS EVERY SHALLOW CLONE: a client offered ref-in-want clones by
+// want-ref, and git's upload-pack answers a fetch that both deepens and
+// names refs with its wanted-refs section before its shallow-info section
+// (upload-pack.c, send_wanted_ref_info then send_shallow_info) while git's
+// fetch-pack reads shallow-info before wanted-refs — so `git clone
+// --depth=1`, protocol v2 being git's default, died `fatal: expected
+// 'packfile', received 'shallow-info'` (measured: a 2.43 client against
+// 2.43, 2.47.3 and 2.48.0 servers, and 2.48.0 against itself). Without it
+// a client lists the refs (ls-refs, linearizable) and fetches the ids it was
+// shown, as it does from a server that never offered want-ref; what that
+// costs is a ref moving between the two requests, which the fetch serves at
+// the id the client saw. And not here because the POOL sets them for every
+// process:
 // protocol.allow, gc.auto, maintenance.auto, pack.threads, core.hooksPath.
 func (c *Cache) ServeConfig() []gitproc.KV {
 	return []gitproc.KV{
@@ -77,7 +89,6 @@ func (c *Cache) ServeConfig() []gitproc.KV {
 		{Key: "uploadpackfilter.tree.maxDepth", Value: "0"},
 		{Key: "uploadpackfilter.object:type.allow", Value: "true"},
 		{Key: "uploadpackfilter.combine.allow", Value: "true"},
-		{Key: "uploadpack.allowRefInWant", Value: "true"},
 		{Key: "uploadpack.keepAlive", Value: "5"},
 	}
 }

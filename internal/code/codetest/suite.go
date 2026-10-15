@@ -99,6 +99,7 @@ func cases() []suiteCase {
 		{"F13_AFetchFromABehindNodeFindsItsWants", aFetchFromABehindNodeFindsItsWants},
 		{"F22_ABloblessCloneChecksOut", aBloblessCloneChecksOut},
 		{"F23_AFilterABitmapCannotAnswerIsRefused", aFilterABitmapCannotAnswerIsRefused},
+		{"F24_AShallowCloneChecksOut", aShallowCloneChecksOut},
 		{"F14_APushOverTheBlobLimitIsRefusedWhole", aPushOverTheBlobLimitIsRefusedWhole},
 		{"F15_ProtectionRulesRefuseByName", protectionRulesRefuseByName},
 		{"F16_AnAtomicPushLandsWholeOrNotAtAll", anAtomicPushLandsWholeOrNotAtAll},

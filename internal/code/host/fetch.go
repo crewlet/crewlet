@@ -23,8 +23,9 @@ import (
 // AN OBJECT ID HAS NO LEVEL: a fetch names ids that mean the same bytes on
 // every node, so it takes whatever the cache holds — unless the cache lacks a
 // want, which means the client's refs came from a node further ahead, and
-// then ONE linearizable sync runs before it is served. An `ls-refs` and a
-// `want-ref` name refs and are linearizable, as every answer naming a ref is.
+// then ONE linearizable sync runs before it is served. An `ls-refs` names refs
+// and is linearizable, as every answer naming a ref is; a fetch names none,
+// since the host offers no want-ref (cache.ServeConfig).
 func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
 	if r.Header.Get("Content-Type") != "application/x-git-upload-pack-request" {

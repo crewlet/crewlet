@@ -72,7 +72,7 @@ happened to omit the key:
 | The operator MCP, about tracker content | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
-| A person's git client, for every answer that names a ref — the refs a clone, a fetch or a push is shown, a protocol v2 `ls-refs`, a fetch by `want-ref` | `linearizable` | No |
+| A person's git client, for every answer that names a ref — the refs a clone, a fetch or a push is shown, a protocol v2 `ls-refs` | `linearizable` | No |
 | A git fetch of objects by id | none — an object id names the same bytes on every node; a want this node has not seen takes one `linearizable` sync first | No |
 | The [code host](../concepts/code-host.md)'s REST reads, `/code/repos…` | `stale`, as the REST read path's | Yes — `linearizable`, `stale` or `consistent_prefix`; `session` is refused `400`, since none of the caller's writes lands on the code log through this surface |
 

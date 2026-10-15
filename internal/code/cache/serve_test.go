@@ -39,7 +39,6 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 		{Key: "uploadpackfilter.tree.maxDepth", Value: "0"},
 		{Key: "uploadpackfilter.object:type.allow", Value: "true"},
 		{Key: "uploadpackfilter.combine.allow", Value: "true"},
-		{Key: "uploadpack.allowRefInWant", Value: "true"},
 		{Key: "uploadpack.keepAlive", Value: "5"},
 	}
 	if !slices.Equal(got, want) {
@@ -48,6 +47,7 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 	for _, kv := range got {
 		switch strings.ToLower(kv.Key) {
 		case "uploadpack.allowanysha1inwant", "uploadpack.allowreachablesha1inwant", "uploadpack.allowtipsha1inwant",
+			"uploadpack.allowrefinwant",
 			"transfer.advertiseobjectinfo", "uploadpack.advertisebundleuris",
 			"protocol.allow", "gc.auto", "maintenance.auto", "pack.threads", "core.hookspath":
 			t.Errorf("ServeConfig sets %s", kv.Key)

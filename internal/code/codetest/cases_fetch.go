@@ -233,6 +233,59 @@ func bloblessCloneChecksOut(t *testing.T, f Fleet, url, lazyURL string) {
 	}
 }
 
+// F24: a SHALLOW clone is served under protocol v2, git's default — the
+// clone a CI system makes — and so is a shallow, blobless, sparse one, the
+// clone a box makes of one sha: each holds the tip alone, shallow, and the
+// files its checkout asked for.
+func aShallowCloneChecksOut(t *testing.T, newFleet NewFleet) {
+	c := newCase(t, newFleet, Shape{}, Settings())
+	p := NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"a/one.txt": "one\n"}, "one")
+	head := p.Commit(work, map[string]string{"b/two.txt": "two\n"}, "two")
+	c.MustPush(p, work, "main")
+	for _, tc := range []struct {
+		name         string
+		clone, after []string
+		files        map[string]string // a file the checkout holds, and its content ("" for none)
+	}{
+		{"depth 1", []string{"--depth=1"}, nil, map[string]string{"a/one.txt": "one\n", "b/two.txt": "two\n"}},
+		{"depth 1, blobless, a cone", []string{"--depth=1", "--filter=blob:none", "--sparse"},
+			[]string{"sparse-checkout", "set", "b"}, map[string]string{"a/one.txt": "", "b/two.txt": "two\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, stderr, err := p.TryClone(t.Context(), c.URL(0), tc.clone...)
+			if err != nil {
+				t.Fatalf("git clone %v under protocol v2: %v\n%s", tc.clone, err, stderr)
+			}
+			if tc.after != nil {
+				if _, stderr, err := p.Git().Try(t, dir, nil, tc.after...); err != nil {
+					t.Fatalf("git %v in the clone: %v\n%s", tc.after, err, stderr)
+				}
+			}
+			if got := p.Head(dir); got != head {
+				t.Errorf("the clone is at %s, want %s", got, head)
+			}
+			if got := strings.TrimSpace(p.Git().Run(t, dir, "rev-parse", "--is-shallow-repository")); got != "true" {
+				t.Errorf("the clone is shallow: %s, want true", got)
+			}
+			if got := strings.TrimSpace(p.Git().Run(t, dir, "rev-list", "--count", "HEAD")); got != "1" {
+				t.Errorf("the clone holds %s commits, want the tip alone", got)
+			}
+			for rel, want := range tc.files {
+				got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+				switch {
+				case want == "" && err == nil:
+					t.Errorf("the checkout holds %s, outside its cone", rel)
+				case want != "" && (err != nil || string(got) != want):
+					t.Errorf("the checkout's %s is %q (%v), want %q", rel, got, err, want)
+				}
+			}
+		})
+	}
+	assertConverged(t, c.Fleet)
+}
+
 // missingObjects is every object dir's history names that dir does not hold —
 // read without fetching any, which a promisor repository does by itself for
 // any other read of an object it lacks.
