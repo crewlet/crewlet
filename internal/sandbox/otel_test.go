@@ -452,7 +452,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env := map[string]string{}
 	lookup := func(name string) string { return env[name] }
 
-	got, err := sandbox.BuildOtelReceiver(lookup, nil)
+	got, err := sandbox.BuildOtelReceiver(t.Context(), lookup, nil)
 	if err != nil || got != nil {
 		t.Fatalf("an unset receiver URL built %v (%v)", got, err)
 	}
@@ -460,7 +460,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env[sandbox.OtelReceiverURLVar] = "https://engine.internal"
 	env[otlpenv.Traces.EndpointVar()] = "https://collector.example/v1/traces"
 	env[otlpenv.HeadersVar] = "api-key=abc"
-	got, err = sandbox.BuildOtelReceiver(lookup, []string{"k1:material"})
+	got, err = sandbox.BuildOtelReceiver(t.Context(), lookup, []string{"k1:material"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +515,7 @@ func TestAnUnusableUpstreamRefusesTheReceiver(t *testing.T) {
 			sandbox.OtelReceiverURLVar: "https://engine.internal",
 			name:                       value,
 		}
-		_, err := sandbox.BuildOtelReceiver(func(k string) string { return env[k] }, nil)
+		_, err := sandbox.BuildOtelReceiver(t.Context(), func(k string) string { return env[k] }, nil)
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s=%q built a receiver, or was refused without its name: %v",
 				name, value, err)
@@ -530,7 +530,7 @@ func TestAnUnusableUpstreamRefusesTheReceiver(t *testing.T) {
 		"OTEL_LOGS_EXPORTER":               "console",
 		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "localhost:4318",
 	}
-	if _, err := sandbox.BuildOtelReceiver(func(k string) string { return env[k] }, nil); err != nil {
+	if _, err := sandbox.BuildOtelReceiver(t.Context(), func(k string) string { return env[k] }, nil); err != nil {
 		t.Errorf("a logs variable refused the receiver, which sends no logs: %v", err)
 	}
 }

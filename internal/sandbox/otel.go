@@ -482,8 +482,9 @@ const (
 //
 // keyMaterial is the Tier A keyring, which every process already loads. Nil
 // or empty takes a per-process key: correct for a single process, and warned
-// about because it cannot work across two.
-func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelReceiver, error) {
+// about because it cannot work across two. ctx carries the boot's trace onto
+// what this logs.
+func BuildOtelReceiver(ctx context.Context, env func(string) string, keyMaterial []string) (*OtelReceiver, error) {
 	if env == nil {
 		return nil, nil
 	}
@@ -495,7 +496,7 @@ func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelRece
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: the OTLP receiver's upstream: %w", err)
 	}
-	otlpenv.ReportDropped(context.Background(), log, otlpenv.ReaderSandboxForwarder, upstream)
+	otlpenv.ReportDropped(ctx, log, otlpenv.ReaderSandboxForwarder, upstream)
 	return NewOtelReceiver(OtelReceiverOptions{
 		BaseURL:  base,
 		Tokens:   NewOtelTokens(OtelTokenOptions{Key: OtelSigningKey(keyMaterial)}),

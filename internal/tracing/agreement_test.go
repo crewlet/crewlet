@@ -102,7 +102,7 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			env := lookup(tc.env)
-			receiver, err := sandbox.BuildOtelReceiver(env, []string{"k1:test-material"})
+			receiver, err := sandbox.BuildOtelReceiver(t.Context(), env, []string{"k1:test-material"})
 			if err != nil {
 				t.Fatalf("the receiver refused what the exporter accepts: %v", err)
 			}
@@ -130,7 +130,7 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 		otlpenv.InsecureVar:          "maybe",
 	} {
 		env := lookup(map[string]string{name: value})
-		_, recvErr := sandbox.BuildOtelReceiver(env, []string{"k1:test-material"})
+		_, recvErr := sandbox.BuildOtelReceiver(t.Context(), env, []string{"k1:test-material"})
 		_, tracesErr := tracing.DestinationFor(env, otlpenv.Traces)
 		if recvErr == nil || tracesErr == nil {
 			t.Errorf("%s=%q: receiver %v, engine traces %v — one half accepted what "+
