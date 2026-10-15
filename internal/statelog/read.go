@@ -159,6 +159,41 @@ func (r ReadRefusal) Retryable() bool {
 	return false
 }
 
+// Elsewhere reports whether ANOTHER node may serve a read this one refused
+// with r: every code but the two that are facts about the whole fleet rather
+// than about this node's copy, its view of the log or its place in a
+// partition — `log_full`, since every node appends its barrier to the one log
+// at the one ceiling, and `maintenance`, since every node of a fleet in a
+// capacity window is in one.
+//
+// It is what makes a refusal a REDIRECT where [ReadRefusal.Retryable] makes it
+// a hint, and the two differ: a node that cannot decode a record will never
+// serve the read (not retryable) while its peer may at once (elsewhere); a
+// node in the minority of a partition refuses `no_quorum` while one in the
+// majority commits its barrier; `wrong_stream` is a caller's position on
+// another log, which every node refuses alike, or this node's own rows keyed
+// to another log, which a peer's are not — and a refusal every node gives is
+// still the answer once each has given it, so treating it as one another node
+// may serve costs asking, never a different final answer. The estate's router
+// asks the next data node a read refused for any of these, and keeps the
+// refusal as its answer only where no node does better.
+//
+// WHAT ASKING COSTS is a question per node and nothing more, because the
+// refusal carries what the read paid for ([Refused.Spent]) and the router
+// hands it to every node it asks next ([WithSpent]): the walk appends at most
+// one barrier and waits at most one whole bound for a position, however many
+// nodes it asks. Asked afresh, each node appended a barrier of its own and
+// waited a whole [ReadBudget] for it — so a fleet the same burst put behind
+// together paid a barrier and two seconds per data node for one final
+// `behind`.
+func (r ReadRefusal) Elsewhere() bool {
+	switch r {
+	case RefuseLogFull, RefuseMaintenance:
+		return false
+	}
+	return r.Valid()
+}
+
 // ElectionRetryHint is what a caller is told to wait after a barrier that did
 // not commit.
 //
@@ -185,6 +220,13 @@ type Refused struct {
 	// Zero means no hint, which is the honest answer for a refusal
 	// waiting cannot clear.
 	RetryAfter time.Duration
+
+	// Spent is what this read had paid for when it was refused — the read
+	// index it held, the position it waited its whole bound for, the log a
+	// barrier ran out on — which a router asking another node for the same
+	// read carries there ([Spent], [WithSpent]), so the walk pays for each
+	// once rather than once a node.
+	Spent Spent
 }
 
 func (r *Refused) Error() string {
@@ -596,36 +638,65 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		}
 	}
 
-	// 3. The freshness target.
-	target, err := r.target(ctx, q, h)
+	// 3. The freshness target — and, for a linearizable read, the read index
+	// it rests on, which every refusal from here on carries ([Refused.Spent])
+	// so a router asking another node for this read hands it on rather than
+	// have that node append a barrier of its own.
+	spent := spentOf(ctx)
+	target, index, err := r.target(ctx, q, h, spent)
 	if err != nil {
 		var refusal *Refused
 		if errors.As(err, &refusal) {
-			return r.refuse(h, q, refusal.Code, refusal.Detail, started)
+			return r.refusePaid(h, q, refusal.Code, refusal.Detail, started, refusal.Spent)
 		}
 		return Answer{}, err
+	}
+	var paid Spent
+	if !index.IsZero() {
+		paid.Index = []Position{index}
 	}
 
 	// 4. The wait, holding nothing.
 	if !target.IsZero() {
 		if target.Stream != "" && target.Stream != r.stream {
-			return r.refuse(h, q, RefuseWrongStream,
+			return r.refusePaid(h, q, RefuseWrongStream,
 				fmt.Sprintf("this read names a position on %s and this domain "+
-					"reads %s", target.Stream, r.stream), started)
+					"reads %s", target.Stream, r.stream), started, paid)
 		}
 		// WITHIN WHAT THE ASKER LEFT, where the read was asked across a wire
 		// ([WithReplyMargin]): `behind` said after the asker stopped
 		// listening is heard as a node that is gone.
-		waitCtx, cancel, bound := WaitWithin(ctx, ReadBudget)
+		//
+		// AND NOT AT ALL FOR A POSITION THIS READ ALREADY WAITED OUT on a
+		// node asked for it before this one ([Spent.Waited]): the walk's
+		// wait for a position is one bound wherever it is spent, so this
+		// node serves the read if it holds the position now and refuses
+		// `behind` at once if it does not.
+		budget := ReadBudget
+		waited := spent.WaitedFor(target)
+		if waited {
+			budget = 0
+		}
+		waitCtx, cancel, bound := WaitWithin(ctx, budget)
 		err := r.waiter.WaitCommitted(waitCtx, target)
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
 				return Answer{}, ctx.Err()
 			}
-			return r.refuse(h, q, RefuseBehind,
-				fmt.Sprintf("this node has not reached %s within %s", target, bound),
-				started)
+			// THE WAIT RAN ITS WHOLE BOUND, which is what a node asked
+			// next is spared; a wait the applier abandoned spent nothing
+			// a later node's would.
+			if errors.Is(err, context.DeadlineExceeded) {
+				paid.Waited = []Position{target}
+			}
+			detail := fmt.Sprintf("this node has not reached %s within %s", target, bound)
+			if waited {
+				detail = fmt.Sprintf("this node has not reached %s, which a node asked "+
+					"for this read before it already waited a whole bound for — so it "+
+					"waited for nothing", target)
+			}
+			return r.refusePaid(h, q, RefuseBehind, detail, started, paid)
 		}
 		answer.Position = r.waiter.Committed()
 
@@ -642,11 +713,11 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		// from the answer it is printed beside.
 		post, unread := r.health()
 		if unread != nil {
-			return r.refuse(Health{}, q, RefuseBrokerUnreachable, unreadHealth(unread), started)
+			return r.refusePaid(Health{}, q, RefuseBrokerUnreachable, unreadHealth(unread), started, paid)
 		}
 		answer.Lag = post.Lag
 		if refusal := r.pastBound(q, post); refusal != nil {
-			return r.refuse(post, q, refusal.Code, refusal.Detail, started)
+			return r.refusePaid(post, q, refusal.Code, refusal.Detail, started, paid)
 		}
 	}
 
@@ -701,7 +772,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	}); err != nil {
 		var refusal *Refused
 		if errors.As(err, &refusal) {
-			return r.refuse(h, q, refusal.Code, refusal.Detail, started)
+			return r.refusePaid(h, q, refusal.Code, refusal.Detail, started, paid.Merge(refusal.Spent))
 		}
 		return Answer{}, err
 	}
@@ -748,8 +819,10 @@ func (r *Reader) coverage(ctx context.Context, q Query) (*gap, error) {
 	return found, nil
 }
 
-// target is the position this read must wait for, by level.
-func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error) {
+// target is the position this read must wait for, by level, and — for a
+// linearizable read — the read index it rests on: the barrier it appended, or
+// the one a node asked for the same read before it established ([Spent]).
+func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Position, Position, error) {
 	// THE CALLER'S FLOOR NAMES A STREAM, AND IT IS CHECKED BEFORE ANY
 	// LEVEL LOOKS AT IT.
 	//
@@ -770,7 +843,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 	if !q.MinPosition.IsZero() && q.MinPosition.Stream != "" &&
 		q.MinPosition.Stream != r.stream {
 
-		return Position{}, &Refused{
+		return Position{}, Position{}, &Refused{
 			Code: RefuseWrongStream, Level: q.Level,
 			Detail: fmt.Sprintf("this read floors at a position on %s and this "+
 				"domain reads %s — a position names the log it is a position "+
@@ -780,8 +853,22 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 	}
 	switch q.Level {
 	case ReadLinearizable:
+		// A READ INDEX THIS READ ALREADY HOLDS — established by a node
+		// asked for it before this one — IS WAITED FOR AND NOTHING IS
+		// APPENDED: as linearizable as a barrier of this node's own, since
+		// that barrier started after the request reached a node and the
+		// broker committed it ([Spent]). And so whatever this node's mode,
+		// since it appends nothing. NOT ONE FROM A GENERATION THIS NODE'S
+		// LOG HAS PASSED: a sequence there is a number in another space,
+		// and compared against this node's checkpoint it would read as
+		// reached whatever the log holds — so this node establishes its
+		// own.
+		if at, held := spent.IndexOn(r.stream); held &&
+			at.Generation >= r.waiter.Committed().Generation {
+			return furthest(at, q.MinPosition), at, nil
+		}
 		if !r.mode.Publishes() {
-			return Position{}, &Refused{
+			return Position{}, Position{}, &Refused{
 				Code: RefuseMaintenance, Level: q.Level,
 				Detail: fmt.Sprintf("this node runs in %s mode, which publishes "+
 					"nothing, and a linearizable read establishes the log's end "+
@@ -792,10 +879,22 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 			}
 		}
 		if r.index == nil {
-			return Position{}, &Refused{
+			return Position{}, Position{}, &Refused{
 				Code: RefuseBrokerUnreachable, Level: q.Level,
 				Detail: "this node has no read index, so no position can be " +
 					"established as the log's end",
+			}
+		}
+		// NO SECOND BARRIER ON A LOG A NODE ASKED BEFORE THIS ONE SPENT A
+		// BARRIER'S WHOLE BUDGET ON: every node's goes to the one log's
+		// leader, which has no quorum ([Spent.NoQuorum]).
+		if spent.NoQuorumOn(r.stream) {
+			return Position{}, Position{}, &Refused{
+				Code: RefuseNoQuorum, Level: q.Level,
+				Detail: "a node asked for this read before this one spent a barrier's " +
+					"whole budget without it committing — the log has no quorum — so " +
+					"this one appends no second barrier",
+				Spent: Spent{NoQuorum: []string{r.stream}},
 			}
 		}
 		// THE BARRIER'S WAIT ENDS WHERE THE ASKER'S ATTEMPT LEAVES OFF, on a
@@ -819,16 +918,25 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 				// it: a reader that hung up says nothing about the
 				// broker, and counted as `no_quorum` it was a majority
 				// failing to agree on every operator's graph.
-				return Position{}, ctx.Err()
+				return Position{}, Position{}, ctx.Err()
 			case ranOut:
-				return Position{}, &Refused{
+				return Position{}, Position{}, &Refused{
 					Code: RefuseNoQuorum, Level: q.Level,
 					Detail: fmt.Sprintf("the barrier this read appended to establish the "+
 						"log's end had not committed after %s, all its asker's attempt left",
 						time.Since(began).Round(time.Millisecond)),
+					Spent: Spent{NoQuorum: []string{r.stream}},
 				}
 			}
-			return Position{}, barrierRefusal(q.Level, err)
+			refusal := barrierRefusal(q.Level, err)
+			// A BARRIER THAT RAN ITS OWN WHOLE BUDGET is a log without a
+			// quorum, which a node asked next is spared appending to; one
+			// refused at once — a full log, a broker that did not answer —
+			// spent nothing it would.
+			if refusal.Code == RefuseNoQuorum && errors.Is(err, context.DeadlineExceeded) {
+				refusal.Spent = Spent{NoQuorum: []string{r.stream}}
+			}
+			return Position{}, Position{}, refusal
 		}
 		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier
 		// was appended to — a position a write returned was acknowledged
@@ -837,7 +945,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		// stream has not reached, and waiting for it is what turns a
 		// pasted position into a `behind` refusal the caller can read
 		// rather than an answer served from before it.
-		return furthest(at, q.MinPosition), nil
+		return furthest(at, q.MinPosition), at, nil
 
 	case ReadSession:
 		// THE STRONGEST OF WHAT THE CALLER ALREADY KNOWS. A session
@@ -845,19 +953,19 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		// stronger name, so it waits for nothing rather than appending
 		// a barrier nobody asked for — which is why the grammars refuse
 		// the level to a caller that named no position.
-		return furthest(q.Session, q.MinPosition), nil
+		return furthest(q.Session, q.MinPosition), Position{}, nil
 
 	case ReadStale, ReadConsistentPrefix:
 		if refusal := r.pastBound(q, h); refusal != nil {
-			return Position{}, refusal
+			return Position{}, Position{}, refusal
 		}
 		// AND THE FLOOR STILL HOLDS. A stale read with a position is
 		// "whatever this node holds, from here on": the lag is checked
 		// above and reported on the answer, and the wait below is for
 		// the caller's own write rather than for the log's end.
-		return q.MinPosition, nil
+		return q.MinPosition, Position{}, nil
 	}
-	return Position{}, fmt.Errorf("statelog: unreachable read level %q", q.Level)
+	return Position{}, Position{}, fmt.Errorf("statelog: unreachable read level %q", q.Level)
 }
 
 // pastBound is the staleness bound's whole rule, against ONE health snapshot.
@@ -923,7 +1031,7 @@ func unreadHealth(err error) string {
 // The three are genuinely different: a broker that did not answer, a majority
 // that did not agree, and a log that is full. Only the first two are worth
 // coming back for, and only the third names a field an operator has to change.
-func barrierRefusal(level ReadLevel, err error) error {
+func barrierRefusal(level ReadLevel, err error) *Refused {
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {
@@ -943,8 +1051,17 @@ func barrierRefusal(level ReadLevel, err error) error {
 	}
 }
 
-// refuse records and returns one refusal.
+// refuse records and returns one refusal of a read that paid for nothing a
+// node asked next would be spared ([Spent]).
 func (r *Reader) refuse(h Health, q Query, code ReadRefusal, detail string, started time.Time) (Answer, error) {
+	return r.refusePaid(h, q, code, detail, started, Spent{})
+}
+
+// refusePaid records and returns one refusal, carrying what the read had paid
+// for when it was refused ([Refused.Spent]).
+func (r *Reader) refusePaid(h Health, q Query, code ReadRefusal, detail string, started time.Time,
+	paid Spent) (Answer, error) {
+
 	lag := uint64(0)
 	if h.Lag != nil {
 		lag = *h.Lag
@@ -962,6 +1079,7 @@ func (r *Reader) refuse(h Health, q Query, code ReadRefusal, detail string, star
 		Level:      q.Level,
 		Detail:     detail,
 		RetryAfter: RetryHint(code, lag, r.drain()),
+		Spent:      paid,
 	}
 }
 

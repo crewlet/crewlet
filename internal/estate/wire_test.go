@@ -323,8 +323,9 @@ func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 	}
 }
 
-// THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, a reply that answers
-// it, admission's ping and a copy out of service. A field added to the
+// THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, one asked again
+// after a node refused it, a reply that answers it, admission's ping and a
+// copy out of service. A field added to the
 // envelope, renamed or made to send its zero value changes what every node of
 // a fleet mid-upgrade reads of every other, and this is where that shows —
 // rather than in a router that silently reads a field its peer stopped
@@ -343,6 +344,18 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			want: `{"op":"tracker.tasks","args":{"Query":{}},` +
 				`"floors":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":7}],` +
 				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
+		},
+		"a read asked after a node refused it": {
+			value: request{Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
+				Spent: &statelog.Spent{
+					Index:    []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
+					Waited:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
+					NoQuorum: []string{pagesStream},
+				}},
+			want: `{"op":"tracker.tasks","args":{"Query":{}},"spent":{` +
+				`"index":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
+				`"waited":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
+				`"no_quorum":["CREWLET_PAGES_LOG"]}}`,
 		},
 		"a write's last resort": {
 			value: request{Op: opCreateTask.spec.name, Actor: &swe, AcceptLagging: true},

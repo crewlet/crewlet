@@ -582,6 +582,69 @@ func TestAServingNodesErrorKeepsItsIdentity(t *testing.T) {
 	}
 }
 
+// A READ A COPY REFUSES ABOUT ITSELF IS ASKED OF THE NEXT NODE: a node whose
+// applier is behind the barrier its linearizable read appended ran nothing,
+// and a peer whose applier keeps up serves the read — the refusal is the
+// answer only where no node does better, and keeps its identity then. A
+// refusal about the whole fleet is final at once, since no node does better.
+func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
+	t.Parallel()
+	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadLinearizable,
+		Detail: "this node has not reached its barrier within 2s", RetryAfter: 3 * time.Second}
+	t.Run("a peer serves it", func(t *testing.T) {
+		t.Parallel()
+		f := newFleet(t, "data-a", "data-b")
+		_, first := f.first(t, f.client)
+		first.set(func(n *fakeNode) { n.failWith = behind })
+		answer, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		if err != nil || answer.TotalHint != 7 {
+			t.Fatalf("a read the first node refused as behind = (%+v, %v), want the peer's answer", answer, err)
+		}
+		if peer := f.other(first); !peer.askedFor("tasks") {
+			t.Errorf("%s was never asked once %s refused the read about itself", peer.name, first.name)
+		}
+	})
+	t.Run("nobody does better", func(t *testing.T) {
+		t.Parallel()
+		f := newFleet(t, "data-a", "data-b")
+		for _, n := range f.nodes {
+			n.set(func(n *fakeNode) { n.failWith = behind })
+		}
+		_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		var refused *statelog.Refused
+		if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind || refused.RetryAfter != behind.RetryAfter {
+			t.Fatalf("a read every node refused as behind = %v, want that refusal with its hint", err)
+		}
+	})
+	t.Run("a refusal about the whole fleet is final", func(t *testing.T) {
+		t.Parallel()
+		f := newFleet(t, "data-a", "data-b")
+		_, first := f.first(t, f.client)
+		first.set(func(n *fakeNode) {
+			n.failWith = &statelog.Refused{Code: statelog.RefuseLogFull, Level: statelog.ReadLinearizable}
+		})
+		_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		var refused *statelog.Refused
+		if !errors.As(err, &refused) || refused.Code != statelog.RefuseLogFull {
+			t.Fatalf("a read refused log_full = %v, want that refusal", err)
+		}
+		if peer := f.other(first); peer.askedFor("tasks") {
+			t.Errorf("%s was asked a read %s refused for a full log, which every node refuses alike",
+				peer.name, first.name)
+		}
+	})
+	t.Run("this node's own copy", func(t *testing.T) {
+		t.Parallel()
+		f := newFleet(t, "data-b")
+		local := &fakeNode{name: "data-a", units: chartOf("data-a"), failWith: behind}
+		answer, err := f.router(t, "data-a", local).Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		if err != nil || answer.TotalHint != 7 {
+			t.Fatalf("a read this node's own copy refused as behind = (%+v, %v), want data-b's answer",
+				answer, err)
+		}
+	})
+}
+
 // A NODE THAT DOES NOT ANSWER IS PASSED OVER FOR A READ, and asked last until
 // its suspicion lapses — so a node that died costs one attempt per router
 // rather than one per request.

@@ -153,7 +153,7 @@ flowchart TD
     op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node whose copy of the<br/>operation's log is in service?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
     local -- no --> order[Ask the live data nodes in order:<br/>last to answer that log, rendezvous,<br/>out of service for that log, silent ones last]
-    own -- behind its floor, or lagging its logs --> order
+    own -- behind its floor, lagging its logs,<br/>or refusing a read about itself --> order
     order --> reply{The data node's answer}
     reply -- ran it --> done[The answer]
     reply -- ran nothing --> order
@@ -226,6 +226,17 @@ flowchart TD
 - **A node that ran nothing is passed over, whatever the operation**: one whose
   copy of the operation's log is out of service (`out_of_service`), whose copy
   of it lags that log (asked again last), or that is behind the caller's floor.
+  So is one that refuses a *read* for a reason about itself — its applier did
+  not reach the barrier a linearizable read appended in time (`behind`), it
+  stalled, it holds a record it cannot decode, it was evicted, or it lost its
+  broker or its quorum: the next data node is asked, and the refusal is the
+  answer only where none does better. The two refusals that hold for every
+  node alike — the log is full (`log_full`), the fleet is in a capacity window
+  (`maintenance`) — are answered at once, from the first node that gives them.
+  Asking the next node costs a question and nothing more: it is handed what
+  the read already paid for — the barrier the first node appended, the
+  position it waited its whole read budget for — so a walk past every data
+  node appends one barrier and waits one read budget, however many there are.
   What may be repeated once
   a node *may* have run a write is the operation's own rule: a tracker write
   moves on under the same operation id, a knowledge-base write that went
