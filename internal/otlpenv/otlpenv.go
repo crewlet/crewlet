@@ -51,8 +51,11 @@
 //     endpoint verifies the collector against the system's roots, or
 //     against the PEM file OTEL_EXPORTER_OTLP_<SIGNAL>_CERTIFICATE, else
 //     OTEL_EXPORTER_OTLP_CERTIFICATE, names; and presents the client
-//     certificate and key the CLIENT_CERTIFICATE and CLIENT_KEY pair name —
-//     the signal's own pair when both halves are set, else the base pair.
+//     certificate and key the CLIENT_CERTIFICATE and CLIENT_KEY pair name.
+//     A signal's own pair, when either half of it is set, must be complete
+//     and replaces the base pair; with neither half set, the base pair is
+//     used. (The SDK falls back to the base pair past a half signal pair;
+//     this package refuses one — see below.)
 //     OTEL_EXPORTER_OTLP_INSECURE says nothing the scheme does not already:
 //     the specification applies it only to an endpoint written WITHOUT a
 //     scheme, which this package refuses, and the SDK the engine's exporters

@@ -267,6 +267,10 @@ func TestTLSMaterialThatCannotBeUsedIsRefused(t *testing.T) {
 		{"a client key without its certificate", map[string]string{
 			otlpenv.EndpointVar: secure, otlpenv.Traces.ClientKeyVar(): key},
 			otlpenv.Traces.ClientCertificateVar()},
+		{"half a signal's pair beside a complete base pair", map[string]string{
+			otlpenv.EndpointVar: secure, otlpenv.ClientCertificateVar: cert,
+			otlpenv.ClientKeyVar: key, otlpenv.Traces.ClientCertificateVar(): cert},
+			otlpenv.Traces.ClientKeyVar()},
 		{"a client certificate and somebody else's key", map[string]string{
 			otlpenv.EndpointVar: secure, otlpenv.ClientCertificateVar: cert,
 			otlpenv.ClientKeyVar: otherKey},
