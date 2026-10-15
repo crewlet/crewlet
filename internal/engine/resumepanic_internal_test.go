@@ -26,7 +26,7 @@ func TestAResumeThatPanicsIsAbandonedAndRecordsTheFailureOnTheSeat(t *testing.T)
 	e := &Engine{backends: &Backends{Queue: p}}
 	run := sandbox.PendingRun{
 		TurnID: "t-9", WorkKey: "wk-9", AgentHandle: "ceo", Role: "CEO", AgentID: "a-1",
-		TraceID: "0af7651916cd43dd8448eb211c80319c",
+		TraceID: "0af7651916cd43dd8448eb211c80319c", SpanID: "00f067aa0ba902b7", TraceUnsampled: true,
 	}
 
 	err := e.guardResume(context.Background(), run, func() error {
@@ -52,6 +52,16 @@ func TestAResumeThatPanicsIsAbandonedAndRecordsTheFailureOnTheSeat(t *testing.T)
 	}
 	if strings.Contains(breach.Detail, "goroutine") {
 		t.Errorf("the published detail carries a stack: %q", breach.Detail)
+	}
+	// BENEATH THE SPAN THAT LAUNCHED THE RUN, decision kept, as every record
+	// the coordinator writes about a run is: that span did not publish it.
+	// Mutation, red here: file it under the row's trace as it is.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, ev := range p.events {
+		if got, want := ev.Trace(), run.Trace().Beneath(); got != want {
+			t.Errorf("%s is filed under %+v, want beneath the run's span: %+v", ev.Type, got, want)
+		}
 	}
 }
 

@@ -935,6 +935,83 @@ func TestAPanicDoesNotReRecordWhatTheLedgerAlreadyDropped(t *testing.T) {
 	}
 }
 
+// A RECORD THE DISPATCHER WRITES ABOUT A TRIGGER IS FILED BENEATH IT — in the
+// trigger's trace and under its decision, with the span the trigger names as
+// its parent and no span of its own. The dispatcher opens no span: copied
+// verbatim, as the trigger's ids were, a skip, an abandonment or a breach
+// claimed the span the trigger was published in as its own — the asker's
+// `a2a_ask` call, a schedule's fire — and the dashboard filed the dispatcher's
+// record among that span's events.
+//
+// The triggers here are published INSIDE a span, the shape that went wrong; a
+// wake relayed beneath one already came out right.
+//
+// Mutation, red here: file any of the four records under the trigger's trace
+// as it is.
+func TestTheDispatchersRecordsAboutATriggerAreFiledBeneathIt(t *testing.T) {
+	t.Parallel()
+	spanned := func() *events.Event {
+		e := ev("notification")
+		e.TraceID, e.SpanID, e.ParentSpanID = tracingtest.Remote().TraceID, "00f067aa0ba902b7", "b7ad6b7169203331"
+		e.TraceUnsampled = true
+		return e
+	}
+	for name, tc := range map[string]func(*engine.Dispatcher, *recorder) []*events.Event{
+		"already worked": func(d *engine.Dispatcher, _ *recorder) []*events.Event {
+			worked := spanned()
+			completions := ledgerstore.NewMemoryCompletions()
+			if err := completions.Record(context.Background(), "ceo",
+				workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			d.Completions = completions
+			return []*events.Event{worked, spanned()}
+		},
+		"broke after acting": func(d *engine.Dispatcher, r *recorder) []*events.Event {
+			r.result, r.err = turn.Result{Acted: true}, errors.New("the reviewer's provider went away")
+			d.Completions = ledgerstore.NewMemoryCompletions()
+			return []*events.Event{spanned()}
+		},
+		"panicked outside the loop": func(d *engine.Dispatcher, _ *recorder) []*events.Event {
+			d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+			d.Completions = ledgerstore.NewMemoryCompletions()
+			return []*events.Event{spanned()}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			var seen []*events.Event
+			d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+			d.Identify = func(string) (string, string) { return "CEO", "a-1" }
+			triggers := tc(d, r)
+			byID := map[string]*events.Event{}
+			for _, e := range triggers {
+				byID[e.ID.String()] = e
+			}
+			if got := d.Dispatch(context.Background(), "ceo", triggers); got.Outcome != queue.OutcomeAck {
+				t.Fatalf("outcome = %v, want an ack", got.Outcome)
+			}
+			if len(seen) == 0 {
+				t.Fatal("the dispatcher recorded nothing — the premise")
+			}
+			for _, rec := range seen {
+				// The trigger a record is about: the one it names, or the
+				// partition's first for a breach, which names a run.
+				about := triggers[0]
+				if skip, ok := rec.Data.(*types.TurnTriggerSkipped); ok {
+					about = byID[skip.TriggerID]
+				}
+				if got, want := rec.Trace(), about.Trace().Beneath(); got != want {
+					t.Errorf("%s is filed under %+v, want beneath its trigger: %+v",
+						rec.Type, got, want)
+				}
+			}
+		})
+	}
+}
+
 func typesSeen(evs []*events.Event) []string {
 	out := make([]string, 0, len(evs))
 	for _, e := range evs {
