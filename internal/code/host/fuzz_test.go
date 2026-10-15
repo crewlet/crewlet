@@ -253,6 +253,7 @@ func FuzzNegotiation(f *testing.F) {
 	f.Add([]byte(string(pktString("want "+oidA+" multi_ack_detailed side-band-64k\n"))+flushPkt+
 		string(pktString("done\n"))), false)
 	f.Add([]byte(string(pktString("want "+gitref.ZeroOID+"\n"))+flushPkt), false)
+	f.Add([]byte(v2+string(pktString("want "+strings.ToUpper(oidA)+"x\n"))+flushPkt), true)
 	f.Fuzz(func(t *testing.T, raw []byte, v2 bool) {
 		n, err := parseNegotiation(bytes.NewReader(raw), int64(len(raw)), v2)
 		if err != nil {

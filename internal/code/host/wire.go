@@ -38,7 +38,8 @@ var errMalformed = errors.New("host: not a pkt-line")
 // Every reader of what a client sends holds an id to this, never to ValidOID
 // alone, because git takes an id written in capitals: held to ValidOID, a
 // push's command in capitals was a line the receiver skipped and receive-pack
-// acted on — one step 2 never measured.
+// acted on — one step 2 never measured — and a fetch's want in capitals was
+// one the node never checked it held.
 func wireOID[S ~string | ~[]byte](id S) (string, bool) {
 	if len(id) != gitref.OIDHexLen {
 		return "", false

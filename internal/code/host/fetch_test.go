@@ -129,6 +129,38 @@ func TestAMissingWantTakesOneLinearizableSync(t *testing.T) {
 	}
 }
 
+// A WANT IS READ AS UPLOAD-PACK READS IT — the id after `want `, hex in either
+// case, whatever follows it — so a node that lacks the object syncs once at
+// the log's head and serves it however the client spelled it. Held to the
+// lowercase spelling alone, a want in capitals was no want here, though
+// upload-pack takes it: the node never checked it held the object, and
+// answered a fetch it was one sync from serving with `not our ref`.
+func TestAWantIsReadAsUploadPackReadsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want func(head string) string
+	}{
+		{"in lowercase", func(head string) string { return head }},
+		{"in capitals", strings.ToUpper},
+		{"followed by more than its id", func(head string) string { return head + "x" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &recording{}
+			c, head := behindAMovedHead(t, e, codetest.SoloOptions{})
+			before := e.linearizable()
+			resp, body := post(t, c, 1, "ceo", "git-upload-pack", v2, fetchWants([]string{tc.want(head)}))
+			if resp.StatusCode != http.StatusOK || !strings.Contains(body, "packfile") {
+				t.Errorf("a fetch of %s through the node behind answered %d: %.300q", tc.want(head),
+					resp.StatusCode, body)
+			}
+			if got := e.linearizable() - before; got != 1 {
+				t.Errorf("a fetch of a want the node lacked read the estate through the barrier %d times, "+
+					"want once", got)
+			}
+		})
+	}
+}
+
 // behindAMovedHead is a case whose node 1 holds main one push behind node 0
 // — the node in a minority a missing want's sync at the log's head exists for
 // — and the head node 1 lacks; every estate call goes through e.

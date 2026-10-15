@@ -98,14 +98,19 @@ func parseNegotiation(src io.Reader, size int64, v2 bool) (negotiation, error) {
 	}
 }
 
-// wantOID is the object a `want <oid>[ <caps>]` line names, or "".
+// wantOID is the object a `want <oid>[ <caps>]` line names, or "": the id as
+// upload-pack reads it (receive_needs for v0, parse_want for v2) — the
+// gitref.OIDHexLen bytes after `want `, hex in either case (wireOID), whatever
+// follows them, since git reads the id and nothing past it. A want read more
+// narrowly than git reads it is one this node never checks it holds, and
+// upload-pack answers it `not our ref` on a node one sync from serving it.
 func wantOID(line string) string {
 	rest, ok := strings.CutPrefix(line, "want ")
-	if !ok {
+	if !ok || len(rest) < gitref.OIDHexLen {
 		return ""
 	}
-	oid, _, _ := strings.Cut(rest, " ")
-	if !gitref.ValidOID(oid) || oid == gitref.ZeroOID {
+	oid, ok := wireOID(rest[:gitref.OIDHexLen])
+	if !ok || oid == gitref.ZeroOID {
 		return ""
 	}
 	return oid
