@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -32,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracing/tracingtest"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -1344,6 +1346,57 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.FirstAt != clock.UTC().Format(time.RFC3339) ||
 		rec.LastAt != clock.Add(2*time.Minute).UTC().Format(time.RFC3339) {
 		t.Errorf("span = %s..%s", rec.FirstAt, rec.LastAt)
+	}
+}
+
+// A MERGE RECORD IS PUBLISHED IN A SPAN OF ITS OWN, a child of the trigger's —
+// never under the trigger's span id, which it used to claim as its own because
+// it is published after the trigger's trace is restored and before the turn
+// opens its span. And the turn it feeds is still the trigger's child, not the
+// merge's.
+//
+// Mutations, each red here: publish under the restored context again (the
+// record claims the trigger's span); hand the turn the span's context (the
+// turn nests under the merge).
+func TestAMergeRecordIsPublishedInASpanOfItsOwn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	var turnUnder trace.SpanContext
+	run := d.Turn
+	d.Turn = func(ctx context.Context, req engine.Request) (turn.Result, error) {
+		turnUnder = trace.SpanContextFromContext(ctx)
+		return run(ctx, req)
+	}
+
+	trigger := events.NewTrace()
+	tracingtest.Watch(t, trigger.TraceID)
+	first := inThread("notification", "slack:C1/T1")
+	first.TraceID, first.SpanID = trigger.TraceID, trigger.SpanID
+	second := inThread("notification", "slack:C1/T1")
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{first, second}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("%d observations, want one merge record", len(seen))
+	}
+	span := tracingtest.Only(t, trigger.TraceID, engine.CoalesceSpan)
+	if got := span.Parent().SpanID().String(); got != trigger.SpanID {
+		t.Errorf("the merge's span has parent %s, want the trigger's %s", got, trigger.SpanID)
+	}
+	if got := tracingtest.Attr(span, "crewlet.count"); got != "2" {
+		t.Errorf("crewlet.count = %q, want 2", got)
+	}
+	want := events.TraceContext{TraceID: trigger.TraceID,
+		SpanID: span.SpanContext().SpanID().String(), ParentSpanID: trigger.SpanID}
+	if got := seen[0].Trace(); got != want {
+		t.Errorf("the merge record is filed under %+v, want its own span %+v", got, want)
+	}
+	if turnUnder.SpanID().String() != trigger.SpanID {
+		t.Errorf("the turn was handed span %s, want the trigger's %s", turnUnder.SpanID(), trigger.SpanID)
 	}
 }
 
