@@ -103,7 +103,7 @@ prompt on its own model — a frontier model to work, a cheap one to check. See
 ## Quickstart
 
 There is no infrastructure to bring up. Crewlet is one binary: it embeds its
-event stream (a NATS JetStream server) and its database is a local file it
+event stream (a NATS JetStream server) and its database is two local files it
 creates. Describe a company and run it:
 
 ```bash
@@ -269,7 +269,7 @@ flowchart LR
     API["<b>REST API + dashboard</b><br/><i>inside the engine's<br/>own process</i>"]
     Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>clustered or external for a fleet</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
-    DB[("<b>Store</b><br/>one local file<br/>events · memory · config")]
+    DB[("<b>Store</b><br/>two local files<br/>events · memory · config ·<br/>the replicated estate")]
 
     EXT -->|webhooks| API
     API <--> Q

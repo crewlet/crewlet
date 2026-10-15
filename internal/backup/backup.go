@@ -5,12 +5,13 @@
 // A node's durable state is split across two estates that an outside tool
 // cannot reach, for two different reasons.
 //
-// The STORE is one file this process owns exclusively for the life of the
+// The STORE is two files on a data node — its own and the replicated estate
+// beside it — each of which this process owns exclusively for the life of its
 // handle, and the driver does not support a second process on a database file
 // — so every SQLite-ecosystem backup tool, all of which work by being a
-// second opener, is unavailable. Copying the file underneath a running engine
-// is worse than unavailable: committed data lives in the file and its -wal,
-// and a copy of either alone is torn.
+// second opener, is unavailable. Copying a file underneath a running engine is
+// worse than unavailable: committed data lives in the file and its -wal, and a
+// copy of either alone is torn.
 //
 // The STREAM ESTATE — the agent mailboxes and every coordination bucket, which
 // is where the fleet's leases, ledgers, counters and sealed credentials live —
