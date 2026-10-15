@@ -224,7 +224,7 @@ every other route.
 | `GET` | `/code/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a token** (see [The code reads](#the-code-reads)) |
 | `GET` | `/code/repos/{name}` | One repository in detail (same) |
 | `GET` | `/code/repos/{name}/pushes` | One repository's push history, newest first, each push naming the person who made it (same) |
-| `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to rebuild what is damaged: answered `202` at once, the check running on (see [below](#post-codereposnameverify)) |
+| `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to rebuild what is damaged: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-codereposnameverify)) |
 | `GET` | `/code/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-codereposnameverifyid)) |
 
 > **Auth.** Writes and every route of the always-guarded surfaces — `/config`,
@@ -4112,10 +4112,12 @@ people's git reads. A position that does not parse, or one on another log, is
 every byte of the copy — measured at about nine seconds a gigabyte, git's
 connectivity check nearly all of it, minutes for a large repository, and
 about twice that with a repair — which outlives any proxy's read timeout. So
-it answers at once, **`202 Accepted`**, with the verification running and its
-address in `Location`, and the check runs on the node's own time: the request
-ending, or a proxy closing it, ends nothing. Read the outcome there (below)
-until it ends.
+the check runs on the node's own time — the request ending, or a proxy
+closing it, ends nothing — and the request waits for it **a quarter of a
+second at most**: a check that ends within it (a copy of up to some 25 MiB)
+is answered **`200`** with the verification ended, its report in the one
+answer, and one still running **`202 Accepted`**, with its address in
+`Location`. Read the outcome there (below) until it ends.
 
 ```json
 { "id": "0190d2f2-…", "repo": "web", "repair": false, "state": "running",
@@ -4142,7 +4144,7 @@ read nothing — so a retry costs nothing either:
   it — so how many checks run at once is bounded by the lane.
 - `409 verify_running` when a check of the repository with the other `repair`
   setting is running on the node, naming it as `running`. One with the same
-  setting is answered `202` as that one: two asking share one check.
+  setting is answered as that one: two asking share one check.
 - `503 unavailable` with `Retry-After: 30` on a node whose code host is
   stopping, and `500 query_failed` **with its sentence** when the node's memory
   cannot hold the check at all — the sentence says to run it on a node with
@@ -4174,7 +4176,8 @@ the object store those make is bounded on its own, as every sync's is.
 The node keeps a verification **an hour after it ends**, until the
 repository's next verify begins, and never across a restart: a verification it
 does not keep is `404 not_found`. A read, so a draining node still answers it.
-A client polls it every few seconds; what it costs is a lookup.
+A client polls it — by the `deadline` the node states, at doubling waits from
+the quarter of a second the request already waited; what it costs is a lookup.
 
 ## Agent Memory
 

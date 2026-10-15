@@ -525,8 +525,10 @@ the refs against what was written, git's own connectivity check — and, asked
 to, to repair what it finds damaged, linking in every pack it found whole so
 the repair downloads only the rest ([`POST
 /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)).
-A check reads every byte of the copy, so it runs on the node's own time and is
-read until it ends rather than answered in one request, and it is **admitted
+A check reads every byte of the copy, so it runs on the node's own time — the
+request that asked for it is answered in place when the check ends within a
+quarter of a second, a small copy's, and otherwise the check is read until it
+ends — and it is **admitted
 before it reads anything**: it holds a slot of the maintenance lane — the one
 the background indexing leaves free — and its connectivity check's memory from
 its first read to its last, and a node with neither free refuses it at once
