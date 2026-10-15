@@ -92,6 +92,11 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 			otlpenv.CertificateVar:       ca,
 			otlpenv.Traces.InsecureVar(): "false",
 		}},
+		{"an https scheme in upper case", map[string]string{
+			otlpenv.EndpointVar:          "HTTPS://collector.example.com:4318",
+			otlpenv.CertificateVar:       ca,
+			otlpenv.Traces.InsecureVar(): "false",
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

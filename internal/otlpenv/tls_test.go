@@ -155,6 +155,83 @@ func TestTLSMaterialResolvesPerSignal(t *testing.T) {
 	}
 }
 
+// THE SCHEME DECIDES TLS IN ANY CASE, as url.Parse — and so the SDK, whose
+// WithEndpointURL sets `Insecure = u.Scheme != "https"` on the parse — reads
+// it. Secure() once matched the prefix `https://` against the endpoint as
+// written, so for `HTTPS://` the receiver's gRPC forward dialled a TLS
+// collector in plaintext while the engine's exporter used TLS; and the checks
+// beside it refused a certificate as "an http:// endpoint", refused
+// INSECURE=false, and accepted INSECURE=true.
+//
+// Mutation: store the endpoint as written and the canonical-spelling check
+// goes red; match a prefix in Secure() and the literal-destination check does.
+func TestTheSchemeDecidesTLSInAnyCase(t *testing.T) {
+	t.Parallel()
+	ca, _ := pemFiles(t, "ca")
+	cert, key := pemFiles(t, "client")
+	for _, tc := range []struct {
+		name, variable, raw, want string
+	}{
+		{"an upper-case base", otlpenv.EndpointVar,
+			"HTTPS://collector.example.com:4318", "https://collector.example.com:4318/v1/traces"},
+		{"a mixed-case base", otlpenv.EndpointVar,
+			"Https://collector.example.com:4318/Otlp/", "https://collector.example.com:4318/Otlp/v1/traces"},
+		{"an upper-case signal endpoint", otlpenv.Traces.EndpointVar(),
+			"HTTPS://collector.example.com/v1/traces", "https://collector.example.com/v1/traces"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := resolve(t, otlpenv.Traces, map[string]string{
+				tc.variable:                  tc.raw,
+				otlpenv.CertificateVar:       ca,
+				otlpenv.ClientCertificateVar: cert,
+				otlpenv.ClientKeyVar:         key,
+				otlpenv.InsecureVar:          "false",
+			})
+			if d.Endpoint != tc.want {
+				t.Errorf("endpoint = %q, want the scheme lowercased and the rest as written: %q",
+					d.Endpoint, tc.want)
+			}
+			if !d.Secure() || d.TLS.Certificate != ca || d.TLS.ClientCertificate != cert {
+				t.Errorf("an https endpoint in another case: Secure()=%v, TLS %+v", d.Secure(), d.TLS)
+			}
+			_, err := otlpenv.Resolve(envOf(map[string]string{
+				tc.variable: tc.raw, otlpenv.InsecureVar: "true",
+			}), otlpenv.Traces)
+			if err == nil || !strings.Contains(err.Error(), otlpenv.InsecureVar) {
+				t.Errorf("INSECURE=true beside %s: %v, want a refusal naming %s",
+					tc.variable, err, otlpenv.InsecureVar)
+			}
+		})
+	}
+
+	// AND THE MIRROR: `HTTP://` is plaintext, so material beside it is
+	// refused as it is beside `http://`.
+	plain := resolve(t, otlpenv.Traces, map[string]string{otlpenv.EndpointVar: "HTTP://collector.example.com"})
+	if plain.Secure() || plain.Endpoint != "http://collector.example.com/v1/traces" {
+		t.Errorf("HTTP:// resolved to %q, Secure()=%v", plain.Endpoint, plain.Secure())
+	}
+	if _, err := otlpenv.Resolve(envOf(map[string]string{
+		otlpenv.EndpointVar: "HTTP://collector.example.com", otlpenv.CertificateVar: ca,
+	}), otlpenv.Traces); err == nil {
+		t.Error("a certificate beside HTTP:// was accepted")
+	}
+
+	// SECURE() PARSES, whatever built the destination: a Destination is a
+	// plain value, and one not made by Resolve must not read differently.
+	for endpoint, want := range map[string]bool{
+		"HTTPS://collector.example.com": true,
+		"https://collector.example.com": true,
+		"http://collector.example.com":  false,
+		"HTTP://collector.example.com":  false,
+		"":                              false,
+	} {
+		if got := (otlpenv.Destination{Endpoint: endpoint}).Secure(); got != want {
+			t.Errorf("Destination{Endpoint: %q}.Secure() = %v, want %v", endpoint, got, want)
+		}
+	}
+}
+
 // MATERIAL THAT CAN NEVER BE USED IS REFUSED BY THE VARIABLE THAT NAMED IT.
 // The SDK reports such a file through its error handler and exports without
 // it — to a collector that refuses the handshake, or with no client
