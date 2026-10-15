@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -302,5 +304,74 @@ func TestALandingRefusesARepositoryThatTakesNoPush(t *testing.T) {
 	}
 	if n := len(objects(t, c)) - stored; n != 0 {
 		t.Errorf("a push to an archived repository stored %d objects", n)
+	}
+}
+
+// A LANDING THAT CANNOT FINISH IS THE PUSH'S, NEVER THE HOOK'S: a step of the
+// landing that fails — here the one after the bundle's upload, so the bundle IS
+// stored — fails the push in the engine's words and is logged
+// code_push_unchecked, naming the repository, the push and why. Logged as
+// code_hook_protocol, which says the hook spoke out of turn and nothing was
+// stored, it sent an operator to the hook for a git deadline on this node and
+// told them a stored bundle did not exist.
+func TestALandingThatCannotFinishIsLoggedAsTheLandings(t *testing.T) {
+	var lines logs
+	c := newCase(t, codetest.SoloOptions{Logger: lines.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "unchecked\n"}, "unchecked")
+	const why = "the step after the upload failed"
+	c.Fleet.Faults().Arm(codefault.HostAfterUpload, codefault.Action{Once: true, Err: errors.New(why)})
+	stored := len(objects(t, c))
+
+	res := p.Push(c.Ctx, work, c.URL(0), "main")
+	if res.OK("refs/heads/main") || !strings.Contains(res.Stderr, "the engine could not check this push: "+why) {
+		t.Fatalf("a push whose landing failed after its upload: %s", res)
+	}
+	if n := len(objects(t, c)) - stored; n != 1 {
+		t.Fatalf("the push stored %d objects, want its one bundle before the step that failed", n)
+	}
+	if n := lines.count("code_push_unchecked", `"level":"WARN"`, `"repo":"`+codetest.RepoName+`"`,
+		`"push_id":"`, why); n != 1 {
+		t.Errorf("code_push_unchecked was logged %d times naming the repository, the push and why, want once:\n%s",
+			n, strings.Join(lines.at("WARN"), ""))
+	}
+	if n := lines.count("code_hook_protocol"); n != 0 {
+		t.Errorf("a landing that failed after its upload was logged code_hook_protocol %d times: the hook "+
+			"spoke in turn", n)
+	}
+	if _, moved := c.Rows().Refs["refs/heads/main"]; moved {
+		t.Error("refs/heads/main exists, and the only push to it failed before its proposal")
+	}
+}
+
+// A LANDING ITS CLIENT ABANDONED IS NO WARNING: the push's request ending under
+// it — the client hanging up mid-check — ends the landing too, and that is
+// logged at DEBUG, since the handler records the request's own end for what it
+// was and a WARN for every person who presses Ctrl-C hides the one that
+// matters.
+func TestALandingItsClientAbandonedIsNoWarning(t *testing.T) {
+	var lines logs
+	timing := fast
+	timing.Keepalive = 30 * time.Second // no line on receive-pack's stderr: nothing starts the response
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{Timing: timing}, Logger: lines.logger()},
+		codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "abandoned\n"}, "abandoned")
+	reached := make(chan struct{})
+	c.Fleet.Faults().Arm(codefault.HostAfterUpload, codefault.Action{Once: true, Block: make(chan struct{}),
+		Reached: reached})
+	ctx, cancel := context.WithCancel(c.Ctx)
+	pushed := make(chan codetest.Pushed, 1)
+	go func() { pushed <- p.Push(ctx, work, c.URL(0), "main") }()
+	<-reached
+	cancel()
+	<-pushed
+	eventually(t, "the abandoned landing's line", func() bool {
+		return lines.count("code_push_unchecked", `"level":"DEBUG"`, `"repo":"`+codetest.RepoName+`"`) == 1
+	})
+	if n := lines.count("code_push_unchecked", `"level":"WARN"`); n != 0 {
+		t.Errorf("a landing its client abandoned was logged code_push_unchecked at WARN %d times", n)
 	}
 }

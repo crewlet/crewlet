@@ -125,18 +125,43 @@ var errProtocol = errors.New("host: git handed the hook a command it cannot read
 // push landed (land) and git told what landed. Every step's failure ends it
 // with a sentence on the hook's stderr and exit 1 — git then fails every ref
 // of the push — and the push recorded failed.
+//
+// Its log line says WHOSE step failed, since the two send an operator to
+// different places: code_hook_protocol is the RELAY's — git's version block or
+// commands not what git sends, before anything is stored — and
+// code_push_unchecked the push's own work, a landing that could not finish (a
+// git process over the push's objects failing or past its deadline on this
+// node, its pack unreadable), after which a bundle may already be stored and
+// named by no row, which the object collector removes after its grace.
 func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) {
 	sess.reachedRelay()
 	ctx := sess.ctx
-	fail := func(words string, err error) {
-		s.log.Warn("code_hook_protocol", "repo", sess.synced.Repo.Name, "push_id", sess.pushID, "step", words,
-			"error", err)
+	end := func(words string) {
 		sess.fail(words)
 		_ = fw.write(frameStderr, []byte("crewlet: "+sentence(words)+"\n"))
 		_ = fw.write(frameExit, []byte{1})
 	}
+	protocol := func(words string, err error) {
+		s.log.Warn("code_hook_protocol", "repo", sess.synced.Repo.Name, "push_id", sess.pushID, "step", words,
+			"error", err)
+		end(words)
+	}
+	// unchecked is the push's own work ended with no outcome: at DEBUG when
+	// the push's request ended under it — its client gone, the host stopping,
+	// receive-pack ended — which the handler logs for what it was
+	// (code_git_abandoned, code_push_failed), so a client that hangs up mid
+	// check is no WARN.
+	unchecked := func(words string, err error) {
+		attrs := []any{"repo", sess.synced.Repo.Name, "push_id", sess.pushID, "words", words, "error", err}
+		if sess.ctx.Err() != nil {
+			s.log.Debug("code_push_unchecked", attrs...)
+		} else {
+			s.log.Warn("code_push_unchecked", attrs...)
+		}
+		end(words)
+	}
 	if err := s.fault(ctx, codefault.HostHookAdmitted, 0); err != nil {
-		fail("the engine stopped while admitting this push's hook", err)
+		unchecked("the engine stopped while admitting this push's hook", err)
 		return
 	}
 	stop := s.keepalive(sess, fw)
@@ -144,12 +169,12 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 
 	atomic, err := s.versionBlock(br, fw)
 	if err != nil {
-		fail("proc-receive did not speak version 1, the one this engine speaks", err)
+		protocol("proc-receive did not speak version 1, the one this engine speaks", err)
 		return
 	}
 	cmds, err := readHookCommands(br)
 	if err != nil {
-		fail("git handed the hook a command it cannot read", err)
+		protocol("git handed the hook a command it cannot read", err)
 		return
 	}
 	for i, c := range cmds {
@@ -166,7 +191,7 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		if le, ok := errors.AsType[*landingError](err); ok {
 			cause = le.err
 		}
-		fail(err.Error(), cause)
+		unchecked(err.Error(), cause)
 		return
 	}
 	stop()
