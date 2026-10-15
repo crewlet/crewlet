@@ -242,6 +242,22 @@ a burst one record a batch. A batch is decided in one snapshot of the rows,
 each push against what the ones before it did, and a push is answered `ok`
 only from the row its record applied, never from the decision.
 
+The live data nodes are the ones each node's view of the fleet's presence
+names. The view hears a presence claim or release as it lands and lists the
+fleet again then — see
+[Coordination](coordination.md#who-is-in-the-fleet-asked-per-request) — so a
+data node that joins is in every repository's order within about a second of
+its claim, and a fleet started all at once agrees on every committer within
+about a second of the last node's claim. A push received inside that second
+may be committed by a node that has not yet heard its committer join: correct,
+since the pushes still contend on the repository's one subject and the broker
+decides between them, and short only of that push's group commit. A node
+without `data` that has heard of no data node yet has nobody to ask, and
+refuses a push, a fetch or a read as unserved until one claims. A committer
+that stops without releasing its presence stays in the order until its lease
+lapses, asked after the rest once it has gone silent — see
+[Scaling](scaling.md#how-a-request-reaches-the-estate).
+
 A push carries an id the receiving node minted, and a push id the repository's
 history already holds is answered from its row — so a push asked twice, or of
 a second node after the first stopped answering, is still one push. A
