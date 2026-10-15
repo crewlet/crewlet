@@ -161,10 +161,12 @@ func (s *fetchSlots) give(buf []byte) {
 // TWO, so a GET never waits on this node's disk: the round's share and the
 // node's slot go back the moment a GET ends, and while one share of bundles
 // is being read the one before it is made durable and renamed in. A share's
-// GETs bring a bundle every 2 ms at sixteen and a 30 ms first byte, while
-// this node's own side took 1.1 to 1.5 ms a bundle from memory (Measured) —
-// so a second share covers a share's disk work, and a disk slower than its
-// link holds the GETs back rather than growing a backlog. It is what bounds
+// GETs bring a bundle every 2 ms at sixteen and the S3 fake's 30 ms first
+// byte — every 6 to 12 ms at S3's own 100 to 200 ms — while this node's own
+// side took 1.1 to 1.5 ms a bundle from memory (Measured) — so a second share
+// covers a share's disk work, by more at a real bucket's first byte, and a
+// disk slower than its link holds the GETs back rather than growing a
+// backlog. It is what bounds
 // that disk work: tmp/ holds at most a round's 2 × FetchConcurrency and the
 // node's 2 × NodeFetches largest bundles, and the syncs a node has in flight
 // at once are three files a pack of them — never a backlog, nor a thread a

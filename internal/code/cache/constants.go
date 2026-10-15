@@ -36,19 +36,25 @@ const EvictInterval = time.Minute
 // s3obj reads up to PartBytes (8 MiB) as one request — rides a connection the
 // transport keeps open, rather than paying a TCP and TLS handshake for one it
 // then closes. And it is what a node joining a fleet asks of the store at
-// once: 32 small reads in flight at 30 ms to the first byte are about a
-// thousand GETs a second, a fifth of what S3 serves one prefix.
+// once: S3 answers in about 100 to 200 ms to the first byte (AWS's
+// performance guidelines), and 32 small reads in flight there are about 150
+// to 290 GETs a second — the S3 fake answering 100 and 200 ms late gave 285
+// and 150 bundles a second (BenchmarkColdSync's firstbyte arms; Measured in
+// doc.go). The node's own side of a bundle, about 900 a second, is what bounds
+// it only at a first byte under about 35 ms, the fake's 30 ms arm among them.
 //
 // A NODE'S BOUND, NEVER THE FLEET'S. Every object is named under one `files/`
-// prefix (objstore.Key.Name, ADR-0026), and every git node that syncs a repository it has
-// never served asks this much of it: measured 680 to 948 small bundles a second
-// a node (BenchmarkColdSync), so five or six git nodes cold-syncing at once —
-// a fresh fleet, or a repository imported and then fetched through every node
-// by a balancer that spreads /git/ evenly — reach the 5 500 GETs a second S3
-// serves one prefix, past which it answers SlowDown until it has partitioned
-// the prefix: those syncs slow down, and nothing they hold is wrong. How many
-// nodes warm one repository is where its requests land, which routing
-// /git/<name> by repository keeps to one or two (docs/concepts/scaling.md).
+// prefix (objstore.Key.Name, ADR-0026), and every git node that syncs a
+// repository it has never served asks this much of it: about 19 to 37 git
+// nodes cold-syncing at once, each at its full thirty-two — twice as many at
+// one repository's sixteen — reach the 5 500 GETs a second S3 serves one
+// prefix (a fresh fleet, or a repository imported and then fetched through
+// every node by a balancer that spreads /git/ evenly), past which it answers
+// SlowDown until it has partitioned the prefix. The bucket's client then
+// slows every request the node sends (internal/objstore/s3obj), so those
+// syncs slow down and nothing they hold is wrong. How many nodes warm one
+// repository is where its requests land, which routing /git/<name> by
+// repository keeps to one or two (docs/concepts/scaling.md).
 //
 // IT COUNTS OBJECTS, NOT REQUESTS. A bundle larger than one part is read by
 // s3obj as up to four ranges at once, the extra ones on buffers from the
@@ -79,7 +85,13 @@ const NodeFetches = httpx.MaxIdleConnsPerHost
 // the S3 fake at 30 ms to the first byte and 80 MB/s a connection, four
 // vCPUs): 2 000 bundles of 150 KB arrive at 448 a second at sixteen against
 // 680 at thirty-two, so 10 000 pushes' packs take about 22 seconds rather
-// than 15. Sixteen is bound by its GETs: sixteen of the 33 ms each took allow
+// than 15. At S3's own 100 to 200 ms it is the same share of a longer wait:
+// the fake answering 100 and 200 ms late gave sixteen 150 and 76 bundles a
+// second against 285 and 150 at thirty-two, so 10 000 pushes' packs take
+// about 67 to 131 seconds rather than 35 to 67. A cold sync's length is its
+// pack count, and fewer packs is what shortens it — not a share wider than
+// the shared transport's warm connections allow the node. Sixteen is bound by
+// its GETs: sixteen of the 33 ms each took allow
 // 484 a second, while this node's own side of a bundle — its files created,
 // written, synced and renamed — ran at 878 a second from a store in memory.
 // Thirty-two is bound by both: its GETs took 40 ms, the fake's server sharing
