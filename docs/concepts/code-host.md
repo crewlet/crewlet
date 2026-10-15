@@ -712,8 +712,14 @@ push a protection refuses — each is refused before receive-pack runs, and
 nothing is stored. A forced update of a ref a protection keeps from forcing,
 and a blob larger than `code.limits.max_blob_bytes`, are known only once the
 objects are, so the hook checks them — and refuses the push before uploading
-anything. Only a push that passes every check is uploaded, as **one** object:
-its pack with the indexes the receiving git wrote.
+anything. A ref keeps the first refusal it meets: a force-push of a protected
+branch is answered `protected_force` even when its pack also carries a blob
+over the limit, and a push every ref of which is refused by then is not
+scanned for blobs at all. A blob over the limit refuses every ref still
+standing, since the pack is stored whole or not at all, and names the path any
+ref of the push reaches it by. Only a push that passes every check is
+uploaded, as **one** object: its pack with the indexes the receiving git
+wrote.
 
 **The commands are read as receive-pack reads them.** Every check before
 receive-pack runs is a check of the ref updates the engine read from the

@@ -143,9 +143,10 @@ func (s *Server) largestBlob(ctx context.Context, dir, idxPath string, packBytes
 }
 
 // pathOf is the path a blob of the push is reached by — the first `rev-list
-// --objects` names it at among the push's new commits, past what the
-// repository already holds — or "(unreachable in this push)" for a blob no new
-// tree names.
+// --objects` names it at from the ids the push sent (news: every command's new
+// id, refused or not, since the pack carries the objects of all of them), past
+// what the repository already holds — or "(unreachable in this push)" for a
+// blob no new tree names.
 func (s *Server) pathOf(ctx context.Context, dir string, news []string, oid string, packBytes int64) string {
 	path := "(unreachable in this push)"
 	lines := gitproc.NewLines(func(line []byte) error {
