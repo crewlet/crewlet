@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
@@ -16,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
@@ -48,10 +51,11 @@ type Turn struct {
 	Role  *org.Role
 	Event types.TurnCompleted
 
-	// Trace is the completed turn's trace context, carried so a worker
-	// publishing its own events links them to the turn that caused them.
-	// It lives on the envelope, never on the payload, so it has to be
-	// handed down explicitly, because nothing in a turn travels ambiently.
+	// Trace is the pass's own span — `learning.reflect`, a child of the
+	// completed turn's span — carried so the events the pass publishes are
+	// filed beneath the turn that caused them. It lives on the envelope,
+	// never on the payload, so it has to be handed down explicitly, because
+	// nothing in a turn travels ambiently.
 	Trace events.TraceContext
 }
 
@@ -472,6 +476,10 @@ type Reflection struct {
 	Failed map[string]error
 }
 
+// ReflectSpan is the span one reflection pass runs in, beneath the span of the
+// turn it reflects on. See [Reflector.Reflect].
+const ReflectSpan = "learning.reflect"
+
 // Skip reasons. Exported because they are what an operator reads back out of
 // a log line or a test asserts on, and a caller comparing against its own
 // copy of the string is how the two drift.
@@ -492,11 +500,22 @@ const (
 	SkipNoBudget = "no_budget"
 )
 
-// Reflect runs one pass over a completed turn.
+// Reflect runs one pass over a completed turn, whose trace is tr.
 //
 // Exported so an embedder can drive reflection without a queue — and so the
 // gates below are reachable in a test without staging a delivery.
-func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr events.TraceContext) Reflection {
+//
+// # The pass is a span beneath the turn
+//
+// The turn's trace is RESTORED onto ctx and the pass opens [ReflectSpan]
+// beneath it, so every model call a worker makes — each one an
+// `llm.auxiliary` span, with its provider's own spans under that — and every
+// event the pass publishes sit in the turn's trace under the pass. It used to
+// be handed the trace as an argument and nothing else: the events carried the
+// turn's ids copied verbatim, claiming the turn's span as their own, and the
+// workers' model calls ran under no span at all, so each was a root of its own
+// and its spend record a third.
+func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr events.TraceContext) (out Reflection) {
 	// Fast path before any other work: with nothing wired there is no
 	// question to ask about this turn, and asking it means an org lookup
 	// and a dedup insert per completed turn for nothing.
@@ -504,6 +523,20 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	if len(live.workers) == 0 {
 		return Reflection{Skip: SkipNoWorkers}
 	}
+	ctx, span := tracing.Start(tracing.WithRemote(ctx, tr), "learning", ReflectSpan,
+		attribute.String("crewlet.seat", tc.AgentHandle),
+		// Spelled as agent.turn spells it, so one query on the run finds
+		// the turn and what reflecting on it did.
+		attribute.String("crewlet.turn_id", tc.TurnID))
+	defer func() {
+		// WHICH GATE CLOSED, where one did: a pass that reflected on
+		// nothing and one that never started read the same otherwise.
+		if out.Skip != "" {
+			span.SetAttributes(attribute.String("crewlet.skip", out.Skip))
+		}
+		span.End()
+	}()
+	tr = tracing.TraceOf(ctx)
 
 	// live.org is never nil past that check: both the constructor and
 	// Reconfigure refuse a nil org, and the only epoch without one is the
@@ -613,7 +646,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		return Reflection{Skip: SkipNoEngagement}
 	}
 
-	out := Reflection{}
+	out = Reflection{}
 	for _, w := range live.workers {
 		if reason := w.Skip(turn); reason != "" {
 			if out.Skipped == nil {
@@ -691,9 +724,11 @@ func (r *Reflector) dispatch(ctx context.Context, w Worker, t Turn) (payloads []
 
 // publish emits one lifecycle event, best effort.
 //
-// The trace context is copied VERBATIM from the turn that caused it, so a
-// trace-grouped view nests reflection under the turn's own card rather than
-// showing it as free-floating background work with no cause.
+// Under the pass's own span ([Turn.Trace]), whose parent is the turn that
+// caused it, so a trace-grouped view nests reflection under the turn's own card
+// rather than showing it as free-floating background work with no cause — and
+// never under the turn's span id itself, which would claim a span that ended
+// before the pass began as the one that published these.
 func (r *Reflector) publish(ctx context.Context, t Turn, payload events.Payload) {
 	ev := events.NewFrom(payload, t.Trace)
 	if ev == nil {

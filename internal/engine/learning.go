@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The learning WRITE side, wired.
@@ -620,11 +621,15 @@ func (e *Engine) seatAgentID(seat *org.Role) string {
 // publishLearning announces one background pass, best effort.
 //
 // SOURCED to the seat the pass was about, so a dashboard files it under that
-// seat rather than as free-floating background work. No trace context: a
-// background pass has no turn that caused it, and inventing one would nest
-// a company-wide sweep under whichever turn happened to run last.
+// seat rather than as free-floating background work. FILED UNDER THE PASS'S
+// OWN TRACE, which ctx holds — a root the pass opened (see
+// [learning.Background]), never a turn's: a background pass has no turn that
+// caused it, and inventing one would nest a company-wide sweep under whichever
+// turn happened to run last. It used to carry no trace at all, which put the
+// announcement in no trace and the pass's model calls each in one of their
+// own.
 func (e *Engine) publishLearning(ctx context.Context, handle string, payload events.Payload) {
-	ev := events.NewFrom(payload, events.TraceContext{})
+	ev := events.NewFrom(payload, tracing.TraceOf(ctx))
 	if ev == nil || e.backends == nil || e.backends.Queue == nil {
 		return
 	}

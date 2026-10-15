@@ -89,6 +89,14 @@ func Start(ctx context.Context, component, name string, attrs ...attribute.KeyVa
 	return ctx, span
 }
 
+// StartRoot is [Start] for work NOTHING CAUSED but a clock — a background pass
+// — which must root a trace of its own whatever ctx holds: a span left on a
+// long-lived loop's context by whatever armed it would otherwise make every
+// tick of a company-wide sweep a child of one unrelated piece of work.
+func StartRoot(ctx context.Context, component, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	return Start(trace.ContextWithSpanContext(ctx, trace.SpanContext{}), component, name, attrs...)
+}
+
 // TraceOf renders the active span as the envelope's fields, so an event
 // published from inside a span carries the ids that span will export under —
 // and its SAMPLING DECISION, so whatever restores the trace on the far side of

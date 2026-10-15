@@ -104,6 +104,25 @@ func TestANestedSpanReportsItselfAndItsParent(t *testing.T) {
 	}
 }
 
+// A ROOT IS A ROOT whatever the context it was opened on holds — the span a
+// long-lived loop's context carried from whatever armed it included — and it
+// claims no parent.
+//
+// Mutation: make StartRoot plain Start and both halves go red.
+func TestStartRootIgnoresTheSpanItsContextHolds(t *testing.T) {
+	configure(t, nil)
+	stale := events.NewTrace()
+	ctx, root := StartRoot(WithRemote(context.Background(), stale), "test", "root")
+	defer root.End()
+	got := TraceOf(ctx)
+	if got.TraceID == stale.TraceID {
+		t.Errorf("the root opened in the trace its context held, %s", stale.TraceID)
+	}
+	if got.ParentSpanID != "" {
+		t.Errorf("the root claimed a parent: %q", got.ParentSpanID)
+	}
+}
+
 // A turn woken by an event off the queue must continue the trigger's trace,
 // not start a new one. This is the whole point of carrying ids in the envelope.
 //
