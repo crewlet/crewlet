@@ -91,6 +91,17 @@ fails: the shell discards a command substitution's exit status, and gofmt
 handed no paths formats its standard input, finds nothing wrong and exits 0.
 Run from anywhere but the module root, the listing fails every time.
 
+**Two of those gates judge formatting, at two standards.** `gofmt -l` over
+`go run ./internal/sourcetree/gofiles` is one of them; `golangci-lint run` is
+the other, because `.golangci.yml` enables the `gofmt` *formatter* too and its
+`simplify` pass is on — so a redundant composite-literal type passes the first
+and fails the second. `make fmt` repairs both (it runs `gofmt -s -w` over that
+same list); `golangci-lint fmt` repairs those plus the `goimports` grouping the
+lint job also enforces — hand it the captured list too, since on its own it
+steps over a dot-directory by name but walks into a nested checkout anywhere
+else. Reach for one of those two rather than plain `gofmt -w`, which cannot
+fix what the linter reports.
+
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), never a bare
 `npx vitest`. Vitest's forks pool writes every transformed module into a
