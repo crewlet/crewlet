@@ -95,6 +95,30 @@ func TestTheRetentionTrimRunsOnANode(t *testing.T) {
 	// has to be told what to do, and the remedy travels on the report rather
 	// than being looked up beside it.
 	t.Run("TheReportNamesTheBackupTermsRemedy", func(t *testing.T) {
+		// WAITED FOR, as the floors are above: the report this test read at
+		// boot can come before the trim's first evaluation of a domain, and
+		// a domain nothing has evaluated yet has no prose — not a wrong
+		// answer, just one not written yet. So the report is read again until
+		// every domain has been evaluated once, and only then held to what it
+		// says; a domain that never gets there fails here, by name.
+		report := report
+		waitFor(t, "every domain's report to lead with its blocking term", func() bool {
+			report, _ = n.engine.RetentionReport(t.Context())
+			for _, domain := range report.Domains {
+				if domain.Prose == "" {
+					return false
+				}
+			}
+			return len(report.Domains) > 0
+		}, func() string {
+			var unwritten []string
+			for _, domain := range report.Domains {
+				if domain.Prose == "" {
+					unwritten = append(unwritten, domain.Domain)
+				}
+			}
+			return fmt.Sprintf("no prose yet for %v of %d domains", unwritten, len(report.Domains))
+		})
 		for _, domain := range report.Domains {
 			if domain.Prose == "" {
 				t.Fatalf("the report for %s leads with nothing: the blocking term "+
