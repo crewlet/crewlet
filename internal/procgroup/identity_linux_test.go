@@ -6,6 +6,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -79,5 +80,89 @@ func TestAGroupOfAnOrphanedZombieIsNotCurrent(t *testing.T) {
 	}
 	if Exists(leader.PID) {
 		t.Fatal("the group still exists after its orphaned member was reaped")
+	}
+}
+
+// A GROUP'S CPU IS WHAT ITS LEADER'S REAP REPORTS, read from the other side:
+// a shell runs a loop in a subshell it waits for — so the loop's time is the
+// shell's to hand on — and then sleeps as the group's only member. What
+// GroupCPU reads from the kernel's records then is what wait4 reports when
+// the shell is killed and reaped, to within the four clock ticks a record
+// rounds its four times to: so the ticks are read from the right fields and
+// turned into time at the kernel's own rate, where a rate assumed wrong by
+// any factor puts the two figures that factor apart.
+func TestAGroupsCPUIsWhatItsLeadersReapReports(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c",
+		`(i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done); echo spent; exec sleep 300`)
+	Set(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+	line := make([]byte, 16)
+	if n, err := stdout.Read(line); err != nil || strings.TrimSpace(string(line[:n])) != "spent" {
+		t.Fatalf("waiting for the loop to end: %q, %v", line[:n], err)
+	}
+	read, err := GroupCPU(cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("GroupCPU: %v", err)
+	}
+	if err := Kill(cmd.Process.Pid); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	_ = cmd.Wait()
+	reaped := cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
+	t.Logf("GroupCPU read %v; the reap reported %v", read, reaped)
+	if reaped < 100*time.Millisecond {
+		t.Fatalf("the loop spent %v, too little for a rate wrong by any factor to show", reaped)
+	}
+	if diff := read - reaped; diff < -50*time.Millisecond || diff > 50*time.Millisecond {
+		t.Fatalf("GroupCPU read %v and the reap reported %v: more than the four ticks a record rounds to apart",
+			read, reaped)
+	}
+}
+
+// A GROUP KILLED WHOLE LEAVES ITS LEADER NONE OF ITS CHILDREN'S TIME — the
+// reason GroupCPU exists. A shell starts a loop that runs until it is killed
+// and waits for it; the group is read while the loop runs and then killed as
+// one, and the shell dies without reaping the loop, so its reap reports the
+// shell alone. GroupCPU, read before the signal, counted the loop.
+func TestAGroupKilledWholeLeavesItsLeaderNoneOfItsChildrensTime(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", `while :; do :; done & wait`)
+	Set(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+	var read time.Duration
+	for deadline := time.Now().Add(30 * time.Second); read < 200*time.Millisecond; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the group's loop had spent %v after 30 s", read)
+		}
+		time.Sleep(20 * time.Millisecond)
+		var err error
+		if read, err = GroupCPU(cmd.Process.Pid); err != nil {
+			t.Fatalf("GroupCPU: %v", err)
+		}
+	}
+	if err := Kill(cmd.Process.Pid); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	_ = cmd.Wait()
+	reaped := cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
+	t.Logf("GroupCPU read %v before the kill; the leader's reap reported %v", read, reaped)
+	if reaped > read/4 {
+		t.Fatalf("the leader's reap reported %v of the %v its group had spent: the premise — that a leader "+
+			"killed with its group does not reap the rest — no longer holds here", reaped, read)
 	}
 }

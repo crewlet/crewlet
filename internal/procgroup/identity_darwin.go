@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -59,6 +60,15 @@ func groupLiving(pgid int) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// groupCPU has no reading on XNU: kinfo_proc's tick counts are never filled
+// in, a process's CPU is kept where only libproc's proc_pid_rusage reads it,
+// x/sys/unix wraps no call that reaches it, and the engine builds without
+// cgo. So a group's figure is the leader's own usage at its reap, and a caller
+// says so rather than reading a zero as a group that spent nothing.
+func groupCPU(int) (time.Duration, error) {
+	return 0, fmt.Errorf("procgroup: a process group's CPU is not read on darwin: %w", errors.ErrUnsupported)
 }
 
 // sZomb is XNU's SZOMB process state (sys/proc.h): exited and awaiting a

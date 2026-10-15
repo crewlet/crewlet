@@ -2,7 +2,10 @@
 
 package procgroup
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // inspect has no kernel record to read on a platform outside the release
 // matrix. It says so rather than answering "no such process", because absence
@@ -16,4 +19,10 @@ func inspect(int) (Process, bool, error) {
 // group reported as having no living member is one a caller may discard.
 func groupLiving(int) (bool, error) {
 	return false, errors.ErrUnsupported
+}
+
+// groupCPU has no record to read either, and says so rather than answering a
+// group that spent nothing.
+func groupCPU(int) (time.Duration, error) {
+	return 0, errors.ErrUnsupported
 }
