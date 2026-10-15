@@ -82,8 +82,11 @@ func configureMeter(
 		if err != nil {
 			return nil, err
 		}
+		// The reader's bound is the exporter's, which is the operator's
+		// timeout: see [exportTimeout].
 		providerOpts = append(providerOpts, sdkmetric.WithReader(
-			sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(interval))))
+			sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(interval),
+				sdkmetric.WithTimeout(exportTimeout(at)))))
 	}
 
 	// THE HISTOGRAM BOUNDARIES ARE THE RECORDER'S, so a bucket on a
@@ -111,7 +114,7 @@ func configureMeter(
 		// returned alone for the same reason: it names the instrument an
 		// operator's catalogue change broke, which a flush failure behind
 		// it would only bury.
-		if ferr := shutdownMeter(ctx, mp); ferr != nil {
+		if ferr := shutdownMeter(ctx, mp, at); ferr != nil {
 			log.WarnContext(ctx, "meter_provider_abandoned_unflushed", "error", ferr)
 		}
 		return nil, err
@@ -120,7 +123,7 @@ func configureMeter(
 	log.InfoContext(ctx, "metrics_configured",
 		"exporting", at.Exports(), "declined", at.Declined,
 		"endpoint", at.Endpoint, "protocol", at.Protocol,
-		"interval", interval,
+		"interval", interval, "timeout", exportTimeout(at),
 		"instruments", len(metrics.Catalogue()))
 
 	return mp, nil
@@ -130,8 +133,16 @@ func configureMeter(
 // [shutdownTracer], including its detached context, and for the reason written
 // down there: the context a drain is given is normally the cancelled one that
 // woke it, and a flush inheriting that exports nothing at all.
-func shutdownMeter(ctx context.Context, mp *sdkmetric.MeterProvider) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushGrace)
+//
+// BOUNDED BY THE EXPORT TIMEOUT as well as the flush, whichever is shorter. A
+// periodic reader applies its own timeout to a shutdown only when the context
+// it is handed has no deadline, and this one always has — so the final export
+// was held to the flush alone, and against a collector that does not answer
+// the exporter retried its failed attempts for the whole eight seconds whatever
+// timeout the operator set. The deadline here is the bound the reader would
+// otherwise have applied ([exportTimeout]).
+func shutdownMeter(ctx context.Context, mp *sdkmetric.MeterProvider, at otlpenv.Destination) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(exportTimeout(at), flushGrace))
 	defer cancel()
 	if err := mp.Shutdown(ctx); err != nil {
 		return fmt.Errorf("flush metrics: %w", err)

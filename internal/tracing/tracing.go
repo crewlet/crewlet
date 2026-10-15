@@ -36,8 +36,14 @@
 // about the signal endpoint, the protocol and how a header value is decoded.
 // TestTheExporterAndTheReceiverResolveOneDestination holds them together, and
 // every exporter here is handed the whole resolution explicitly — endpoint,
-// headers, compression, TLS ([exporterOptions]) — so the SDK's own reading of
-// the same variables is never a third opinion.
+// headers, compression, TLS and the timeout ([exporterOptions]), the timeout
+// bounding the batch processor and the metric reader too ([exportTimeout]) —
+// so the SDK's own reading of the same variables is never a third opinion.
+// What the SDK still reads for itself is what no resolution here covers: the
+// batch processor's queue, batch size and delay, the span limits, and the
+// metric exporter's temporality and exemplar filter, each as the SDK documents
+// it. A variable the SDK would read and an explicit setting here would then
+// override is refused by name instead ([refuseSuperseded]).
 //
 // A second reason, specific to this engine: Tier A is the root of trust and
 // resolves with EnvOnly, and it holds to the rule that two keys setting one
@@ -213,15 +219,36 @@ const (
 	samplerRatio     = "parentbased_traceidratio"
 )
 
-// exportTimeout bounds one batch's delivery to the collector.
+// defaultExportTimeout bounds one export to the collector when neither
+// OTEL_EXPORTER_OTLP_<SIGNAL>_TIMEOUT nor OTEL_EXPORTER_OTLP_TIMEOUT says
+// otherwise ([exportTimeout]).
 //
-// Tied to something real rather than picked: the SDK's own default is 30s,
-// which is longer than this engine's whole 5s API shutdown grace, so a
-// collector that has stopped answering would hold the drain open through the
-// final flush. 5s matches that grace — one export attempt fits inside the
-// window the process already promises — and a collector slower than that is
-// down, not busy.
-const exportTimeout = 5 * time.Second
+// Tied to something real rather than picked: the specification's default is
+// 10s and the SDK's batch processor's 30s, both longer than this engine's whole
+// 5s API shutdown grace, so a collector that has stopped answering would hold
+// the drain open through the final flush. 5s matches that grace — one export
+// attempt fits inside the window the process already promises — and a
+// collector slower than that is down, not busy.
+const defaultExportTimeout = 5 * time.Second
+
+// exportTimeout is the ONE bound an export of d is held to: the timeout the
+// operator wrote, else [defaultExportTimeout].
+//
+// ONE NUMBER FOR EVERY LAYER AN EXPORT PASSES. The exporter bounds its own
+// attempt, the batch span processor bounds the export it hands the exporter,
+// and the periodic metric reader bounds the collect-and-export it runs — and
+// each read a number of its own. This package once fixed the batch
+// processor's at 5s while the SDK read OTEL_EXPORTER_OTLP_TIMEOUT for the
+// exporter by itself, so a timeout above 5s did nothing, a timeout below it
+// only shortened one layer, and nothing said so: the one setting read two ways
+// that [otlpenv] exists to remove. Every layer is now handed this value, and
+// the processors' own variables are refused ([refuseSuperseded]).
+func exportTimeout(d otlpenv.Destination) time.Duration {
+	if d.Timeout > 0 {
+		return d.Timeout
+	}
+	return defaultExportTimeout
+}
 
 // flushGrace bounds the final flush at shutdown. Deliberately a little longer
 // than one export attempt so a single in-flight batch can finish, and far
@@ -416,6 +443,9 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 		log.Warn("otel_internal_error", "error", err)
 	}))
 
+	if err := refuseSuperseded(opts); err != nil {
+		return nil, err
+	}
 	sampler, err := rootSamplerFor(opts)
 	if err != nil {
 		return nil, err
@@ -443,7 +473,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 		// on the goroutine that ended the span, which puts a collector's
 		// latency inside a turn.
 		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter,
-			sdktrace.WithExportTimeout(exportTimeout)))
+			sdktrace.WithExportTimeout(exportTimeout(traces))))
 	}
 
 	// BUILT HERE, INSTALLED AT THE COMMIT BELOW, because everything between
@@ -506,16 +536,18 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// The endpoint is printed as resolved: [otlpenv] refuses one carrying
 	// userinfo or a query, the two places a URL holds a credential.
 	otlpenv.ReportDropped(ctx, log, otlpenv.ReaderExporter, traces, metricsAt)
+	reportTimeouts(ctx, traces, metricsAt)
 	log.InfoContext(ctx, "tracing_configured",
 		"exporting", traces.Exports(), "declined", traces.Declined,
 		"endpoint", traces.Endpoint, "protocol", traces.Protocol,
+		"timeout", exportTimeout(traces),
 		"service", serviceName(res), "sampler", sampler.Description())
 
 	return func(ctx context.Context) error {
 		// BOTH, and the traces error wins when both fail: it is the one
 		// with spans in flight, and a joined error here would be two
 		// telemetry failures where a caller wants one line.
-		metricsErr := shutdownMeter(ctx, mp)
+		metricsErr := shutdownMeter(ctx, mp, metricsAt)
 		if err := shutdownTracer(ctx, tp); err != nil {
 			return err
 		}
@@ -565,8 +597,8 @@ func shutdownTracer(ctx context.Context, tp *sdktrace.TracerProvider) error {
 
 // newExporter builds the span exporter for a resolved destination.
 //
-// The endpoint, the headers, the compression and the TLS material are passed
-// EXPLICITLY, although the SDK would read the same variables itself: an
+// The endpoint, the headers, the compression, the TLS material and the
+// timeout are passed EXPLICITLY, although the SDK would read the same variables itself: an
 // explicit option replaces what the SDK read, so the exporter sends exactly
 // what [otlpenv] resolved — which is what the sandbox receiver forwards with —
 // rather than the SDK's own reading of the environment, which is the second
@@ -633,6 +665,7 @@ func (e exporterSettings) traceGRPC() []otlptracegrpc.Option {
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpointURL(e.d.Endpoint),
 		otlptracegrpc.WithHeaders(e.d.Headers),
+		otlptracegrpc.WithTimeout(exportTimeout(e.d)),
 	}
 	if e.gzip() {
 		opts = append(opts, otlptracegrpc.WithCompressor(string(otlpenv.Gzip)))
@@ -652,6 +685,7 @@ func (e exporterSettings) traceHTTP() []otlptracehttp.Option {
 		otlptracehttp.WithEndpointURL(e.d.Endpoint),
 		otlptracehttp.WithHeaders(e.d.Headers),
 		otlptracehttp.WithCompression(compression),
+		otlptracehttp.WithTimeout(exportTimeout(e.d)),
 	}
 	if e.tls != nil {
 		opts = append(opts, otlptracehttp.WithTLSClientConfig(e.tls))
@@ -663,6 +697,7 @@ func (e exporterSettings) metricGRPC() []otlpmetricgrpc.Option {
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpointURL(e.d.Endpoint),
 		otlpmetricgrpc.WithHeaders(e.d.Headers),
+		otlpmetricgrpc.WithTimeout(exportTimeout(e.d)),
 	}
 	if e.gzip() {
 		opts = append(opts, otlpmetricgrpc.WithCompressor(string(otlpenv.Gzip)))
@@ -682,6 +717,7 @@ func (e exporterSettings) metricHTTP() []otlpmetrichttp.Option {
 		otlpmetrichttp.WithEndpointURL(e.d.Endpoint),
 		otlpmetrichttp.WithHeaders(e.d.Headers),
 		otlpmetrichttp.WithCompression(compression),
+		otlpmetrichttp.WithTimeout(exportTimeout(e.d)),
 	}
 	if e.tls != nil {
 		opts = append(opts, otlpmetrichttp.WithTLSClientConfig(e.tls))

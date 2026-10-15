@@ -27,8 +27,11 @@ import (
 //
 // So for each environment the engine's traces destination must equal the
 // receiver's upstream — endpoint, headers, protocol, compression, TLS, whether
-// the signal was declined, and what was dropped — and a value one half refuses
-// the other must refuse too. Traces are the one signal both halves send: the
+// the signal was declined, what was dropped, and the timeout with what was set
+// aside of it — and a value one half refuses the other must refuse too. The
+// timeout is resolved alike and honoured by the engine's exporter alone: a
+// forward is bounded by the receiver's own OtelForwardTimeout, which a box's
+// exporter is told to wait past. Traces are the one signal both halves send: the
 // receiver forwards a box's traces and nothing else. Each half's own wire
 // behaviour is held to its resolution beside it: TestTheExporterSendsWhatThe-
 // ResolverResolved here, and internal/sandbox's TestTracesAreForwardedToThe-
@@ -97,6 +100,16 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 			otlpenv.EndpointVar:          "HTTPS://collector.example.com:4318",
 			otlpenv.CertificateVar:       ca,
 			otlpenv.Traces.InsecureVar(): "false",
+		}},
+		{"a timeout, and a signal's own", map[string]string{
+			otlpenv.EndpointVar:          base,
+			otlpenv.TimeoutVar:           "30000",
+			otlpenv.Traces.TimeoutVar():  "2500",
+			otlpenv.Metrics.TimeoutVar(): "9000",
+		}},
+		{"a timeout set aside", map[string]string{
+			otlpenv.EndpointVar: base,
+			otlpenv.TimeoutVar:  "10s",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

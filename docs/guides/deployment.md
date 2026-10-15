@@ -1395,7 +1395,9 @@ the turn that started them, nested underneath it. A collector behind a private
 certificate authority takes `OTEL_EXPORTER_OTLP_CERTIFICATE`, and one that wants
 a client certificate the `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and
 `OTEL_EXPORTER_OTLP_CLIENT_KEY` pair; a file that cannot be used is refused at
-startup by name.
+startup by name. A slow collector takes `OTEL_EXPORTER_OTLP_TIMEOUT`, in
+milliseconds (default `5000`): it bounds every layer of one export, so a value
+above five seconds is honoured, up to the eight-second final flush at shutdown.
 
 #### Spans from Claude
 

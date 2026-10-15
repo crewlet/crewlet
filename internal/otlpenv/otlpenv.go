@@ -1,7 +1,7 @@
 // Package otlpenv resolves the standard OTLP exporter environment: for each
-// signal, where its exports go, with which headers, over which protocol, and
-// whether the operator switched it off. Every reader of those variables in the
-// engine resolves them here.
+// signal, where its exports go, with which headers, over which protocol, how
+// long one may take, and whether the operator switched it off. Every reader of
+// those variables in the engine resolves them here.
 //
 // # Why one resolver, when the variables were meant to be the shared interface — ADR-0010
 //
@@ -45,6 +45,17 @@
 //     the endpoint says.
 //   - COMPRESSION. OTEL_EXPORTER_OTLP_<SIGNAL>_COMPRESSION, else
 //     OTEL_EXPORTER_OTLP_COMPRESSION: `gzip`, or `none`, the default.
+//   - TIMEOUT. OTEL_EXPORTER_OTLP_<SIGNAL>_TIMEOUT, else
+//     OTEL_EXPORTER_OTLP_TIMEOUT: how long one export may take, in whole
+//     milliseconds. A variable the SDK cannot parse it sets aside and reads
+//     the next, and so does this package — but it sets aside a zero or a
+//     negative too, where the SDK reads zero as NO BOUND AT ALL, under which
+//     one collector that stopped answering holds the exporter for ever. A
+//     value set aside is named in [Destination.Ignored] rather than refused:
+//     a typo in a number has a safe reading, the reader's default, which a
+//     typo in an endpoint does not. Neither set leaves [Destination.Timeout]
+//     zero, and the READER decides the default, because what an export may
+//     cost is bounded by that reader's own deadlines.
 //   - TLS. The endpoint's SCHEME decides whether an export is encrypted, read
 //     in any case — `HTTPS://` is https, as url.Parse and so the SDK read
 //     it — and stored lowercased in [Destination.Endpoint]. An https
@@ -113,10 +124,13 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Signal is one OTLP signal: what is exported, and the path segment it is
@@ -189,7 +203,8 @@ func (s Signal) ClientKeyVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper()
 // endpoint's scheme and otherwise without effect.
 func (s Signal) InsecureVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_INSECURE" }
 
-// TimeoutVar is the signal-specific export wait, in milliseconds ([TimeoutVar]).
+// TimeoutVar is the signal-specific export wait, in milliseconds, which wins
+// over the base [TimeoutVar].
 func (s Signal) TimeoutVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_TIMEOUT" }
 
 func (s Signal) upper() string { return strings.ToUpper(string(s)) }
@@ -223,9 +238,8 @@ const (
 	InsecureVar = "OTEL_EXPORTER_OTLP_INSECURE"
 
 	// TimeoutVar is how long an exporter waits for one export to be
-	// answered, in milliseconds. NAMED HERE AND NOT RESOLVED: the engine's
-	// own exporters leave it to the SDK, which reads it from this process's
-	// environment, and what writes it is the sandbox, into a box's.
+	// answered, in milliseconds, for every signal whose own variable says
+	// nothing ([Destination.Timeout]).
 	TimeoutVar = "OTEL_EXPORTER_OTLP_TIMEOUT"
 )
 
@@ -304,6 +318,39 @@ type Destination struct {
 	// them, because a dropped credential is an export the backend refuses,
 	// and a reason given once at boot is better than a 401 on every batch.
 	Dropped []Dropped
+
+	// Timeout is how long one export may take: the signal's own
+	// OTEL_EXPORTER_OTLP_<SIGNAL>_TIMEOUT, else OTEL_EXPORTER_OTLP_TIMEOUT,
+	// in whole milliseconds. ZERO MEANS NEITHER GAVE A USABLE VALUE, and the
+	// reader's own default stands — the specification's is ten seconds; a
+	// reader whose deadlines are shorter than that keeps a shorter one.
+	Timeout time.Duration
+
+	// TimeoutVar names the variable Timeout was read from. Empty when
+	// Timeout is zero.
+	TimeoutVar string
+
+	// Ignored are the timeout variables that were set to something other
+	// than whole positive milliseconds, in the order they were read: each
+	// was set aside, as the SDK sets aside a value it cannot parse, and the
+	// next variable or the default decided instead. Named so a reader that
+	// honours the timeout can warn.
+	Ignored []Ignored
+}
+
+// Ignored is one variable a resolution read and set aside.
+//
+// Unlike [Dropped] it carries the VALUE: it is a number of milliseconds, never
+// a credential, and the value is what an operator has to correct.
+type Ignored struct {
+	// Var is the variable set aside.
+	Var string
+
+	// Value is what it held, trimmed.
+	Value string
+
+	// Reason says what it must hold instead.
+	Reason string
 }
 
 // Exports reports whether this signal is exported anywhere.
@@ -457,6 +504,7 @@ func Resolve(env func(string) string, s Signal) (Destination, error) {
 	if d.Compression, err = compressionFor(get, s); err != nil {
 		return Destination{}, err
 	}
+	d.Timeout, d.TimeoutVar, d.Ignored = timeoutFor(get, s)
 	if err := d.resolveTLS(get, s); err != nil {
 		return Destination{}, err
 	}
@@ -479,6 +527,31 @@ func compressionFor(get func(string) string, s Signal) (Compression, error) {
 			"to %s or %s", name, raw, Gzip, NoCompression)
 	}
 	return c, nil
+}
+
+// maxTimeoutMillis is the longest timeout a [time.Duration] holds, in whole
+// milliseconds: a value past it would wrap round to a negative bound.
+const maxTimeoutMillis = math.MaxInt64 / int64(time.Millisecond)
+
+// timeoutFor applies the timeout rule: the signal's own variable, else the
+// base, each set aside — and named — when it is not whole positive
+// milliseconds, so the next one decides; zero when neither is usable.
+func timeoutFor(get func(string) string, s Signal) (time.Duration, string, []Ignored) {
+	var ignored []Ignored
+	for _, name := range []string{s.TimeoutVar(), TimeoutVar} {
+		raw := get(name)
+		if raw == "" {
+			continue
+		}
+		ms, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || ms <= 0 || ms > maxTimeoutMillis {
+			ignored = append(ignored, Ignored{Var: name, Value: raw,
+				Reason: "an export timeout is a whole number of milliseconds above zero"})
+			continue
+		}
+		return time.Duration(ms) * time.Millisecond, name, ignored
+	}
+	return 0, "", ignored
 }
 
 // resolveTLS applies the TLS rule — see the package doc — and refuses

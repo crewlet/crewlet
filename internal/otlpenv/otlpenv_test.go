@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/otlpenv"
 )
@@ -230,6 +231,67 @@ func TestTheProtocolResolvesPerSignal(t *testing.T) {
 			t.Parallel()
 			if got := resolve(t, otlpenv.Traces, tc.env).Protocol; got != tc.want {
 				t.Errorf("protocol = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// THE TIMEOUT IS THE SIGNAL'S OWN, ELSE THE BASE, in whole milliseconds — and
+// a value that is not whole positive milliseconds is SET ASIDE AND NAMED rather
+// than refused, the next variable deciding, as the SDK sets aside one it cannot
+// parse. Zero and a negative are set aside too: the SDK reads zero as no bound
+// at all, which lets one collector that stopped answering hold an exporter for
+// ever. Neither usable leaves Timeout zero, the reader's default.
+//
+// Mutations: read the base before the signal's own (the precedence case);
+// accept zero (the zero case); stop recording what was set aside (every
+// ignored case); refuse rather than set aside (every ignored case errors).
+func TestTheTimeoutIsTheSignalsOwnElseTheBase(t *testing.T) {
+	t.Parallel()
+	ignored := func(name, value string) otlpenv.Ignored {
+		return otlpenv.Ignored{Var: name, Value: value,
+			Reason: "an export timeout is a whole number of milliseconds above zero"}
+	}
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		want    time.Duration
+		from    string
+		ignored []otlpenv.Ignored
+	}{
+		{"unset", nil, 0, "", nil},
+		{"the base", map[string]string{otlpenv.TimeoutVar: "30000"},
+			30 * time.Second, otlpenv.TimeoutVar, nil},
+		{"the signal's own wins", map[string]string{
+			otlpenv.TimeoutVar: "30000", otlpenv.Traces.TimeoutVar(): " 2500 ",
+		}, 2500 * time.Millisecond, otlpenv.Traces.TimeoutVar(), nil},
+		{"another signal's own is not read", map[string]string{
+			otlpenv.Metrics.TimeoutVar(): "2500",
+		}, 0, "", nil},
+		{"an unparseable signal value falls to the base", map[string]string{
+			otlpenv.TimeoutVar: "7000", otlpenv.Traces.TimeoutVar(): "10s",
+		}, 7 * time.Second, otlpenv.TimeoutVar,
+			[]otlpenv.Ignored{ignored(otlpenv.Traces.TimeoutVar(), "10s")}},
+		{"zero is no bound, and set aside", map[string]string{otlpenv.TimeoutVar: "0"},
+			0, "", []otlpenv.Ignored{ignored(otlpenv.TimeoutVar, "0")}},
+		{"a negative", map[string]string{otlpenv.TimeoutVar: "-5"},
+			0, "", []otlpenv.Ignored{ignored(otlpenv.TimeoutVar, "-5")}},
+		{"past what a duration holds", map[string]string{otlpenv.TimeoutVar: "9223372036854775807"},
+			0, "", []otlpenv.Ignored{ignored(otlpenv.TimeoutVar, "9223372036854775807")}},
+		{"both unusable", map[string]string{
+			otlpenv.TimeoutVar: "1.5", otlpenv.Traces.TimeoutVar(): "soon",
+		}, 0, "", []otlpenv.Ignored{
+			ignored(otlpenv.Traces.TimeoutVar(), "soon"), ignored(otlpenv.TimeoutVar, "1.5"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := resolve(t, otlpenv.Traces, tc.env)
+			if d.Timeout != tc.want || d.TimeoutVar != tc.from {
+				t.Errorf("timeout = %v from %q, want %v from %q", d.Timeout, d.TimeoutVar, tc.want, tc.from)
+			}
+			if !slices.Equal(d.Ignored, tc.ignored) {
+				t.Errorf("set aside %+v, want %+v", d.Ignored, tc.ignored)
 			}
 		})
 	}
