@@ -45,8 +45,10 @@
 //     the endpoint says.
 //   - COMPRESSION. OTEL_EXPORTER_OTLP_<SIGNAL>_COMPRESSION, else
 //     OTEL_EXPORTER_OTLP_COMPRESSION: `gzip`, or `none`, the default.
-//   - TLS. The endpoint's SCHEME decides whether an export is encrypted. An
-//     https endpoint verifies the collector against the system's roots, or
+//   - TLS. The endpoint's SCHEME decides whether an export is encrypted, read
+//     in any case — `HTTPS://` is https, as url.Parse and so the SDK read
+//     it — and stored lowercased in [Destination.Endpoint]. An https
+//     endpoint verifies the collector against the system's roots, or
 //     against the PEM file OTEL_EXPORTER_OTLP_<SIGNAL>_CERTIFICATE, else
 //     OTEL_EXPORTER_OTLP_CERTIFICATE, names; and presents the client
 //     certificate and key the CLIENT_CERTIFICATE and CLIENT_KEY pair name —
@@ -280,7 +282,18 @@ type Destination struct {
 func (d Destination) Exports() bool { return d.Endpoint != "" && !d.Declined }
 
 // Secure reports whether exports go over TLS: the endpoint's scheme is https.
-func (d Destination) Secure() bool { return strings.HasPrefix(d.Endpoint, "https://") }
+//
+// The scheme is read as the SDK reads it — parsed, so in any case (its
+// WithEndpointURL sets `Insecure = u.Scheme != "https"` on url.Parse's
+// lowercased scheme) — rather than matched as a prefix. [Resolve] stores the
+// scheme lowercased already; parsing here as well is what keeps a Destination
+// built any other way from reading `HTTPS://` as plaintext, which is how the
+// receiver's gRPC forward once dialled a TLS collector without TLS while the
+// engine's own exporter, reading the same value, used it.
+func (d Destination) Secure() bool {
+	u, err := url.Parse(d.Endpoint)
+	return err == nil && u.Scheme == "https"
+}
 
 // TLS is the certificate material one destination is dialled with, by the
 // files that hold it — which keeps a [Destination] comparable, and keeps a
@@ -597,58 +610,69 @@ func DroppedOf(ds ...Destination) []Dropped {
 // signal variable is the whole URL. Treating the base as a full URL is what
 // put `/v1/traces/v1/traces` in front of a collector when an operator followed
 // a guide that set the base to a URL ending in the signal path.
+//
+// # The scheme is stored lowercased
+//
+// A scheme is case-insensitive, and every reader of an endpoint but a prefix
+// match reads it so: url.Parse lowercases it, and the SDK decides TLS on what
+// url.Parse says. So the endpoint is stored with its scheme in the one
+// spelling a parse yields, and `HTTPS://collector` means TLS to every reader
+// — the exporter, both forwarders, the TLS checks here and a log line alike —
+// rather than to whichever of them happened to parse it. The rest of the URL
+// is kept as written: a host is case-insensitive too, but a path is not.
 func endpointFor(get func(string) string, s Signal) (string, error) {
 	if signal := get(s.EndpointVar()); signal != "" {
-		if err := checkEndpoint(s.EndpointVar(), signal); err != nil {
-			return "", err
-		}
-		return signal, nil
+		return checkEndpoint(s.EndpointVar(), signal)
 	}
 	base := get(EndpointVar)
 	if base == "" {
 		return "", nil
 	}
-	if err := checkEndpoint(EndpointVar, base); err != nil {
+	checked, err := checkEndpoint(EndpointVar, base)
+	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(base, "/") + s.Path(), nil
+	return strings.TrimRight(checked, "/") + s.Path(), nil
 }
 
-// checkEndpoint refuses an endpoint the exporters cannot honour as written.
+// checkEndpoint refuses an endpoint the exporters cannot honour as written,
+// and answers one they can with its scheme lowercased (see [endpointFor]).
 //
 // The value is NEVER quoted back: an endpoint is where an operator who has not
 // found the headers variable puts a credential, and this error is printed at
 // boot and kept in the logs.
-func checkEndpoint(name, raw string) error {
+func checkEndpoint(name, raw string) (string, error) {
 	const how = "an OTLP endpoint is an http:// or https:// URL with a host, " +
 		"e.g. http://localhost:4318"
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%s does not parse as a URL; %s", name, how)
+		return "", fmt.Errorf("%s does not parse as a URL; %s", name, how)
 	}
 	switch {
 	case u.Scheme != "http" && u.Scheme != "https":
 		// `localhost:4318` lands here: url.Parse reads `localhost` as a
 		// scheme. The scheme is also what decides TLS, so it is never
 		// guessed.
-		return fmt.Errorf("%s has no http:// or https:// scheme — the scheme "+
+		return "", fmt.Errorf("%s has no http:// or https:// scheme — the scheme "+
 			"is what decides whether the export uses TLS; %s", name, how)
 	case u.Host == "":
-		return fmt.Errorf("%s names no host; %s", name, how)
+		return "", fmt.Errorf("%s names no host; %s", name, how)
 	case u.User != nil:
-		return fmt.Errorf("%s carries credentials in its userinfo, which the "+
+		return "", fmt.Errorf("%s carries credentials in its userinfo, which the "+
 			"OTLP exporter drops without a word: remove them, and send them as "+
 			"a header in %s instead (e.g. authorization=Basic%%20<base64>)",
 			name, HeadersVar)
 	case u.RawQuery != "" || u.ForceQuery:
-		return fmt.Errorf("%s carries a query string, which the OTLP exporter "+
+		return "", fmt.Errorf("%s carries a query string, which the OTLP exporter "+
 			"drops without a word: an endpoint is a scheme, a host and a path, "+
 			"and a credential belongs in %s", name, HeadersVar)
 	case u.Fragment != "" || strings.Contains(raw, "#"):
-		return fmt.Errorf("%s carries a fragment, which is never sent; an "+
+		return "", fmt.Errorf("%s carries a fragment, which is never sent; an "+
 			"endpoint is a scheme, a host and a path", name)
 	}
-	return nil
+	// url.Parse lowercased the scheme it judged; raw still spells it as
+	// written, and a scheme is ASCII letters, so the two are one length.
+	return u.Scheme + raw[len(u.Scheme):], nil
 }
 
 // parseHeaders reads one headers variable the way the SDK's envconfig does.

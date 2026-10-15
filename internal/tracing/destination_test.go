@@ -150,6 +150,53 @@ func TestTheExporterSendsWhatTheResolverResolved(t *testing.T) {
 	}
 }
 
+// AN HTTPS ENDPOINT IN ANY CASE IS EXPORTED OVER TLS, verified against the
+// authority the environment names — the exporter's half of the scheme rule
+// whose receiver half internal/sandbox's TestAnUpperCaseHTTPSUpstreamIsDialled-
+// OverTLS holds. The two once read `HTTPS://` differently: this exporter used
+// TLS and the receiver's gRPC forward did not.
+//
+// Mutation: hand the exporter an endpoint whose scheme it reads as plaintext
+// (or drop the certificate from its options) and nothing reaches the
+// collector.
+func TestAnUpperCaseHTTPSEndpointIsExportedOverTLS(t *testing.T) {
+	c := &collector{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		c.mu.Lock()
+		c.seen = append(c.seen, received{path: r.URL.Path, header: r.Header.Clone()})
+		c.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: server.Certificate().Raw,
+	}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
+		otlpenv.EndpointVar:           "HTTPS://" + u.Host,
+		otlpenv.CertificateVar:        ca,
+		otlpenv.Metrics.ExporterVar(): "none",
+	})})
+	if err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	_, span := Start(context.Background(), "test", "an.operation")
+	span.End()
+	if err := shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	if got := c.at("/v1/traces"); len(got) == 0 {
+		t.Errorf("nothing reached the TLS collector through an HTTPS:// endpoint; it saw %v", c.seen)
+	}
+}
+
 // A SIGNAL THE OPERATOR DECLINED IS NOT SENT, whatever the endpoint says —
 // OTEL_TRACES_EXPORTER=none is honoured as OTEL_METRICS_EXPORTER=none always
 // was, so "metrics yes, traces no" can be said in the specification's words.

@@ -608,6 +608,33 @@ func TestAGRPCUpstreamOverTLSPresentsTheClientCertificate(t *testing.T) {
 	}
 }
 
+// AN HTTPS ENDPOINT IN ANY CASE IS DIALLED OVER TLS, as the engine's own
+// exporter dials it. The forward once read the scheme as the prefix `https://`
+// of the endpoint as written, so for `HTTPS://` it dialled a TLS collector in
+// plaintext — every box's export failed its handshake, visible only as one
+// forward warning per batch — while the engine's exporter, which parses the
+// URL, exported over TLS.
+//
+// Mutation: store the endpoint as written in otlpenv and match a prefix in
+// Destination.Secure (the code this replaced) and nothing arrives.
+func TestAnUpperCaseHTTPSUpstreamIsDialledOverTLS(t *testing.T) {
+	t.Parallel()
+	server := newPKI(t, "collector")
+	collector, endpoint := startGRPCCollector(t, "HTTPS", grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{server.cert},
+		MinVersion:   tls.VersionTLS12,
+	})))
+	receiver := receiverTo(t, map[string]string{
+		otlpenv.EndpointVar:    endpoint,
+		otlpenv.ProtocolVar:    "grpc",
+		otlpenv.CertificateVar: server.certFile,
+	})
+	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
+	if traces, _, _ := collector.counts(); traces != 1 {
+		t.Fatalf("a TLS collector at %s received %d traces exports, want one", endpoint, traces)
+	}
+}
+
 // A GRPC UPSTREAM THAT COMPRESSES IS SENT GZIP, as the engine's own gRPC
 // exporter sends it — and one that does not is sent plain. The mutual-TLS case
 // above runs with gzip on and would pass whether or not the call was
