@@ -155,7 +155,7 @@ scripts/              # The two vendor dev-loop bootstraps, and the DCO gate
 
 ## Pre-commit Checks
 Before committing, ALWAYS run **`make check`** and fix what it reports. It is every gate CI runs on a pull request:
-- `gofmt -l` over `go run ./internal/sourcetree/gofiles` — never `gofmt -l .`, which enters every nested checkout under `.claude/worktrees/`
+- `gofmt -l` over `go run ./internal/sourcetree/gofiles` — never `gofmt -l .`, which enters every nested checkout under `.claude/worktrees/`. It is one of TWO formatting gates, at two standards: `golangci-lint run` enables the `gofmt` formatter with `simplify` on, and `goimports` beside it, so a redundant composite-literal type passes this one and fails that one. Repair with `make fmt` (`gofmt -s -w` over the same list, which clears both gofmt standards) or `golangci-lint fmt` handed the captured list (which also fixes the import grouping) — never plain `gofmt -w`, which cannot fix what the linter reports. `CONTRIBUTING.md` says the same.
 - `go mod tidy -diff` (`make tidy` applies the patch)
 - `scripts/check-signoff.sh` and its suite `scripts/check-signoff_test.sh`
 - `go vet ./...` — the only vet: both test targets run `go test -vet=off`
