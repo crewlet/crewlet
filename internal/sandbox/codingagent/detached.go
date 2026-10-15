@@ -319,17 +319,26 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	inner := withShimPath(r.cli.Command(req, paths, configPath), paths)
 	script := wrapperScript(inner, r.cli.Output(paths), paths)
 
-	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
+	// A LOGIN SHELL, and it is load-bearing: a coding CLI is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
 	// entries exist only in a profile a login shell sources. A plain `sh -c`
 	// finds no CLI at all in exactly the images operators build.
 	//
-	// It also means the box's PATH inside the wrapper is the PROFILE's, not
-	// the environment the engine handed the process — which is why the shim
-	// directory is prepended INSIDE the script (see withShimPath) rather
-	// than exported around it: an assignment made outside would be replaced
-	// by the profile before the agent ever ran.
-	pid, err := box.StartBackground(ctx, "sh -lc "+shellQuote(script), sandbox.ExecOptions{Env: req.Env})
+	// THE BOX'S LOGIN SHELL, never one of the runner's own. The box puts the
+	// run environment back over the profile its shell sources
+	// ([sandbox.ExecOptions.Login]), so a template's profile cannot switch
+	// the agent's content capture back on or replace a credential; a `sh
+	// -lc` here was a SECOND login shell inside that one, which sourced the
+	// profile again over the environment the box had just put back. The
+	// script still runs in a `sh -c` of its own, because a backend may
+	// background the command it is handed with `&`, which takes one command.
+	//
+	// The box's PATH inside the wrapper is still the PROFILE's where the run
+	// environment sets none, which is why the shim directory is prepended
+	// INSIDE the script (see withShimPath) rather than handed in the run
+	// environment, where it would replace the profile's PATH whole.
+	pid, err := box.StartBackground(ctx, "sh -c "+shellQuote(script),
+		sandbox.ExecOptions{Env: req.Env, Login: true})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("codingagent: starting %s: %w", r.cli.Name(), err)
 	}

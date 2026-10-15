@@ -39,6 +39,9 @@ type FakeSandbox struct {
 	closed       bool
 	commands     []string
 	background   []string
+	// backgroundOpts are the options each background start was given, in
+	// step with background.
+	backgroundOpts []ExecOptions
 	// readCap is the whole-read cap a suite gave the box, zero for
 	// [MaxFileBytes]: see [FakeSandbox.CapReads].
 	readCap int
@@ -113,6 +116,7 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.background = append(s.background, cmd)
+	s.backgroundOpts = append(s.backgroundOpts, opts)
 	return strconv.Itoa(len(s.background)), nil
 }
 
@@ -240,6 +244,15 @@ func (s *FakeSandbox) Background() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.background)
+}
+
+// BackgroundOptions are the options each background start was given, in the
+// order [FakeSandbox.Background] lists the starts — so a test can see whether
+// a job asked for a login shell, and the environment it handed one.
+func (s *FakeSandbox) BackgroundOptions() []ExecOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.backgroundOpts)
 }
 
 // Put seeds a file, standing in for something the job wrote.

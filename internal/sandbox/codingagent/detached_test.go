@@ -2,6 +2,7 @@ package codingagent_test
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -89,7 +90,7 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	if handle.CommandID == "" {
 		t.Fatal("Start returned no handle — nothing could ever probe the job")
 	}
-	// The whole thing is one shell-quoted argument to `sh -lc`, so the
+	// The whole thing is one shell-quoted argument to `sh -c`, so the
 	// assertions are on what survives that quoting: the paths themselves,
 	// and the redirections around them.
 	script := lastBackground(t, b)
@@ -587,6 +588,34 @@ func alive(yes bool) func(context.Context, string, sandbox.ExecOptions) (sandbox
 }
 
 // lastBackground is the script the fake was asked to run detached.
+// THE JOB RUNS IN THE BOX'S LOGIN SHELL, AND IN NONE OF ITS OWN.
+//
+// The box puts the run environment back over the profile its login shell
+// sources, so an image's or a template's profile cannot switch the agent's
+// content capture back on or replace a credential. The runner used to start
+// its own `sh -lc` inside that shell, which sourced the profile a second time
+// over the environment the box had just put back.
+//
+// Mutation: start the job as `sh -lc` again, or without asking the box for a
+// login shell, and this goes red.
+func TestTheJobRunsInTheBoxsLoginShellAndNoneOfItsOwn(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	env := map[string]string{"GITHUB_TOKEN": "declared-by-config"}
+	if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "fix the flake", Env: env}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	opts := b.BackgroundOptions()
+	if len(opts) == 0 || !opts[len(opts)-1].Login || !maps.Equal(opts[len(opts)-1].Env, env) {
+		t.Errorf("the job was started with %+v, want the box's login shell and the run environment", opts)
+	}
+	cmd := lastBackground(t, b)
+	if !strings.HasPrefix(cmd, "sh -c ") || strings.Contains(cmd, "sh -l") {
+		t.Errorf("the job starts a login shell of its own: %s", cmd)
+	}
+}
+
 func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 	t.Helper()
 	cmds := b.Background()

@@ -221,6 +221,16 @@ type e2bProcessResult struct {
 // over a shell line — pipes, redirects, `&&` — because that is what a setup
 // step and a coding-agent invocation are. envd's own API takes an argv, so
 // the shell is named explicitly rather than left to a runtime that has none.
+//
+// A LOGIN SHELL WHEN ASKED FOR ONE ([ExecOptions.Login]), and then the run
+// environment is put back over the profile it sources (loginenv.go). envd
+// hands a process its envs before the shell starts, so a template's
+// /etc/profile.d script or ~/.bash_profile ran after them and won: every
+// command here used to be `bash -l`, so a template that exported
+// OTEL_LOG_USER_PROMPTS=true turned a coding agent's prompt capture back on
+// over the engine's `false`, and could replace any variable role.sandbox.env
+// declared. The engine's own probes and housekeeping ask for no login shell,
+// so a template's profile cannot change what they read either.
 type startRequest struct {
 	Process struct {
 		Cmd  string            `json:"cmd"`
@@ -230,13 +240,21 @@ type startRequest struct {
 	} `json:"process"`
 }
 
-func newStartRequest(cmd string, opts ExecOptions) startRequest {
+func newStartRequest(cmd string, opts ExecOptions) (startRequest, error) {
 	var req startRequest
 	req.Process.Cmd = "/bin/bash"
-	req.Process.Args = []string{"-l", "-c", cmd}
+	req.Process.Args = []string{"-c", cmd}
 	req.Process.Envs = opts.Env
+	if opts.Login {
+		script, env, err := loginScript(cmd, opts.Env)
+		if err != nil {
+			return startRequest{}, err
+		}
+		req.Process.Args = []string{"-l", "-c", script}
+		req.Process.Envs = env
+	}
 	req.Process.Cwd = opts.Cwd
-	return req
+	return req, nil
 }
 
 // startResponse is one frame of the Process/Start stream.
@@ -267,7 +285,11 @@ type startResponse struct {
 // of "start and walk away": the process keeps running inside the box because
 // envd owns it, not because anything here is still listening.
 func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, background bool) (e2bProcessResult, error) {
-	body, err := json.Marshal(newStartRequest(cmd, opts))
+	start, err := newStartRequest(cmd, opts)
+	if err != nil {
+		return e2bProcessResult{}, err
+	}
+	body, err := json.Marshal(start)
 	if err != nil {
 		return e2bProcessResult{}, fmt.Errorf("e2b: encode command: %w", err)
 	}

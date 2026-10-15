@@ -287,7 +287,7 @@ func TestTheWrapperCopiesTheResultLineAfterTheCLIExits(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	start(t, runner, b)
-	// The script reaches the box single-quoted inside `sh -lc`, so its own
+	// The script reaches the box single-quoted inside `sh -c`, so its own
 	// quotes arrive escaped; the order is what is asserted.
 	script := lastBackground(t, b)
 	exited := strings.Index(script, "code=$?")

@@ -351,11 +351,16 @@ type Sandbox interface {
 	// rather than a constant — see [DefaultHome].
 	Home() string
 
+	// Exec runs cmd in a shell and waits for it. A login shell only when
+	// [ExecOptions.Login] asks for one, and then the run environment is
+	// applied after its profile.
 	Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
 
 	// StartBackground launches a detached process and returns its handle
 	// immediately. The job keeps running after the caller's turn ends and
-	// writes its result to a file a later collect reads.
+	// writes its result to a file a later collect reads. cmd is ONE command
+	// — a backend may put it in the background with `&` — and runs as
+	// [Sandbox.Exec]'s does.
 	StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error)
 
 	// JobRunning reports whether the background job whose handle
@@ -479,6 +484,19 @@ type ExecOptions struct {
 	Env        map[string]string
 	Cwd        string
 	TimeoutSec float64
+
+	// Login runs the command in a LOGIN SHELL, with the run environment
+	// applied AFTER the profile that shell sources: the box's own run
+	// environment, Env over it, and a local box's isolation over both, in
+	// every backend. So the command finds what the profile puts on PATH — a
+	// CLI installed through a version manager — and nothing the profile
+	// exports replaces a variable the run sets (see loginenv.go).
+	//
+	// For the work a run does in its box: its setup steps and its coding job.
+	// The engine's own probes and housekeeping (a liveness check, clearing
+	// the last run's files) run without one, so a profile that prints, or
+	// fails, cannot change what they read.
+	Login bool
 }
 
 // ErrBoxGone is a [Provider.Connect] that found the box DEFINITIVELY not

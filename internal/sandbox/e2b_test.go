@@ -654,8 +654,10 @@ func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 	if process["cmd"] != "/bin/bash" {
 		t.Errorf("cmd = %v, want a shell — a bare argv cannot run `a && b`", process["cmd"])
 	}
+	// A PLAIN SHELL, since this command asked for no login shell: a
+	// template's profile has no say in what the engine's own commands read.
 	args, _ := process["args"].([]any)
-	if len(args) != 3 || args[2] != "make test && echo ok" {
+	if len(args) != 2 || args[0] != "-c" || args[1] != "make test && echo ok" {
 		t.Errorf("args = %v", args)
 	}
 	if process["cwd"] != "/home/user/work" {

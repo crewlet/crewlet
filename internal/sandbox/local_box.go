@@ -153,10 +153,37 @@ func (b *directBox) Home() string { return b.layout.home() }
 // those names is reported when the box is created ([warnIsolationKept]).
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
-	maps.Copy(env, b.env)
+	maps.Copy(env, b.runEnv(extra))
+	return env
+}
+
+// runEnv is what the box SETS, as against what it inherits from the host: the
+// box's environment, a command's own over it, and the isolation over both. It
+// is what a login shell's profile is not allowed to replace
+// ([ExecOptions.Login]); the inherited PATH is exactly what it is allowed to.
+func (b *directBox) runEnv(extra map[string]string) map[string]string {
+	env := maps.Clone(b.env)
+	if env == nil {
+		env = map[string]string{}
+	}
 	maps.Copy(env, extra)
 	maps.Copy(env, directIsolation(b.layout.home()))
 	return env
+}
+
+// shell is the argv and environment one command runs with on the engine host:
+// a plain `sh -c`, or a login shell with the run environment over its profile.
+func (b *directBox) shell(cmd string, opts ExecOptions) ([]string, map[string]string, error) {
+	env := b.childEnv(opts.Env)
+	if !opts.Login {
+		return []string{"/bin/sh", "-c", cmd}, env, nil
+	}
+	script, stashed, err := loginScript(cmd, b.runEnv(opts.Env))
+	if err != nil {
+		return nil, nil, err
+	}
+	maps.Copy(env, stashed)
+	return []string{"/bin/sh", "-l", "-c", script}, env, nil
 }
 
 // directIsolation is a direct box's ISOLATION, by name and value: HOME, the
@@ -228,10 +255,14 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	if err != nil {
 		return ExecResult{}, err
 	}
+	argv, env, err := b.shell(cmd, opts)
+	if err != nil {
+		return ExecResult{}, err
+	}
 	return runHost(ctx, hostCommand{
-		argv:    []string{"/bin/sh", "-c", cmd},
+		argv:    argv,
 		cwd:     dir,
-		env:     b.childEnv(opts.Env),
+		env:     env,
 		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
 	})
 }
@@ -260,12 +291,16 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	if err != nil {
 		return "", err
 	}
+	argv, env, err := b.shell(cmd, opts)
+	if err != nil {
+		return "", err
+	}
 	// Not exec.CommandContext: the job must outlive the turn that starts it,
 	// so binding it to the caller's context would kill it at the first
 	// return.
-	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
+	proc := exec.Command(argv[0], argv[1:]...) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
-	proc.Env = flattenEnv(b.childEnv(opts.Env))
+	proc.Env = flattenEnv(env)
 	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads
 	// these, and a pipe nobody drains would block the agent on a full buffer.
@@ -553,7 +588,37 @@ func (b *containerBox) hostPath(path string) (string, error) {
 	return resolved, nil
 }
 
-// envArgs renders the run env as --env-file arguments.
+// runEnv is what a command in the container is handed: the box's
+// environment, the command's own over it, and the container's isolation over
+// both — less any value an env file cannot carry.
+//
+// THE BOX'S HOME LAST, over every layer: it is the bind-mounted home the
+// box's credential files, its records' twins and the coding agent's state live
+// in, and an exec env-file is applied over the container's own HOME — so a
+// role.sandbox.env HOME moved the agent off its mount, onto a directory the
+// container discards and the engine cannot read.
+//
+// --env-file is line-oriented KEY=value with no quoting, so a newline in a
+// value would forge an extra variable. Values that cannot be represented are
+// dropped LOUDLY rather than silently truncated into a different env — and
+// dropped HERE, before a login shell stashes what it will put back, so a value
+// the file cannot carry is absent rather than put back empty.
+func (b *containerBox) runEnv(extra map[string]string) map[string]string {
+	merged := make(map[string]string, len(b.env)+len(extra)+1)
+	maps.Copy(merged, b.env)
+	maps.Copy(merged, extra)
+	maps.Copy(merged, containerIsolation())
+	for key, value := range merged {
+		if strings.ContainsAny(value, "\n\r") {
+			localLog.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
+			delete(merged, key)
+		}
+	}
+	return merged
+}
+
+// envArgs writes env as the box's env file and returns the --env-file
+// arguments that hand it to one exec.
 //
 // NOT "-e KEY=value": a process's argv is world-readable on a normal Linux box
 // (/proc/<pid>/cmdline, and every ps on the host), and this env carries the
@@ -565,54 +630,46 @@ func (b *containerBox) hostPath(path string) (string, error) {
 // two execs: with a link that this rewrite followed to overwrite whatever host
 // file it named, or with a named pipe whose open never returned.
 //
-// Rewritten per call rather than kept: extra differs between the setup steps
-// and the coding job, and a stale file would hand one phase another's
-// environment.
-func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
-	merged := make(map[string]string, len(b.env)+len(extra)+1)
-	maps.Copy(merged, b.env)
-	maps.Copy(merged, extra)
-	// THE BOX'S HOME LAST, over every layer: it is the bind-mounted home the
-	// box's credential files, its records' twins and the coding agent's state
-	// live in, and an exec env-file is applied over the container's own
-	// HOME — so a role.sandbox.env HOME moved the agent off its mount, onto
-	// a directory the container discards and the engine cannot read.
-	maps.Copy(merged, containerIsolation())
-	// --env-file is line-oriented KEY=value with no quoting, so a newline in
-	// a value would forge an extra variable. Values that cannot be
-	// represented are dropped LOUDLY rather than silently truncated into a
-	// different env.
-	var lines []string
-	for _, assignment := range flattenEnv(merged) {
-		key, value, _ := strings.Cut(assignment, "=")
-		if strings.ContainsAny(value, "\n\r") {
-			localLog.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
-			continue
-		}
-		lines = append(lines, assignment)
-	}
+// Rewritten per call rather than kept: the environment differs between the
+// setup steps and the coding job, and a stale file would hand one phase
+// another's environment.
+func (b *containerBox) envArgs(env map[string]string) ([]string, error) {
 	if err := os.MkdirAll(b.layout.records(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("container sandbox %s could not write its env file: %v", b.layout.id, err)
 	}
-	blob := strings.Join(lines, "\n") + "\n"
+	blob := strings.Join(flattenEnv(env), "\n") + "\n"
 	if err := os.WriteFile(b.layout.envFile(), []byte(blob), hostbox.FileMode); err != nil {
 		return nil, localErrorf("container sandbox %s could not write its env file: %v", b.layout.id, err)
 	}
 	return []string{"--env-file", b.layout.envFile()}, nil
 }
 
+// execArgv is the runtime invocation that runs cmd in the container: a plain
+// `sh -c`, or a login shell with the run environment over its profile
+// ([ExecOptions.Login]) — the stashes that puts back riding the env file with
+// everything else, never the command line.
 func (b *containerBox) execArgv(cmd string, opts ExecOptions) ([]string, error) {
 	cwd := opts.Cwd
 	if cwd == "" {
 		cwd = b.workdir()
 	}
+	env := b.runEnv(opts.Env)
+	shell := []string{"/bin/sh", "-c", cmd}
+	if opts.Login {
+		script, stashed, err := loginScript(cmd, env)
+		if err != nil {
+			return nil, err
+		}
+		env, shell = stashed, []string{"/bin/sh", "-l", "-c", script}
+	}
 	argv := []string{b.runtime, "exec", "-w", cwd}
-	envArgs, err := b.envArgs(opts.Env)
+	envArgs, err := b.envArgs(env)
 	if err != nil {
 		return nil, err
 	}
 	argv = append(argv, envArgs...)
-	return append(argv, b.container, "/bin/sh", "-c", cmd), nil
+	argv = append(argv, b.container)
+	return append(argv, shell...), nil
 }
 
 func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
