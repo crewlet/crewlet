@@ -206,10 +206,17 @@ flowchart TD
   pushes are decided against its one record of refs, so they all meet at one
   committer, which puts a burst of them into a few records instead of two
   committers each losing rounds to the other; the repositories spread across
-  the data nodes. A committer that is silent, stopping or otherwise runs
-  nothing hands the push, with the same push id, to that repository's
-  runner-up, and a node that said in the last thirty seconds that its copy is
-  out of service, or went silent, is asked after the rest as for any other
+  the data nodes. *Live* is as each node's own view of the fleet's presence
+  names the data nodes, and the view hears a presence claim or release as it
+  lands, so a node that joins is in every order within about a second of its
+  claim and a fleet started all at once agrees on every committer within
+  about a second of the last claim; a push inside that second may be
+  committed by its receiver, which the broker's compare-and-set keeps correct
+  and which costs that push the group commit. A committer that is silent,
+  stopping or otherwise runs nothing hands the push, with the same push id, to
+  that repository's runner-up, and a node that said in the last thirty seconds
+  that its copy is out of service, or went silent, is asked after the rest as
+  for any other
   operation. Nobody's last answer moves a push anywhere else. A committer
   answers inside the minute the asking node gives it: a push still queued
   when a whole batch and its answer would no longer fit — or one that reaches
