@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The BACKGROUND passes, which are the half of learning no turn drives.
@@ -381,10 +382,30 @@ func (b *Background) loop(ctx context.Context, name string, choose pick) {
 			if !b.holdsDuty(ctx, name) {
 				continue
 			}
-			pass(ctx)
+			b.run(ctx, name, pass)
 		}
 	}
 }
+
+// run is one tick of one pass, in a trace of its own.
+//
+// A ROOT SPAN PER TICK ([PassSpanPrefix] and the loop's name): nothing caused a
+// background pass but its clock, so it hangs under no turn — nesting a
+// company-wide sweep under whichever turn ran last would explain neither — but
+// it is not traceless either. Every model call the pass makes is an
+// `llm.auxiliary` span beneath this one, with its provider's spans under that,
+// and every event it announces is filed under it, so a compaction's calls, its
+// spend and its announcement are one trace rather than a root each.
+func (b *Background) run(ctx context.Context, name string, pass func(context.Context)) {
+	ctx, span := tracing.StartRoot(ctx, "learning", PassSpanPrefix+name)
+	defer span.End()
+	pass(ctx)
+}
+
+// PassSpanPrefix begins the name of every background pass's span:
+// `learning.episode_lifecycle`, `learning.skill_curator`,
+// `learning.skill_clustering`, `learning.skill_promotion`.
+const PassSpanPrefix = "learning."
 
 // holdsDuty reports whether this node runs the pass this tick.
 //
@@ -498,8 +519,10 @@ func (b *Background) agentID(seat *org.Role) string {
 // The seat's handle rides ALONGSIDE the payload rather than being read out
 // of it, because these events reach the engine's publisher which stamps a
 // SOURCE — and the source is what makes a dashboard file the event under the
-// seat it is about. A background pass has no turn and therefore no trace to
-// inherit, which is the one place these differ from a reflection worker's.
+// seat it is about. ctx holds the pass's own root span (see [Background.run]),
+// which is the trace the event is filed under: a background pass has no turn
+// to inherit one from, which is the one place these differ from a reflection
+// worker's.
 type Announce func(ctx context.Context, handle string, payload events.Payload)
 
 // announce reports one lifecycle pass.

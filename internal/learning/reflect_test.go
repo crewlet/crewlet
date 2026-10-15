@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -17,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing/tracingtest"
 )
 
 // --- fixtures -------------------------------------------------------------
@@ -551,6 +554,15 @@ func TestNothingWiredIsAFastPath(t *testing.T) {
 
 // --- what the pass announces ----------------------------------------------
 
+// THE PASS'S EVENTS HANG OFF THE TURN THAT CAUSED THEM: in the turn's trace,
+// beneath the turn's span, under the pass's own — and with the turn's sampling
+// decision, unsampled here because sampled is the zero value a pass that
+// dropped it would publish. An unsampled pass records no span, but its context
+// still names one, so the events are filed under it all the same.
+//
+// Mutations, each red here: publish under the trace handed in rather than the
+// pass's (the span half — the events claim the turn's span as their own);
+// open the pass's span without restoring the turn's trace (the trace half).
 func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "w", out: types.PersistDeciderCompleted{TurnID: "t1", Classification: types.PersistLong}}
@@ -559,19 +571,23 @@ func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 
 	ev := due(settledTurn(), events.NewTrace())
 	ev.ParentSpanID = "aaaaaaaaaaaaaaaa"
-	// AND THE TURN'S SAMPLING DECISION, unsampled because sampled is the
-	// zero value a pass that dropped it would publish.
 	ev.TraceUnsampled = true
 	r.Handle(context.Background(), ev)
 
 	for _, kind := range []string{"persist_decider_completed", "reflection_completed"} {
-		got := pub.last(t, kind)
-		if got.Trace() != ev.Trace() {
-			t.Errorf("%s carries trace %+v, want the turn's %+v — otherwise it renders "+
-				"as background work with no cause", kind, got.Trace(), ev.Trace())
+		published := pub.last(t, kind)
+		got := published.Trace()
+		if got.TraceID != ev.TraceID || got.ParentSpanID != ev.SpanID || !got.Unsampled {
+			t.Errorf("%s carries trace %+v, want the turn's trace %s beneath its span %s, "+
+				"unsampled — otherwise it renders as background work with no cause",
+				kind, got, ev.TraceID, ev.SpanID)
 		}
-		if got.Source != "Dev" {
-			t.Errorf("%s source = %q, want the seat", kind, got.Source)
+		if got.SpanID == "" || got.SpanID == ev.SpanID {
+			t.Errorf("%s carries span %q, want the pass's own rather than the turn's %s",
+				kind, got.SpanID, ev.SpanID)
+		}
+		if published.Source != "Dev" {
+			t.Errorf("%s source = %q, want the seat", kind, published.Source)
 		}
 	}
 	if pub.topics[0] != topics.Event("persist_decider_completed") {
@@ -580,6 +596,81 @@ func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 	if got := pub.last(t, "reflection_completed").Data.(*types.ReflectionCompleted); got.WorkersRun != 1 ||
 		got.Agent != "agent-uuid" || got.AgentHandle != "dev" || got.ReviewOutcome != "done" {
 		t.Errorf("sentinel = %+v", got)
+	}
+}
+
+// spanWorker remembers the span context its pass ran it under — where every
+// model call it makes would nest.
+type spanWorker struct {
+	stubWorker
+	mu    sync.Mutex
+	under trace.SpanContext
+}
+
+func (w *spanWorker) Reflect(ctx context.Context, t learning.Turn) ([]events.Payload, error) {
+	w.mu.Lock()
+	w.under = trace.SpanContextFromContext(ctx)
+	w.mu.Unlock()
+	return w.stubWorker.Reflect(ctx, t)
+}
+
+// A REFLECTION PASS IS A SPAN BENEATH ITS TURN, and its workers run inside it:
+// every model call a worker makes is an `llm.auxiliary` span under the pass,
+// with its provider's spans beneath that, rather than a root of its own — and
+// the events the pass publishes are filed under the same span.
+//
+// Mutations, each red here: run the workers on the context the pass was handed
+// (the worker half); drop the restore (the parent half); drop an attribute.
+func TestAReflectionPassIsASpanBeneathItsTurn(t *testing.T) {
+	t.Parallel()
+	w := &spanWorker{stubWorker: stubWorker{name: "w",
+		out: types.PersistDeciderCompleted{TurnID: "t1", Classification: types.PersistLong}}}
+	pub := &recordingPub{}
+	r := reflector(t, devOrg(), pub, w)
+	ev := due(settledTurn(), events.NewTrace())
+	tracingtest.Watch(t, ev.TraceID)
+	r.Handle(context.Background(), ev)
+
+	span := tracingtest.Only(t, ev.TraceID, learning.ReflectSpan)
+	if got := span.Parent().SpanID().String(); got != ev.SpanID {
+		t.Errorf("learning.reflect's parent is %s, want the turn's span %s", got, ev.SpanID)
+	}
+	for key, want := range map[string]string{
+		"crewlet.seat": "dev", "crewlet.turn_id": "t1",
+	} {
+		if got := tracingtest.Attr(span, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	w.mu.Lock()
+	under := w.under
+	w.mu.Unlock()
+	if under.SpanID() != span.SpanContext().SpanID() {
+		t.Errorf("the worker ran under span %s, want the pass's %s — its model calls "+
+			"would not nest beneath the pass", under.SpanID(), span.SpanContext().SpanID())
+	}
+	if got := pub.last(t, "reflection_completed").Trace().SpanID; got != span.SpanContext().SpanID().String() {
+		t.Errorf("the sentinel is filed under span %s, want the pass's %s", got, span.SpanContext().SpanID())
+	}
+}
+
+// A PASS A GATE STOPPED SAYS WHICH GATE, on its span: a pass that reflected on
+// nothing and one that never started read the same otherwise.
+//
+// Mutation, red here: drop the deferred attribute.
+func TestASkippedReflectionPassNamesItsGateOnItsSpan(t *testing.T) {
+	t.Parallel()
+	r := reflector(t, devOrg(), &recordingPub{}, &stubWorker{name: "w"})
+	turn := settledTurn()
+	turn.RoleName = "Nobody"
+	tr := events.NewTrace()
+	tracingtest.Watch(t, tr.TraceID)
+	if out := r.Reflect(context.Background(), turn, tr); out.Skip != learning.SkipNoRole {
+		t.Fatalf("skip = %q, want %q", out.Skip, learning.SkipNoRole)
+	}
+	span := tracingtest.Only(t, tr.TraceID, learning.ReflectSpan)
+	if got := tracingtest.Attr(span, "crewlet.skip"); got != learning.SkipNoRole {
+		t.Errorf("crewlet.skip = %q, want %q", got, learning.SkipNoRole)
 	}
 }
 

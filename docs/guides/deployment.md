@@ -1225,6 +1225,8 @@ flowchart TD
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     L["<b>llm.auxiliary</b><br/>one per call on a seat's auxiliary chain"]
+    R["<b>learning.reflect</b><br/>reflection on the turn, after it"]
+    P["<b>learning.&lt;pass&gt;</b><br/>a background learning pass, a root of its own"]
     H["<b>anthropic.messages.create</b> (CLIENT)<br/>the Anthropic SDK's span of each HTTP attempt"]
     J["<b>claude -p</b>, a text-mode cli-agent call<br/><i>spans nothing; forwards the round's traceparent</i>"]
     K["<b>claude_code.interaction</b> and its children<br/><i>Claude Code in a coding box, exported through the receiver</i>"]
@@ -1234,6 +1236,9 @@ flowchart TD
     D --> F
     E --> H
     C --> L
+    C --> R
+    R --> L
+    P --> L
     L --> H
     E -.->|"TRACEPARENT"| J
     F -.->|"TRACEPARENT (run_sandbox)"| K
@@ -1247,10 +1252,14 @@ flowchart TD
 **The engine's own spans are these, and only these:** `webhook.receive` and
 `schedule.fire`, which start work; `agent.turn`, and `agent.turn.resume` for a
 suspended run re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
-`execute`, `review` and `judge`; `llm.round`; `tool.call`; and `llm.auxiliary`,
+`execute`, `review` and `judge`; `llm.round`; `tool.call`; `llm.auxiliary`,
 one per call on a seat's [auxiliary chain](../concepts/agent-learning.md#what-the-auxiliary-calls-cost)
 — the turn-start context, a rewrite, reflection, a background learning pass, a
-person's question — carrying the call's `crewlet.stage` and `crewlet.purpose`.
+person's question — carrying the call's `crewlet.stage` and `crewlet.purpose`;
+`learning.reflect`, the reflection pass after a turn, beneath the turn's span;
+and one root per tick of a background learning pass, named for it
+(`learning.episode_lifecycle`, `learning.skill_curator`,
+`learning.skill_clustering`, `learning.skill_promotion`).
 Beneath `llm.round` or `llm.auxiliary`, a call an `anthropic` provider makes is
 a span of the Anthropic SDK's own, `anthropic.messages.create`, which is what
 the Claude API's spans nest under; a text-mode Claude Code call spans nothing
@@ -1259,10 +1268,12 @@ itself — see [Spans from Claude](#spans-from-claude).
 
 **Every model call has a parent.** A call is made in `llm.round` or in
 `llm.auxiliary`, so the SDK's span and the API's are never the root of a trace
-of their own. Where nothing above an auxiliary call holds a span,
-`llm.auxiliary` is the root, and the call's `auxiliary_spend` record names that
-same trace — the record and the spans of the call it records are always one
-trace.
+of their own, and the callers that used to hold no span hold one now: a
+reflection pass runs in `learning.reflect` under the turn it reflects on, and a
+background pass in a root of its own. Where nothing above an auxiliary call
+holds a span even so, `llm.auxiliary` is the root. The call's `auxiliary_spend`
+record names the call's own span either way, so the record and the spans of the
+call it records are always one trace.
 
 The engine's span attributes are deliberately thin: the seat, the phase, the
 model, the round, the tool and its outcome, an auxiliary call's stage and
