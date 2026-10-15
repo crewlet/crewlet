@@ -140,8 +140,10 @@ A text-mode call is one model round, and the tool loop spans it
 is the one — is handed that span's W3C trace context in `TRACEPARENT`, and in
 `TRACESTATE` when the trace carries vendor state. The engine sets both last,
 like the isolation, so neither `cli.env` nor the profile can pin one parent
-for every call an entry makes, and a call made beneath no span — a
-`crewlet llm doctor` probe — is handed neither. The flag is the round's own
+for every call an entry makes, and a call made beneath no span is handed
+neither. A `crewlet llm doctor` probe is not one of those: it runs in the
+`llm.doctor` span of the entry it examines, and is handed that span's context
+([`crewlet llm`](../reference/cli.md#crewlet-llm)). The flag is the round's own
 sampling decision: a round the [sampler](../guides/deployment.md#otlp-export)
 decided against is `-00`.
 
