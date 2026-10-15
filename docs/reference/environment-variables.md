@@ -293,8 +293,9 @@ delivery wakes, on whichever node runs it; it is kept on a suspended coding run'
 so the resumed half — days later, possibly on another node — continues as the first half
 was decided; and it is the flag of the `TRACEPARENT` a sandbox is handed (`-00` for a run
 launched from an unsampled turn). So a node's sampler decides only the traces that node
-starts — a webhook delivery, a schedule's fire, an event published outside any span — and
-a fleet whose nodes are configured differently splits no tree. Sampling does not depend
+starts — a webhook delivery, a schedule's fire, a committed tracker or knowledge-base
+change that wakes a seat, an event published outside any span — and a fleet whose nodes
+are configured differently splits no tree. Sampling does not depend
 on whether anything exports: with no endpoint, spans are created and decided exactly as
 they would be with one, and their ids still flow into every event.
 

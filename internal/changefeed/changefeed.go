@@ -69,6 +69,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("changefeed")
@@ -372,9 +373,14 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
+	// A ROOT, through the one place a root is minted: a committed record is
+	// where the trace of the wake it causes starts, and TraceOf decides it by
+	// the operator's root rule. Minted here with events.NewTrace, as it was,
+	// every change-feed wake claimed sampled whatever OTEL_TRACES_SAMPLER
+	// said, and the turn it woke continued it so.
 	ev := events.New(types.RawWebhook{
 		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(msg.Record),
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
 		// THE CLAIM IS RELEASED BEFORE THE NAK. A claim held over a

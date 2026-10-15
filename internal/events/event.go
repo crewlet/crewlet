@@ -680,7 +680,11 @@ func DataAs[T Payload](e *Event) (T, bool) {
 // single place a root is minted now; the eight publishers that used to call
 // this directly ask TraceOf instead, so an event's trace comes from the span
 // it was published under whenever there is one. Do not add a second caller —
-// a root minted outside TraceOf is an event that has left its turn's trace.
+// a root minted outside TraceOf is an event that has left its turn's trace,
+// and one no sampler DECIDED: TraceOf asks the operator's root rule about the
+// ids this mints, and a caller of this reads as sampled whatever it says. The
+// change feed was such a caller; internal/tracing's TestOnlyTraceOfMintsARoot
+// now holds the rule rather than this sentence.
 func NewTrace() TraceContext {
 	var buf [24]byte
 	_, _ = rand.Read(buf[:])
