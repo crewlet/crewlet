@@ -46,7 +46,8 @@ import (
 // refuses a pack past it, having read it — so a larger history goes in steps:
 // the default branch first, along its first-parent history, each step a
 // FAST-FORWARD of the branch itself, so no temporary ref ever exists; then
-// every other branch and tag in batches. Each step is held to a tenth below
+// every other branch and tag in batches, each as many refs as one push's
+// record holds ([importer.recordHolds]). Each step is held to a tenth below
 // the limit ([importStepBudget]).
 //
 // A STEP IS SENT WHOLE (`git push --no-thin`), SO WHAT IT SENDS IS WHAT THE
@@ -218,6 +219,10 @@ func prepareImport(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return nil, false, err
 	}
+	principal, err := codeImportPrincipal(ctx, client)
+	if err != nil {
+		return nil, false, err
+	}
 	g, err := newOperatorGit(*gitPath, client, os.Environ())
 	if err != nil {
 		return nil, false, err
@@ -225,7 +230,7 @@ func prepareImport(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err = g.atLeast(ctx, gitproc.MinVersion); err != nil {
 		return nil, false, err
 	}
-	imp := &importer{g: g, client: client, source: source, name: name, repo: repo,
+	imp := &importer{g: g, client: client, source: source, name: name, repo: repo, principal: principal,
 		budget: importStepBudget(repo.Limits.MaxPushBytes), maxStored: code.MaxPackBytes,
 		stdout: stdout, stderr: stderr}
 	if isTerminal(stderr) {
@@ -275,6 +280,24 @@ func codeImportTarget(ctx context.Context, client *nodeClient, name string) (cod
 	return r, nil
 }
 
+// codeImportPrincipal is who the node records the import's pushes as — the
+// token's id and the seat bound to it, asked of the node (GET /viewer, the one
+// question every personal surface asks) rather than assumed. Every push's
+// record carries it beside the push's ref updates, so it is part of what one
+// push's record holds ([importer.recordHolds]); neither a token's id nor a
+// handle has a length bound of its own, so nothing short of asking says how
+// much of the record it takes.
+func codeImportPrincipal(ctx context.Context, client *nodeClient) (code.Principal, error) {
+	var viewer struct {
+		OperatorID string `json:"operator_id"`
+		Handle     string `json:"handle"`
+	}
+	if err := client.get(ctx, "/viewer", &viewer); err != nil {
+		return code.Principal{}, fmt.Errorf("ask the node who this token is: %w", err)
+	}
+	return code.Principal{Kind: code.PrincipalOperator, OperatorID: viewer.OperatorID, Seat: viewer.Handle}, nil
+}
+
 // importer is one run of `crewlet code import`.
 type importer struct {
 	g      operatorGit
@@ -282,7 +305,10 @@ type importer struct {
 	source string // the source's URL, as the operator gave it
 	name   string // the repository on the node
 	repo   codeRepoView
-	budget int64 // the most one step's pack carries
+	// principal is who the node records each step's push as
+	// ([codeImportPrincipal]).
+	principal code.Principal
+	budget    int64 // the most one step's pack carries
 	// maxStored is the most one push may STORE — its pack, .idx and .rev
 	// together: code.MaxPackBytes, past which the node refuses the push
 	// pack_too_large.
@@ -1678,11 +1704,17 @@ func (p *importPlanner) mergeTooLarge(ctx context.Context, step *importStep, lac
 		strings.Join(branches, "; "), p.imp.name)
 }
 
-// batchStep is the next batch of the queue: as many of its refs, in order and
-// at most code.MaxCommandsPerPush, as the step can carry. A branch that alone
-// is past the budget is advanced along its first-parent history instead.
+// batchStep is the next batch of the queue: as many of its refs, in order, at
+// most code.MaxCommandsPerPush and no more than one push's record holds
+// ([importer.recordHolds]), as the step can carry. A branch that alone is past
+// the budget is advanced along its first-parent history instead.
 func (p *importPlanner) batchStep(ctx context.Context) (*importStep, error) {
 	candidates := p.queue[:min(len(p.queue), code.MaxCommandsPerPush)]
+	held, err := p.imp.recordHolds(candidates)
+	if err != nil {
+		return nil, err
+	}
+	candidates = candidates[:held]
 	estimates := map[int]int64{}
 	estimate := func(n int) (int64, error) {
 		if e, ok := estimates[n]; ok {
@@ -1692,9 +1724,9 @@ func (p *importPlanner) batchStep(ctx context.Context) (*importStep, error) {
 		for i, r := range candidates[:n] {
 			news[i] = r.oid
 		}
-		e, err := p.imp.estimate(ctx, news, p.remote)
+		e, estimateErr := p.imp.estimate(ctx, news, p.remote)
 		estimates[n] = e
-		return e, err
+		return e, estimateErr
 	}
 	n, err := furthest(1, len(candidates), max(p.lastBatch, 1), under(estimate, p.target()))
 	if err != nil {
@@ -1745,6 +1777,75 @@ func (p *importPlanner) batchStep(ctx context.Context) (*importStep, error) {
 			return nil, err
 		}
 	}
+}
+
+// importWidestNode is the widest node id config admits (config.ValidNodeID):
+// a step's push is received by whichever node its URL reaches, and that
+// node's id is part of what the push's record holds.
+var importWidestNode = strings.Repeat("n", 64)
+
+// recordHolds is how many of refs, in order, one push carries by the room its
+// record has for them: at least one, and up to all of them.
+//
+// THE NODE HOLDS A PUSH'S REF UPDATES TO ITS RECORD before anything of the push
+// runs (code.Proposal.ValidateCommands): one push's entry in the code log's
+// record takes at most code.EntryRoom, about 1 MiB, with every field the
+// push's work could add at its largest, and a push past it is refused whole —
+// "push them in parts". A thousand plain refs of the longest take under half
+// of that, but a ref whose characters the log spells in six bytes each (`&`,
+// `<`, `>`) costs up to six times its length, so some six hundred such refs
+// fill a push's record — and an import that batched them by count alone had
+// every such batch refused, on every run. So the batch is cut by the domain's
+// own rule, asked as the node will ask it: the person the node records
+// ([codeImportPrincipal]) and the widest node id that may receive it. A
+// command's two ids are spelled at one width whatever they hold, so each
+// command is asked as a create of its value; the rule takes every command
+// forced and refused at its widest, so what the node decides of it never
+// widens it past what this answered.
+//
+// None fitting is no ref's fault: one update of the longest ref a push may
+// carry takes under two kibibytes, so the person's own id or handle fills the
+// record, and no push of theirs can land.
+func (imp *importer) recordHolds(refs []queuedRef) (int, error) {
+	var refusal error
+	fits := func(n int) (bool, error) {
+		cmds := make([]code.Command, n)
+		for i, r := range refs[:n] {
+			cmds[i] = code.Command{Ref: code.RecordedRef(r.ref), Old: code.ZeroOID, New: r.oid}
+		}
+		err := code.Proposal{Principal: imp.principal, Node: importWidestNode, Commands: cmds}.ValidateCommands()
+		var wide *code.TooWideError
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.As(err, &wide):
+			refusal = err
+			return false, nil
+		}
+		return false, fmt.Errorf("the batch from %s: %w", refs[0].ref, err)
+	}
+	// The whole list first, which is the answer for every batch of plain
+	// refs: one question, never a search.
+	n, err := furthest(1, len(refs), len(refs), fits)
+	switch {
+	case err != nil:
+		return 0, err
+	case n < 1:
+		return 0, fmt.Errorf("a push of %s alone, as %s, is wider than one push's record may be (%w): the "+
+			"token's id or the seat bound to it fills the record, and no push by this token can land — "+
+			"import with a token whose id, and whose seat's handle, are shorter", refs[0].ref,
+			principalName(imp.principal), refusal)
+	}
+	return n, nil
+}
+
+// principalName is the person a principal is, as the import names it: the
+// seat's handle and the token's id.
+func principalName(p code.Principal) string {
+	if p.Seat == "" {
+		return "token " + p.OperatorID
+	}
+	return p.Seat + " (token " + p.OperatorID + ")"
 }
 
 // walkInstead advances the queue's first ref — a branch no batch can carry —

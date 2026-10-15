@@ -581,6 +581,110 @@ func TestImportSkipsForgeRefs(t *testing.T) {
 	}
 }
 
+// AN IMPORT CUTS A BATCH TO WHAT ONE PUSH'S RECORD HOLDS. The node refuses a
+// push whose ref updates are wider than its record may be, before anything of
+// it runs, and a ref the code log spells long — `&` is six bytes there — fills
+// a record long before a thousand of them: seven hundred tags of 240 `&` each
+// are one push the node refuses whole. The import asks the domain's own rule
+// of each batch, as the person the node records, so the tags land in more than
+// one push, every one of them taken.
+//
+// Mutation: batch by count alone (drop recordHolds' cut), and the one batch of
+// seven hundred is refused "push them in parts" on every run.
+func TestImportCutsABatchToWhatOnePushsRecordHolds(t *testing.T) {
+	t.Parallel()
+	h := importNode(t)
+	var hist sourceHistory
+	c := hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
+	const tags = 700
+	for i := range tags {
+		hist.point(fmt.Sprintf("refs/tags/%03d%s", i, strings.Repeat("&", 240)), c)
+	}
+	git, url, bare := hist.load(t)
+
+	out, errOut, err := h.importInto(t, url)
+	if err != nil {
+		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	wantSameRefs(t, h, git, bare)
+	batches, landed := 0, 0
+	for _, push := range h.history(t) {
+		if !strings.HasPrefix(push.Commands[0].Ref, "refs/tags/") {
+			continue
+		}
+		batches++
+		for _, cmd := range push.Commands {
+			if cmd.Result != "ok" {
+				t.Errorf("%s was %s (%s) in its push", cmd.Ref, cmd.Result, cmd.Reason)
+			}
+			landed++
+		}
+	}
+	if batches < 2 || landed != tags {
+		t.Errorf("the %d tags landed as %d updates in %d pushes, want every one of them in more than one",
+			tags, landed, batches)
+	}
+}
+
+// A BATCH IS CUT WHERE THE NODE'S OWN RULE CUTS IT: recordHolds answers the
+// most refs, in order, whose updates the domain's rule takes as one push from
+// this person through the widest node id config admits — one more is refused
+// as too wide — and a thousand plain refs of the longest are one batch. A
+// person whose own id fills the record is refused naming them, since no push
+// of theirs can land.
+//
+// Mutation: ask the rule with an empty principal, and the wide case's batch
+// is one the node may refuse, and the person whose id fills the record is
+// never told. (A node id's 64 bytes are within one wide command's width, so
+// no batch here tells the widest from the narrowest: importWidestNode is held
+// to config's own rule instead.)
+func TestABatchIsCutWhereThePushsRecordRuleCutsIt(t *testing.T) {
+	t.Parallel()
+	if !config.ValidNodeID(importWidestNode) || config.ValidNodeID(importWidestNode+"n") {
+		t.Fatalf("importWidestNode is %d bytes, not the widest node id config admits", len(importWidestNode))
+	}
+	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 4<<10),
+		Seat: strings.Repeat("s", 4<<10)}
+	imp := &importer{principal: person}
+	refs := func(fill string) []queuedRef {
+		out := make([]queuedRef, code.MaxCommandsPerPush)
+		for i := range out {
+			name := fmt.Sprintf("refs/tags/%04d", i)
+			name += strings.Repeat(fill, code.MaxRefNameBytes-len(name))
+			out[i] = queuedRef{sourceRef: sourceRef{ref: name, oid: fmt.Sprintf("%040x", i+1), kind: "commit"}}
+		}
+		return out
+	}
+	asked := func(rs []queuedRef) error {
+		cmds := make([]code.Command, len(rs))
+		for i, r := range rs {
+			cmds[i] = code.Command{Ref: r.ref, Old: code.ZeroOID, New: r.oid}
+		}
+		return code.Proposal{Principal: person, Node: importWidestNode, Commands: cmds}.ValidateCommands()
+	}
+
+	if n, err := imp.recordHolds(refs("a")); err != nil || n != code.MaxCommandsPerPush {
+		t.Errorf("a thousand plain refs of the longest: %d, %v — want one batch of all of them", n, err)
+	}
+	wide := refs("&")
+	n, err := imp.recordHolds(wide)
+	if err != nil {
+		t.Fatalf("recordHolds of wide refs: %v", err)
+	}
+	var tooWide *code.TooWideError
+	if n >= len(wide) || asked(wide[:n]) != nil || !errors.As(asked(wide[:n+1]), &tooWide) {
+		t.Errorf("recordHolds cut %d wide refs at %d, which is not where the node's rule cuts them", len(wide), n)
+	}
+
+	huge := &importer{principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 1<<20),
+		Seat: "founder"}}
+	_, err = huge.recordHolds(wide[:1])
+	if err == nil || !errors.As(err, &tooWide) || !strings.Contains(err.Error(), "no push by this token can land") ||
+		!strings.Contains(err.Error(), "founder (token ooo") {
+		t.Errorf("a person whose id fills the record: %v", err)
+	}
+}
+
 // AN IMPORT REFUSES A REPOSITORY THAT DIVERGED: a main the repository already
 // holds at a commit the source's history does not hold is somebody else's
 // push, not an earlier step of this import — refused naming the ref and both
