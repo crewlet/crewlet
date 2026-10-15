@@ -139,6 +139,8 @@ func fleetCases() []fleetCase {
 	return []fleetCase{
 		{"F12_APushIsVisibleThroughEveryNodeAtOnce", aPushIsVisibleThroughEveryMember},
 		{"F13_AFetchFromABehindNodeFindsItsWants", aFetchFromABehindMemberFindsItsWants},
+		{"F22_ABloblessCloneChecksOut", aBloblessCloneChecksOutOnAFleet},
+		{"F23_AFilterABitmapCannotAnswerIsRefused", aFilterABitmapCannotAnswerIsRefusedOnAFleet},
 		{"F4_TwoPushesToOneRefLandOnce", twoPushesThroughTwoMembersLandOnce},
 		{"F19_PushesThroughEveryNodeMeetAtOneCommitter", pushesThroughEveryNodeMeetAtOneCommitter},
 		{"F1_ACommitterThatDiesAfterAppendingStillAnswersOk", aCommitterThatDiesAfterAppendingStillAnswersOk},
@@ -311,6 +313,24 @@ func aFetchFromABehindMemberFindsItsWants(t *testing.T, c Cluster) {
 	}
 	resume()
 	resumed = true
+	rc.converged()
+}
+
+// F22 on a fleet: a blobless clone through one member, its checkout's lazy
+// fetch through another — neither of them the committer, so each serves from a
+// copy that applied the push rather than decided it.
+func aBloblessCloneChecksOutOnAFleet(t *testing.T, c Cluster) {
+	rc := newRepoCase(t, c, "fleet-f22")
+	committer := rc.committer()
+	r := rc.other(committer)
+	bloblessCloneChecksOut(t, c, rc.url(r), rc.url(rc.other(committer, r)))
+	rc.converged()
+}
+
+// F23 on a fleet: a member serves only the filters a bitmap answers.
+func aFilterABitmapCannotAnswerIsRefusedOnAFleet(t *testing.T, c Cluster) {
+	rc := newRepoCase(t, c, "fleet-f23")
+	filtersABitmapCannotAnswerAreRefused(t, c, rc.url(rc.other(rc.committer())))
 	rc.converged()
 }
 

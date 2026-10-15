@@ -802,6 +802,31 @@ git has read it and started its answer, not when a slow client finishes
 downloading. A blobless clone needs protocol v2, git's default since 2.28 —
 under v0 a fetch of a blob the client never saw advertised is refused.
 
+**The partial-clone filters served.** A cache serves the filters git can
+answer from a repository's bitmap and no others: `blob:none`, `blob:limit=<n>`,
+`tree:0`, `object:type=<type>`, and a `combine:` of them. git refuses the rest
+in its own words — `filter 'sparse:oid' not supported`, and
+`tree filter allows max depth 0, but got <n>` for `tree:<n>` past 0 — because
+git answers those by walking every object the clone reaches, whatever the node
+holds. The served ones are read from the bitmap where the node holds one, and
+it does not always: until the node's first background index of its copy of a
+repository, a rebuilt copy included — which waits for the runs ahead of it and
+for room in the node's memory, so a node that has just joined indexes the last
+of its repositories only after all the others, on four cores a quarter of an
+hour or more for 50 GB of them — and for a repository whose bitmap is past the
+node's memory, which it indexes without one (the
+[`code_maintenance_refused`](../reference/alarms.md) alarm says which;
+[background indexing and memory](#the-cache-on-a-git-node) say what each
+costs). There every clone, filtered or not, walks the history it reaches,
+bounded only by the node's transfer slots and their deadlines — so plan the
+memory of a node serving blobless clones of its largest repositories from the
+bitmap's figure.
+No way of working is lost by the refusals: a blobless clone with a sparse
+checkout fetches the files a `sparse:oid` would have named, as it needs them.
+It is housekeeping, not a security boundary — a shallow clone also does without
+the bitmap and is served, held like every transfer to the node's transfer slots
+and their deadlines.
+
 ---
 
 ## What git prints, and what it means
@@ -856,6 +881,8 @@ words, since git does not read the header.
 | The rows cannot be read into a cache | `<repo>'s rows cannot be read into a cache on this node (code_bad_snapshot): <why>; retrying does not end it — an operator must act on this node's code_bad_snapshot line, and a node running a newer build may serve it` (500, no `Retry-After`) | Do not retry this node: it reads the same rows again. The rows hold something this build cannot install (a ref, an id or a pack's sizes), and the sentence names the row; a node of a newer build may install it. It is an operator's problem: the node logs `code_bad_snapshot` at `ERROR`. |
 | A damaged copy, rebuilt moments ago, is still damaged | `<repo>'s cache on this node was rebuilt moments ago and is still damaged: retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)), which says what the rebuild could not repair. |
 | git failed on the node, for a reason the engine does not classify | `git <command> failed on this node (<kind>): <git's last line>` (500) | git's last line says why. A hand-built push of a line git's protocol does not have reads `protocol error` there. The node logs `code_push_failed` or `code_fetch_failed`. |
+| A partial clone asks for `--filter=sparse:oid=…` | `fatal: remote error: filter 'sparse:oid' not supported` | Clone with `--filter=blob:none` and a sparse checkout: the files are fetched as the checkout needs them ([the filters served](#a-push-end-to-end)). |
+| A partial clone asks for `--filter=tree:<n>` with `<n>` past 0 | `fatal: remote error: tree filter allows max depth 0, but got <n>` | Clone with `--filter=tree:0` or `--filter=blob:none`. |
 | A fetch request past its repository's bound | `this fetch request is larger than any repository <name> holds could need …` (413) | Fetch in parts. |
 | A fetch request past a quarter of the node's room for large requests | `this fetch request is larger than this node takes from one credential at once …` (413) | Fetch through a node with more cores and the memory to back them (its git transfer slots size the room), or fewer objects at once. |
 | The node's room for large requests is in use | `this node's room for large fetch requests is in use …` (503) | Retry, or against another node. |

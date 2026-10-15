@@ -32,6 +32,12 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*code.DefaultLimits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
 		{Key: "uploadpack.allowFilter", Value: "true"},
+		{Key: "uploadpackfilter.allow", Value: "false"},
+		{Key: "uploadpackfilter.blob:none.allow", Value: "true"},
+		{Key: "uploadpackfilter.blob:limit.allow", Value: "true"},
+		{Key: "uploadpackfilter.tree.maxDepth", Value: "0"},
+		{Key: "uploadpackfilter.object:type.allow", Value: "true"},
+		{Key: "uploadpackfilter.combine.allow", Value: "true"},
 		{Key: "uploadpack.allowRefInWant", Value: "true"},
 		{Key: "uploadpack.keepAlive", Value: "5"},
 	}
