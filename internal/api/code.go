@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	seatplacement "github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE ENGINE'S OWN GIT HOST, ON THE API: smart HTTP under /git/ for a person's
@@ -58,7 +59,7 @@ type GitRoutes interface {
 	InfoRefs() http.Handler
 	UploadPack() http.Handler
 	ReceivePack() http.Handler
-	StartVerify(ctx context.Context, name string, repair bool) (host.Verification, error)
+	StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
 	Verification(name string, id uuid.UUID) (host.Verification, bool)
 }
 
@@ -420,8 +421,22 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// THE CALLER'S FLOOR, where it names one: a position on the code log it
+	// read at, which the copy is brought to with no barrier (see
+	// host.Server.StartVerify).
+	var floor statelog.Position
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_position")); raw != "" {
+		at, err := statelog.ParsePosition(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": stream.CodeBadParams, "detail": "min_position: " + err.Error(),
+			})
+			return
+		}
+		floor = at
+	}
 	name := r.PathValue("name")
-	v, err := g.StartVerify(r.Context(), name, repair)
+	v, err := g.StartVerify(r.Context(), name, repair, floor)
 	var running *host.VerifyRunningError
 	switch {
 	case err == nil:
@@ -430,6 +445,11 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": stream.CodeNotFound, "detail": notDeclared(name),
+		})
+	case errors.Is(err, code.ErrInvalid):
+		// A floor on another log than the repositories' rows.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": stream.CodeBadParams, "detail": err.Error(),
 		})
 	case errors.Is(err, cache.ErrNotHeld):
 		writeJSON(w, http.StatusNotFound, map[string]string{

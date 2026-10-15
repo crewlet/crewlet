@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,7 +51,7 @@ func awaitVerify(t *testing.T, h *host.Server, name string, id uuid.UUID) host.V
 func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	h := c.Fleet.Nodes()[0].Host()
-	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false); !errors.Is(err, cache.ErrNotHeld) {
+	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{}); !errors.Is(err, cache.ErrNotHeld) {
 		t.Fatalf("a verify of a repository this node never served answered %v, want cache.ErrNotHeld", err)
 	}
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -58,7 +59,7 @@ func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	c.MustPush(p, work, "main")
 
-	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false)
+	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
 	if err != nil {
 		t.Fatalf("a verify of %s failed to start: %v", codetest.RepoName, err)
 	}
@@ -79,12 +80,12 @@ func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 		t.Error("the node answered a verification it never made")
 	}
 	for _, name := range []string{"nobody-declared-this", "not a name"} {
-		if _, err := h.StartVerify(c.Ctx, name, false); !errors.Is(err, code.ErrRepoNotFound) {
+		if _, err := h.StartVerify(c.Ctx, name, false, statelog.Position{}); !errors.Is(err, code.ErrRepoNotFound) {
 			t.Errorf("a verify of %q answered %v, want code.ErrRepoNotFound", name, err)
 		}
 	}
 	h.Stop(c.Ctx)
-	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false); !errors.Is(err, host.ErrStopping) {
+	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{}); !errors.Is(err, host.ErrStopping) {
 		t.Errorf("a verify of a stopped host answered %v, want host.ErrStopping", err)
 	}
 	if v, ok := h.Verification(codetest.RepoName, started.ID); !ok || v.State != host.VerifyDone {
@@ -137,7 +138,7 @@ func TestAVerifyOutlivesItsRequest(t *testing.T) {
 
 	holding.Store(true)
 	ctx, cancel := context.WithCancel(c.Ctx)
-	started, err := h.StartVerify(ctx, codetest.RepoName, true)
+	started, err := h.StartVerify(ctx, codetest.RepoName, true, statelog.Position{})
 	if err != nil {
 		t.Fatalf("a repair failed to start: %v", err)
 	}
@@ -147,13 +148,13 @@ func TestAVerifyOutlivesItsRequest(t *testing.T) {
 		t.Fatal("the check never reached its sync")
 	}
 	cancel()
-	shared, err := h.StartVerify(c.Ctx, codetest.RepoName, true)
+	shared, err := h.StartVerify(c.Ctx, codetest.RepoName, true, statelog.Position{})
 	if err != nil || shared.ID != started.ID {
 		t.Errorf("a second asker of the same repair was handed %+v, %v; want the running %s", shared, err,
 			started.ID)
 	}
 	var running *host.VerifyRunningError
-	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false); !errors.As(err, &running) ||
+	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{}); !errors.As(err, &running) ||
 		running.Running.ID != started.ID {
 		t.Errorf("a check beside a running repair answered %v, want a VerifyRunningError naming %s", err,
 			started.ID)
@@ -208,7 +209,7 @@ func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 
 	holding.Store(true)
 	began := time.Now()
-	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false)
+	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
 	if err != nil {
 		t.Fatalf("a verify failed to start: %v", err)
 	}
@@ -231,6 +232,62 @@ func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 	if ended := awaitVerify(t, h, codetest.RepoName, started.ID); ended.State != host.VerifyDone ||
 		!ended.Deadline.IsZero() {
 		t.Errorf("the verify ended %+v, want done and stating no deadline", ended)
+	}
+}
+
+// A VERIFY AT ITS CALLER'S FLOOR APPENDS NO BARRIER: named a position on the
+// code log — a listing's, read at the head once for a whole sweep — the
+// repository is resolved and its copy brought to that position, and a copy
+// already there is checked as it is, so nothing of the verify reads at the
+// log's head. Named none, the copy is brought to the head. A floor on another
+// stream is no floor on a repository's rows, and is refused.
+//
+// Mutation: bring the copy to the head whatever the floor, and the floored
+// verify reads through the barrier.
+func TestAVerifyAtItsCallersFloorAppendsNoBarrier(t *testing.T) {
+	e := &recording{}
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
+	h := c.Fleet.Nodes()[0].Host()
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	ref, err := e.Estate.Resolve(c.Ctx, code.ResolveQuery{Name: codetest.RepoName,
+		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verify := func(floor statelog.Position) []call {
+		t.Helper()
+		e.mu.Lock()
+		e.calls = nil
+		e.mu.Unlock()
+		started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, floor)
+		if err != nil {
+			t.Fatalf("a verify at %v failed to start: %v", floor, err)
+		}
+		if ended := awaitVerify(t, h, codetest.RepoName, started.ID); ended.State != host.VerifyDone ||
+			len(ended.Report.Problems) != 0 {
+			t.Fatalf("a verify at %v ended %+v, want done and clean", floor, ended)
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return slices.Clone(e.calls)
+	}
+	for _, call := range verify(ref.Position) {
+		if call.level == statelog.ReadLinearizable {
+			t.Errorf("a verify at its caller's floor %s read %s at the log's head", ref.Position, call.op)
+		}
+	}
+	if head := verify(statelog.Position{}); !slices.ContainsFunc(head, func(c call) bool {
+		return c.op == "state" && c.level == statelog.ReadLinearizable
+	}) {
+		t.Errorf("a verify naming no floor read %v, want its copy brought to the log's head", head)
+	}
+	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false,
+		statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 1}); !errors.Is(err, code.ErrInvalid) {
+		t.Errorf("a verify at a floor on another stream answered %v, want code.ErrInvalid", err)
 	}
 }
 
@@ -298,7 +355,7 @@ func TestAVerifyTheStopCutsShortIsAnsweredStopping(t *testing.T) {
 			defer cancel()
 			answered := make(chan error, 1)
 			go func() {
-				_, err := h.StartVerify(ctx, codetest.RepoName, false)
+				_, err := h.StartVerify(ctx, codetest.RepoName, false, statelog.Position{})
 				answered <- err
 			}()
 			select {
@@ -347,7 +404,7 @@ func TestAVerifyTheStopCutsShortIsAnsweredStopping(t *testing.T) {
 		p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 		c.MustPush(p, work, "main")
 		holding.Store(true)
-		started, err := h.StartVerify(c.Ctx, codetest.RepoName, false)
+		started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
 		if err != nil {
 			t.Fatalf("a verify failed to start: %v", err)
 		}
