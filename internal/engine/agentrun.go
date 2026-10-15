@@ -78,12 +78,18 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
+	// THE RUN'S IDENTITY, read once: the row the launch writes and the
+	// session the box's calls come back through name one trace — the span
+	// that launched the run — so a bridged call is filed in the turn's trace
+	// and under the same parent as the box itself.
+	ref := l.runTurnRef(ctx)
 	endpoint := e.bridge.Open(&mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
 		Ledger:  ledger,
+		Trace:   ref.Trace(),
 	})
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
@@ -133,7 +139,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	}
 
 	_, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
-		Turn:       l.runTurnRef(ctx),
+		Turn:       ref,
 		Spec:       spec,
 		Setup:      setup,
 		MCPServers: servers,

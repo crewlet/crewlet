@@ -13,9 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/tracing/tracingtest"
 )
 
 // heldTool is a tool that answers only once released, so a test can hold a
@@ -58,6 +61,13 @@ type bridgedRun struct {
 // agent would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
+	return launchBridgedIn(t.Context(), t, turnID, offered...)
+}
+
+// launchBridgedIn is [launchBridged] launched under ctx — the span a turn
+// launches its run from.
+func launchBridgedIn(ctx context.Context, t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
+	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("test-key"), BaseURL: server.URL})
@@ -79,7 +89,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		engine: e, turn: &turnctx.Turn{RunID: turnID, Seat: seat}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
-	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+	if err := launcher.LaunchExecutor(ctx, runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
 		Surface: tools.NewSurface("execute", reg.Snapshot(), names),
 	}); err != nil {
@@ -94,9 +104,9 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		t.Fatal("the job was handed no bridge to dial")
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+	session, err := client.Connect(dialCtx, &mcp.StreamableClientTransport{
 		Endpoint: endpoint, HTTPClient: httpxtest.Pool(t),
 	}, nil)
 	if err != nil {
@@ -188,5 +198,30 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 	if len(row.BridgeCalls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("the next job took the last one's late call: calls %+v, spend %+v",
 			row.BridgeCalls, row.Launch.Bridged)
+	}
+}
+
+// A BRIDGED CALL IS FILED IN ITS RUN'S TRACE, under the span that launched the
+// run — the parent the box's own TRACEPARENT names — rather than as the root
+// of a trace of its own. Driven through the real launcher and the real bridge,
+// because the trace reaches the session through one field of LaunchExecutor
+// and nothing else can show it was set.
+//
+// Mutation, red here: open the session without the run's trace.
+func TestABridgedCallIsFiledInItsRunsTrace(t *testing.T) {
+	t.Parallel()
+	launch := events.NewTrace()
+	tracingtest.Watch(t, launch.TraceID)
+	read := newHeldTool("read_page")
+	close(read.release)
+	run := launchBridgedIn(tracing.WithRemote(t.Context(), launch), t, "t-traced", read)
+	if got := run.row(t, "t-traced").Trace(); got != launch {
+		t.Fatalf("the run's row names trace %+v, want the launching span's %+v", got, launch)
+	}
+
+	run.call(t, "read_page")
+	span := tracingtest.Only(t, launch.TraceID, "tool.call")
+	if got := span.Parent().SpanID().String(); got != launch.SpanID {
+		t.Errorf("the bridged tool.call's parent is %s, want the launching span %s", got, launch.SpanID)
 	}
 }
