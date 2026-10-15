@@ -565,7 +565,12 @@ crewlet budgets show                       # usage per scope
 The environment wins over the config so an operator who exported a token
 deliberately gets that one. There is no token *default* on the command line:
 a token typed as an argument is in the shell history, in `ps`, and in any CI
-log that echoes the command.
+log that echoes the command. The config is read for these defaults alone, so
+with `-url` and `$CREWLET_API_TOKEN` exported no config is read at all — the
+way to reach a node from a laptop or a CI job that holds no Tier A file — and
+every command that talks to a running node (`backup`, `budgets`, `code`,
+`fleet broker`, `objects status`, `retention`, `seats`, `work purge`) takes
+them so.
 
 The **ceilings** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
@@ -812,7 +817,8 @@ the token is bound to: the repositories are rows the data nodes keep, and a git
 node's cache is files only its own process touches, so nothing here opens
 either. Like every node client they find the node and the token from the Tier
 A file (`-url` and `-token` override it, and `$CREWLET_API_TOKEN` comes before
-its first token). `export` and `credential` are **client-side**: your own git,
+its first token; with `-url` and the variable exported, no Tier A file is
+read). `export` and `credential` are **client-side**: your own git,
 with your own environment, talks to the node's git routes exactly as anyone's
 git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
 

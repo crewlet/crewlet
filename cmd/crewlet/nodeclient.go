@@ -110,14 +110,22 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	}
 
 	base, bearer := *addr, *token
+	if bearer == "" {
+		// THE ENVIRONMENT BEFORE THE FILE — the token's first default, and
+		// one that needs no file: read only inside the branch below, an
+		// operator who named the node with -url and exported the token had
+		// supplied both and was still refused for a config this machine
+		// does not hold.
+		bearer = exportedToken()
+	}
 	if base == "" || bearer == "" {
 		// The config is read for the DEFAULTS only, so an operator who
-		// supplied both flags can act on a node whose config file this
-		// machine does not have.
+		// supplied the node and the token can act on a node whose config
+		// file this machine does not have.
 		boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 		if err != nil {
-			return nil, fmt.Errorf("%w\n\nPass -url and -token to reach a node "+
-				"whose config this machine does not hold", err)
+			return nil, fmt.Errorf("%w\n\nPass -url, and -token or %s, to reach a node "+
+				"whose config this machine does not hold", err, apiTokenEnv)
 		}
 		if base == "" {
 			base, err = nodeBaseURL(boot, "", "this node")

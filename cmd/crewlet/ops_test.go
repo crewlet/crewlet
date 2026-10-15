@@ -358,6 +358,33 @@ func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
 	}
 }
 
+// AN EXPORTED TOKEN AND -url NEED NO CONFIG. The Tier A file is read for the
+// defaults alone, and the token's first default is the environment, so an
+// operator who named the node and exported a token has supplied both and can
+// act on a node whose config this machine does not hold — a laptop, a CI job;
+// and one who supplied neither is told that the variable would do.
+//
+// Mutation: read the environment only after loading Tier A, and the command
+// fails on a config file nothing needed.
+func TestAnExportedTokenAndAURLNeedNoConfig(t *testing.T) {
+	node := newFakeNode(t)
+	missing := filepath.Join(t.TempDir(), "nowhere.yaml")
+	t.Setenv(apiTokenEnv, "exported")
+
+	if _, _, err := cli(t, "budgets", "show", "-config", missing, "-url", node.server.URL); err != nil {
+		t.Fatalf("budgets show with -url and an exported token = %v, want no config read", err)
+	}
+	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
+		t.Errorf("Authorization = %q, want the exported token", got)
+	}
+
+	t.Setenv(apiTokenEnv, "")
+	_, _, err := cli(t, "budgets", "show", "-config", missing, "-url", node.server.URL)
+	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {
+		t.Errorf("budgets show with -url, no token and no config = %v, want it to name %s", err, apiTokenEnv)
+	}
+}
+
 // A NODE THAT IS NOT THERE says what to do about it. "connection refused"
 // alone sends an operator to the network; the actual answer is usually that
 // the engine is not running, because that is where this state lives.

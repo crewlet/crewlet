@@ -1719,9 +1719,10 @@ crewlet budgets show      # the durable counters, read from a running node
 ```
 
 It talks to a node rather than to a file: the counters are the fleet's, and on
-the default topology they live inside the running engine. `-url` and `-token`
-name another node; without them they are taken from the `api` block of the
-config on the command line.
+the default topology they live inside the running engine. `-url` names another
+node and `$CREWLET_API_TOKEN` (or `-token`) the token to send; what neither
+gives is taken from the `api` block of the config on the command line, which
+is not read at all when both are given.
 
 ### Token Budgets
 
