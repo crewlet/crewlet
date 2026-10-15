@@ -20,9 +20,9 @@ import (
 // A seat's page drew "Turns in the record" as the LENGTH of its phase history —
 // a page of at most fifty, read from the answering node's own event log — so a
 // busy seat's number stopped at fifty, a quiet one's described one node of the
-// fleet, and neither said over what window. Here the numbers are every node's
-// days, summed: the same on whichever node is asked, still counting a node
-// that has left, and labelled with the days they cover.
+// fleet, and neither said over what window. Here the numbers are every data
+// node's days, summed: the same on whichever node is asked, still counting a
+// node that has left, and labelled with the days they cover.
 
 // DefaultSeatActivityDays is the window a seat's activity covers when the
 // question names none: a week, which is what a profile's KPIs compare against
@@ -234,7 +234,7 @@ type seatActivityFold struct {
 	chart         []chartSeat
 }
 
-// foldSeatActivity sums every node's days into one row per seat.
+// foldSeatActivity sums every data node's days into one row per seat.
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes, the
 // reviewed-only denominator, the merged quantiles — is testable without a
