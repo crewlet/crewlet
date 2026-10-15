@@ -539,7 +539,7 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // stopCodeHost is [Engine.stopCodeHost] on this runtime, and the stop its own
 // failure path takes ([native.shutdown]).
 //
-// ONCE, AND BOUNDED ONCE, by [codeHostStopBudget]: everything the host waits
+// ONCE, AND BOUNDED ONCE, by [host.StopBudget]: everything the host waits
 // for has already been cancelled by the time it waits, so what is left is
 // git's own exit and the handlers' answers to clients that are gone. Both the
 // teardown and the runtime's shutdown ask for it, and [host.Server.Stop] is
@@ -557,16 +557,9 @@ func (n *native) stopCodeHost(ctx context.Context) {
 	n.codeHostStop.stop(ctx, n.codeHost.Stop)
 }
 
-// codeHostStopBudget bounds a stop's wait for the code host's cancelled work:
-// THREE KILL GRACES. A cancelled git process is sent SIGTERM and, gitproc.KillGrace
-// later, SIGKILL; a pipe a straggler still holds is closed a further KillGrace
-// after that; and the third is for what follows a process's end — a handler's
-// answer to a client that has gone, an upload abandoned under its own bound.
-const codeHostStopBudget = 3 * gitproc.KillGrace
-
 // boundedStop runs a stop ONCE, its wait bounded by budget, however many
 // callers ask for it: every caller returns once that one stop has, and none
-// waits a second budget. Its zero value bounds by [codeHostStopBudget].
+// waits a second budget. Its zero value bounds by [host.StopBudget].
 type boundedStop struct {
 	once   sync.Once
 	budget time.Duration
@@ -580,7 +573,7 @@ func (b *boundedStop) stop(ctx context.Context, stop func(context.Context)) {
 	b.once.Do(func() {
 		budget := b.budget
 		if budget <= 0 {
-			budget = codeHostStopBudget
+			budget = host.StopBudget
 		}
 		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 		defer cancel()
