@@ -533,8 +533,8 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 // turns tab rather than on every poll of the detail.
 //
 // FROM THE TRACKER'S ROWS, NOT THE EVENT HISTORY. `turns{work_item=}` answers
-// a similar-looking question from each node's event store, which keeps thirty
-// days and is scattered across the fleet; this is the task's own durable
+// a similar-looking question from each data node's event store, which keeps
+// thirty days and is scattered across the fleet; this is the task's own durable
 // account — the same rows its `spend` sums — so a turn listed here is a turn
 // the cost panel counted, on any node, at any age.
 func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {

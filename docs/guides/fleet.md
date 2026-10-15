@@ -22,11 +22,11 @@ so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 
 **One thing does divide by itself.** Above 10 000 indexed documents a fleet
-splits the knowledge search's 64 buckets between its live nodes, so each scans
-a share of the corpus rather than all of it. Nothing is configured and nothing
-is rebuilt — adding a node divides the buckets again on the next search, and an
-answer a node did not come back for is labelled partial rather than silently
-short. See [Search](search.md).
+splits the knowledge search's 64 buckets between its live data nodes, so each
+scans a share of the corpus rather than all of it. Nothing is configured and
+nothing is rebuilt — adding a data node divides the buckets again on the next
+search, and an answer a node did not come back for is labelled partial rather
+than silently short. See [Search](search.md).
 
 ## What a fleet needs
 
@@ -742,11 +742,13 @@ The consequences worth stating plainly:
   counts it as behind on config and names the revision it runs, which
   [`GET /fleet`](../reference/api-endpoints.md#get-fleet) gives as
   `config_serving_revision_id`.
-- **A node that leaves takes its turn-level history with it.** Every node's
-  event store holds the events it published, and the dashboard's turns,
-  traces and event log are read from every live node at query time. A node
-  you drain for good, or a node whose volume you discard, is a node whose
-  turns, phases and events no screen can show again — the spend, turn
+- **A node that leaves takes its turn-level history with it.** Every data
+  node's event store holds the events it published and the ones it keeps in
+  custody for a node without `data`, and the dashboard's turns, traces and
+  event log are read from every live data node at query time. A data node
+  you drain for good, or one whose volume you discard, is a node whose
+  turns, phases and events — and those it kept for a node without `data` —
+  no screen can show again — the spend, turn
   counts and page reads it recorded survive it, in the replicated `usage`
   domain. Export to an OTLP sink first if you need that detail kept. See
   [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history).
@@ -774,8 +776,8 @@ and keeps the records a joiner would still need.
 
 What that means for an operator: **upgrade every node before letting any node
 fall below the trim floor.** In practice this is the ordinary rolling deploy
-plus one check — watch **Settings › Nodes** until every node reports a snapshot
-again before you start restoring, rebuilding or adding nodes.
+plus one check — watch **Settings › Nodes** until every data node reports a
+snapshot again before you start restoring, rebuilding or adding nodes.
 
 ## Watching a fleet
 
@@ -916,8 +918,8 @@ deliberate — see [Backup and restore](backup.md). Until it trims, nothing can
 fall below the floor, and this path is never needed.
 
 Watch for **`statelog_no_snapshot_yet`** (a warning), which says a node has
-never successfully taken one and why. A fleet where every node logs it has no
-recovery path: a member that falls behind will find nothing to adopt, months
+never successfully taken one and why. A fleet where every data node logs it has
+no recovery path: a member that falls behind will find nothing to adopt, months
 later, in the one situation where it matters.
 
 It is logged once per change of reason rather than on every retry, so the line

@@ -20,7 +20,7 @@ Seven kinds ship in this release:
 
 The motivating case is a review table an agent hands to a team: the agent
 publishes it, three reviewers and the agent tick boxes and pick statuses in it
-at the same time, every edit lands on every node in the same order, and
+at the same time, every edit lands on every data node in the same order, and
 everybody sees who is in which row.
 
 ```mermaid
@@ -202,7 +202,7 @@ uploads_outstanding`, naming when the oldest reservation expires.
 
 **The quotas are Tier A**, because a tenant administrator must not raise their
 own, and each record that consumes quota carries the limits it was decided
-under, so every node applies it identically:
+under, so every data node applies it identically:
 
 | Key | Default | Bounds |
 |---|---|---|
@@ -503,9 +503,9 @@ flowchart LR
 **The write is decided where it is applied.** Each store is one sequenced log:
 the API decides what needs identity or the org chart (the caller's role on the
 artifact, whether the caller is an agent, the quotas in force) and stamps it
-into the record; every node's applier then decides the rest from the record
+into the record; every data node's applier then decides the rest from the record
 and its own rows (names, schema, field rules, version guards, caps), in log
-order, so every node reaches the same verdict: `applied`, `conflict`,
+order, so every data node reaches the same verdict: `applied`, `conflict`,
 `invalid`, `forbidden`, `quota` or `gone`. The writer reads its own verdict
 back; a `conflict` answer carries the current documents to merge with. A sheet
 in the dashboard shows an edit at once as pending and makes it solid when the

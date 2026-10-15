@@ -2336,7 +2336,7 @@ type LaunchRecord struct {
 	// [PendingRun.Charged] is: the publish sits inside the part of the
 	// completion tail that is retried, the retry may run on another node or
 	// after a restart, and every reader of that record — the spend rollup,
-	// each node's daily usage — counts it as spend. A second copy is a
+	// each data node's daily usage — counts it as spend. A second copy is a
 	// second charge on every surface that shows one. WRITTEN BY THE
 	// RELEASE ([Release.Published]), the one write through which a retry
 	// reaches the publish again.

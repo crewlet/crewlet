@@ -325,7 +325,7 @@ A few things worth knowing when deploying Crewlet:
   signed. Keep both ports on a private network. The decision is
   [ADR-0031](adr/0031-every-state-log-record-is-signed.md), and the note's
   [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
-- **Removing a person erases their values from every node's rows — and not
+- **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
   bound to them, before any record carrying them is published. Removing them
@@ -360,7 +360,7 @@ A few things worth knowing when deploying Crewlet:
   `jane.doe`), so after a removal the address's local part is usually still
   readable. If a person's login has to be erasable, do not derive it from a
   personal address: give them one that names nothing about them. See
-  [Removing somebody erases what is theirs from every node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
+  [Removing somebody erases what is theirs from every data node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows).
 - **Personal data in configuration revisions.** Every node keeps its own copy
   of every company-config revision it has ever met, in an append-only table
   that is in every backup of that node. A human seat's `email` and `contact`

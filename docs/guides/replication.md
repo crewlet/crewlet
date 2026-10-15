@@ -2,9 +2,8 @@
 
 Worklet and Doclet, Crewlet's identity directory, its artifacts, artifact
 datastores and Dashboard Assistant conversations are **replicated state
-machines**: eight domains on one framework, the embeddings
-and each node's usage history riding it as
-[compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day).
+machines**: eight domains on one framework, the embeddings and each data node's usage history riding it as
+[compacted domains](#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
 One ordered stream per domain is the write-ahead log; every data node applies it
 into its own SQL database; the checkpoint commits in the same transaction as the
 rows it covers. That last clause is the whole design: a node's position and its
@@ -28,7 +27,7 @@ are stated first.
 The anchor and the version are equal only while every accepted record produces
 rows, and an apply **gate** is by definition the rule that makes them differ.
 An evicted node's append is accepted by the broker at sequence 102 and dropped
-by every applier: the object's version stays at 100 on every node while the
+by every applier: the object's version stays at 100 on every data node while the
 broker's last message on that subject is 102. A writer that formed its
 expectation from the version would be refused, re-read 100, and burn its whole
 round budget — for at least the trim's age floor, and unbounded above while any
@@ -214,7 +213,7 @@ was queued before the join files its writes like any other, however old the
 work is.
 
 What the ledger can do is **lose rows**, and it keeps a watermark saying how far
-back it may have. Each node deletes its rows thirty days after applying them,
+back it may have. Each data node deletes its rows thirty days after applying them,
 and records how far back each pass deleted. An operation minted before the
 watermark whose row is gone is answered **`unknown`** — before anything is
 published — rather than decided a second time, so a retry a month on is never
@@ -403,12 +402,13 @@ above, never its own.
 This is the sentence the backup schedule hangs on.
 
 **Above the trim floor**, the log holds every record on R replicas and every
-node holds the applied rows. Losing a node loses nothing.
+data node holds the applied rows. Losing a node loses nothing.
 
 **Below the trim floor the log may already hold nothing — the trim has licensed
-deleting it — and each node's own database file is the only copy of that
-history** — N of them, independent, none replicated. Losing history below the
-floor takes all N disks, and it is covered **only** by the backup gate.
+deleting it — and each data node's replicated estate is the only copy of that
+history** — one per data node, independent, none replicated. Losing history
+below the floor takes every data node's disk, and it is covered **only** by the
+backup gate.
 
 That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
@@ -445,7 +445,7 @@ manifest, before anything is transferred; see
 
 ## A node resumes from its rows, never from its reader
 
-Each node reads each log through a durable consumer of its own on the broker,
+Each data node reads each log through a durable consumer of its own on the broker,
 named after the node. That consumer's position is a second, weaker number than
 the checkpoint: it moves *after* the commit, and the broker keeps it when the
 node's database does not. The checkpoint is what the node resumes from — but
@@ -491,8 +491,8 @@ is not answering, either one can fail. What happens then depends on the drift:
   node reported itself up.
 
 A rebuild touches only this node. No peer reads through its consumer, and no
-retention term reads it either: the trim works from the positions each node
-publishes from its own rows. What the rebuild makes safe is **losing the
+retention term reads it either: the trim works from the positions each data
+node publishes from its own rows. What the rebuild makes safe is **losing the
 replicated database while the broker keeps its estate**. A node started on an
 empty `crewlet-replicated.db` replays each log from the broker, or adopts a
 peer's snapshot where the trim has already removed the start of one. It no
@@ -721,7 +721,7 @@ applies anything new. It happens once per change, on every data node; the
 between and how many rows it wrote. Both domains are at rule set 1, the one
 this build applies as it goes.
 
-## Two compacted domains: the embeddings and each node's day
+## Two compacted domains: the embeddings and each data node's day
 
 Two domains do not keep a history at all. Their streams keep **one message per
 subject** — a keyed table rather than a log — so a node that joins replays the
@@ -734,17 +734,17 @@ hold identical rows.
 | **vectors** | `CREWLET_TRACKER_VECTORS` | embedded source | the fleet's one embedding duty | 90 days per message; the rows until the source is forgotten |
 | **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat, schedule or person) | **every data node, for its own days only** | 181 days |
 
-**`usage` is what makes history fleet-wide.** Each node derives its own day —
-the spend by phase, worker, model and provider slot, the turns that ended and
-how (failed, reviewed, first pass, sent back, a duration histogram), the pages
-its seats read, the schedules it fired — from its own event log, every 15
+**`usage` is what makes history fleet-wide.** Each data node derives its own
+day — the spend by phase, worker, model and provider slot, the turns that ended
+and how (failed, reviewed, first pass, sent back, a duration histogram), the
+pages its seats read, the schedules it fired — from its own event log, every 15
 seconds while the day moves, and publishes each object's whole cumulative value.
 A node without `data` keeps no event log of its own: what its seats did is
 handed to the data node that keeps its events, and is counted in that node's
-day. Every data node applies every node's days, so any data node answers for
-the fleet and a node that leaves takes nothing with it: its days stay in every
-peer's rows, and a node that joins later replays them from the stream. Because the node is part
-of the subject, no two nodes ever write one object and nothing is arbitrated;
+day. Every data node applies every data node's days, so any data node answers
+for the fleet and a node that leaves takes nothing with it: its days stay in
+every peer's rows, and a node that joins later replays them from the stream.
+Because the node is part of the subject, no two nodes ever write one object and nothing is arbitrated;
 an apply replaces the object's rows.
 
 A day is cut on the company's clock (`timezone`). A node re-derives today and
@@ -778,7 +778,7 @@ can be days back after a long partition. The settle records the oldest of them
 (the node's own `usage_rederive` rows) and the next tick derives every day from
 it again. Never a day older than the event log's 30-day read floor: its rows
 may already be swept, and a short derivation would replace the whole day on
-every node with less, so such a day keeps the value it was last published at
+every data node with less, so such a day keeps the value it was last published at
 and the node logs `usage_rederive_past_floor` once.
 
 A day derived again is cut on the instants it was first cut on (the node's
@@ -981,8 +981,8 @@ replication:
 | `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
 | `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops serving the estate: the seats it holds stay and read it from the other data nodes, and a new one is admitted only on a data node whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
 | `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
-| `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever. The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). A record more than one gate holds is logged under the first the applier asks — the framework's two, then the writer's eviction, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
-| `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#who-a-refusal-names)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |
+| `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each data node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever. The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). A record more than one gate holds is logged under the first the applier asks — the framework's two, then the writer's eviction, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
+| `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#who-a-refusal-names)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each data node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
 | `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows to the ledger's thirty-day sweep, and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
 | `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record; `restored`, followed from its end; or `abandoned`, followed from this node's own checkpoint with the records of the generation an evicted peer held void) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`) and the generation its rows stood at (`from_generation` — every generation strictly between it and the new one is abandoned), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). A restored reanchor the operator ran with `-discard` names, on the start as `discarding` and on the completion as `discarded`, the sequence of the newest record written after the restore that it applied on no node (0 when it discarded none). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |

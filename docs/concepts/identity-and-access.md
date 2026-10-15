@@ -2015,7 +2015,7 @@ route's:
 | **Reset two-step verification** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
 | **Sign out everywhere** | Moves their revocation epoch: every session — and every personal token and password reset link — they hold ends |
 | **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
-| **Remove** | Typed back by login. Deletes the person, frees their seat, which stands vacant in the org chart, and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting or creating them on a seat again |
+| **Remove** | Typed back by login. Deletes the person, frees their seat, which stands vacant in the org chart, and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows); undone only by inviting or creating them on a seat again |
 
 Its **Human seats** list shows every human seat with its holder or its open
 invitation, and its tile counts the seats nothing holds. Every write among these asks
@@ -2765,7 +2765,7 @@ Identity has **two trails**, and they answer different questions.
 
 Anybody who can reach the API can fail to sign in as often as they like, for
 free, with no credential to revoke and no identity on the row. A row per
-attempt would hand the size of every node's event store — and of every backup
+attempt would hand the size of every data node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
 sign-in, a refused second factor, an
 invitation or password reset link that answers `410` without
@@ -3022,7 +3022,7 @@ claim. They do not all travel. The deferred records and their scope are this
 node's own verdict about bytes its build could not decode, and are scrubbed
 out of any snapshot a node donates to a joining peer. The operation ledger
 **travels** with the snapshot: its rows are what every data node writes from
-the same records, only the instant each node applied them differs, and a joiner
+the same records, only the instant each data node applied them differs, and a joiner
 that arrived without them could not tell a retry of something the donor
 applied from a first attempt — in this estate, a second enrolment, a second
 permission change or a second bump of somebody's revocation epoch.
@@ -3118,7 +3118,7 @@ person's own row as well as the credentials listing, so the next change to
 their credentials cannot bring it back. See
 [Retention](../guides/retention.md#the-identity-duties).
 
-### Removing somebody erases what is theirs from every node's rows
+### Removing somebody erases what is theirs from every data node's rows
 
 A removal deletes the person's row, their credentials, their sessions and their
 revocation epoch, and leaves a **tombstone** — who removed them, when, and what

@@ -1697,12 +1697,14 @@ type Stream struct {
 	IamLogMaxBytes int64 `yaml:"iam_log_max_bytes,omitempty" json:"iam_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."`
 
 	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
-	// stream every node publishes its own company days to, so that spend,
-	// turn and read history is answered fleet-wide and outlives the node
-	// that spent it.
+	// stream every data node publishes its own company days to (a node
+	// without `data` publishes none: its events are kept in one data node's
+	// log by custody and counted in that node's day), so that spend, turn
+	// and read history is answered fleet-wide and outlives the node that
+	// spent it.
 	//
 	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
-	// (node, day, seat or schedule) for 181 days, so its size is the
+	// (node, day, seat, schedule or person) for 181 days, so its size is the
 	// number of those objects rather than how busy they were. A three-node
 	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
 	// default is four times that. Unset takes the default rather than a
@@ -1720,7 +1722,7 @@ type Stream struct {
 	// CREATED with, and crossing it refuses the append — the day's figures
 	// stop replicating and the log's headroom alarm names this domain —
 	// rather than dropping the oldest day.
-	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
+	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each data node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
 
 	// ArtifactsLogMaxBytes is the byte ceiling on the artifacts log, the
 	// ordered stream every create, publish, share and trash of an artifact

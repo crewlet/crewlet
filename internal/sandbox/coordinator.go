@@ -1787,8 +1787,8 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // no phase record at all: the executor that launched it publishes nothing when
 // it suspends, and its resumed record is the EXECUTOR's — its own rounds and
 // its own tokens. So every token a coding run spent was missing from the spend
-// rollup and from each node's daily usage (the budget counter was charged, and
-// nothing a person reads agreed with it), and the activity transcript the
+// rollup and from each data node's daily usage (the budget counter was charged,
+// and nothing a person reads agreed with it), and the activity transcript the
 // runner reconstructs — the only account of what an agent with no telemetry
 // did — was collected, redacted and thrown away. It is published here, where
 // the result is in hand, for every collected run: one that finished and one

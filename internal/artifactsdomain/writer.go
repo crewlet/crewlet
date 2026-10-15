@@ -273,7 +273,7 @@ func validCall(c Call) error {
 }
 
 // quotaCall refuses a quota-consuming write whose authority carries no limits:
-// the applier refuses such a record on every node, so it is refused here first.
+// the applier refuses such a record on every data node, so it is refused here first.
 func quotaCall(c Call) error {
 	if !stampedLimits(c.Authority) {
 		return fmt.Errorf("%w: the call's authority carries no quota limits: the API "+

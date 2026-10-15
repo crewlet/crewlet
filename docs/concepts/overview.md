@@ -207,11 +207,12 @@ internal/
 ├── iamdomain/            # The identity estate — statelog's fourth domain:
 │                         #   people, logins, credentials, invitations and
 │                         #   sessions, uniqueness arbitrated on one subject
-├── usage/                # Each node's day, replicated — statelog's fifth
-│                         #   domain: spend, turns and reads that outlive the
-│                         #   node that recorded them
+├── usage/                # Each data node's day, replicated — statelog's
+│                         #   fifth domain: spend, turns and reads that
+│                         #   outlive the node that recorded them
 ├── eventfan/             # The fleet's turn-level history, read from every
-│                         #   node at query time, with coverage on every answer
+│                         #   data node at query time, with coverage on every
+│                         #   answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
 │                         #   embedding domain and the fleet's bucket fan-out

@@ -57,7 +57,7 @@ import (
 // ADDRESS rather than by its invitation ([Applier.applyDirectory]), so it is
 // erased even once the sweep has collected the invitation itself.
 //
-// # Deterministic, because every node does it
+// # Deterministic, because every data node does it
 //
 // The walk re-encodes a document it changed with encoding/json, which writes
 // object keys in sorted order and numbers as they were read ([json.Number]),

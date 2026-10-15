@@ -146,7 +146,7 @@ type TagAuthority struct {
 // The caveats it returns are the near-duplicates the edit declared, and they
 // are ADVISORY: a lead can merge two tags and a refusal with no override would
 // block `apis` behind `api` for ever. THE APPLY MUST NEVER DEPEND ON ONE:
-// every node applies the same record, and only this node saw the caveat.
+// every data node applies the same record, and only this node saw the caveat.
 func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	edit TagEdit, authority TagAuthority) (WriteResult, error) {
 

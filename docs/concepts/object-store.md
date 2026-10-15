@@ -463,7 +463,7 @@ lock-free deletion sound:
 
 - the applier performs a carry only by finding the artifact's own live
   reference to that object **in its own apply transaction**; finding none, it
-  skips the record identically on every node, and the publisher is told `409
+  skips the record identically on every data node, and the publisher is told `409
   carried_object_gone`, naming the files to send again;
 - every record that adds or removes an artifact's object reference is ordered
   on that artifact's own subject, so no carry can race a removal;

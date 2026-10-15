@@ -194,8 +194,8 @@ type gathered[T any] struct {
 	fanned bool
 }
 
-// gather asks every live node one question and reads this node's own answer
-// beside it.
+// gather asks every live data node one question and reads this node's own
+// answer beside it.
 func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []string,
 	local func(context.Context) (T, error),
 ) (gathered[T], error) {
@@ -611,9 +611,9 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 // the seat named by its agent id, never a role name two seats may share.
 //
 // A SEAT MOVES — placement hands it to another node when its owner leaves or
-// the fleet rebalances — so its history is on every node that ever held it,
-// and the seat page read from one node showed only the turns since the last
-// move.
+// the fleet rebalances — so its history is on every data node that ran it or
+// kept its events in custody while it ran on a node without `data`, and the
+// seat page read from one node showed only the turns since the last move.
 func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	if agentID == "" {
@@ -640,11 +640,11 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 // on.
 //
 // TWO SCATTERS, because the node a turn is SELECTED on is not always the only
-// node that holds it. The first asks every node for its page — each node's
-// share of the turns it would list — and the second asks every node for its
-// share of exactly the turns any of them listed, so a turn resumed on another
-// node after a restart is folded from both halves rather than listed as two
-// half-turns or as whichever half was nearer.
+// node that holds it. The first asks every data node for its page — each
+// node's share of the turns it would list — and the second asks every data
+// node for its share of exactly the turns any of them listed, so a turn
+// resumed on another node after a restart is folded from both halves rather
+// than listed as two half-turns or as whichever half was nearer.
 //
 // A page by START is exact down to the newest point any full page stopped at,
 // for [MergeListing]'s reason, and the cursor resumes from there. A point is a
@@ -868,9 +868,9 @@ func (l listings) at(id string, start time.Time) {
 // than this in its window; a smaller one pages a quiet company.
 const PhaseTokenPage = 4096
 
-// PhaseTokens answers the per-phase spend records of a window from every node,
-// newest first, cut to the query's limit — what the live projection's spend
-// rollup is seeded from.
+// PhaseTokens answers the per-phase spend records of a window from every data
+// node, newest first, cut to the query's limit — what the live projection's
+// spend rollup is seeded from.
 //
 // THE WINDOW IS PINNED to the caller's instant ([store.PhaseTokenQuery.At],
 // read here once only when it pinned none) before anybody is asked, for

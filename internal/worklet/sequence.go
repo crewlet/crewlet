@@ -262,7 +262,7 @@ type WriteResult struct {
 	// Caveats are what the caller should know and was not refused for: a
 	// body carrying more task keys than the applier will resolve, a tag
 	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON
-	// ONE: every node applies the same record, and only this node saw the
+	// ONE: every data node applies the same record, and only this node saw the
 	// caveat. Each carries a model's phrasing and a person's
 	// ([caveat.Caveat]), because the same write answers both.
 	//
@@ -718,8 +718,8 @@ func checkCreateAsk(task *Task, ask *Comment) error {
 	switch {
 	case ask.ID == "":
 		return invalid("the ask filed with task %s names no comment "+
-			"id — the id is the row's key on every node, so it is derived by "+
-			"the writer rather than minted at apply", task.ID)
+			"id — the id is the row's key on every data node, so it is "+
+			"derived by the writer rather than minted at apply", task.ID)
 	case ask.Ask == "":
 		return invalid("the comment filed with task %s asks nobody — "+
 			"a create carries a comment only as the question it was filed as",
@@ -1348,7 +1348,7 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 
 // bodyCaveats is what a writer is told and not refused for.
 //
-// THE APPLY MUST NOT DEPEND ON IT. Every node applies the same record and
+// THE APPLY MUST NOT DEPEND ON IT. Every data node applies the same record and
 // resolves the same first [MaxReferencesPerBody] keys in document order, so
 // the cap is deterministic without this — the warning exists so the person who
 // wrote a body full of keys learns that most of them link nothing, rather than
@@ -2840,7 +2840,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), bulkAdmission, er
 	projected := float64(rows) / w.drainRows()
 	if w.metrics != nil {
 		// THE PROJECTION IS WHAT IS SUMMED, not the wall clock: it is the
-		// applier occupancy this call is about to impose on EVERY node,
+		// applier occupancy this call is about to impose on EVERY data node,
 		// and the wall clock here would measure only this one.
 		w.metrics.AddValue(metrics.TrackerBulkApplySeconds, projected, nil)
 	}

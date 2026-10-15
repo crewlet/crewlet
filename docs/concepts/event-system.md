@@ -616,9 +616,9 @@ events — which ask `events` and `event_series` with `feed_only`, so a bar neve
 counts and a page never lists a row the feed would not hold. The row is still
 in `GET /events` without it, a turn's history and a trace.
 
-Every node applies `feed_only` to its own rows — its page and its bars alike —
-by its own copy of that class, and the rows a related-agent page pulls in by
-trace id are held to it too, since a turn's trace holds every one of its
+Every data node applies `feed_only` to its own rows — its page and its bars
+alike — by its own copy of that class, and the rows a related-agent page pulls
+in by trace id are held to it too, since a turn's trace holds every one of its
 accounting records.
 
 ---
@@ -668,14 +668,18 @@ back to the broker — a delivery it parked, a dead letter — relays the origin
 rather than claiming the event. The caller's own event is never written to;
 the queue stamps a copy.
 
-It is on the envelope because it is the **store-routing fact**. The event store
-is written by a publish listener inline on the publishing node (see
-[Publish Listeners](#publish-listeners)), so each node's database holds what
-that node published and nothing else — and a reader holding one row or one live
-frame has only `node` to find the node whose store holds the rest of that
-node's record, and to say where the work it describes ran. That is also why the
-backup audit record names no node of its own: the route publishes from the node
-that took the copy, so the envelope already says whose disk it is on.
+It is on the envelope because it is **where the work ran**. The event store is
+written by a publish listener inline on the publishing node (see
+[Publish Listeners](#publish-listeners)), so each data node's store holds what
+it published and the events it keeps in custody for a node without `data`,
+which keeps no store of its own
+([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
+So which store a row was read from does not say where it happened, and every
+stored row keeps the `node` its envelope carried: a reader holding one row or
+one live frame reads where the work it describes ran off the row itself. That is
+also why the backup audit record names no node of its own: the route publishes
+from the node that took the copy, so the envelope already says whose disk it is
+on.
 
 `node` is absent only on an event published through a queue client built
 without a node, which only a test harness builds. Like every envelope field it
@@ -696,14 +700,16 @@ Changes are additive-only — new fields get defaults, existing fields are never
 
 ## Reading the fleet's history
 
-Each node's event store holds what **that node** published and nothing else
-(see [Publish Listeners](#publish-listeners)), so no one store is the
-company's history. A read of turn-level detail — `events`, `event`,
+Each data node's event store holds what **that node** published, and the
+events of a node without `data` it keeps in
+[custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data),
+and nothing else (see [Publish Listeners](#publish-listeners)), so no one store
+is the company's history. A read of turn-level detail — `events`, `event`,
 `event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
 the integrations' delivery counts and what became of those deliveries (the
 `notification_outcomes` question: each node's dropped and merged
 notifications per third-party app, counted over the window the delivery
-counts name) — is answered by **every live node at query time**
+counts name) — is answered by **every live data node at query time**
 (`internal/eventfan`, ADR-0021). The same scatter seeds the live
 projection when a node starts. It seeds the feed and each seat's last turn,
 so a restarted node's screens show the company rather than the part of it
@@ -723,7 +729,7 @@ sequenceDiagram
     D->>A: GET /turns
     par this node's own store
         A->>A: read its share
-    and every live peer, on crewlet.observe.read
+    and every live data node, on crewlet.observe.read
         A->>B: the same question
         A->>C: the same question
     end
@@ -736,11 +742,13 @@ sequenceDiagram
   directly and scatters the same question over the broker's ephemeral
   request/reply — no stream, no consumer, no stored record, because a read of
   the event log that wrote an event would grow the log every time somebody
-  looked at it. The roster is the fleet's live node leases.
+  looked at it. The roster is the live data nodes, read off the presence
+  leases: a node without `data` keeps no event store and serves no API, so it
+  neither asks nor is asked, and the asker is always a data node.
 - **Every answer says who answered.** `coverage` is
   `{nodes: [{id, answered, error}], complete}` on every one of these answers.
-  `complete` is true only when every live node answered; a node that did not
-  is named with the reason — no answer inside the **2-second** fleet read
+  `complete` is true only when every live data node answered; a node that did
+  not is named with the reason — no answer inside the **2-second** fleet read
   budget, a build speaking another protocol version, a reply it could not
   read, or its own read failing. A short answer that did not say so would
   read exactly like a quiet company.
@@ -818,7 +826,7 @@ sequenceDiagram
   and says it holds more, which the merge already handles.
 
 The `history_partial` [alarm](../reference/alarms.md) fires on the fraction
-of a node's history reads that came back without every node, at the fleet
+of a node's history reads that came back without every data node, at the fleet
 read budget it borrows rather than a threshold of its own.
 
 ---

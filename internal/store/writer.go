@@ -134,8 +134,10 @@ var tagKeys = map[string]string{
 	// event names no app carries none.
 	"notification_source": "notification_source",
 	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
-	// queue stamps on the way out and which is therefore the node whose
-	// store holds the row. The envelope owns the key (a payload field under
+	// queue stamps on the way out. Not always the node whose store holds the
+	// row: a data node also keeps the events of a node without `data` in
+	// custody, and their rows name the node that published them. The
+	// envelope owns the key (a payload field under
 	// it is dropped), so it means one thing on every type. A tag because a
 	// listing never selects the payload, and a row read back from history
 	// had no other way to say where it came from: a runtime backup's row is

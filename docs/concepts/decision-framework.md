@@ -96,7 +96,7 @@ with your answer and posts it to #&lt;channel&gt;"*, or, with no inform,
 
 ## What the engine enforces, and what it does not
 
-A structured ask is a comment on a work item, so it lives where every other comment does — in the tracker, identical on every node — and the engine holds it to exactly three rules:
+A structured ask is a comment on a work item, so it lives where every other comment does — in the tracker, identical on every data node — and the engine holds it to exactly three rules:
 
 - **Its shape.** Two to six options, each with an id typed back in `choice`; a recommendation that is one of them; evidence that resolves (a cited task is stored by id, a cited page must exist); a role. The decision rides only the comment that asks and is never edited afterwards, because an answer names an option by id and options changed under it would change what that answer meant.
 - **Its answer.** A `choice` must name an option **of the ask it answers**, checked against that ask's own record, and an ask is answered once — a second answer is refused naming who answered first, and when.

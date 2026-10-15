@@ -497,8 +497,8 @@ type Options struct {
 	//
 	// A SECOND FACTOR'S SEED is the other, sealed when it is enrolled and
 	// opened only to check a code: it is a secret the replicated estate
-	// would otherwise hold in the clear on every node, in every snapshot
-	// and every backup.
+	// would otherwise hold in the clear on every data node, in every
+	// snapshot and every backup.
 	Sealer Sealer
 
 	// Sessions is what one bearer is validated against. REQUIRED.

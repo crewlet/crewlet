@@ -35,7 +35,7 @@ import (
 // batch past its bounds, a person value naming no seat the running chart
 // holds, this node's write budget spent) and what is permanent (a store its
 // artifact's purge removed). Everything else (schema, rules, guards, caps,
-// limits) is the applier's, in log order, so every node reaches one verdict.
+// limits) is the applier's, in log order, so every data node reaches one verdict.
 //
 // A schema change is ARBITRATED: decided in a snapshot of the schema it
 // replaces, refused early when the snapshot already refuses it, and judged
@@ -184,7 +184,7 @@ func validCall(c Call) error {
 }
 
 // stampedCall refuses a write whose authority the applier would refuse on
-// every node: no role, or no datastore limits.
+// every data node: no role, or no datastore limits.
 func stampedCall(c Call) error {
 	if err := validCall(c); err != nil {
 		return err

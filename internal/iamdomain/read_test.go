@@ -114,12 +114,12 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 // by an unauthenticated route and the answer is one bit — and a count of
 // PEOPLE, so a service account alone leaves the company unclaimed.
 //
-// And "nobody" is PROVED against the log's end or not said: every node applies
-// the identity log from boot, company or none, so a node that has just joined
-// a fleet with people in it holds empty rows for a moment — and its /health
-// and its boot log would tell an operator to invite a founder into a company
-// that has one. Mutation: drop the coverage check and the behind arm answers
-// (false, nil); count every row and the machine alone answers true.
+// And "nobody" is PROVED against the log's end or not said: every data node
+// applies the identity log from boot, company or none, so a node that has just
+// joined a fleet with people in it holds empty rows for a moment — and its
+// /health and its boot log would tell an operator to invite a founder into a
+// company that has one. Mutation: drop the coverage check and the behind arm
+// answers (false, nil); count every row and the machine alone answers true.
 func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

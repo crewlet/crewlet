@@ -102,7 +102,7 @@ func judgeParent(ctx context.Context, tx *sql.Tx, pageID, container,
 	// THE WALK UP FROM THE PARENT, looking for the page itself, to the top.
 	// It ends because the tree is acyclic, by induction over the strict log:
 	// every write of a parent keeps it so — a create and a move are judged
-	// here at their own position, on rows identical on every node, so the
+	// here at their own position, on rows identical on every data node, so the
 	// second of two crossing moves finds the page above its new parent and
 	// keeps the old one ([salvageParent]); a purge re-parents its children
 	// onto its own parent, which in an acyclic tree is never beneath them;

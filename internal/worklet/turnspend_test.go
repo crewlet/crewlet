@@ -202,9 +202,9 @@ func TestRecordTurnRefusesATaskItCannotSee(t *testing.T) {
 //
 // A turn is additive: nothing at the broker orders it against a purge of the
 // same task, so a turn decided while the task existed can land after the purge
-// that removed it. Its spend update then finds no row — and every node applies
-// the same log in the same order, so an applier that stopped there stopped the
-// whole fleet. The deletion gate is what reads it past.
+// that removed it. Its spend update then finds no row — and every data node
+// applies the same log in the same order, so an applier that stopped there
+// stopped the whole fleet. The deletion gate is what reads it past.
 func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

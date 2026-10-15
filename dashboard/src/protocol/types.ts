@@ -3510,7 +3510,7 @@ export interface WorkItemDetail {
    *
    *  A relation, parent or cascade delta names the other end by its ID,
    *  because a key belongs to that task's own row and a history row is written
-   *  once by every node and repaired by nothing. Neither side can fix
+   *  once by every data node and repaired by nothing. Neither side can fix
    *  "Parent: — → 1d573f85-…" alone: the engine may not put a key on the
    *  record, and this build holds no map to resolve one with. It is what
    *  `LabelContext.taskKey` is threaded from.
@@ -3896,8 +3896,10 @@ export interface AgentAnswer {
   body_withheld?: boolean;
   /** Pass back as `before` to page further into the record. */
   next: string;
-  /** Which nodes the history came from — a seat's history is on every node
-   *  that ever held it — or null when it could not be read at all. */
+  /** Which data nodes the history came from — a seat's history is kept by
+   *  every data node it ran on, or that kept its events in custody while it
+   *  ran on a node without `data` — or null when it could not be read at
+   *  all. */
   coverage?: Coverage | null;
 }
 
@@ -5347,7 +5349,7 @@ export interface AnsweredDecisionsAnswer {
   complete?: boolean;
 }
 
-/** One company day of one seat's turns, summed across every node. */
+/** One company day of one seat's turns, summed across every data node. */
 export interface SeatActivityDay {
   /** A company date label, `2026-09-23`. */
   day: string;
@@ -5371,7 +5373,7 @@ export interface SeatActivityTotals {
 
 /**
  * One seat's turns over a window of company days, from the replicated usage
- * domain — every node's days summed (`seat_activity`).
+ * domain — every data node's days summed (`seat_activity`).
  */
 export interface SeatActivityRow {
   handle: string;

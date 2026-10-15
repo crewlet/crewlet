@@ -782,7 +782,7 @@ func TestAFleetOfThree(t *testing.T) {
 // from either screen looks exactly like the other node being idle.
 func claimARecordOneNodeWritesReachesEveryNodesRows(t *testing.T, c *cluster) {
 	// THE CHART FIRST. A create takes its key from its project's own
-	// counter, so the project has to exist — every node applies the chart
+	// counter, so the project has to exist — every data node applies the chart
 	// at boot, and this is also the first assertion that it did.
 	task := newTask("ENG", "the fleet-wide one")
 	written, err := operator(t, c.nodes[0]).CreateTask(

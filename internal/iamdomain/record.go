@@ -171,7 +171,7 @@ const (
 	// FULL POST-STATE AND NOT A PATCH, unlike the tracker: a person is
 	// authored as a form and submitted whole, so the writer always holds the
 	// complete new value and a patch would be a diff it computed in order to
-	// be reassembled by every node.
+	// be reassembled by every data node.
 	OpUpdate OpKind = "update"
 
 	// OpStatus moves a person between the enrolment and suspension stages
@@ -410,7 +410,7 @@ type MutationRecord struct {
 	// IT IS WHERE EVERY SEALED VALUE LIVES. A person's name and address are
 	// sealed under the fleet keyring BEFORE publication, with their id and
 	// the field as the additional authenticated data, so the bytes on the
-	// broker, in every node's deferred table and in every snapshot are
+	// broker, in every data node's deferred table and in every snapshot are
 	// ciphertext that only a holder of the keyring can open.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
@@ -482,7 +482,7 @@ type MutationRecord struct {
 // AN IP ADDRESS, A USER AGENT OR A DEVICE FINGERPRINT. A session record says
 // that a session was opened and by whom; where from is a request-scoped
 // observation, and putting one on a replicated, permanently retained log would
-// make every node's database a location history nobody asked for.
+// make every data node's database a location history nobody asked for.
 
 // MaxReason bounds the reason a record carries.
 //

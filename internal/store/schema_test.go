@@ -36,7 +36,7 @@ import (
 // migrated estate is this package's. Running all eight here also makes
 // the walk two-sided: a domain whose tables stopped being created at all would
 // fail here rather than quietly stop being certified — the two COMPACTED
-// domains (the vectors and each node's usage) included, whose ledgerless
+// domains (the vectors and each data node's usage) included, whose ledgerless
 // declarations are the ones a migration is likeliest to get wrong unnoticed.
 func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()

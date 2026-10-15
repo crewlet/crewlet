@@ -497,7 +497,7 @@ export function Activity() {
       </div>
 
       {/* A NODE THAT DID NOT ANSWER is named where the rows are drawn: the
-          log is every node's, read at query time (ADR-0021), and a short
+          log is every data node's, read at query time (ADR-0021), and a short
           answer that did not say so would read exactly like a quiet company. */}
       <CoverageNote coverage={[series.data?.coverage, ...pageCoverage]} what="this log" />
 

@@ -77,8 +77,9 @@ func runEnvelope(t *testing.T, new Factory) {
 	})
 }
 
-// runApply certifies the two properties every node's copy rests on: the same
-// records produce the same rows, and applying one twice is applying it once.
+// runApply certifies the two properties every data node's copy rests on: the
+// same records produce the same rows, and applying one twice is applying it
+// once.
 func runApply(t *testing.T, new Factory) {
 	t.Helper()
 
