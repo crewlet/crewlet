@@ -640,10 +640,13 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # four vCPUs its arms took an hour and three quarters, half an hour of it
 # BenchmarkBoot's thousand repositories, and BenchmarkMidx's memory arms add
 # about five minutes a count (the gigabyte's clone walking its history a
-# minute and a half of it); with CREWLET_BENCH_LARGE=1 about five and a half
-# hours, two of them the gigabyte split into packs, whose clones with no
-# index take minutes each. Eight hours holds six counts of everything with
-# room for a slower machine; a real bucket's arm is bounded by its link.
+# minute and a half of it); with CREWLET_BENCH_LARGE=1 about five and three
+# quarter hours, two of them the gigabyte split into packs, whose clones with
+# no index take minutes each, and a quarter of an hour BenchmarkColdSync's
+# cold syncs at S3's 100 and 200 ms first byte (two minutes and a half a
+# count: two more 2 000-push fixtures, and a minute of syncs). Eight hours
+# holds six counts of everything with room for a slower machine; a real
+# bucket's arm is bounded by its link.
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
