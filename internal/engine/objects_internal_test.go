@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -237,6 +238,51 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 }
 
 func (*namedNothing) Required(statelog.Position) []objstore.Walk { return nil }
+
+// A NODE NAMING ANOTHER OBJECT STORE IS REFUSED, NAMING BOTH.
+//
+// The fleet records the store its first node opened, and a node whose
+// store.objects names another would split the company's files between the two
+// with nothing failing. The refusal is TYPED, carrying both identities, because
+// the setting fails in other ways that name it too — the record unreadable,
+// the bucket unreachable — and a caller asking whether a boot was refused for
+// this reason (a restore that put the old store's record back) must not be
+// answered by one of those. And it comes BEFORE the backend is opened: the
+// store named here listens nowhere, and reaching for it would answer the
+// open's failure instead.
+func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	const recorded = "s3:http://old.example.com/code/nimbus/"
+	if _, err := fleet.AgreeObjectBackend(t.Context(), recorded); err != nil {
+		t.Fatal(err)
+	}
+	boot := config.DefaultBootstrap()
+	boot.Store.Objects = config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
+		Endpoint: "http://127.0.0.1:1", Region: "us-east-1", Bucket: "code", Prefix: "nimbus/",
+		PathStyle: true,
+	}}
+	out := &Backends{Fleet: fleet}
+	err := openObjects(t.Context(), &boot, out, nil)
+	var mismatch *ObjectStoreMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("a node naming another object store than the fleet's was answered %v, "+
+			"not the agreement's refusal", err)
+	}
+	if mismatch.Configured != boot.Store.Objects.Identity() || mismatch.Fleet != recorded {
+		t.Errorf("the refusal names %q as this node's store and %q as the fleet's, want %q and %q",
+			mismatch.Configured, mismatch.Fleet, boot.Store.Objects.Identity(), recorded)
+	}
+	for _, named := range []string{"store.objects", recorded, boot.Store.Objects.Identity()} {
+		if !strings.Contains(err.Error(), named) {
+			t.Errorf("the refusal %q does not name %q", err, named)
+		}
+	}
+	if out.Objects != nil || out.objectsIdentity != "" {
+		t.Errorf("a refused node opened its object store anyway (%T, %q)", out.Objects,
+			out.objectsIdentity)
+	}
+}
 
 // collectorNode is an engine holding just enough to run the collector's duty
 // by hand: an in-memory store and fleet, and a collector over source.
