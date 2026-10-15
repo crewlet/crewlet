@@ -434,10 +434,12 @@ so a second repository's cold sync never waits behind the first one's longest
 downloads. Each is verified against its SHA-256 and installed as the receiving
 node's git indexed it — a push stores its pack together with its index, so no
 other node spends a core re-indexing it, and a cold sync is bound by the
-object store rather than the CPU. From an S3-shaped store answering in 30 ms,
-that is about 450 small packs a second: a repository of 10 000 pushes — one
-pack each, since nothing compacts them yet — comes up in about 22 seconds,
-before its first request is answered.
+object store rather than the CPU. S3 answers each request in about 100 to
+200 ms, and from a fake answering that late a cold sync read about 75 to 150
+small packs a second: a repository of 10 000 pushes — one pack each, since
+nothing compacts them yet — comes up in about 70 to 130 seconds before its
+first request is answered (about 22 seconds from the same fake answering in
+30 ms).
 
 The first fetch of a repository after a node restarts reads the whole of its
 rows once, reusing every pack the cache already holds, which is what makes a

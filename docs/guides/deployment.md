@@ -1137,7 +1137,8 @@ cache on its own disk. What such a node needs from its host:
   **before a request's first byte**, which is a cache sync: warm, a few
   milliseconds; on a node that has never served the repository, or whose budget
   evicted it, a **cold** sync downloads one object for every push the
-  repository ever took (about 22 s at 10 000 pushes from an S3-shaped store).
+  repository ever took (about 70 to 130 s at 10 000 pushes from S3, which
+  answers each request in about 100 to 200 ms).
   Either size the idle timeout to the cold sync of your largest repository, or
   route `/git/<name>` by repository — a balancer hashing the path to a node,
   with the next one in line when it is down — so each repository stays warm on

@@ -365,7 +365,9 @@
 //
 // The byte path, on the same machine (nproc 4) with git 2.43.0, its
 // CREWLET_BENCH_LARGE=1 arms too — the 5 GB index and the lookups over a
-// gigabyte and over 10 000 packs at three counts, everything else at six. A
+// gigabyte and over 10 000 packs at three counts, everything else at six.
+// Every cold-sync figure is the S3 FAKE's, whose first byte is the arm's rather
+// than a bucket's: what a first byte that long costs the node. A
 // COLD SYNC of 2 000 pushes of 150 KB, from the S3 fake at 30 ms to every
 // request's first byte and 80 MB/s a connection, takes 67 s one GET at a time,
 // 4.5 s at FetchConcurrency's sixteen and 2.9 s at NodeFetches' thirty-two —
@@ -376,6 +378,15 @@
 // bound by its GETs and that side, never by a core. Sixteen is bound by its
 // GETs, at 93% of the 484 a second sixteen of the 33 ms each took allow; at
 // thirty-two each took 40 ms, the fake's server sharing the node's four cores.
+// S3 itself answers in about 100 to 200 ms (AWS's performance guidelines), and
+// with the fake answering that late (the firstbyte arms, three operations
+// each, 2026-10-15, in a run that gave the 30 ms arm 30, 417 and 623 bundles a
+// second) the same 2 000 take 13.4 s and 26.2 s at sixteen and 7.0 s and
+// 13.3 s at thirty-two — 150 and 76, and 285 and 150, bundles a second, at
+// 104 and 205 ms a GET: bound by the GETs alone, within a few percent of
+// fetch over first byte, so the node's own side bounds a sync only at a first
+// byte under about 35 ms, and 10 000 pushes' packs take about 67 to 131
+// seconds at a repository's sixteen.
 // The node's own side is a bundle's FILE WORK (BenchmarkBundleFiles: its files
 // created, written, synced and renamed, without the GET or the hashing):
 // sixteen at once, about 700 a second whether the syncs are made or not, bound

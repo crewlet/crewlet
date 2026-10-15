@@ -126,13 +126,20 @@ a cost decision, never a correctness one
 ([Deployment](../guides/deployment.md#the-code-host)).
 
 The object store sees the same multiplication. A git node reads at most 32
-bundles at once, about 700 to 950 small ones a second while it syncs a
-repository it has never served, and every bundle is named under the one
-`files/` prefix — so five or six git nodes cold-syncing at once (a fresh fleet,
-or a repository imported and then fetched through every node) reach the
-5 500 reads a second S3 serves one prefix, past which it answers `SlowDown`
-until it has partitioned the prefix. Those syncs slow down and nothing they
-hold is wrong, and routing by repository is again what bounds it.
+bundles at once — sixteen for any one repository — and S3 answers each in
+about 100 to 200 ms, so a node syncing repositories it has never served reads
+about 150 to 290 small ones a second (about 75 to 150 for one repository,
+measured against a fake answering that late). Every bundle is named under the
+one `files/` prefix, so about 19 to 37 git nodes cold-syncing at once at their
+full 32 — twice as many syncing one repository each — reach the 5 500 reads a
+second S3 serves one prefix (a fresh fleet, or a repository imported and then
+fetched through every node), past which it answers `SlowDown` until it has
+partitioned the prefix. Each node's client then slows every request it sends
+to the bucket rather than failing it
+([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
+down and nothing they hold is wrong, and routing by repository is again what
+bounds it. What shortens a cold sync is fewer packs: at one a push, a
+repository of 10 000 pushes comes up in about 70 to 130 seconds.
 
 ### How a request reaches the estate
 

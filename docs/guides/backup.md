@@ -147,12 +147,14 @@ What is worth knowing about it:
   `s3` the backup reads every object a **live** row of the replicated copy names
   — read from the copy itself, for the position's reason below — from the
   bucket, **thirty-two at a time**. A first copy is bound by how long each
-  request waits for its first byte rather than by the link, so thirty-two out
-  keep a 1 Gbit/s link busy at S3's 20 to 100 ms first byte — sixteen left it a
-  third idle, and the large model's first copy (about 2.1 million objects,
-  1.15 TB) took about five hours where thirty-two took about three on the
-  host it was measured on — while staying at most an eighth of what S3 serves
-  one prefix, so the company's own downloads keep the rest. Each is streamed
+  request waits for its first byte rather than by the link: S3 answers in about
+  100 to 200 ms, and thirty-two out keep a 1 Gbit/s link busy at the lower end —
+  sixteen left it a third idle, and the large model's first copy (about 2.1
+  million objects, 1.15 TB) took about five hours where thirty-two took about
+  three on the host it was measured on — and about three fifths of it at the
+  upper end, where that first copy takes about four hours (worked out rather
+  than measured). Thirty-two out stay under a twentieth of what S3 serves one
+  prefix, so the company's own downloads keep the rest. Each is streamed
   to disk and checked against its row's size and SHA-256 as it is written,
   and lands under `objects/files/<key>` — the
   bucket's own layout under its prefix — first under a temporary name, renamed
