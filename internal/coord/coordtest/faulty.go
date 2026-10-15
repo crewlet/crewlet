@@ -107,6 +107,16 @@ func (f *Faulty) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease
 	return f.inner.ListLive(ctx, class)
 }
 
+// WatchLive delegates, or fails with the configured error. A watch already
+// running is the backend's, and a Break does not reach it: an outage ends a
+// real watch by closing it, which only the backend can do.
+func (f *Faulty) WatchLive(ctx context.Context, class coord.Class) (<-chan coord.LeaseWrite, error) {
+	if err := f.fault(); err != nil {
+		return nil, err
+	}
+	return f.inner.WatchLive(ctx, class)
+}
+
 // PreferredResources delegates, or fails with the configured error.
 func (f *Faulty) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
 	if err := f.fault(); err != nil {

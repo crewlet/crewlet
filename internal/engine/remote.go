@@ -77,9 +77,12 @@ func (e *Engine) startRemote(c *Company) error {
 // lease in the fleet on every call — an O(fleet) read of the coordination
 // store, crossing the leaf link on a stateless node, per tool call and per
 // search — for an answer that changes only when a node joins, leaves or lets
-// its lease lapse. The view lists on the presence heartbeat's own cadence and
-// answers UNKNOWN rather than an old or an empty roster once its last listing
-// is older than a lease survives; see [coord.LeaseView] and [newDataView].
+// its lease lapse. The view lists on the presence heartbeat's own cadence,
+// hears every presence claim and release as it lands and lists again then —
+// so a node that joins, or leaves cleanly, is in or out of the roster within
+// about a second rather than a heartbeat later — and answers UNKNOWN rather
+// than an old or an empty roster once its last listing is older than a lease
+// survives; see [coord.LeaseView] and [newDataView].
 //
 // ONE FILTER FOR EVERY QUESTION ABOUT DATA NODES — [dataNodesOf], which the
 // trim and the eviction gate apply to a listing of their own — because a
@@ -105,7 +108,10 @@ func (e *Engine) dataRoster(context.Context) ([]string, error) {
 // new) and trusts a listing for one TTL (past which a lease it named may have
 // lapsed and one it missed may have been held all along). Neither is a knob
 // of its own: both move with `coordination.lease_ttl_seconds`, as the leases
-// do.
+// do. Between listings it WATCHES the presence leases, so a claim or a release
+// lists it again at once: what the cadence is left to catch is a lease that
+// lapsed, which is no write — a node that stopped without releasing, as it
+// leaves every roster.
 func newDataView(b *config.Bootstrap, backend coord.Backend) (*coord.LeaseView, error) {
 	if backend == nil {
 		return nil, nil

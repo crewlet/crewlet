@@ -387,6 +387,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) coord.Backend) {
 		{"concurrency", concurrencyCases},
 		{"duty", dutyCases},
 		{"node_status", nodeStatusCases},
+		{"watch", watchCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {

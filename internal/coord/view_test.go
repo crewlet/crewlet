@@ -3,6 +3,7 @@ package coord_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,17 +13,29 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// stubLister is a store whose listing a case controls, counting every call.
+// stubLister is a store whose listing and watch a case controls, counting every
+// call and recording the order of the first two.
 type stubLister struct {
 	mu     sync.Mutex
 	leases []coord.Lease
 	err    error
 	calls  atomic.Int64
 	listed chan struct{}
+
+	// writes is what every running watch hands over, once each; a case
+	// sends into it. watchErr refuses every watch begun while it is set,
+	// and end ends the watch running now.
+	writes   chan coord.LeaseWrite
+	watchErr error
+	end      chan struct{}
+	watches  atomic.Int64
+	// order is the calls made of the store, in order: "watch" and "list".
+	order []string
 }
 
 func newStubLister(leases ...coord.Lease) *stubLister {
-	return &stubLister{leases: leases, listed: make(chan struct{}, 64)}
+	return &stubLister{leases: leases, listed: make(chan struct{}, 64),
+		writes: make(chan coord.LeaseWrite, 64)}
 }
 
 func (s *stubLister) ListLive(_ context.Context, class coord.Class) ([]coord.Lease, error) {
@@ -35,10 +48,71 @@ func (s *stubLister) ListLive(_ context.Context, class coord.Class) ([]coord.Lea
 	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.order = append(s.order, "list")
 	if class != coord.ClassNode {
 		return nil, errors.New("listed the wrong class")
 	}
 	return append([]coord.Lease(nil), s.leases...), s.err
+}
+
+func (s *stubLister) WatchLive(ctx context.Context, class coord.Class) (<-chan coord.LeaseWrite, error) {
+	s.watches.Add(1)
+	s.mu.Lock()
+	s.order = append(s.order, "watch")
+	err, end := s.watchErr, make(chan struct{})
+	if err == nil {
+		s.end = end
+	}
+	s.mu.Unlock()
+	if class != coord.ClassNode {
+		return nil, errors.New("watched the wrong class")
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan coord.LeaseWrite)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-end:
+				return
+			case w := <-s.writes:
+				select {
+				case out <- w:
+				case <-ctx.Done():
+					return
+				case <-end:
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// endWatch ends the watch running now, as a store that stopped hearing does.
+func (s *stubLister) endWatch() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.end != nil {
+		close(s.end)
+		s.end = nil
+	}
+}
+
+func (s *stubLister) refuseWatches(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.watchErr = err
+}
+
+func (s *stubLister) calledInOrder() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.order)
 }
 
 func (s *stubLister) set(err error, leases ...coord.Lease) {
@@ -221,10 +295,14 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 }
 
 // heldLister is a store whose listing of one lease waits to be let go, saying
-// when it is asked.
+// when it is asked. Its watch hears nothing.
 type heldLister struct {
 	asked   chan struct{}
 	release chan struct{}
+}
+
+func (h *heldLister) WatchLive(ctx context.Context, _ coord.Class) (<-chan coord.LeaseWrite, error) {
+	return silentWatch(ctx), nil
 }
 
 func (h *heldLister) ListLive(ctx context.Context, _ coord.Class) ([]coord.Lease, error) {
@@ -324,5 +402,166 @@ func TestAViewRefusesATrustShorterThanItsCadence(t *testing.T) {
 	if _, err := coord.NewLeaseView(newStubLister(), "",
 		coord.ViewOptions{Every: time.Minute, Trust: time.Minute}); err == nil {
 		t.Fatal("a view of no class was built")
+	}
+}
+
+// silentWatch is a watch that hears nothing and ends with ctx.
+func silentWatch(ctx context.Context) <-chan coord.LeaseWrite {
+	out := make(chan coord.LeaseWrite)
+	go func() {
+		<-ctx.Done()
+		close(out)
+	}()
+	return out
+}
+
+// heldNode is a lease of a node under one tenure.
+func heldNode(id string, epoch int64) coord.Lease {
+	return coord.Lease{Resource: coord.ClassNode.Resource(id), Owner: id, Epoch: epoch}
+}
+
+// A CLAIM REACHES THE VIEW AT ONCE, NOT AT ITS CADENCE.
+//
+// A roster listed only on a heartbeat named a node that joined up to a
+// heartbeat late — and a fleet booted at once, every node's first listing
+// taken before any presence lease existed, routed as though each node were
+// alone for its whole first heartbeat. The view hears the claim on its watch
+// and lists then: its cadence here is an hour, so a listing within seconds
+// can only be the watch's.
+func TestAClaimReachesTheViewAtOnceNotAtItsCadence(t *testing.T) {
+	t.Parallel()
+	store := newStubLister()
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	awaitAnswer(t, view, "its first listing, of nobody", holding(0))
+
+	store.set(nil, heldNode("a", 1))
+	store.writes <- coord.LeaseWrite{Resource: coord.ClassNode.Resource("a"), Owner: "a", Epoch: 1}
+	awaitAnswer(t, view, "the node whose claim it heard", holding(1))
+
+	// AND A RELEASE LEAVES IT AS FAST: a node that stopped cleanly is out
+	// of every roster before a caller has asked it anything.
+	store.set(nil)
+	store.writes <- coord.LeaseWrite{Resource: coord.ClassNode.Resource("a")}
+	awaitAnswer(t, view, "nobody, once the release was heard", holding(0))
+}
+
+// ONLY A WRITE THAT MOVES THE ROSTER LISTS IT AGAIN.
+//
+// Every node renews its presence once a heartbeat, so every view hears the
+// whole fleet's renewals; a view that listed on each would list the class N
+// times a heartbeat instead of once. A renewal names the holder and the tenure
+// the listing already holds and asks for nothing, and so does a release of a
+// lease the listing does not name — while a tenure the listing names under
+// another epoch (a takeover, or the same node back after a lapse) asks for a
+// listing.
+func TestOnlyAWriteThatMovesTheRosterListsItAgain(t *testing.T) {
+	t.Parallel()
+	store := newStubLister(heldNode("a", 1))
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	awaitAnswer(t, view, "its first listing", holding(1))
+
+	renewal := coord.LeaseWrite{Resource: coord.ClassNode.Resource("a"), Owner: "a", Epoch: 1}
+	for range 50 {
+		store.writes <- renewal
+	}
+	store.writes <- coord.LeaseWrite{Resource: coord.ClassNode.Resource("gone")}
+	time.Sleep(3 * coord.MinViewRefresh)
+	if got := store.calls.Load(); got != 1 {
+		t.Fatalf("fifty renewals of a lease the view holds, and a release of one it "+
+			"does not, listed the store %d more time(s), want none", got-1)
+	}
+
+	store.set(nil, heldNode("a", 2))
+	store.writes <- coord.LeaseWrite{Resource: coord.ClassNode.Resource("a"), Owner: "a", Epoch: 2}
+	awaitAnswer(t, view, "the new tenure", func(leases []coord.Lease, err error) bool {
+		return err == nil && len(leases) == 1 && leases[0].Epoch == 2
+	})
+}
+
+// THE WATCH BEGINS BEFORE THE FIRST LISTING, so nothing written between the two
+// goes unheard: a claim landing after the listing was asked and before the
+// watch could hear it would be in neither, and missing until the cadence.
+func TestTheWatchBeginsBeforeTheFirstListing(t *testing.T) {
+	t.Parallel()
+	store := newStubLister(heldNode("a", 1))
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	awaitAnswer(t, view, "its first listing", holding(1))
+	if got := store.calledInOrder(); len(got) < 2 || got[0] != "watch" || got[1] != "list" {
+		t.Fatalf("the view's first calls were %v, want the watch begun before the listing", got)
+	}
+	// AND THAT ORDER COSTS NO LISTING: a watch begun before the first
+	// listing has nothing to catch up on.
+	time.Sleep(2 * coord.MinViewRefresh)
+	if got := store.calls.Load(); got != 1 {
+		t.Fatalf("a view whose watch began first listed %d times, want once", got)
+	}
+}
+
+// A WATCH THAT ENDS IS BEGUN AGAIN, AND THE VIEW LISTS AS IT RESUMES: a claim
+// written while nobody was listening is otherwise missing until the cadence,
+// which is the window the watch exists to close.
+func TestAWatchThatEndsIsBegunAgainAndListsAsItResumes(t *testing.T) {
+	t.Parallel()
+	store := newStubLister()
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	awaitAnswer(t, view, "its first listing, of nobody", holding(0))
+
+	// The store stops hearing, and a node claims while nobody listens.
+	store.endWatch()
+	store.set(nil, heldNode("a", 1))
+	awaitAnswer(t, view, "the claim it could not hear, listed as the watch resumed",
+		holding(1))
+	if got := store.watches.Load(); got < 2 {
+		t.Fatalf("the view began %d watch(es), want it begun again after the first ended", got)
+	}
+	// And the resumed watch hears as the first did.
+	store.set(nil)
+	store.writes <- coord.LeaseWrite{Resource: coord.ClassNode.Resource("a")}
+	awaitAnswer(t, view, "the release the resumed watch heard", holding(0))
+}
+
+// A VIEW WHOSE WATCH CANNOT BEGIN IS STILL THE LISTED VIEW: the watch is a hint
+// about latency, so a store that refuses one costs the view its speed and
+// nothing it answers — and the view asks again, since the store that refused
+// may answer the next time.
+func TestAViewWhoseWatchCannotBeginStillLists(t *testing.T) {
+	t.Parallel()
+	store := newStubLister(heldNode("a", 1))
+	store.refuseWatches(coord.ErrUnavailable)
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	awaitAnswer(t, view, "its first listing, its watch refused", holding(1))
+	bound := 5 * coord.MinViewRefresh
+	deadline := time.Now().Add(bound)
+	for store.watches.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("a refused watch was asked %d time(s) in %v, want it asked again",
+				store.watches.Load(), bound)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

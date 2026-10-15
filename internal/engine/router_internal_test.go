@@ -333,7 +333,7 @@ func TestANodeShedsItsSeatsOnlyOnceItCannotRoute(t *testing.T) {
 	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	advance := func(d time.Duration) { clock.Add(int64(d)) }
-	store := &flakyLister{Lister: coordmem.New()}
+	store := &flakyLister{ViewStore: coordmem.New()}
 	view, err := coord.NewLeaseView(store, coord.ClassNode, coord.ViewOptions{
 		Every: 15 * time.Second, Trust: 45 * time.Second, Now: now,
 	})
@@ -371,7 +371,7 @@ func TestANodeShedsItsSeatsOnlyOnceItCannotRoute(t *testing.T) {
 	// A VIEW STILL ANSWERING IS ONE THE NODE CAN ROUTE BY, however old its
 	// listing: on a deployment whose leases live five minutes, a listing
 	// ninety seconds old is still an answer, and the router reads it.
-	long := &flakyLister{Lister: coordmem.New()}
+	long := &flakyLister{ViewStore: coordmem.New()}
 	patient, err := coord.NewLeaseView(long, coord.ClassNode, coord.ViewOptions{
 		Every: 100 * time.Second, Trust: 300 * time.Second, Now: now,
 	})
@@ -407,7 +407,7 @@ func within[T any](d time.Duration, f func() T) (T, bool) {
 
 // flakyLister lists from its store until it is told to fail.
 type flakyLister struct {
-	coord.Lister
+	coord.ViewStore
 	failing atomic.Bool
 }
 
@@ -417,7 +417,7 @@ func (f *flakyLister) ListLive(ctx context.Context, class coord.Class) ([]coord.
 	if f.failing.Load() {
 		return nil, errors.New("the store is unreachable")
 	}
-	return f.Lister.ListLive(ctx, class)
+	return f.ViewStore.ListLive(ctx, class)
 }
 
 // staleView is a view of the fleet's data nodes that listed once and has since
@@ -428,7 +428,7 @@ func staleView(t *testing.T) (*coord.LeaseView, func() time.Time) {
 	var clock atomic.Int64
 	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
-	store := &flakyLister{Lister: coordmem.New()}
+	store := &flakyLister{ViewStore: coordmem.New()}
 	view, err := coord.NewLeaseView(store, coord.ClassNode, coord.ViewOptions{
 		Every: 15 * time.Second, Trust: 45 * time.Second, Now: now,
 	})
