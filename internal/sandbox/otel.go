@@ -142,7 +142,7 @@ type OtelReceiverOptions struct {
 const OtelForwardTimeout = 10 * time.Second
 
 // OtelAnswerWithin is how long a box's exporter is told to wait for the
-// receiver to answer one export ([OtelTimeoutVar]), and what a runner derives
+// receiver to answer one export ([otlpenv.TimeoutVar]), and what a runner derives
 // its agent's own export waits from.
 //
 // TIED TO [OtelForwardTimeout] rather than picked, because the receiver
@@ -160,12 +160,6 @@ const OtelAnswerWithin = OtelForwardTimeout + otelAnswerMargin
 // with the engine that mints its endpoint — and waiting for the decoding
 // budget, which is [otelBudgetWait]'s one second.
 const otelAnswerMargin = 2*time.Second + otelBudgetWait
-
-// OtelTimeoutVar is the standard variable an OTLP exporter reads its
-// per-export wait from, in milliseconds. Written into a box's environment
-// ([OtelReceiver.RunEnv]); the engine's own exporters take theirs from the
-// SDK, which reads the same variable from this process's environment.
-const OtelTimeoutVar = "OTEL_EXPORTER_OTLP_TIMEOUT"
 
 // NewOtelReceiver builds the receiver, and its forwarder when the upstream
 // exports.
@@ -374,12 +368,37 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 // unset, because an exporter reads it from the box's own environment
 // otherwise, and a box image or template can bake one in (a Dockerfile's ENV,
 // an E2B template's environment): a value written there would be sent to the
-// engine with every export. An empty value is the difference between "no
-// credential" and somebody else's.
+// engine with every export.
 //
 // The PROTOCOL is http/protobuf, the one the receiver's route speaks, and the
 // TIMEOUT is [OtelAnswerWithin], so the exporter waits as long as the receiver
 // may take to answer — see there.
+//
+// EACH SIGNAL'S OWN FORM OF THOSE FOUR IS WRITTEN EMPTY, for every signal the
+// specification names ([otlpenv.Specified]). An exporter reads
+// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT — and the signal's _HEADERS, _PROTOCOL
+// and _TIMEOUT — BEFORE the base variable, so one an image bakes in decides
+// where a box's spans go and what they carry whatever the base says. Measured
+// against Claude Code 2.1.300 with only the base variables written: a baked
+// traces endpoint sent every span to the image's collector and none to the
+// receiver, a baked traces header reached the engine on every export, a baked
+// `grpc` lost every export in silence against a route that speaks HTTP, and a
+// baked timeout gave up before the receiver could answer.
+//
+// EMPTY, AND NOT THE MINTED VALUES. The specification reads an empty variable
+// as unset, and so does every reader involved — the Go SDK, OpenTelemetry JS,
+// Claude Code's own protocol read, [otlpenv] — so each signal falls back to the
+// base variable: the engine's, or the one an operator's role.sandbox.env writes
+// over it. Written with the minted values instead, they would outrank an
+// operator who points a seat at their own collector with the BASE variable,
+// which is the documented way to. Every signal and not just traces, because an
+// operator may switch a box's metrics or logs back on, and they would then go
+// wherever the image said.
+//
+// ALL OF THIS IS AN ENVIRONMENT, and an environment is not all an agent reads:
+// one that reads a settings file above it can be pointed elsewhere by a file
+// the image carries. What a runner can do about that is its own
+// ([Runner.Telemetry]).
 //
 // The RESOURCE ATTRIBUTES are non-secret routing facts — which turn, which
 // seat — so a span from inside a box lands under the turn that started it
@@ -413,11 +432,16 @@ func (r *OtelReceiver) RunEnv(ctx context.Context, trace events.TraceContext,
 		otlpenv.EndpointVar: r.EndpointFor(trace.TraceID, ttl),
 		otlpenv.ProtocolVar: string(otlpenv.HTTPProtobuf),
 		otlpenv.HeadersVar:  "",
-		OtelTimeoutVar:      strconv.FormatInt(OtelAnswerWithin.Milliseconds(), 10),
+		otlpenv.TimeoutVar:  strconv.FormatInt(OtelAnswerWithin.Milliseconds(), 10),
 		"OTEL_RESOURCE_ATTRIBUTES": strings.Join([]string{
 			"crewlet.turn_id=" + turnID,
 			"crewlet.agent_handle=" + handle,
 		}, ","),
+	}
+	for _, s := range otlpenv.Specified {
+		for _, name := range []string{s.EndpointVar(), s.HeadersVar(), s.ProtocolVar(), s.TimeoutVar()} {
+			env[name] = ""
+		}
 	}
 	if parent := tracing.Traceparent(ctx, trace); parent != "" {
 		env[tracing.TraceparentVar] = parent

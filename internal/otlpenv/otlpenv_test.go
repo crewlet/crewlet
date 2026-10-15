@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,21 +31,38 @@ func resolve(t *testing.T, s otlpenv.Signal, kv map[string]string) otlpenv.Desti
 // once and agree with itself while it did.
 func TestTheVariableNamesAreTheSpecifications(t *testing.T) {
 	t.Parallel()
-	for s, want := range map[otlpenv.Signal][4]string{
+	for s, want := range map[otlpenv.Signal][5]string{
 		otlpenv.Traces: {"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-			"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "OTEL_TRACES_EXPORTER"},
+			"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "OTEL_TRACES_EXPORTER",
+			"OTEL_EXPORTER_OTLP_TRACES_TIMEOUT"},
 		otlpenv.Metrics: {"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-			"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "OTEL_METRICS_EXPORTER"},
+			"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "OTEL_METRICS_EXPORTER",
+			"OTEL_EXPORTER_OTLP_METRICS_TIMEOUT"},
+		otlpenv.Logs: {"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+			"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "OTEL_LOGS_EXPORTER",
+			"OTEL_EXPORTER_OTLP_LOGS_TIMEOUT"},
 	} {
-		got := [4]string{s.EndpointVar(), s.HeadersVar(), s.ProtocolVar(), s.ExporterVar()}
+		got := [5]string{s.EndpointVar(), s.HeadersVar(), s.ProtocolVar(), s.ExporterVar(), s.TimeoutVar()}
 		if got != want {
 			t.Errorf("%s reads %v, want %v", s, got, want)
 		}
 	}
 	if otlpenv.EndpointVar != "OTEL_EXPORTER_OTLP_ENDPOINT" ||
 		otlpenv.HeadersVar != "OTEL_EXPORTER_OTLP_HEADERS" ||
-		otlpenv.ProtocolVar != "OTEL_EXPORTER_OTLP_PROTOCOL" {
+		otlpenv.ProtocolVar != "OTEL_EXPORTER_OTLP_PROTOCOL" ||
+		otlpenv.TimeoutVar != "OTEL_EXPORTER_OTLP_TIMEOUT" {
 		t.Error("a base variable name is not the specification's")
+	}
+	// EVERY SIGNAL THE SPECIFICATION NAMES, and the ones this package
+	// resolves among them: a box's exporter reads all three, whatever the
+	// engine sends.
+	if !slices.Equal(otlpenv.Specified, []otlpenv.Signal{otlpenv.Traces, otlpenv.Metrics, otlpenv.Logs}) {
+		t.Errorf("Specified = %v, want the specification's three signals", otlpenv.Specified)
+	}
+	for _, s := range otlpenv.Signals {
+		if !slices.Contains(otlpenv.Specified, s) {
+			t.Errorf("%s is resolved but not among the specified signals", s)
+		}
 	}
 }
 
@@ -326,8 +344,8 @@ func TestAnInvalidEndpointIsRefusedEvenWhenDeclined(t *testing.T) {
 // EVERY SIGNAL RESOLVES, AND AN UNKNOWN SIGNAL IS NO SIGNAL: a signal is
 // concatenated into a variable name and an upstream path, and an unchecked one
 // would choose part of the address the engine's own credential is sent to.
-// Logs is among the unknown: nothing in the engine sends them, so nothing
-// reads their variables.
+// Logs is among the unknown although it has a name: nothing in the engine
+// sends them, so nothing here reads their variables.
 func TestEverySignalResolvesAndNoOtherDoes(t *testing.T) {
 	t.Parallel()
 	for _, s := range otlpenv.Signals {
@@ -336,7 +354,7 @@ func TestEverySignalResolvesAndNoOtherDoes(t *testing.T) {
 			t.Errorf("%s resolved to %+v", s, d)
 		}
 	}
-	for _, bad := range []otlpenv.Signal{"", "TRACES", "logs", "profiles", "traces/../../admin", ".."} {
+	for _, bad := range []otlpenv.Signal{"", "TRACES", otlpenv.Logs, "profiles", "traces/../../admin", ".."} {
 		if bad.Valid() {
 			t.Errorf("%q is accepted as a signal", bad)
 		}
