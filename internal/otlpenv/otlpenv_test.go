@@ -32,8 +32,6 @@ func TestTheVariableNamesAreTheSpecifications(t *testing.T) {
 			"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "OTEL_TRACES_EXPORTER"},
 		otlpenv.Metrics: {"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
 			"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "OTEL_METRICS_EXPORTER"},
-		otlpenv.Logs: {"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-			"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "OTEL_LOGS_EXPORTER"},
 	} {
 		got := [4]string{s.EndpointVar(), s.HeadersVar(), s.ProtocolVar(), s.ExporterVar()}
 		if got != want {
@@ -63,7 +61,7 @@ func TestTheEndpointVariablesKeepTheirSpecMeanings(t *testing.T) {
 			otlpenv.Traces, "http://localhost:4318/v1/traces", otlpenv.EndpointVar},
 		{"every signal gets its own path",
 			map[string]string{otlpenv.EndpointVar: "http://localhost:4318"},
-			otlpenv.Logs, "http://localhost:4318/v1/logs", otlpenv.EndpointVar},
+			otlpenv.Metrics, "http://localhost:4318/v1/metrics", otlpenv.EndpointVar},
 		{"a trailing slash on the base does not double up",
 			map[string]string{otlpenv.EndpointVar: "http://localhost:4318/otlp/"},
 			otlpenv.Metrics, "http://localhost:4318/otlp/v1/metrics", otlpenv.EndpointVar},
@@ -292,8 +290,8 @@ func TestAnEndpointTheExporterCannotHonourIsRefused(t *testing.T) {
 		"https://collector.example.com/#sk-secret",
 		"http://[::1",
 	} {
-		for _, name := range []string{otlpenv.EndpointVar, otlpenv.Logs.EndpointVar()} {
-			_, err := otlpenv.Resolve(envOf(map[string]string{name: raw}), otlpenv.Logs)
+		for _, name := range []string{otlpenv.EndpointVar, otlpenv.Metrics.EndpointVar()} {
+			_, err := otlpenv.Resolve(envOf(map[string]string{name: raw}), otlpenv.Metrics)
 			if err == nil {
 				t.Errorf("%s=%q was accepted", name, raw)
 				continue
@@ -322,26 +320,20 @@ func TestAnInvalidEndpointIsRefusedEvenWhenDeclined(t *testing.T) {
 	}
 }
 
-// RESOLVEALL COVERS EVERY SIGNAL, AND AN UNKNOWN SIGNAL IS NO SIGNAL: the
-// receiver takes one from a request path, and an unchecked one would choose
-// part of the address the engine's own credential is sent to.
+// EVERY SIGNAL RESOLVES, AND AN UNKNOWN SIGNAL IS NO SIGNAL: a signal is
+// concatenated into a variable name and an upstream path, and an unchecked one
+// would choose part of the address the engine's own credential is sent to.
+// Logs is among the unknown: nothing in the engine sends them, so nothing
+// reads their variables.
 func TestEverySignalResolvesAndNoOtherDoes(t *testing.T) {
 	t.Parallel()
-	all, err := otlpenv.ResolveAll(envOf(map[string]string{
-		otlpenv.EndpointVar: "http://localhost:4318",
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(all) != len(otlpenv.Signals) {
-		t.Fatalf("resolved %d signals, want %d", len(all), len(otlpenv.Signals))
-	}
-	for s, d := range all {
+	for _, s := range otlpenv.Signals {
+		d := resolve(t, s, map[string]string{otlpenv.EndpointVar: "http://localhost:4318"})
 		if d.Signal != s || d.Endpoint != "http://localhost:4318"+s.Path() {
 			t.Errorf("%s resolved to %+v", s, d)
 		}
 	}
-	for _, bad := range []otlpenv.Signal{"", "TRACES", "profiles", "traces/../../admin", ".."} {
+	for _, bad := range []otlpenv.Signal{"", "TRACES", "logs", "profiles", "traces/../../admin", ".."} {
 		if bad.Valid() {
 			t.Errorf("%q is accepted as a signal", bad)
 		}
@@ -351,15 +343,12 @@ func TestEverySignalResolvesAndNoOtherDoes(t *testing.T) {
 	}
 }
 
-// ONE DROPPED ENTRY, ONE REPORT. Three signals reading one base variable each
-// drop the same entry, and a reader serving all three should say so once.
+// ONE DROPPED ENTRY, ONE REPORT. Two signals reading one base variable each
+// drop the same entry, and a reader serving both should say so once.
 func TestADroppedEntryIsReportedOnce(t *testing.T) {
 	t.Parallel()
-	all, err := otlpenv.ResolveAll(envOf(map[string]string{otlpenv.HeadersVar: "oops"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := otlpenv.DroppedOf(all[otlpenv.Traces], all[otlpenv.Metrics], all[otlpenv.Logs]); len(got) != 1 {
+	env := map[string]string{otlpenv.HeadersVar: "oops"}
+	if got := otlpenv.DroppedOf(resolve(t, otlpenv.Traces, env), resolve(t, otlpenv.Metrics, env)); len(got) != 1 {
 		t.Errorf("DroppedOf = %+v, want one entry", got)
 	}
 }

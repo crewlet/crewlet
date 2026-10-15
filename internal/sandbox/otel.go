@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/protobuf/proto"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/otlpenv"
@@ -30,25 +30,38 @@ import (
 // deployment.
 //
 // So the box exports to the ENGINE, which forwards. The engine adds the real
-// auth on the trusted side, and the box holds nothing worth stealing.
+// auth on the trusted side, and the box holds nothing worth stealing. It
+// forwards TRACES and nothing else — what the runners declare a box exports
+// (see otelwire.go).
 //
 // # Why the token is in the PATH and signed rather than stored
 //
 // The box needs to authenticate itself, and every header it could carry is a
 // header a leaked box carries too. So the credential is a per-run token in
 // the URL — which means the exporter needs no header configuration at all —
-// scoped to the run's trace and expiring a day after it was minted
-// ([OtelTokenLifetime]).
+// minted for one run, scoped to the TRACE that run was launched in, and
+// expiring a day after it was minted ([OtelTokenLifetime]).
 //
 // # What the scope holds, and what it does not
 //
 // The token names the trace the run was launched in, and the receiver holds
-// every export to it ([OtelReceiver.Accept]): a span, or a log record naming
-// a trace, in any other trace is refused and never forwarded. So a token
-// copied out of a box cannot put a span into somebody else's trace. It CAN, for
-// its day, send its own trace's spans and any metrics it likes to the company's
-// backend — junk, through the receiver, never the backend's credential — and
-// that is the exposure the lifetime bounds.
+// every export to it ([OtelReceiver.Accept]): a span in any other trace is
+// refused and never forwarded, and so is every metric and log record, which
+// the receiver does not serve at all. So a token copied out of a box cannot
+// put a span into any other trace.
+//
+// THE SCOPE IS THE TRACE, NOT THE RUN. A trace can hold other seats' turns
+// and coding runs beside this one — an A2A ask and the turn that answers it,
+// every seat one webhook delivery woke — and a token admits spans anywhere in
+// it, those runs' parts included. Per trace is the finest scope this verifier
+// can hold: telling this run's spans from another's in the same trace needs
+// their ancestry, which a stateless check on whichever node a box reaches
+// does not have across exports; and minting each run a trace of its own would
+// undo the nesting under the launching turn that the receiver exists to give.
+//
+// So what a token is worth, for its day, is spans in its run's trace —
+// junk in the company's backend at worst, through the receiver, never the
+// backend's credential — and that is the exposure the lifetime bounds.
 //
 // The token itself is [runtoken], which is where the format, the signature
 // and the expiry live — the MCP bridge carries the same credential shape for
@@ -81,16 +94,17 @@ func (t *OtelTokens) Mint(traceID string, ttl time.Duration) string {
 // malformed or expired.
 func (t *OtelTokens) Validate(token string) string { return t.signer.Validate(token) }
 
-// OtelReceiver mints a run's endpoint and forwards what the box exports.
+// OtelReceiver mints a run's endpoint and forwards the traces the box exports.
 //
-// It holds a CONNECTION per gRPC upstream once one has forwarded, for the rest
-// of its life — a forward is one call on it, not a dial and a TLS handshake
-// per batch — so whoever built it closes it ([OtelReceiver.Close]).
+// It holds a CONNECTION to a gRPC upstream once one has forwarded, for the
+// rest of its life — a forward is one call on it, not a dial and a TLS
+// handshake per batch — so whoever built it closes it ([OtelReceiver.Close]).
 type OtelReceiver struct {
 	base     string
 	tokens   *OtelTokens
-	upstream map[otlpenv.Signal]otlpenv.Destination
-	forward  map[otlpenv.Signal]otelForwarder
+	upstream otlpenv.Destination
+	// forward is nil when the upstream does not export.
+	forward otelForwarder
 }
 
 // OtelReceiverOptions configure [NewOtelReceiver].
@@ -103,17 +117,18 @@ type OtelReceiverOptions struct {
 	// Tokens mints and verifies. Required.
 	Tokens *OtelTokens
 
-	// Upstream is the real OTLP backend, PER SIGNAL, as [otlpenv] resolved
-	// it — the same destinations the engine's own exporters resolve, which
-	// is what makes a box's spans land beside the turn that started them.
-	// Its headers are the backend's ingest credential, applied HERE and
-	// never handed to the sandbox; that is the whole point of the hop.
+	// Upstream is where a box's traces go: the traces destination as
+	// [otlpenv] resolved it — the one the engine's own span exporter
+	// resolves, which is what makes a box's spans land beside the turn that
+	// started them. Its headers are the backend's ingest credential,
+	// applied HERE and never handed to the sandbox; that is the whole point
+	// of the hop.
 	//
-	// A signal with no destination, or one that does not export, ACCEPTS
-	// AND DROPS, which is a working configuration rather than a broken one:
-	// the engine's own per-turn span still carries the trace, and a
-	// deployment with no backend should not have every export fail.
-	Upstream map[otlpenv.Signal]otlpenv.Destination
+	// One that does not export ACCEPTS AND DROPS, which is a working
+	// configuration rather than a broken one: the engine's own per-turn
+	// span still carries the trace, and a deployment with no backend should
+	// not have every export fail.
+	Upstream otlpenv.Destination
 }
 
 // OtelForwardTimeout bounds one forwarded payload.
@@ -149,8 +164,8 @@ const otelAnswerMargin = 2 * time.Second
 // SDK, which reads the same variable from this process's environment.
 const OtelTimeoutVar = "OTEL_EXPORTER_OTLP_TIMEOUT"
 
-// NewOtelReceiver builds the receiver, and a forwarder for every signal with a
-// destination that exports.
+// NewOtelReceiver builds the receiver, and its forwarder when the upstream
+// exports.
 //
 // A FORWARDER SPEAKS ITS DESTINATION'S PROTOCOL, compression and TLS — the
 // engine's own exporter's, since both resolve through [otlpenv] — so a box's
@@ -168,29 +183,25 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	if opts.Tokens == nil {
 		return nil, fmt.Errorf("sandbox: the OTLP receiver needs a token minter")
 	}
+	if s := opts.Upstream.Signal; s != "" && s != otlpenv.Traces {
+		return nil, fmt.Errorf("sandbox: the OTLP receiver forwards traces, and was "+
+			"handed the %s destination", s)
+	}
+	upstream := opts.Upstream
+	// COPIED, headers included, so a caller that goes on to change its
+	// map cannot change where — or with what credential — this forwards.
+	upstream.Headers = maps.Clone(upstream.Headers)
 	r := &OtelReceiver{
 		base:     strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		tokens:   opts.Tokens,
-		upstream: make(map[otlpenv.Signal]otlpenv.Destination, len(opts.Upstream)),
-		forward:  map[otlpenv.Signal]otelForwarder{},
+		upstream: upstream,
 	}
-	// COPIED, headers included, so a caller that goes on to change its
-	// map cannot change where — or with what credential — this forwards.
-	for s, d := range opts.Upstream {
-		d.Headers = maps.Clone(d.Headers)
-		r.upstream[s] = d
-	}
-	for _, s := range otlpenv.Signals {
-		d := r.upstream[s]
-		if !d.Exports() {
-			continue
-		}
-		f, err := newOtelForwarder(s, d)
+	if upstream.Exports() {
+		f, err := newOtelForwarder(upstream)
 		if err != nil {
-			_ = r.Close()
-			return nil, fmt.Errorf("sandbox: the OTLP receiver's %s upstream: %w", s, err)
+			return nil, fmt.Errorf("sandbox: the OTLP receiver's upstream: %w", err)
 		}
-		r.forward[s] = f
+		r.forward = f
 	}
 	return r, nil
 }
@@ -198,11 +209,10 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 // Close releases the receiver's upstream connections. Exports accepted after
 // it are answered as ever and forwarded nowhere, with a warning each.
 func (r *OtelReceiver) Close() error {
-	var errs []error
-	for _, f := range r.forward {
-		errs = append(errs, f.close())
+	if r.forward == nil {
+		return nil
 	}
-	return errors.Join(errs...)
+	return r.forward.close()
 }
 
 // EndpointFor mints one run's OTLP endpoint.
@@ -216,49 +226,34 @@ func (r *OtelReceiver) EndpointFor(traceID string, ttl time.Duration) string {
 // Validate reports the trace a token is scoped to, or empty.
 func (r *OtelReceiver) Validate(token string) string { return r.tokens.Validate(token) }
 
-// Upstream is where this receiver forwards one signal: the destination it was
-// built with, or the zero one — which exports nothing — for a signal it was
-// not. A copy, so a caller cannot change what the receiver sends.
-func (r *OtelReceiver) Upstream(signal otlpenv.Signal) otlpenv.Destination {
-	d := r.upstream[signal]
+// Upstream is where this receiver forwards a box's traces: the destination it
+// was built with. A copy, so a caller cannot change what the receiver sends.
+func (r *OtelReceiver) Upstream() otlpenv.Destination {
+	d := r.upstream
 	d.Headers = maps.Clone(d.Headers)
 	return d
 }
 
-// Forwards reports whether an accepted payload of this signal goes anywhere.
+// Forwards reports whether an accepted export goes anywhere.
 //
 // The receiver with no upstream is a real configuration — accept and drop —
 // so this is what an operator surface asks rather than inferring it from a
 // nil.
-func (r *OtelReceiver) Forwards(signal otlpenv.Signal) bool {
-	return r.upstream[signal].Exports()
-}
+func (r *OtelReceiver) Forwards() bool { return r.upstream.Exports() }
 
-// Forwarding is every signal an accepted payload goes somewhere for, in
-// [otlpenv.Signals] order.
-func (r *OtelReceiver) Forwarding() []otlpenv.Signal {
-	var out []otlpenv.Signal
-	for _, s := range otlpenv.Signals {
-		if r.Forwards(s) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// Accept takes one export a box made under the token for trace, forwards it,
-// and answers what the route sends the box.
+// Accept takes one traces export a box made under the token for trace,
+// forwards it, and answers what the route sends the box.
 //
 // DECODED FIRST, so an export the receiver cannot read is refused as what it
 // is — [ErrOtelUnsupported], [ErrOtelMalformed], [ErrOtelTooLarge] — which an
 // exporter takes as final rather than retrying. See otelwire.go for why the
 // receiver decodes at all.
 //
-// TO THE SIGNAL'S OWN DESTINATION, which is the endpoint the engine's exporter
-// would send that signal to — its OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT when
-// one is set, the base with the signal path otherwise. Forwarding everything
-// to the base with the path appended is what dropped every box's spans on a
-// deployment that set only the traces endpoint.
+// TO THE TRACES DESTINATION, which is the endpoint the engine's span exporter
+// sends to — OTEL_EXPORTER_OTLP_TRACES_ENDPOINT when it is set, the base with
+// `/v1/traces` otherwise. Forwarding to the base with the path appended,
+// whatever else was set, is what dropped every box's spans on a deployment
+// that set only the traces endpoint.
 //
 // A FORWARD'S FAILURE IS LOGGED, NEVER RETURNED as something the caller
 // reports to the box. An exporter that gets a 5xx retries, and retries against
@@ -266,36 +261,30 @@ func (r *OtelReceiver) Forwarding() []otlpenv.Signal {
 // traffic multiplies while nothing it carries is recoverable anyway. So an
 // export that decodes is answered as accepted whatever the backend did.
 //
-// AND HELD TO ITS TOKEN'S TRACE. A span — or a log record naming a trace — in
-// any other trace is removed before the forward and reported back to the box
-// as a partial success, which an exporter neither retries nor fails its batch
-// for. The token is minted for the trace the run was launched in, and the box
-// is handed that trace's TRACEPARENT, so every span a coding agent records
-// descends from it (measured: every Claude Code span of a run, tool calls
-// included); what names another trace was written by something in the box
-// other than the agent, into somebody else's trace. Metrics name no trace and
-// are not scoped. See [OtelTokens].
+// AND HELD TO ITS TOKEN'S TRACE. A span in any other trace is removed before
+// the forward and reported back to the box as a partial success, which an
+// exporter neither retries nor fails its batch for. The token is minted for
+// the trace the run was launched in, and the box is handed that trace's
+// TRACEPARENT, so every span a coding agent records descends from it
+// (measured: every Claude Code span of a run, tool calls included); what names
+// another trace was written by something in the box other than the agent.
+// The scope is that TRACE, which other seats' turns and runs can share — see
+// [OtelTokens] and the package doc.
 func (r *OtelReceiver) Accept(ctx context.Context, trace string, e OtelExport) (OtelReply, error) {
 	decoded, err := decodeExport(e)
 	if err != nil {
 		return OtelReply{}, err
 	}
-	codec := otelCodecs[e.Signal]
-	resp := codec.response()
-	kept := int64(1)
-	if codec.scope != nil {
-		var removed int64
-		removed, kept = codec.scope(decoded.request, traceBytes(trace))
-		if removed > 0 {
-			why := fmt.Sprintf("%d record(s) name a trace other than the one this "+
-				"endpoint was minted for, and were not forwarded", removed)
-			resp = codec.partial(removed, why)
-			log.WarnContext(ctx, "sandbox_otel_out_of_scope", "signal", e.Signal,
-				"trace_id", trace, "removed", removed)
-		}
+	resp := &coltracepb.ExportTraceServiceResponse{}
+	removed, kept := scopeToTrace(decoded.request, traceBytes(trace))
+	if removed > 0 {
+		why := fmt.Sprintf("%d span(s) are in a trace other than the one this "+
+			"endpoint was minted for, and were not forwarded", removed)
+		resp = outOfScope(removed, why)
+		log.WarnContext(ctx, "sandbox_otel_out_of_scope", "trace_id", trace, "removed", removed)
 	}
 	if kept > 0 {
-		r.forwardTo(ctx, e.Signal, decoded.request)
+		r.forwardTo(ctx, decoded.request)
 	}
 	return encodeReply(resp, decoded.mediaType)
 }
@@ -311,30 +300,27 @@ func traceBytes(trace string) []byte {
 }
 
 // forwardTo sends a decoded export upstream, bounded by [OtelForwardTimeout].
-func (r *OtelReceiver) forwardTo(ctx context.Context, signal otlpenv.Signal, req proto.Message) {
-	f, ok := r.forward[signal]
-	if !ok {
+func (r *OtelReceiver) forwardTo(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) {
+	if r.forward == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, OtelForwardTimeout)
 	defer cancel()
-	resp, err := f.send(ctx, req)
+	resp, err := r.forward.send(ctx, req)
 	if refused := (otelRefused{}); errors.As(err, &refused) {
-		log.WarnContext(ctx, "sandbox_otel_forward_refused", "signal", signal, "status", refused.status)
+		log.WarnContext(ctx, "sandbox_otel_forward_refused", "status", refused.status)
 		return
 	}
 	if err != nil {
-		log.WarnContext(ctx, "sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_otel_forward_failed", "error", err.Error())
 		return
 	}
 	// A PARTIAL SUCCESS is the backend saying it dropped part of what it
 	// was sent and why, on a 200 — the one refusal an exporter never
 	// retries and so never reports twice.
-	if resp != nil {
-		if n, why := otelCodecs[signal].rejected(resp); n > 0 || why != "" {
-			log.WarnContext(ctx, "sandbox_otel_forward_partial",
-				"signal", signal, "rejected", n, "reason", why)
-		}
+	if p := resp.GetPartialSuccess(); p.GetRejectedSpans() > 0 || p.GetErrorMessage() != "" {
+		log.WarnContext(ctx, "sandbox_otel_forward_partial",
+			"rejected", p.GetRejectedSpans(), "reason", p.GetErrorMessage())
 	}
 }
 
@@ -452,11 +438,11 @@ const (
 // the failure the signed, stateless token exists to prevent. A node with the
 // variable unset builds none, and its route is absent rather than refusing.
 //
-// THE UPSTREAM IS RESOLVED BY [otlpenv.ResolveAll], the resolver the engine's
-// exporters use, for every signal — so a value that can never work (an
-// endpoint that is not an http(s) URL, a protocol or an exporter this build
-// does not have) is refused here by name, as the engine's own exporter refuses
-// it, rather than accepted and forwarded nowhere.
+// THE UPSTREAM IS RESOLVED BY [otlpenv.Resolve], for traces — the signal and
+// the resolver the engine's span exporter uses — so a value that can never
+// work (an endpoint that is not an http(s) URL, a protocol or an exporter
+// this build does not have) is refused here by name, as the engine's own
+// exporter refuses it, rather than accepted and forwarded nowhere.
 //
 // keyMaterial is the Tier A keyring, which every process already loads. Nil
 // or empty takes a per-process key: correct for a single process, and warned
@@ -469,15 +455,11 @@ func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelRece
 	if base == "" {
 		return nil, nil
 	}
-	upstream, err := otlpenv.ResolveAll(env)
+	upstream, err := otlpenv.Resolve(env, otlpenv.Traces)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: the OTLP receiver's upstream: %w", err)
 	}
-	var resolved []otlpenv.Destination
-	for _, s := range otlpenv.Signals {
-		resolved = append(resolved, upstream[s])
-	}
-	for _, d := range otlpenv.DroppedOf(resolved...) {
+	for _, d := range otlpenv.DroppedOf(upstream) {
 		log.Warn("sandbox_otel_header_dropped", "var", d.Var, "entry", d.Entry,
 			"header", d.Header, "reason", d.Reason)
 	}

@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,19 +12,27 @@ import (
 	"slices"
 	"strings"
 
-	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
-	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
-	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-
-	"github.com/crewlet/crewlet/internal/otlpenv"
 )
 
 // The wire half of the receiver: what a box's export IS, read off its body.
+//
+// # Traces, and nothing else
+//
+// A box exports its TRACES here, and the receiver serves no other signal: the
+// route is `/otlp/{token}/v1/traces`, and a metrics or a logs path under the
+// same token is the mux's own 404, which an exporter takes as final. No runner
+// the engine ships exports anything else — Claude Code's metrics and logs are
+// switched off ([Runner.Telemetry]) and OpenCode is minted no endpoint — so a
+// metrics or logs export under a box token could only come from something in
+// the box other than the agent, and the receiver used to forward it with the
+// backend's credential: log records naming no trace, with any resource and
+// body, and metric exemplars naming any trace. Serving what the runners
+// declare, and only that, is what makes "spans in its own trace" the whole of
+// what a token is worth.
 //
 // # Why the receiver decodes what it forwards
 //
@@ -71,17 +78,16 @@ var (
 	ErrOtelTooLarge = errors.New("sandbox: an OTLP export past the receiver's bound once decompressed")
 )
 
-// OtelExport is one export a box made, as the route received it.
+// OtelExport is one traces export a box made, as the route received it.
 type OtelExport struct {
-	Signal          otlpenv.Signal
 	Body            []byte
 	ContentType     string
 	ContentEncoding string
 }
 
-// OtelReply is what the route answers an accepted export with: the signal's
-// Export response, in the media type the export arrived in, as the OTLP/HTTP
-// specification asks.
+// OtelReply is what the route answers an accepted export with: the trace
+// service's Export response, in the media type the export arrived in, as the
+// OTLP/HTTP specification asks.
 type OtelReply struct {
 	ContentType string
 	Body        []byte
@@ -93,118 +99,42 @@ const (
 	otlpJSON     = "application/json"
 )
 
-// otelCodec is what differs by signal: the message an export decodes into, the
-// response, the gRPC call that carries the message upstream, and what of an
-// export the token's trace scopes.
-//
-// A TABLE rather than a type switch at each use, so a signal is either wholly
-// handled or not handled at all — a fourth signal added to [otlpenv.Signals]
-// with no row here is refused at [NewOtelReceiver], not half-forwarded.
-type otelCodec struct {
-	request  func() proto.Message
-	response func() proto.Message
-	export   func(ctx context.Context, conn grpc.ClientConnInterface, req proto.Message) (proto.Message, error)
-	// rejected is what an upstream's answer said it dropped, and why.
-	rejected func(resp proto.Message) (int64, string)
-	// scope removes from req every record naming a trace other than trace,
-	// and reports how many records it removed and how many it kept. Nil
-	// for a signal whose records name no trace.
-	scope func(req proto.Message, trace []byte) (removed, kept int64)
-	// partial is the response reporting that removed records were refused.
-	partial func(removed int64, why string) proto.Message
+// scopeToTrace removes from req every span in a trace other than trace, and
+// reports how many it removed and how many it kept. A nil trace — a token
+// whose subject is not a trace id — keeps none.
+func scopeToTrace(req *coltracepb.ExportTraceServiceRequest, trace []byte) (removed, kept int64) {
+	for _, rs := range req.GetResourceSpans() {
+		for _, ss := range rs.GetScopeSpans() {
+			ss.Spans = slices.DeleteFunc(ss.Spans, func(span *tracepb.Span) bool {
+				if trace != nil && bytes.Equal(span.GetTraceId(), trace) {
+					kept++
+					return false
+				}
+				removed++
+				return true
+			})
+		}
+	}
+	return removed, kept
 }
 
-var otelCodecs = map[otlpenv.Signal]otelCodec{
-	otlpenv.Traces: {
-		request:  func() proto.Message { return &coltracepb.ExportTraceServiceRequest{} },
-		response: func() proto.Message { return &coltracepb.ExportTraceServiceResponse{} },
-		export: func(ctx context.Context, conn grpc.ClientConnInterface, req proto.Message) (proto.Message, error) {
-			return coltracepb.NewTraceServiceClient(conn).Export(ctx, req.(*coltracepb.ExportTraceServiceRequest))
-		},
-		rejected: func(resp proto.Message) (int64, string) {
-			p := resp.(*coltracepb.ExportTraceServiceResponse).GetPartialSuccess()
-			return p.GetRejectedSpans(), p.GetErrorMessage()
-		},
-		scope: func(req proto.Message, trace []byte) (removed, kept int64) {
-			for _, rs := range req.(*coltracepb.ExportTraceServiceRequest).GetResourceSpans() {
-				for _, ss := range rs.GetScopeSpans() {
-					ss.Spans = slices.DeleteFunc(ss.Spans, func(span *tracepb.Span) bool {
-						if bytes.Equal(span.GetTraceId(), trace) {
-							kept++
-							return false
-						}
-						removed++
-						return true
-					})
-				}
-			}
-			return removed, kept
-		},
-		partial: func(removed int64, why string) proto.Message {
-			return &coltracepb.ExportTraceServiceResponse{PartialSuccess: &coltracepb.ExportTracePartialSuccess{
-				RejectedSpans: removed, ErrorMessage: why,
-			}}
-		},
-	},
-	otlpenv.Metrics: {
-		request:  func() proto.Message { return &colmetricspb.ExportMetricsServiceRequest{} },
-		response: func() proto.Message { return &colmetricspb.ExportMetricsServiceResponse{} },
-		export: func(ctx context.Context, conn grpc.ClientConnInterface, req proto.Message) (proto.Message, error) {
-			return colmetricspb.NewMetricsServiceClient(conn).Export(ctx, req.(*colmetricspb.ExportMetricsServiceRequest))
-		},
-		rejected: func(resp proto.Message) (int64, string) {
-			p := resp.(*colmetricspb.ExportMetricsServiceResponse).GetPartialSuccess()
-			return p.GetRejectedDataPoints(), p.GetErrorMessage()
-		},
-	},
-	otlpenv.Logs: {
-		request:  func() proto.Message { return &collogspb.ExportLogsServiceRequest{} },
-		response: func() proto.Message { return &collogspb.ExportLogsServiceResponse{} },
-		export: func(ctx context.Context, conn grpc.ClientConnInterface, req proto.Message) (proto.Message, error) {
-			return collogspb.NewLogsServiceClient(conn).Export(ctx, req.(*collogspb.ExportLogsServiceRequest))
-		},
-		rejected: func(resp proto.Message) (int64, string) {
-			p := resp.(*collogspb.ExportLogsServiceResponse).GetPartialSuccess()
-			return p.GetRejectedLogRecords(), p.GetErrorMessage()
-		},
-		// A log record need not name a trace; one that names ANOTHER is
-		// refused, as a span in another trace is.
-		scope: func(req proto.Message, trace []byte) (removed, kept int64) {
-			for _, rl := range req.(*collogspb.ExportLogsServiceRequest).GetResourceLogs() {
-				for _, sl := range rl.GetScopeLogs() {
-					sl.LogRecords = slices.DeleteFunc(sl.LogRecords, func(r *logspb.LogRecord) bool {
-						if id := r.GetTraceId(); len(id) == 0 || bytes.Equal(id, trace) {
-							kept++
-							return false
-						}
-						removed++
-						return true
-					})
-				}
-			}
-			return removed, kept
-		},
-		partial: func(removed int64, why string) proto.Message {
-			return &collogspb.ExportLogsServiceResponse{PartialSuccess: &collogspb.ExportLogsPartialSuccess{
-				RejectedLogRecords: removed, ErrorMessage: why,
-			}}
-		},
-	},
+// outOfScope is the response telling a box that removed spans were refused: a
+// partial success, which an exporter neither retries nor fails its batch for.
+func outOfScope(removed int64, why string) *coltracepb.ExportTraceServiceResponse {
+	return &coltracepb.ExportTraceServiceResponse{PartialSuccess: &coltracepb.ExportTracePartialSuccess{
+		RejectedSpans: removed, ErrorMessage: why,
+	}}
 }
 
 // decodedExport is an export read into its message, with the media type its
 // reply is written in.
 type decodedExport struct {
-	request   proto.Message
+	request   *coltracepb.ExportTraceServiceRequest
 	mediaType string
 }
 
 // decodeExport reads an export into the OTLP message it is.
 func decodeExport(e OtelExport) (decodedExport, error) {
-	codec, ok := otelCodecs[e.Signal]
-	if !ok {
-		return decodedExport{}, fmt.Errorf("%w: %q is not a signal", ErrOtelUnsupported, e.Signal)
-	}
 	mediaType, _, err := mime.ParseMediaType(e.ContentType)
 	if err != nil {
 		return decodedExport{}, fmt.Errorf("%w: Content-Type %q", ErrOtelUnsupported, e.ContentType)
@@ -213,7 +143,7 @@ func decodeExport(e OtelExport) (decodedExport, error) {
 	if err != nil {
 		return decodedExport{}, err
 	}
-	req := codec.request()
+	req := &coltracepb.ExportTraceServiceRequest{}
 	switch mediaType {
 	case otlpProtobuf:
 		err = proto.Unmarshal(body, req)
@@ -223,7 +153,7 @@ func decodeExport(e OtelExport) (decodedExport, error) {
 		return decodedExport{}, fmt.Errorf("%w: Content-Type %q", ErrOtelUnsupported, mediaType)
 	}
 	if err != nil {
-		return decodedExport{}, fmt.Errorf("%w: %s as %s: %w", ErrOtelMalformed, e.Signal, mediaType, err)
+		return decodedExport{}, fmt.Errorf("%w: traces as %s: %w", ErrOtelMalformed, mediaType, err)
 	}
 	return decodedExport{request: req, mediaType: mediaType}, nil
 }
@@ -261,7 +191,7 @@ func inflate(body []byte, encoding string) ([]byte, error) {
 	return out, nil
 }
 
-// encodeReply writes a signal's response in the media type its export came in.
+// encodeReply writes a response in the media type its export came in.
 func encodeReply(resp proto.Message, mediaType string) (OtelReply, error) {
 	var (
 		body []byte
@@ -279,10 +209,9 @@ func encodeReply(resp proto.Message, mediaType string) (OtelReply, error) {
 }
 
 // otlpIDFields are the members OTLP/JSON writes as HEX where the protobuf JSON
-// mapping writes base64: a span's and a link's trace and span ids, a span's
-// parent, a log record's and an exemplar's trace and span ids. Every one is
-// named one of these, in either spelling a receiver must accept, and nothing
-// else in the format is.
+// mapping writes base64: a span's and a link's trace and span ids, and a
+// span's parent. Every one is named one of these, in either spelling a
+// receiver must accept, and nothing else in a traces export is.
 var otlpIDFields = map[string]bool{
 	"traceId": true, "spanId": true, "parentSpanId": true,
 	"trace_id": true, "span_id": true, "parent_span_id": true,

@@ -557,9 +557,13 @@ func withTelemetry(ctx context.Context, m *Manager, runner Runner, req LaunchReq
 //
 // A DAY, and not longer, because the token is a credential a box can read:
 // whatever runs in the box can export with it until it expires. What that
-// buys is junk in the company's telemetry backend, through the receiver —
-// never the backend's own credential, and never a span in another run's trace
-// ([OtelReceiver.Accept]) — and a day bounds it. A JUDGMENT, not a
+// buys is spans in the run's own trace — junk in the company's telemetry
+// backend at worst, through the receiver, never the backend's own credential,
+// never a metric or a log record and never a span in any other trace
+// ([OtelReceiver.Accept]) — and a day bounds it. That trace can hold other
+// seats' turns and runs beside this one (an A2A exchange, one webhook
+// delivery's wakes), and the token admits spans among theirs too: the scope
+// is the trace, not the run (see [OtelTokens]). A JUDGMENT, not a
 // measurement: it sits far past any coding run a working day produces, and a
 // run whose box is still exporting a day after it started is refused from
 // then on, which costs that run's late telemetry and nothing else.

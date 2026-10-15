@@ -315,17 +315,17 @@ func TestTheTLSAndCompressionNamesAreTheSpecifications(t *testing.T) {
 	got := []string{
 		otlpenv.CompressionVar, otlpenv.CertificateVar, otlpenv.ClientCertificateVar,
 		otlpenv.ClientKeyVar, otlpenv.InsecureVar,
-		otlpenv.Logs.CompressionVar(), otlpenv.Logs.CertificateVar(),
-		otlpenv.Logs.ClientCertificateVar(), otlpenv.Logs.ClientKeyVar(),
-		otlpenv.Logs.InsecureVar(),
+		otlpenv.Metrics.CompressionVar(), otlpenv.Metrics.CertificateVar(),
+		otlpenv.Metrics.ClientCertificateVar(), otlpenv.Metrics.ClientKeyVar(),
+		otlpenv.Metrics.InsecureVar(),
 	}
 	want := []string{
 		"OTEL_EXPORTER_OTLP_COMPRESSION", "OTEL_EXPORTER_OTLP_CERTIFICATE",
 		"OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE", "OTEL_EXPORTER_OTLP_CLIENT_KEY",
 		"OTEL_EXPORTER_OTLP_INSECURE",
-		"OTEL_EXPORTER_OTLP_LOGS_COMPRESSION", "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
-		"OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE", "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
-		"OTEL_EXPORTER_OTLP_LOGS_INSECURE",
+		"OTEL_EXPORTER_OTLP_METRICS_COMPRESSION", "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+		"OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE", "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
+		"OTEL_EXPORTER_OTLP_METRICS_INSECURE",
 	}
 	for i := range want {
 		if got[i] != want[i] {

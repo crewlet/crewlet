@@ -7,9 +7,9 @@
 //
 // Two halves read the OTLP environment: the engine's own exporters
 // (internal/tracing, for traces and metrics) and the sandbox OTLP receiver
-// (internal/sandbox), which forwards a coding box's telemetry to the backend
-// the engine exports to, so the box's spans nest under the turn that started
-// them. ADR-0010 made the standard variables the shared interface and let each
+// (internal/sandbox), which forwards a coding box's traces to the backend the
+// engine exports its own to, so the box's spans nest under the turn that
+// started them. ADR-0010 made the standard variables the shared interface and let each
 // half read them directly, on the theory that one set of variable names could
 // not be read two ways. It was read three ways while every test passed: the
 // receiver ignored OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, so a deployment that set
@@ -28,7 +28,7 @@
 //
 //   - ENDPOINT. OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT is the full URL and is used
 //     verbatim; OTEL_EXPORTER_OTLP_ENDPOINT is a BASE, and the signal's path
-//     (`/v1/traces`, `/v1/metrics`, `/v1/logs`) is appended to it after a
+//     (`/v1/traces`, `/v1/metrics`) is appended to it after a
 //     trailing slash is trimmed. Neither set means the signal is not exported.
 //   - HEADERS. `name=value` pairs separated by commas, each value
 //     PERCENT-DECODED (url.PathUnescape) and then trimmed. A per-signal
@@ -118,22 +118,23 @@ import (
 // exported under.
 type Signal string
 
-// The signals OTLP defines, and this engine resolves.
+// The signals this engine resolves: the two it sends. OTLP's third, logs, has
+// no reader — the engine exports no logs of its own, and the sandbox receiver
+// forwards a box's traces and nothing else — so its variables are not read,
+// and a value in one is neither honoured nor refused.
 const (
 	Traces  Signal = "traces"
 	Metrics Signal = "metrics"
-	Logs    Signal = "logs"
 )
 
 // Signals is every [Signal], in the order the specification lists them.
-var Signals = []Signal{Traces, Metrics, Logs}
+var Signals = []Signal{Traces, Metrics}
 
 // Valid reports a signal this package resolves.
 //
 // A CLOSED SET, because a signal is concatenated into a variable name and into
-// an upstream path: the receiver takes one from a request URL, and an
-// unchecked segment would let a caller choose part of the address the
-// engine's own credential is sent to.
+// an upstream path, and a value from anywhere else would choose part of the
+// address the engine's own credential is sent to.
 func (s Signal) Valid() bool { return slices.Contains(Signals, s) }
 
 // Path is the path the specification appends to a base endpoint.
@@ -570,25 +571,11 @@ func keyPair(name, certPath, keyPath string) (tls.Certificate, error) {
 	return pair, nil
 }
 
-// ResolveAll resolves every signal, for a reader that serves all three.
-func ResolveAll(env func(string) string) (map[Signal]Destination, error) {
-	out := make(map[Signal]Destination, len(Signals))
-	for _, s := range Signals {
-		d, err := Resolve(env, s)
-		if err != nil {
-			return nil, err
-		}
-		out[s] = d
-	}
-	return out, nil
-}
-
 // DroppedOf is every dropped header entry across several destinations, each
 // reported once.
 //
-// Three signals reading one base headers variable each drop the same entry,
-// and a reader that resolves all three should say so once rather than three
-// times.
+// Two signals reading one base headers variable each drop the same entry, and
+// a reader that resolves both should say so once rather than twice.
 func DroppedOf(ds ...Destination) []Dropped {
 	var out []Dropped
 	for _, d := range ds {

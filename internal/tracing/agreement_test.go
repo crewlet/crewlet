@@ -26,14 +26,15 @@ import (
 // protocol, and neither decoded a header value.
 //
 // So for each environment the engine's traces destination must equal the
-// receiver's traces upstream, and the meter's metrics destination the
-// receiver's metrics upstream — endpoint, headers, protocol, whether the
-// signal was declined, and what was dropped — and a value one half refuses
-// the other must refuse too. Each half's own wire behaviour is held to its
-// resolution beside it: TestTheExporterSendsWhatTheResolverResolved here, and
-// internal/sandbox's TestEachSignalIsForwardedToItsOwnDestination.
+// receiver's upstream — endpoint, headers, protocol, compression, TLS, whether
+// the signal was declined, and what was dropped — and a value one half refuses
+// the other must refuse too. Traces are the one signal both halves send: the
+// receiver forwards a box's traces and nothing else. Each half's own wire
+// behaviour is held to its resolution beside it: TestTheExporterSendsWhatThe-
+// ResolverResolved here, and internal/sandbox's TestTracesAreForwardedToThe-
+// TracesDestination.
 //
-// Mutation: have the receiver resolve every signal's endpoint from the base
+// Mutation: have the receiver resolve the traces endpoint from the base
 // variable alone, and the signal-endpoint cases go red; have it skip header
 // decoding, and the percent-encoded case does.
 func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
@@ -105,15 +106,13 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the receiver refused what the exporter accepts: %v", err)
 			}
-			for _, s := range []otlpenv.Signal{otlpenv.Traces, otlpenv.Metrics} {
-				engine, err := tracing.DestinationFor(env, s)
-				if err != nil {
-					t.Fatalf("the engine refused what the receiver accepts: %v", err)
-				}
-				if forwards := receiver.Upstream(s); !reflect.DeepEqual(engine, forwards) {
-					t.Errorf("%s: the engine exports to\n\t%+v\nand the receiver forwards to\n\t%+v",
-						s, engine, forwards)
-				}
+			engine, err := tracing.DestinationFor(env, otlpenv.Traces)
+			if err != nil {
+				t.Fatalf("the engine refused what the receiver accepts: %v", err)
+			}
+			if forwards := receiver.Upstream(); !reflect.DeepEqual(engine, forwards) {
+				t.Errorf("the engine exports traces to\n\t%+v\nand the receiver forwards them to\n\t%+v",
+					engine, forwards)
 			}
 		})
 	}
@@ -121,22 +120,21 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 	// A VALUE ONE HALF REFUSES, THE OTHER REFUSES: a receiver that accepted
 	// what the engine refused would answer every box 200 and forward nowhere.
 	for name, value := range map[string]string{
-		otlpenv.EndpointVar:           "localhost:4318",
-		otlpenv.Traces.EndpointVar():  "https://user:pass@collector.example.com",
-		otlpenv.ProtocolVar:           "http/json",
-		otlpenv.Metrics.ProtocolVar(): "otlp",
-		otlpenv.Traces.ExporterVar():  "console",
-		otlpenv.CompressionVar:        "zstd",
-		otlpenv.CertificateVar:        "/nonexistent/ca.pem",
-		otlpenv.InsecureVar:           "maybe",
+		otlpenv.EndpointVar:          "localhost:4318",
+		otlpenv.Traces.EndpointVar(): "https://user:pass@collector.example.com",
+		otlpenv.ProtocolVar:          "http/json",
+		otlpenv.Traces.ProtocolVar(): "otlp",
+		otlpenv.Traces.ExporterVar(): "console",
+		otlpenv.CompressionVar:       "zstd",
+		otlpenv.CertificateVar:       "/nonexistent/ca.pem",
+		otlpenv.InsecureVar:          "maybe",
 	} {
 		env := lookup(map[string]string{name: value})
 		_, recvErr := sandbox.BuildOtelReceiver(env, []string{"k1:test-material"})
 		_, tracesErr := tracing.DestinationFor(env, otlpenv.Traces)
-		_, metricsErr := tracing.DestinationFor(env, otlpenv.Metrics)
-		if recvErr == nil || (tracesErr == nil && metricsErr == nil) {
-			t.Errorf("%s=%q: receiver %v, engine traces %v, metrics %v — one half "+
-				"accepted what the other refused", name, value, recvErr, tracesErr, metricsErr)
+		if recvErr == nil || tracesErr == nil {
+			t.Errorf("%s=%q: receiver %v, engine traces %v — one half accepted what "+
+				"the other refused", name, value, recvErr, tracesErr)
 		}
 	}
 }
