@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -14,11 +15,14 @@ import (
 	"testing/synctest"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // recorder collects what the fleet republished: the wakes in sent, and the
@@ -498,43 +502,8 @@ func TestADuplicatePostIsPublishedOnce(t *testing.T) {
 // itself — and the cursor it resumes from is the SERVER's clock.
 func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 	s := newServer(t)
-	// THE SERVER'S CLOCK READS A MINUTE BEFORE THE POSTS, so the first
-	// connect's anchor sits behind them and the gap holds what was
-	// created after the drop — as a real gap does.
-	serverNow := time.UnixMilli(1718003000000).UTC().Add(-time.Minute)
 	var backfilled atomic.Int32
-	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
-		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
-		// MOST SPECIFIC FIRST: a channels path is
-		// /users/{id}/teams/{id}/channels, so matching /teams before it
-		// answers the channel read with a team list.
-		switch {
-		case strings.Contains(r.URL.Path, "/posts"):
-			backfilled.Add(1)
-			json.NewEncoder(w).Encode(map[string]any{
-				"order": []string{"g2", "g1"},
-				"posts": map[string]any{
-					"g1": map[string]any{
-						"id": "g1", "channel_id": "C1", "user_id": "u-ana",
-						"message": "missed one", "create_at": float64(1718003001000),
-					},
-					"g2": map[string]any{
-						"id": "g2", "channel_id": "C1", "user_id": "u-ana",
-						"message": "missed two", "create_at": float64(1718003002000),
-					},
-				},
-			})
-		case strings.HasSuffix(r.URL.Path, "/channels"):
-			json.NewEncoder(w).Encode([]map[string]any{
-				{"id": "C1", "name": "eng", "type": "O"},
-			})
-		case strings.HasSuffix(r.URL.Path, "/teams"):
-			json.NewEncoder(w).Encode([]map[string]any{{"id": "t1", "name": "eng"}})
-		default:
-			w.Write([]byte(`{"id":"bot-1","username":"agent-swe"}`))
-		}
-		return true
-	})
+	servesAGap(s, &backfilled)
 
 	rec := &recorder{}
 	first := newSocket(frame("p1", "before the drop", nil))
@@ -571,6 +540,154 @@ func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 	if backfilled.Load() == 0 {
 		t.Fatal("no backfill was attempted")
 	}
+}
+
+// A POST IS ONE TRACE: its wake and its delivery record are published inside
+// one `mattermost.receive` span, a ROOT of its own, so the delivery row an
+// operator opens and the skip or turn the wake causes are filed in the same
+// trace — live or replayed — as a webhook delivery's are under
+// `webhook.receive`.
+//
+// Armed both ways: outside any span, where each event published on the bare
+// loop context would mint a root of its own; and under a span, which no post
+// may be a child of, since the socket loop keeps the arming context's values
+// for its whole life.
+//
+// Mutations: publish both events on the loop's own context (armed outside a
+// span, the two halves name different traces and no span; armed under one,
+// every post is filed in the arming span's trace); open the span with Start
+// rather than StartRoot (every post armed under a span is its child).
+func TestAPostsWakeAndItsRecordShareOneTrace(t *testing.T) {
+	for _, underSpan := range []bool{false, true} {
+		t.Run(fmt.Sprintf("armed under a span: %v", underSpan), func(t *testing.T) {
+			ctx := t.Context()
+			armedIn := ""
+			if underSpan {
+				var arming trace.Span
+				ctx, arming = tracing.Start(ctx, "test", "arming")
+				defer arming.End()
+				armedIn = arming.SpanContext().TraceID().String()
+			}
+			wakes, records := fourPostsDelivered(ctx, t)
+
+			seen := map[string]string{}
+			for _, id := range []string{"p1", "p2", "g1", "g2"} {
+				wake, record := wakes[id], records[id]
+				if wake != record {
+					t.Errorf("post %s: the wake is filed in %+v and its delivery record in "+
+						"%+v — the row an operator opens is not where the wake's outcome is",
+						id, wake, record)
+				}
+				if wake.SpanID == "" || wake.ParentSpanID != "" {
+					t.Errorf("post %s: published in %+v, want a root span of its own", id, wake)
+				}
+				if wake.TraceID == armedIn {
+					t.Errorf("post %s is filed in the trace of the span that armed the socket", id)
+				}
+				if other, dup := seen[wake.TraceID]; dup {
+					t.Errorf("posts %s and %s share trace %s — each post roots its own",
+						other, id, wake.TraceID)
+				}
+				seen[wake.TraceID] = id
+			}
+		})
+	}
+}
+
+// fourPostsDelivered arms a seat under ctx, delivers two live posts (p1, p2),
+// drops the socket so the reconnect replays two more (g1, g2), and returns the
+// trace each post's wake and delivery record was published in, by post id.
+func fourPostsDelivered(ctx context.Context, t *testing.T) (wakes, records map[string]events.TraceContext) {
+	t.Helper()
+	s := newServer(t)
+	servesAGap(s, nil)
+
+	rec := &recorder{}
+	first := newSocket(frame("p1", "before the drop", nil), frame("p2", "and another", nil))
+	second := newSocket()
+	var dials atomic.Int32
+	f, err := mattermost.NewFleet(mattermost.FleetOptions{
+		Publisher: rec, Claims: coordmemory.NewFleet(),
+		Backoff: fastBackoff,
+		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+			if dials.Add(1) == 1 {
+				return first, nil
+			}
+			return second, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFleet: %v", err)
+	}
+	if err := f.Add(ctx, seat, client(t, s)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	defer f.Stop()
+
+	waitFor(t, 2, func() int { return len(rec.posts()) })
+	first.Close() // the drop, so g1 and g2 are replayed
+	waitFor(t, 4, func() int { return len(rec.posts()) })
+	waitFor(t, 4, func() int { return len(rec.records()) })
+
+	wakes, records = map[string]events.TraceContext{}, map[string]events.TraceContext{}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, ev := range rec.sent {
+		w, _ := events.DataAs[*types.RawWebhook](ev)
+		post, _ := w.Body["post"].(map[string]any)
+		wakes[str(post, "id")] = ev.Trace()
+	}
+	for _, ev := range rec.recorded {
+		d, _ := events.DataAs[*types.InboundDelivery](ev)
+		records[d.DeliveryKey] = ev.Trace()
+	}
+	return wakes, records
+}
+
+// servesAGap answers a seat's REST reads with one team, one channel and two
+// posts — g1 and g2 — created after the anchor a first connect takes, so a
+// reconnect's replay delivers both. backfilled, when set, counts the post
+// reads.
+//
+// THE SERVER'S CLOCK READS A MINUTE BEFORE THE POSTS, so the first connect's
+// anchor sits behind them and the gap holds what was created after the drop —
+// as a real gap does.
+func servesAGap(s *server, backfilled *atomic.Int32) {
+	serverNow := time.UnixMilli(1718003000000).UTC().Add(-time.Minute)
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
+		// MOST SPECIFIC FIRST: a channels path is
+		// /users/{id}/teams/{id}/channels, so matching /teams before it
+		// answers the channel read with a team list.
+		switch {
+		case strings.Contains(r.URL.Path, "/posts"):
+			if backfilled != nil {
+				backfilled.Add(1)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"order": []string{"g2", "g1"},
+				"posts": map[string]any{
+					"g1": map[string]any{
+						"id": "g1", "channel_id": "C1", "user_id": "u-ana",
+						"message": "missed one", "create_at": float64(1718003001000),
+					},
+					"g2": map[string]any{
+						"id": "g2", "channel_id": "C1", "user_id": "u-ana",
+						"message": "missed two", "create_at": float64(1718003002000),
+					},
+				},
+			})
+		case strings.HasSuffix(r.URL.Path, "/channels"):
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "C1", "name": "eng", "type": "O"},
+			})
+		case strings.HasSuffix(r.URL.Path, "/teams"):
+			json.NewEncoder(w).Encode([]map[string]any{{"id": "t1", "name": "eng"}})
+		default:
+			w.Write([]byte(`{"id":"bot-1","username":"agent-swe"}`))
+		}
+		return true
+	})
 }
 
 // A first connect is starting, not resuming: there is no gap, and replaying

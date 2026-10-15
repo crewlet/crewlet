@@ -728,7 +728,8 @@ turn's span opens — files its event *beneath* the span it acts for: no
 open has neither, because no span ever had an id for it; an id invented for it
 would be a parent no collector ever receives. Whatever continues such an event
 hangs under the span it names — the turn a relayed wake starts is the child of
-the delivery's `webhook.receive` — or, for a root nobody spanned, roots the
+the delivery's `webhook.receive`, or for a post read off a Mattermost seat's
+socket of its `mattermost.receive` — or, for a root nobody spanned, roots the
 same trace with the decision it was minted with.
 
 **When a delivery addressed to somebody is dropped** — its payload cannot be read, its source was disconnected, nothing parses its source, its parser refuses the payload, no seat matches its recipient, the routing gate refuses it, or the rate valve is shut — a `NotificationSkipped` event is emitted with the reason, visible in the trace so you can see why a webhook didn't reach an agent. Its `reason` is always one of a fixed set of phrases, so a reader can match it exactly; what the gate said about this particular delivery — the parser's error, for a payload its parser refused — is in `detail`, beside it. A chat parser's own filtering is **not** a skip: an agent's own post, a thread reply the seat does not follow, a system post or a deleted one concerns nobody, so it is logged at debug (`slack_event_skipped`, `mattermost_post_skipped`) rather than recorded — recording each would bury the drops that matter under the ordinary traffic of a busy channel.

@@ -1221,8 +1221,9 @@ Crewlet uses **OpenTelemetry** for distributed tracing. Every event carries W3C 
 ```mermaid
 flowchart TD
     A["<b>webhook.receive</b><br/>the delivery arrives, and roots the trace"]
-    B["the wake is published to the seat's inbox, beneath webhook.receive<br/><i>trace rides in the event envelope</i>"]
-    C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace,<br/>so the turn is webhook.receive's child"]
+    M["<b>mattermost.receive</b><br/>a post read off a seat's socket, a root of its own"]
+    B["the wake is published to the seat's inbox, beneath the arrival's span<br/><i>trace rides in the event envelope</i>"]
+    C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace,<br/>so the turn is the arrival's child"]
     D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
@@ -1237,6 +1238,7 @@ flowchart TD
     K["<b>claude_code.interaction</b> and its children<br/><i>Claude Code in a coding box, exported through the receiver</i>"]
     I["<b>anthropic.messages.create</b> (SERVER) and its children<br/><i>the Claude API's own spans, exported by Anthropic</i>"]
     A --> B --> C --> D
+    M --> B
     D --> E
     D --> F
     D -->|"agent.turn.judge's own call"| H
@@ -1259,8 +1261,11 @@ flowchart TD
     C -.->|"suspend, then resume"| G
 ```
 
-**The engine's own spans are these, and only these:** `webhook.receive` and
-`schedule.fire`, which start work; `notifications.coalesce`, the instant a seat's
+**The engine's own spans are these, and only these:** `webhook.receive`,
+`mattermost.receive` and `schedule.fire`, which start work —
+`mattermost.receive` being a post read off a Mattermost seat's socket rather
+than delivered to a webhook route, a root of its own whose trace holds both the
+wake and the post's `inbound_delivery` record; `notifications.coalesce`, the instant a seat's
 batch of deliveries is merged into one turn's trigger, beneath the first
 delivery's span; `agent.turn`, and `agent.turn.resume` for a suspended run
 re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
