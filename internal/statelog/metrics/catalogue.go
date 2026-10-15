@@ -745,6 +745,26 @@ func Catalogue() []Instrument {
 				"`git.max_processes`, one core a slot.",
 		},
 		{
+			Name: CodeGitCPU, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"class"},
+			Shows: "CPU a git process tree spent, by lane: `transfer` is clones " +
+				"and pushes, `read` the cache's reads and a push's scans and " +
+				"fetch checks, `maintenance` the bitmaps, indexes and checks. " +
+				"One observation per process, its whole cost, recorded when it " +
+				"ends: its user and system time and that of every process it " +
+				"waited for (upload-pack's pack-objects, receive-pack's " +
+				"index-pack) — and for one the node ended (a deadline, a stall, " +
+				"a client gone) at least what its whole group had spent when it " +
+				"was signalled; on macOS, only what the process and the " +
+				"children it had reaped spent. So the sum is what a lane's runs " +
+				"cost, read over a window longer than the runs it counts — a " +
+				"clone may run for hours and a bitmap for a quarter of an hour, " +
+				"each landing whole in the window it ends in — and never the " +
+				"share of the node git is taking now, which is the container's " +
+				"own CPU usage. Read the sum and the count rather than the " +
+				"percentiles: a run past 64 s of CPU lands in the last bin.",
+		},
+		{
 			Name: CodeGitProcesses, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"class"},
 			Shows: "Git processes running on this node, by `class`. `transfer` " +

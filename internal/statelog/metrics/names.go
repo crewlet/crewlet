@@ -30,6 +30,7 @@ const (
 	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"
 	CodeCommitBusy                   = "crewlet.code.commit.busy"
 	CodeFetchDuration                = "crewlet.code.fetch.duration"
+	CodeGitCPU                       = "crewlet.code.git.cpu"
 	CodeGitLentCores                 = "crewlet.code.git.lent_cores"
 	CodeGitProcesses                 = "crewlet.code.git.processes"
 	CodeGitWait                      = "crewlet.code.git.wait"

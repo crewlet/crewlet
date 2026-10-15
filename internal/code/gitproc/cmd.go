@@ -160,6 +160,14 @@ type Result struct {
 	Exit   int           // the exit status; -1 when a signal ended the process
 	Took   time.Duration // start to reap
 	Waited time.Duration // in the lane, before start
+	// CPU is the user and system time the process tree spent, the whole of
+	// it, counted when the run ends: the process and every descendant it
+	// waited for (upload-pack's pack-objects, receive-pack's index-pack), as
+	// wait4 reports them at the reap — and for a run the node ended, at
+	// least what its group's members had spent when it was signalled, read
+	// from their own records first, since a leader killed with its group
+	// reaps none of them (Linux; elsewhere the reap's figure alone).
+	CPU time.Duration
 }
 
 // THE BASE CONFIGURATION, set first for every process, in this order. A call

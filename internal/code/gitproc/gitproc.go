@@ -144,6 +144,31 @@
 // caller, and only a pipe held by a descendant that escaped the group, and
 // left EMPTY, is closed from this side.
 //
+// # What every process cost is counted when it ends
+//
+// A lane counts processes, and a transfer's slot says nothing about the
+// cores it burns: a clone paced by a slow client holds its slot for hours on
+// almost no CPU, a burst of identical clones each runs pack-objects over the
+// same history. So every run's [Result] carries its CPU — the user and system
+// time wait4 reports at the reap, which the kernel sums over the process and
+// every descendant it waited for (upload-pack's pack-objects, receive-pack's
+// index-pack) — and every run is one observation of crewlet.code.git.cpu by
+// class, as it ends. A run the node ENDS — its deadline, a stall, its caller
+// gone — is read before it is signalled as well: the group dies as one and
+// its leader reaps none of the rest, so the reap alone would count a clone
+// abandoned at the end of its pack-objects as almost free; the group's own
+// process records, read just before the signal (procgroup.GroupCPU), hold
+// what every member spent, and the run counts the greater of the two (Linux;
+// on darwin the reap's alone). Read from the reap rather than from this
+// process's children's usage (getrusage), which sums every git the process
+// ever reaped and cannot tell one run from another — nor the server's git
+// from a test's client git running beside it.
+//
+// One observation is one run's whole cost, recorded when it ends: the cost
+// a request or a lane is charged, never a share of the node over a window —
+// a run's CPU lands in whichever window it ends in, all at once, however
+// long it ran.
+//
 // # What went wrong is classified from git's own words
 //
 // Every stderr line is read as it arrives and classified by a table built
@@ -250,9 +275,10 @@ type Options struct {
 
 	// Metrics is where the pool records crewlet.code.git.wait (how long
 	// each admission waited for its lane), crewlet.code.git.processes (the
-	// processes running in each class) and crewlet.code.git.lent_cores
-	// (the read lane's cores lent to pushes' receive-packs right now); nil
-	// records nothing.
+	// processes running in each class), crewlet.code.git.lent_cores (the
+	// read lane's cores lent to pushes' receive-packs right now) and
+	// crewlet.code.git.cpu (the CPU each run's process tree spent, by its
+	// class, recorded whole as the run ends); nil records nothing.
 	Metrics *metrics.Recorder
 }
 

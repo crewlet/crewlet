@@ -1,11 +1,13 @@
 package procgroup
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // parseProcStat reads the three things this package takes from a Linux
@@ -44,18 +46,13 @@ import (
 // has a thread that has not exited. Reading every Z as a zombie would answer a
 // running job as finished, and the sandbox deletes a finished job's checkout.
 func parseProcStat(stat, boot string) (Process, error) {
-	paren := strings.LastIndexByte(stat, ')')
-	if paren < 0 {
-		return Process{}, errors.New("no parenthesised command field")
-	}
-	const stateField, groupField, threadsField, startField = 3, 5, 20, 22
-	fields := strings.Fields(stat[paren+1:])
-	if len(fields) <= startField-stateField {
-		return Process{}, fmt.Errorf("%d fields after the command, want at least %d",
-			len(fields), startField-stateField+1)
+	const groupField, threadsField, startField = 5, 20, 22
+	fields, err := statFields(stat, startField)
+	if err != nil {
+		return Process{}, err
 	}
 	ticks := fields[startField-stateField]
-	if _, err := strconv.ParseUint(ticks, 10, 64); err != nil {
+	if _, err = strconv.ParseUint(ticks, 10, 64); err != nil {
 		return Process{}, fmt.Errorf("starttime %q is not a tick count", ticks)
 	}
 	group, err := strconv.Atoi(fields[groupField-stateField])
@@ -80,6 +77,59 @@ func parseProcStat(stat, boot string) (Process, error) {
 	}, nil
 }
 
+// stateField is the number proc(5) gives the state, the first field after the
+// command: field n of a stat line is element n-stateField of [statFields].
+const stateField = 3
+
+// statFields is the fields of a /proc/<pid>/stat line after its command,
+// counted from the LAST closing parenthesis (see [parseProcStat] for why),
+// refusing a line too short to hold field last.
+func statFields(stat string, last int) ([]string, error) {
+	paren := strings.LastIndexByte(stat, ')')
+	if paren < 0 {
+		return nil, errors.New("no parenthesised command field")
+	}
+	fields := strings.Fields(stat[paren+1:])
+	if len(fields) <= last-stateField {
+		return nil, fmt.Errorf("%d fields after the command, want at least %d", len(fields), last-stateField+1)
+	}
+	return fields, nil
+}
+
+// parseProcCPU reads the CPU a /proc/<pid>/stat line records, in clock ticks,
+// and the process group it belongs to (field 5, as [parseProcStat] reads it).
+//
+// The CPU is fields 14 to 17: utime and stime, the user and system time of the
+// process's own threads — an exited thread's included, since the kernel folds
+// a thread's time into its process as the thread goes — and cutime and
+// cstime, the same of every child it has waited for, which carry their own
+// reaped children's. So one record is the process and everything below it
+// that it has reaped, and a sum of records over a group counts each process
+// once: a child still running, or exited and not yet reaped, is in its own
+// record and not yet in its parent's; one reaped is in its parent's and has
+// no record of its own. cutime and cstime are printed signed (a long) and are
+// never negative, so a line that says otherwise is not the kernel's and is
+// refused.
+func parseProcCPU(stat string) (group int, ticks uint64, err error) {
+	const groupField, utimeField, cstimeField = 5, 14, 17
+	fields, err := statFields(stat, cstimeField)
+	if err != nil {
+		return 0, 0, err
+	}
+	group, err = strconv.Atoi(fields[groupField-stateField])
+	if err != nil {
+		return 0, 0, fmt.Errorf("pgrp %q is not a process group id", fields[groupField-stateField])
+	}
+	for f := utimeField; f <= cstimeField; f++ {
+		n, err := strconv.ParseUint(fields[f-stateField], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("field %d, %q, is not a tick count", f, fields[f-stateField])
+		}
+		ticks += n
+	}
+	return group, ticks, nil
+}
+
 // procTable is the Linux process table as this package reads it: a listing
 // of /proc, one stat record per process, and the boot the records belong to.
 //
@@ -95,21 +145,33 @@ type procTable struct {
 	stat func(pid int) ([]byte, error)
 	// boot is the kernel's boot id.
 	boot func() (string, error)
+	// hz is how many clock ticks make a second, the unit a stat record's
+	// times are counted in.
+	hz func() (uint64, error)
 }
 
-// inspect reads one process's stat record; see [parseProcStat] for what it
-// takes from it and why.
+// record reads one process's raw stat record.
 //
 // A missing entry is a process that does not exist, and so is ESRCH, which a
 // read reports when the process is reaped between the open and the read.
 // Every other failure is "could not ask", which [Inspect] promises its caller
 // never to report as absence.
-func (t procTable) inspect(pid int) (Process, bool, error) {
+func (t procTable) record(pid int) ([]byte, bool, error) {
 	raw, err := t.stat(pid)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errNoProcess) {
-		return Process{}, false, nil
+		return nil, false, nil
 	}
 	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
+}
+
+// inspect reads one process's stat record (see [procTable.record] for which
+// failure is absence); see [parseProcStat] for what it takes from it and why.
+func (t procTable) inspect(pid int) (Process, bool, error) {
+	raw, found, err := t.record(pid)
+	if err != nil || !found {
 		return Process{}, false, err
 	}
 	boot, err := t.boot()
@@ -179,4 +241,75 @@ func (t procTable) groupLiving(pgid int) (bool, error) {
 			"the engine with access to them", unreadable)
 	}
 	return false, nil
+}
+
+// groupCPU is the CPU the members of process group pgid have spent so far,
+// summed over every process's stat record (see [parseProcCPU] for why a sum
+// counts each process once).
+//
+// The members are found as [procTable.groupLiving] finds them, by scanning,
+// and every member counts, an exited one awaiting its reap included: its time
+// is in its own record and in no parent's yet.
+//
+// A FIGURE THAT IS SHORT, NEVER ONE THAT IS LONG. A record that cannot be
+// read or parsed is reported beside the sum of every one that could, rather
+// than ending the scan: its caller keeps the most any reading found, so a
+// floor is worth having and an error worth logging. The scan races the
+// processes it reads, as every scan of /proc does: a member reaped while it
+// runs takes its time into its reaper's record, which the scan may already
+// have read — one process's figure, missed by a reading taken in the instant
+// it changed hands. A table that cannot be listed, or a clock with no tick
+// rate, gives nothing.
+func (t procTable) groupCPU(pgid int) (time.Duration, error) {
+	hz, err := t.hz()
+	if err != nil {
+		return 0, err
+	}
+	if hz == 0 {
+		return 0, errors.New("the kernel gave a clock of no ticks a second to count a stat record's times in")
+	}
+	names, err := t.list()
+	if err != nil {
+		return 0, fmt.Errorf("listing /proc to find the members of the group: %w", err)
+	}
+	var (
+		ticks      uint64
+		unreadable int
+		failed     error
+	)
+	for _, name := range names {
+		pid, err := strconv.Atoi(name)
+		if err != nil || pid <= 0 {
+			continue
+		}
+		raw, found, err := t.record(pid)
+		switch {
+		case errors.Is(err, fs.ErrPermission):
+			unreadable++
+			continue
+		case err != nil:
+			failed = cmp.Or(failed, err)
+			continue
+		case !found:
+			continue
+		}
+		group, n, err := parseProcCPU(string(raw))
+		if err != nil {
+			failed = cmp.Or(failed, fmt.Errorf("/proc/%d/stat: %w", pid, err))
+			continue
+		}
+		if group == pgid {
+			ticks += n
+		}
+	}
+	spent := time.Duration(ticks/hz)*time.Second + time.Duration(ticks%hz)*time.Second/time.Duration(hz)
+	if failed != nil {
+		return spent, fmt.Errorf("reading the CPU of process group %d's members: %w", pgid, failed)
+	}
+	if unreadable > 0 {
+		return spent, fmt.Errorf("%d process records under /proc could not be read and any of them may be a "+
+			"member of process group %d, whose CPU is then not counted: mount /proc without hidepid=1 "+
+			"(hidepid=2 hides them instead) or run the engine with access to them", unreadable, pgid)
+	}
+	return spent, nil
 }

@@ -173,8 +173,11 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	// comes only when every holder of its write end has gone, and a member
 	// of the group that outlived its leader (a backgrounded child) is one.
 	// Leader.Current answers false at once for a group whose last member was
-	// the reaped leader, so the common case costs two system calls.
-	if p.signal(c, leader, "KILL", procgroup.Kill) {
+	// the reaped leader, so the common case costs two system calls. What a
+	// straggler spent is in no record the reap gave, so it is read before
+	// the kill.
+	var stragglers time.Duration
+	if p.signal(c, leader, "KILL", p.counted(c, &stragglers, procgroup.Kill)) {
 		p.log.Warn("code_git_straggler_killed", "class", c.Class, "command", c.Args[0], "pid", leader.PID)
 	}
 	p.track(c.Class, -1)
@@ -185,9 +188,13 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 		Stderr: errs.tail(),
 		Exit:   cmd.ProcessState.ExitCode(),
 		Took:   reaped.Sub(start),
+		CPU:    max(cpuOf(cmd.ProcessState)+stragglers, w.spent),
 	}
 	if capt != nil {
 		res.Stdout = capt.buf
+	}
+	if p.metrics != nil {
+		p.metrics.Observe(metrics.CodeGitCPU, res.CPU, metrics.Attrs{"class": string(c.Class)})
 	}
 
 	// THE ANSWER, in precedence order. A kill wins whatever the exit status:
@@ -209,6 +216,55 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 		return res, nil
 	}
 	return res, &ExitError{Command: c.Args[0], Result: res, Kind: errs.kind()}
+}
+
+// cpuOf is the CPU the reap reports for a process: the user and system time
+// wait4 gave for it, which the kernel sums over the process and every
+// descendant it waited for before it exited — upload-pack's pack-objects,
+// receive-pack's index-pack. For a run that ended by itself that is the whole
+// tree's, since git waits for every child it starts; for a member nobody
+// reaped it holds nothing, which is what [Pool.counted] is for. Read from the
+// reap, never from this process's own children's usage (getrusage's
+// RUSAGE_CHILDREN), which sums every git the process ever reaped — a test's
+// client git among them — and cannot say which run spent what. Zero for a
+// process whose wait reported no usage.
+func cpuOf(s *os.ProcessState) time.Duration {
+	if s == nil {
+		return 0
+	}
+	return s.UserTime() + s.SystemTime()
+}
+
+// counted is send preceded by a reading of the CPU the group's members have
+// spent so far, kept in *spent if it is the most a reading found.
+//
+// A RUN THE NODE ENDS IS COUNTED BEFORE IT IS SIGNALLED. The group dies as
+// one, and its leader dies without reaping the children dying beside it, so
+// the reap's figure is the leader alone: measured on git 2.43
+// (TestARunTheNodeEndsCountsWhatItsGroupSpent), an upload-pack killed with
+// half its clone read reaped at 3.8 ms, where its pack-objects had spent over
+// half a second — gone with the orphan. Read just before the signal,
+// the group's records hold every member's time and that of every child each
+// has reaped, so the run's figure is the greater of that reading and what the
+// reap reports — each counts only processes the tree ran, so the greater is
+// the nearer, and it is short only of what the group spent in the moment
+// between the reading and its death. The greater, never the sum: a leader may
+// still reap a child after the signal, and that child's time would then be in
+// both. A sweep's straggler is outside the reap's figure altogether, and is
+// added to it instead (see run).
+//
+// Where the kernel's records cannot be read — not Linux — the figure is the
+// reap's, and says less of a killed run; a record that could not be read is
+// logged, and what was read is kept as a floor.
+func (p *Pool) counted(c Cmd, spent *time.Duration, send func(int) error) func(int) error {
+	return func(pid int) error {
+		cpu, err := procgroup.GroupCPU(pid)
+		if err != nil && !errors.Is(err, errors.ErrUnsupported) {
+			p.log.Warn("code_git_cpu_unread", "class", c.Class, "command", c.Args[0], "pid", pid, "error", err)
+		}
+		*spent = max(*spent, cpu)
+		return send(pid)
+	}
 }
 
 // killed is the answer for a run the watcher ended, logged where it is
@@ -247,6 +303,9 @@ type watcher struct {
 	done   chan struct{} // closed by the watcher as it returns
 	ended  end           // read after done
 	cause  error         // the caller's, when ended is endCaller
+	// spent is the most CPU the group's members had spent at a signal the
+	// watcher sent them (Pool.counted); read after done.
+	spent time.Duration
 }
 
 // watch starts the run's one watcher goroutine. Run closes reaped once the
@@ -291,16 +350,18 @@ func (p *Pool) watch(ctx context.Context, c Cmd, leader procgroup.Leader, proc *
 				}
 			}
 		}
-		p.kill(c, leader, proc, w.reaped)
+		p.kill(c, leader, proc, w.reaped, &w.spent)
 	}()
 	return w
 }
 
 // kill ends the group: SIGTERM, then SIGKILL KillGrace later unless the leader
 // was reaped first — and the leader's own handle after it, so a leader that
-// somehow left its group still ends.
-func (p *Pool) kill(c Cmd, leader procgroup.Leader, proc *os.Process, reaped <-chan struct{}) {
-	p.signal(c, leader, "TERM", procgroup.Terminate)
+// somehow left its group still ends. Before each signal the group's CPU is
+// read into *spent (Pool.counted): the second reading counts what a member
+// that ignored the first spent through the grace.
+func (p *Pool) kill(c Cmd, leader procgroup.Leader, proc *os.Process, reaped <-chan struct{}, spent *time.Duration) {
+	p.signal(c, leader, "TERM", p.counted(c, spent, procgroup.Terminate))
 	grace := time.NewTimer(p.killGrace)
 	defer grace.Stop()
 	select {
@@ -308,7 +369,7 @@ func (p *Pool) kill(c Cmd, leader procgroup.Leader, proc *os.Process, reaped <-c
 		return
 	case <-grace.C:
 	}
-	p.signal(c, leader, "KILL", procgroup.Kill)
+	p.signal(c, leader, "KILL", p.counted(c, spent, procgroup.Kill))
 	// The handle, not the pid: os.Process knows when it was waited on, so
 	// this can never reach a recycled pid.
 	_ = proc.Kill()
