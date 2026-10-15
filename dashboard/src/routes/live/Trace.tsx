@@ -70,10 +70,17 @@ interface Span {
  * A span whose parent is not in this trace is a ROOT rather than dropped: a
  * trace can begin mid-flight (the parent was published before the store's
  * retention window, or by a node whose events went elsewhere), and hiding
- * those rows loses the half of the trace that is actually present. An event
- * with no span id is a span of its own. A parent chain that loops (a corrupt
- * or hand-written id) cannot hide its spans either: a span no root reaches is
- * drawn as a root.
+ * those rows loses the half of the trace that is actually present. A parent
+ * chain that loops (a corrupt or hand-written id) cannot hide its spans
+ * either: a span no root reaches is drawn as a root.
+ *
+ * AN EVENT NO SPAN PUBLISHED is a node of its own, UNDER THE SPAN IT NAMES.
+ * Code that publishes without opening a span — the notification service
+ * relaying a delivery into a wake, the sandbox coordinator announcing a run —
+ * sends no `span_id` and names the span it acted beneath as its
+ * `parent_span_id`; a root minted where no span was open names neither, and
+ * is a root. Drawn as roots whatever they named, as they were, a wake sat at
+ * the top of its trace beside the webhook that caused it.
  */
 export function arrange(events: readonly EventRecord[]): TraceRow[] {
   const ordered = [...events].sort(oldestFirst);
@@ -89,11 +96,14 @@ export function arrange(events: readonly EventRecord[]): TraceRow[] {
     }
     span.events.push(event);
   }
+  // EVERY NODE NAMES ITS PARENT, a span-less event's included: the first
+  // parent its events name that is present here and is not itself.
   const parentOf = new Map<Span, Span>();
-  for (const [id, span] of spans) {
-    const named = span.events.find(
-      (e) => e.parent_span_id && e.parent_span_id !== id && spans.has(e.parent_span_id),
-    );
+  for (const span of order) {
+    const named = span.events.find((e) => {
+      const parent = e.parent_span_id ? spans.get(e.parent_span_id) : undefined;
+      return parent !== undefined && parent !== span;
+    });
     if (named) parentOf.set(span, spans.get(named.parent_span_id)!);
   }
   // A LOOP IS BROKEN WHERE IT IS FOUND: walking up from a span, meeting it
@@ -150,7 +160,12 @@ export function TraceScreen({ traceId }: { traceId: string }) {
   const from = events.length ? Math.min(...events.map((e) => tsKey(e.timestamp))) : 0;
   const to = events.length ? Math.max(...events.map((e) => tsKey(e.timestamp))) : 0;
   const spread = to > from;
-  const spanCount = useMemo(() => new Set(events.map((e) => e.span_id || e.id)).size, [events]);
+  // SPANS, and an event no span published is not one: it is counted among
+  // the events and drawn under the span it names.
+  const spanCount = useMemo(
+    () => new Set(events.map((e) => e.span_id).filter(Boolean)).size,
+    [events],
+  );
   // THE ROW'S OWN FIELD, not its payload. `EventLog.Trace` scans through
   // `scanRows`, whose SELECT does not include `payload` — so `e.payload` is
   // undefined on every span and this tile read 0 on every trace ever drawn,

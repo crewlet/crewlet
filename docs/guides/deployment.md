@@ -1330,6 +1330,7 @@ The dashboard groups a trace's events into a tree — reach one from any row tha
 
 - Root event (e.g., webhook) shown as the trace header
 - Child events nested underneath with connecting lines
+- An event no span published — the wake relayed from a delivery, a coding run's announcement — sits under the span it names as its parent, and is not counted among the trace's spans
 - Click `inspect →` on LLM turn events to view the full prompt/response
 - Notification skip reasons shown inline (e.g., "not following this thread")
 
