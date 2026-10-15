@@ -186,8 +186,9 @@ back what it wrote.
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
-**`workers` is nine company-wide singletons, each held on its own
-`worker:DUTY` lease.**
+**`workers` runs the company-wide singletons, each held on its own
+`worker:DUTY` lease.** A `workers` node holds data too, because the duties read
+and write this node's own copy of the replicated estate.
 
 | Lease | Duty |
 |---|---|

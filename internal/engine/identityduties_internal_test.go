@@ -3,11 +3,76 @@ package engine
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
+
+// identityDutyRoster is every duty [Engine.identityDutiesFor] arms, with the
+// interval it runs at.
+//
+// THE DUTY GATES READ THESE DUTIES HERE rather than at the claim, because the
+// claim is made once, inside the helper every identity duty goes through, as
+// `e.workerDuty(name, identityDutyTTL(interval))` — a syntax-tree scan sees
+// the parameters, never the values. So the TTL table (dutyTTLs), the name
+// table (dutyNames) and the ceiling check below all take them from this one
+// roster, and [TestTheIdentityDutyRosterIsWhatTheEngineArms] holds the roster
+// to what the engine actually arms.
+var identityDutyRoster = map[string]time.Duration{
+	identitySweepDuty: IdentitySweepInterval,
+}
+
+// longestIdentityDutyTTL is the longest lease any identity duty claims.
+func longestIdentityDutyTTL() time.Duration {
+	longest := time.Duration(0)
+	for _, every := range identityDutyRoster {
+		longest = max(longest, identityDutyTTL(every))
+	}
+	return longest
+}
+
+// THE ROSTER IS WHAT THE ENGINE ARMS, in both directions.
+//
+// A duty armed and missing from the roster is one whose lease no TTL gate
+// checks and whose name no duty table is held to; a roster entry the engine
+// does not arm is a duty the pages would be made to list although nothing
+// runs it. Read off identityDutiesFor itself, on a workers node with no
+// coordination store, where every claim is nil and nothing is started.
+// Mutation: arm a second duty in identityDutiesFor, or arm the sweep at
+// another interval, and this fails.
+func TestTheIdentityDutyRosterIsWhatTheEngineArms(t *testing.T) {
+	t.Parallel()
+	e := &Engine{profile: placement.NodeProfile{
+		ID: "n1", Roles: placement.Roles(placement.RoleData, placement.RoleWorkers),
+	}}
+	e.core.Store(&core{})
+	armed := map[string]time.Duration{}
+	for _, duty := range e.identityDutiesFor(&config.Bootstrap{}) {
+		if _, twice := armed[duty.name]; twice {
+			t.Errorf("identityDutiesFor arms %q twice", duty.name)
+		}
+		armed[duty.name] = duty.interval
+	}
+	if len(armed) == 0 {
+		t.Fatal("identityDutiesFor armed nothing on a workers node, so the " +
+			"roster cannot be compared with it")
+	}
+	if !maps.Equal(armed, identityDutyRoster) {
+		t.Errorf("identityDutiesFor arms %v, and identityDutyRoster lists %v; "+
+			"change the roster to match what the engine arms",
+			armed, identityDutyRoster)
+	}
+}
+
+// identityDutyNames is the roster's names, sorted.
+func identityDutyNames() []string {
+	return slices.Sorted(maps.Keys(identityDutyRoster))
+}
 
 // THE IDENTITY DUTY'S LEASE FITS THE DUTY CEILING.
 //
@@ -17,9 +82,7 @@ import (
 // ceiling. Mutation: arm one at a day and its lease is refused.
 func TestEveryIdentityDutysLeaseFitsTheDutyCeiling(t *testing.T) {
 	t.Parallel()
-	for name, every := range map[string]time.Duration{
-		identitySweepDuty: IdentitySweepInterval,
-	} {
+	for name, every := range identityDutyRoster {
 		if ttl := identityDutyTTL(every); ttl > coord.MaxDutyTTL {
 			t.Errorf("%s runs every %s and takes a %s lease, which every "+
 				"backend refuses — the duty would never run", name, every, ttl)
