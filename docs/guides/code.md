@@ -190,7 +190,13 @@ GIT_ASKPASS=/tmp/askpass git clone https://crewlet.example.com/git/web.git
 ```
 
 Fetch and push as you would anywhere. Protocol v2 — git's default since 2.28 —
-is what a blobless clone (`git clone --filter=blob:none`) needs.
+is what a blobless clone (`git clone --filter=blob:none`) needs. A partial
+clone may ask for `blob:none`, `blob:limit=<n>`, `tree:0`, `object:type=<type>`
+or a `combine:` of them — the filters git can answer from a repository's bitmap,
+where the node holds one. `sparse:oid` and `tree:<n>` past 0 are refused; a
+blobless clone with a sparse
+checkout reaches the same files ([the filters
+served](../concepts/code-host.md#a-push-end-to-end)).
 
 Repositories use git's default SHA-1 object format; a local repository created
 with `--object-format=sha256` cannot push to one.

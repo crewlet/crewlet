@@ -97,6 +97,8 @@ func cases() []suiteCase {
 		{"F11_AMissingPackIs503NamingIt", aMissingPackIs503NamingIt},
 		{"F12_APushIsVisibleThroughEveryNodeAtOnce", aPushIsVisibleThroughEveryNodeAtOnce},
 		{"F13_AFetchFromABehindNodeFindsItsWants", aFetchFromABehindNodeFindsItsWants},
+		{"F22_ABloblessCloneChecksOut", aBloblessCloneChecksOut},
+		{"F23_AFilterABitmapCannotAnswerIsRefused", aFilterABitmapCannotAnswerIsRefused},
 		{"F14_APushOverTheBlobLimitIsRefusedWhole", aPushOverTheBlobLimitIsRefusedWhole},
 		{"F15_ProtectionRulesRefuseByName", protectionRulesRefuseByName},
 		{"F16_AnAtomicPushLandsWholeOrNotAtAll", anAtomicPushLandsWholeOrNotAtAll},

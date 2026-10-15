@@ -212,13 +212,23 @@ var baseKeys = []KV{
 // two siblings) — a denylist leaks whichever nobody named. A key a call site
 // needs is added here in the commit that adds the call site.
 var allowedConfig = map[string]string{
-	"core.multipackindex":       "the cache's serve configuration and its maintainer",
-	"pack.allowpackreuse":       "the cache's serve configuration, valued Pool.PackReuse",
-	"pack.windowmemory":         "the cache's serve configuration",
-	"pack.usebitmaps":           "the cache's serve configuration",
-	"uploadpack.allowfilter":    "the cache's serve configuration",
-	"uploadpack.allowrefinwant": "the cache's serve configuration",
-	"uploadpack.keepalive":      "the cache's serve configuration: the stall watchdog relies on it",
+	"core.multipackindex":    "the cache's serve configuration and its maintainer",
+	"pack.allowpackreuse":    "the cache's serve configuration, valued Pool.PackReuse",
+	"pack.windowmemory":      "the cache's serve configuration",
+	"pack.usebitmaps":        "the cache's serve configuration",
+	"uploadpack.allowfilter": "the cache's serve configuration",
+	// Which partial-clone filters upload-pack serves. A subsection — the
+	// filter's name — is the one part of a key git reads case-sensitively, so
+	// another case of one of these names no filter git knows: it allows
+	// nothing, and what it names is refused by uploadpackfilter.allow=false.
+	"uploadpackfilter.allow":             "the cache's serve configuration: only the filters a bitmap answers",
+	"uploadpackfilter.blob:none.allow":   "the cache's serve configuration: only the filters a bitmap answers",
+	"uploadpackfilter.blob:limit.allow":  "the cache's serve configuration: only the filters a bitmap answers",
+	"uploadpackfilter.tree.maxdepth":     "the cache's serve configuration: only the filters a bitmap answers",
+	"uploadpackfilter.object:type.allow": "the cache's serve configuration: only the filters a bitmap answers",
+	"uploadpackfilter.combine.allow":     "the cache's serve configuration: only the filters a bitmap answers",
+	"uploadpack.allowrefinwant":          "the cache's serve configuration",
+	"uploadpack.keepalive":               "the cache's serve configuration: the stall watchdog relies on it",
 	// A prefix filter on the refs git lists of an alternate, passed to the
 	// for-each-ref it runs as patterns: it names refs and runs nothing. Its
 	// sibling core.alternateRefsCommand runs a command, and is not here.

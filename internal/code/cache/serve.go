@@ -20,7 +20,27 @@ import (
 //     carry and one base for it — which bounds a transfer's memory
 //     (gitproc.TransfersPerProcess counts on it).
 //   - pack.useBitmaps: the maintainer's bitmap is used.
-//   - uploadpack.allowFilter: partial clones (--filter=blob:none).
+//   - uploadpack.allowFilter: partial clones (--filter=blob:none), and the
+//     uploadpackfilter keys after it: ONLY THE FILTERS A BITMAP CAN ANSWER.
+//     uploadpackfilter.allow=false refuses every filter the keys after it do
+//     not name, which are exactly those pack-objects can answer from a
+//     bitmap (pack-bitmap.c's filter_bitmap): blob:none, blob:limit,
+//     tree at depth 0 (uploadpackfilter.tree.maxDepth=0, which allows
+//     tree too), object:type, and a combine of them — checked filter by
+//     filter. sparse:oid and tree at any depth past 0 walk every object the
+//     fetch reaches whatever the repository holds, and git refuses them in
+//     its own words (`filter 'sparse:oid' not supported`, `tree filter
+//     allows max depth 0, but got 1`), which the client prints after
+//     `remote error:`. Every key is at the 2.40 floor. A served filter is
+//     answered from the bitmap only where this cache HOLDS one: before the
+//     maintainer's first run over an incarnation, and on a repository whose
+//     bitmap the node's memory refuses (code_maintenance_refused), every
+//     fetch, filtered or not, walks what it reaches, bounded by the transfer
+//     lane and its deadlines. HYGIENE, NOT A SECURITY BOUNDARY: a shallow
+//     fetch disables the bitmap the same way and is served, bounded the same
+//     way. A client loses no way to work: a blobless clone with a sparse
+//     checkout reaches the files a sparse:oid names, fetching them as it
+//     needs them.
 //   - uploadpack.allowRefInWant: protocol v2's want-ref.
 //   - uploadpack.keepAlive: git's own five seconds, stated, because the
 //     pool's stall watchdog relies on a transfer moving that often.
@@ -37,6 +57,12 @@ func (c *Cache) ServeConfig() []gitproc.KV {
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*c.limits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
 		{Key: "uploadpack.allowFilter", Value: "true"},
+		{Key: "uploadpackfilter.allow", Value: "false"},
+		{Key: "uploadpackfilter.blob:none.allow", Value: "true"},
+		{Key: "uploadpackfilter.blob:limit.allow", Value: "true"},
+		{Key: "uploadpackfilter.tree.maxDepth", Value: "0"},
+		{Key: "uploadpackfilter.object:type.allow", Value: "true"},
+		{Key: "uploadpackfilter.combine.allow", Value: "true"},
 		{Key: "uploadpack.allowRefInWant", Value: "true"},
 		{Key: "uploadpack.keepAlive", Value: "5"},
 	}
