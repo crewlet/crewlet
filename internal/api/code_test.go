@@ -302,28 +302,33 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name       string
-		why        error
-		status     int
-		reason     string
-		detail     string
-		retryAfter string
+		name   string
+		why    error
+		status int
+		// reason is what both surfaces name — the git route's line and a
+		// read's `reason` — and readReason what a read names, which for a
+		// company hosting no code is a reason the git line, read by nobody
+		// but a person, says in words alone.
+		reason, readReason string
+		detail             string
+		retryAfter         string
 		// claims is what the answer must NOT say: a fact about the
 		// company's configuration the node did not read.
 		claims []string
 	}{
-		{"not hosted", engine.ErrCodeNotHosted, http.StatusNotFound, "", "code.native is not set", "", nil},
+		{"not hosted", engine.ErrCodeNotHosted, http.StatusNotFound, "", "not_hosted", "code.native is not set", "",
+			nil},
 		{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying), http.StatusServiceUnavailable,
-			"applying", "retry in 5 seconds", "5", []string{"hosts code", "serves the code host"}},
+			"applying", "applying", "retry in 5 seconds", "5", []string{"hosts code", "serves the code host"}},
 		{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed), http.StatusServiceUnavailable,
-			"config_apply_failed", "which hosts code", "", nil},
+			"config_apply_failed", "config_apply_failed", "which hosts code", "", nil},
 		{"unknown", fmt.Errorf("%w (epoch 4)", engine.ErrCodeUnknown), http.StatusServiceUnavailable,
-			"config_apply_failed", "cannot say whether this company hosts code", "",
+			"config_apply_failed", "config_apply_failed", "cannot say whether this company hosts code", "",
 			[]string{"which hosts code", "does not host code", "serves the code host"}},
 		{"needs restart", engine.ErrCodeNeedsRestart, http.StatusServiceUnavailable,
-			"native_backend_needs_restart", "once restarted", "", nil},
+			"native_backend_needs_restart", "native_backend_needs_restart", "once restarted", "", nil},
 		{"unexplained", errors.New("a seam that says something else"), http.StatusInternalServerError,
-			"", "", "", nil},
+			"", "", "", "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -362,11 +367,11 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 				}
 				want := map[int]string{http.StatusNotFound: "not_found", http.StatusServiceUnavailable: "unavailable",
 					http.StatusInternalServerError: "query_failed"}[tc.status]
-				if rec.Code != tc.status || body.Error != want || body.Reason != tc.reason ||
+				if rec.Code != tc.status || body.Error != want || body.Reason != tc.readReason ||
 					!strings.Contains(body.Detail, tc.detail) || rec.Header().Get("Retry-After") != tc.retryAfter {
 					t.Errorf("%s %s answered %d %+v (Retry-After %q), want %d %s, reason %q, naming %q "+
 						"(Retry-After %q)", req.method, req.path, rec.Code, body, rec.Header().Get("Retry-After"),
-						tc.status, want, tc.reason, tc.detail, tc.retryAfter)
+						tc.status, want, tc.readReason, tc.detail, tc.retryAfter)
 				}
 				unclaimed(req.method+" "+req.path, body.Detail)
 			}
@@ -401,29 +406,35 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		path        string
 		status      int
 		code        string
+		reason      string
 		detail      string
 		retryAfter  string
 		readerAsked bool
 	}{
-		{"/code/repos/web", http.StatusNotFound, "not_found", `"web" is declared in code.repos`, "", true},
-		{"/code/repos/level", http.StatusBadRequest, "bad_params", "stale and consistent_prefix", "", true},
-		{"/code/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "not a cursor", "", true},
-		{"/code/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "7", true},
-		{"/code/repos/nobody", http.StatusServiceUnavailable, "unavailable", "", "5", true},
-		{"/code/repos/evicted", http.StatusInternalServerError, "query_failed", "", "", true},
-		{"/code/repos?read_level=bogus", http.StatusBadRequest, "bad_params", "bogus", "", false},
-		{"/code/repos?status=gone", http.StatusBadRequest, "bad_params", `"gone"`, "", false},
-		{"/code/repos?limit=-1", http.StatusBadRequest, "bad_params", "limit", "", false},
-		{"/code/repos?limit=ten", http.StatusBadRequest, "bad_params", "limit", "", false},
+		{"/code/repos/web", http.StatusNotFound, "not_found", "not_declared", `"web" is declared in code.repos`, "",
+			true},
+		{"/code/repos/level", http.StatusBadRequest, "bad_params", "", "stale and consistent_prefix", "", true},
+		{"/code/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "", "not a cursor", "", true},
+		{"/code/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "", "7", true},
+		{"/code/repos/nobody", http.StatusServiceUnavailable, "unavailable", "", "", "5", true},
+		{"/code/repos/evicted", http.StatusInternalServerError, "query_failed", "", "", "", true},
+		{"/code/repos?read_level=bogus", http.StatusBadRequest, "bad_params", "", "bogus", "", false},
+		{"/code/repos?status=gone", http.StatusBadRequest, "bad_params", "", `"gone"`, "", false},
+		{"/code/repos?limit=-1", http.StatusBadRequest, "bad_params", "", "limit", "", false},
+		{"/code/repos?limit=ten", http.StatusBadRequest, "bad_params", "", "limit", "", false},
 	} {
 		before := len(reads.queries())
 		rec := ask(t, a, http.MethodGet, tc.path, true)
 		code, detail := errorBody(t, rec)
-		if rec.Code != tc.status || code != tc.code || !strings.Contains(detail, tc.detail) ||
-			rec.Header().Get("Retry-After") != tc.retryAfter {
-			t.Errorf("GET %s answered %d %s %q (Retry-After %q), want %d %s naming %q (Retry-After %q)",
-				tc.path, rec.Code, code, detail, rec.Header().Get("Retry-After"), tc.status, tc.code,
-				tc.detail, tc.retryAfter)
+		var reason struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &reason)
+		if rec.Code != tc.status || code != tc.code || reason.Reason != tc.reason ||
+			!strings.Contains(detail, tc.detail) || rec.Header().Get("Retry-After") != tc.retryAfter {
+			t.Errorf("GET %s answered %d %s (reason %q) %q (Retry-After %q), want %d %s (reason %q) naming %q "+
+				"(Retry-After %q)", tc.path, rec.Code, code, reason.Reason, detail, rec.Header().Get("Retry-After"),
+				tc.status, tc.code, tc.reason, tc.detail, tc.retryAfter)
 		}
 		if asked := len(reads.queries()) > before; asked != tc.readerAsked {
 			t.Errorf("GET %s asked the reader: %v, want %v", tc.path, asked, tc.readerAsked)
@@ -642,7 +653,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		name, code, reason, detail, retryAfter string
 		status                                 int
 	}{
-		{"gone", "not_found", "", `no repository named "gone" is declared in code.repos`, "",
+		{"gone", "not_found", "not_declared", `no repository named "gone" is declared in code.repos`, "",
 			http.StatusNotFound},
 		{"elsewhere", "not_found", "not_held", "holds no copy", "", http.StatusNotFound},
 		{"racing", "verify_running", "", running.ID.String(), "", http.StatusConflict},

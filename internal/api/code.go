@@ -112,14 +112,26 @@ const (
 	reasonNeedsRestart = "native_backend_needs_restart"
 )
 
-// reasonNotHeld is what a verify's 404 names when the repository is declared
-// and THIS node holds no copy of it — a different fact from a repository
-// nobody declared, which a client acts on the opposite way: a sweep of every
-// repository on one git node passes over the ones that node does not keep
-// (nothing there can be damaged) and fails on a name nobody declared. Both
-// are `not_found`, since neither has anything here to check; the reason is
-// what tells them apart without reading the sentence.
-const reasonNotHeld = "not_held"
+// THE REASONS a code route's 404 can name: every one is `not_found`, since none
+// has anything here to answer, and the reason is what tells them apart without
+// reading the sentence, because a client acts on each a different way.
+//
+//   - reasonNotDeclared — nobody declared a repository of that name: declaring
+//     one in code.repos, and waiting for the activation, is what makes it;
+//   - reasonNotHosted — the company hosts no code at all (code.native is not
+//     set): declaring a repository changes nothing until it does;
+//   - reasonNotHeld — a verify's repository is declared and THIS node holds no
+//     copy of it: a sweep of every repository on one git node passes over the
+//     ones that node does not keep (nothing there can be damaged) and fails on
+//     a name nobody declared.
+//
+// A git route says the same in git's one text/plain line, where nothing reads
+// a reason: the sentence is all git prints.
+const (
+	reasonNotDeclared = "not_declared"
+	reasonNotHosted   = "not_hosted"
+	reasonNotHeld     = "not_held"
+)
 
 // notDeclared is the sentence a repository nobody declared is answered with,
 // naming the setting that declares one.
@@ -240,7 +252,8 @@ func codeNotServed(w http.ResponseWriter, why error) {
 	status, after, reason, detail := codeUnserved(why)
 	switch status {
 	case http.StatusNotFound:
-		writeJSON(w, status, map[string]string{"error": stream.CodeNotFound, "detail": detail})
+		writeJSON(w, status, map[string]string{"error": stream.CodeNotFound, "reason": reasonNotHosted,
+			"detail": detail})
 	case http.StatusServiceUnavailable:
 		if after > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(int(after.Seconds())))
@@ -329,7 +342,7 @@ func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "detail": notDeclared(repo),
+			"error": stream.CodeNotFound, "reason": reasonNotDeclared, "detail": notDeclared(repo),
 		})
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
 		errors.Is(err, code.ErrInvalid):
@@ -457,7 +470,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, viewOf(v))
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "detail": notDeclared(name),
+			"error": stream.CodeNotFound, "reason": reasonNotDeclared, "detail": notDeclared(name),
 		})
 	case errors.Is(err, code.ErrInvalid):
 		// A floor on another log than the repositories' rows.
