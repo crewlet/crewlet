@@ -438,13 +438,20 @@ const (
 )
 
 // providerFirstByte is how long the S3 fake waits before it answers each
-// request in BenchmarkColdSync: 30 ms, a bucket in the node's own region (S3
-// answers in 20–100 ms). Every GET pays it whatever its size, which is what
-// makes a cold sync bound by its GET count — sixteen at once at the 33 ms
-// each takes allow about 480 bundles a second, and a round at
-// FetchConcurrency reaches about 450 — and what a fake on loopback,
-// answering thousands a second, could never show.
+// request in BenchmarkColdSync's every shape: 30 ms, the floor of what S3
+// answers in, and the arm the cache's figures were first taken at. Every GET
+// pays it whatever its size, which is what makes a cold sync bound by its GET
+// count — sixteen at once at the 33 ms each takes allow about 480 bundles a
+// second, and a round at FetchConcurrency reaches about 450 — and what a fake
+// on loopback, answering thousands a second, could never show.
 const providerFirstByte = 30 * time.Millisecond
+
+// s3FirstBytes is the first byte BenchmarkColdSync's fake also answers its
+// 2 000-push shape at: 100 and 200 ms, the range AWS's performance guidelines
+// give for S3's first byte, at which a GET holds its slot three to six times
+// as long as at providerFirstByte — so a cold sync's rate at a real bucket is
+// MEASURED at each end of it, never computed from the 30 ms arm.
+var s3FirstBytes = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
 
 // providerConnBytes is the most a second the S3 fake sends one connection of
 // an object's bytes: 80 MB/s, the low end of what one S3 connection carries.
@@ -669,15 +676,16 @@ func (s coldShape) size(i int) int64 {
 	return medianPush
 }
 
-// coldWorld is a sync world over the bucket a cold-sync arm names.
-func coldWorld(b *testing.B, bucket string) *syncWorld {
+// coldWorld is a sync world over the bucket a cold-sync arm names — the S3
+// fake answering every request firstByte after it arrives.
+func coldWorld(b *testing.B, bucket string, firstByte time.Duration) *syncWorld {
 	b.Helper()
 	switch bucket {
 	case "memobj":
 		return newSyncWorld(b, onMemory)
 	case "fake":
 		srv := s3fake.Start(b, "files")
-		srv.Latency, srv.ConnBytesPerSecond = providerFirstByte, providerConnBytes
+		srv.Latency, srv.ConnBytesPerSecond = firstByte, providerConnBytes
 		w := syncWorldOver(b, openS3Fake(b, srv))
 		w.s3 = srv
 		return w
@@ -735,9 +743,11 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
 //
 //   - bucket=memobj is the store in process: the node's own side alone —
 //     SHA-256 over every byte, the disk.
-//   - bucket=fake is the S3 fake over HTTP at the production part size, 30
-//     ms to every request's first byte and 80 MB/s a connection
-//     (providerFirstByte, providerConnBytes).
+//   - bucket=fake is the S3 fake over HTTP at the production part size, 80
+//     MB/s a connection (providerConnBytes) and firstbyte to every
+//     request's first byte: 30 ms for every shape (providerFirstByte), and
+//     100 and 200 ms — S3's own range (s3FirstBytes) — for the 2 000-push
+//     shape at the cache's two widths, fetch=16 and fetch=32.
 //   - bucket=real is the bucket CREWLET_BENCH_S3_* names
 //     (s3fake.RealBucket), and skips when none is named.
 //   - shape=tail is the same 200 pushes with the first 512 MiB — an
@@ -747,19 +757,38 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
 // fetch=1 is one GET at a time; fetch=16 is FetchConcurrency, half the
 // node's; fetch=32 is NodeFetches, the whole node given to one repository,
 // which the share gives up. packs/s at 200 and at 2 000 pushes is one rate
-// when a cold sync is bound by its GETs rather than by the node. get-ms is
+// when a cold sync is bound by its GETs rather than by the node; at a
+// first byte f, fetch GETs in flight bound it near fetch/f a second. get-ms is
 // one GET as the cache sees it, from its open to its close; cpu-ms/pack is
 // the process's CPU a bundle, user and system — the S3 fake's server's
 // among it, since it runs in the process and on the same cores, which a
 // real bucket's does not.
 func BenchmarkColdSync(b *testing.B) {
 	quiet(b)
-	for _, bucket := range []string{"memobj", "fake", "real"} {
-		for _, shape := range []coldShape{{packs: 200}, {packs: 2000}, {packs: 200, tail: 512 << 20}} {
-			if shape.tail > 0 && bucket == "memobj" {
-				continue
+	type arm struct {
+		bucket    string
+		firstByte time.Duration
+		shapes    []coldShape
+		fetches   []int
+	}
+	every := []coldShape{{packs: 200}, {packs: 2000}, {packs: 200, tail: 512 << 20}}
+	widths := []int{1, cache.FetchConcurrency, cache.NodeFetches}
+	arms := []arm{
+		{bucket: "memobj", shapes: every[:2], fetches: widths},
+		{bucket: "fake", firstByte: providerFirstByte, shapes: every, fetches: widths},
+	}
+	for _, firstByte := range s3FirstBytes {
+		arms = append(arms, arm{bucket: "fake", firstByte: firstByte, shapes: every[1:2],
+			fetches: []int{cache.FetchConcurrency, cache.NodeFetches}})
+	}
+	arms = append(arms, arm{bucket: "real", shapes: every, fetches: widths})
+	for _, a := range arms {
+		for _, shape := range a.shapes {
+			name := "bucket=" + a.bucket
+			if a.bucket == "fake" {
+				name += fmt.Sprintf("/firstbyte=%dms", a.firstByte.Milliseconds())
 			}
-			name := fmt.Sprintf("bucket=%s/packs=%d", bucket, shape.packs)
+			name += fmt.Sprintf("/packs=%d", shape.packs)
 			if shape.tail > 0 {
 				name += "/shape=tail"
 			}
@@ -767,9 +796,9 @@ func BenchmarkColdSync(b *testing.B) {
 				if shape.packs > 200 {
 					large(b, "2 000 pushes packed and stored")
 				}
-				w := coldWorld(b, bucket)
+				w := coldWorld(b, a.bucket, a.firstByte)
 				repo, total := w.coldRepo(b, shape)
-				for _, fetch := range []int{1, cache.FetchConcurrency, cache.NodeFetches} {
+				for _, fetch := range a.fetches {
 					b.Run(fmt.Sprintf("fetch=%d", fetch), func(b *testing.B) {
 						root := b.TempDir()
 						b.SetBytes(total)
