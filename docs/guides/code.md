@@ -216,6 +216,77 @@ is never said of a push that is merely on its way. Every other condition, the
 exact line git prints and what to do about it is in [What git prints, and what
 it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
 
+## Import from GitHub or GitLab
+
+Declare the repository first — the import fills one that `code.repos`
+declares, and creates none — then, with your token exported:
+
+```sh
+crewlet code import https://github.com/acme/web.git web
+crewlet code import git@gitlab.com:acme/web.git web     # SSH works as well
+```
+
+**Your git does the work, with your access.** It clones the source with your
+own credentials — your credential helper, your SSH key, your proxy — and pushes
+it to the code host as you, so the engine reaches no other host and the
+repository's push history names you for every step. Where the source asks for a
+password none of your helpers holds, or ssh for a host key or a passphrase,
+your git asks you on the terminal, as it would for a clone of your own. Your token must be bound to
+your seat ([Give each person a token](#give-each-person-a-token)): a token bound
+to nobody fetches only, and the import says so before it downloads anything.
+The source is cloned into the system's temporary directory, so point `TMPDIR`
+at a volume with room for it.
+
+**What it takes, and what it skips.** Every branch and every tag. A forge's own
+refs — GitHub's `refs/pull/*`, GitLab's `refs/merge-requests/*` — are the
+forge's rather than the repository's: they are listed as skipped, and the
+history only they reach is never downloaded. Git LFS files stay on the LFS
+server they live on; the import carries the pointer files the history holds.
+
+**What it refuses** — before anything is pushed where the source shows it,
+every finding at once so you fix the source once, and otherwise before the
+step that would meet it:
+
+| The import says | What to do |
+|---|---|
+| `blob <id> (<path>) is 812.0 MiB, past code.limits.max_blob_bytes (50.0 MiB)` | Large binaries belong in tracker files. Rewrite the history without them (`git filter-repo --strip-blobs-bigger-than 50M` on a copy) and import that, or raise `code.limits.max_blob_bytes`. |
+| `the source's history packs to … as one pack, past code.limits.repo_max_bytes` | Raise `code.limits.repo_max_bytes` — with room for the steps, below — or import a smaller history. |
+| `web would hold … of packs once the next step lands … past code.limits.repo_max_bytes` | The steps store more than the source's own pack (below). Raise `code.limits.repo_max_bytes` and run the same command again: it resumes. |
+| `commit … alone packs to …: it brings in the history of …, and no other branch of the source can carry it` | A merge of a history larger than one step that no other branch reaches. Mirror the source (`git clone --mirror`), give the commit it names a branch there (`git branch`), and import from the mirror: that history is stepped on the branch first. Delete the branch afterwards if you do not want it. |
+| `the source is a shallow clone` | Import from a full clone. |
+| `refs/heads/main is at … on web and … in the source — this is not a resumed import of the same history` | Something else was pushed to the repository: import into an empty one, or delete the ref there first. |
+
+**Large histories go in steps.** One push carries at most
+`code.limits.max_push_bytes` (1 GiB at most), so the import pushes the default
+branch along its history in steps that each fit — every step a fast-forward of
+the branch itself — then the other branches and tags in batches. Each step is
+sent whole and measured before it is sent, so what it sends is what the
+repository stores, and no step is refused for its size; a single commit or tag
+that is past the limit on its own is refused naming it, since nothing can split
+it, and a merge that brings in more than one step is stepped from the other
+side first. `crewlet code import … -dry-run` prints the plan and pushes
+nothing.
+
+**A stepped import stores more than the source.** Every step keeps whole the
+files it touches whose earlier versions an earlier step stored, so a history
+pushed in steps takes more room than one pack of it — measured on this
+project's own history, 34 MB as one pack, about twice that in eleven steps. The
+object store keeps those bytes and every git node serving the repository caches
+them, since nothing repacks them yet. Run a large import with
+`code.limits.max_push_bytes` at its 1 GiB ceiling, which takes the fewest steps,
+and leave `code.limits.repo_max_bytes` room for the steps rather than for the
+source's own pack size.
+
+**Resuming.** A step that fails — a network drop, a node restarting, a rule
+that refuses it — stops the import with git's own reason, and every step before
+it has landed whole. Run **the same command again**: it reads what the
+repository already holds and pushes the rest. A branch protected with
+`direct_push: none` refuses its own import, as it refuses every push: lift the
+rule for the import and put it back after.
+
+Every step, flag and message is in
+[`crewlet code import`](../reference/cli.md#crewlet-code-import).
+
 ## Status and verify
 
 **`crewlet code status`** lists what is hosted — each repository's status,

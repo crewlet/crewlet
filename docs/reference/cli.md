@@ -28,6 +28,7 @@ subcommand below is served by it.
 | `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
 | `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` rebuild a copy found damaged. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
 | `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
+| `crewlet code import <source-url> <name> [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into a declared one, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
@@ -807,6 +808,7 @@ cannot be read included: a store that lost bytes is an answer, and the
 crewlet code status [<config.yaml>] [-url URL] [-token TOKEN] [-repo NAME] [-pushes N] [-json]
 crewlet code verify [<config.yaml>] [-url URL] [-token TOKEN] [-repo NAME]... [-repair] [-json]
 crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] [-token TOKEN] [-git PATH]
+crewlet code import <source-url> <name> [<config.yaml>] [-url URL] [-token TOKEN] [-git PATH] [-dry-run]
 crewlet code credential [-token-env NAME] get|store|erase
 ```
 
@@ -818,7 +820,7 @@ node's cache is files only its own process touches, so nothing here opens
 either. Like every node client they find the node and the token from the Tier
 A file (`-url` and `-token` override it, and `$CREWLET_API_TOKEN` comes before
 its first token; with `-url` and the variable exported, no Tier A file is
-read). `export` and `credential` are **client-side**: your own git,
+read). `export`, `import` and `credential` are **client-side**: your own git,
 with your own environment, talks to the node's git routes exactly as anyone's
 git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
 
@@ -976,6 +978,163 @@ interrupted leaves nothing that looks finished either; the mirror is
 made in a directory **beside the bundle** and removed when the export ends, so
 the bundle's volume needs room for the repository twice while it runs. A
 repository with no refs yet, or one deleted, is refused with nothing written.
+
+### `crewlet code import`
+
+Pushes another host's repository — anything your git clones: an HTTPS or SSH
+URL on GitHub or GitLab, another server, a path on this machine — into one the
+code host serves, **as you**: every step is an ordinary push by the person your
+token is bound to, held to every rule a push is held to (`code.limits`, the
+repository's protections, the blob limit, git's own object checks), and the
+repository's push history names you for each. The engine dials nothing: your
+git reaches the source with your own credentials, proxy and network, so there
+is no fetch of a URL on the node to guard.
+
+```
+$ crewlet code import https://github.com/acme/web.git web
+skipping 412 refs outside refs/heads/ and refs/tags/ (refs/pull/*): a forge's, not the repository's
+cloning https://github.com/acme/web.git into /tmp/crewlet-import-2861
+cloned https://github.com/acme/web.git: 63 refs (4 branches, 59 tags), 2.1 GiB packed
+importing 63 refs in steps of at most 921.6 MiB (code.limits.max_push_bytes less a tenth), each measured before it is pushed
+pushing step 1: refs/heads/main → 3f2a91c (905.1 MiB)
+imported step 1: refs/heads/main → 3f2a91c (905.1 MiB)
+pushing step 2: refs/heads/main → 9e8d7c6 (911.4 MiB)
+…
+imported step 5: 62 refs, refs/heads/develop … refs/tags/v3.2.0 (48.0 MiB)
+imported web: 63 refs, 3.6 GiB sent in 5 steps, 3.6 GiB stored with the packs' indexes
+```
+
+In order:
+
+1. **The repository.** It must be declared in `code.repos` and active — read at
+   `linearizable`, so one declared a moment ago is found — and its
+   `code.limits` are the ones the node holds its pushes to. An archived or
+   deleted repository takes no push, and is refused saying how to declare it;
+   a name nobody declared is refused naming `code.repos`, and a company that
+   does not set `code.native` is refused saying so, in the node's words.
+2. **Before anything is downloaded**, your git (2.40 or newer — the first on
+   `PATH`, or `-git PATH`) reads the source's own list of refs, and the import
+   refuses a ref the code host takes no push of (git's ref rules, at most 255
+   bytes of UTF-8) and more refs than one repository holds (100 000). Where the
+   source asks for a user name and password none of your credential helpers
+   holds — or ssh for a host key on a first connection, or a key's passphrase
+   with no agent — your git **asks you on the terminal**, here and in the clone,
+   as a git you ran yourself would; with no terminal (a CI job) the question
+   fails and the import says so. It then asks the node what a push's first
+   request asks — a dry run of one — so a token bound to nobody, which fetches
+   only, or a node that takes no push here, is refused now, in git's words,
+   rather than after the source has been downloaded.
+3. **The clone**: a bare clone of the source's branches and tags, into the
+   system's temporary directory — set `TMPDIR` to a volume with room for the
+   source, since a temporary directory is often small or held in memory. Refs
+   outside `refs/heads/` and `refs/tags/` — a forge's `refs/pull/*` and
+   `refs/merge-requests/*`, notes, remotes — are skipped and counted: they are
+   the forge's rather than the repository's, the code host takes no push of
+   them, and the history only they reach is never downloaded.
+4. **Every refusal the source shows, before any push**, listed together: a
+   shallow source (import from a full clone of it), a source whose objects are
+   SHA-256 (the code host keeps SHA-1 repositories), every blob past
+   `code.limits.max_blob_bytes` — by its id, its path and its size, wherever
+   it is in the history (large binaries belong in tracker files; a history
+   rewritten without them imports) — and a source whose history is past
+   `code.limits.repo_max_bytes` already as **one pack** (raise it, or import
+   less): an import stores more than that (step 6).
+5. **What the repository already holds.** A ref it holds at the source's value
+   is done; a branch it holds at an earlier commit of the source's branch is an
+   import that stopped part way — or a source that has moved on since — and is
+   continued from there, through the commits that descend from the one it
+   holds, so every step is a fast-forward even where that commit reached the
+   source's branch through a merge. A ref at any other value — something else
+   was pushed there — is refused naming the first such ref in the source's
+   order, both values and that this is not a resumed import of the same
+   history. A ref the repository holds that the source does not is left as it
+   is, and named.
+6. **The steps.** The default branch first — the source's branch of the name
+   `code.repos` gives as `default_branch`, or, where the source has none, the
+   source's own default branch under its own name (said, so you can push the
+   repository's default afterwards) — advanced along its first-parent history,
+   every step a fast-forward of the branch itself, so no temporary ref ever
+   exists. Then every other branch and tag, in name order, in batches of at
+   most 1 000 refs. Every step is **sent whole** (`--no-thin`), so the pack it
+   sends is the pack the node stores, and is **measured before it is pushed**:
+   its pack is built exactly as `git push` builds it, against what the
+   repository will hold, its bytes counted and thrown away. A step is held to
+   `code.limits.max_push_bytes` less a tenth for what it sends, to the
+   1.25 GiB one push may store with its indexes, and — added to what the
+   repository holds and what the steps before it stored — to
+   `code.limits.repo_max_bytes`. Where a history is stored as a forge stores it
+   — each file's newest version whole and its older ones as deltas against it —
+   a step packs to far more than the source's own pack holds of it, so a step
+   past what it may carry is cut shorter before anything is sent, and the
+   summary says how many were. A branch no batch can carry is stepped along its
+   own history. A **merge** whose other side is more than one step — a
+   long-lived branch merged back, a subtree added, an unrelated history merged
+   in — has that side's own history stepped first, to the merged-in commit and
+   no further, on a branch of the source still to be pushed that reaches it:
+   the branch whose history it is where the source keeps one, and otherwise
+   any that reaches it, such as a branch created after the merge. That branch
+   is taken out of its turn, every step a fast-forward of it, and goes on to
+   its own value in its turn; a branch the repository holds carries it only
+   where it holds it at an earlier commit of that history. The merge, measured
+   once, then goes in a step of what is left. Where no other branch can carry
+   it, the import is refused naming the merge, the merged-in commit and what
+   its history weighs, with the remedy: a branch on that commit in a mirror of
+   the source (`git clone --mirror`, then `git branch`), imported from the
+   mirror. One commit, or one tag no branch reaches, that alone packs past the
+   limit cannot be split, and is refused naming it — raise
+   `code.limits.max_push_bytes` (at most 1 GiB). The next
+   step is measured while one is pushed, so the second build of each pack —
+   `git push` sends no pack it did not build — overlaps the upload and the
+   node's work rather than adding to them, and a push that fails ends that
+   measurement at once.
+7. **The pushes**: each step is one `git push --porcelain --atomic
+   --no-verify --no-thin`, through `crewlet code credential` exactly as
+   `export`'s clone is. `--atomic`: a step lands whole or not at all.
+   `--no-verify`: your own pre-push hooks are for your own pushes, and one that
+   uploads elsewhere — Git LFS's — would refuse every step. And each is
+   **pinned against your own push settings**, which would change what a step
+   carries or have git refuse it: `--no-follow-tags` (`push.followTags` adds
+   tags the step never planned), `--no-signed` (`push.gpgSign` asks for a push
+   certificate the code host does not take), `--no-recurse-submodules`, push
+   options cleared (`push.pushOption`: the code host takes none, and git
+   refuses a push carrying one) and `push.negotiate` off.
+8. **The proof**: every branch and tag of the source, read back from the node
+   as git lists it, at the source's value; any that differs exits 1 naming it.
+
+**A stepped history stores more than one pack of it**: every step keeps whole
+the files its deltas cannot reach in the steps before it, so each file a step
+touches is stored again in full. Measured on this project's own history,
+34.0 MB as one pack: 68.5 MB in eleven steps and 78.6 MB in forty-two. What
+the repository stores is what the object store holds and what every git node
+serving it caches, so run a large import with `code.limits.max_push_bytes` at
+its 1 GiB ceiling — the fewest, largest steps — and size
+`code.limits.repo_max_bytes` for the steps rather than for the source's own
+pack. A step that would take the repository past it is refused **before it is
+sent**, saying what the repository would hold, what is left of the source, and
+to raise the limit and run again.
+
+**A failed step is safe to run again**: the import stops at the first step git
+refuses, printing git's own line for every ref it refused — `!
+<id>:refs/heads/frozen [remote rejected] (protected_direct: …)` — and saying
+how many steps of the run landed before it. Fix the cause and run the same
+command again: step 5 finds what landed and pushes the rest. The protections
+apply to an import as to any push, so a branch whose rule says `direct_push:
+none` refuses its own import: lift the rule for the import and restore it
+after.
+
+`-dry-run` does steps 1–5 and prints the plan — every step, sized from how the
+source stores its objects (`≈`), with nothing measured and nothing pushed, and
+a step marked where its estimate passes the push limit or takes the repository
+past `code.limits.repo_max_bytes`. A merge whose estimate passes the push limit
+has its other side's history planned first, on the branch the run would carry
+it on, and the plan says so as the run does (`stepping … first`). A real run's
+steps can differ from it, since a step is cut where its measurement says.
+
+Git LFS: the import carries the pointer files a history holds, never the large
+files an LFS server keeps beside it; the code host serves no LFS.
+
+Exits 0 once every ref is proven, and 1 on any refusal, a stopped step or a
+ref that differs.
 
 ### `crewlet code credential`
 

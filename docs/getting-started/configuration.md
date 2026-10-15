@@ -1781,7 +1781,7 @@ code:
 
 - **`max_push_bytes`** — the largest pack one push may send. Unset is 1 GiB, which is also the most it may be: a person's first push of an existing project is its whole history, and a larger one is imported in parts.
 - **`max_blob_bytes`** — the largest single file a push may carry. Unset is 50 MiB, and it is what sizes git's own memory on a node serving the repository, so a larger binary belongs in [tracker files](../concepts/object-store.md) rather than in a repository.
-- **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it.
+- **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it. It counts the packs as the pushes stored them, so a history [imported](../reference/cli.md#crewlet-code-import) in steps counts for more than one pack of it — about twice as much in eleven steps, measured ([Limits](../concepts/code-host.md#limits)).
 
 The order is checked on what a push is actually held to, the defaults included: `max_push_bytes: 10485760` set alone is refused, because the default `max_blob_bytes` (50 MiB) is larger, and the refusal names the default it met — set both. `code.limits` on a company that does not set `code.native` is refused: it would read as live and limit nothing.
 

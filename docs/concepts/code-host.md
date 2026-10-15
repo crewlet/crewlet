@@ -295,6 +295,17 @@ bound first. The receiving node measures a push's ref updates as it reads
 them, with everything the rest of the push could add at its largest, and
 refuses one past the bound before anything of it is run or stored.
 
+What a repository holds is its packs **as the pushes stored them**, and
+nothing repacks them yet — which matters for a history that arrived in many
+pushes rather than grew by them. A history [imported](../guides/code.md#import-from-github-or-gitlab)
+in steps stores more than one pack of it: every step keeps whole the files it
+touches whose earlier versions an earlier step stored. Measured on this
+project's own history, 34 MB as one pack stored 68.5 MB in eleven steps and
+78.6 MB in forty-two. Those bytes are what the object store holds, what every
+git node serving the repository caches and what a cold sync downloads, so
+size `repo_max_bytes`, the object store and the git nodes' caches for the
+repository as it was pushed, not for the source it came from.
+
 ---
 
 ## Retention and history
