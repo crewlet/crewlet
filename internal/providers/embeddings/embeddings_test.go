@@ -897,3 +897,19 @@ func TestTheFakeBatchKeepsEveryInputsSlot(t *testing.T) {
 		t.Fatal("the batch and the single call disagree about one text")
 	}
 }
+
+// AN ENDPOINT NO CALL CAN BE SENT ON IS REFUSED AT NEW, without a word of it:
+// the SDK would defer its parse error to every request and print the whole
+// URL, a gateway password in its userinfo included (httpapi.BaseURL).
+//
+// Mutation: hand the SDK the trimmed cfg.BaseURL directly, and New builds.
+func TestNewRefusesAnEndpointWithoutRepeatingIt(t *testing.T) {
+	t.Parallel()
+	_, err := embeddings.New(embeddings.Config{
+		Model: "text-embedding-3-small", Dimensions: 8, Limits: openAILimits,
+		BaseURL: "https://u:gw-password@gw.example.com/v1\x7f",
+	})
+	if err == nil || strings.Contains(err.Error(), "gw-password") {
+		t.Fatalf("New = %v, want a refusal that does not repeat the password", err)
+	}
+}

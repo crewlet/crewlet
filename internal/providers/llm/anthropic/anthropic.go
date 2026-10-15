@@ -168,9 +168,10 @@ type Config struct {
 	// constructor that refused to exist.
 	APIKeys []string
 
-	// BaseURL is the endpoint. Empty takes DefaultBaseURL. It is ALWAYS
-	// sent explicitly, so an ambient ANTHROPIC_BASE_URL cannot silently
-	// redirect a company's traffic.
+	// BaseURL is the endpoint, trimmed. Empty takes DefaultBaseURL, and one
+	// that is not an http:// or https:// URL with a host is refused by New
+	// ([httpapi.BaseURL]). It is ALWAYS sent explicitly, so an ambient
+	// ANTHROPIC_BASE_URL cannot silently redirect a company's traffic.
 	BaseURL string
 
 	// Timeout bounds one HTTP attempt. Zero takes DefaultTimeout.
@@ -261,10 +262,10 @@ func New(cfg Config) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: ClaudeModel: %w", err)
 	}
-	if err := profile.CheckEffort(cfg.Model, claudemodel.Effort(cfg.Effort)); err != nil {
+	if err = profile.CheckEffort(cfg.Model, claudemodel.Effort(cfg.Effort)); err != nil {
 		return nil, fmt.Errorf("anthropic: Effort: %w", err)
 	}
-	if err := profile.CheckBudget(cfg.Model, cfg.ThinkingBudget); err != nil {
+	if err = profile.CheckBudget(cfg.Model, cfg.ThinkingBudget); err != nil {
 		return nil, fmt.Errorf("anthropic: ThinkingBudget: %w", err)
 	}
 	// The entry's level: what it named, or the default, on a model that
@@ -280,9 +281,9 @@ func New(cfg Config) (*Provider, error) {
 
 	keys := cfg.APIKeys
 
-	baseURL := cfg.BaseURL
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = DefaultBaseURL
+	baseURL, err := httpapi.BaseURL(cfg.BaseURL, DefaultBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: %w", err)
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {

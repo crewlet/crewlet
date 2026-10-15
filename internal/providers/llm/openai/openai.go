@@ -97,8 +97,9 @@ type Config struct {
 	// store are both in reach.
 	APIKeys []string
 
-	// BaseURL is the endpoint. Empty takes DefaultBaseURL, and it is
-	// ALWAYS sent explicitly: the SDK reads OPENAI_BASE_URL from the
+	// BaseURL is the endpoint, trimmed. Empty takes DefaultBaseURL, one that
+	// is not an http:// or https:// URL with a host is refused by New
+	// ([httpapi.BaseURL]), and it is ALWAYS sent explicitly: the SDK reads OPENAI_BASE_URL from the
 	// process environment, and an ambient one would silently redirect a
 	// company's traffic to somewhere its operator never configured.
 	BaseURL string
@@ -165,9 +166,9 @@ func New(cfg Config) (*Provider, error) {
 
 	keys := cfg.APIKeys
 
-	baseURL := cfg.BaseURL
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = DefaultBaseURL
+	baseURL, err := httpapi.BaseURL(cfg.BaseURL, DefaultBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
