@@ -87,10 +87,10 @@ func TestSilenceEndsTheAttemptAsATimeout(t *testing.T) {
 }
 
 // A STALL THE SDK ALREADY REPORTED IS NAMED ONCE. Part-way through a stream
-// the failure is a read of the body, and a body read on a cancelled request
-// returns the context's cause — the stall itself, which the SDK hands back
-// wrapped in its own words. Swapped for the stall again, the message a person
-// reads said "stream went silent" twice over.
+// the failure is a read of the body, which the watched body reports as the
+// stall itself on either protocol ([TestABodyReadTheStallFailedReportsTheStall])
+// and which the SDK hands back wrapped in its own words. Swapped for the stall
+// again, the message a person reads said "stream went silent" twice over.
 //
 // Mutation: drop the errors.Is(err, ErrStalled) pass-through from Err.
 func TestAStallTheSDKAlreadyReportedIsNamedOnce(t *testing.T) {
@@ -109,6 +109,87 @@ func TestAStallTheSDKAlreadyReportedIsNamedOnce(t *testing.T) {
 	}
 	if kind := FromTransport(err, "p", "m").Kind; kind != llm.KindTimeout {
 		t.Fatalf("a stall classified %s, want timeout", kind)
+	}
+}
+
+// cancelledBody blocks a read until ctx is done and then fails it with what
+// the transport under test reports for a cancelled body read — after the
+// first read, which returns data, so the stream had begun.
+type cancelledBody struct {
+	ctx     context.Context
+	started bool
+	fail    func(ctx context.Context) error
+}
+
+func (b *cancelledBody) Read(p []byte) (int, error) {
+	if !b.started {
+		b.started = true
+		p[0] = 'x'
+		return 1, nil
+	}
+	<-b.ctx.Done()
+	return 0, b.fail(b.ctx)
+}
+
+func (*cancelledBody) Close() error { return nil }
+
+// A BODY READ THE STALL FAILED REPORTS THE STALL, whichever protocol carried
+// it. Go's HTTP/1.1 client fails a cancelled body read with the context's
+// cause, which is the stall already; its HTTP/2 client — what the real API
+// speaks — fails it with the bare context.Canceled, which the SDK's span reads
+// as the application stopping and leaves without a status, and which Err could
+// only wrap, naming a cancellation beside the stall. Both read the same
+// through the watched body, and Err names the stall once.
+//
+// Mutation: return the wrapped body's error unchanged and the HTTP/2 case
+// reads Canceled.
+func TestABodyReadTheStallFailedReportsTheStall(t *testing.T) {
+	t.Parallel()
+	for name, fail := range map[string]func(context.Context) error{
+		"HTTP/1.1, the cause": context.Cause,
+		"HTTP/2, bare Err":    func(ctx context.Context) error { return ctx.Err() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, w := WatchIdle(context.Background(), 30*time.Millisecond)
+			defer w.Stop()
+			_, err := io.ReadAll(w.Body(&cancelledBody{ctx: ctx, fail: fail}))
+			if !errors.Is(err, ErrStalled) || errors.Is(err, context.Canceled) {
+				t.Fatalf("the read failed with %v, want the stall and not a cancellation", err)
+			}
+			reported := w.Err(fmt.Errorf("reading the stream: %w", err))
+			if n := strings.Count(reported.Error(), "stream went silent"); n != 1 ||
+				strings.Contains(reported.Error(), "canceled") {
+				t.Fatalf("err = %q, want the stall named once and no cancellation", reported)
+			}
+			if kind := FromTransport(reported, "p", "m").Kind; kind != llm.KindTimeout {
+				t.Fatalf("a stall classified %s, want timeout", kind)
+			}
+		})
+	}
+}
+
+// ONLY THE STALL IS TRANSLATED: a body read the CALLER's cancellation failed
+// stays the caller's, and a stream that reached its end stays ended whatever
+// the timer did afterwards.
+func TestABodyReadNotFailedByTheStallIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	parent, cancel := context.WithCancel(context.Background())
+	ctx, w := WatchIdle(parent, time.Hour)
+	defer w.Stop()
+	cancel()
+	if _, err := io.ReadAll(w.Body(&cancelledBody{ctx: ctx,
+		fail: func(ctx context.Context) error { return ctx.Err() }})); !errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrStalled) {
+		t.Fatalf("the caller's cancellation read as %v, want it unchanged", err)
+	}
+
+	stalled, w2 := WatchIdle(context.Background(), time.Millisecond)
+	defer w2.Stop()
+	<-stalled.Done()
+	n, err := w2.Body(io.NopCloser(strings.NewReader(""))).Read(make([]byte, 1))
+	if n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("a finished body read as %d, %v after the bound passed, want its EOF", n, err)
 	}
 }
 

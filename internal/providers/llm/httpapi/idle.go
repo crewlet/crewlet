@@ -98,8 +98,8 @@ func (w *IdleWatchdog) Stop() {
 // the transport, which reports the cancellation as a bare context.Canceled
 // rather than its cause — which every classifier reads as the caller giving
 // up, a fatal and wrong answer — so the stall replaces it here. Part-way
-// through a stream, the failure is a READ of the body, and a body read on a
-// cancelled request returns the context's cause: the stall itself, already.
+// through a stream, the failure is a READ of the body, which the watched body
+// reports as the stall itself on either protocol (see [watchedBody.Read]).
 // That one passes through as it is, or the message a person reads names the
 // stall twice.
 func (w *IdleWatchdog) Err(err error) error {
@@ -117,10 +117,33 @@ type watchedBody struct {
 	w *IdleWatchdog
 }
 
+// Read is the body's read, with every read that returns data resetting the
+// bound — and a read the STALL failed reporting the stall itself.
+//
+// The watchdog cancelled the request, and it is the only party that knows
+// why; what the body read reports depends on the protocol, and the real API
+// speaks HTTP/2. Go's HTTP/1.1 client fails a cancelled body read with the
+// context's CAUSE (net/http's transport cancels the connection with
+// context.Cause), which is the stall. Its HTTP/2 client fails it with the
+// context's bare Err (net/http/internal/http2's writeRequest returns
+// ctx.Err() and aborts the stream with it) — context.Canceled, which the SDK's
+// own span reads as the application stopping and ends with no status, and
+// which reached [IdleWatchdog.Err] needing a wrap that named the cancellation
+// beside the stall. So a read failed while the stall is the watchdog's cause
+// reports the stall on both, and the SDK's span — which reads the body through
+// this wrapper — and the engine's classification agree on what happened.
+//
+// End of stream is passed through: a body that finished is not one that
+// stalled, whatever the timer did after. A cancellation of any other cause —
+// the caller's, or [IdleWatchdog.Stop] — is left as the transport reported it.
 func (b *watchedBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if n > 0 {
 		b.w.timer.Reset(b.w.idle)
+	}
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, ErrStalled) &&
+		errors.Is(context.Cause(b.w.ctx), ErrStalled) {
+		return n, b.w.stall
 	}
 	return n, err
 }

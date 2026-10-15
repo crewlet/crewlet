@@ -2932,48 +2932,76 @@ func TestARotationIsTwoSiblingSpansTheFirstInError(t *testing.T) {
 // engine's classification (a timeout, on the phase event and on llm.round when
 // the round fails) is the one that names it; once the stream has begun, the
 // same stall is a client timeout to the SDK too.
+//
+// OVER BOTH PROTOCOLS, because they report a cancelled body read differently
+// and the real API speaks HTTP/2: Go's HTTP/1.1 client fails the read with the
+// context's cause — the stall — while its HTTP/2 client fails it with a bare
+// context.Canceled, which the SDK files as the application stopping. The
+// engine's watched body makes the two agree ([httpapi.IdleWatchdog]); before
+// it did, every mid-stream stall against the real API ended with no status.
+//
+// Mutation: drop the watched body's translation of a read failed by the stall
+// and the HTTP/2 mid-stream case ends Unset.
 func TestTheCallsSpanEndsAsTheDocsSay(t *testing.T) {
 	const timeout = 100 * time.Millisecond
-	for _, tc := range []struct {
-		name      string
-		handle    func(w http.ResponseWriter)
-		status    codes.Code
-		errorType string
-	}{
-		{"answered", func(w http.ResponseWriter) {
-			writeJSON(w, 200, okMessage("hi"))
-		}, codes.Ok, ""},
-		{"cut before message_stop", func(w http.ResponseWriter) {
-			writeStream(w, streamOf(streamStart(), textBlock(0, "nearly"))...)
-		}, codes.Error, "api_error"},
-		{"an error event mid-stream", func(w http.ResponseWriter) {
-			writeStream(w, streamStart(),
-				sseEvent{"error", `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`})
-		}, codes.Error, "overloaded_error"},
-		{"silent before the first byte", func(w http.ResponseWriter) {
-			time.Sleep(3 * timeout)
-		}, codes.Unset, ""},
-		{"silent mid-stream", func(w http.ResponseWriter) {
-			writeStream(w, streamStart())
-			time.Sleep(3 * timeout)
-		}, codes.Error, "client_timeout_error"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, url := serve(t, func(w http.ResponseWriter, _ int) { tc.handle(w) })
-			p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-			ctx, parent := round(t, true)
-			_, _ = p.Complete(ctx, userTurn("hello"))
-			spans := spansOf(parent)
-			if len(spans) != 1 {
-				t.Fatalf("%d spans, want one", len(spans))
-			}
-			if got := spans[0].Status().Code; got != tc.status {
-				t.Fatalf("the span ended %v, want %v", spans[0].Status(), tc.status)
-			}
-			if got := attributeOf(spans[0], "error.type"); got != tc.errorType {
-				t.Fatalf("error.type = %q, want %q", got, tc.errorType)
-			}
-		})
+	for _, protocol := range []string{"HTTP/1.1", "HTTP/2.0"} {
+		for _, tc := range []struct {
+			name      string
+			handle    func(w http.ResponseWriter)
+			status    codes.Code
+			errorType string
+		}{
+			{"answered", func(w http.ResponseWriter) {
+				writeJSON(w, 200, okMessage("hi"))
+			}, codes.Ok, ""},
+			{"cut before message_stop", func(w http.ResponseWriter) {
+				writeStream(w, streamOf(streamStart(), textBlock(0, "nearly"))...)
+			}, codes.Error, "api_error"},
+			{"an error event mid-stream", func(w http.ResponseWriter) {
+				writeStream(w, streamStart(),
+					sseEvent{"error", `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`})
+			}, codes.Error, "overloaded_error"},
+			{"silent before the first byte", func(w http.ResponseWriter) {
+				time.Sleep(3 * timeout)
+			}, codes.Unset, ""},
+			{"silent mid-stream", func(w http.ResponseWriter) {
+				writeStream(w, streamStart())
+				time.Sleep(3 * timeout)
+			}, codes.Error, "client_timeout_error"},
+		} {
+			t.Run(protocol+"/"+tc.name, func(t *testing.T) {
+				var spoken atomic.Value
+				api := &fakeAPI{handle: func(w http.ResponseWriter, _ int) { tc.handle(w) }}
+				srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					spoken.Store(r.Proto)
+					api.ServeHTTP(w, r)
+				}))
+				// TLS for both, so the one difference between the two
+				// cases is the protocol the transport negotiates.
+				srv.EnableHTTP2 = protocol == "HTTP/2.0"
+				srv.StartTLS()
+				t.Cleanup(srv.Close)
+				p := newProvider(t, srv.URL, func(c *Config) {
+					c.Timeout = timeout
+					c.HTTPClient = srv.Client()
+				})
+				ctx, parent := round(t, true)
+				_, _ = p.Complete(ctx, userTurn("hello"))
+				if got, _ := spoken.Load().(string); got != protocol {
+					t.Fatalf("the call was made over %q, want %s — the premise", got, protocol)
+				}
+				spans := spansOf(parent)
+				if len(spans) != 1 {
+					t.Fatalf("%d spans, want one", len(spans))
+				}
+				if got := spans[0].Status().Code; got != tc.status {
+					t.Fatalf("the span ended %v, want %v", spans[0].Status(), tc.status)
+				}
+				if got := attributeOf(spans[0], "error.type"); got != tc.errorType {
+					t.Fatalf("error.type = %q, want %q", got, tc.errorType)
+				}
+			})
+		}
 	}
 }
 
