@@ -574,9 +574,11 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	touchAlive(layout)
 
 	if l.opts.Placement == Direct {
+		warnIsolationKept(id, Direct, spec.Env, directIsolation(layout.home()))
 		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.home())
 		return &directBox{layout: layout, env: spec.Env, credentials: spec.CredentialFiles}, nil
 	}
+	warnIsolationKept(id, Container, spec.Env, containerIsolation())
 
 	name := l.containerName(id)
 	argv := l.runArgv(ctx, layout, name)

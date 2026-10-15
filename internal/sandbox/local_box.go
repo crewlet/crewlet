@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,30 +136,75 @@ var _ Sandbox = (*directBox)(nil)
 func (b *directBox) ID() string   { return b.layout.id }
 func (b *directBox) Home() string { return b.layout.home() }
 
-// childEnv is the allowlisted host environment plus the box's home and the run
-// env.
+// childEnv is the allowlisted host environment, the run env, and the box's
+// isolation over both.
 //
 // Allowlisted — [hostbox.PassthroughEnv], the list the CLI LLM backend starts
 // from too — because the engine's environment holds the org's chat token, the
 // keyring that decrypts its secret store and possibly a metered API key, none
 // of which the coding agent has any business reading. The run env is what
 // config deliberately put there.
+//
+// THE ISOLATION IS SET LAST ([directIsolation]), over every layer the run env
+// is assembled from — role.sandbox.env, a setup step's env, a command's own —
+// because it is the only boundary a direct box has: a HOME written in any of
+// them landed after it and moved the coding agent's home out of its box, onto
+// whatever directory of the engine host it named. What a run env says about
+// those names is reported when the box is created ([warnIsolationKept]).
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
-	home := b.layout.home()
-	env["HOME"] = home
-	env["XDG_CONFIG_HOME"] = filepath.Join(home, ".config")
-	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
-	env["XDG_STATE_HOME"] = filepath.Join(home, ".local", "state")
-	env["XDG_CACHE_HOME"] = filepath.Join(home, ".cache")
-	env["TMPDIR"] = filepath.Join(home, ".tmp")
-	for key, value := range b.env {
-		env[key] = value
-	}
-	for key, value := range extra {
-		env[key] = value
-	}
+	maps.Copy(env, b.env)
+	maps.Copy(env, extra)
+	maps.Copy(env, directIsolation(b.layout.home()))
 	return env
+}
+
+// directIsolation is a direct box's ISOLATION, by name and value: HOME, the
+// XDG base directories and TMPDIR, each inside the box's own home — every
+// place a coding agent keeps state, so that state is the box's rather than
+// the engine user's.
+func directIsolation(home string) map[string]string {
+	return map[string]string{
+		"HOME":            home,
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
+		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
+		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
+		"TMPDIR":          filepath.Join(home, ".tmp"),
+	}
+}
+
+// isolationKept is every name of the isolation a run env also writes, sorted:
+// the values a box will not use.
+func isolationKept(env, isolation map[string]string) []string {
+	var kept []string
+	for name := range isolation {
+		if _, written := env[name]; written {
+			kept = append(kept, name)
+		}
+	}
+	slices.Sort(kept)
+	return kept
+}
+
+// containerIsolation is a container box's isolation: its HOME, the bind-mounted
+// [DefaultHome] the container was started with. The rest of the box's
+// environment is the image's own, inside a boundary of its own.
+func containerIsolation() map[string]string { return map[string]string{"HOME": DefaultHome} }
+
+// warnIsolationKept says, once per box, which of a run env's variables the box
+// overrides with its own isolation — so a value an operator wrote is reported
+// as doing nothing rather than ignored in silence.
+func warnIsolationKept(id string, placement Placement, env, isolation map[string]string) {
+	kept := isolationKept(env, isolation)
+	if len(kept) == 0 {
+		return
+	}
+	localLog.Warn("local_sandbox_env_isolation_kept", "sandbox_id", id,
+		"placement", string(placement), "vars", kept,
+		"detail", "the box sets these itself, over role.sandbox.env and every setup "+
+			"step's env, so the coding agent's state stays inside its box: the values "+
+			"written for them are not used")
 }
 
 // workdir resolves a command's cwd, defaulting to the box's checkout.
@@ -523,16 +569,15 @@ func (b *containerBox) hostPath(path string) (string, error) {
 // and the coding job, and a stale file would hand one phase another's
 // environment.
 func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
-	merged := make(map[string]string, len(b.env)+len(extra))
-	for key, value := range b.env {
-		merged[key] = value
-	}
-	for key, value := range extra {
-		merged[key] = value
-	}
-	if len(merged) == 0 {
-		return nil, nil
-	}
+	merged := make(map[string]string, len(b.env)+len(extra)+1)
+	maps.Copy(merged, b.env)
+	maps.Copy(merged, extra)
+	// THE BOX'S HOME LAST, over every layer: it is the bind-mounted home the
+	// box's credential files, its records' twins and the coding agent's state
+	// live in, and an exec env-file is applied over the container's own
+	// HOME — so a role.sandbox.env HOME moved the agent off its mount, onto
+	// a directory the container discards and the engine cannot read.
+	maps.Copy(merged, containerIsolation())
 	// --env-file is line-oriented KEY=value with no quoting, so a newline in
 	// a value would forge an extra variable. Values that cannot be
 	// represented are dropped LOUDLY rather than silently truncated into a
