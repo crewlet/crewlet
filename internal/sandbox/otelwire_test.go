@@ -833,6 +833,15 @@ func TestATokenNamingNoTraceForwardsNoSpan(t *testing.T) {
 		protobufExport(t, spansIn(launchedFrom.TraceID))); err != nil {
 		t.Fatal(err)
 	}
+	// NOR A SPAN NAMING NO TRACE EITHER: an empty id and a subject that
+	// reads as no id are both empty, and compared as bytes they were equal,
+	// so such a token forwarded every span that left its trace id out.
+	// Mutation: compare the ids without first requiring the token's.
+	traceless := spansIn(launchedFrom.TraceID)
+	traceless.ResourceSpans[0].ScopeSpans[0].Spans[0].TraceId = nil
+	if _, err := receiver.Accept(t.Context(), "not-a-trace", protobufExport(t, traceless)); err != nil {
+		t.Fatal(err)
+	}
 	if traces := collector.counts(); traces != 0 {
 		t.Errorf("a token naming no trace forwarded %d exports", traces)
 	}
