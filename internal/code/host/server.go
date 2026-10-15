@@ -227,11 +227,24 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// StopBudget is how long a caller of [Server.Stop] gives the host's cancelled
+// work to end: THREE KILL GRACES. A cancelled git process is sent SIGTERM and,
+// gitproc.KillGrace later, SIGKILL; a pipe a straggler still holds is closed a
+// further KillGrace after that; and the third is for what follows a process's
+// end — a handler's answer to a client that has gone, an upload abandoned
+// under its own bound. Declared here, beside the stop whose work it measures,
+// because every caller that stops a host as the engine does — the engine's
+// teardown, and the topologies that stop a node the engine's way
+// (internal/code/codetest) — must give it the same time.
+const StopBudget = 3 * gitproc.KillGrace
+
 // Stop refuses every new git request (503, Retry-After StoppingRetryAfter);
 // cancels every in-flight request's work — a receive-pack is killed through
 // its context, its hook's connection with it; waits for the in-flight
 // handlers, until ctx ends; closes the relay's listener, waits for its
-// connections and removes its directory; and stops the cache. Idempotent.
+// connections and removes its directory; and stops the cache. Idempotent in
+// effect: a second call waits again for whatever is still running. A caller
+// bounds ctx by [StopBudget].
 func (s *Server) Stop(ctx context.Context) {
 	s.mu.Lock()
 	s.stopped = true

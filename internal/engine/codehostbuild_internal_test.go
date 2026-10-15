@@ -493,17 +493,6 @@ func TestTheMaxTransfersDescriptionIsThePoolsDefault(t *testing.T) {
 	}
 }
 
-// THE HOST'S STOP WAITS OUT A KILLED GIT: its bound is longer than the SIGKILL
-// that follows a cancelled process's SIGTERM and the release of a pipe a
-// straggler holds.
-func TestTheCodeHostsStopOutlastsAKilledGit(t *testing.T) {
-	t.Parallel()
-	if codeHostStopBudget <= 2*gitproc.KillGrace {
-		t.Fatalf("codeHostStopBudget %v ends before a killed git's SIGKILL and pipe release (%v)",
-			codeHostStopBudget, 2*gitproc.KillGrace)
-	}
-}
-
 // THE HOST IS STOPPED ONCE, AND WAITED FOR ONE BUDGET, however many ask. The
 // teardown and the runtime's shutdown both stop it, and a host whose git work
 // outlives the bound is exactly the stop that runs the whole budget: asked
