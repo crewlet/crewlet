@@ -35,8 +35,9 @@ func seatBase(home, cache string) map[string]string {
 // other layer to name — is these names. A variable added to the isolation is
 // set and guarded by the same edit.
 //
-// A relocation variable naming one of the base variables is refused by
-// [Profile.Validate]; were one to reach here, the base value would stand.
+// A relocation variable naming one of the base variables is refused on a write
+// ([Profile.ValidateEnv]); one that reaches here anyway — a revision a newer
+// peer admitted — leaves the base value standing, so the seat stays isolated.
 func (p *Profile) SeatEnv(home, cache string) map[string]string {
 	env := seatBase(home, cache)
 	for name, rel := range p.ConfigEnv {
@@ -126,6 +127,17 @@ func (p *Profile) ValidateEnv(name string) error {
 	}
 	refuse("token_env", p.TokenEnv, "a token placed there never reaches the CLI")
 	refuse("api_key_env", p.APIKeyEnv, "a key placed there never reaches the CLI")
+	// A RELOCATION VARIABLE NAMING A BASE ONE is the same fault from the
+	// other side: [Profile.SeatEnv] keeps the base value, so the directory
+	// written here is never used and the seat stays isolated.
+	base := seatBase("", "")
+	for _, env := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
+		if _, owned := base[env]; owned {
+			bad = append(bad, fmt.Sprintf("config_env names %s, which the engine sets from "+
+				"the seat home on every call, so the relocation written here never takes "+
+				"effect: remove it", env))
+		}
+	}
 	if len(bad) == 0 {
 		return nil
 	}

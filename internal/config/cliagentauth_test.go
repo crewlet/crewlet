@@ -327,15 +327,14 @@ func TestAnotherCLIsRelocationVariableIsAnOrdinaryVariable(t *testing.T) {
 }
 
 // A RELOCATION VARIABLE IS PART OF THE ISOLATION, so it may not leave the seat
-// home — `../../shared` pointed every seat's vendor state at one directory —
-// nor give a base variable a second value. RUNNABLE, unlike the layers above:
-// the profile contradicts itself about where a seat's state lives.
+// home — `../../shared` pointed every seat's vendor state at one directory.
+// RUNNABLE, unlike the layers above: that profile would share state between
+// seats, so no node applies it.
 func TestARelocationVariableThatLeavesTheSeatHomeIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, override := range map[string]string{
 		"a climb out of the home": `config_env: {CLAUDE_CONFIG_DIR: "../../shared/.claude"}`,
 		"an absolute directory":   `config_env: {CLAUDE_CONFIG_DIR: /srv/shared/.claude}`,
-		"a base variable":         `config_env: {XDG_CONFIG_HOME: .elsewhere}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -350,4 +349,39 @@ func TestARelocationVariableThatLeavesTheSeatHomeIsRefused(t *testing.T) {
 			}
 		})
 	}
+}
+
+// AND ONE NAMING A BASE VARIABLE IS AN ADMISSION RULE, for the reason `env`
+// naming the same variable is: the engine's value wins and the seat runs
+// isolated, so the relocation is a setting that reaches nothing. Refused on a
+// write, applied with a warning — a newer peer that admitted it would
+// otherwise split the fleet's epoch.
+func TestARelocationVariableNamingABaseVariableIsAnAdmissionRule(t *testing.T) {
+	t.Parallel()
+	assertAdmissionOnly(t, cliEntry("cli: {agent: claude-code, overrides: {config_env: {XDG_CONFIG_HOME: .elsewhere}}}"),
+		"providers.llm.sub.cli.overrides")
+}
+
+// A PROFILE DECLARATION ITS CLI NEVER ACTS ON is an admission rule: usage
+// counts that are not a pair where they are read (every call estimated, which
+// the doctor reports), and a setting the profile's own mode never reads. Each
+// runs, so an apply only warns. And inert usage paths on a text profile with
+// no usage file are not refused at all, since nothing reads them.
+//
+// Mutation: drop ValidateAuthoring from validateCLIEnv, and these write clean.
+func TestAProfileDeclarationItsCLINeverReadsIsAnAdmissionRule(t *testing.T) {
+	t.Parallel()
+	for name, override := range map[string]string{
+		"one usage count":             `usage: {output: []}`,
+		"prompt_args on stdin":        `prompt_mode: stdin, prompt_args: ["--prompt"]`,
+		"an event filter on json":     `output: json, event_type_path: [type], text_events: [assistant]`,
+		"vendor-default with no note": `local_tools: vendor-default, local_tools_note: ""`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertAdmissionOnly(t, cliEntry("cli: {agent: claude-code, overrides: {"+override+"}}"),
+				"providers.llm.sub.cli.overrides")
+		})
+	}
+	mustCompany(t, cliEntry(`cli: {agent: copilot, overrides: {usage: {input: [[input_tokens]]}}}`))
 }

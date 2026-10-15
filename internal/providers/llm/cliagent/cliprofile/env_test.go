@@ -114,22 +114,54 @@ func TestNoShippedProfileNamesAVariableTheEngineSets(t *testing.T) {
 	}
 }
 
-// A relocation variable is part of the isolation, so the runnable rules keep
-// it in the seat home and off the base variables.
+// A RELOCATION VARIABLE IS PART OF THE ISOLATION, and its two rules are of two
+// classes. One whose directory leaves the seat home would put every seat's
+// vendor state in ONE place, so it is RUNNABLE and the profile does not load.
+// One naming a base variable runs isolated — [Profile.SeatEnv] keeps the base
+// value — so it is an ADMISSION rule: the profile loads, the seat's
+// environment holds the base value, and [Profile.ValidateEnv] refuses it on a
+// write, as it refuses `env` naming the same variable.
+//
+// Mutation: refuse a base variable in Validate again, and its cases fail to
+// load; drop the config_env loop from ValidateEnv, and they are not refused.
 func TestARelocationVariableMustStayInTheSeatHome(t *testing.T) {
 	t.Parallel()
 	for name, configEnv := range map[string]map[string]any{
-		"a climb":            {"CLAUDE_CONFIG_DIR": "../../shared"},
-		"an absolute path":   {"CLAUDE_CONFIG_DIR": "/srv/shared"},
-		"HOME":               {"HOME": ".home"},
-		"an XDG directory":   {"XDG_DATA_HOME": ".data"},
-		"the temp directory": {"TMPDIR": ".tmp"},
+		"a climb":          {"CLAUDE_CONFIG_DIR": "../../shared"},
+		"an absolute path": {"CLAUDE_CONFIG_DIR": "/srv/shared"},
 	} {
 		if _, err := Load("claude-code", map[string]any{"config_env": configEnv}); err == nil {
 			t.Errorf("%s: config_env %v loaded", name, configEnv)
 		}
 	}
+	for name, env := range map[string]string{
+		"HOME": "HOME", "an XDG directory": "XDG_DATA_HOME", "the temp directory": "TMPDIR",
+	} {
+		p, err := Load("claude-code", map[string]any{"config_env": map[string]any{env: ".moved"}})
+		if err != nil {
+			t.Errorf("%s: a profile that runs isolated did not load: %v", name, err)
+			continue
+		}
+		if got, want := p.SeatEnv("/h", "/c")[env], seatBase("/h", "/c")[env]; got != want {
+			t.Errorf("%s: the seat's %s is %q, want the base value %q", name, env, got, want)
+		}
+		if err := p.ValidateEnv("claude-code"); err == nil || !strings.Contains(err.Error(), "config_env names "+env) {
+			t.Errorf("%s: ValidateEnv = %v, want the relocation refused on a write", name, err)
+		}
+	}
 	if _, err := Load("claude-code", map[string]any{"config_env": map[string]any{"VENDOR_DIR": "nested/dir"}}); err != nil {
 		t.Errorf("a relocation inside the home was refused: %v", err)
+	}
+}
+
+// No shipped profile breaks an authoring rule either: the table is held to the
+// rules an operator's override is.
+func TestNoShippedProfileDeclaresWhatItsCLINeverReads(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		if err := p.ValidateAuthoring(name); err != nil {
+			t.Error(err)
+		}
 	}
 }

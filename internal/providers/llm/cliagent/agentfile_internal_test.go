@@ -105,7 +105,8 @@ func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 
 // A profile that has no `{file}` channel has nothing to write the envelope
 // to, so the template would silently configure nothing while the seat's
-// identity went to argv bare.
+// identity went to argv bare. It runs — the template is inert — so it loads
+// and a write is refused (cliprofile.Profile.ValidateAuthoring).
 func TestASystemPromptTemplateWithoutAFileChannelIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, overrides := range map[string]map[string]any{
@@ -120,9 +121,13 @@ func TestASystemPromptTemplateWithoutAFileChannelIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := cliprofile.Load("claude-code", overrides); err == nil ||
+			p, err := cliprofile.Load("claude-code", overrides)
+			if err != nil {
+				t.Fatalf("a profile that runs did not load: %v", err)
+			}
+			if err := p.ValidateAuthoring("claude-code"); err == nil ||
 				!strings.Contains(err.Error(), "system_prompt_file") {
-				t.Fatalf("err = %v, want a refusal naming system_prompt_file", err)
+				t.Fatalf("err = %v, want a write refused naming system_prompt_file", err)
 			}
 		})
 	}

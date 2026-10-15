@@ -166,11 +166,10 @@ func TestAUsageFileWithNothingToSubstituteOrNothingToReadIsRefused(t *testing.T)
 				"usage_file_args": []any{"--usage-file", "{usage_file}"},
 				"usage":           map[string]any{},
 			},
-			// The stricter rule this now falls under — both prompt
-			// counts or none — is covered case by case in
-			// markerscope_internal_test.go; declaring none at all is
-			// still the plainest way to write a report nothing reads.
-			want: "usage.input and usage.output",
+			// An ADMISSION rule (ValidateAuthoring): the profile runs,
+			// estimated, so it loads and a write is refused. Each count
+			// alone is covered in markerscope_internal_test.go.
+			want: "neither usage.input nor usage.output",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -181,7 +180,13 @@ func TestAUsageFileWithNothingToSubstituteOrNothingToReadIsRefused(t *testing.T)
 			if name == "no placeholder" {
 				base = "claude-code"
 			}
-			_, err := cliprofile.Load(base, tc.overrides)
+			p, err := cliprofile.Load(base, tc.overrides)
+			if name == "no usage paths" {
+				if err != nil {
+					t.Fatalf("a profile that runs, estimated, did not load: %v", err)
+				}
+				err = p.ValidateAuthoring(base)
+			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want a refusal naming %q", err, tc.want)
 			}
