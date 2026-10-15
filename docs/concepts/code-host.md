@@ -486,9 +486,15 @@ repository past what the node can give it is indexed without one.
 pack for every object. So once a repository's packs have stood still for ten
 seconds — or the oldest has waited ten minutes, for one pushed to without pause
 — a git node writes it a multi-pack index with a bitmap, and a commit-graph, so
-a clone counts its objects from the bitmap rather than walking the history; and
-writes them again once 64 more packs have gathered beside them, at most every
-ten minutes and at most a tenth of a core's time for any one repository. A
+a clone counts its objects from the bitmap rather than walking the history. The
+bitmap carries git's lookup table, so a request that opens it reads only the
+bitmaps it needs rather than every commit's: over a gigabyte, the pack-objects
+run that answers a blobless clone's lazy fetch of one blob takes 5.0 ms with
+the table and 6.2 without, and the one that answers a fetch of one new commit
+8.2 ms rather than 9.0 — the git process alone, which is part of what such a
+request costs beside its exchange, its sync and its checks. The node writes
+them again once 64 more packs have gathered beside them, at most every ten
+minutes and at most a tenth of a core's time for any one repository. A
 run, on one core, takes 16 to 30 seconds a gigabyte of packs, more a gigabyte
 the larger the repository. Runs take at most half the node's cores, one each,
 in a slot that is free or not at all, so they never make a push or a fetch

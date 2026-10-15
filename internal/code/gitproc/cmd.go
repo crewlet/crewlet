@@ -212,10 +212,14 @@ var baseKeys = []KV{
 // two siblings) — a denylist leaks whichever nobody named. A key a call site
 // needs is added here in the commit that adds the call site.
 var allowedConfig = map[string]string{
-	"core.multipackindex":    "the cache's serve configuration and its maintainer",
-	"pack.allowpackreuse":    "the cache's serve configuration, valued Pool.PackReuse",
-	"pack.windowmemory":      "the cache's serve configuration",
-	"pack.usebitmaps":        "the cache's serve configuration",
+	"core.multipackindex": "the cache's serve configuration and its maintainer",
+	"pack.allowpackreuse": "the cache's serve configuration, valued Pool.PackReuse",
+	"pack.windowmemory":   "the cache's serve configuration",
+	"pack.usebitmaps":     "the cache's serve configuration",
+	// Read only by a bitmap write (the maintainer's multi-pack-index), so
+	// it rides the serve configuration and changes no other process.
+	"pack.writebitmaplookuptable": "the maintainer's bitmap write: a table of its commits, so a reader loads " +
+		"only the bitmaps it asks for (git 2.38)",
 	"uploadpack.allowfilter": "the cache's serve configuration",
 	// Which partial-clone filters upload-pack serves. A subsection — the
 	// filter's name — is the one part of a key git reads case-sensitively, so

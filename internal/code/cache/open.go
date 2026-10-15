@@ -48,6 +48,12 @@ type Cache struct {
 	// the suite can lower them rather than push dozens of packs a case
 	// (knobs.roundPacks, knobs.midxPacks).
 	roundPacks, midxPacks int
+	// noLookupTable is BenchmarkMidx's arm WITHOUT the bitmap's lookup
+	// table (ServeConfig), the figure the table is weighed against — set
+	// only by the suite (export_test.go), so its zero value, the table
+	// written, is every node's. An atomic, since the maintainer reads the
+	// serve configuration on its own goroutine.
+	noLookupTable atomic.Bool
 	// tmpBytes is what tmp/ holds for the cache's own work: downloads in
 	// flight, until each file is renamed into place or removed, and the
 	// pushed packs adoptions staged for a round or a listing to install
