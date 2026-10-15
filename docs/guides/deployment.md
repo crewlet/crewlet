@@ -110,9 +110,10 @@ for — so:
   of the last two is derived from the disk at all, because the identity log
   grows with headcount and the usage log's size is a count of node-days rather
   than a rate, so more disk buys either nothing. They are scaled down together
-  whenever they ask for more than half the free space, which on a first boot
-  is every volume with less than about 290 GiB free (at their clamps the five
-  ask for about 145 GiB); from there up each log gets what it asked for.
+  whenever they ask for more than that half — half of three quarters, so three
+  eighths of the free space — which on a first boot is every volume with less
+  than about 388 GiB free (at their clamps the five ask for 145.5 GiB, three
+  eighths of 388); from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
