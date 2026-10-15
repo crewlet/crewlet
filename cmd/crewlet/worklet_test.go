@@ -116,7 +116,7 @@ func (n *fakePurgeNode) set(change func(*fakePurgeNode)) {
 // resurrecting anything — and no CLI verb, no route and no tool reached it. A
 // company could not destroy a task under any circumstances: an erasure request
 // had no mechanism, and a credential pasted into a task body stayed in the
-// durable rows of every node for ever.
+// durable rows of every data node for ever.
 func TestWorkletPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
@@ -279,7 +279,7 @@ func TestEveryPurgeThatNamesItsOperationIsRetriedUnderIt(t *testing.T) {
 }
 
 // `pending` IS NOT A FAILURE AND MUST NOT BE RETRIED: the record is on the log
-// and every node applies it as it reaches it. The node says so with a 202,
+// and every data node applies it as it reaches it. The node says so with a 202,
 // which the command used to read as an error — the ordinary next move after
 // which is running it again.
 func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {

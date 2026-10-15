@@ -882,7 +882,7 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 		// difference between a node that has stopped writing and one
 		// that is about to.
 		fmt.Fprintln(stdout, "  A pending log holds the record durably and this node "+
-			"has not applied it yet: the gate takes effect as each node reaches it.")
+			"has not applied it yet: the gate takes effect as each data node reaches it.")
 	}
 	if !answer.Complete {
 		// NOT A FAILURE TO RETRY BLINDLY: the logs that answered hold
