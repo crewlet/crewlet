@@ -270,6 +270,29 @@ func wireAPI(
 		operators.EndListens()
 		srv.Close()
 	})
+
+	// AND THE RECONCILE LOOP, as `crewlet run` starts it once the node is
+	// serving: what applies a configuration write. Without it a PUT /config
+	// stored a revision and moved the fleet's pointer, and no node here —
+	// the one that took the write included — ever applied it, so a harness
+	// node was one whose company no write could change. With no pointer
+	// published, which is every case here that writes no configuration, a
+	// tick reads the pointer, finds none and changes nothing.
+	//
+	// STOPPED FIRST, before the listener (a teardown runs in reverse), as
+	// the signal that ends `crewlet run` ends the loop before its drain:
+	// an apply racing the engine's stop would be work with nowhere to go.
+	// The goroutine is waited for, so nothing it started outlives the stop.
+	loopCtx, endLoop := context.WithCancel(ctx)
+	looped := make(chan struct{})
+	go func() {
+		defer close(looped)
+		reconciler.Run(loopCtx)
+	}()
+	stops = append(stops, func() {
+		endLoop()
+		<-looped
+	})
 	return app, srv, stops, nil
 }
 
