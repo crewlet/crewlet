@@ -143,10 +143,12 @@ func (m *metered) Read(p []byte) (int, error) {
 // # Every read is bounded twice
 //
 // The whole read runs under [ReadBudget] — or ctx's own deadline, where that
-// is sooner — and each Read of the backend under [ReadStall]: a Read that
-// waits longer cancels the stream, so a broker that lost the object's pieces
-// or a connection that went away ends the read in a minute rather than at the
-// end of a budget that may be hours long.
+// is sooner — and every wait on the backend under [ReadStall]: the backend's
+// open of the stream ([Store.begin]) and each Read of it after. A wait that
+// lasts longer cancels the read, so a broker that lost the object's pieces, a
+// connection that went away or a bucket that keeps failing the request a read
+// begins with ends the read in a minute rather than at the end of a budget
+// that may be hours long.
 //
 // A missing object is [ErrNotFound] here, before the first byte.
 func (s *Store) Open(ctx context.Context, o Object) (io.ReadCloser, error) {
@@ -154,7 +156,7 @@ func (s *Store) Open(ctx context.Context, o Object) (io.ReadCloser, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, ReadBudget(o.Size))
-	body, err := s.backend.Get(ctx, o.Key.Name(), 0, -1)
+	body, err := s.begin(ctx, cancel, o, 0, -1)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("objstore: open %s: %w", o.Key, err)
@@ -254,6 +256,39 @@ func (v *verifier) tail() error {
 // Close ends the read, the backend's stream with it.
 func (v *verifier) Close() error { return v.body.Close() }
 
+// begin asks the backend for n bytes of o from off — to the end where n is
+// negative — under the stall watchdog: a backend that has handed back no
+// stream within [ReadStall] has the read's context cancelled (cancel), and the
+// read fails as stalled, as a Read that waits as long does ([watched]).
+//
+// THE OPEN IS A WAIT ON THE BACKEND LIKE ANY READ, and the longest one: a
+// backend looks the object up and asks for its first bytes before it hands a
+// stream back — S3's first range is a request answered before Get returns,
+// the broker's a leader's read of its metadata and its consumer's first
+// message — and none of that is a Read for [watched] to time. Unwatched, an
+// open the backend kept failing and asking again — a gateway answering one
+// object with a server error every time, a bucket refusing connections, a
+// throttle that never lifts — held its read, and the node's slot it was read
+// in, until the read's whole budget had passed: two minutes for a small file,
+// hours for a pack bundle near its ceiling. Watched, it ends where a read that
+// heard nothing for as long would, and one the backend merely slowed, and that
+// begins inside the stall, is read as ever.
+func (s *Store) begin(ctx context.Context, cancel context.CancelFunc, o Object, off, n int64) (io.ReadCloser, error) {
+	timer := time.AfterFunc(s.stall, cancel)
+	body, err := s.backend.Get(ctx, o.Key.Name(), off, n)
+	if timer.Stop() {
+		return body, err
+	}
+	// THE WATCHDOG FIRED, whatever the backend then answered: the read's
+	// context is cancelled, so a stream it handed back as the watchdog
+	// fired would fail at its first Read — and the open is what stalled.
+	if err == nil {
+		_ = body.Close()
+		err = context.Cause(ctx)
+	}
+	return nil, fmt.Errorf("stalled: the backend began no stream for %v: %w", s.stall, err)
+}
+
 // watched is a backend's stream under the stall watchdog: a Read that waits
 // longer than [ReadStall] cancels ctx — which every backend's stream answers
 // by ending ([Backend.Get]) — and fails as stalled.
@@ -311,9 +346,10 @@ func (w *watched) Close() error {
 // final page is the one read that can see the object's end; a page of the
 // right length is whatever the backend holds there. It is what a tool reading a
 // page into a model's context takes, where reading the whole object to check
-// one page would be the wrong price. Bounded as [Store.Open] is, by the
-// budget of every byte up to the page's end, because a backend with no ranged
-// read (the broker's) walks the object to the offset.
+// one page would be the wrong price. Bounded as [Store.Open] is — the stall
+// watching its open and its Reads — by the budget of every byte up to the
+// page's end, because a backend with no ranged read (the broker's) walks the
+// object to the offset, reading its messages' headers alone inside the open.
 func (s *Store) ReadAt(ctx context.Context, o Object, off, n int64) ([]byte, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
@@ -338,7 +374,7 @@ func (s *Store) ReadAt(ctx context.Context, o Object, off, n int64) ([]byte, err
 		ask++
 	}
 	ctx, cancel := context.WithTimeout(ctx, ReadBudget(off+ask))
-	body, err := s.backend.Get(ctx, o.Key.Name(), off, ask)
+	body, err := s.begin(ctx, cancel, o, off, ask)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("objstore: read %s: %w", o.Key, err)
