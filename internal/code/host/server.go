@@ -154,6 +154,11 @@ type Server struct {
 	// requestMemory is RequestMemoryBytes, a field so the suite can reach
 	// the spool without megabytes of fixtures (export_test.go).
 	requestMemory int
+
+	// checkProposal is code.Proposal.ValidateUnstored, the receiver's own
+	// check of a proposal before its bundle is stored — a field so the suite
+	// can stand in a receiver's bug, which no push reaches (export_test.go).
+	checkProposal func(code.Proposal) error
 }
 
 // New builds a Server, refusing every required field missing, by name, in one
@@ -183,7 +188,8 @@ func New(o Options) (*Server, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: %s missing or zero", ErrOptions, strings.Join(missing, ", "))
 	}
-	s := &Server{o: o, log: o.Logger, now: o.Now, requestMemory: RequestMemoryBytes}
+	s := &Server{o: o, log: o.Logger, now: o.Now, requestMemory: RequestMemoryBytes,
+		checkProposal: code.Proposal.ValidateUnstored}
 	if s.log == nil {
 		s.log = logging.Get("code.host")
 	}

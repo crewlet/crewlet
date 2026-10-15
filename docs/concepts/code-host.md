@@ -286,6 +286,15 @@ may hold — is read off the **deciding node's current revision** at every
 decision, so a change holds from its activation with no restart. A repository
 also holds at most 100 000 refs, and a push moves at most 1 000 of them.
 
+A push's ref updates must also fit the one record its committer writes for
+it: about 1 MiB of them, as the code log spells them. A thousand plain refs of
+the longest, 255 bytes, take under half of that. A ref whose characters the
+log spells in six bytes each (`&`, `<`, `>`) costs up to six times its
+length, so a push of some six hundred such refs of the longest reaches the
+bound first. The receiving node measures a push's ref updates as it reads
+them, with everything the rest of the push could add at its largest, and
+refuses one past the bound before anything of it is run or stored.
+
 ---
 
 ## Retention and history
@@ -295,7 +304,12 @@ repository, never by a sweep:
 
 - **Push history** — a push row is kept **181 days**, the same horizon as the
   company's [usage history](../guides/retention.md), so "what happened over
-  the last half year" has one answer across the engine.
+  the last half year" has one answer across the engine. A row names every
+  ref its push named, refused ones too. A ref the engine refused for being
+  longer than 255 bytes, or for not being UTF-8, is kept as much of it as
+  fits in 255 bytes beside its length and a digest of the whole
+  (`refs/heads/x… [60013 bytes, sha256 <32 hex>]`), so a ref nothing can ever
+  name costs every node's history no more than one that could.
 - **Ref tombstones** — a deleted ref is kept as a tombstone for **48 hours**,
   so a node bringing a repository up to date learns of the deletion.
 - **A purge** — below.
@@ -673,6 +687,17 @@ objects are, so the hook checks them — and refuses the push before uploading
 anything. Only a push that passes every check is uploaded, as **one** object:
 its pack with the indexes the receiving git wrote.
 
+**The commands are read as receive-pack reads them.** Every check before
+receive-pack runs is a check of the ref updates the engine read from the
+request, and receive-pack moves the ones *it* read — so the engine reads them
+by git's own rules: an object id in either case, the capabilities whichever
+line asks for them, every ref to the end of its line, and the commands up to
+the packet that ends them. A client built by hand that writes its ids in
+capitals is held to every check git's own client is. A **push certificate** —
+a signed push — is refused before anything runs: the engine never advertises
+one, so `git push --signed` stops in git itself, but receive-pack acts on the
+ref updates a certificate names whatever it advertised.
+
 **An `ok` means the row applied.** The committer answers with the push's row
 once its record has been applied. A record that is durable on the log but not
 yet applied on the node that answered is **pending**: the host reads the
@@ -752,6 +777,8 @@ words, since git does not read the header.
 | The repository is archived (a push) | `fatal: remote error: …archived…`, or `(repo_archived: …)` per ref | Fetch only; unarchive it in `code.repos` to push. |
 | A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …` | Push with your own token — the one your human seat's `contact.crewlet_operator_id` names. |
 | More than 1 000 refs in one push | `(this push names more than 1000 refs; push them in parts …)` | Push the refs in groups. |
+| More ref updates than one push's record holds — some six hundred of the longest refs whose characters the code log spells long (`&`, `<`, `>`) | `(this push's ref updates take up to <size> of its record, past the 1023.5 KiB one push may; push them in parts …)` | Push the refs in groups. Nothing of the push was run or stored. |
+| A push carries a push certificate — a signed push, from a client built by hand (`git push --signed` stops in git itself, since the engine advertises none) | `this push carries a push certificate (a signed push), which this engine never advertises and does not take: push without --signed` (400) | Push without `--signed`. Nothing of the push was run or stored. |
 | A ref moved since you fetched | `(stale: refs/heads/main is at <id>; fetch first)`, or `(stale: was at <id>, which this repository does not hold; fetch first)` when the commit you pushed from was never pushed here | Fetch, integrate, push again. |
 | A protection refused it | `(protected_force: refuses a force-push (protection <pattern>: allow_force))`, and `protected_delete` and `protected_direct` likewise | The rule named says what it allows. |
 | A tag moved, a reserved ref | `(tag_moved: …)`, `(reserved_ref: …)` | Create a new tag; push under `refs/heads/` or `refs/tags/`. |
@@ -775,7 +802,7 @@ words, since git does not read the header.
 | A fetch request past its repository's bound | `this fetch request is larger than any repository <name> holds could need …` (413) | Fetch in parts. |
 | A fetch request past a quarter of the node's room for large requests | `this fetch request is larger than this node takes from one credential at once …` (413) | Fetch through a node with more cores and the memory to back them (its git transfer slots size the room), or fewer objects at once. |
 | The node's room for large requests is in use | `this node's room for large fetch requests is in use …` (503) | Retry, or against another node. |
-| The request's body could not be read (a gzip stream that fails its checksum; for a fetch, a body cut short too) | `the push's body could not be read: …`, or `the request body could not be read: …` for a fetch (400) | Nothing was stored; send it again, and if it fails the same way the client is sending a broken stream. |
+| The request's body could not be read (a gzip stream that fails its checksum; for a fetch, a body cut short too) | `the push's body could not be read: …`, or `the push's command list could not be read: …` when it failed before the pack or was not pkt-lines at all, or `the request body could not be read: …` for a fetch (400) | Nothing was stored; send it again, and if it fails the same way the client is sending a broken stream. |
 
 **What to watch.** `crewlet.code.push.duration` by `outcome` (`pending`
 growing is a code log slow to apply here; `unknown`, a committer that stopped
@@ -811,7 +838,7 @@ reference](../reference/metrics.md)).
 | `code_git_abandoned` | `DEBUG` | A git request ended because its client hung up (`by`: `client`), answered nothing, or because the node is stopping (`by`: `stop`), answered 503 — never the code log failing. A push abandoned after its proposal is recorded as its session concluded it (`unknown`, `applied`). |
 | `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-git-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
 | `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A git request failed because a downloaded bundle is not the one its row describes — the cache logs that line too, once for the sync (below) — or the rows cannot be read into a cache: an operator's problem, answered 503. |
-| `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal the committer refused: a bug, and the push fails. Its bundle was already stored; no row names it, and the object collector removes it after its grace. |
+| `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal its own check or its committer refused: a bug, and the push fails. A proposal is checked as soon as the commits it introduces are listed, and its bundle's upload is ended there; a bundle already stored is named by no row, and the object collector removes it after its grace. A push past what one push may carry is never this: it is refused before its work, in git's words. |
 | `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
 | `code_push_blob_path` | `WARN` | The path of a blob over the limit could not be found; the refusal names the blob without it. |
 | `code_hook_accept_failed` | `WARN` | The hook socket failed to accept a connection; it goes on accepting. |

@@ -126,8 +126,8 @@ import (
 // holds at most CommitterNodeBytes of proposals across every repository, from
 // each one's queueing to its caller's answer: a node commits for every
 // repository rendezvous ranks it first for, and per-repository bounds alone
-// let a thousand of the largest pushes from as many repositories hold over
-// 400 MiB of entries, and as much again decoded.
+// let a thousand of the largest pushes from as many repositories hold about a
+// gibibyte of entries (EntryRoom each), and as much again decoded.
 
 // CommitterOptions configure a committer.
 type CommitterOptions struct {

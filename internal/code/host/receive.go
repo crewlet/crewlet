@@ -59,6 +59,12 @@ func receiveConfig(l code.Limits) []gitproc.KV {
 // engine refused before receive-pack ran.
 const refusedNote = "refused before anything was stored"
 
+// pushCertificateSentence answers a push that carries a push certificate
+// (errPushCertificate) — sent only by a client built by hand, since git's own
+// stops `git push --signed` itself when the server advertises no push-cert.
+const pushCertificateSentence = "this push carries a push certificate (a signed push), which this engine " +
+	"never advertises and does not take: push without --signed"
+
 func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
 	if r.Header.Get("Content-Type") != "application/x-git-receive-pack-request" {
@@ -115,8 +121,24 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 			return "", words
 		}))
 		return
+	case errors.Is(err, errPushCertificate):
+		drain(body, drainLimit)
+		auth.GitText(w, http.StatusBadRequest, pushCertificateSentence)
+		s.audit(ctx, adm, pushRecord{outcome: types.AuditRefused, refusal: RefusalCommands, commands: len(sec.Commands),
+			started: start})
+		return
 	case err != nil:
+		// A COMMAND LIST THAT COULD NOT BE READ is a push all the same, and
+		// recorded like every other: refused for its commands when its bytes
+		// are not pkt-lines — the client's to fix, as git's own unpack error
+		// over a pack that is not one is — and failed when the body itself
+		// failed (cut short, not gzip, too slow), as it is past the section.
+		rec := pushRecord{outcome: types.AuditFailed, commands: len(sec.Commands), started: start}
+		if errors.Is(err, errMalformed) {
+			rec.outcome, rec.refusal = types.AuditRefused, RefusalCommands
+		}
 		auth.GitText(w, http.StatusBadRequest, "the push's command list could not be read: "+sentence(err.Error()))
+		s.audit(ctx, adm, rec)
 		return
 	case sec.Empty():
 		// GIT'S PROBE before a push past its post buffer: a 200 and nothing
@@ -141,6 +163,17 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.refusedEvery(sec, pre, refuseAll) {
+		return
+	}
+	// WHAT ONE PUSH MAY CARRY, before any work is spent on it: the commands
+	// as they will be proposed, with everything the work may add at its
+	// largest (code.Proposal.ValidateCommands). Past it, a push was refused by
+	// its committer after receive-pack, the scans, the bundle's put and the
+	// estate's round trip — as the engine refusing its own proposal.
+	if words := commandsRefusal(adm, s.o.NodeID, sec, pre); words != "" {
+		refuseAll(RefusalCommands, refuseWith(sec.Commands, func(parsedCommand) (code.Refusal, string) {
+			return "", words
+		}))
 		return
 	}
 	if ferr := s.fault(ctx, codefault.HostAfterCommands, 0); ferr != nil {
@@ -203,7 +236,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	sess := newSession(work, cancel)
 	sess.repo, sess.synced, sess.scratch, sess.pushID = synced.Repo, synced, scratch, pushID
 	sess.principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: adm.operatorID, Seat: adm.seat}
-	sess.receivedAt, sess.preRefused, sess.caps = s.now(), pre, sec.Caps
+	sess.receivedAt, sess.preRefused = s.now(), pre
 	sess.rules, sess.judged = rules, judged
 	s.relay.open(sess)
 

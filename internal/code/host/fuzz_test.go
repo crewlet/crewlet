@@ -5,10 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitref"
 )
@@ -92,6 +94,48 @@ func FuzzProcReceive(f *testing.F) {
 			if !gitref.ValidOID(c.Old) || !gitref.ValidOID(c.New) || c.Ref == "" {
 				t.Fatalf("an accepted command %+v", c)
 			}
+		}
+	})
+}
+
+// FuzzCommandSection: a push's command section as the receiver reads it,
+// before anything checks it. Never a panic; what was read is a prefix of what
+// was sent and reads again to the same section — the bytes receive-pack is
+// handed are the bytes the commands were read from — and every command holds
+// two ids in their one spelling and a ref with no NUL, whatever case the
+// client wrote them in. The seeds are git's own shapes (its first command's
+// capabilities, a shallow line) and the ones receive-pack reads beyond them.
+func FuzzCommandSection(f *testing.F) {
+	upper := strings.ToUpper(oidB)
+	f.Add([]byte(string(pktString(gitref.ZeroOID+" "+oidB+" refs/heads/main\x00report-status-v2 side-band-64k "+
+		"quiet object-format=sha1 agent=git/2.43.0\n")) + flushPkt))
+	f.Add([]byte(string(pktString("shallow "+oidA+"\n")) + string(pktString(oidA+" "+oidB+" refs/heads/x\n")) +
+		flushPkt))
+	f.Add([]byte(string(pktString(gitref.ZeroOID+" "+upper+" refs/heads/x\n")) +
+		string(pktString(gitref.ZeroOID+" "+oidB+" \x00report-status atomic\n")) + delimPkt))
+	f.Add([]byte(string(pktString("push-cert\x00report-status\n")) + string(pktString("certificate version 0.1\n")) +
+		flushPkt))
+	f.Add([]byte(flushPkt))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		s, err := readCommands(readerOf(raw), MaxCommandSectionBytes, code.MaxCommandsPerPush)
+		if !bytes.HasPrefix(raw, s.Raw) {
+			t.Fatalf("the section read %q, not a prefix of %q", s.Raw, raw)
+		}
+		for _, c := range s.Commands {
+			if !gitref.ValidOID(c.Old) || !gitref.ValidOID(c.New) || strings.ContainsRune(c.Ref, 0) {
+				t.Fatalf("a command read as %+v", c)
+			}
+		}
+		if err != nil {
+			return
+		}
+		again, err := readCommands(readerOf(s.Raw), MaxCommandSectionBytes, code.MaxCommandsPerPush)
+		if err != nil || !bytes.Equal(again.Raw, s.Raw) || !slices.Equal(again.Commands, s.Commands) ||
+			again.Caps != s.Caps {
+			t.Fatalf("the section's own bytes read again as %+v (%v), not %+v", again, err, s)
+		}
+		if s.Empty() != (string(s.Raw) == flushPkt) {
+			t.Fatalf("a section of %q read as empty: %v", s.Raw, s.Empty())
 		}
 	})
 }

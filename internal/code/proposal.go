@@ -3,14 +3,17 @@ package code
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -138,13 +141,155 @@ func (p Proposal) measure() (int, error) {
 	switch {
 	case err != nil:
 		return 0, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
-	case bound > MaxRecordBytes-recordOverheadBytes:
-		return 0, fmt.Errorf("%w: commands: the push's entry can reach %d bytes in its record, "+
-			"past the %d one entry may take (MaxRecordBytes less a record's own overhead) — "+
-			"a push this wide is pushed in parts", ErrInvalidProposal, bound,
-			MaxRecordBytes-recordOverheadBytes)
+	case bound > EntryRoom:
+		return 0, &TooWideError{Bytes: bound, Room: EntryRoom}
 	}
 	return bound, nil
+}
+
+// EntryRoom is the most bytes ONE push's entry may take in its record:
+// [MaxRecordBytes] less a record's own overhead, so a push alone in its
+// record always fits it.
+const EntryRoom = MaxRecordBytes - recordOverheadBytes
+
+// ValidateCommands holds a push's COMMANDS to what one push may carry, BEFORE
+// ITS WORK: every rule [Proposal.Validate] holds a proposal's commands to —
+// at least one and at most [MaxCommandsPerPush], each ref in its
+// [RecordedRef] form and named once, two ids that differ, undecided or
+// refused under a code a record carries — and the push's entry to
+// [EntryRoom] with everything the work may yet add at its largest
+// ([Proposal.completed]): every command forced and decided, a pack, the most
+// introduced ids a row lists, the push's id and the receive instant at their
+// longest spellings, and the push --atomic. p is the proposal as the receiver
+// holds it once it has read the client's commands, before receive-pack runs:
+// its principal, its node and its commands, with the receiver's refusals that
+// need no object; every other field is ignored.
+//
+// WHAT IT REFUSES IS THE CLIENT'S PUSH, never the receiver's bug: the client
+// chose the commands, and every other field is taken at its largest. A push
+// that passes here passes [Proposal.Validate]'s budget whatever its work
+// adds, so a push too wide for its record is refused before receive-pack, the
+// object-store put and the estate's round trip are spent on it — where it was
+// once refused by its committer, with the receiver's own proposal, after all
+// three. Plain refs fit easily: [MaxCommandsPerPush] commands at
+// [MaxRefNameBytes] take under half the room. What reaches it is a ref JSON
+// spells long — `&`, `<` and `>` six bytes each, U+2028 and U+2029 two bytes
+// for each of their three — of which some six hundred refs of the longest are
+// enough.
+func (p Proposal) ValidateCommands() error {
+	switch {
+	case len(p.Commands) == 0:
+		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
+	case len(p.Commands) > MaxCommandsPerPush:
+		return fmt.Errorf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
+			ErrInvalidProposal, len(p.Commands), MaxCommandsPerPush)
+	}
+	if err := validCommands(p.Commands); err != nil {
+		return err
+	}
+	bound, err := entryBound(p.completed())
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+	}
+	// THE INTRODUCED IDS AT THEIR MOST ARE ADDED, NOT ENCODED: JSON spells
+	// an object's members one after another, so what they add to an entry is
+	// the same bytes whatever else it holds — and encoding the thousand ids
+	// for every push read cost each one 50 KB and a tenth of a millisecond
+	// to learn one number.
+	if bound += introducedShare(); bound > EntryRoom {
+		return &TooWideError{Bytes: bound, Room: EntryRoom}
+	}
+	return nil
+}
+
+// completed is p with everything a push's work may add to its entry at its
+// largest but the introduced ids ([introducedShare]), for
+// [Proposal.ValidateCommands]: each command forced and refused by the receiver
+// under the longest code a record carries — what the hook's checks (stale, a
+// blob, a protection) write into the proposal, beside which [entryBound] still
+// adds [commandResultBound] for the committer's decision — a pack whose every
+// field is spelled at its longest, the push id and the receive instant at
+// their longest spellings, and the push --atomic.
+func (p Proposal) completed() Proposal {
+	w := p
+	w.PushID, w.Atomic = largestEntry().PushID, true
+	w.ReceivedAt = largestEntry().ReceivedAt
+	w.Commands = make([]Command, len(p.Commands))
+	for i, c := range p.Commands {
+		c.Forced, c.Result, c.Reason = true, ResultNG, longestRecorded()
+		w.Commands[i] = c
+	}
+	w.Pack, w.Introduced, w.IntroducedCount = largestEntry().Pack, nil, 0
+	return w
+}
+
+// introducedShare is what [MaxIntroduced] commit ids and the largest count add
+// to a push entry's encoding: the same bytes whatever else the entry holds.
+var introducedShare = sync.OnceValue(func() int {
+	ids := make([]string, MaxIntroduced)
+	for i := range ids {
+		ids[i] = strings.Repeat("f", 40)
+	}
+	with, err := json.Marshal(PushEntry{Introduced: ids, IntroducedCount: math.MaxInt})
+	if err != nil {
+		panic("code: encode the most introduced ids: " + err.Error())
+	}
+	without, err := json.Marshal(PushEntry{})
+	if err != nil {
+		panic("code: encode an empty entry: " + err.Error())
+	}
+	return len(with) - len(without)
+})
+
+// longestRecorded is the longest code a record's command may carry.
+var longestRecorded = sync.OnceValue(func() Refusal {
+	var longest Refusal
+	for _, r := range Refusals() {
+		if r.Recorded() && len(r) > len(longest) {
+			longest = r
+		}
+	}
+	return longest
+})
+
+// largestEntry is the fields of a push entry the receiver's work fills in but
+// the introduced ids, at their longest spellings: a UUIDv7 push id, an instant
+// with nine fractional digits in a zone of its own, and a pack whose numbers
+// are each the widest an int64 spells.
+var largestEntry = sync.OnceValue(func() PushEntry {
+	key, err := objstore.ParseKey("01ffffff-ffff-7fff-bfff-ffffffffffff")
+	if err != nil {
+		panic("code: the largest object key: " + err.Error())
+	}
+	return PushEntry{
+		PushID:     "01ffffff-ffff-7fff-bfff-ffffffffffff",
+		ReceivedAt: time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", -(23*3600+59*60))),
+		Pack: &PackRef{PackID: "01ffffff-ffff-7fff-bfff-ffffffffffff", Object: key,
+			Hash: objstore.Hash(strings.Repeat("f", 64)), Size: math.MaxInt64, IndexBytes: math.MaxInt64,
+			ReverseBytes: math.MaxInt64, GitChecksum: strings.Repeat("f", 40), Objects: math.MaxInt64},
+	}
+})
+
+// ValidateUnstored is [Proposal.Validate] of a proposal whose pack is not yet
+// STORED — its sizes, its object count and its checksum known from the push's
+// own files, its object's key and digest not until the put returns: the pack
+// is measured and checked as it will be once stored, a key and a digest
+// having one spelling's length each. So the receiver holds its proposal to
+// every rule the committer will, once the commits the push introduces are
+// listed and while its bundle is still uploading, and stops the upload of a
+// push no committer could take rather than store a bundle no row will name.
+// A pack already stored is refused: Validate is the check of that.
+func (p Proposal) ValidateUnstored() error {
+	if p.Pack != nil {
+		if !p.Pack.Object.IsZero() || p.Pack.Hash != "" {
+			return fmt.Errorf("%w: pack: already stored as %s — Validate checks a stored pack",
+				ErrInvalidProposal, p.Pack.Object)
+		}
+		pack := *p.Pack
+		pack.Object, pack.Hash = largestEntry().Pack.Object, largestEntry().Pack.Hash
+		p.Pack = &pack
+	}
+	return p.Validate()
 }
 
 // validFields is every rule of [Proposal.Validate] but the record budget.
@@ -214,6 +359,10 @@ func validCommands(cmds []Command) error {
 	seen := make(map[string]bool, len(cmds))
 	for i, c := range cmds {
 		switch {
+		case RecordedRef(c.Ref) != c.Ref:
+			return fmt.Errorf("%w: commands[%d].ref: %d bytes (valid UTF-8: %t) — a command carries its "+
+				"ref in its recorded form (RecordedRef), at most %d bytes of UTF-8", ErrInvalidProposal, i,
+				len(c.Ref), utf8.ValidString(c.Ref), MaxRefNameBytes)
 		case seen[c.Ref]:
 			return fmt.Errorf("%w: commands[%d].ref: %q is named twice — git sends one "+
 				"command a ref", ErrInvalidProposal, i, c.Ref)

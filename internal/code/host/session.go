@@ -49,8 +49,6 @@ type session struct {
 	// Forced unknown, so false — as it asked (protectAfterForce).
 	rules  code.Protections
 	judged map[judgedKey]bool
-	// caps are the push's capabilities.
-	caps capabilities
 
 	// indexed is the receive-pack's Cmd.Indexed: closed when the hook first
 	// reaches the relay, which receive-pack starts only once its index-pack
@@ -361,15 +359,38 @@ func (s *Server) decide(ctx context.Context, sess *session, cmds []code.Command,
 	}
 
 	// 8.3 AND 8.5 TOGETHER: the commits every update still standing
-	// introduces, and the bundle stored before anything names it.
+	// introduces, and the bundle stored before anything names it — the
+	// proposal held to every rule its committer will hold it to once the
+	// listing answers, before the upload completes. Every ref is proposed in
+	// its recorded form (code.RecordedRef) and git is answered with the ref it
+	// named (withRefs).
 	news = news[:0]
 	for _, c := range cmds {
 		if c.Result == "" && c.New != code.ZeroOID {
 			news = append(news, c.New)
 		}
 	}
-	introduced, count, stored, err := s.introduceAndStore(ctx, sess, news, packPath, ref)
+	proposed, named := recordedCommands(cmds)
+	proposal := func(introduced []string, count int, pack *code.PackRef) code.Proposal {
+		return code.Proposal{
+			PushID: sess.pushID, RepoID: sess.repo.ID, Principal: sess.principal, Node: s.o.NodeID,
+			Atomic: atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
+			ReceivedAt: sess.receivedAt, Seen: sess.synced.Position,
+		}
+	}
+	introduced, count, stored, err := s.introduceAndStore(ctx, sess, news, packPath, ref,
+		func(introduced []string, count int, unstored *code.PackRef) error {
+			return s.checkProposal(proposal(introduced, count, unstored))
+		})
+	var invalid *invalidProposal
 	switch {
+	case errors.As(err, &invalid):
+		// THE RECEIVER'S OWN BUG, found before its committer was asked and
+		// before its bundle was stored: answered as the committer answers
+		// one (decided), its upload stopped.
+		v := s.decided(ctx, sess, proposed, code.ProposeResult{}, invalid.err)
+		result.outcome = v.outcome
+		return decision{commands: withRefs(v.commands, named), result: result}, nil
 	case err != nil:
 		return decision{}, err
 	case stored != nil:
@@ -392,12 +413,7 @@ func (s *Server) decide(ctx context.Context, sess *session, cmds []code.Command,
 	// context: cancellation and no deadline of its own — each data node gets
 	// the router's write attempt.
 	sess.step("committing the push")
-	proposed := cmds
-	res, perr := s.o.Estate.Propose(ctx, code.Proposal{
-		PushID: sess.pushID, RepoID: sess.repo.ID, Principal: sess.principal, Node: s.o.NodeID,
-		Atomic: atomic, Commands: proposed, Pack: ref, Introduced: introduced, IntroducedCount: count,
-		ReceivedAt: sess.receivedAt, Seen: sess.synced.Position,
-	})
+	res, perr := s.o.Estate.Propose(ctx, proposal(introduced, count, ref))
 	if err := s.fault(ctx, codefault.HostAfterPropose, 0); err != nil {
 		return decision{}, err
 	}
@@ -408,7 +424,7 @@ func (s *Server) decide(ctx context.Context, sess *session, cmds []code.Command,
 			result.ok++
 		}
 	}
-	d := decision{commands: v.commands, result: result, applied: v.applied}
+	d := decision{commands: withRefs(v.commands, named), result: result, applied: v.applied}
 	if v.applied && ref != nil && result.ok > 0 {
 		d.adopt = ref
 	}
@@ -453,21 +469,45 @@ func protectAfterForce(cmds []code.Command, rules code.Protections, judged map[j
 // which refuses the push unavailable. A bundle stored under a listing that
 // then failed is named by no row, and the collector removes it after its
 // grace, as it does a refused push's.
+//
+// validate is the proposal's own check, asked as soon as what it carries is
+// known — once the listing has answered, or before the upload starts when
+// there is nothing to list — over the pack as it stands unstored: a proposal
+// it refuses ends the upload, and err is an *invalidProposal, so no bundle is
+// stored for a push no committer could take.
 func (s *Server) introduceAndStore(ctx context.Context, sess *session, news []string, packPath string,
-	ref *code.PackRef) (introduced []string, count int, stored, err error) {
+	ref *code.PackRef, validate func([]string, int, *code.PackRef) error) (introduced []string, count int,
+	stored, err error) {
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	// The pack as it stands before the upload, copied before the upload
+	// starts: the upload writes ref's object into it, which the listing's
+	// goroutine must not read beside it.
+	var unstored *code.PackRef
+	if ref != nil {
+		copied := *ref
+		unstored = &copied
+	}
+	check := func() error {
+		if verr := validate(introduced, count, unstored); verr != nil {
+			cancel(errInvalidProposal)
+			return &invalidProposal{err: verr}
+		}
+		return nil
+	}
 	var listing sync.WaitGroup
 	if len(news) > 0 && ref != nil {
-		// Read before the upload starts: the upload writes ref's object
-		// into it, and PackBytes reads the row whole.
-		packBytes := ref.PackBytes()
+		packBytes := unstored.PackBytes()
 		listing.Go(func() {
 			if introduced, count, err = s.introduced(ctx, sess.scratch.Dir, news, packBytes); err != nil {
 				cancel(errListingFailed)
+				return
 			}
+			err = check()
 		})
+	} else if err = check(); err != nil {
+		return nil, 0, nil, err
 	}
 	if ref != nil {
 		sess.step("storing the pack")
@@ -481,18 +521,27 @@ func (s *Server) introduceAndStore(ctx context.Context, sess *session, news []st
 		// Ended because the upload failed: the upload's failure is the
 		// push's.
 		err = nil
-	case stored != nil && errors.Is(cause, errListingFailed):
-		// Ended because the listing failed: the listing's failure is.
+	case stored != nil && (errors.Is(cause, errListingFailed) || errors.Is(cause, errInvalidProposal)):
+		// Ended because the listing failed, or the proposal it completed
+		// was refused: that is the push's.
 		stored = nil
 	}
 	return introduced, count, stored, err
 }
 
-// The two causes introduceAndStore ends one step's work with.
+// The three causes introduceAndStore ends one step's work with.
 var (
-	errListingFailed = errors.New("host: listing the commits the push introduces failed")
-	errUploadFailed  = errors.New("host: storing the push's bundle failed")
+	errListingFailed   = errors.New("host: listing the commits the push introduces failed")
+	errUploadFailed    = errors.New("host: storing the push's bundle failed")
+	errInvalidProposal = errors.New("host: the push's proposal is not one its committer can decide")
 )
+
+// invalidProposal is a proposal the receiver's own check refused
+// (code.Proposal.ValidateUnstored): err wraps code.ErrInvalidProposal.
+type invalidProposal struct{ err error }
+
+func (e *invalidProposal) Error() string { return e.err.Error() }
+func (e *invalidProposal) Unwrap() error { return e.err }
 
 // undecided reports whether any command is still to be decided.
 func undecided(cmds []code.Command) bool {

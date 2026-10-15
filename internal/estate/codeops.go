@@ -71,9 +71,11 @@ var opCodePropose = define("code.propose", opIdempotentWrite, codeDomain, false,
 //
 // What a slot costs is a goroutine and the proposal it carries, a kilobyte or
 // two for an ordinary push: a full lane of them is a few megabytes. The
-// largest push the code domain admits weighs about 440 KiB (a thousand
-// commands at the longest ref, and a full list of the commits it
-// introduced), and those the committer bounds by their bytes, so a full lane
+// largest push the code domain admits weighs about a mebibyte
+// (code.EntryRoom: some six hundred commands at the longest ref JSON spells
+// six times over — a thousand at the longest plain ref, and a full list of
+// the commits it introduced, weigh about 440 KiB), and those the committer
+// bounds by their bytes, so a full lane
 // of large ones holds what code.CommitterNodeBytes admits and answers the
 // rest busy at once. And every proposal is a push some receiving node's
 // receive-pack holds open while it waits, so what reaches the lane at once is

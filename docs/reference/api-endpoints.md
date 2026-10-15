@@ -4064,7 +4064,7 @@ What a route answers before git is reached:
 |---|---|
 | `GET /code/repos` | The repositories, by name, a page at a time: `?status=` a comma list of `active`, `archived`, `deleted` and `purging` (unset is `active,archived`), `?limit=` (1–500, unset or `0` is 100) and `?cursor=` (the `next` of the page before). Each carries its id, name, status, owner, default branch, protection rules, ref and pack counts and bytes, the default branch's head, and how many pushes it has ever had |
 | `GET /code/repos/{name}` | One repository in detail: the listing's fields, its branch, tag and ref-tombstone counts, when it was created, and the `code.limits` of the node that served the read |
-| `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the token that pushed it (`actor`) and the person it is bound to (`actor_seat`), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at |
+| `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the token that pushed it (`actor`) and the person it is bound to (`actor_seat`), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at. A ref the engine refused for being longer than 255 bytes or not UTF-8 is named in a bounded form: as much of it as fits in 255 bytes, then its length and a digest of the whole |
 
 Every answer carries the `position` and the `level` it was read at. They read
 at the REST read path's level — `stale` by default — through the same

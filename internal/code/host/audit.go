@@ -33,7 +33,9 @@ const (
 	// RefusalGit is a push git refused itself before the engine saw it —
 	// fsck, connectivity, an unpack failure, a shallow update.
 	RefusalGit AuditRefusal = "git"
-	// RefusalCommands is a command section past its bounds.
+	// RefusalCommands is a command section past its bounds, one that is not
+	// pkt-lines or carries a push certificate, or commands more than one push
+	// may carry (code.Proposal.ValidateCommands).
 	RefusalCommands AuditRefusal = "commands"
 )
 

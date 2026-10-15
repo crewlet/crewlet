@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -30,6 +31,31 @@ const (
 // errMalformed is bytes that are not a pkt-line: a length that is not four hex
 // digits, one under four that is no special packet, or one past git's largest.
 var errMalformed = errors.New("host: not a pkt-line")
+
+// wireOID is an object id AS GIT READS ONE FROM A CLIENT — parse_oid_hex:
+// gitref.OIDHexLen hex digits of EITHER case — in the one spelling the engine
+// holds an id in, lowercase (gitref.ValidOID); ok is false for anything else.
+// Every reader of what a client sends holds an id to this, never to ValidOID
+// alone, because git takes an id written in capitals: held to ValidOID, a
+// push's command in capitals was a line the receiver skipped and receive-pack
+// acted on — one step 2 never measured.
+func wireOID[S ~string | ~[]byte](id S) (string, bool) {
+	if len(id) != gitref.OIDHexLen {
+		return "", false
+	}
+	out := make([]byte, len(id))
+	for i := range len(id) {
+		switch c := id[i]; {
+		case '0' <= c && c <= '9', 'a' <= c && c <= 'f':
+			out[i] = c
+		case 'A' <= c && c <= 'F':
+			out[i] = c + ('a' - 'A')
+		default:
+			return "", false
+		}
+	}
+	return string(out), true
+}
 
 // pktLine is payload as one pkt-line. payload is at most maxPktPayload bytes;
 // every caller writes what it built itself.
@@ -173,10 +199,13 @@ func errAdvert(w http.ResponseWriter, svc, words string) {
 // writeRefusalReport answers a push the engine refused before receive-pack
 // ran, as receive-pack itself would: in band 2 `crewlet: <note>` (omitted
 // under quiet and without side-band), then — in band 1 when the client asked
-// for side-band-64k, bare otherwise — `unpack ok`, `ng <ref> <sentence>` for
-// every command, a flush; then the outer flush. THE CALLER HAS READ THE BODY
-// TO ITS END: a response written while git is still uploading is lost to a
-// broken pipe, and git prints `RPC failed` instead of the reason (measured).
+// for side-band-64k, bare otherwise — the REPORT, `unpack ok`, `ng <ref>
+// <sentence>` for every command and a flush, written only to a client that
+// asked for one (report-status or report-status-v2: receive-pack writes no
+// report otherwise, and git's own client always asks); then, under side-band,
+// the outer flush. THE CALLER HAS READ THE BODY TO ITS END: a response written
+// while git is still uploading is lost to a broken pipe, and git prints `RPC
+// failed` instead of the reason (measured).
 func writeRefusalReport(w http.ResponseWriter, caps capabilities, refused []answered, note string) {
 	h := w.Header()
 	h.Set("Content-Type", "application/x-git-receive-pack-result")
@@ -188,11 +217,13 @@ func writeRefusalReport(w http.ResponseWriter, caps capabilities, refused []answ
 // refusalReport is writeRefusalReport's body.
 func refusalReport(caps capabilities, refused []answered, note string) []byte {
 	var report bytes.Buffer
-	report.Write(pktString("unpack ok\n"))
-	for _, a := range refused {
-		report.Write(pktString(a.line() + "\n"))
+	if caps.reportStatus || caps.reportStatusV2 {
+		report.Write(pktString("unpack ok\n"))
+		for _, a := range refused {
+			report.Write(pktString(a.line() + "\n"))
+		}
+		report.WriteString(flushPkt)
 	}
-	report.WriteString(flushPkt)
 	if !caps.sideBand64k {
 		return report.Bytes()
 	}
@@ -200,7 +231,9 @@ func refusalReport(caps capabilities, refused []answered, note string) []byte {
 	if note != "" && !caps.quiet {
 		out.Write(banded(bandProgress, []byte("crewlet: "+sentence(note)+"\n")))
 	}
-	out.Write(banded(bandData, report.Bytes()))
+	if report.Len() > 0 {
+		out.Write(banded(bandData, report.Bytes()))
+	}
 	out.WriteString(flushPkt)
 	return out.Bytes()
 }
