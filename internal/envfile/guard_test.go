@@ -39,7 +39,15 @@ var handBuilt = regexp.MustCompile(
 		`"export "\s*\+`)
 
 // touchesEnvFile marks a source file as writing or rewriting a .env.
-var touchesEnvFile = regexp.MustCompile(`\.env\b|envFile|EnvFile|envfile\.`)
+//
+// A `.env` counts only where nothing that could be part of an identifier
+// comes before it — a filename in a string or a path (`".env"`, `dir/.env`)
+// — because the same three characters END a field or method access (`p.env`,
+// `opts.env(`) and a config key's path (`cli.env`, `role.sandbox.env`), and
+// scoped on those the guard read every file that mentions an environment as
+// one that writes a dotenv file, and flagged a shell script's `export` there
+// as a credential line.
+var touchesEnvFile = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])\.env\b|envFile|EnvFile|envfile\.`)
 
 // What each pattern cannot match without, derived from the pattern itself
 // (see [sourcetree.Required]). Neither expression has a literal prefix the
@@ -51,11 +59,11 @@ var (
 	touchesEnvFileNeeds = sourcetree.Required(touchesEnvFile)
 )
 
-// minInScope is the fewest files the scope may find in this tree. Forty-seven
-// mention a .env today, forty-five of them through `.env` itself; a floor at
-// under half of that survives a refactor that consolidates a few writers and
-// fails the day the scope expression stops recognising its main spelling —
-// which would otherwise leave this guard checking almost nothing, green.
+// minInScope is the fewest files the scope may find in this tree. Twenty-five
+// write or name a .env file today; a floor a little under that survives a
+// refactor that consolidates a few writers and fails the day the scope
+// expression stops recognising its main spelling — which would otherwise
+// leave this guard checking almost nothing, green.
 const minInScope = 20
 
 func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
@@ -197,6 +205,15 @@ func TestTheGuardFindsAHandBuiltAssignmentInAFileThatWritesAnEnv(t *testing.T) {
 			"}\n",
 		"internal/run/run.go": "package run\n\n" +
 			"func env(k, v string) string { return fmt.Sprintf(\"%s=%s\", k, v) }\n",
+		// A shell script built from the run environment, in a file that
+		// names role.sandbox.env and reads a field called env: no .env
+		// file anywhere, so its export is out of scope.
+		"internal/box/login.go": "package box\n\n" +
+			"// The variables role.sandbox.env declares are put back.\n" +
+			"func restore(b box, name string) string {\n" +
+			"\t_ = b.env\n" +
+			"\treturn \"export \" + name + `=\"${STASH}\"`\n" +
+			"}\n",
 		"internal/envfile/envfile.go": "package envfile\n\n" +
 			"// .env\nvar _ = fmt.Sprintf(\"%s=%s\", \"k\", \"v\")\n",
 	} {
@@ -209,9 +226,10 @@ func TestTheGuardFindsAHandBuiltAssignmentInAFileThatWritesAnEnv(t *testing.T) {
 		}
 	}
 	scan := scanForHandBuilt(t, root)
-	if scan.files != 2 || scan.inScope != 1 {
-		t.Errorf("read %d files and found %d writing a .env; want 2 and 1 — the "+
-			"writer, and not the exec environment beside it", scan.files, scan.inScope)
+	if scan.files != 3 || scan.inScope != 1 {
+		t.Errorf("read %d files and found %d writing a .env; want 3 and 1 — the "+
+			"writer, and neither the exec environment nor the login script beside it",
+			scan.files, scan.inScope)
 	}
 	want := `internal/writer/writer.go:5: fmt.Fprintf(w, "%s=%s\n", k, v)`
 	if len(scan.offenders) != 1 || scan.offenders[0] != want {
