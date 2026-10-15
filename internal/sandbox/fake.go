@@ -267,6 +267,10 @@ type FakeProvider struct {
 	// KillErr, when set, fails every Kill after recording it, standing in
 	// for a provider that could not be reached to reclaim a box.
 	KillErr error
+	// AsEngine is what [FakeProvider.RunsAsEngine] answers: false, as
+	// nothing runs in a fake box, unless a test stands in for a direct
+	// one.
+	AsEngine bool
 	// AttachFunc, when set, is called by every Attach before it answers,
 	// WITHOUT the provider's lock, and a non-nil answer fails the Attach —
 	// a control plane that is slow to answer, or does not, for one box
@@ -283,6 +287,13 @@ func NewFakeProvider() *FakeProvider {
 
 // Kind names the backend, for the messages a real provider's errors carry.
 func (p *FakeProvider) Kind() string { return "fake" }
+
+// RunsAsEngine is [FakeProvider.AsEngine].
+func (p *FakeProvider) RunsAsEngine() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.AsEngine
+}
 
 // Create mints a box and remembers it, so a later Connect hands back the
 // same one.
@@ -411,6 +422,11 @@ type FakeRunner struct {
 	// ([Runner.Telemetry]); nil declares none, as an agent that exports
 	// nothing does. Set before the runner is used.
 	Exports map[string]string
+	// AdmitErr, when set, refuses every launch at [Runner.Admit].
+	AdmitErr error
+	// AdmittedAsEngine records what each [Runner.Admit] was told about
+	// the box's backend, in order.
+	AdmittedAsEngine []bool
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -436,6 +452,14 @@ func (r *FakeRunner) Telemetry() map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return maps.Clone(r.Exports)
+}
+
+// Admit records what it was told and answers [FakeRunner.AdmitErr].
+func (r *FakeRunner) Admit(_ Spec, asEngine bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.AdmittedAsEngine = append(r.AdmittedAsEngine, asEngine)
+	return r.AdmitErr
 }
 
 // Install records that the agent was provisioned into the box.

@@ -516,3 +516,90 @@ func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest
 	r.t.Cleanup(c.Stop)
 	return c.Launch(ctx, m, req)
 }
+
+// A RUNNER THAT REFUSES THE PAIRING REFUSES THE LAUNCH BEFORE ANYTHING EXISTS:
+// no row to settle, no box to reclaim, and the runner's own sentence carried
+// to the caller — rather than a box provisioned, set up and started for an
+// agent that exits at its first breath, its reason buried in its error stream.
+//
+// Mutation: ask the runner after the row is written, or after the box is
+// created, and the row or the box is there.
+func TestARefusedPairingBuildsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.runner.AdmitErr = errors.New("run the engine as a non-root user")
+
+	_, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1"))
+	if err == nil || !strings.Contains(err.Error(), "non-root user") {
+		t.Fatalf("Launch: %v, want the runner's own refusal", err)
+	}
+	if _, found, gerr := rig.pending.Get(t.Context(), "t1"); gerr != nil || found {
+		t.Errorf("a refused launch left a row (found %v, %v)", found, gerr)
+	}
+	rig.provider.mu.Lock()
+	created := rig.provider.next
+	rig.provider.mu.Unlock()
+	if created != 0 {
+		t.Errorf("a refused launch provisioned %d boxes", created)
+	}
+	if started := rig.runner.Started(); len(started) != 0 {
+		t.Errorf("a refused launch started %d jobs", len(started))
+	}
+}
+
+// THE RUNNER IS TOLD WHICH CELL ITS BOX IS IN, which decides how Claude Code is
+// invoked there, and its admission is told what the BACKEND says about the
+// box — whether its job runs as the engine's own user on the engine's host —
+// rather than inferring it from the cell's name, which the in-process fake
+// answers too.
+//
+// Mutation: hand Admit the cell's name instead of the backend's answer and
+// the second launch's record goes red.
+func TestTheRunnerIsToldItsCellAndWhatItsBackendRunsAs(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Spec.Placement = Direct
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatal(err)
+	}
+	if started := rig.runner.Started(); len(started) != 1 || started[0].Placement != Direct {
+		t.Errorf("the runner was started with %+v", started)
+	}
+
+	rig.provider.mu.Lock()
+	rig.provider.AsEngine = true
+	rig.provider.mu.Unlock()
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t2")); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.mu.Lock()
+	admitted := slices.Clone(rig.runner.AdmittedAsEngine)
+	rig.runner.mu.Unlock()
+	if !slices.Equal(admitted, []bool{false, true}) {
+		t.Errorf("the admissions were told %v, want the fake's own answer each time", admitted)
+	}
+}
+
+// EACH BACKEND SAYS WHAT ITS JOBS RUN AS. A direct box's job is a process of
+// the engine's own user on the engine's host, so it is the one the answer is
+// yes for; a container is a boundary, and so is a remote VM.
+//
+// Mutation: answer by the backend's kind rather than its placement and the
+// container case goes red.
+func TestOnlyADirectBoxRunsAsTheEngine(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		provider Provider
+		want     bool
+	}{
+		{&Local{opts: LocalOptions{Placement: Direct}}, true},
+		{&Local{opts: LocalOptions{Placement: Container}}, false},
+		{&E2BProvider{}, false},
+		{NewFakeProvider(), false},
+	} {
+		if got := tc.provider.RunsAsEngine(); got != tc.want {
+			t.Errorf("%T %+v: RunsAsEngine = %v, want %v", tc.provider, tc.provider, got, tc.want)
+		}
+	}
+}

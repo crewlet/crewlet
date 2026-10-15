@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -36,7 +37,11 @@ var ClaudeCodeCredentialEnv = []string{
 // which is why WriteConfig here only ever renders MCP servers: the credential
 // comes from providers.llm via the sandbox env, and duplicating it into a file
 // inside the box would put the secret somewhere the agent can read it back.
-type ClaudeCode struct{}
+type ClaudeCode struct {
+	// uid is the engine process's user id, which is a direct box's
+	// ([ClaudeCode.Admit]). Nil reads it from the process; a test states it.
+	uid func() int
+}
 
 var _ CLI = ClaudeCode{}
 
@@ -45,6 +50,58 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 
 // Name is the coding agent's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
+
+// claudeSandboxedVar and claudeBubblewrapVar are the two ways Claude Code is
+// told the process it runs in is a deliberate sandbox, which is what it
+// requires before it will bypass permissions as root: IS_SANDBOX must be
+// exactly "1", and CLAUDE_CODE_BUBBLEWRAP anything at all (measured against
+// 2.1.300's own check).
+const (
+	claudeSandboxedVar  = "IS_SANDBOX"
+	claudeBubblewrapVar = "CLAUDE_CODE_BUBBLEWRAP"
+)
+
+// Admit refuses a direct box when the engine runs as root.
+//
+// Claude Code will not run `--permission-mode bypassPermissions` — which every
+// headless run needs, a prompt would hang it — as root, unless it is told the
+// process is a deliberate sandbox: it exits at once, saying so on its error
+// stream ("cannot be used with root/sudo privileges"), measured against
+// 2.1.300. A CONTAINER is such a sandbox and is told so ([ClaudeCode.Command]).
+// A DIRECT box is not: its job is a process tree of the engine's own user on
+// the engine's own host (asEngine), and telling the CLI otherwise would be a
+// lie about the one thing its refusal protects — a root process with every
+// permission bypassed, on the host. So the launch is refused, by a sentence
+// naming the two ways out, before a box exists. It is the BACKEND's answer
+// that decides, not the cell's name: the in-process fake a demonstration runs
+// on answers every cell and runs nothing, so it is refused nothing.
+//
+// THE CLI'S OWN RULE, mirrored rather than tightened: an operator who has made
+// the engine's host itself a sandbox and said so in role.sandbox.env —
+// IS_SANDBOX=1, or CLAUDE_CODE_BUBBLEWRAP — has made the claim themselves, and
+// the CLI would accept it, so this does too. The engine never makes it for a
+// direct box.
+func (c ClaudeCode) Admit(spec sandbox.Spec, asEngine bool) error {
+	if !asEngine || c.userID() != 0 {
+		return nil
+	}
+	if spec.Env[claudeSandboxedVar] == "1" || spec.Env[claudeBubblewrapVar] != "" {
+		return nil
+	}
+	return errors.New("the claude CLI refuses --permission-mode bypassPermissions to a " +
+		"process running as root, and a direct box runs as the engine's own user, which " +
+		"is root on this node: run the engine as a non-root user, or run this seat's code " +
+		"work in a container box (role.sandbox.run_in: container, or cli.run_in on an " +
+		"agent-mode entry)")
+}
+
+// userID is the engine process's user id, which a direct box runs as.
+func (c ClaudeCode) userID() int {
+	if c.uid != nil {
+		return c.uid()
+	}
+	return os.Getuid()
+}
 
 // claudeCodeContentSwitches are Claude Code's switches for putting CONTENT on
 // what it exports — the prompt, a tool's arguments and output, the model's
@@ -122,11 +179,27 @@ func (ClaudeCode) Telemetry() map[string]string {
 // stream-json without --verbose ("When using --print,
 // --output-format=stream-json requires --verbose").
 func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) string {
-	parts := []string{
+	var parts []string
+	if req.Placement == sandbox.Container {
+		// A CONTAINER IS A DELIBERATE SANDBOX, and Claude Code is told so,
+		// because it refuses bypassPermissions to a process running as
+		// root unless it is (see [ClaudeCode.Admit]) — and a container's
+		// process IS root under a rootless runtime, and under any runtime
+		// on a host whose engine runs as root. Set in the invocation, not
+		// the run's environment, so a profile the login shell sources
+		// cannot take it away; and in no other cell, because it is a claim
+		// about where the process runs: a direct box runs on the engine's
+		// own host as the engine's own user, and an E2B box runs as the
+		// template's unprivileged user, where the claim buys nothing and
+		// would change how the CLI behaves for nothing (it also governs
+		// whether an overloaded API is retried or given up on).
+		parts = append(parts, claudeSandboxedVar+"=1")
+	}
+	parts = append(parts,
 		"claude", "-p", shellQuote(req.Brief),
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
-	}
+	)
 	// VERBATIM, because whichever entry reached this runner already names
 	// the model in Claude Code's own terms: an `anthropic` entry's model id,
 	// or a claude-code cli-agent entry's alias exactly as its text calls

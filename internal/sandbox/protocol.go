@@ -543,6 +543,14 @@ type Provider interface {
 	// timer or its state moves.
 	Attach(ctx context.Context, sandboxID string) (Sandbox, error)
 
+	// RunsAsEngine reports whether a job in this backend's boxes is a
+	// process of the engine's own user on the engine's own host, with no
+	// boundary of its own around it — a direct box. A container or a
+	// remote VM is a boundary; the in-process fake runs nothing. Asked by
+	// a launch before anything is built, for a coding agent whose own
+	// refusals turn on it ([Runner.Admit]).
+	RunsAsEngine() bool
+
 	// Kill terminates a box by id WITHOUT resuming it.
 	//
 	// The primitive the pause reaper needs. Connect auto-resumes, so
@@ -593,6 +601,18 @@ type Runner interface {
 	// box whose agent will never use it is a credential nothing needs.
 	// Fresh on every call, so a caller may add to it.
 	Telemetry() map[string]string
+
+	// Admit reports whether this agent can run a job built from spec in a
+	// box of a backend whose jobs run as the engine's own user on its host
+	// (asEngine, [Provider.RunsAsEngine]), or why not — in words naming
+	// what an operator changes.
+	//
+	// ASKED BEFORE ANYTHING EXISTS: before the run's row is written and
+	// before a box is provisioned, so a pairing the agent itself would
+	// refuse at its first breath costs a launch nothing and fails by a
+	// sentence an operator can act on, rather than as a run that exited at
+	// once with the agent's own complaint buried in its error stream.
+	Admit(spec Spec, asEngine bool) error
 }
 
 // RunRequest is one coding run's inputs.
@@ -600,6 +620,10 @@ type RunRequest struct {
 	Brief  string
 	Env    map[string]string
 	Limits Limits
+
+	// Placement is the cell the box is in, for a runner whose invocation
+	// depends on it: what a process there may be told about where it runs.
+	Placement Placement
 
 	// LLM is the seat's model and endpoint, for a runner that configures its
 	// own provider. Nil leaves the agent to read the env.

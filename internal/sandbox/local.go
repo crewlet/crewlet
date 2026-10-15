@@ -505,6 +505,11 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 // Kind names the backend, for logs and the operator surface.
 func (l *Local) Kind() string { return "local" }
 
+// RunsAsEngine is true for a direct box, whose job is a process tree of the
+// engine's own user on the engine's host — the state it isolates is the
+// box's, never the host — and false for a container, which is a boundary.
+func (l *Local) RunsAsEngine() bool { return l.opts.Placement == Direct }
+
 // layout is where one box's files live.
 //
 // AN EMPTY ID IS REFUSED, and this is not defensive tidiness: joining "" gives

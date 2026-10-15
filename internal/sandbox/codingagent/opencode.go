@@ -52,6 +52,11 @@ func (OpenCode) Name() string { return OpenCodeName }
 // the engine-side lifecycle events.
 func (OpenCode) Telemetry() map[string]string { return nil }
 
+// Admit admits every cell: OpenCode has no refusal of its own about where it
+// runs — its permission gate is configured open in the run's own opencode.json
+// rather than bypassed by a flag it guards.
+func (OpenCode) Admit(sandbox.Spec, bool) error { return nil }
+
 // Command builds the non-interactive `opencode run` invocation.
 //
 // ALWAYS --format json, and that is load-bearing rather than a preference.
