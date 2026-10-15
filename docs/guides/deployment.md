@@ -1507,7 +1507,15 @@ off: the metrics count what the engine already records for the run, and the
 log events are Claude Code's content channel. The receiver serves **traces
 only** — a metrics or logs export under a box's token is a `404` — so what the
 token in a box is worth to anything else running there is spans in its run's
-trace, a trace other seats' turns and runs can share, and nothing more. With no receiver URL the engine
+trace, a trace other seats' turns and runs can share, and nothing more. The
+switches and the endpoint are set over the image's environment, the login
+profile the box's commands run under and a settings file in the box's home,
+but a Claude Code **managed settings** file in the image — or on the engine
+host, for a `direct` box — outranks everything the engine sets, so do not ship
+one in a box image. With in-box telemetry on, Claude Code also sends the run's
+`traceparent` on each MCP tool call to every HTTP MCP server rendered into the
+box, as it does to the Claude API ([MCP inside the sandbox](../concepts/code-sandbox.md#mcp-inside-the-sandbox)).
+With no receiver URL the engine
 switches nothing on in a box, and Claude Code's spans of a run reach a
 collector only if the seat's `role.sandbox.env` points them at one.
 

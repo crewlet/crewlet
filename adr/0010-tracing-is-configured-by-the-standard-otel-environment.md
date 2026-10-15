@@ -99,9 +99,14 @@ same values are handed to Claude Code as flag settings too, because it reads
 the `env` of a settings file over its environment, and a user settings file in
 the box would otherwise decide. A MANAGED settings file is the one layer above
 those, and nothing the engine sets reaches it: an image that ships one, or a
-direct box's host, decides the CLI's telemetry itself. The
-operator's `role.sandbox.env` wins over all of it, as over every variable the
-engine sets in a box.
+direct box's host, decides the CLI's telemetry itself. The run environment
+is put back over the profile a box's login shell sources, so an image's
+profile cannot replace any of it either. The operator's `role.sandbox.env`
+wins over every one of these telemetry variables, so a seat can switch its
+agent's export off again or point it at a collector of its own; the full
+precedence of a box's environment, and what a box keeps for itself over it,
+is the sandbox's (`docs/concepts/code-sandbox.md`, "Credentials and the run
+environment").
 
 **A command that calls a model is traced as a node is.** `crewlet llm doctor`
 sends real calls through the engine's own providers, so it configures
