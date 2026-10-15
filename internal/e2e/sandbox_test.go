@@ -106,6 +106,15 @@ roles:
         FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
+        # THE HOST IS DECLARED A SANDBOX, as an operator would declare one. A
+        # direct box runs as the engine's own user, and the claude-code
+        # runner refuses that box to a root engine unless the host says it
+        # is a deliberate sandbox, because Claude Code itself refuses to
+        # bypass permissions as root without the claim. This suite runs as
+        # whoever runs it — root in a development container — and its box is
+        # a scratch directory running a stand-in script, which is exactly
+        # the case the claim is for. As any other user nothing reads it.
+        IS_SANDBOX: "1"
   - name: Founder
     kind: human
     contact:
