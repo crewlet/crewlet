@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/solo"
 )
@@ -26,7 +27,18 @@ import (
 // test runner to itself: cluster_test.go stands up a fleet of engines, each
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
+//
+// THE HOOK FIRST, before the sink is installed. Every node here that hosts
+// code execs THIS binary as its proc-receive hook ([codetest.HookCommand],
+// handed to the engine as engine.Options.GitHook), because the test binary is
+// not `crewlet`; started that way it is a push's hook and not a test run, and
+// it answers exactly as `crewlet code hook` does — main()'s reason for asking
+// before anything else: the hook's stdout is git's protocol and its stderr
+// reaches the pushing client, so a log line on either is a corrupted push.
 func TestMain(m *testing.M) {
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
+	}
 	logging.Configure(slog.LevelDebug, logging.FormatJSON, logs)
 	os.Exit(solo.Run(m))
 }
