@@ -3,7 +3,6 @@ package host
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
@@ -122,7 +121,7 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 	case errors.As(err, &exit):
 		s.log.Warn(failedLine(r), append([]any{"repo", name, "command", exit.Command, "error", err}, attrs...)...)
 		auth.GitText(w, http.StatusInternalServerError, "git "+exit.Command+" failed on this node ("+
-			kindOf(exit)+"): "+lastLine(exit.Result.Stderr))
+			kindOf(exit)+"): "+sentence(exit.Result.LastLine()))
 	case errors.Is(err, cache.ErrLogRead), errors.Is(err, errLogRead):
 		s.unavailable(w, r, name, err)
 	case errors.Is(err, cache.ErrStoreRead):
@@ -299,10 +298,4 @@ func kindOf(e *gitproc.ExitError) string {
 		return "not our ref"
 	}
 	return "failed"
-}
-
-// lastLine is the last non-empty line of a process's stderr, as a sentence.
-func lastLine(stderr string) string {
-	lines := strings.Split(strings.TrimSpace(stderr), "\n")
-	return sentence(lines[len(lines)-1])
 }

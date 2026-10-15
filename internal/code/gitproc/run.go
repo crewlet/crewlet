@@ -186,6 +186,7 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 
 	res := Result{
 		Stderr: errs.tail(),
+		Damage: errs.damage(),
 		Exit:   cmd.ProcessState.ExitCode(),
 		Took:   reaped.Sub(start),
 		CPU:    max(cpuOf(cmd.ProcessState)+stragglers, w.spent),

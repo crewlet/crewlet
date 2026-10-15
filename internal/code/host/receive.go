@@ -234,7 +234,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	case runErr == nil && !claimed:
 		// GIT REFUSED THE PUSH ITSELF — an unpack, fsck or connectivity
 		// failure, a shallow update — and wrote its own report.
-		rec.outcome, rec.refusal, rec.git = types.AuditRefused, RefusalGit, lastLine(res.Stderr)
+		rec.outcome, rec.refusal, rec.git = types.AuditRefused, RefusalGit, sentence(res.LastLine())
 	case runErr == nil:
 	case ended:
 		// THE CLIENT HUNG UP, OR THE HOST IS STOPPING, and the kill of

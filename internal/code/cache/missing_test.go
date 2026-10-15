@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitref"
 )
@@ -110,6 +113,61 @@ func TestMissingAnswersTheFirstAbsentWant(t *testing.T) {
 	c.Stop(context.Background())
 	if _, err := c.Missing(t.Context(), s, wants(tip), 1<<10); !errors.Is(err, cache.ErrStopped) {
 		t.Errorf("Missing after Stop = %v, want ErrStopped", err)
+	}
+}
+
+// A CHECK THAT READ DAMAGE ANSWERS THE DAMAGE, never an absent want: cat-file
+// calls an object in a pack whose index is truncated `missing` and exits 0,
+// only its stderr saying why, and taken as absent the fetch's upload-pack
+// then refuses the want in band, past the first byte a repair can retry
+// under. A pack whose files are gone says nothing and IS an absent want: the
+// linearizable sync installs it again.
+func TestMissingAnswersTheDamageItRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		damage func(t *testing.T, pack string)
+		absent bool
+	}{
+		{"the index truncated", func(t *testing.T, pack string) {
+			idx := pack + ".idx"
+			if err := os.Chmod(idx, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Truncate(idx, 100); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"the pack's files removed", func(t *testing.T, pack string) {
+			for _, ext := range []string{".pack", ".idx", ".rev"} {
+				if err := os.Remove(pack + ext); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			tip, row := w.push(t, repo, "refs/heads/main", map[string]string{"a.txt": "alpha\n"})
+			c := w.open(t)
+			s := w.sync(t, c, repo)
+			tc.damage(t, filepath.Join(s.Dir, "objects", "pack", "pack-"+row.GitChecksum))
+			got, err := c.Missing(t.Context(), s, wants(tip), 1<<10)
+			if tc.absent {
+				if err != nil || got != tip {
+					t.Fatalf("Missing = %q, %v; want %s absent", got, err, tip)
+				}
+				return
+			}
+			if got != "" || !errors.Is(err, gitproc.ErrCorrupt) || !strings.Contains(err.Error(), "is too small") {
+				t.Fatalf("Missing = %q, %v; want ErrCorrupt quoting git's line", got, err)
+			}
+			if reason, ok := cache.DamageReason(err); !ok || reason != cache.RebuildCorrupt {
+				t.Errorf("DamageReason(%v) = %q, %v; want %q, a rebuild", err, reason, ok, cache.RebuildCorrupt)
+			}
+		})
 	}
 }
 

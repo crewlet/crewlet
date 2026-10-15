@@ -421,21 +421,31 @@ esac`)
 }
 
 // A damaged cache is rebuilt once, under the fetch that found it, and the
-// fetch retried over the same request.
+// fetch retried over the same request — under either protocol, whose wants
+// are object ids: the check of missing wants is what meets the damage, since
+// upload-pack refuses a want it cannot read IN BAND, past the first byte a
+// retry can be made under.
 func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
-	var l logs
-	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
-	p := codetest.NewPerson(t, c.Fleet, "ceo")
-	work := p.Init()
-	head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
-	c.MustPush(p, work, "main")
-	truncateNewestIndex(t, c)
-	clone := p.Clone(c.URL(0))
-	if got := p.Head(clone); got != head {
-		t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
-	}
-	if n := l.count("code_fetch_retried", `"reason":"corrupt"`); n != 1 {
-		t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want once", n)
+	for _, v := range []int{0, 2} {
+		t.Run(fmt.Sprintf("protocol=%d", v), func(t *testing.T) {
+			var l logs
+			c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+			p := codetest.NewPerson(t, c.Fleet, "ceo")
+			work := p.Init()
+			head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
+			c.MustPush(p, work, "main")
+			truncateNewestIndex(t, c)
+			clone, stderr, err := p.TryClone(c.Ctx, c.URL(0), "--config", fmt.Sprintf("protocol.version=%d", v))
+			if err != nil {
+				t.Fatalf("a clone of the damaged cache: %v\n%s", err, stderr)
+			}
+			if got := p.Head(clone); got != head {
+				t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
+			}
+			if n := l.count("code_fetch_retried", `"reason":"corrupt"`); n != 1 {
+				t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want once", n)
+			}
+		})
 	}
 }
 
