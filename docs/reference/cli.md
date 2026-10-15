@@ -1011,7 +1011,10 @@ In order:
    `code.limits` are the ones the node holds its pushes to. An archived or
    deleted repository takes no push, and is refused saying how to declare it;
    a name nobody declared is refused naming `code.repos`, and a company that
-   does not set `code.native` is refused saying so, in the node's words.
+   does not set `code.native` is refused saying so, in the node's words. The
+   import also asks the node who the token is (`GET /viewer`): every push's
+   record names that person, so it is part of what one push may carry
+   (step 6).
 2. **Before anything is downloaded**, your git (2.40 or newer — the first on
    `PATH`, or `-git PATH`) reads the source's own list of refs, and the import
    refuses a ref the code host takes no push of (git's ref rules, at most 255
@@ -1055,8 +1058,13 @@ In order:
    repository's default afterwards) — advanced along its first-parent history,
    every step a fast-forward of the branch itself, so no temporary ref ever
    exists. Then every other branch and tag, in name order, in batches of at
-   most 1 000 refs. Every step is **sent whole** (`--no-thin`), so the pack it
-   sends is the pack the node stores, and is **measured before it is pushed**:
+   most 1 000 refs — fewer where the refs are long and spelled long in the
+   code log (`&`, `<` and `>` take six bytes each there): each batch holds
+   only as many as one push's record has room for, as the person the token is
+   bound to, which the node refuses past before anything of the push runs
+   ([Limits](../concepts/code-host.md#limits)). Every step is **sent whole**
+   (`--no-thin`), so the pack it sends is the pack the node stores, and is
+   **measured before it is pushed**:
    its pack is built exactly as `git push` builds it, against what the
    repository will hold, its bytes counted and thrown away. A step is held to
    `code.limits.max_push_bytes` less a tenth for what it sends, to the
