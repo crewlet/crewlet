@@ -1,10 +1,14 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -19,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// THE AUXILIARY SEAM, and the two things it does.
+// THE AUXILIARY SEAM, and the three things it does.
 //
 // Every completion this engine makes for a seat — or for a person — that is not
 // a phase of a turn runs on the seat's AUXILIARY chain (`llm_auxiliary`): the
@@ -37,7 +41,10 @@ import (
 //   - it RECORDS each completion in this node's auxiliary-spend ledger
 //     (internal/auxspend) under the attribution its caller states, so every
 //     spend figure read from events — the usage history, the live rollup, the
-//     turn list, a turn's page, a task's spend — holds what the counters hold.
+//     turn list, a turn's page, a task's spend — holds what the counters hold;
+//   - it SPANS each completion (`llm.auxiliary`), so the provider's own spans
+//     of the call have a parent and the record names the trace they are in —
+//     see [auxiliarySpan].
 //
 // ONE SEAM rather than a charge call and a record call at each site, because a
 // call per site is the shape that let this spend go uncounted: the turn loop
@@ -198,9 +205,18 @@ func (p recordedProvider) Model() string { return p.inner.Model() }
 func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if p.use.Budget != nil {
 		if held := p.use.Budget.Held(ctx); held != nil {
+			// No span: a call the gate held is a call nobody made, and
+			// the turn's own refusal is where the hold is recorded.
 			return nil, fmt.Errorf("engine: auxiliary %s call not made: %w", p.use.Purpose, held)
 		}
 	}
+	// ONE SPAN PER CALL, opened here because this is the one frame every
+	// auxiliary call passes — see [auxiliarySpan]. Its context is what the
+	// provider is handed, so the Anthropic SDK's span of the call nests
+	// beneath it, and what the spend record's trace is read from, so the
+	// record and the spans of the call it records are one trace.
+	ctx, span := p.span(ctx)
+	defer span.End()
 	started := p.now()
 	completion, err := p.inner.Complete(ctx, req)
 	ended := p.now()
@@ -219,6 +235,13 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 			model = billed.Model
 		}
 	}
+	tracing.Fail(span, err)
+	span.SetAttributes(
+		attribute.String("crewlet.model", model),
+		attribute.Int("crewlet.input_tokens", spent.Input),
+		attribute.Int("crewlet.output_tokens", spent.Output),
+		attribute.Int("crewlet.cache_read_tokens", spent.CacheRead),
+		attribute.Int("crewlet.cache_write_tokens", spent.CacheWrite))
 	if tokens := spent.Tokens(); tokens > 0 && p.meter != nil {
 		// context.WithoutCancel: the tokens are already spent at the
 		// vendor. A record skipped because the caller's deadline expired
@@ -256,6 +279,42 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 	})
 	return completion, err
 }
+
+// span opens `llm.auxiliary` around one call, as [auxiliarySpan] describes.
+func (p recordedProvider) span(ctx context.Context) (context.Context, trace.Span) {
+	return tracing.Start(ctx, "engine", auxiliarySpan,
+		attribute.String("crewlet.stage", string(p.use.Stage)),
+		attribute.String("crewlet.purpose", string(p.use.Purpose)),
+		attribute.String("crewlet.seat", cmp.Or(p.seat.Handle, p.seat.Person)))
+}
+
+// auxiliarySpan is the span every auxiliary call is made in: `llm.auxiliary`,
+// the auxiliary seam's counterpart of the turn loop's `llm.round`.
+//
+// # Why every call has one
+//
+// Without it the call had whatever span its caller happened to hold, and three
+// kinds of caller hold none — reflection after a turn, a background learning
+// pass, a person's question on the operator surface. There the provider's own
+// spans were ROOTS: the Anthropic SDK's `anthropic.messages.create`, and the
+// Claude API's spans beneath it, each started a trace of its own, while the
+// spend record of the same call minted a third through tracing.TraceOf. A call
+// a reader could see three times was a call nobody could join. Opened here,
+// every auxiliary call has a parent its provider's spans nest under and its
+// spend record names, whatever its caller holds — and where the caller holds a
+// span (a turn's, a reflection pass's, a background pass's, an operator call's),
+// it is a child of that.
+//
+// # What it carries
+//
+// The stage and the purpose, which are the record's own two enums and name the
+// line of code that made the call; the seat; and, once the call returns, the
+// model that served it and what it billed — on a failed call too, where the
+// provider reported a bill, as the record counts it. The token counts are
+// `crewlet.*` rather than the GenAI conventions' `gen_ai.usage.*` for
+// `llm.round`'s reason: the SDK's span beneath this one carries those for the
+// same call, and a collector summing them must not count it twice.
+const auxiliarySpan = "llm.auxiliary"
 
 // seatSpend records one agent seat's auxiliary spend in the seat's counter and
 // the company's.

@@ -1224,6 +1224,7 @@ flowchart TD
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
+    L["<b>llm.auxiliary</b><br/>one per call on a seat's auxiliary chain"]
     H["<b>anthropic.messages.create</b> (CLIENT)<br/>the Anthropic SDK's span of each HTTP attempt"]
     J["<b>claude -p</b>, a text-mode cli-agent call<br/><i>spans nothing; forwards the round's traceparent</i>"]
     K["<b>claude_code.interaction</b> and its children<br/><i>Claude Code in a coding box, exported through the receiver</i>"]
@@ -1232,6 +1233,8 @@ flowchart TD
     D --> E
     D --> F
     E --> H
+    C --> L
+    L --> H
     E -.->|"TRACEPARENT"| J
     F -.->|"TRACEPARENT (run_sandbox)"| K
     C -.->|"TRACEPARENT (agent mode)"| K
@@ -1244,16 +1247,26 @@ flowchart TD
 **The engine's own spans are these, and only these:** `webhook.receive` and
 `schedule.fire`, which start work; `agent.turn`, and `agent.turn.resume` for a
 suspended run re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
-`execute`, `review` and `judge`; `llm.round`; and `tool.call`. Beneath
-`llm.round`, a call an `anthropic` provider makes is a span of the Anthropic
-SDK's own, `anthropic.messages.create`, which is what the Claude API's spans
-nest under; a text-mode Claude Code call spans nothing and hands the round's
-own context on, so the API's spans nest under `llm.round` itself — see
-[Spans from Claude](#spans-from-claude). A call made where no span is open has
-no parent, so its span starts a trace of its own.
+`execute`, `review` and `judge`; `llm.round`; `tool.call`; and `llm.auxiliary`,
+one per call on a seat's [auxiliary chain](../concepts/agent-learning.md#what-the-auxiliary-calls-cost)
+— the turn-start context, a rewrite, reflection, a background learning pass, a
+person's question — carrying the call's `crewlet.stage` and `crewlet.purpose`.
+Beneath `llm.round` or `llm.auxiliary`, a call an `anthropic` provider makes is
+a span of the Anthropic SDK's own, `anthropic.messages.create`, which is what
+the Claude API's spans nest under; a text-mode Claude Code call spans nothing
+and hands the round's own context on, so the API's spans nest under `llm.round`
+itself — see [Spans from Claude](#spans-from-claude).
+
+**Every model call has a parent.** A call is made in `llm.round` or in
+`llm.auxiliary`, so the SDK's span and the API's are never the root of a trace
+of their own. Where nothing above an auxiliary call holds a span,
+`llm.auxiliary` is the root, and the call's `auxiliary_spend` record names that
+same trace — the record and the spans of the call it records are always one
+trace.
 
 The engine's span attributes are deliberately thin: the seat, the phase, the
-model, the round, the tool and its outcome, and token counts. Everything about
+model, the round, the tool and its outcome, an auxiliary call's stage and
+purpose, and token counts. Everything about
 what a turn *did* — prompts and responses verbatim, tool arguments and results,
 the decision — is already in the [event store](#the-event-store), and a span
 carries what no event does, which is **duration**.
@@ -1407,14 +1420,15 @@ sends them, and the one thing the engine decides about them is the sampling
 flag: `OTEL_TRACES_SAMPLER=parentbased_always_off` leaves every trace the engine
 starts unsampled, and the API emits nothing for a call made in one.
 
-**Count tokens once.** One call's tokens can be on three spans: `llm.round`
-(`crewlet.input_tokens`, `crewlet.output_tokens`, `crewlet.cache_read_tokens`,
-`crewlet.cache_write_tokens`), the SDK's span and the API's span (both
-`gen_ai.usage.*`). The round's are named `crewlet.*` so that a dashboard summing
-the GenAI conventions' `gen_ai.usage.*` never adds the engine's copy to
-Anthropic's — but the SDK's and the API's spans are two copies of the same
-usage, so sum one or the other, never both. The figure the engine bills and
-budgets by is its own, on the phase events, and not any span's.
+**Count tokens once.** One call's tokens can be on three spans: `llm.round` or
+`llm.auxiliary` (`crewlet.input_tokens`, `crewlet.output_tokens`,
+`crewlet.cache_read_tokens`, `crewlet.cache_write_tokens`), the SDK's span and
+the API's span (both `gen_ai.usage.*`). The engine's are named `crewlet.*` so
+that a dashboard summing the GenAI conventions' `gen_ai.usage.*` never adds the
+engine's copy to Anthropic's — but the SDK's and the API's spans are two copies
+of the same usage, so sum one or the other, never both. The figure the engine
+bills and budgets by is its own, on the phase and `auxiliary_spend` events, and
+not any span's.
 
 **Claude Code on the engine host, a propagator.** A
 [`cli-agent`](../concepts/subscription-llm-backends.md) entry on Claude Code in
