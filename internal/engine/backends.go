@@ -439,6 +439,31 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	return out, nil
 }
 
+// ObjectStoreMismatchError is a node refused because its store.objects names
+// another object store than the one the fleet keeps its files in.
+//
+// A TYPE, carrying both identities, because the remedy is an edit of this
+// node's Tier A and which store is the FLEET'S is the one fact the operator
+// cannot read off the node they are editing. And because the setting fails in
+// other ways that name it too — the record unreadable, the bucket unreachable
+// at open — so a caller asking whether a boot was refused for THIS reason (a
+// restore that put the old store's record back, docs/guides/backup.md) asks
+// the type rather than a substring the other failures share.
+type ObjectStoreMismatchError struct {
+	// Configured is the identity this node's store.objects names.
+	Configured string
+	// Fleet is the identity the fleet recorded when its first node opened a
+	// store ([coord.Fleet.AgreeObjectBackend]).
+	Fleet string
+}
+
+func (e *ObjectStoreMismatchError) Error() string {
+	return fmt.Sprintf("engine: store.objects names %q and the fleet keeps its files in %q: "+
+		"every node must name the same object store, or the company's files split "+
+		"between the two — set store.objects on this node to match the others",
+		e.Configured, e.Fleet)
+}
+
 // openObjects opens the backend the company's files are kept in, once the
 // fleet has agreed it is the fleet's.
 //
@@ -456,10 +481,7 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		return fmt.Errorf("engine: check store.objects against the fleet's object store: %w", err)
 	}
 	if agreed != identity {
-		return fmt.Errorf("engine: store.objects names %q and the fleet keeps its files in %q: "+
-			"every node must name the same object store, or the company's files split "+
-			"between the two — set store.objects on this node to match the others",
-			identity, agreed)
+		return &ObjectStoreMismatchError{Configured: identity, Fleet: agreed}
 	}
 	out.objectsIdentity = identity
 	switch objects.BackendOrDefault() {
