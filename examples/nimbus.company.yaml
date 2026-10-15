@@ -531,7 +531,8 @@ integrations:
     url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
     team: nimbus
     typing_status: addressed
-    # Read ONLY by ``crewlet mattermost provision``; the engine ignores it.
+    # Read by the engine's reconcile loop AND ``crewlet mattermost provision``:
+    # every pass names each bot from it and joins it to these channels.
     provisioning:
       username_prefix: ""          # handles are already agent-*, so a prefix would double it
       channels: [town-square, engineering, product]
