@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -218,6 +220,22 @@ type node struct {
 	// has to read the directory, and deriving it a second time from the
 	// bootstrap would be a second place to decide where they go.
 	snapshotDir string
+
+	// metrics is the recorder this node's engine writes its measurements to
+	// ([engine.Options.Metrics]), as `crewlet run` hands every engine one. A
+	// fleet member's, so a case can say WHICH member did what only the doer
+	// measures — the code committer's batches among it; nil on a single
+	// node, where there is only one member to have done it.
+	metrics *metrics.Recorder
+
+	// stop takes the node down — its API, then its engine — ONCE, however
+	// many times it is called: the test's own cleanup calls it too, so a
+	// case that replaces its node part way
+	// ([TestARestoredNodeServesEveryRefWhole]) stops it in the order a
+	// fleet's teardown does ([stopAll]) and the end of the test finds
+	// nothing left to stop. Nil on a fleet member, whose teardown is the
+	// fleet's.
+	stop func()
 }
 
 // start stands one up.
@@ -240,7 +258,11 @@ type nodeSpec struct {
 	// company amends the golden company document.
 	company func(doc string) string
 	// boot amends the operator's half of the configuration, for the cases
-	// that need it — a bearer token a person writes with.
+	// that need it — a bearer token a person writes with, or the paths, the
+	// coordination and the object store a restored node runs on. It runs
+	// after the fresh store and stream paths are set, so a path it names
+	// wins, and before the store is seeded, which leaves a file already
+	// there as it is.
 	boot func(*config.Bootstrap)
 	// env is what the node's `${VAR}` references resolve to beyond the
 	// harness's own ([nodeEnvironment]).
@@ -292,18 +314,37 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(spec.env),
+		// THIS TEST BINARY IS THE HOOK a node hosting code execs as its
+		// proc-receive (TestMain answers it), because the binary is not
+		// `crewlet`. Handed to every node, as `crewlet run` hands its own
+		// path to every node: one whose company hosts no code builds no
+		// host and never reads it.
+		GitHook: codetest.HookCommand(t),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	// ONE TEARDOWN, registered before anything can fail, so a Start or an
+	// API that fails halfway still stops what came up: the API in front of
+	// the engine, then the engine. A case may call it early; the cleanup
+	// then finds it done.
+	var apiStops []func()
+	stop := sync.OnceFunc(func() {
+		stopInReverse(apiStops)
+		e.Stop(context.Background())
+	})
+	t.Cleanup(stop)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, nil)
+	app, srv, stops, err := wireAPI(t.Context(), e, &boot, nil)
+	apiStops = stops
+	if err != nil {
+		t.Fatalf("api: %v", err)
+	}
 
-	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
+	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID, stop: stop}
 }
 
 // seedStore writes the migrated store image where boot's store will open, so a

@@ -32,9 +32,16 @@ import (
 
 // e2eOperatorID and e2eOperatorToken are the credential a cluster member's
 // API accepts writes under.
+//
+// e2eDevID and e2eDevToken are a PERSON'S: the developer's human seat names
+// e2eDevID as its contact.crewlet_operator_id ([withCode]), so a push made
+// with the token is that person's own — the only credential a git push is
+// taken under, since a token bound to nobody fetches only.
 const (
 	e2eOperatorID    = "e2e-ops"
 	e2eOperatorToken = "e2e-operator-token-0123456789"
+	e2eDevID         = "e2e-dev"
+	e2eDevToken      = "e2e-dev-token-0123456789abcdef"
 )
 
 // upload PUTs a file through a node's byte route.
