@@ -1,5 +1,6 @@
-// Package tracing is the engine's OpenTelemetry wiring: one TracerProvider,
-// built from the environment, installed globally, and flushed on the way out.
+// Package tracing is the engine's OpenTelemetry wiring: one TracerProvider and
+// one MeterProvider, built from the environment, installed globally together,
+// and flushed on the way out.
 //
 // # Why the provider is always installed, and only the exporter is optional
 //
@@ -122,10 +123,10 @@
 // — and the Claude API's beneath it — the root of a trace nobody else was in,
 // while the call's spend record minted a different one through [TraceOf]. So a
 // call is made in a span of the engine's own whatever its caller holds:
-// `llm.round` in a turn's tool loop, and `llm.auxiliary` around every call on a
-// seat's auxiliary chain, opened by the one seam every such call passes
-// (internal/engine's auxiliary seam), which files the call's spend record under
-// it. The callers that held no span hold one: a reflection pass restores its
+// `llm.round` in a turn's tool loop, `agent.turn.judge` around the extension
+// judge's call, and `llm.auxiliary` around every call on a seat's auxiliary
+// chain, opened by the one seam every such call passes (internal/engine's
+// auxiliary seam), which files the call's spend record under it. The callers that held no span hold one: a reflection pass restores its
 // turn's trace and runs in `learning.reflect` beneath it, a background
 // learning pass roots a trace of its own per tick ([StartRoot]), a person's
 // call on the operator surface runs in a `tool.call` of its own, and a coding

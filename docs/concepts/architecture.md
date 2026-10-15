@@ -77,7 +77,9 @@ flowchart LR
     NODE --> EMB
     NODE -->|"tool calls, made as each agent"| MCPS
     NODE -->|"detached coding runs"| BOX
-    NODE -.->|traces| OTEL
+    BOX -.->|"a coding agent's traces,<br/>to the node's /otlp receiver"| NODE
+    NODE -.->|"traces · metrics,<br/>and what a box exported"| OTEL
+    LLM -.->|"the Claude API's own spans,<br/>by Anthropic, to the Console's destination"| OTEL
     NODE -.->|"stream + coordination"| NATS
 ```
 
@@ -95,7 +97,7 @@ act through, and every other one still routes end to end.
 | Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
 | Code sandbox | No | Code authoring as a detached, suspended executor phase | No `run_sandbox`; agents still read and review code over MCP |
-| OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
+| OTLP collector | No | The node's traces and metrics, a coding box's traces forwarded through the node's receiver, and — exported by Anthropic, when an organization admin points the Claude Console's telemetry destination at it — the Claude API's own spans of each call, nested in the engine's | Trace ids are still minted and still stored on every event row, and every call still carries the sampling decision |
 | External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
 
 ---
@@ -166,7 +168,7 @@ back what it wrote.
 | `/config` · `/secrets` · `/setup` · `/agents` · `/org` · `/tools` · `/query` · `/backup` | The REST and config plane. It reads and writes the coordination KV and the store directly. |
 | `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
 | `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker and knowledge tools a seat holds — served to a person's own assistant over MCP, and to the dashboard as the person the token is bound to. Always guarded. |
-| `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
+| `/otlp/{token}/v1/{signal}` | Signed-token OTLP ingest for a coding box — traces, metrics and logs, forwarded to the collector the node itself exports to, with that collector's credential added outside the box. Per-run, like the tool bridge below. |
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
@@ -388,7 +390,12 @@ publish to a subject no durable consumer covers is dropped in silence.
 event carries `trace_id` and `parent_span_id` forward, and every event the turn
 publishes hangs beneath it — so a delivery and the turn it woke are one story at
 the collector, and the same ids are columns on the event rows whether or not a
-collector exists.
+collector exists. Two producers outside the engine's tracer join the same
+trace: a coding agent in a box, whose spans reach the collector through the
+node's `/otlp` receiver, and the Claude API, which nests its own spans of each
+call under the `traceparent` the call carries and exports them itself, to
+wherever an organization admin pointed the Claude Console's destination — see
+[Spans from Claude](../guides/deployment.md#spans-from-claude).
 
 **There are two inbound edges, not one.** Six third-party apps plus Atlassian's Forge
 relay arrive as verified HTTP on `/webhooks/*` and take every step above — five
@@ -826,7 +833,7 @@ here.
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |
 | REST, the dashboard, the socket | `internal/api`, `static/dashboard` | [API endpoints](../reference/api-endpoints.md) · [Dashboard design](../reference/dashboard-design.md) |
-| Event rows, live projection, traces | `internal/observe`, `internal/tracing`, `internal/tokens` | [Deployment](../guides/deployment.md) |
+| Event rows, live projection, traces and metrics | `internal/observe`, `internal/tracing`, `internal/otlpenv`, `internal/tokens` | [Deployment](../guides/deployment.md) |
 | The fleet's turn-level history, read from every node | `internal/eventfan` | [Event system](event-system.md#reading-the-fleets-history) |
 | Which tracker a company runs, and why one of them keeps no state | — | [The tracker](task-engine.md) |
 | DACI, and the structured ask that is all the engine records of a decision | `internal/tracker` | [Decision framework](decision-framework.md) · [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision) |
