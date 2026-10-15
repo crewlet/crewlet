@@ -7,10 +7,16 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
+var log = logging.Get("coord")
+
 // A LEASE VIEW: one class of live leases, WATCHED — listed on a cadence and
-// on demand, and read from memory by every caller in between.
+// on demand, told of every claim and release as it lands, and read from
+// memory by every caller in between.
 //
 // # Why a view, and not a listing per question
 //
@@ -32,6 +38,46 @@ import (
 // TTL old may name a node that is gone and miss one that has joined, and past
 // that a stale roster is a guess rather than an answer.
 //
+// # Why it watches as well as lists
+//
+// A roster listed once a heartbeat learns of a node that JOINED up to a
+// heartbeat late, and so did every view of it: a node joining was missing from
+// every peer's routing for up to fifteen seconds, and a fleet booted at once
+// — every node's first listing taken before any presence lease, its own
+// included, existed — routed for its first heartbeat as though each node were
+// alone. A node holding the estate committed every push it received itself
+// rather than meeting its peers at the repository's one committer, and a node
+// without it had no data node to ask and refused every push, fetch and read.
+// A shorter cadence only shrinks that window by listing the whole class more
+// often, which is the cost the view exists to remove.
+//
+// So the view WATCHES its class ([Backend.WatchLive]) for as long as it runs,
+// and a write that disagrees with what it holds — a holder it does not name, a
+// tenure it names under another owner or epoch, a release of a lease it names
+// — asks for a listing at once, held to [MinViewRefresh] like an invalidation.
+// A renewal agrees with the listing and asks for nothing, so the watch costs a
+// node the class's write rate (for presence, one message per node per
+// heartbeat) and a listing only when the roster moved. A join therefore
+// reaches every view within about a second of its claim, and a clean
+// departure as fast.
+//
+// THE WATCH IS A HINT AND THE LISTING IS STILL THE ANSWER: a write is held
+// against the last listing and never applied to it, because what a listing
+// holds is the store's judgement of what is live (a backend decides liveness
+// on its own clock) and a write is one message about one key. What the watch
+// cannot say is what the cadence is still for: a lease that LAPSES is no write
+// at all, so a node that stopped without releasing leaves the roster at the
+// first listing past its TTL, as it always did; a payload that moves with no
+// change of holder (a renewal's fresh profile) is read at the next listing; and
+// while the watch is down the view is exactly the listed view it was before.
+//
+// The watch begins BEFORE the first listing, so nothing written between the
+// two goes unheard: what landed before the watch is in the listing, and what
+// landed after is delivered. A watch that ends is begun again — after
+// [MinViewRefresh], doubling to the view's cadence, since past that a listing
+// would have caught what it missed anyway — and asks for a listing as it
+// resumes, for whatever was written while nobody was listening.
+//
 // # Invalidation
 //
 // A caller that asked a node the view named and got nothing back says so
@@ -50,12 +96,14 @@ import (
 // answer rather than asking the store again.
 
 // MinViewRefresh is the shortest interval between two listings a view makes
-// because a caller invalidated it.
+// because a caller invalidated it or its watch heard the roster move.
 //
 // ONE SECOND: long enough that a node which never answers costs at most one
-// listing a second however many requests fail against it, and short enough
-// that a lease released on a clean stop leaves the roster before a caller has
-// retried more than once or twice.
+// listing a second however many requests fail against it, and that a fleet
+// booting at once — every node's claim a write each view hears — costs each
+// view a listing a second while it boots rather than one per claim; and short
+// enough that a lease released on a clean stop leaves the roster before a
+// caller has retried more than once or twice.
 const MinViewRefresh = time.Second
 
 // ViewOptions configure a [LeaseView].
@@ -72,19 +120,21 @@ type ViewOptions struct {
 	Now func() time.Time
 }
 
-// Lister is the one call a view makes of the store.
-type Lister interface {
+// ViewStore is what a view asks of the store: a listing of its class, and a
+// watch of the writes to it. Every [Backend] is one.
+type ViewStore interface {
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
+	WatchLive(ctx context.Context, class Class) (<-chan LeaseWrite, error)
 }
 
 // LeaseView watches one class of leases. Build it with [NewLeaseView] and run
 // it with [LeaseView.Run]; its lifetime is the Run's.
 type LeaseView struct {
-	lister Lister
-	class  Class
-	every  time.Duration
-	trust  time.Duration
-	now    func() time.Time
+	store ViewStore
+	class Class
+	every time.Duration
+	trust time.Duration
+	now   func() time.Time
 
 	// kick asks the loop for a listing now; capacity one, so any number
 	// of invalidations between two listings is one listing.
@@ -95,12 +145,15 @@ type LeaseView struct {
 	loaded   bool
 	listedAt time.Time
 	lastErr  error
+	// held is the last listing by resource, for judging a watched write
+	// against it without a walk of the roster per message.
+	held map[string]Lease
 }
 
 // NewLeaseView builds a view of one class. It lists nothing until it runs.
-func NewLeaseView(lister Lister, class Class, opts ViewOptions) (*LeaseView, error) {
+func NewLeaseView(store ViewStore, class Class, opts ViewOptions) (*LeaseView, error) {
 	switch {
-	case lister == nil:
+	case store == nil:
 		return nil, errors.New("coord: a lease view needs a store to list")
 	case !class.Valid():
 		return nil, fmt.Errorf("coord: a lease view needs a class, and %q is not one", class)
@@ -116,16 +169,39 @@ func NewLeaseView(lister Lister, class Class, opts ViewOptions) (*LeaseView, err
 		now = time.Now
 	}
 	return &LeaseView{
-		lister: lister, class: class, every: opts.Every, trust: opts.Trust,
+		store: store, class: class, every: opts.Every, trust: opts.Trust,
 		now: now, kick: make(chan struct{}, 1),
 	}, nil
 }
 
-// Run lists now and then on the view's cadence and on every invalidation,
-// until ctx ends. It returns ctx's error, and nothing else ends it: a listing
-// that fails is recorded, and the view answers unknown once its last good one
-// is older than its trust.
+// Run watches the class, lists it once its watch has begun, and then lists on
+// the view's cadence, on every invalidation and whenever the watch hears the
+// roster move, until ctx ends. It returns ctx's error, and nothing else ends
+// it: a listing that fails is recorded, and the view answers unknown once its
+// last good one is older than its trust; a watch that fails is begun again,
+// and the view lists on its cadence meanwhile.
 func (v *LeaseView) Run(ctx context.Context) error {
+	watching, stopWatching := context.WithCancel(ctx)
+	began := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		v.watch(watching, began)
+	}()
+	defer func() {
+		stopWatching()
+		<-watched
+	}()
+	// THE WATCH FIRST, so the first listing answers for everything written
+	// before the watch could hear it. Its first attempt is bounded by the
+	// store's own request budget, and one that fails lets the listing go
+	// ahead: the view is then the listed view it would have been anyway.
+	select {
+	case <-began:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	ticker := time.NewTicker(v.every)
 	defer ticker.Stop()
 	var last time.Time
@@ -158,6 +234,83 @@ func (v *LeaseView) Run(ctx context.Context) error {
 	}
 }
 
+// watch runs the view's watch of its class until ctx ends, beginning it again
+// whenever it ends, and closes began once its first attempt has answered.
+func (v *LeaseView) watch(ctx context.Context, began chan struct{}) {
+	first := true
+	failures := 0
+	for {
+		writes, err := v.store.WatchLive(ctx, v.class)
+		if first {
+			close(began)
+		}
+		if err == nil {
+			if !first {
+				// RESUMED: whatever was written while no watch was
+				// listening is answered by a listing, not by waiting
+				// out the cadence for it.
+				v.Invalidate()
+				if failures > 0 {
+					log.InfoContext(ctx, "coord_view_watch_resumed", "class", string(v.class))
+				}
+			}
+			failures = 0
+			for w := range writes {
+				if v.moves(w) {
+					v.Invalidate()
+				}
+			}
+		}
+		first = false
+		if ctx.Err() != nil {
+			return
+		}
+		failures++
+		if failures == 1 {
+			detail := "the watch stopped hearing the store"
+			if err != nil {
+				detail = err.Error()
+			}
+			log.WarnContext(ctx, "coord_view_watch_failed", "class", string(v.class),
+				"error", detail,
+				"detail", "the view lists the class on its cadence and hears no join "+
+					"or departure between listings until the watch begins again")
+		}
+		timer := time.NewTimer(backoff.Doubling(failures, MinViewRefresh, v.every))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+// moves reports whether a watched write disagrees with the last listing — a
+// holder the listing does not name, the tenure it names under another owner
+// or epoch, or a release of a lease it names — which is a roster that may
+// have moved since. A renewal of a lease the listing names agrees with it.
+//
+// Before any listing, every write moves it: the listing about to be taken
+// answers for it, and asking costs nothing a listing in flight was not
+// already going to pay.
+func (v *LeaseView) moves(w LeaseWrite) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.loaded {
+		return true
+	}
+	held, named := v.held[w.Resource]
+	switch {
+	case w.Owner == "":
+		return named
+	case !named:
+		return true
+	default:
+		return held.Owner != w.Owner || held.Epoch != w.Epoch
+	}
+}
+
 // refresh takes one listing, bounded by the view's own cadence so a store that
 // hangs cannot stop the next one.
 //
@@ -171,7 +324,7 @@ func (v *LeaseView) refresh(ctx context.Context) {
 	listing, cancel := context.WithTimeout(ctx, v.every)
 	defer cancel()
 	asked := v.now()
-	leases, err := v.lister.ListLive(listing, v.class)
+	leases, err := v.store.ListLive(listing, v.class)
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if err != nil {
@@ -180,7 +333,11 @@ func (v *LeaseView) refresh(ctx context.Context) {
 		}
 		return
 	}
-	v.leases, v.loaded, v.listedAt, v.lastErr = slices.Clone(leases), true, asked, nil
+	held := make(map[string]Lease, len(leases))
+	for _, l := range leases {
+		held[l.Resource] = l
+	}
+	v.leases, v.held, v.loaded, v.listedAt, v.lastErr = slices.Clone(leases), held, true, asked, nil
 }
 
 // Leases is the view's answer: every lease of its class live as of its last

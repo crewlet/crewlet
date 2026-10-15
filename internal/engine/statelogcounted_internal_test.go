@@ -128,10 +128,14 @@ func TestAnUnansweredPresenceViewCountsTheRegisterAlone(t *testing.T) {
 	}
 }
 
-// failingLister is a coordination store whose every listing fails.
+// failingLister is a coordination store whose every listing and watch fails.
 type failingLister struct{}
 
 func (failingLister) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
+	return nil, errors.New("coordination timed out")
+}
+
+func (failingLister) WatchLive(context.Context, coord.Class) (<-chan coord.LeaseWrite, error) {
 	return nil, errors.New("coordination timed out")
 }
 

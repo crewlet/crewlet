@@ -591,6 +591,32 @@ type Backend interface {
 	// roster.
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
+	// WatchLive streams every write to a lease of one class made after it
+	// returns — a claim, a renewal, a takeover, a release — as the
+	// [LeaseWrite] it left, in the order the store applied them, until ctx
+	// ends or the watch fails, when the channel is closed. A CLOSED
+	// CHANNEL says nothing about any lease: the watcher stopped hearing,
+	// and watches again.
+	//
+	// A HINT, NEVER AN ANSWER. A write says the class's roster may have
+	// changed; ListLive is still what says what the roster IS, because a
+	// watch cannot: a lease that LAPSES is no write and need not be
+	// delivered, a watch says nothing about what was held before it began,
+	// and a write it delivers may already be superseded. What it buys is
+	// LATENCY — a roster listed once a heartbeat learns that a node joined
+	// or left the moment it did rather than a heartbeat later
+	// ([LeaseView]). Only a write that names the lease's holder, or names
+	// none, is a write of the lease: a backend whose claim passes through
+	// a state of its own before it has a fencing token (the KV backend's
+	// claiming record) does not deliver that state, which holds nothing.
+	//
+	// Starting it is bounded by ctx, or by the store's own request budget
+	// where ctx carries no deadline, and a store that cannot start one
+	// answers an error (UNKNOWN) rather than a channel that will never
+	// speak. The consumer drains the channel: a backend may hold every
+	// later write behind one it has not read.
+	WatchLive(ctx context.Context, class Class) (<-chan LeaseWrite, error)
+
 	// PreferredResources returns resources of this class whose stickiness
 	// hint names this node, INCLUDING lapsed ones: the hint's whole
 	// purpose is to bring a restarted node's own seats back to it.
@@ -604,6 +630,24 @@ type Backend interface {
 	// protocol nothing is being refused over, and send an operator looking
 	// for an older node that is not there.
 	FleetProtocolFloor(ctx context.Context) (int, bool, error)
+}
+
+// LeaseWrite is one write to a lease as a watch delivers it
+// ([Backend.WatchLive]): who holds the resource once the write has landed,
+// and under which fencing token.
+type LeaseWrite struct {
+	// Resource is the lease's resource name.
+	Resource string
+
+	// Owner holds the resource after the write, and is EMPTY where the
+	// write left nobody holding it — a release, or a record the store
+	// removed.
+	Owner string
+
+	// Epoch is the holder's fencing token, which a renewal leaves as it
+	// was. With no Owner it is the ended tenure's or zero, and a reader
+	// takes nothing from it.
+	Epoch int64
 }
 
 // Refusal is why a claim was definitively not granted.
