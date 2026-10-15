@@ -258,17 +258,20 @@ func newMetricExporter(ctx context.Context, d otlpenv.Destination) (sdkmetric.Ex
 	if err != nil {
 		return nil, err
 	}
+	// An error names the endpoint's VARIABLE and never its value, which is
+	// where a misplaced credential sits — otlpenv's rule for every message
+	// about an endpoint.
 	switch d.Protocol {
 	case otlpenv.GRPC:
 		exp, err := otlpmetricgrpc.New(ctx, opts.metricGRPC()...)
 		if err != nil {
-			return nil, fmt.Errorf("otlp grpc metric exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
+			return nil, fmt.Errorf("otlp grpc metric exporter for %s: %w", d.EndpointVar, err)
 		}
 		return exp, nil
 	case otlpenv.HTTPProtobuf:
 		exp, err := otlpmetrichttp.New(ctx, opts.metricHTTP()...)
 		if err != nil {
-			return nil, fmt.Errorf("otlp http metric exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
+			return nil, fmt.Errorf("otlp http metric exporter for %s: %w", d.EndpointVar, err)
 		}
 		return exp, nil
 	}
