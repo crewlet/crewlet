@@ -264,9 +264,14 @@ func TestASyncWhoseOwnGitFindsDamageIsAnsweredByItsRepair(t *testing.T) {
 // inside the cooldown is refused by the cooldown, never by the unchanged
 // rule: a shape refusal proves something wrote into the directory.
 //
+// The refusal is COUNTED AND LOGGED BEFORE IT IS ANSWERED, as Rebuild's own
+// is, so a caller it wakes reads both: its log line is written late here,
+// which answered first, the case reads before it lands.
+//
 // Mutations: drop tidy's hold to gitproc.CheckShape, and the round behind the
 // sweep answers a directory the pool refuses; answer a swept round's shape
-// refusal in place too (damagedRound), and the repair never ends.
+// refusal in place too (damagedRound), and the repair never ends; answer the
+// round's refusal before reporting it (Cache.run), and its line is missing.
 func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 	t.Parallel()
 	for name, arm := range map[string]struct {
@@ -281,6 +286,7 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			w := newSyncWorld(t, onMemory)
+			w.logs.slow = "code_cache_rebuild_refused"
 			repo := w.repo(t, 1)
 			tip, _ := w.push(t, repo, "refs/heads/main", nil)
 			if arm.tagged {

@@ -349,11 +349,12 @@ func (c *Cache) run(e *entry, r *round) {
 	inc, kind, err := c.converging(e, r)
 	e.mu.Lock()
 	var (
-		d    *damaged
-		quit *refused
+		d       *damaged
+		quit    *refused
+		refusee []*waiter
 	)
 	if r.rebuild == "" && errors.As(err, &d) && !e.dead && e.current == d.inc {
-		quit = c.damagedRound(e, r, d)
+		quit, refusee = c.damagedRound(e, r, d)
 	}
 	requeue := r.rebuild != "" && err != nil && !e.dead
 	if requeue {
@@ -370,14 +371,25 @@ func (c *Cache) run(e *entry, r *round) {
 	c.start(e)
 	e.mu.Unlock()
 	if quit != nil {
+		// COUNTED AND LOGGED BEFORE IT IS ANSWERED, as Rebuild's own
+		// refusal is: a caller woken by the refusal reads a counter and a
+		// log that already hold it. Reported under e.mu it would hold the
+		// entry through a log write; answered first, the caller could read
+		// both before they did.
 		c.report(*quit)
+		e.mu.Lock()
+		for _, w := range refusee {
+			c.answer(e, w, nil, "", quit.err())
+		}
+		e.mu.Unlock()
 	}
 }
 
 // damagedRound answers the callers of r, a round whose own git named damage d
 // of the entry's current incarnation; e.mu is held. Every caller of r is
-// answered or handed on here, and what it answers is a refusal to report once
-// e.mu is let go, or nil.
+// answered or handed on here but those a refused rebuild answers: it returns
+// that refusal, to report once e.mu is let go, and its callers, to answer with
+// it once it is reported — or nil and none.
 //
 //   - A CHECK (waiter.checks) is answered with the damage and the incarnation
 //     pinned: it names the damage, and an operator's Repair is what repairs
@@ -397,7 +409,7 @@ func (c *Cache) run(e *entry, r *round) {
 //     fails answers them as it answers the callers of any round it was queued
 //     over — queued again for an ordinary round, which meets the damage again
 //     and is refused by the window the failed attempt opened.
-func (c *Cache) damagedRound(e *entry, r *round, d *damaged) *refused {
+func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waiter) {
 	c.log.Info("code_sync_damaged", "repo", e.id, "reason", string(d.reason), "swept", d.swept, "error", d.err)
 	var asking []*waiter
 	for _, w := range r.waiters {
@@ -414,24 +426,21 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) *refused {
 	r.waiters = nil
 	switch {
 	case len(asking) == 0:
-		return nil
+		return nil, nil
 	case d.reason == RebuildShape && !d.swept:
 		markWhole(d.inc, RebuildShape)
 		for _, w := range asking {
 			c.queue(e, w)
 		}
-		return nil
+		return nil, nil
 	}
 	next, rule := c.askRebuild(e, d.inc, d.reason, true, nil, c.now())
 	if rule == "" {
 		next.waiters = append(next.waiters, asking...)
-		return nil
+		return nil, nil
 	}
 	f := c.refusal(e, d.name, d.reason, rule, c.now())
-	for _, w := range asking {
-		c.answer(e, w, nil, "", f.err())
-	}
-	return &f
+	return &f, asking
 }
 
 // markWhole marks inc to be read WHOLE, IN PLACE, by its next round, for
