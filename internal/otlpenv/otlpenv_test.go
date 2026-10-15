@@ -1,6 +1,9 @@
 package otlpenv_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"maps"
 	"strings"
 	"testing"
@@ -350,5 +353,56 @@ func TestADroppedEntryIsReportedOnce(t *testing.T) {
 	env := map[string]string{otlpenv.HeadersVar: "oops"}
 	if got := otlpenv.DroppedOf(resolve(t, otlpenv.Traces, env), resolve(t, otlpenv.Metrics, env)); len(got) != 1 {
 		t.Errorf("DroppedOf = %+v, want one entry", got)
+	}
+}
+
+// A DROPPED ENTRY IS REPORTED UNDER ONE NAME, the documented one, with the
+// reader and the signals it was dropped for — and never its value. The sandbox
+// receiver reported its drops as `sandbox_otel_header_dropped`, which no page
+// named, so a search for the documented event found half of them.
+//
+// Mutation: report under any other name, or leave the signals off, and this
+// goes red.
+func TestADroppedEntryIsReportedUnderOneName(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{
+		otlpenv.EndpointVar:          "http://localhost:4318",
+		otlpenv.HeadersVar:           "authorization Bearer sk-base",
+		otlpenv.Metrics.HeadersVar(): "x-key sk-metrics",
+	}
+	traces, metrics := resolve(t, otlpenv.Traces, env), resolve(t, otlpenv.Metrics, env)
+	var out bytes.Buffer
+	otlpenv.ReportDropped(t.Context(), slog.New(slog.NewJSONHandler(&out, nil)),
+		otlpenv.ReaderExporter, traces, metrics)
+
+	var lines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		lines = append(lines, rec)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("reported %d drops, want 2: %s", len(lines), out.String())
+	}
+	want := map[string]string{
+		otlpenv.HeadersVar:           "traces",
+		otlpenv.Metrics.HeadersVar(): "metrics",
+	}
+	for _, rec := range lines {
+		if rec["msg"] != otlpenv.DroppedEvent || otlpenv.DroppedEvent != "otel_header_dropped" {
+			t.Errorf("reported as %v, want %s", rec["msg"], "otel_header_dropped")
+		}
+		if rec["reader"] != otlpenv.ReaderExporter {
+			t.Errorf("reported by %v", rec["reader"])
+		}
+		variable, _ := rec["var"].(string)
+		if signals, ok := want[variable]; !ok || rec["signals"] != signals {
+			t.Errorf("%s was reported for %v, want %q", variable, rec["signals"], signals)
+		}
+	}
+	if strings.Contains(out.String(), "sk-") {
+		t.Errorf("a report quotes a dropped entry's value: %s", out.String())
 	}
 }

@@ -502,10 +502,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// rather than an announcement the next statement can still retract.
 	// The endpoint is printed as resolved: [otlpenv] refuses one carrying
 	// userinfo or a query, the two places a URL holds a credential.
-	for _, d := range otlpenv.DroppedOf(traces, metricsAt) {
-		log.WarnContext(ctx, "otel_header_dropped", "var", d.Var,
-			"entry", d.Entry, "header", d.Header, "reason", d.Reason)
-	}
+	otlpenv.ReportDropped(ctx, log, otlpenv.ReaderExporter, traces, metricsAt)
 	log.InfoContext(ctx, "tracing_configured",
 		"exporting", traces.Exports(), "declined", traces.Declined,
 		"endpoint", traces.Endpoint, "protocol", traces.Protocol,

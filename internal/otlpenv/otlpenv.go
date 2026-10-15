@@ -105,9 +105,11 @@
 package otlpenv
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"slices"
@@ -586,6 +588,42 @@ func DroppedOf(ds ...Destination) []Dropped {
 		}
 	}
 	return out
+}
+
+// DroppedEvent is the one name a dropped header entry is reported under, by
+// every reader of these variables ([ReportDropped]).
+const DroppedEvent = "otel_header_dropped"
+
+// The readers that report a drop, named on each report so an operator can
+// tell which half of the engine read the entry.
+const (
+	ReaderExporter         = "exporter"
+	ReaderSandboxForwarder = "sandbox_forwarder"
+)
+
+// ReportDropped logs every header entry ds dropped, each once, as
+// [DroppedEvent], naming the reader and the signals the entry was dropped for.
+//
+// ONE NAME FOR EVERY READER, through this one function, because a drop
+// reported under two names is a drop an operator searching for the documented
+// one finds half of: the sandbox receiver once reported its own as
+// `sandbox_otel_header_dropped`, which no page named, so an entry only it read
+// was reported under a name nobody searched for, and a base entry both halves
+// read was reported once under each. Each reader still reports what it read —
+// an entry both read appears once per reader, with its reader named — because
+// "the exporter dropped it" and "the receiver dropped it" are each a fact.
+func ReportDropped(ctx context.Context, logger *slog.Logger, reader string, ds ...Destination) {
+	for _, x := range DroppedOf(ds...) {
+		var signals []string
+		for _, d := range ds {
+			if slices.Contains(d.Dropped, x) {
+				signals = append(signals, string(d.Signal))
+			}
+		}
+		logger.WarnContext(ctx, DroppedEvent, "reader", reader, "var", x.Var,
+			"entry", x.Entry, "header", x.Header, "reason", x.Reason,
+			"signals", strings.Join(signals, ","))
+	}
 }
 
 // endpointFor applies the endpoint rule: the signal's own variable verbatim,

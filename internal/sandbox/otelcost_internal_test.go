@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,5 +51,34 @@ func TestOnlyWaitingSpendsAnExportsWaitAllowance(t *testing.T) {
 	other.release()
 	if !b.sem.TryAcquire(100) {
 		t.Error("a released hold kept part of the budget")
+	}
+}
+
+// THE RECEIVER REPORTS A DROPPED HEADER UNDER THE DOCUMENTED NAME. It reported
+// its own drops as `sandbox_otel_header_dropped`, a name no page gave, so an
+// operator searching for `otel_header_dropped` found the engine's half and not
+// the receiver's.
+//
+// Mutation: log the drop under the old name and this goes red.
+func TestTheReceiverReportsADroppedHeaderUnderTheDocumentedName(t *testing.T) {
+	logs := captureLogs(t)
+	env := map[string]string{
+		OtelReceiverURLVar:                   "https://engine.internal",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+		"OTEL_EXPORTER_OTLP_TRACES_HEADERS":  "authorization Bearer sk-secret",
+	}
+	receiver, err := BuildOtelReceiver(func(k string) string { return env[k] }, []string{"k1:material"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = receiver.Close() })
+	out := logs.String()
+	if !strings.Contains(out, "otel_header_dropped") || strings.Contains(out, "sandbox_otel_header_dropped") ||
+		!strings.Contains(out, "reader=sandbox_forwarder") ||
+		!strings.Contains(out, "OTEL_EXPORTER_OTLP_TRACES_HEADERS") {
+		t.Errorf("the drop was not reported as otel_header_dropped by the forwarder:\n%s", out)
+	}
+	if strings.Contains(out, "sk-secret") {
+		t.Errorf("the report quotes the dropped entry's value:\n%s", out)
 	}
 }
