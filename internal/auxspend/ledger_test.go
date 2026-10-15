@@ -150,7 +150,11 @@ func TestALedgersBucketNeverHoldsTwoTraces(t *testing.T) {
 	t.Parallel()
 	pub := &recorder{}
 	l := auxspend.NewLedger(pub)
+	// Each call in a span of its own, as every auxiliary call is made in an
+	// `llm.auxiliary`: a minted root names none, and the first call's span
+	// would then be indistinguishable from no span at all.
 	first, second := events.NewTrace(), events.NewTrace()
+	first.SpanID, second.SpanID = "b7ad6b7169203331", "53995c3f42cd8ad8"
 	again := first
 	again.SpanID = "00f067aa0ba902b7"
 	for i, tr := range []events.TraceContext{first, second, again} {
