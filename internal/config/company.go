@@ -253,8 +253,10 @@ func (c *Company) ValidateRunnable() error {
 // within one list, a GitHub App on a human seat, an avatar the dashboard
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
 // cli-agent entry's credential configured where its CLI never reads it
-// ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
-// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), and a
+// ([LLMProvider.validateCLICredentials]), a variable the engine sets itself
+// named in a cli-agent entry's cli.env or profile ([LLMProvider.validateCLIEnv]),
+// a cli-agent model with no provider segment on a CLI that reads one
+// ([LLMProvider.validateCLIModel]), and a
 // seat whose code work hands a
 // cli-agent entry to another CLI's coding agent
 // ([Company.validateSandboxCodingAgents]).
@@ -268,7 +270,7 @@ func (c *Company) ValidateAdmission() error {
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
 		c.validateHumanSeatApps(), c.validateAvatars(), c.validateCLIAgentCredentials(),
-		c.validateCLIAgentModels(), c.validateSandboxCodingAgents())
+		c.validateCLIAgentEnv(), c.validateCLIAgentModels(), c.validateSandboxCodingAgents())
 }
 
 // validateHumanSeatApps refuses a per-seat GitHub App on a human seat.

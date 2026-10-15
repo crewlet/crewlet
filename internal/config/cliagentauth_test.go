@@ -230,3 +230,117 @@ func TestACLIAgentProfileThatCannotLoadIsRefusedAtItsOverrides(t *testing.T) {
 		t.Errorf("want a shape error naming the misspelled field, got %v", err)
 	}
 }
+
+// NO LAYER AN OPERATOR WRITES MAY NAME A VARIABLE THE ENGINE SETS ITSELF.
+//
+// HOME, the XDG directories, TMPDIR and the vendor's relocation variable are
+// the isolation between seats, and the system-prompt channel carries a
+// per-call path. The backend sets each last and removes whatever cli.env or
+// the profile said, so a value there reaches nothing — and before it did, a
+// cli.env HOME landed after the isolation and put every seat on the entry in
+// one home. So a write naming one is refused, at the field, and judged against
+// the MERGED profile: an override that declares a relocation variable makes
+// that name the engine's.
+func TestAVariableTheEngineSetsItselfIsRefusedInEveryLayer(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		path  string
+	}{
+		{
+			name:  "HOME in cli.env",
+			lines: []string{"cli: {agent: claude-code, env: {HOME: /srv/shared}}"},
+			path:  "providers.llm.sub.cli.env.HOME",
+		},
+		{
+			name:  "an XDG directory in cli.env",
+			lines: []string{"cli: {agent: codex, env: {XDG_CONFIG_HOME: /srv/shared/.config}}"},
+			path:  "providers.llm.sub.cli.env.XDG_CONFIG_HOME",
+		},
+		{
+			name:  "TMPDIR in cli.env",
+			lines: []string{"cli: {agent: claude-code, env: {TMPDIR: /tmp}}"},
+			path:  "providers.llm.sub.cli.env.TMPDIR",
+		},
+		{
+			name:  "the vendor's relocation variable in cli.env",
+			lines: []string{"cli: {agent: claude-code, env: {CLAUDE_CONFIG_DIR: /srv/shared/.claude}}"},
+			path:  "providers.llm.sub.cli.env.CLAUDE_CONFIG_DIR",
+		},
+		{
+			name: "a relocation variable an override declares, in cli.env",
+			lines: []string{
+				"cli: {agent: codex, env: {VENDOR_DIR: /srv/shared}, overrides: {config_env: {VENDOR_DIR: .vendor}}}"},
+			path: "providers.llm.sub.cli.env.VENDOR_DIR",
+		},
+		{
+			name:  "the system-prompt channel in cli.env",
+			lines: []string{"cli: {agent: gemini-cli, env: {GEMINI_SYSTEM_MD: /srv/prompt.md}}"},
+			path:  "providers.llm.sub.cli.env.GEMINI_SYSTEM_MD",
+		},
+		{
+			name:  "HOME in the profile's own env",
+			lines: []string{"cli: {agent: claude-code, overrides: {env: {HOME: /srv/shared}}}"},
+			path:  "providers.llm.sub.cli.overrides",
+		},
+		{
+			name:  "the host's HOME forwarded by passthrough_env",
+			lines: []string{"cli: {agent: claude-code, overrides: {passthrough_env: [HOME]}}"},
+			path:  "providers.llm.sub.cli.overrides",
+		},
+		{
+			name:  "a token variable the isolation overwrites",
+			lines: []string{"cli: {agent: claude-code, overrides: {token_env: TMPDIR}}"},
+			path:  "providers.llm.sub.cli.overrides",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, cliEntry(tc.lines...), tc.path)
+			if !errors.Is(err, ErrConflict) {
+				t.Errorf("want %v, got %v", ErrConflict, err)
+			}
+			if !strings.Contains(err.Error(), "engine sets") {
+				t.Errorf("the refusal does not say the engine sets the variable itself:\n%v", err)
+			}
+			assertAdmissionOnly(t, cliEntry(tc.lines...), tc.path)
+		})
+	}
+}
+
+// What another CLI's profile owns is an ordinary variable here: only the
+// merged profile's own isolation and channel are the engine's.
+func TestAnotherCLIsRelocationVariableIsAnOrdinaryVariable(t *testing.T) {
+	t.Parallel()
+	doc := cliEntry("cli: {agent: codex, env: {CLAUDE_CONFIG_DIR: /srv/claude, GEMINI_SYSTEM_MD: /srv/p.md}}")
+	if _, err := ParseCompany([]byte(doc)); err != nil {
+		t.Errorf("a variable codex's profile does not own was refused: %v", err)
+	}
+}
+
+// A RELOCATION VARIABLE IS PART OF THE ISOLATION, so it may not leave the seat
+// home — `../../shared` pointed every seat's vendor state at one directory —
+// nor give a base variable a second value. RUNNABLE, unlike the layers above:
+// the profile contradicts itself about where a seat's state lives.
+func TestARelocationVariableThatLeavesTheSeatHomeIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, override := range map[string]string{
+		"a climb out of the home": `config_env: {CLAUDE_CONFIG_DIR: "../../shared/.claude"}`,
+		"an absolute directory":   `config_env: {CLAUDE_CONFIG_DIR: /srv/shared/.claude}`,
+		"a base variable":         `config_env: {XDG_CONFIG_HOME: .elsewhere}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doc := cliEntry("cli: {agent: claude-code, overrides: {" + override + "}}")
+			rejects(t, doc, "providers.llm.sub.cli.overrides")
+			cfg, err := ParseCompanyDocument([]byte(doc))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if err := cfg.ValidateRunnable(); err == nil {
+				t.Error("ValidateRunnable() admitted a profile whose isolation leaves the seat home")
+			}
+		})
+	}
+}

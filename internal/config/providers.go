@@ -967,7 +967,9 @@ type CLIAgent struct {
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
-	// the CLI needs beyond PATH, locale, TLS and proxy is declared here.
+	// the CLI needs beyond PATH, locale, TLS and proxy is declared here —
+	// never a variable the engine sets itself on every call
+	// ([LLMProvider.validateCLIEnv]).
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
 
 	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
@@ -1146,6 +1148,20 @@ func (c *Company) validateCLIAgentCredentials() error {
 			continue
 		}
 		p.wrap(spec.validateCLICredentials(entryPath(key)))
+	}
+	return p.err()
+}
+
+// validateCLIAgentEnv is [LLMProvider.validateCLIEnv] over every cli-agent
+// entry of the company, in key order.
+func (c *Company) validateCLIAgentEnv() error {
+	var p problems
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		spec := c.Providers.LLM[key]
+		if spec.Type != LLMCLIAgent || spec.CLI == nil {
+			continue
+		}
+		p.wrap(spec.validateCLIEnv(entryPath(key)))
 	}
 	return p.err()
 }
@@ -1366,6 +1382,49 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 					"here reaches the CLI depends on auth.mode, and on whether api_keys "+
 					"resolves or the engine's environment holds a key of its own. Give "+
 					"the key as api_keys with cli.auth.mode api-key", name)
+		}
+	}
+	return p.err()
+}
+
+// validateCLIEnv refuses a cli-agent entry that names, in any layer of the
+// CLI's environment it can write, a variable the engine sets itself on every
+// call ([cliprofile.Profile.EngineEnv]): the variables that put a seat's state
+// inside that seat's own home, and the one carrying the system prompt's path.
+//
+// The backend sets each of those LAST and removes whatever a lower layer
+// wrote, so a value here never reaches the CLI — which is the guarantee, and
+// a silent one. Before it was a guarantee, a cli.env HOME landed after the
+// isolation and put every seat on the entry in one home, each reading the
+// others' transcripts. Refused here so an operator who wrote one is told it
+// does nothing, naming the variable.
+//
+// ADMISSION rather than runnable, because an entry that breaks one runs: the
+// engine's value wins. Judged against the profile with cli.overrides merged
+// in, since config_env and system_prompt_env are overridable and decide which
+// names are the engine's.
+func (l *LLMProvider) validateCLIEnv(path Path) error {
+	cli := l.CLI
+	if cli.Agent != "" && !cli.Agent.Valid() {
+		return nil
+	}
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil {
+		//nolint:nilerr // Deliberate: a profile that does not load is a
+		// runnable fault validateCLIProfile already reports at
+		// cli.overrides, and there is no profile to say which names are
+		// the engine's.
+		return nil
+	}
+	var p problems
+	if err := profile.ValidateEnv(cli.Name()); err != nil {
+		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+	}
+	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
+		if sets := profile.EngineSets(name); sets != "" {
+			p.add(entry(at(path, "cli.env"), name), ErrConflict,
+				"the engine sets %s itself on every call, to %s, and removes whatever "+
+					"cli.env says, so this value never reaches the CLI: remove it", name, sets)
 		}
 	}
 	return p.err()
