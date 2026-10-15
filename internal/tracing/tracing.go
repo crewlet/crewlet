@@ -68,7 +68,8 @@
 // a publish, so the decision rides beside the ids: [TraceOf] writes it into
 // the envelope ([events.TraceContext.Unsampled], `trace_unsampled` on the
 // wire), [WithRemote] restores it, and a sandbox run's row and the TRACEPARENT
-// its box is handed ([Traceparent]) carry it. Before it travelled, everything
+// its box is handed ([Traceparent]) carry it, as does the TRACEPARENT a
+// text-mode CLI call is handed for its round ([ProcessEnv]). Before it travelled, everything
 // restored read as sampled — the queue's far side, a resumed run, a box — so
 // a ratio of 0.1 decided the webhook's span and nothing after the first hop.
 //
@@ -109,6 +110,14 @@
 // SDK's ANTHROPIC_OPEN_TELEMETRY* variables, because tracing is the standard
 // OTEL_* environment's alone, and it resolves the global provider on every
 // call, so whatever [Configure] installed is what records it.
+//
+// A PROCESS THE ENGINE STARTS is handed its parent in its ENVIRONMENT —
+// TRACEPARENT and TRACESTATE, the propagator's fields upper-cased
+// ([ProcessEnv]) — by the same propagator that writes the header, so a coding
+// box and a text-mode Claude Code call read the one encoding an outbound
+// request carries. Such a process is handed trace context and never this
+// package's exporter configuration: a vendor's CLI holding the collector's
+// endpoint and headers would hold the company's ingest credential.
 package tracing
 
 import (

@@ -49,12 +49,15 @@ func (p *Profile) SeatEnv(home, cache string) map[string]string {
 }
 
 // EngineEnv names every variable the engine sets in a CLI child's environment
-// itself: the isolation ([Profile.SeatEnv]) and the system-prompt channel
-// ([Profile.SystemPromptEnv]), which carries a per-call path. Sorted.
+// itself: the isolation ([Profile.SeatEnv]), the system-prompt channel
+// ([Profile.SystemPromptEnv]), which carries a per-call path, and — for a CLI
+// that reads it — the call's trace context ([Profile.EnvTraceContext]).
+// Sorted.
 //
 // THE ENGINE'S VALUE OR NONE. The backend removes each of these from whatever
 // the lower layers assembled — the profile's env, its passthrough_env, the
-// operator's cli.env — before it sets its own, so no layer can move a seat's
+// operator's cli.env — before it sets its own (the per-call ones only on a
+// call that has a value for them), so no layer can move a seat's
 // home: a cli.env HOME used to land AFTER the isolation and collapse every
 // seat on the entry into one home, which is the shared-memory failure this
 // backend exists to prevent. Config refuses a document that names one in any
@@ -64,9 +67,9 @@ func (p *Profile) EngineEnv() []string {
 	return slices.Sorted(maps.Keys(p.engineEnv()))
 }
 
-// EngineSets says what the engine puts in an engine-owned variable — the
-// clause a refusal to let any other layer name it ends with — or "" for a
-// variable the engine leaves to the layers below.
+// EngineSets says what an engine-owned variable carries — the clause a
+// refusal to let any other layer name it ends with — or "" for a variable the
+// engine leaves to the layers below.
 func (p *Profile) EngineSets(env string) string {
 	return p.engineEnv()[env]
 }
@@ -80,8 +83,22 @@ func (p *Profile) engineEnv() map[string]string {
 	if p.SystemPromptEnv != "" {
 		owned[p.SystemPromptEnv] = "the path of the seat's system prompt for that call"
 	}
+	if p.EnvTraceContext {
+		for _, name := range TraceContextEnv {
+			owned[name] = "the W3C trace context of the model round the call belongs to"
+		}
+	}
 	return owned
 }
+
+// TraceContextEnv is where a CLI that declares [Profile.EnvTraceContext] reads
+// W3C trace context from: the propagator's two fields, upper-cased, which is
+// the OpenTelemetry convention for carrying them in a process's environment.
+//
+// Spelled here rather than read from internal/tracing, which renders them,
+// because this package is a leaf config imports; a test in the backend holds
+// the two spellings to one.
+var TraceContextEnv = []string{"TRACEPARENT", "TRACESTATE"}
 
 // ValidateEnv reports every place this profile names a variable the engine
 // sets itself ([Profile.EngineEnv]): an env or passthrough_env entry, and a
@@ -97,8 +114,8 @@ func (p *Profile) ValidateEnv(name string) error {
 	var bad []string
 	refuse := func(field, env, consequence string) {
 		if sets := p.EngineSets(env); sets != "" {
-			bad = append(bad, fmt.Sprintf("%s names %s, which the engine sets itself on every "+
-				"call to %s, so %s — remove it", field, env, sets, consequence))
+			bad = append(bad, fmt.Sprintf("%s names %s, which the engine owns on every call — "+
+				"it carries %s — so %s: remove it", field, env, sets, consequence))
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {

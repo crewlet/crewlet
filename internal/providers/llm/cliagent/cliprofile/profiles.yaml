@@ -77,6 +77,24 @@ claude-code:
     cache_write: [["usage", "cache_creation_input_tokens"]]
   config_env:
     CLAUDE_CONFIG_DIR: ".claude"
+  # TRACE CONTEXT, PROPAGATED AND NOTHING MORE. In print mode Claude Code reads
+  # TRACEPARENT and TRACESTATE from its environment, and the engine hands each
+  # call the `llm.round` span it belongs to. With the enhanced-telemetry beta
+  # on and CLAUDE_CODE_ENABLE_TELEMETRY unset, the CLI installs no exporter and
+  # forwards that traceparent unchanged on its Messages API requests — measured
+  # against 2.1.300 — so the Claude API's own spans nest directly under the
+  # round, while the CLI exports nothing, holds no collector credential and
+  # adds no flush to a call's exit. PROPAGATE_TRACEPARENT sends the header to
+  # a gateway ANTHROPIC_BASE_URL too, as the engine's own Anthropic SDK does
+  # for any base_url; without it only Anthropic's own endpoint gets it.
+  #
+  # BOTH SWITCHES ARE BETA. A release that drops or renames them stops the
+  # linking and changes nothing else — the call is the same call — which is
+  # what `written_for` and `crewlet llm doctor` exist to make visible.
+  env_trace_context: true
+  env:
+    CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1"
+    CLAUDE_CODE_PROPAGATE_TRACEPARENT: "1"
   credential_paths: [".claude/.credentials.json"]
   volatile_paths:
     # .claude.json is not merely settings: it carries a `projects` map whose

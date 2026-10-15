@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // What these tests protect.
@@ -396,9 +397,9 @@ func TestTheBoxsTraceparentFollowsTheTurnsDecision(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := receiver.RunEnv(t.Context(), tc.trace, "turn-1", "engineer", time.Hour)
-			got, set := env[sandbox.TraceparentVar]
+			got, set := env[tracing.TraceparentVar]
 			if got != tc.want || set != (tc.want != "") {
-				t.Errorf("%s = %q (set: %v), want %q", sandbox.TraceparentVar, got, set, tc.want)
+				t.Errorf("%s = %q (set: %v), want %q", tracing.TraceparentVar, got, set, tc.want)
 			}
 			if env[otlpenv.EndpointVar] == "" {
 				t.Error("a run with a trace got no endpoint")
@@ -578,7 +579,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	// lose the trace context that nests its spans under the turn — with the
 	// turn's own decision as its flag.
 	want := "00-" + launchedFrom.TraceID + "-" + launchedFrom.SpanID + "-00"
-	if got := env[sandbox.TraceparentVar]; got != want {
+	if got := env[tracing.TraceparentVar]; got != want {
 		t.Errorf("TRACEPARENT = %q, want %q", got, want)
 	}
 	if env["ANTHROPIC_API_KEY"] != "sk-test" {

@@ -1423,7 +1423,7 @@ func (l *LLMProvider) validateCLIEnv(path Path) error {
 	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
 		if sets := profile.EngineSets(name); sets != "" {
 			p.add(entry(at(path, "cli.env"), name), ErrConflict,
-				"the engine sets %s itself on every call, to %s, and removes whatever "+
+				"the engine owns %s on every call — it carries %s — and removes whatever "+
 					"cli.env says, so this value never reaches the CLI: remove it", name, sets)
 		}
 	}

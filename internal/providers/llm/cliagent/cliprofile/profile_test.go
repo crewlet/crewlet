@@ -489,3 +489,42 @@ func TestAUsageDeclarationNamesBothPromptCountsOrNeither(t *testing.T) {
 		t.Error("a json profile declaring both counts does not read usage")
 	}
 }
+
+// ONLY A CLI MEASURED READING TRACE CONTEXT FROM ITS ENVIRONMENT IS HANDED IT.
+// Claude Code is (print mode, 2.1.300), and it propagates only with its two
+// beta switches on — telemetry itself left off, so it exports nothing from the
+// engine host. Declared on a CLI that ignores the variables it would change
+// nothing but the profile's claim; so the others leave it off until somebody
+// measures them.
+func TestEnvTraceContextIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		if got, want := p.EnvTraceContext, name == "claude-code"; got != want {
+			t.Errorf("%s: env_trace_context = %v, want %v", name, got, want)
+		}
+	}
+	claude, _ := Builtin("claude-code")
+	for name, value := range map[string]string{
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+		"CLAUDE_CODE_PROPAGATE_TRACEPARENT":   "1",
+	} {
+		if claude.Env[name] != value {
+			t.Errorf("claude-code env %s = %q, want %q — without it the CLI forwards no trace context",
+				name, claude.Env[name], value)
+		}
+	}
+	for name := range claude.Env {
+		if name == "CLAUDE_CODE_ENABLE_TELEMETRY" || strings.HasPrefix(name, "OTEL_") {
+			t.Errorf("claude-code env sets %s: a CLI on the engine host is handed trace context, "+
+				"never a telemetry exporter of its own", name)
+		}
+	}
+	p, err := Load("claude-code", map[string]any{"env_trace_context": false})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.EnvTraceContext {
+		t.Error("cli.overrides.env_trace_context did not reach the profile")
+	}
+}

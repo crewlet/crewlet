@@ -1225,12 +1225,15 @@ flowchart TD
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     H["<b>anthropic.messages.create</b> (CLIENT)<br/>the Anthropic SDK's span of each HTTP attempt"]
+    J["<b>claude -p</b>, a text-mode cli-agent call<br/><i>spans nothing; forwards the round's traceparent</i>"]
     I["<b>anthropic.messages.create</b> (SERVER) and its children<br/><i>the Claude API's own spans, exported by Anthropic</i>"]
     A --> B --> C --> D
     D --> E
     D --> F
     E --> H
+    E -.->|"TRACEPARENT"| J
     H -.->|"traceparent"| I
+    J -.->|"traceparent"| I
     C -.->|"suspend, then resume"| G
 ```
 
@@ -1240,8 +1243,10 @@ suspended run re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
 `execute`, `review` and `judge`; `llm.round`; and `tool.call`. Beneath
 `llm.round`, a call an `anthropic` provider makes is a span of the Anthropic
 SDK's own, `anthropic.messages.create`, which is what the Claude API's spans
-nest under — see [Spans from Claude](#spans-from-claude). A call made where no
-span is open has no parent, so its span starts a trace of its own.
+nest under; a text-mode Claude Code call spans nothing and hands the round's
+own context on, so the API's spans nest under `llm.round` itself — see
+[Spans from Claude](#spans-from-claude). A call made where no span is open has
+no parent, so its span starts a trace of its own.
 
 The engine's span attributes are deliberately thin: the seat, the phase, the
 model, the round, the tool and its outcome, and token counts. Everything about
@@ -1309,8 +1314,9 @@ that would re-decide a trace already in flight — `always_on`, `traceidratio` �
 refused at startup with the parent-based spelling to use. The decision is made
 once, where a trace starts, and **travels with it**: in the event envelope across
 the queue (`trace_unsampled`), on a suspended coding run's record, as the flag
-of the `TRACEPARENT` a sandbox is handed, and as the flag of the `traceparent`
-each call to the Claude API carries — so the turn a delivery wakes, the resumed
+of the `TRACEPARENT` a sandbox or a text-mode Claude Code call is handed, and
+as the flag of the `traceparent` each call to the Claude API carries — so the
+turn a delivery wakes, the resumed
 half of a run, a coding box and the API's own spans are recorded exactly when
 the trace they continue was, whichever node runs them. Only W3C trace context propagates;
 baggage is neither accepted nor sent.
@@ -1402,9 +1408,24 @@ Anthropic's — but the SDK's and the API's spans are two copies of the same
 usage, so sum one or the other, never both. The figure the engine bills and
 budgets by is its own, on the phase events, and not any span's.
 
-A [`cli-agent`](../concepts/subscription-llm-backends.md) entry on Claude Code
-does not call the API through this SDK: the CLI makes its own calls, so none of
-the SDK's spans above are recorded for it.
+**Claude Code on the engine host, a propagator.** A
+[`cli-agent`](../concepts/subscription-llm-backends.md) entry on Claude Code in
+`text` mode does not call the API through this SDK — the CLI makes its own
+calls, so none of the SDK's spans are recorded for it — but it is handed the
+round's trace context: each call's `TRACEPARENT` (and `TRACESTATE`) is the
+`llm.round` span it belongs to, flag included, and the profile turns on the two
+Claude Code switches that make the CLI forward it, unchanged, on its Messages
+API requests — to a gateway `ANTHROPIC_BASE_URL` as well as to Anthropic. So
+the Claude API's spans nest **directly under `llm.round`**, exactly as they do
+under the SDK's span for an `anthropic` entry, and the sampling decision goes
+with them. The CLI's own telemetry stays off: no `CLAUDE_CODE_ENABLE_TELEMETRY`
+and none of the engine's `OTEL_*` variables reach it, so Claude Code exports no
+spans of its own from the engine host — it is handed no collector, and so no
+collector credential, and an export it never makes adds nothing to a call's
+exit. Both switches are Claude Code beta behaviour (measured against 2.1.300):
+a release that drops them stops the linking and changes nothing else. A host's
+own Claude Code managed settings can still turn its telemetry on, whatever the
+engine hands it — see [trace context](../concepts/subscription-llm-backends.md#trace-context).
 
 #### Correlating logs with traces
 

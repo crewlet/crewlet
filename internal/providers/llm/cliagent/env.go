@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // AuthMode is how a call authenticates. It mirrors config.CLIAgentAuthMode,
@@ -115,6 +117,19 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	}
 	maps.Copy(env, p.SeatEnv(c.Home, c.Cache))
 	return env
+}
+
+// traceEnv is the W3C trace context of the span ctx holds, as the KEY=VALUE
+// pairs a child reads it from — sorted, as [buildEnv]'s are — or none when ctx
+// holds no span. One encoding with every other process the engine hands a
+// parent to ([tracing.ProcessEnv]).
+func traceEnv(ctx context.Context) []string {
+	env := tracing.ProcessEnv(ctx)
+	out := make([]string, 0, len(env))
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		out = append(out, name+"="+env[name])
+	}
+	return out
 }
 
 // applyAuth puts the credential the mode asks for into the child environment,
