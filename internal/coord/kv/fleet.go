@@ -123,13 +123,8 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// on a boot that opens every coordination bucket in a row — where a
 	// read's term costs it two.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
-	var bucket jetstream.KeyValue
-	err := jsprovision.Read(lookupCtx,
-		func(ctx context.Context) error {
-			var e error
-			bucket, e = js.KeyValue(ctx, cfg.Bucket)
-			return e
-		}, nil)
+	bucket, err := jsprovision.Read(lookupCtx,
+		func(ctx context.Context) (jetstream.KeyValue, error) { return js.KeyValue(ctx, cfg.Bucket) }, nil)
 	cancelLookup()
 	switch {
 	case err == nil:
@@ -137,7 +132,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// ON ctx, NOT lookupCtx: a slow lookup can leave its own
 		// deadline spent, and the observation would then fail on a
 		// bucket it had just found. observeReplicas owns its own term.
-		return bucket, observeReplicas(ctx, bucket, cfg)
+		return bucket, observeReplicas(ctx, js, bucket, cfg)
 	case errors.Is(err, jetstream.ErrBucketNotFound):
 		// TOLD it is absent. Create it below.
 	case jsprovision.Unanswered(ctx, err):
@@ -249,11 +244,8 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// One lookup answers at an arbitrary instant inside that window and
 	// fails a boot over a bucket that exists. ON ctx AND NOT createCtx,
 	// because createCtx is the deadline that just expired.
-	err = jsprovision.Settle(ctx, func(ctx context.Context) error {
-		var e error
-		bucket, e = js.KeyValue(ctx, cfg.Bucket)
-		return e
-	})
+	bucket, err = jsprovision.Settle(ctx,
+		func(ctx context.Context) (jetstream.KeyValue, error) { return js.KeyValue(ctx, cfg.Bucket) })
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: the first says what went wrong and the second only
@@ -263,7 +255,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// THE PEER MADE IT, so it is the peer's replica count that is in force
 	// and this node has to agree with it — the same question the adopt
 	// path above asks, for the same reason.
-	return bucket, observeReplicas(ctx, bucket, cfg)
+	return bucket, observeReplicas(ctx, js, bucket, cfg)
 }
 
 // observeReplicas refuses a bucket replicated below what this node is
@@ -305,7 +297,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 // send and then failed the boot over a bucket it had just found — the one
 // status read on the path still asked that way after every other had moved to
 // Settle.
-func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
+func observeReplicas(ctx context.Context, js jetstream.JetStream, bucket jetstream.KeyValue,
 	cfg jetstream.KeyValueConfig) error {
 
 	want := max(cfg.Replicas, 1)
@@ -313,7 +305,7 @@ func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 		// Nothing to be short of, and no round trip spent asking.
 		return nil
 	}
-	facts, err := readBucket(ctx, bucket)
+	facts, err := readBucket(ctx, js, bucket)
 	if err != nil {
 		return err
 	}
@@ -768,7 +760,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	// Mattermost post a reconnecting seat replays delivered twice. So Claim
 	// refuses one ([coord.ErrTTLTooLong]) rather than take it on a promise
 	// the bucket cannot keep.
-	facts, err := readBucket(ctx, store.claims)
+	facts, err := readBucket(ctx, js, store.claims)
 	if err != nil {
 		return nil, err
 	}

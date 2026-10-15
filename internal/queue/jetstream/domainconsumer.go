@@ -355,11 +355,10 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// consumer an earlier boot made is one whose position this
 			// node's rows may no longer agree with.
 			createErr := err
-			err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
-				var e error
-				cons, e = q.js.Consumer(ctx, stream, name)
-				return e
-			})
+			cons, err = jsprovision.SettleWith(ctx, q.provisioning(),
+				func(ctx context.Context) (jetstream.Consumer, error) {
+					return q.js.Consumer(ctx, stream, name)
+				})
 			switch {
 			case err == nil:
 				err = handle.resumeAt(ctx, cons, after)
@@ -597,12 +596,22 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 
 	info := cons.CachedInfo()
 	if info == nil {
-		// A READ, sized and re-asked as one — see [Queue.askRead].
-		if err := c.q.askRead(ctx, func(ctx context.Context) error {
-			var e error
-			info, e = cons.Info(ctx)
-			return e
-		}); err != nil {
+		// A READ, sized and re-asked as one — see [askRead] — through a
+		// handle of each request's own: the consumer handle's Info caches
+		// its reply into the handle with no lock, and a read may have two
+		// requests out at once.
+		var err error
+		info, err = askRead(ctx, c.q, func(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+			fresh, lookupErr := c.q.js.Consumer(ctx, c.stream, c.name)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if held := fresh.CachedInfo(); held != nil {
+				return held, nil
+			}
+			return fresh.Info(ctx)
+		})
+		if err != nil {
 			return fmt.Errorf("read the consumer's state: %w", err)
 		}
 	}
@@ -902,35 +911,29 @@ func nextDelivery(through, first uint64) uint64 {
 
 // firstSequence is the first sequence the stream still holds, or zero for one
 // nothing has been written to. It is a READ, sized and re-asked as one — see
-// [Queue.askRead].
+// [askRead].
 func (q *Queue) firstSequence(ctx context.Context, stream string) (uint64, error) {
-	var s jetstream.Stream
-	if err := q.askRead(ctx, func(ctx context.Context) error {
-		var e error
-		s, e = q.js.Stream(ctx, stream)
-		return e
-	}); err != nil {
+	s, err := askRead(ctx, q, func(ctx context.Context) (jetstream.Stream, error) {
+		return q.js.Stream(ctx, stream)
+	})
+	if err != nil {
 		return 0, fmt.Errorf("read %s's first sequence: %w", stream, err)
 	}
 	return s.CachedInfo().State.FirstSeq, nil
 }
 
 // lookup asks the broker for this node's consumer, as a read — see
-// [Queue.askRead].
+// [askRead].
 func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error) {
-	var cons jetstream.Consumer
-	err := c.q.askRead(ctx, func(ctx context.Context) error {
-		var e error
-		cons, e = c.q.js.Consumer(ctx, c.stream, c.name)
-		return e
+	return askRead(ctx, c.q, func(ctx context.Context) (jetstream.Consumer, error) {
+		return c.q.js.Consumer(ctx, c.stream, c.name)
 	})
-	return cons, err
 }
 
 // askRead runs one metadata READ on a state log's bring-up — its stream's
 // ceiling when the logs are sized, and everything a domain consumer's open
 // reads: under the lookup ceiling of [Queue.provisioning], re-issued by
-// [jsprovision.Timing.Read] while nobody answers.
+// [jsprovision.ReadWith] while nobody answers, every request kept outstanding.
 //
 // # Why a read on this path is not sized like the writes beside it
 //
@@ -946,10 +949,14 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 // ON THE CALLER'S CONTEXT, which is the one that bounds the boot, and never on
 // what an earlier read or write left: each gets its own term, so no one of
 // them decides how long the next may take.
-func (q *Queue) askRead(ctx context.Context, read func(context.Context) error) error {
+//
+// A FUNCTION RATHER THAN A METHOD only because a method cannot take a type
+// parameter, and the read hands back what it read rather than writing it
+// anywhere: [jsprovision.ReadWith] may have more than one request out at once.
+func askRead[T any](ctx context.Context, q *Queue, read func(context.Context) (T, error)) (T, error) {
 	readCtx, cancel := context.WithTimeout(ctx, q.provisioning().Lookup)
 	defer cancel()
-	return q.provisioning().Read(readCtx, read, nil)
+	return jsprovision.ReadWith(readCtx, q.provisioning(), read, nil)
 }
 
 // domainConsumerName is what this node's reader is called on the broker.

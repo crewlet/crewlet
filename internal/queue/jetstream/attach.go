@@ -469,9 +469,9 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// exceeded` with nothing logged before it.
 	//
 	// TWO VERBS, because there are two hazards and one tool does not cover
-	// both. [jsprovision.Timing.Read] re-issues a request the group never
+	// both. [jsprovision.ReadWith] re-issues a request the group never
 	// answered, under [jsprovision.LookupBudget] as its ceiling;
-	// [jsprovision.Settle]
+	// [jsprovision.SettleWith]
 	// waits out the propagation window, and this read is inside one BY
 	// CONSTRUCTION — EnsureSubscription above has just created the
 	// consumer, so the member that made it can still be told it is not
@@ -485,24 +485,17 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 			"detail", "still opening the mailbox this attachment consumes from; "+
 				"on a fleet that is a metadata group that has not settled")
 	})
-	var cons jetstream.Consumer
-	err = q.provisioning().Read(lookupCtx,
-		func(ctx context.Context) error {
-			var e error
-			cons, e = q.js.Consumer(ctx, stream, name)
-			return e
-		}, nil)
+	consumer := func(ctx context.Context) (jetstream.Consumer, error) {
+		return q.js.Consumer(ctx, stream, name)
+	}
+	cons, err := jsprovision.ReadWith(lookupCtx, q.provisioning(), consumer, nil)
 	stopLookup()
 	cancelLookup()
 	if jsprovision.NotYetVisible(err) {
-		// ON ctx, NOT lookupCtx, for the reason [jsprovision.Settle]
+		// ON ctx, NOT lookupCtx, for the reason [jsprovision.SettleWith]
 		// gives: lookupCtx may be the deadline that just expired, and a
 		// read-back handed an expired context asks once and gives up.
-		err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
-			var e error
-			cons, e = q.js.Consumer(ctx, stream, name)
-			return e
-		})
+		cons, err = jsprovision.SettleWith(ctx, q.provisioning(), consumer)
 	}
 	if err != nil {
 		return fmt.Errorf("open consumer %s/%s: %w", topic, group, err)

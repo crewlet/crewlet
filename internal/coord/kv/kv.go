@@ -513,11 +513,11 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 	// Resolved once, here, where nothing is concurrent yet. See lane.stream
 	// for why the stream is not read per call, and this function's doc for
 	// why the age is read back rather than assumed.
-	leaseFacts, err := readBucket(ctx, leases)
+	leaseFacts, err := readBucket(ctx, js, leases)
 	if err != nil {
 		return nil, err
 	}
-	dutyFacts, err := readBucket(ctx, duties)
+	dutyFacts, err := readBucket(ctx, js, duties)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +624,7 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
 	bucket jetstream.KeyValue, want jetstream.KeyValueConfig, holds string) (jetstream.KeyValue, error) {
 
-	facts, err := readBucket(ctx, bucket)
+	facts, err := readBucket(ctx, js, bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -677,27 +677,30 @@ type bucketFacts struct {
 // RE-ASKED through [jsprovision.Settle] for the reason every other read-back on
 // this path is: a bucket handle can come back before the metadata update that
 // made it is visible here, so one lookup inside that window fails a clustered
-// boot over a bucket this node just opened. Settle owns the short deadline each
-// attempt runs under, for its own reason: an ordinary metadata read against a
+// boot over a bucket this node just opened. Settle owns the short term each
+// request runs under, for its own reason: an ordinary metadata read against a
 // group that has just proven it works.
-func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, error) {
-	var status jetstream.KeyValueStatus
-	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
-		var e error
-		status, e = bucket.Status(ctx)
-		return e
+//
+// THROUGH A STREAM HANDLE OF EACH REQUEST'S OWN, never the bucket's Status: that
+// reads the bucket handle's stream info into the handle with no lock, and a
+// read-back keeps a request it has presumed lost outstanding while it asks the
+// next ([jsprovision.SettleWith]), so two of them can be answered at once — and
+// the bucket's handle is the one every later call on the bucket reads.
+func readBucket(ctx context.Context, js jetstream.JetStream, bucket jetstream.KeyValue) (bucketFacts, error) {
+	info, err := jsprovision.Settle(ctx, func(ctx context.Context) (*jetstream.StreamInfo, error) {
+		stream, err := js.Stream(ctx, bucketStream(bucket))
+		if err != nil {
+			return nil, err
+		}
+		return stream.CachedInfo(), nil
 	})
 	if err != nil {
 		return bucketFacts{}, fmt.Errorf("coord/kv: read %s status: %w", bucket.Bucket(), err)
 	}
-	info, ok := status.(*jetstream.KeyValueBucketStatus)
-	if !ok || info.StreamInfo() == nil {
-		return bucketFacts{}, fmt.Errorf("coord/kv: %s reported no backing stream", bucket.Bucket())
-	}
 	return bucketFacts{
-		stream:   info.StreamInfo().Config.Name,
-		age:      info.TTL(),
-		replicas: info.StreamInfo().Config.Replicas,
+		stream:   info.Config.Name,
+		age:      info.Config.MaxAge,
+		replicas: info.Config.Replicas,
 	}, nil
 }
 
