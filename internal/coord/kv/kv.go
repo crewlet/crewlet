@@ -190,10 +190,14 @@
 //
 // A lease's read-back, a renew's and a release's read, Get, the epoch and
 // hint reads, and every record the fleet store reads by key (fleet.go, the
-// mailboxes, the positions, the follows, the secrets) go
-// through ONE read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only
-// the stream leader answers ([leaderReader], [getLatest]). NONE is the bucket
-// handle's own Get, and none may be.
+// mailboxes, the positions, the follows, the secrets, the token counters, the
+// object store's records, the seat pauses) go through ONE read:
+// `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only the stream leader
+// answers ([leaderReader], [getLatest]). NONE is the bucket handle's own Get,
+// and none may be — TestNothingReadsAKeyThroughADirectGet reads this
+// package's source for one, because the partition case below holds only the
+// call sites it reads through, and every other read is a call site of its
+// own.
 //
 // That Get is a DIRECT get, and a direct get is answered by whichever replica
 // the broker picks — the one on the caller's own member first — from its own
