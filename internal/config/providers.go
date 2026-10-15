@@ -567,6 +567,18 @@ func (l *LLMProvider) validate(path Path) error {
 	// backend it would reach does not send it.
 	switch kind {
 	case LLMCLIAgent:
+		// NOTHING READS IT: the CLI makes its own calls, and the engine
+		// neither builds an HTTP client for the entry nor hands its coding
+		// boxes an endpoint (a cli-agent entry's run carries the CLI's own
+		// sign-in and no base URL). Accepted, it was a gateway an operator
+		// configured and no call ever went through.
+		if strings.TrimSpace(l.BaseURL) != "" {
+			p.add(at(path, "base_url"), ErrConflict,
+				"base_url is an HTTP backend's endpoint, and nothing reads it on a "+
+					"cli-agent provider: the CLI makes its own calls. Point the CLI "+
+					"at a gateway in its own variable in cli.env — ANTHROPIC_BASE_URL "+
+					"for Claude Code — and drop this field")
+		}
 		if l.ReasoningEffort != "" {
 			p.add(at(path, "reasoning_effort"), ErrConflict,
 				"reasoning_effort is an API request field and does nothing on a "+
@@ -646,7 +658,7 @@ func (l *LLMProvider) validate(path Path) error {
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible provider needs the endpoint to talk to")
 	}
-	if err := CheckBaseURL(l.BaseURL); err != nil {
+	if err := CheckBaseURL(l.BaseURL); kind != LLMCLIAgent && err != nil {
 		p.add(at(path, "base_url"), ErrUnknownValue, "%v", err)
 	}
 	return p.err()

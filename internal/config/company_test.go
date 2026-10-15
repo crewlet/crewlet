@@ -87,6 +87,16 @@ func TestCompanyValidatorRejections(t *testing.T) {
 				"      reasoning_budget_tokens: 10000\n      cli:\n        agent: claude-code\n",
 			"providers.llm.sub.reasoning_budget_tokens", ErrConflict,
 		},
+		// And the endpoint, for the same reason: the CLI makes its own
+		// calls, so nothing builds a client over base_url and nothing hands
+		// it to the entry's boxes. A gateway configured here was one no
+		// call ever went through.
+		{
+			"base_url on a cli-agent provider",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: haiku\n" +
+				"      base_url: https://gateway.example.com\n      cli:\n        agent: claude-code\n",
+			"providers.llm.sub.base_url", ErrConflict,
+		},
 		// An entry's dials are refused wherever the backend they would
 		// reach does not send them, and an anthropic entry's are held to
 		// what its MODEL accepts (claudemodel) — each of these would
