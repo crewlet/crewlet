@@ -41,7 +41,8 @@ type Node interface {
 	Host() *host.Server
 	Cache() *cache.Cache
 	Pool() *gitproc.Pool
-	// Metrics is the recorder the node's pool and host record to.
+	// Metrics is the recorder the node's pool, cache and host record to —
+	// one, as the engine's are.
 	Metrics() *metrics.Recorder
 	// CacheDir is the node's cache directory.
 	CacheDir() string

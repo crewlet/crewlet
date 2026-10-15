@@ -184,7 +184,7 @@ func (r *relay) handle(conn *net.UnixConn) {
 	defer close(sess.done)
 	defer func() {
 		if p := recover(); p != nil {
-			r.s.log.Error("code_hook_panic", "repo", sess.repo.Name, "push_id", sess.pushID,
+			r.s.log.Error("code_hook_panic", "repo", sess.synced.Repo.Name, "push_id", sess.pushID,
 				"panic", fmt.Sprint(p), "stack", string(debug.Stack()))
 			sess.fail("the engine failed while serving this push's hook")
 			_ = fw.write(frameStderr, []byte("crewlet: the engine failed while serving this push; nothing "+

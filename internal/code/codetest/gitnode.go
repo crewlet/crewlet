@@ -210,7 +210,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	limits := func() code.Limits { return g.o.Limits }
 	if n.cache, err = cache.Open(ctx, cache.Options{
 		Layout: layout, MaxBytes: 1 << 30, Git: n.pool, Objects: objects, Fetch: g.o.Estate,
-		Limits: limits, HookCommand: HookCommand(t), Faults: g.o.Faults, Now: time.Now,
+		Limits: limits, HookCommand: HookCommand(t), Faults: g.o.Faults, Metrics: n.metrics, Now: time.Now,
 	}); err != nil {
 		t.Fatalf("codetest: open %s's cache: %v", n.id, err)
 	}

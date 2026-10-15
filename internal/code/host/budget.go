@@ -155,16 +155,17 @@ func SpoolsPerCredential(transfers int) int {
 	return max(transfers/SpoolCredentialShare, 1)
 }
 
-// HookBudget bounds the session's own steps inside one receive-pack —
-// gitproc.ReceivePackDeadline's hook term: the three scans over the stored
-// pack (force, blobs, introduced — each gitproc.PackWorkDeadline of the
-// largest pack one push may store, code.MaxPackBytes), the bundle's put at
+// HookBudget bounds what a push's hook session does inside one receive-pack —
+// its landing (land) — as gitproc.ReceivePackDeadline's hook term: the three
+// scans over the stored pack (force, blobs, introduced — each
+// gitproc.PackWorkDeadline of the largest pack one push may store,
+// code.MaxPackBytes), the bundle's put at
 // the pace floor every leg is held to (objstore.ReadBase +
 // objstore.PaceFor(code.MaxPackBytes)), ProposeBudget, and the pending wait —
 // summed, though the introduced listing runs beside the put, because a bound
 // on the two together is no less than the longer of them.
 // Over code.MaxPackBytes rather than the epoch's push limit, because what the
-// session scans and stores is the client's input COMPLETED against the
+// landing scans and stores is the client's input COMPLETED against the
 // repository plus its indexes, which a thin push can grow past
 // max_push_bytes. A BOUND on a trickling client, never a schedule: a push that
 // stops moving is ended by its Timing.Stall long before it.
