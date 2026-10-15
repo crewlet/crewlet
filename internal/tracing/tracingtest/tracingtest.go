@@ -22,7 +22,7 @@
 // for the life of the binary, under the race detector's multiplier, for the
 // handful of traces a few cases read. So nothing is kept until a case asks:
 // [Watch] keeps a trace it already knows — the usual shape, a case restoring a
-// trace it minted with tracing.WithRemote — and [WatchNamed] keeps every trace
+// [Remote] parent with tracing.WithRemote — and [WatchNamed] keeps every trace
 // a span of one name is OPENED in, for a case whose code under test roots a
 // trace the case cannot know in advance. Either keeps the spans of the trace
 // that END after it was set, which is why a watch is set before the code runs.
@@ -35,12 +35,15 @@ package tracingtest
 
 import (
 	"context"
+	"crypto/rand"
 	"sync"
 	"testing"
 
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/crewlet/crewlet/internal/events"
 
 	// THE PROVIDER THIS PACKAGE RECORDS ON is the one internal/tracing's
 	// init installs, so that init must have run before this one does.
@@ -86,6 +89,30 @@ func WatchNamed(name string) {
 	kept.mu.Lock()
 	defer kept.mu.Unlock()
 	kept.names[name] = true
+}
+
+// Remote is the trace of an event published INSIDE a span this process never
+// opened — a turn on another node, a coding box's own call, the phase a case
+// stands in for — with a fresh trace id and that span's id: what a case
+// restores with tracing.WithRemote when the code under test hangs beneath a
+// parent the case does not open itself. Sampled, the zero decision.
+//
+// Not events.NewTrace, which mints a ROOT and so names no span: restored, a
+// root has no parent for anything to hang under. And not through it either:
+// the ids here are a fixture's, which decides nothing, and NewTrace has one
+// caller outside the tests (internal/tracing's TestOnlyTraceOfMintsARoot).
+func Remote() events.TraceContext {
+	var (
+		traceID trace.TraceID
+		spanID  trace.SpanID
+	)
+	for !traceID.IsValid() {
+		_, _ = rand.Read(traceID[:])
+	}
+	for !spanID.IsValid() {
+		_, _ = rand.Read(spanID[:])
+	}
+	return events.TraceContext{TraceID: traceID.String(), SpanID: spanID.String()}
 }
 
 // Spans is every kept span of one trace that has ENDED, in the order each

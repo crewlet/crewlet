@@ -2231,8 +2231,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// THE TURN'S OWN SPAN, opened before anything else so every phase, LLM
 	// round and tool call below is a child of it and every event the turn
 	// publishes carries its id. The dispatcher has already restored the
-	// trigger's trace onto ctx, so this is a child of the wake rather than
-	// a root.
+	// trigger's trace onto ctx, so this is a child of the span the wake was
+	// published in — or beneath, for one the notification service relayed,
+	// which makes it the delivery's `webhook.receive` — rather than a root.
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn",
 		attribute.String("crewlet.seat", req.Handle),
 		// `turn_id` IS the run id, and it is spelled the way every event

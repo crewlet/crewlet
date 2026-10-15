@@ -1221,8 +1221,8 @@ Crewlet uses **OpenTelemetry** for distributed tracing. Every event carries W3C 
 ```mermaid
 flowchart TD
     A["<b>webhook.receive</b><br/>the delivery arrives, and roots the trace"]
-    B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
-    C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
+    B["the wake is published to the seat's inbox, beneath webhook.receive<br/><i>trace rides in the event envelope</i>"]
+    C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace,<br/>so the turn is webhook.receive's child"]
     D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
@@ -1518,7 +1518,11 @@ crewlet run -log-format json | jq 'select(.trace_id == "4bf92f35…")'
 ```
 
 Lines emitted outside any span carry neither field rather than carrying an
-empty one, so a shipper indexing `trace_id` never sees a placeholder.
+empty one, so a shipper indexing `trace_id` never sees a placeholder. A line
+written on a trace that arrived from elsewhere, before any span of this node's
+opened on it — the dispatcher's, between restoring a wake's trace and opening
+the turn's span — carries `trace_id` alone: it belongs to that trace, and to no
+span this node exports.
 
 #### Querying Traces in the Event Store
 
@@ -2011,7 +2015,9 @@ Every significant operation emits structured log entries:
 
 `trace_id` and `span_id` are present on any line emitted inside a span — which
 is every line a turn produces — and absent entirely on lines that are not, so a
-shipper indexing them never sees an empty placeholder. They are the same ids the
+shipper indexing them never sees an empty placeholder; a line written on a
+trace restored from elsewhere, before a span opens on it, carries `trace_id`
+alone. They are the same ids the
 [tracing](#tracing) section exports, which is what lets you pivot from a slow
 span in Jaeger to the lines the engine wrote while it was open.
 

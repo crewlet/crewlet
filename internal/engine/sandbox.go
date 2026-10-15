@@ -515,7 +515,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// span beneath it. That is the honest shape: two spans in one trace,
 	// with the wait between them visible as the gap it actually is. Every
 	// run carries ids: the launch takes them from the active span, minting
-	// a fresh trace when there is none.
+	// a fresh trace when there is none — a trace with no span id, since no
+	// span launched it, so the resumed half is that trace's root.
 	//
 	// AND ITS DECISION, off the same row: the resumed half is exported
 	// exactly when the half that suspended was, whichever node resumes it

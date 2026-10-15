@@ -93,7 +93,7 @@ func TestABridgedCallNestsUnderTheBoxsSpanOnlyInItsRunsTrace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t)
-			run := events.NewTrace()
+			run := tracingtest.Remote()
 			f.session.Trace = run
 			tracingtest.Watch(t, run.TraceID)
 			tracingtest.Watch(t, foreign.TraceID)
@@ -123,7 +123,7 @@ func TestABridgedCallNestsUnderTheBoxsSpanOnlyInItsRunsTrace(t *testing.T) {
 	t.Run("an unsampled run", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
-		run := events.NewTrace()
+		run := tracingtest.Remote()
 		run.Unsampled = true
 		f.session.Trace = run
 		tracingtest.Watch(t, run.TraceID)

@@ -383,8 +383,10 @@ func TestTheAnswerDeskFilesAnAnswerUnderItsCall(t *testing.T) {
 	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
 	given, _ := givenFor("t1")
 	given.LaunchID = "launch-1"
-	call := events.NewTrace()
-	if err := desk.Deliver(tracing.WithRemote(t.Context(), call), given); err != nil {
+	ctx, span := tracing.Start(t.Context(), "test", "tool.call")
+	defer span.End()
+	call := tracing.TraceOf(ctx)
+	if err := desk.Deliver(ctx, given); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
 	rig.queue.mu.Lock()

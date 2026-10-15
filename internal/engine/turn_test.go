@@ -1356,8 +1356,8 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 // merge's.
 //
 // Mutations, each red here: publish under the restored context again (the
-// record claims the trigger's span); hand the turn the span's context (the
-// turn nests under the merge).
+// record has no span of its own, and no collector sees the merge); hand the
+// turn the span's context (the turn nests under the merge).
 func TestAMergeRecordIsPublishedInASpanOfItsOwn(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1371,10 +1371,13 @@ func TestAMergeRecordIsPublishedInASpanOfItsOwn(t *testing.T) {
 		return run(ctx, req)
 	}
 
-	trigger := events.NewTrace()
+	// THE DELIVERY'S SPAN, and the first wake as the notification service
+	// publishes it: beneath that span, with no span of its own.
+	trigger := tracingtest.Remote()
 	tracingtest.Watch(t, trigger.TraceID)
 	first := inThread("notification", "slack:C1/T1")
-	first.TraceID, first.SpanID = trigger.TraceID, trigger.SpanID
+	wake := trigger.Beneath()
+	first.TraceID, first.SpanID, first.ParentSpanID = wake.TraceID, wake.SpanID, wake.ParentSpanID
 	second := inThread("notification", "slack:C1/T1")
 	if got := d.Dispatch(context.Background(), "ceo",
 		[]*events.Event{first, second}); got.Outcome != queue.OutcomeAck {

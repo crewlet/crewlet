@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracing/tracingtest"
@@ -58,7 +57,7 @@ func TestARoundSpanParentsItsCallAndCarriesItsBill(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			phase := events.NewTrace()
+			phase := tracingtest.Remote()
 			tracingtest.Watch(t, phase.TraceID)
 			p := &spanSeen{scriptedProvider: tc.provider}
 			_, err := toolloop.Run(tracing.WithRemote(t.Context(), phase), toolloop.Config{

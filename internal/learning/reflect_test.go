@@ -195,7 +195,7 @@ func TestADueReflectionReachesTheWorkersThroughTheSeatsOwnSubject(t *testing.T) 
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	ev := due(settledTurn(), events.NewTrace())
+	ev := due(settledTurn(), tracingtest.Remote())
 	if err := q.Publish(ctx, topics.AgentReflect(handle), ev); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 	pub := &recordingPub{}
 	r := reflector(t, devOrg(), pub, w)
 
-	ev := due(settledTurn(), events.NewTrace())
+	ev := due(settledTurn(), tracingtest.Remote())
 	ev.ParentSpanID = "aaaaaaaaaaaaaaaa"
 	ev.TraceUnsampled = true
 	r.Handle(context.Background(), ev)
@@ -627,7 +627,7 @@ func TestAReflectionPassIsASpanBeneathItsTurn(t *testing.T) {
 		out: types.PersistDeciderCompleted{TurnID: "t1", Classification: types.PersistLong}}}
 	pub := &recordingPub{}
 	r := reflector(t, devOrg(), pub, w)
-	ev := due(settledTurn(), events.NewTrace())
+	ev := due(settledTurn(), tracingtest.Remote())
 	tracingtest.Watch(t, ev.TraceID)
 	r.Handle(context.Background(), ev)
 
@@ -663,7 +663,7 @@ func TestASkippedReflectionPassNamesItsGateOnItsSpan(t *testing.T) {
 	r := reflector(t, devOrg(), &recordingPub{}, &stubWorker{name: "w"})
 	turn := settledTurn()
 	turn.RoleName = "Nobody"
-	tr := events.NewTrace()
+	tr := tracingtest.Remote()
 	tracingtest.Watch(t, tr.TraceID)
 	if out := r.Reflect(context.Background(), turn, tr); out.Skip != learning.SkipNoRole {
 		t.Fatalf("skip = %q, want %q", out.Skip, learning.SkipNoRole)

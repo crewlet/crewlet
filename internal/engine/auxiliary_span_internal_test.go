@@ -75,7 +75,7 @@ func TestAnAuxiliaryCallIsSpannedBeneathItsCaller(t *testing.T) {
 			provider := &spanSeen{answeringProvider: answeringProvider{
 				in: 700, out: 300, cacheRead: 200, err: tc.err, completion: true}}
 			r := newSeamRig(provider, nil)
-			caller := events.NewTrace()
+			caller := tracingtest.Remote()
 			tracingtest.Watch(t, caller.TraceID)
 			ctx := tracing.WithRemote(t.Context(), caller)
 
@@ -170,7 +170,7 @@ func TestAHeldAuxiliaryCallOpensNoSpan(t *testing.T) {
 		Scope: "agent", Used: 2, Limit: 1, Period: period.Day, Window: "2026-09-23",
 	}}
 	use.Tally = auxspend.NewTally()
-	caller := events.NewTrace()
+	caller := tracingtest.Remote()
 	tracingtest.Watch(t, caller.TraceID)
 	member, err := r.seam.Auxiliary(dev, use)
 	if err != nil {

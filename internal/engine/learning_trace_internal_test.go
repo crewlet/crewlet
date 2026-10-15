@@ -34,8 +34,10 @@ func TestABackgroundAnnouncementIsFiledUnderItsPass(t *testing.T) {
 	})
 	e := &Engine{backends: &Backends{Queue: q}}
 
-	pass := events.NewTrace()
-	e.publishLearning(tracing.WithRemote(t.Context(), pass), "dev",
+	ctx, span := tracing.StartRoot(t.Context(), "learning", "learning.probe")
+	defer span.End()
+	pass := tracing.TraceOf(ctx)
+	e.publishLearning(ctx, "dev",
 		types.CompactionRequested{AgentHandle: "dev", RawCount: 3, Threshold: 2})
 
 	mu.Lock()

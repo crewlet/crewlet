@@ -6,7 +6,6 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracing/tracingtest"
 )
@@ -22,7 +21,7 @@ import (
 // pass half).
 func TestABackgroundPassRootsATraceOfItsOwn(t *testing.T) {
 	t.Parallel()
-	stale := events.NewTrace()
+	stale := tracingtest.Remote()
 	tracingtest.WatchNamed(PassSpanPrefix + "skill_curator")
 	b := NewBackground(BackgroundOptions{})
 

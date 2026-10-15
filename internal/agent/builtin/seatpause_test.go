@@ -231,9 +231,10 @@ func TestAPauseAndAResumeAreFiledUnderTheirCall(t *testing.T) {
 	t.Parallel()
 	rig := newPauseRig(t, coordmem.NewFleet(), "jane")
 	for _, tool := range []string{builtin.PauseSeatTool, builtin.ResumeSeatTool} {
-		call := events.NewTrace()
-		res, err := rig.tools[tool].Call(tracing.WithRemote(context.Background(), call),
-			map[string]any{"handle": "agent-cto"})
+		ctx, span := tracing.Start(context.Background(), "test", "tool.call")
+		call := tracing.TraceOf(ctx)
+		res, err := rig.tools[tool].Call(ctx, map[string]any{"handle": "agent-cto"})
+		span.End()
 		if err != nil || res.Failed {
 			t.Fatalf("%s = %+v, %v", tool, res, err)
 		}

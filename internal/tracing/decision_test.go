@@ -29,17 +29,18 @@ func (*probe) EventType() string { return "tracing_decision_probe" }
 // into the sampler. A restorer that re-decided would answer with its own rule
 // and fail the half it disagrees with.
 //
-// TWO SHAPES of event cross a hop. One published from inside a span names that
-// span; one published BENEATH a span by code that opens none (a chat wake, a
-// sandbox run's announcements) names it only as the parent and has no span id
-// — a context the SDK does not count as a parent at all, which is what the
-// `continued` root sampler is for.
+// THREE SHAPES of event cross a hop. One published from inside a span names
+// that span; one published BENEATH a span by code that opens none (a chat
+// wake, a sandbox run's announcements) names it only as the parent; and a
+// root minted where no span was open names neither — a context the SDK does
+// not count as a parent at all, which is what the `continued` root sampler is
+// for.
 //
 // Mutations, each of which goes red here: force `trace.FlagsSampled` in
-// WithRemote (the spanned, unsampled cases); let `continued` hand every root
-// to its rule (both span-less cases); drop `omitempty`'s field from the
-// envelope or its key from Trace (every unsampled case); stop TraceOf reading
-// `IsSampled` (every unsampled case).
+// WithRemote (the spanned and beneath, unsampled cases); let `continued` hand
+// every root to its rule (both minted cases); drop `omitempty`'s field from
+// the envelope or its key from Trace (every unsampled case); stop TraceOf
+// reading `IsSampled` (every unsampled case).
 func TestTheSamplingDecisionCrossesTheQueue(t *testing.T) {
 	for _, tc := range []struct {
 		publisher, restorer string
@@ -48,21 +49,24 @@ func TestTheSamplingDecisionCrossesTheQueue(t *testing.T) {
 		{samplerAlwaysOff, samplerAlwaysOn, false},
 		{samplerAlwaysOn, samplerAlwaysOff, true},
 	} {
-		for _, beneath := range []bool{false, true} {
-			name := fmt.Sprintf("rooted under %s, continued under %s, span-less=%v",
-				tc.publisher, tc.restorer, beneath)
+		for _, shape := range []string{"spanned", "beneath", "minted"} {
+			name := fmt.Sprintf("rooted under %s, continued under %s, %s",
+				tc.publisher, tc.restorer, shape)
 			t.Run(name, func(t *testing.T) {
 				// THE PUBLISHING NODE: a root decided by its own rule.
 				configure(t, map[string]string{SamplerVar: tc.publisher})
 				ctx, root := Start(context.Background(), "test", "webhook.receive")
 				published := TraceOf(ctx)
 				root.End()
+				switch shape {
+				case "beneath":
+					published = published.Beneath()
+				case "minted":
+					published = TraceOf(context.Background())
+				}
 				if published.Unsampled == tc.sampled {
 					t.Fatalf("the root under %s reports unsampled=%v — the premise",
 						tc.publisher, published.Unsampled)
-				}
-				if beneath {
-					published = published.Beneath()
 				}
 				wire, err := json.Marshal(events.New(probe{}, published))
 				if err != nil {
@@ -125,7 +129,7 @@ func TestAMintedRootIsDecidedByTheRootRule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			configure(t, tc.env)
 			got := TraceOf(context.Background())
-			if len(got.TraceID) != 32 || len(got.SpanID) != 16 {
+			if len(got.TraceID) != 32 || got.SpanID != "" || got.ParentSpanID != "" {
 				t.Fatalf("a span-less context produced %+v", got)
 			}
 			if got.Unsampled == tc.sampled {
@@ -135,18 +139,24 @@ func TestAMintedRootIsDecidedByTheRootRule(t *testing.T) {
 	}
 }
 
-// WHAT WITHREMOTE RESTORES, TRACEOF REPORTS BACK, field for field — the
-// parent and the decision included, and a trace restored with no span id kept
-// rather than swapped for a fresh root.
+// AN EVENT PUBLISHED ON A RESTORED TRACE IS PUBLISHED BENEATH THE SPAN THE
+// TRACE WAS RESTORED TO, and claims no span of its own: the restored span ended
+// on another node, and the code publishing here opened none. What is restored
+// is the span the arriving event was published in — or, for one itself
+// published beneath a span, that span — so the report is the arriving trace's
+// own Beneath, decision included. Restored again, it continues the same span:
+// a relay of a relay is beneath the span the first one was.
 //
 // The context it restores onto already holds a span with a parent of its own,
-// which is the case WithRemote used to get wrong: it set the span and left the
-// parent, so an event published from the restored context claimed the old
-// span's parent.
+// which nothing of the restored trace may keep: WithRemote once set the span
+// and left the parent, so an event published from the restored context claimed
+// the old span's parent.
 //
-// Mutations: drop the parent WithRemote sets (the stale parent survives); drop
-// the span-less case from TraceOf (it mints a trace the event was never in).
-func TestARestoredTraceIsReportedBackUnchanged(t *testing.T) {
+// Mutations: report a restored span as the context's own (every spanned case
+// claims another node's span); restore a span-less trace with no span (the
+// beneath cases lose their parent); read a stale parent off the context (the
+// spanned cases name the caller's).
+func TestAnEventOnARestoredTraceIsPublishedBeneathIt(t *testing.T) {
 	configure(t, nil)
 	outer, outerSpan := Start(context.Background(), "test", "outer")
 	defer outerSpan.End()
@@ -164,10 +174,18 @@ func TestARestoredTraceIsReportedBackUnchanged(t *testing.T) {
 		{TraceID: traceID, SpanID: spanID},
 		{TraceID: traceID, ParentSpanID: parent},
 		{TraceID: traceID, ParentSpanID: parent, Unsampled: true},
+		{TraceID: traceID},
+		{TraceID: traceID, Unsampled: true},
 	} {
 		t.Run(fmt.Sprintf("%+v", tc), func(t *testing.T) {
-			if got := TraceOf(WithRemote(stale, tc)); got != tc {
-				t.Errorf("restored %+v, reported %+v", tc, got)
+			reported := TraceOf(WithRemote(stale, tc))
+			if reported != tc.Beneath() {
+				t.Errorf("restored %+v, an event published there carries %+v, want %+v",
+					tc, reported, tc.Beneath())
+			}
+			if again := TraceOf(WithRemote(stale, reported)); again != reported {
+				t.Errorf("restoring what was reported, %+v, reports %+v — a relay of a "+
+					"relay is not beneath the span the first one was", reported, again)
 			}
 		})
 	}
@@ -195,6 +213,10 @@ func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
 			"00-" + traceID + "-" + spanID + "-01"},
 		{"unsampled", events.TraceContext{TraceID: traceID, SpanID: spanID, Unsampled: true},
 			"00-" + traceID + "-" + spanID + "-00"},
+		// Published beneath a span, so a child started there is that
+		// span's child too.
+		{"beneath a span", events.TraceContext{TraceID: traceID, ParentSpanID: spanID, Unsampled: true},
+			"00-" + traceID + "-" + spanID + "-00"},
 		// No span to hang under, so nothing a child could parent itself to.
 		{"no span", events.TraceContext{TraceID: traceID}, ""},
 		{"no trace", events.TraceContext{}, ""},
@@ -213,8 +235,12 @@ func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
 			}
 			sc := trace.SpanContextFromContext(propagator().Extract(context.Background(),
 				envCarrier{TraceparentVar: got}))
+			parent := tc.trace.SpanID
+			if parent == "" {
+				parent = tc.trace.ParentSpanID
+			}
 			if sc.TraceID().String() != tc.trace.TraceID ||
-				sc.SpanID().String() != tc.trace.SpanID ||
+				sc.SpanID().String() != parent ||
 				sc.IsSampled() == tc.trace.Unsampled {
 				t.Errorf("%q reads back as %s/%s sampled=%v, want %+v",
 					got, sc.TraceID(), sc.SpanID(), sc.IsSampled(), tc.trace)

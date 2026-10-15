@@ -83,7 +83,8 @@ type Event struct {
 	// stays for genuinely unstructured extras.
 	Payload map[string]any `json:"payload,omitempty"`
 
-	// Trace context, captured at construction from the active span.
+	// Trace context, as the publisher passed it — see [TraceContext] for
+	// what each id names, and why span_id is empty on some events.
 	TraceID      string `json:"trace_id"`
 	SpanID       string `json:"span_id"`
 	ParentSpanID string `json:"parent_span_id"`
@@ -218,9 +219,25 @@ func asPointer(data Payload) Payload {
 }
 
 // TraceContext is the W3C trace linkage stamped onto an event at creation.
+//
+// Its two span ids are a claim about who PUBLISHED the event, and an event
+// claims only a span that did: SpanID is the span the event was published
+// inside, and ParentSpanID the span above that one. An event published by
+// code that opened no span — a relay, a coordinator, anything on a trace
+// restored off the queue before a span opens — has no SpanID and names the
+// span it was published BENEATH as its parent ([TraceContext.Beneath]); a
+// root minted where no span was open has neither. A span id nobody opened is
+// one no backend ever receives, so the turn that hangs beneath it is drawn
+// under a parent that is missing.
 type TraceContext struct {
-	TraceID      string
-	SpanID       string
+	// TraceID is the trace: 32 hex digits, on every event.
+	TraceID string
+	// SpanID is the span that published the event, 16 hex digits, or empty
+	// when no span did.
+	SpanID string
+	// ParentSpanID is the span above the publisher — the publishing span's
+	// parent, or the span a span-less publisher was beneath — or empty for
+	// a root.
 	ParentSpanID string
 
 	// Unsampled is the trace's sampling decision: true when the span that
@@ -259,8 +276,19 @@ func (e *Event) Trace() TraceContext {
 // spell the two ids out by hand, and a third field is exactly what a
 // hand-written copy drops — here, silently turning an unsampled trace sampled
 // one hop later.
+//
+// A tc that names no span of its own is ITSELF beneath one — a wake relayed
+// from a delivery, an event published on a restored trace — and what is
+// published beneath it is beneath the same span, so it is returned as it is.
+// Taking its empty span id as the parent, as this once did, dropped the one
+// span a relay of a relay hung under, and a trace minted with no span stays
+// one with neither.
 func (tc TraceContext) Beneath() TraceContext {
-	return TraceContext{TraceID: tc.TraceID, ParentSpanID: tc.SpanID, Unsampled: tc.Unsampled}
+	parent := tc.SpanID
+	if parent == "" {
+		parent = tc.ParentSpanID
+	}
+	return TraceContext{TraceID: tc.TraceID, ParentSpanID: parent, Unsampled: tc.Unsampled}
 }
 
 // The optional interfaces below let a payload contribute to the envelope's
@@ -660,18 +688,24 @@ func DataAs[T Payload](e *Event) (T, bool) {
 	return v, true
 }
 
-// NewTrace mints a fresh trace context.
+// NewTrace mints a fresh trace context: a root, with a trace id and nothing
+// else.
 //
 // One definition, in the package that owns the field. It was written twice
 // before this — once in the scheduler — and two generators for one wire format
 // is how they come to disagree about a length or a case and produce ids a
-// tracer silently drops.
-//
-// SHAPED rather than merely random: a 32-hex trace id and a 16-hex span id are
-// what a real tracer accepts, so ids stored before one was wired stayed
-// meaningful across that change. crypto/rand cannot fail on any supported
+// tracer silently drops. SHAPED rather than merely random: 32 hex digits, the
+// trace id a real tracer accepts. crypto/rand cannot fail on any supported
 // platform — it panics internally instead — so there is no error to handle and
 // no degraded id to invent.
+//
+// # No span id, because no span has one
+//
+// A span id names a span, and a root minted here is a trace nobody opened a
+// span for. It used to carry a random one anyway, and that id was exported by
+// nothing: once the turn a wake starts was restored beneath the span the wake
+// names, a minted root's id became that turn's parent — a parent every backend
+// reported missing.
 //
 // # One caller
 //
@@ -682,16 +716,13 @@ func DataAs[T Payload](e *Event) (T, bool) {
 // it was published under whenever there is one. Do not add a second caller —
 // a root minted outside TraceOf is an event that has left its turn's trace,
 // and one no sampler DECIDED: TraceOf asks the operator's root rule about the
-// ids this mints, and a caller of this reads as sampled whatever it says. The
+// id this mints, and a caller of this reads as sampled whatever it says. The
 // change feed was such a caller; internal/tracing's TestOnlyTraceOfMintsARoot
 // now holds the rule rather than this sentence.
 func NewTrace() TraceContext {
-	var buf [24]byte
+	var buf [16]byte
 	_, _ = rand.Read(buf[:])
-	return TraceContext{
-		TraceID: hex.EncodeToString(buf[:16]),
-		SpanID:  hex.EncodeToString(buf[16:]),
-	}
+	return TraceContext{TraceID: hex.EncodeToString(buf[:])}
 }
 
 // MaxDiagnosticBytes bounds ONE free-text diagnostic field on an event.

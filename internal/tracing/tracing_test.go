@@ -65,13 +65,19 @@ func TestIdsFlowWithNoCollectorConfigured(t *testing.T) {
 }
 
 // An event published outside any span must still carry a usable trace, because
-// that is what every publisher did before this package existed.
+// that is what every publisher did before this package existed — and only a
+// trace: no span was open, so there is no span id to name and no parent.
+//
+// Mutation: mint a span id beside the trace id again and this goes red.
 func TestNoSpanStillYieldsARootTrace(t *testing.T) {
 	configure(t, nil)
 
 	tc := TraceOf(context.Background())
-	if len(tc.TraceID) != 32 || len(tc.SpanID) != 16 {
+	if len(tc.TraceID) != 32 {
 		t.Fatalf("a span-less context produced %+v", tc)
+	}
+	if tc.SpanID != "" {
+		t.Errorf("a root nobody spanned claims span %q, an id no span ever had", tc.SpanID)
 	}
 	if tc.ParentSpanID != "" {
 		t.Errorf("a root claimed a parent: %q", tc.ParentSpanID)
@@ -112,7 +118,7 @@ func TestANestedSpanReportsItselfAndItsParent(t *testing.T) {
 // Mutation: make StartRoot plain Start and both halves go red.
 func TestStartRootIgnoresTheSpanItsContextHolds(t *testing.T) {
 	configure(t, nil)
-	stale := events.NewTrace()
+	stale := events.TraceContext{TraceID: events.NewTrace().TraceID, SpanID: "00f067aa0ba902b7"}
 	ctx, root := StartRoot(WithRemote(context.Background(), stale), "test", "root")
 	defer root.End()
 	got := TraceOf(ctx)
@@ -127,27 +133,29 @@ func TestStartRootIgnoresTheSpanItsContextHolds(t *testing.T) {
 // A CALLER'S OWN SPAN IS FOLLOWED ONLY INSIDE THE TRACE IT WAS HANDED, and
 // never its decision: a span in tc's trace becomes the parent, anything else —
 // another trace, no carrier — leaves tc's own, and tc's sampling decision
-// stands whatever flag the caller sent.
+// stands whatever flag the caller sent. Read as what an event published on the
+// restored context names: the span it was published beneath.
 //
 // Mutations: drop the trace comparison (the foreign case), or take the
 // carrier's flag (the unsampled case).
 func TestWithRemoteFromFollowsACallerOnlyInsideItsOwnTrace(t *testing.T) {
 	configure(t, nil)
-	const callerSpan = "b7ad6b7169203331"
-	run := events.NewTrace()
-	run.Unsampled = true
+	const callerSpan, runSpan = "b7ad6b7169203331", "00f067aa0ba902b7"
+	run := events.TraceContext{TraceID: events.NewTrace().TraceID, SpanID: runSpan, Unsampled: true}
 	foreign := events.NewTrace()
+	beneath := func(span string) events.TraceContext {
+		return events.TraceContext{TraceID: run.TraceID, ParentSpanID: span, Unsampled: true}
+	}
 	for _, tc := range []struct {
 		name    string
 		carrier propagation.TextMapCarrier
 		want    events.TraceContext
 	}{
-		{"no carrier", nil, run},
+		{"no carrier", nil, beneath(runSpan)},
 		{"a span in the run's trace", propagation.MapCarrier{
-			"traceparent": "00-" + run.TraceID + "-" + callerSpan + "-01"},
-			events.TraceContext{TraceID: run.TraceID, SpanID: callerSpan, Unsampled: true}},
+			"traceparent": "00-" + run.TraceID + "-" + callerSpan + "-01"}, beneath(callerSpan)},
 		{"a span in another trace", propagation.MapCarrier{
-			"traceparent": "00-" + foreign.TraceID + "-" + callerSpan + "-01"}, run},
+			"traceparent": "00-" + foreign.TraceID + "-" + callerSpan + "-01"}, beneath(runSpan)},
 	} {
 		if got := TraceOf(WithRemoteFrom(context.Background(), run, tc.carrier)); got != tc.want {
 			t.Errorf("%s: restored %+v, want %+v", tc.name, got, tc.want)
@@ -229,7 +237,7 @@ func TestAnUnusableRemoteTraceIsNotFatal(t *testing.T) {
 			ctx := WithRemote(base, tc.trace)
 			// It must be safe to keep working: a fresh root, not a panic
 			// and not a poisoned context.
-			if got := TraceOf(ctx); len(got.TraceID) != 32 {
+			if got := TraceOf(ctx); len(got.TraceID) != 32 || got.ParentSpanID != "" {
 				t.Errorf("could not carry on after a bad remote trace: %+v", got)
 			}
 		})
@@ -237,7 +245,8 @@ func TestAnUnusableRemoteTraceIsNotFatal(t *testing.T) {
 }
 
 // A trace id with no span id still names the trace, and joining it beats
-// starting an unrelated one.
+// starting an unrelated one — as its root, since it names no span to hang
+// under.
 func TestATraceWithNoSpanStillJoinsTheTrace(t *testing.T) {
 	configure(t, nil)
 
@@ -245,8 +254,40 @@ func TestATraceWithNoSpanStillJoinsTheTrace(t *testing.T) {
 	ctx, span := Start(WithRemote(context.Background(), origin), "test", "op")
 	defer span.End()
 
-	if got := TraceOf(ctx); got.TraceID != origin.TraceID {
+	got := TraceOf(ctx)
+	if got.TraceID != origin.TraceID {
 		t.Errorf("trace id = %s, want %s", got.TraceID, origin.TraceID)
+	}
+	if got.ParentSpanID != "" {
+		t.Errorf("the span opened in a trace nobody spanned names parent %q", got.ParentSpanID)
+	}
+}
+
+// A RESTORED TRACE IS BOUND FOR THE LOGGER WITHOUT A SPAN: a line logged on
+// the far side of the queue, before a span opens there, is in the trace and in
+// no span of this node's — the span the trace was restored to ended somewhere
+// else, and the line was not logged in it. Nor in the span the caller's own
+// context held, which the restore replaces.
+//
+// Mutation: bind the restored span's id (the line claims another node's span),
+// or the zero id a root nobody spanned restores to (every such line carried
+// span_id 0000000000000000), and a case goes red.
+func TestARestoredTraceIsLoggedInNoSpan(t *testing.T) {
+	configure(t, nil)
+	caller, span := Start(context.Background(), "test", "caller")
+	defer span.End()
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	for name, tc := range map[string]events.TraceContext{
+		"published in a span":       {TraceID: traceID, SpanID: "00f067aa0ba902b7"},
+		"published beneath a span":  {TraceID: traceID, ParentSpanID: "b7ad6b7169203331"},
+		"a root nobody spanned":     {TraceID: traceID},
+		"an unsampled one, spanned": {TraceID: traceID, SpanID: "00f067aa0ba902b7", Unsampled: true},
+	} {
+		gotTrace, gotSpan := logging.TraceFromContext(WithRemote(caller, tc))
+		if gotTrace != traceID || gotSpan != "" {
+			t.Errorf("%s: logging carries (%q, %q), want the trace %s and no span",
+				name, gotTrace, gotSpan, traceID)
+		}
 	}
 }
 

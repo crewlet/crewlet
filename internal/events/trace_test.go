@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -111,18 +112,55 @@ func TestASampledEventCarriesNoDecisionKey(t *testing.T) {
 // did, without opening one of its own. A hand-written copy of the two ids is
 // what used to stand here, and a third field is what such a copy drops.
 //
-// Mutation: drop Unsampled from Beneath and the unsampled case goes red.
+// AND A TRACE THAT NAMES NO SPAN IS ALREADY BENEATH ONE: what a relay of a
+// relay publishes is beneath the span the first relay was — the notification
+// service relaying a delivery that was itself published on a restored trace —
+// and a root nobody spanned stays one. Taking the empty span id as the parent
+// dropped that span.
+//
+// Mutations: drop Unsampled from Beneath (the unsampled cases); take SpanID as
+// the parent whatever it holds (the span-less case loses its parent).
 func TestBeneathKeepsTheTraceAndItsDecision(t *testing.T) {
+	const traceID, spanID, parentID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", "b7ad6b7169203331"
 	for _, unsampled := range []bool{false, true} {
-		span := TraceContext{
-			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", SpanID: "00f067aa0ba902b7",
-			ParentSpanID: "b7ad6b7169203331", Unsampled: unsampled,
+		for _, tc := range []struct {
+			name string
+			from TraceContext
+			want TraceContext
+		}{
+			{"published in a span",
+				TraceContext{TraceID: traceID, SpanID: spanID, ParentSpanID: parentID, Unsampled: unsampled},
+				TraceContext{TraceID: traceID, ParentSpanID: spanID, Unsampled: unsampled}},
+			{"published beneath a span",
+				TraceContext{TraceID: traceID, ParentSpanID: parentID, Unsampled: unsampled},
+				TraceContext{TraceID: traceID, ParentSpanID: parentID, Unsampled: unsampled}},
+			{"a root nobody spanned",
+				TraceContext{TraceID: traceID, Unsampled: unsampled},
+				TraceContext{TraceID: traceID, Unsampled: unsampled}},
+		} {
+			if got := tc.from.Beneath(); got != tc.want {
+				t.Errorf("%s, unsampled=%v: beneath %+v is %+v, want %+v",
+					tc.name, unsampled, tc.from, got, tc.want)
+			}
 		}
-		want := TraceContext{
-			TraceID: span.TraceID, ParentSpanID: span.SpanID, Unsampled: unsampled,
-		}
-		if got := span.Beneath(); got != want {
-			t.Errorf("beneath %+v is %+v, want %+v", span, got, want)
-		}
+	}
+}
+
+// A MINTED ROOT IS A TRACE AND NOTHING ELSE: 32 hex digits naming the trace,
+// and no span id, because no span was opened for it — a span id here was one
+// no backend ever received, and the turn restored beneath it was drawn under a
+// missing parent.
+//
+// Mutation: mint a span id beside the trace id again.
+func TestANewTraceNamesNoSpan(t *testing.T) {
+	tc := NewTrace()
+	if len(tc.TraceID) != 32 || strings.Trim(tc.TraceID, "0123456789abcdef") != "" {
+		t.Errorf("trace id %q is not 32 lowercase hex digits", tc.TraceID)
+	}
+	if tc.SpanID != "" || tc.ParentSpanID != "" || tc.Unsampled {
+		t.Errorf("a minted root is %+v, want a trace id alone", tc)
+	}
+	if again := NewTrace(); again.TraceID == tc.TraceID {
+		t.Errorf("two roots minted one trace id, %s", tc.TraceID)
 	}
 }
