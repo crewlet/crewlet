@@ -283,9 +283,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
 
+	env, telemetry := withTelemetry(ctx, m, runner, req)
 	handle, err := runner.Start(ctx, box, RunRequest{
-		Brief: buildBrief(req),
-		Env:   withTelemetry(ctx, m, runner, req),
+		Brief:     buildBrief(req),
+		Env:       env,
+		Telemetry: telemetry,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -512,6 +514,12 @@ func buildBrief(req LaunchRequest) string {
 // switched on with no endpoint exports to its own default (Claude Code's is
 // localhost:4318), where nothing is listening for it.
 //
+// AND IT NAMES WHAT IT ADDED: the second map is every variable the first two
+// layers wrote, at the value the merged environment carries — an operator's
+// own where role.sandbox.env set one — for a runner that can hand its agent
+// those values somewhere a settings file in the box cannot outrank
+// ([RunRequest.Telemetry]). Nil whenever it added nothing.
+//
 // MERGED HERE rather than in the spec, because the endpoint carries a token
 // scoped to THIS run and minted with a TTL: putting it in the spec would have
 // it persisted with the pending row and re-used by a resume hours later,
@@ -523,24 +531,31 @@ func buildBrief(req LaunchRequest) string {
 // it would be the engine choosing where somebody else's telemetry goes. That
 // includes switching the agent's export off again, by setting the variable
 // the runner declared.
-func withTelemetry(ctx context.Context, m *Manager, runner Runner, req LaunchRequest) map[string]string {
+func withTelemetry(ctx context.Context, m *Manager, runner Runner, req LaunchRequest) (env, telemetry map[string]string) {
 	if m.telemetry == nil {
-		return req.Spec.Env
+		return req.Spec.Env, nil
 	}
 	declared := runner.Telemetry()
 	if len(declared) == 0 {
-		return req.Spec.Env
+		return req.Spec.Env, nil
 	}
 	minted := m.telemetry.RunEnv(ctx, req.Turn.Trace(),
 		req.Turn.TurnID, req.Turn.AgentHandle, OtelTokenLifetime)
 	if len(minted) == 0 {
-		return req.Spec.Env
+		return req.Spec.Env, nil
 	}
-	env := make(map[string]string, len(declared)+len(minted)+len(req.Spec.Env))
+	env = make(map[string]string, len(declared)+len(minted)+len(req.Spec.Env))
 	maps.Copy(env, declared)
 	maps.Copy(env, minted)
 	maps.Copy(env, req.Spec.Env)
-	return env
+	telemetry = make(map[string]string, len(declared)+len(minted))
+	for name := range declared {
+		telemetry[name] = env[name]
+	}
+	for name := range minted {
+		telemetry[name] = env[name]
+	}
+	return env, telemetry
 }
 
 // OtelTokenLifetime is how long a run's export endpoint stays valid.
@@ -571,17 +586,17 @@ const OtelTokenLifetime = 24 * time.Hour
 
 // RunEnvFor is [withTelemetry] under a name a test can reach, with the runner
 // the launch would acquire for the spec's coding agent — or the spec's own
-// environment when the manager has none by that name.
+// environment, and no telemetry, when the manager has none by that name.
 //
 // EXPORTED FOR THE ONE PROPERTY THAT IS OTHERWISE UNOBSERVABLE: the merge
 // order between the engine's telemetry variables and the operator's own. Both
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
 // arrive somewhere.
-func RunEnvFor(ctx context.Context, m *Manager, req LaunchRequest) map[string]string {
+func RunEnvFor(ctx context.Context, m *Manager, req LaunchRequest) (env, telemetry map[string]string) {
 	runner, err := m.RunnerFor(req.Spec.CodingAgent)
 	if err != nil {
-		return req.Spec.Env
+		return req.Spec.Env, nil
 	}
 	return withTelemetry(ctx, m, runner, req)
 }

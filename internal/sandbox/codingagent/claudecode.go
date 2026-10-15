@@ -34,9 +34,10 @@ var ClaudeCodeCredentialEnv = []string{
 // ClaudeCode drives Claude Code headless.
 //
 // It reaches its model through the run ENVIRONMENT rather than a config file,
-// which is why WriteConfig here only ever renders MCP servers: the credential
-// comes from providers.llm via the sandbox env, and duplicating it into a file
-// inside the box would put the secret somewhere the agent can read it back.
+// which is why WriteConfig here renders MCP servers and the run's telemetry
+// and never the model's credential: that comes from providers.llm via the
+// sandbox env, and duplicating it into a file inside the box would put the
+// secret somewhere the agent can read it back.
 type ClaudeCode struct {
 	// uid is the engine process's user id, which is a direct box's
 	// ([ClaudeCode.Admit]). Nil reads it from the process; a test states it.
@@ -140,6 +141,27 @@ var claudeCodeContentSwitches = []string{
 // [sandbox.OtelForwardTimeout] — so against a backend slower than two
 // seconds, every run lost the spans of its own ending, which is the part that
 // says how it ended. The exit is delayed only by an upstream that slow.
+//
+// AND IT IS PINNED ABOVE THE BOX'S OWN SETTINGS FILES. Claude Code reads the
+// `env` of its settings files over its process environment, so an
+// environment is the lowest layer it has: a ~/.claude/settings.json an E2B
+// template carries, or one a previous run wrote into a reused box, switched
+// the prompt capture back on and sent the whole export, prompt included, to
+// another collector — measured against 2.1.300, as was the rest of this
+// paragraph. So every variable the launch added for the run's telemetry —
+// this declaration and the receiver's endpoint, at the values the run
+// environment carries, an operator's own included ([sandbox.RunRequest]'s
+// Telemetry) — is also handed to the CLI as FLAG SETTINGS (`--settings` and a
+// file), which Claude Code layers over a user settings file and over its
+// environment. A FILE, not the JSON on the command line, because the
+// endpoint carries the run's token and a process's argv is listed by every ps
+// on the host of a direct box or a container; the file sits in the box beside
+// the environment that already holds the same token. A project's settings
+// cannot set the destination at all. What NOTHING here can outrank is a
+// MANAGED settings file (/etc/claude-code/managed-settings.json on Linux),
+// which Claude Code layers over every other source, flags included: an image
+// that ships one, or the engine host's own for a direct box, decides this
+// agent's telemetry whatever the engine sets.
 func (ClaudeCode) Telemetry() map[string]string {
 	env := map[string]string{
 		"CLAUDE_CODE_ENABLE_TELEMETRY":         "1",
@@ -178,7 +200,7 @@ func (ClaudeCode) Telemetry() map[string]string {
 // the same object json printed alone. In print mode the CLI refuses
 // stream-json without --verbose ("When using --print,
 // --output-format=stream-json requires --verbose").
-func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) string {
+func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string) string {
 	var parts []string
 	if req.Placement == sandbox.Container {
 		// A CONTAINER IS A DELIBERATE SANDBOX, and Claude Code is told so,
@@ -222,11 +244,28 @@ func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) st
 		// happens to carry, which on a reused box is the previous run's.
 		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
 	}
+	if len(req.Telemetry) > 0 {
+		// The run's telemetry, over every settings file the box carries
+		// but a managed one ([ClaudeCode.Telemetry]); WriteConfig wrote it
+		// under this same condition.
+		parts = append(parts, "--settings", shellQuote(paths.Settings()))
+	}
 	return strings.Join(parts, " ")
 }
 
-// WriteConfig renders the scoped MCP surface, or nothing when there is none.
+// WriteConfig renders the run's telemetry as flag settings when the launch
+// added any ([ClaudeCode.Telemetry]), and the scoped MCP surface, whose path
+// it returns — or "" when there is none.
 func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+	if len(req.Telemetry) > 0 {
+		blob, err := json.Marshal(map[string]any{"env": req.Telemetry})
+		if err != nil {
+			return "", err
+		}
+		if err := box.WriteFile(ctx, paths.Settings(), blob); err != nil {
+			return "", fmt.Errorf("codingagent: writing the run's telemetry settings: %w", err)
+		}
+	}
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}

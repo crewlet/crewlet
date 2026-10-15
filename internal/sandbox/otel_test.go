@@ -553,7 +553,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	}
 	manager := exportingManager(t, receiver, exporting())
 
-	env := sandbox.RunEnvFor(t.Context(), manager, sandbox.LaunchRequest{
+	env, telemetry := sandbox.RunEnvFor(t.Context(), manager, sandbox.LaunchRequest{
 		// LAUNCHED FROM AN UNSAMPLED TURN, so the TRACEPARENT below is
 		// read off the launch's own record of the decision — the path
 		// every real launch takes — rather than off the receiver alone.
@@ -606,6 +606,26 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	if want := "https://our-own-collector.example/v1/traces"; traces.Endpoint != want {
 		t.Errorf("the box's traces resolve to %q, want the operator's %q", traces.Endpoint, want)
 	}
+	// AND THE TELEMETRY A RUNNER MAY PIN ABOVE THE BOX'S SETTINGS FILES is
+	// every variable the runner and the receiver added, at the value the
+	// environment carries — the operator's where the operator set one —
+	// and nothing the operator added for anything else. A runner that
+	// pinned the receiver's values there would outrank the operator from a
+	// layer the environment cannot reach.
+	for name, value := range telemetry {
+		if env[name] != value {
+			t.Errorf("the pinned telemetry says %s=%q where the run environment says %q", name, value, env[name])
+		}
+	}
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "CLAUDE_CODE_ENABLE_TELEMETRY",
+		"OTEL_TRACES_EXPORTER", otlpenv.Traces.EndpointVar(), tracing.TraceparentVar} {
+		if _, ok := telemetry[name]; !ok {
+			t.Errorf("%s is not among the pinned telemetry", name)
+		}
+	}
+	if _, ok := telemetry["ANTHROPIC_API_KEY"]; ok {
+		t.Error("the operator's credential is among the pinned telemetry")
+	}
 }
 
 // AN IMAGE'S PER-SIGNAL VARIABLES DECIDE NOTHING.
@@ -636,7 +656,7 @@ func TestAnImagesPerSignalVariablesDecideNothing(t *testing.T) {
 		image[s.ProtocolVar()] = string(otlpenv.GRPC)
 		image[s.TimeoutVar()] = "1000"
 	}
-	run := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), launchOf(nil))
+	run, _ := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), launchOf(nil))
 	box := maps.Clone(image)
 	maps.Copy(box, run)
 	lookup := func(k string) string { return box[k] }
@@ -737,30 +757,30 @@ func TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint(t *testing.T) {
 
 	t.Run("a runner that exports nothing is minted nothing", func(t *testing.T) {
 		t.Parallel()
-		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, nil), launchOf(operator))
-		if !maps.Equal(env, operator) {
-			t.Errorf("the box got %v, want the operator's environment alone", env)
+		env, telemetry := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, nil), launchOf(operator))
+		if !maps.Equal(env, operator) || telemetry != nil {
+			t.Errorf("the box got %v and telemetry %v, want the operator's environment alone", env, telemetry)
 		}
 	})
 	t.Run("no receiver, none of the runner's switches", func(t *testing.T) {
 		t.Parallel()
-		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, nil, exporting()), launchOf(operator))
-		if !maps.Equal(env, operator) {
-			t.Errorf("the box got %v with nothing to export to", env)
+		env, telemetry := sandbox.RunEnvFor(t.Context(), exportingManager(t, nil, exporting()), launchOf(operator))
+		if !maps.Equal(env, operator) || telemetry != nil {
+			t.Errorf("the box got %v and telemetry %v with nothing to export to", env, telemetry)
 		}
 	})
 	t.Run("no trace, none of the runner's switches", func(t *testing.T) {
 		t.Parallel()
 		req := launchOf(operator)
 		req.Turn.TraceID, req.Turn.SpanID = "", ""
-		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), req)
-		if !maps.Equal(env, operator) {
-			t.Errorf("the box got %v with no endpoint minted", env)
+		env, telemetry := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), req)
+		if !maps.Equal(env, operator) || telemetry != nil {
+			t.Errorf("the box got %v and telemetry %v with no endpoint minted", env, telemetry)
 		}
 	})
 	t.Run("both, the receiver's protocol winning", func(t *testing.T) {
 		t.Parallel()
-		env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), launchOf(operator))
+		env, _ := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), launchOf(operator))
 		if !strings.HasPrefix(env[otlpenv.EndpointVar], "https://engine.internal/otlp/") {
 			t.Errorf("no endpoint was minted beside the runner's switches: %v", env)
 		}
@@ -831,7 +851,7 @@ func TestARunsEndpointLastsADay(t *testing.T) {
 	}
 	req := launchOf(nil)
 	req.Spec.TimeoutSec, req.Spec.PauseTTLSec = 900, 1800
-	env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), req)
+	env, _ := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), req)
 	token := strings.TrimPrefix(env[otlpenv.EndpointVar], "https://engine.internal/otlp/")
 
 	for _, tc := range []struct {

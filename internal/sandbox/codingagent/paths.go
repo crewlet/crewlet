@@ -82,6 +82,11 @@ func (p Paths) Ask() string { return p.WorkDir() + "/ask.json" }
 // MCPConfig is where the scoped MCP surface is rendered.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 
+// Settings is where a runner renders the settings it hands its CLI above every
+// settings file the box itself carries — the run's telemetry, for a CLI that
+// reads such files over its environment ([ClaudeCode.Telemetry]).
+func (p Paths) Settings() string { return p.WorkDir() + "/settings.json" }
+
 // Findings is the agent's authoritative final report.
 //
 // THE RESULT CARRIER OF RECORD. A run that finishes but never exits can lose

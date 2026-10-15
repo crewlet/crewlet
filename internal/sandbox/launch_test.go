@@ -603,3 +603,61 @@ func TestOnlyADirectBoxRunsAsTheEngine(t *testing.T) {
 		}
 	}
 }
+
+// THE RUNNER IS TOLD WHICH OF ITS ENVIRONMENT IS TELEMETRY, at the values the
+// environment carries, so one that can pin those values above a settings file
+// in the box ([RunRequest.Telemetry]) pins what the launch decided — and a
+// launch that adds none tells it none.
+//
+// Mutation: leave Telemetry off the run request, or fill it with the minted
+// values rather than the merged ones, and this goes red.
+func TestTheRunnerIsToldWhichOfItsEnvironmentIsTelemetry(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	receiver, err := NewOtelReceiver(OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  NewOtelTokens(OtelTokenOptions{Key: []byte("k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.Exports = map[string]string{"CLAUDE_CODE_ENABLE_TELEMETRY": "1"}
+	manager, err := NewManager(ManagerOptions{
+		Providers: map[Placement]Provider{Direct: rig.provider},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
+		Telemetry: receiver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := launchReq("t1")
+	req.Spec.Env = map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://our-own.example", "GITHUB_TOKEN": "t"}
+	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
+		t.Fatal(err)
+	}
+	started := rig.runner.Started()
+	if len(started) != 1 {
+		t.Fatalf("started %d runs", len(started))
+	}
+	got := started[0]
+	if got.Telemetry["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" ||
+		got.Telemetry["OTEL_EXPORTER_OTLP_ENDPOINT"] != "https://our-own.example" {
+		t.Errorf("the runner was told the telemetry is %v", got.Telemetry)
+	}
+	if _, ok := got.Telemetry["GITHUB_TOKEN"]; ok {
+		t.Error("the operator's own variable was told to the runner as telemetry")
+	}
+	for name, value := range got.Telemetry {
+		if got.Env[name] != value {
+			t.Errorf("telemetry %s=%q, the environment %q", name, value, got.Env[name])
+		}
+	}
+
+	// AND NONE WHERE THE LAUNCH ADDED NONE.
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t2")); err != nil {
+		t.Fatal(err)
+	}
+	if started := rig.runner.Started(); started[len(started)-1].Telemetry != nil {
+		t.Errorf("a run with no receiver was told telemetry %v", started[len(started)-1].Telemetry)
+	}
+}

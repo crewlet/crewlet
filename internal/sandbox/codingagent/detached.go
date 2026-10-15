@@ -146,8 +146,10 @@ type CLI interface {
 	// the stream's whole text, decoded.
 	Parse(result string) sandbox.Result
 
-	// WriteConfig renders the agent's config file into the box and returns
-	// the path the CLI is pointed at, or "" when there is nothing to write.
+	// WriteConfig renders the agent's config files into the box and returns
+	// the path of the one [CLI.Command] is handed as configPath, or "" when
+	// there is none. A file Command finds by [Paths] instead is written
+	// here under the same condition Command reads.
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
 
 	// Finished reports whether the END of the stream says the agent has done
@@ -276,7 +278,9 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask()}
+	// The settings file as well: it carries the last run's telemetry
+	// endpoint, token included, and a run handed none must not find one.
+	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Settings()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
