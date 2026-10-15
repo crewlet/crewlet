@@ -9,9 +9,10 @@
 
 ## The decision
 
-The OTLP endpoint, headers, protocol, service name and sampling ratio are the
-`OTEL_*` environment variables every collector's own documentation uses. There
-is no `tracing:` block in the Tier A file, and there will not be one.
+The OTLP endpoint, headers and protocol, the service name and resource
+attributes, and the sampler and its ratio are the `OTEL_*` environment
+variables every collector's own documentation uses. There is no `tracing:`
+block in the Tier A file, and there will not be one.
 
 Two packages read those variables, which is why this is a record rather than a
 package doc: the engine's own exporter in `internal/tracing`, and the sandbox
@@ -29,6 +30,14 @@ arguments and results and token counts are already on the phase events in the
 store. A span adds the one thing no event records — how long it took — so span
 attributes stay to small enums and counts rather than shipping whole prompts to
 a tracing backend.
+
+**The environment chooses within the engine's invariants, not around them.**
+The sampler is always parent-based, so `OTEL_TRACES_SAMPLER` decides a trace's
+root and a non-parent-based sampler is refused rather than honoured: these
+traces cross processes, and a node re-deciding a trace in flight splits its
+tree. The propagator is W3C trace context alone and `OTEL_PROPAGATORS` is not
+read: the engine writes no baggage, so the only baggage a context could carry
+is a third party's off a webhook.
 
 ## Why the obvious alternative is wrong
 

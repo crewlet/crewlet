@@ -2,13 +2,17 @@ package tracing
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The bridge between OTel's carrier and this engine's.
@@ -145,12 +149,43 @@ func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 // Telemetry never fails the work (the rule at runner/telemetry.go and
 // engine/telemetry.go), so this returns nothing and tolerates a nil error —
 // the call site stays a single deferred line rather than a branch.
+//
+// # The message is bounded, at the bound an event's diagnostic already has
+//
+// The text is recorded twice — the exception event's message and the span's
+// status — and its length is set by something outside the engine: a provider
+// chain that exhausted carries every attempt's body, and a decode failure
+// carries the document it could not decode. Unbounded, one such span is not
+// merely large: a collector refuses an export request past its size limit
+// WHOLE, so it takes the batch's other spans with it, and the exporter's retry
+// sends the same refused batch again. [events.MaxDiagnosticBytes] is the bound
+// the same error text already has on an event, two orders of magnitude past
+// any message written to be read, and the cut is marked so a reader cannot
+// take the head for the whole.
+//
+// The exception event is written here rather than through span.RecordError,
+// which takes the message from err.Error() with no way to bound it; the type
+// is named the way RecordError names it, so a backend grouping failures by
+// exception.type sees no difference.
 func Fail(span trace.Span, err error) {
-	if err == nil {
+	if err == nil || !span.IsRecording() {
 		return
 	}
-	span.RecordError(err)
-	span.SetStatus(codes.Error, err.Error())
+	message := textcut.Ellipsis(err.Error(), events.MaxDiagnosticBytes)
+	span.AddEvent(semconv.ExceptionEventName, trace.WithAttributes(
+		semconv.ExceptionType(errorType(err)),
+		semconv.ExceptionMessage(message)))
+	span.SetStatus(codes.Error, message)
+}
+
+// errorType names an error's type as the SDK's RecordError does: the package
+// path and the name, or the type's own spelling for an unnamed one.
+func errorType(err error) string {
+	t := reflect.TypeOf(err)
+	if t.PkgPath() == "" && t.Name() == "" {
+		return t.String()
+	}
+	return fmt.Sprintf("%s.%s", t.PkgPath(), t.Name())
 }
 
 // Active reports whether ctx carries a usable span context.

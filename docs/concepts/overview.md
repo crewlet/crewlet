@@ -277,8 +277,9 @@ internal/
 │                         #   dashboard's /operator/act), and pagepolicy/:
 │                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
-├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
-│                         #   the bridge to the envelope's trace fields
+├── tracing/              # OpenTelemetry: one provider, W3C trace-context
+│                         #   propagation, a parent-based sampler, and the
+│                         #   bridge to the envelope's trace fields
 ├── fleetsecrets/         # The company's credential store: this package owns
 │                         #   the key, coordination owns the bytes
 ├── runtoken/             # The signed, self-describing credential a per-run
