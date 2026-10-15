@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -446,11 +447,12 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 }
 
 // The environment is an ALLOWLIST. A child that inherited os.Environ() would
-// hand every seat the org's chat token and its database DSN, and would
-// silently bill a metered key that happened to be exported.
+// hand every seat the org's chat token and the keyring that decrypts the
+// secret store, and would silently bill a metered key that happened to be
+// exported.
 func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-the-child")
-	t.Setenv("CREWLET_STORE_DSN", "file:/var/lib/crewlet/state.db")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "base64-keyring-material-not-for-the-child")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-billed")
 
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_ENV": "1"}, nil)
@@ -458,7 +460,7 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	for _, leaked := range []string{"SLACK_BOT_TOKEN", "CREWLET_STORE_DSN", "ANTHROPIC_API_KEY"} {
+	for _, leaked := range []string{"SLACK_BOT_TOKEN", "CREWLET_SECRET_KEY_2026_01", "ANTHROPIC_API_KEY"} {
 		if strings.Contains(comp.Content, leaked+"=") {
 			t.Errorf("%s reached the child:\n%s", leaked, comp.Content)
 		}
@@ -472,6 +474,39 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 	}
 	if envValue(comp.Content, "XDG_CONFIG_HOME") == "" {
 		t.Error("XDG_CONFIG_HOME was not redirected, so the CLI reads the engine user's config")
+	}
+}
+
+// THE HOST ALLOWLIST IS THE LOCAL BOX'S, NAME FOR NAME.
+//
+// Both consumers of hostbox start a child from the host environment, and this
+// package used to keep a list of its own: it lacked ALL_PROXY, TERM and
+// LC_NUMERIC, so a host that reaches the network only through a SOCKS proxy
+// failed every text-mode call while a local box on the same host worked. Every
+// name on [hostbox.PassthroughEnv] is set here and must arrive — read from
+// inside the child, because what the parent hands os/exec is the question.
+func TestEveryHostVariableALocalBoxInheritsReachesTheCLI(t *testing.T) {
+	want := map[string]string{}
+	for _, name := range hostbox.PassthroughEnv {
+		value := "/inherited/" + strings.ToLower(name)
+		if name == "PATH" {
+			// Kept real: whatever the child execs still has to be found.
+			value = os.Getenv("PATH")
+		}
+		t.Setenv(name, value)
+		want[name] = value
+	}
+
+	p := fakeProvider(t, map[string]string{"FAKE_DUMP_ENV": "1"}, nil)
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	for _, name := range hostbox.PassthroughEnv {
+		if got := envValue(comp.Content, name); got != want[name] {
+			t.Errorf("%s = %q in the child, want %q — the CLI and a local box "+
+				"must inherit one host environment", name, got, want[name])
+		}
 	}
 }
 

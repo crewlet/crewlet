@@ -138,10 +138,11 @@ func (b *directBox) Home() string { return b.layout.home() }
 // childEnv is the allowlisted host environment plus the box's home and the run
 // env.
 //
-// Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
-// environment holds the org's chat token, its database DSN and possibly a
-// metered API key, none of which the coding agent has any business reading.
-// The run env is what config deliberately put there.
+// Allowlisted — [hostbox.PassthroughEnv], the list the CLI LLM backend starts
+// from too — because the engine's environment holds the org's chat token, the
+// keyring that decrypts its secret store and possibly a metered API key, none
+// of which the coding agent has any business reading. The run env is what
+// config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
 	home := b.layout.home()

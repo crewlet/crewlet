@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -144,6 +145,25 @@ func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 	for _, secret := range []string{"ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01"} {
 		if _, ok := env[secret]; ok {
 			t.Fatalf("%s reached the child environment", secret)
+		}
+	}
+}
+
+// THE ONE LIST CARRIES THE UNION OF WHAT EACH CONSUMER'S OWN COPY HAD.
+//
+// The CLI backend kept a list of its own until the two drifted; each name
+// below was on exactly one of them, and dropping any one now takes it from
+// both a text-mode call and a local box at once.
+func TestThePassthroughKeepsWhatEitherConsumerNeeded(t *testing.T) {
+	for name, why := range map[string]string{
+		"LANGUAGE":   "the language a CLI translates its own messages into",
+		"LC_NUMERIC": "how a CLI formats a number it prints",
+		"TERM":       "what terminal a box's shell believes it is on",
+		"ALL_PROXY":  "a host that reaches the network only through a SOCKS proxy",
+		"all_proxy":  "the same, in the spelling curl and most runtimes read",
+	} {
+		if !slices.Contains(PassthroughEnv, name) {
+			t.Errorf("PassthroughEnv lacks %s (%s)", name, why)
 		}
 	}
 }
