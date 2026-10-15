@@ -839,7 +839,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	otel, ownsOtel := opts.OtelReceiver, false
 	if otel == nil {
-		built, err := sandbox.BuildOtelReceiver(getenv(environ),
+		built, err := sandbox.BuildOtelReceiver(ctx, getenv(environ),
 			keyMaterial(opts.Bootstrap))
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment

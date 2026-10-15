@@ -67,7 +67,7 @@ func TestTheReceiverReportsADroppedHeaderUnderTheDocumentedName(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
 		"OTEL_EXPORTER_OTLP_TRACES_HEADERS":  "authorization Bearer sk-secret",
 	}
-	receiver, err := BuildOtelReceiver(func(k string) string { return env[k] }, []string{"k1:material"})
+	receiver, err := BuildOtelReceiver(t.Context(), func(k string) string { return env[k] }, []string{"k1:material"})
 	if err != nil {
 		t.Fatal(err)
 	}
