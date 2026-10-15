@@ -42,8 +42,9 @@
 // What the SDK still reads for itself is what no resolution here covers: the
 // batch processor's queue, batch size and delay, the span limits, and the
 // metric exporter's temporality and exemplar filter, each as the SDK documents
-// it. A variable the SDK would read and an explicit setting here would then
-// override is refused by name instead ([refuseSuperseded]).
+// it. A second bound the SDK would read and an explicit setting here would then
+// override is refused by name instead ([refuseSuperseded]); a shape it would
+// read and then ignore is reported at boot ([reportUnhonoured]).
 //
 // A second reason, specific to this engine: Tier A is the root of trust and
 // resolves with EnvOnly, and it holds to the rule that two keys setting one
@@ -446,6 +447,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	if err := refuseSuperseded(opts); err != nil {
 		return nil, err
 	}
+	reportUnhonoured(ctx, opts)
 	sampler, err := rootSamplerFor(opts)
 	if err != nil {
 		return nil, err

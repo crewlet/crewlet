@@ -344,11 +344,13 @@ documents them: `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_QUEUE_SIZE` and
 `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT`, `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` and the general
 `OTEL_ATTRIBUTE_COUNT_LIMIT` and `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`),
 `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` and `OTEL_METRICS_EXEMPLAR_FILTER`.
-Three it would read and the engine then overrides are **refused at startup** instead,
+Two it would read and the engine then overrides are **refused at startup** instead,
 naming what decides: `OTEL_BSP_EXPORT_TIMEOUT` and `OTEL_METRIC_EXPORT_TIMEOUT`, because
-`OTEL_EXPORTER_OTLP_TIMEOUT` bounds every layer of an export, and
-`OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`, because every histogram the
-engine records is bucketed at its own fixed boundaries.
+`OTEL_EXPORTER_OTLP_TIMEOUT` bounds every layer of an export and a second key for one
+bound is a disagreement. `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` is
+**reported at startup** (`otel_variable_not_honoured`) and the engine boots: every
+histogram the engine records is exported at its own fixed boundaries whatever it says,
+and a vendor snippet that sets it should not stop a node.
 
 None of these variables reaches a coding box from the engine's environment. A box is handed
 an OTLP environment of its own — the receiver as its base endpoint, empty headers, the
