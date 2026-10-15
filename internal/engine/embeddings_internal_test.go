@@ -411,3 +411,32 @@ func TestAFailedQueryVectorCountsAsDegradedAndNoProviderDoesNot(t *testing.T) {
 		t.Error("the scan histogram's rung is not the mode that was served")
 	}
 }
+
+// AN OPENAI-COMPATIBLE EMBEDDER WHOSE ENDPOINT RESOLVED TO NOTHING IS REFUSED,
+// as an openai-compatible chat entry's is. Validation refuses the empty field,
+// but `${VAR}` unset reaches the build empty, and the provider's default is
+// api.openai.com: every page the company indexes and every search would go to
+// a third party under a key that is not an OpenAI key. The refusal names the
+// variable. An `openai` embedder whose reference resolved to nothing keeps the
+// vendor's own endpoint, which is what that type means.
+//
+// Mutation: drop the openai-compatible refusal from buildEmbedder, and the
+// first case builds a provider pointed at api.openai.com.
+func TestAnOpenAICompatibleEmbedderWithNoEndpointIsRefused(t *testing.T) {
+	t.Parallel()
+	doc := func(kind string) string {
+		return strings.Replace(strings.Replace(fmt.Sprintf(embeddingDoc, 1536),
+			"    type: openai\n", "    type: "+kind+"\n", 1),
+			"    api_key: sk-embed\n", "    api_key: sk-embed\n    base_url: ${EMBED_BASE_URL}\n", 1)
+	}
+	e := &Engine{environ: config.MapSource{}}
+	_, err := e.buildEmbedder(companyWith(t, doc("openai-compatible")))
+	if err == nil || !strings.Contains(err.Error(), "EMBED_BASE_URL resolved to nothing") ||
+		!strings.Contains(err.Error(), "api.openai.com") {
+		t.Fatalf("an openai-compatible embedder with no endpoint: %v, want a refusal naming "+
+			"the variable and where the requests would have gone", err)
+	}
+	if _, err := e.buildEmbedder(companyWith(t, doc("openai"))); err != nil {
+		t.Fatalf("an openai embedder whose base_url resolved to nothing: %v, want the vendor's endpoint", err)
+	}
+}
