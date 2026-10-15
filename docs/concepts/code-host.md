@@ -723,12 +723,18 @@ sequenceDiagram
 
 **The advertisement is read at the log's head.** Every answer that names a
 ref — the refs a push or a protocol v0 clone is shown, a protocol v2
-`ls-refs`, a fetch by `want-ref` — is read through the code log's barrier, so
-a node cut off from the fleet answers 503 rather than an old head. An object
-fetch names ids that mean the same bytes on every node, so it takes what the
-node's cache holds; a fetch of an object the node has not seen yet — the
-client learned of it from a node further ahead — makes the node read the
-log's head once before it answers.
+`ls-refs` — is read through the code log's barrier, so a node cut off from
+the fleet answers 503 rather than an old head. An object fetch names ids that
+mean the same bytes on every node, so it takes what the node's cache holds; a
+fetch of an object the node has not seen yet — the client learned of it from
+a node further ahead — makes the node read the log's head once before it
+answers. The host does not offer protocol v2's `ref-in-want`: a client
+offered it fetches by ref name, and git's own server and client disagree on
+the order of a shallow fetch's answer when it does, so every
+`git clone --depth=1` failed with
+`fatal: expected 'packfile', received 'shallow-info'`. A client lists the
+refs and fetches the ids it was shown instead, as it does from any server
+that does not offer it.
 
 **receive-pack never runs in a cache.** git moves a push's objects into the
 repository it runs in *before* any hook can refuse them, so a push received

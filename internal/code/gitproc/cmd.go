@@ -262,7 +262,6 @@ var allowedConfig = map[string]string{
 	"uploadpackfilter.tree.maxdepth":     "the cache's serve configuration: only the filters a bitmap answers",
 	"uploadpackfilter.object:type.allow": "the cache's serve configuration: only the filters a bitmap answers",
 	"uploadpackfilter.combine.allow":     "the cache's serve configuration: only the filters a bitmap answers",
-	"uploadpack.allowrefinwant":          "the cache's serve configuration",
 	"uploadpack.keepalive":               "the cache's serve configuration: the stall watchdog relies on it",
 	// A prefix filter on the refs git lists of an alternate, passed to the
 	// for-each-ref it runs as patterns: it names refs and runs nothing. Its

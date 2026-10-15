@@ -34,16 +34,12 @@ const v2 = "version=2"
 // lsRefs is a protocol v2 `ls-refs`.
 func lsRefs() string { return pkt("command=ls-refs\n") + "0000" }
 
-// fetchWants is a protocol v2 `fetch` of every id in wants (and of every ref
-// in wantRefs), done at once.
-func fetchWants(wants []string, wantRefs ...string) string {
+// fetchWants is a protocol v2 `fetch` of every id in wants, done at once.
+func fetchWants(wants []string) string {
 	var b strings.Builder
 	b.WriteString(pkt("command=fetch\n") + "0001" + pkt("no-progress\n"))
 	for _, w := range wants {
 		b.WriteString(pkt("want " + w + "\n"))
-	}
-	for _, r := range wantRefs {
-		b.WriteString(pkt("want-ref " + r + "\n"))
 	}
 	b.WriteString(pkt("done\n") + "0000")
 	return b.String()
@@ -57,8 +53,8 @@ func randomOID() string {
 }
 
 // Every answer that names a ref is read through the code log's barrier — a
-// v0 advertisement, a v2 ls-refs, a push's advertisement, a want-ref fetch —
-// and an answer that names none takes whatever the cache holds.
+// v0 advertisement, a v2 ls-refs, a push's advertisement — and an answer that
+// names none takes whatever the cache holds.
 func TestTheAdvertisementIsLinearizable(t *testing.T) {
 	e := &recording{}
 	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
@@ -84,9 +80,6 @@ func TestTheAdvertisementIsLinearizable(t *testing.T) {
 		}, true},
 		{"a push's advertisement", func() (*http.Response, string) {
 			return get(t, c, 0, "ceo", "git-receive-pack", "")
-		}, true},
-		{"a want-ref fetch", func() (*http.Response, string) {
-			return post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants(nil, "refs/heads/main"))
 		}, true},
 		{"a v2 fetch of an object the cache holds", func() (*http.Response, string) {
 			return post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants([]string{head}))
