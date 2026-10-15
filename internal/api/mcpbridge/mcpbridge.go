@@ -33,6 +33,10 @@
 //     when it ends, and a token for a closed run resolves to nothing. Without
 //     that, a box that outlived its run keeps a working key to a live seat's
 //     tools.
+//   - THE RUN'S TRACE. A native call runs under its turn's span; a bridged one
+//     arrives on a request that holds none, so the session carries the trace
+//     the run was launched in and every call is filed there — see
+//     [Session.parent].
 package mcpbridge
 
 import (
@@ -48,14 +52,17 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("api.mcpbridge")
@@ -101,6 +108,12 @@ type Session struct {
 	// surface alone, which is correct for a run whose whole life is one
 	// process — a test, or a host-placement run the engine is watching.
 	Ledger Ledger
+
+	// Trace is the run's trace: the span that launched it, with its
+	// sampling decision — what the box's own TRACEPARENT names. Every
+	// bridged call is filed under it ([Session.parent]); the zero value
+	// files each call as a root of its own.
+	Trace events.TraceContext
 
 	// nonce distinguishes THIS session from an earlier one for the same
 	// run. It is half the token's subject, so a token minted for a
@@ -636,7 +649,7 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			return failure(err.Error()), nil
 		}
 
-		res, err := s.Surface.Execute(ctx, llm.ToolCall{Name: name, Arguments: args})
+		res, err := s.Surface.Execute(s.parent(ctx, req), llm.ToolCall{Name: name, Arguments: args})
 		if err != nil {
 			// The surface returns an error only for something that
 			// genuinely could not run — a torn-down turn. That IS a
@@ -669,6 +682,30 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},
 		}, nil
 	}
+}
+
+// parent is the context one bridged call is dispatched under: the run's
+// trace, restored, so the call's `tool.call` span — and everything it
+// publishes, and every model call it makes — is in the trace of the turn that
+// launched the run rather than the root of one of its own.
+//
+// BENEATH THE BOX'S OWN SPAN where the request names one IN THE RUN'S TRACE:
+// Claude Code sends the `traceparent` of the tool span that made the call on
+// every MCP request (with the switches its runner sets), and the box exports
+// that span into the run's trace too, so nesting under it puts the engine's
+// half of the call beneath the step that asked for it. A request naming any
+// other trace is filed under the run's — the box holds a credential for this
+// run's tools, never for somebody else's trace. See [tracing.WithRemoteFrom].
+//
+// The request itself holds no span to continue — the API's routes are not
+// spanned — so without this every bridged call was the root of a trace of its
+// own, and the records its tools published sat outside the turn's.
+func (s *Session) parent(ctx context.Context, req *mcp.CallToolRequest) context.Context {
+	var carrier propagation.TextMapCarrier
+	if req != nil && req.Extra != nil && req.Extra.Header != nil {
+		carrier = propagation.HeaderCarrier(req.Extra.Header)
+	}
+	return tracing.WithRemoteFrom(ctx, s.Trace, carrier)
 }
 
 // appendCall records one finished call in the durable ledger.

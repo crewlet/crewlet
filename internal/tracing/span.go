@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
@@ -222,6 +223,34 @@ func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 	ctx = trace.ContextWithSpanContext(ctx, sc)
 	ctx = context.WithValue(ctx, parentKey{}, parent)
 	return logging.WithTrace(ctx, sc.TraceID().String(), sc.SpanID().String())
+}
+
+// WithRemoteFrom is [WithRemote] for a caller that hands back trace context of
+// its own — an HTTP request from a process the engine started inside the trace
+// tc names: the span carrier names becomes the parent instead of tc's, but ONLY
+// WHEN IT IS IN tc's OWN TRACE.
+//
+// The process is the engine's (a coding box it launched under tc) and so is
+// the trace, so the deeper parent it names — the span of its own that made the
+// call — is a better one than the span that launched it, and the engine's
+// spans beneath nest under the step that caused them. A traceparent naming any
+// OTHER trace is ignored rather than followed: the caller holds a credential
+// for one run, and honouring an arbitrary trace would let it file the engine's
+// spans, and every event published beneath them, into somebody else's.
+//
+// THE DECISION STAYS tc's. The process continued the engine's decision when it
+// started, and a flag it sends back is at best that decision again and at
+// worst its own sampler re-deciding a trace already in flight, which is the
+// one thing every sampler here refuses.
+func WithRemoteFrom(ctx context.Context, tc events.TraceContext, carrier propagation.TextMapCarrier) context.Context {
+	own, err := trace.TraceIDFromHex(tc.TraceID)
+	if carrier != nil && err == nil {
+		inbound := trace.SpanContextFromContext(propagator().Extract(context.Background(), carrier))
+		if inbound.IsValid() && inbound.TraceID() == own {
+			tc.SpanID, tc.ParentSpanID = inbound.SpanID().String(), ""
+		}
+	}
+	return WithRemote(ctx, tc)
 }
 
 // Traceparent renders tc as the W3C `traceparent` value a process this engine

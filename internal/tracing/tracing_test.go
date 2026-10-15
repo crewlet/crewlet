@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
@@ -120,6 +121,37 @@ func TestStartRootIgnoresTheSpanItsContextHolds(t *testing.T) {
 	}
 	if got.ParentSpanID != "" {
 		t.Errorf("the root claimed a parent: %q", got.ParentSpanID)
+	}
+}
+
+// A CALLER'S OWN SPAN IS FOLLOWED ONLY INSIDE THE TRACE IT WAS HANDED, and
+// never its decision: a span in tc's trace becomes the parent, anything else —
+// another trace, no carrier — leaves tc's own, and tc's sampling decision
+// stands whatever flag the caller sent.
+//
+// Mutations: drop the trace comparison (the foreign case), or take the
+// carrier's flag (the unsampled case).
+func TestWithRemoteFromFollowsACallerOnlyInsideItsOwnTrace(t *testing.T) {
+	configure(t, nil)
+	const callerSpan = "b7ad6b7169203331"
+	run := events.NewTrace()
+	run.Unsampled = true
+	foreign := events.NewTrace()
+	for _, tc := range []struct {
+		name    string
+		carrier propagation.TextMapCarrier
+		want    events.TraceContext
+	}{
+		{"no carrier", nil, run},
+		{"a span in the run's trace", propagation.MapCarrier{
+			"traceparent": "00-" + run.TraceID + "-" + callerSpan + "-01"},
+			events.TraceContext{TraceID: run.TraceID, SpanID: callerSpan, Unsampled: true}},
+		{"a span in another trace", propagation.MapCarrier{
+			"traceparent": "00-" + foreign.TraceID + "-" + callerSpan + "-01"}, run},
+	} {
+		if got := TraceOf(WithRemoteFrom(context.Background(), run, tc.carrier)); got != tc.want {
+			t.Errorf("%s: restored %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }
 

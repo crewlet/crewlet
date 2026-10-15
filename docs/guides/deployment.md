@@ -1241,6 +1241,7 @@ flowchart TD
     R --> L
     P --> L
     O --> L
+    K -.->|"traceparent (bridged tool call)"| F
     L --> H
     E -.->|"TRACEPARENT"| J
     F -.->|"TRACEPARENT (run_sandbox)"| K
@@ -1477,7 +1478,11 @@ turn's `agent.turn` in agent mode), and Claude Code's runner switches its
 `claude_code.llm_request` and `claude_code.tool` spans beneath that, and the
 Claude API's spans of each call under its `claude_code.llm_request` — all
 reaching the backend the engine exports to, through the receiver, which adds
-the collector's credential outside the box. Its metrics and log events stay
+the collector's credential outside the box. A call the agent makes back to the
+seat's tools over the engine's [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+is a `tool.call` in the same trace, nested under the `claude_code.tool` span
+whose `traceparent` the request carries — or under the launching span when it
+carries none — and never in any other trace. Its metrics and log events stay
 off: the metrics count what the engine already records for the run, and the
 log events are Claude Code's content channel. With no receiver URL the engine
 switches nothing on in a box, and Claude Code's spans of a run reach a
