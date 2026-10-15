@@ -811,23 +811,20 @@ func (p *Profile) Validate(name string) error {
 	}
 	// A RELOCATION VARIABLE IS PART OF THE ISOLATION ([Profile.SeatEnv]), so
 	// it is held to what the isolation is for: a seat's state stays in that
-	// seat's home. One naming a base variable would give it two values, and
-	// one whose directory climbed out of the home — `../../shared` — would
-	// point every seat's vendor state at ONE directory, the shared-memory
-	// failure the isolation exists to prevent.
+	// seat's home. One whose directory climbed out of the home —
+	// `../../shared` — would point every seat's vendor state at ONE
+	// directory, the shared-memory failure the isolation exists to prevent,
+	// which is why this half is RUNNABLE. One naming a base variable is not:
+	// the base value stands and the seat stays isolated, so that is an
+	// admission rule ([Profile.ValidateEnv]).
 	base := seatBase("", "")
 	for _, env := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
 		if _, owned := base[env]; owned {
-			add("config_env may not name %s — it is set from the seat home already", env)
 			continue
 		}
 		if _, err := UnderRoot(seedValidationRoot, p.ConfigEnv[env]); err != nil {
 			add("config_env.%s %q must be relative and stay inside the seat home", env, p.ConfigEnv[env])
 		}
-	}
-	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {
-		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
-			"on argv and there is none to introduce", p.EffectivePromptMode())
 	}
 	if p.EffectivePromptMode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
 		// Refused rather than defaulted to a bare append: a file-mode
@@ -838,19 +835,21 @@ func (p *Profile) Validate(name string) error {
 		add("prompt_mode is file but no prompt_args entry contains {file} — set " +
 			`cli.overrides.prompt_args, e.g. ["--prompt-file", "{file}"]`)
 	}
-	switch {
-	case len(p.EventTypePath) > 0 && len(p.TextEvents) == 0:
-		add("event_type_path is set but text_events is empty — naming where the " +
-			"event kind lives says nothing about which kinds carry the answer")
-	case len(p.EventTypePath) == 0 && len(p.TextEvents) > 0:
-		add("text_events is set but event_type_path is empty — there is nothing to " +
-			"compare the event names against")
-	case len(p.EventTypePath) > 0 && p.EffectiveOutput() != OutputJSONL:
-		// Refused rather than ignored: an operator who wrote it meant the
-		// answer to be picked out of an event stream, and a filter that
-		// silently did nothing is a debugging session.
-		add("event_type_path is set but output is %q — an event discriminator "+
-			"only exists in a jsonl stream", p.EffectiveOutput())
+	// RUNNABLE on a jsonl stream, where the filter is read: a discriminator
+	// with no text events matches no line, so every call finds no answer,
+	// and text events with no discriminator drop the filter, so a stream
+	// that spliced a tool's output into the reply reads as the model's own.
+	// On any other output the filter is never read, which is an admission
+	// rule ([Profile.ValidateAuthoring]).
+	if p.EffectiveOutput() == OutputJSONL {
+		switch {
+		case len(p.EventTypePath) > 0 && len(p.TextEvents) == 0:
+			add("event_type_path is set but text_events is empty — naming where the " +
+				"event kind lives says nothing about which kinds carry the answer")
+		case len(p.EventTypePath) == 0 && len(p.TextEvents) > 0:
+			add("text_events is set but event_type_path is empty — there is nothing to " +
+				"compare the event names against")
+		}
 	}
 	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
 		// One channel or the other. Both would hand the CLI the same
@@ -875,15 +874,6 @@ func (p *Profile) Validate(name string) error {
 			"machine; keep the {file} form and drop {system}")
 	}
 	if p.SystemPromptFile != nil {
-		if !p.WritesSystemPromptFile() {
-			// A template with no file to write is not a harmless
-			// extra: on a `{system}` profile the seat's identity goes
-			// on argv bare, and an operator who wrote frontmatter
-			// meant it to reach the CLI.
-			add("system_prompt_file is set but no system-prompt channel writes a " +
-				"file — set system_prompt_args with a {file} placeholder, or " +
-				"system_prompt_env")
-		}
 		if tpl := p.SystemPromptFile.Template; tpl != "" && !strings.Contains(tpl, "{system}") {
 			add("system_prompt_file.template has no {system} placeholder — every " +
 				"call would hand the CLI the same fixed file and no seat's identity")
@@ -899,30 +889,13 @@ func (p *Profile) Validate(name string) error {
 				"directory separator", fileName)
 		}
 	}
-	if len(p.UsageFileArgs) > 0 {
-		if !hasPlaceholder(p.UsageFileArgs, "{usage_file}") {
-			add("usage_file_args carries no {usage_file} placeholder — there is " +
-				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
-		}
-		// BOTH PROMPT COUNTS, because a usage report is read only when both
-		// resolve — a partial overlay would pair one source's input with
-		// another's output, and the sum is what a budget is charged. A
-		// profile declaring one of them (or only the cache paths) therefore
-		// estimates on EVERY call while `crewlet llm doctor` reports it as
-		// using the vendor's own figures, which is the one thing that
-		// report exists to settle.
-		if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
-			add("usage_file_args is set but usage.input and usage.output are not both " +
-				"declared — the report is only read when both counts resolve, so every " +
-				"call would fall back to an estimate while the doctor reports otherwise")
-		}
-	} else if (len(p.Usage.Input) == 0) != (len(p.Usage.Output) == 0) {
-		// The same rule for a report on stdout: the backend charges the
-		// vendor's counts only when BOTH resolve, so one declared without
-		// the other is a profile that estimates on every call.
-		add("usage.input and usage.output must be declared together — the counts are " +
-			"charged only when both resolve, so declaring one estimates every call; " +
-			"declare the other, or neither")
+	// RUNNABLE: a usage flag with nowhere to put the path hands the CLI a
+	// flag with no value. Which counts are DECLARED beside it is an
+	// admission rule ([Profile.ValidateAuthoring]), since a profile that
+	// declares the wrong ones still runs, estimated.
+	if len(p.UsageFileArgs) > 0 && !hasPlaceholder(p.UsageFileArgs, "{usage_file}") {
+		add("usage_file_args carries no {usage_file} placeholder — there is " +
+			`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
 	}
 	if p.MarkerScope != "" && !p.MarkerScope.Valid() {
 		add("marker_scope %q (want %s or %s)",
@@ -949,12 +922,6 @@ func (p *Profile) Validate(name string) error {
 	}
 	if p.LocalTools != "" && !p.LocalTools.Valid() {
 		add("local_tools %q (want denied or vendor-default)", p.LocalTools)
-	}
-	if p.LocalTools == LocalToolsVendorDefault && strings.TrimSpace(p.LocalToolsNote) == "" {
-		// A stance that admits the CLI's tools without saying why is
-		// exactly the silent hole the field exists to make visible.
-		add("local_tools is vendor-default but local_tools_note is empty — say which " +
-			"denial the vendor lacks")
 	}
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
@@ -1044,6 +1011,84 @@ func (p *Profile) ValidateCredentials(name string) error {
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
 }
 
+// ValidateAuthoring reports every declaration this profile makes that the CLI
+// never acts on as written: a setting its mode does not read, a usage report
+// whose counts are not declared as a pair, and a stance on local tools with no
+// account of itself.
+//
+// AN ADMISSION RULE, like [Profile.ValidateCredentials] and
+// [Profile.ValidateEnv] and for the same reason: a profile that breaks one
+// still builds, starts and answers — the setting is inert, or every call is
+// estimated, and `crewlet llm doctor` says which — so config refuses it on
+// every write and warns about a revision being applied. Refused at apply, it
+// would split a rolling upgrade's epoch over a revision a newer peer admitted
+// under a relaxed rule: a CLI measured to report only one count, say, with
+// the other estimated. What cannot run safely stays in [Profile.Validate].
+func (p *Profile) ValidateAuthoring(name string) error {
+	var bad []string
+	add := func(format string, args ...any) {
+		bad = append(bad, fmt.Sprintf(format, args...))
+	}
+	// BOTH PROMPT COUNTS OR NEITHER, wherever the counts are read — a
+	// usage file, or a stdout that is decoded at all. The backend charges
+	// the vendor's figures only when input and output both resolve, because
+	// a partial overlay would pair one source's input with another's output
+	// and the sum is what a budget is charged; so with one declared, every
+	// call is ESTIMATED (four characters per token), which `crewlet llm
+	// doctor` reports ([Profile.ReadsUsage]). ONE rule, whichever channel
+	// carries the report. On a text profile with no usage file the paths
+	// are read by nothing, and an inherited one is simply inert there, so
+	// it is not refused.
+	reads := len(p.UsageFileArgs) > 0 || p.EffectiveOutput() != OutputText
+	switch input, output := len(p.Usage.Input) > 0, len(p.Usage.Output) > 0; {
+	case reads && input != output:
+		add("usage.input and usage.output must be declared together — the CLI's " +
+			"counts are charged only when both resolve, so with one declared every " +
+			"call is estimated at four characters per token, as `crewlet llm doctor` " +
+			"reports; declare the missing one, or neither")
+	case len(p.UsageFileArgs) > 0 && !input && !output:
+		add("usage_file_args is set but neither usage.input nor usage.output is " +
+			"declared — the report the CLI writes is never read, so every call is " +
+			"estimated; declare both counts, or drop usage_file_args")
+	}
+	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {
+		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
+			"on argv and there is none to introduce, so it is never passed", p.EffectivePromptMode())
+	}
+	if p.EffectiveOutput() != OutputJSONL {
+		// Refused rather than ignored: an operator who wrote it meant the
+		// answer to be picked out of an event stream, and a filter that
+		// silently did nothing is a debugging session.
+		for _, field := range []struct {
+			name string
+			set  bool
+		}{{"event_type_path", len(p.EventTypePath) > 0}, {"text_events", len(p.TextEvents) > 0}} {
+			if field.set {
+				add("%s is set but output is %q — an event filter only exists in a "+
+					"jsonl stream, so it is never read", field.name, p.EffectiveOutput())
+			}
+		}
+	}
+	if p.SystemPromptFile != nil && !p.WritesSystemPromptFile() {
+		// A template with no file to write is not a harmless extra: on a
+		// `{system}` profile the seat's identity goes on argv bare, and an
+		// operator who wrote frontmatter meant it to reach the CLI.
+		add("system_prompt_file is set but no system-prompt channel writes a " +
+			"file — set system_prompt_args with a {file} placeholder, or " +
+			"system_prompt_env")
+	}
+	if p.LocalTools == LocalToolsVendorDefault && strings.TrimSpace(p.LocalToolsNote) == "" {
+		// A stance that admits the CLI's tools without saying why is
+		// exactly the silent hole the field exists to make visible.
+		add("local_tools is vendor-default but local_tools_note is empty — say which " +
+			"denial the vendor lacks")
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
 // EffectivePromptMode is the prompt mode with its default applied.
 func (p *Profile) EffectivePromptMode() PromptMode {
 	if p.PromptMode == "" {
@@ -1098,8 +1143,8 @@ func sentinelProblem(sentinel string) string {
 //
 // BOTH HALVES, because either alone is a lie. A profile that does not declare
 // both prompt counts cannot — the backend charges the vendor's figures only
-// when input and output both resolve, and [Profile.Validate] refuses one
-// declared without the other; less obviously, a TEXT profile cannot either — [extract]
+// when input and output both resolve, and [Profile.ValidateAuthoring] refuses
+// one declared without the other; less obviously, a TEXT profile cannot either — [extract]
 // never decodes a document in that mode, so declared paths are walked by
 // nothing. That combination is not an operator error to refuse: `output: text`
 // is a one-line override, and the JSON paths it inherits from the built-in

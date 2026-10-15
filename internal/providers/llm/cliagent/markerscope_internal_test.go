@@ -147,12 +147,13 @@ func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 	}
 }
 
-// A USAGE-FILE PROFILE MISSING EITHER PROMPT COUNT REPORTS FIGURES IT NEVER
-// READS. [extracted.applyUsageFile] takes the report only when input AND
-// output resolve — a partial overlay would pair one source's input with
-// another's output, and the sum is what a budget is charged. So a profile
-// declaring one of them estimates on every call while ReadsUsage, and
-// `crewlet llm doctor` with it, says the vendor's own figures are in use.
+// A USAGE-FILE PROFILE MISSING EITHER PROMPT COUNT NEVER READS ITS REPORT.
+// [extracted.applyUsageFile] takes the report only when input AND output
+// resolve — a partial overlay would pair one source's input with another's
+// output, and the sum is what a budget is charged. So a profile declaring one
+// of them is estimated on every call, which ReadsUsage, and `crewlet llm
+// doctor` with it, reports. It still runs, so a write is refused and the
+// profile loads (cliprofile.Profile.ValidateAuthoring).
 func TestAUsageFileProfileMustDeclareBothPromptCounts(t *testing.T) {
 	t.Parallel()
 	for name, usage := range map[string]map[string]any{
@@ -167,13 +168,19 @@ func TestAUsageFileProfileMustDeclareBothPromptCounts(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := cliprofile.Load("hermes", map[string]any{"usage": usage})
-			if err == nil || !strings.Contains(err.Error(), "usage.input and usage.output") {
-				t.Fatalf("err = %v, want a refusal naming both counts", err)
+			p, err := cliprofile.Load("hermes", map[string]any{"usage": usage})
+			if err != nil {
+				t.Fatalf("a profile that runs, estimated, did not load: %v", err)
+			}
+			if p.ReadsUsage() {
+				t.Error("ReadsUsage on a profile whose report is never read")
+			}
+			if err := p.ValidateAuthoring("hermes"); err == nil || !strings.Contains(err.Error(), "usage.input") {
+				t.Fatalf("ValidateAuthoring = %v, want a write refused naming the counts", err)
 			}
 		})
 	}
-	// The shipped profile declares both, so the doctor's claim is true.
+	// The shipped profile declares both, so the doctor reports its figures.
 	p, _ := cliprofile.Builtin("hermes")
 	if !p.ReadsUsage() {
 		t.Error("hermes stopped reporting real usage")

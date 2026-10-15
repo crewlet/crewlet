@@ -320,15 +320,24 @@ func TestASeedFileMayNotEscapeItsScope(t *testing.T) {
 			t.Errorf("path %q: err = %v, want a refusal naming seed_files[0].path", path, err)
 		}
 	}
-	_, err := New(Config{
+	// A STANCE WITH NO ACCOUNT OF ITSELF runs — the note is what the doctor
+	// prints — so it builds, and a write is refused.
+	overrides := map[string]any{
+		"binary": "x", "complete_args": []any{"-p"}, "output": "text", "model_args": []any{},
+		"local_tools": "vendor-default",
+	}
+	if _, err := New(Config{
 		Key: "sub", Agent: "custom", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{
-			"binary": "x", "complete_args": []any{"-p"}, "output": "text", "model_args": []any{},
-			"local_tools": "vendor-default",
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "local_tools_note") {
-		t.Errorf("vendor-default without a note: err = %v, want a refusal naming local_tools_note", err)
+		Overrides: overrides,
+	}); err != nil {
+		t.Errorf("vendor-default without a note did not build: %v", err)
+	}
+	p, err := cliprofile.Load("custom", overrides)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := p.ValidateAuthoring("custom"); err == nil || !strings.Contains(err.Error(), "local_tools_note") {
+		t.Errorf("vendor-default without a note: err = %v, want a write refused naming local_tools_note", err)
 	}
 }
 

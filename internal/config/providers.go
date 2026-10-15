@@ -1491,6 +1491,13 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 // engine's value wins. Judged against the profile with cli.overrides merged
 // in, since config_env and system_prompt_env are overridable and decide which
 // names are the engine's.
+//
+// The profile's other AUTHORING rules are judged on the same merged profile
+// here ([cliprofile.Profile.ValidateAuthoring]): a declaration the CLI never
+// acts on as written — usage counts that are not a pair where they are read, a
+// setting the profile's own mode never reads, a vendor-default tool stance
+// with no note. Each runs (inert, or estimated on every call), so each is an
+// admission rule for this method's reason.
 func (l *LLMProvider) validateCLIEnv(path Path) error {
 	cli := l.CLI
 	if cli.Agent != "" && !cli.Agent.Valid() {
@@ -1506,6 +1513,9 @@ func (l *LLMProvider) validateCLIEnv(path Path) error {
 	}
 	var p problems
 	if err := profile.ValidateEnv(cli.Name()); err != nil {
+		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+	}
+	if err := profile.ValidateAuthoring(cli.Name()); err != nil {
 		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
 	}
 	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {

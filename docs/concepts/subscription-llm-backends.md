@@ -81,7 +81,8 @@ state layout is reachable across that boundary — and nothing you write can
 move it: the engine sets these variables **last**, over the profile's `env`,
 its `passthrough_env` and your `cli.env`, and a document naming one in any of
 those is [refused](#engine-owned-variables) on a write. A `config_env`
-directory has to stay inside the seat home.
+directory has to stay inside the seat home, and a `config_env` naming one of
+the base variables changes nothing: the engine's value stands.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
@@ -880,7 +881,13 @@ is a profile whose other path has drifted from the CLI, not a call that cost
 nothing on that side, so the call is estimated rather than charged a real
 input against an output of zero. A stream may carry the two on different
 events. For the same reason a profile declares `usage.input` and
-`usage.output` together, or neither.
+`usage.output` together, or neither, wherever the counts are read (a JSON
+or JSONL answer, or a usage file): with one declared, every call is
+estimated, which `crewlet llm doctor` reports as `estimated (4 characters per
+token)` with a problem line. The pairing is refused on every write and only
+warned about on a revision being applied, because such a profile still runs.
+On a `text` profile with no usage file nothing reads the paths, so one it
+inherits is simply inert there and is not refused.
 
 **A CLI can report its tokens honestly and still not put them in the
 answer.** Hermes's one-shot entry point is `hermes -z`, whose whole contract
@@ -908,10 +915,11 @@ partial overlay would pair one source's input count with another's output
 count, and the sum is what a budget is charged. (The two cache figures are
 not part of that test — a provider that caches nothing reports neither, and
 zero is the true answer there.) For the same reason a profile setting
-`usage_file_args` must declare **both** `usage.input` and `usage.output`, as
-every profile must: declaring one means every call quietly falls back to an
-estimate while `crewlet llm doctor` reports the vendor's own figures, which
-is precisely what that line exists to settle.
+`usage_file_args` declares **both** `usage.input` and `usage.output`, as
+every profile whose counts are read must: declaring one, or neither, means
+the file is never read and every call is estimated, which `crewlet llm
+doctor` reports. A write breaking it is refused at `cli.overrides`; an
+applied revision is warned about, since the profile still runs.
 
 **Not every vendor's richer channel is worth taking.** `pi` has one —
 `--mode json` streams every session event and carries real counts — and this
@@ -1306,7 +1314,7 @@ key by key; lists and single values replace wholesale.
 | `event_type_path` | Where a `jsonl` line names its event kind. |
 | `text_events` | The event kinds whose text is the answer. |
 | `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
-| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. `input` and `output` are declared together or not at all. |
+| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. `input` and `output` are declared together or not at all wherever they are read; with one declared every call is estimated, and a write is refused. |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
 | `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and never climbing out of it. |
 | `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable [the engine sets itself](#engine-owned-variables). |
@@ -1484,10 +1492,21 @@ put them all in the engine user's own. Which names are the engine's is judged
 against the merged profile: a `config_env` override makes its variable one.
 
 A `config_env` directory is relative to the seat home and has to stay inside
-it, and may not name one of the base variables above: `../../shared` would
-point every seat's vendor state at one directory. That one is a **runnable**
-rule — the profile contradicts itself about where a seat's state lives — so
-it is refused at apply too.
+it: `../../shared` would point every seat's vendor state at one directory.
+That one is a **runnable** rule — the seats would share state — so it is
+refused at apply too. A `config_env` naming one of the base variables above
+is an **admission** rule instead, for the reason `env` naming one is: the
+engine's value stands and the seat runs isolated, so the relocation is a
+setting that reaches nothing.
+
+The profile's other declarations its CLI never acts on as written are
+admission rules for the same reason: `usage.input` without `usage.output`
+(or the reverse) where the counts are read, `usage_file_args` with neither
+count, `prompt_args` in `stdin` mode, an event filter (`event_type_path`,
+`text_events`) on an answer that is not `jsonl`, a `system_prompt_file` with
+no channel that writes a file, and a `vendor-default` `local_tools` with no
+`local_tools_note`. Each is refused at `cli.overrides` on a write and warned
+about on an applied revision.
 
 ---
 

@@ -464,21 +464,44 @@ func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
 	}
 }
 
-// THE TWO PROMPT COUNTS ARE DECLARED TOGETHER, on stdout as for a usage file:
-// the backend charges the vendor's counts only when both resolve, so a profile
-// declaring one estimates every call while the doctor says otherwise.
+// THE TWO PROMPT COUNTS ARE DECLARED TOGETHER wherever they are read, on stdout
+// as for a usage file: the backend charges the vendor's counts only when both
+// resolve, so a profile declaring one is ESTIMATED on every call, and the
+// doctor says so (ReadsUsage). An ADMISSION rule — such a profile loads and
+// runs — and only where the paths are read: on a text profile with no usage
+// file they are inert, and an inherited one is not refused there.
+//
+// Mutation: drop the `reads` condition, and the text case is refused; move the
+// rule back into Validate, and every case fails to load.
 func TestAUsageDeclarationNamesBothPromptCountsOrNeither(t *testing.T) {
 	t.Parallel()
 	for name, usage := range map[string]map[string]any{
 		"input alone":  {"input": []any{[]any{"usage", "input_tokens"}}},
 		"output alone": {"output": []any{[]any{"usage", "output_tokens"}}},
 	} {
-		_, err := Load("custom", map[string]any{
+		p, err := Load("custom", map[string]any{
 			"binary": "x", "complete_args": []any{"-p"}, "text_paths": []any{[]any{"result"}},
 			"usage": usage,
 		})
-		if err == nil || !strings.Contains(err.Error(), "declared together") {
-			t.Errorf("%s: want a refusal naming the pair, got %v", name, err)
+		if err != nil {
+			t.Errorf("%s: a profile that runs, estimated, did not load: %v", name, err)
+			continue
+		}
+		if p.ReadsUsage() {
+			t.Errorf("%s: ReadsUsage, so the doctor would claim the vendor's figures", name)
+		}
+		if err := p.ValidateAuthoring("custom"); err == nil || !strings.Contains(err.Error(), "declared together") {
+			t.Errorf("%s: want a write refused naming the pair, got %v", name, err)
+		}
+		inert, err := Load("custom", map[string]any{
+			"binary": "x", "complete_args": []any{"-p"}, "output": "text", "usage": usage,
+		})
+		if err != nil {
+			t.Fatalf("%s on a text profile: %v", name, err)
+		}
+		if err := inert.ValidateAuthoring("custom"); err != nil {
+			t.Errorf("%s on a text profile with no usage file, where nothing reads the "+
+				"paths, was refused: %v", name, err)
 		}
 	}
 	p, err := Load("claude-code", map[string]any{"usage": map[string]any{"cache_read": []any{}}})

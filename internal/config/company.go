@@ -254,7 +254,8 @@ func (c *Company) ValidateRunnable() error {
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
 // cli-agent entry's credential configured where its CLI never reads it
 // ([LLMProvider.validateCLICredentials]), a variable the engine sets itself
-// named in a cli-agent entry's cli.env or profile ([LLMProvider.validateCLIEnv]),
+// named in a cli-agent entry's cli.env or profile, or a profile declaration its
+// CLI never acts on as written ([LLMProvider.validateCLIEnv]),
 // a cli-agent model with no provider segment on a CLI that reads one
 // ([LLMProvider.validateCLIModel]), a provider setting the entry's backend
 // never sends — a dial its type does not read, and a base_url's query,

@@ -21,9 +21,15 @@
 // which [Load] runs, is whether the merged profile can drive a CLI at all —
 // RUNNABLE, so a node refuses to apply a revision that breaks it.
 // [Profile.ValidateCredentials] is where the profile lets a credential in
-// around cli.auth, and [Profile.ValidateEnv] where it names a variable the
-// engine sets itself — both ADMISSION, so a write is refused and an applied
-// revision only warned about, since such a profile still runs.
+// around cli.auth, [Profile.ValidateEnv] where it names a variable the engine
+// sets itself (a relocation naming a base variable included), and
+// [Profile.ValidateAuthoring] where it declares what its CLI never acts on as
+// written — usage counts that are not a pair where they are read, a setting
+// its own mode never reads — all three ADMISSION, so a write is refused and an
+// applied revision only warned about, since such a profile still runs. The
+// line between the two is whether the profile CAN RUN, never how serious the
+// slip looks: a relocation that leaves the seat home shares state between
+// seats and is runnable, one that names a base variable is ignored and is not.
 //
 // It is also where the ISOLATION is spelled ([Profile.SeatEnv]): which
 // variables point a CLI's state inside one seat's home, and therefore which
