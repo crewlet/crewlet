@@ -246,6 +246,90 @@ func TestTheIndexNamesEveryRecord(t *testing.T) {
 	}
 }
 
+// AND EACH ROW NAMES ITS RECORD'S GATES — every test the record's Enforced-by
+// names and no other, or `nothing` exactly where the record says nothing.
+//
+// The column is the one a reader scans to learn what holds a decision, and it
+// is a second copy of a field: the record is the authority, the row a summary
+// of it. Kept by hand, it drifted the way the paragraph above says a hand-kept
+// table does — seven rows named fewer gates than their records, one of them
+// the single test a record listed before eight more were added beside it — and
+// a row naming one gate where nine hold the decision undersells exactly the
+// coverage this directory exists to make visible.
+func TestEveryIndexRowNamesItsRecordsGates(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	rows := indexRows(read(t, filepath.Join(root, adr.Dir, "README.md")))
+
+	for _, r := range load(t) {
+		row, ok := rows[r.File]
+		if !ok {
+			// TestTheIndexNamesEveryRecord reports the missing row.
+			continue
+		}
+		recordSays := namedTests(r.EnforcedBy())
+		rowSays := namedTests(row)
+		slices.Sort(recordSays)
+		slices.Sort(rowSays)
+		if !slices.Equal(recordSays, rowSays) {
+			t.Errorf("adr/README.md's row for %s names %q as its gates, and "+
+				"the record's Enforced-by names %q.\n\tThe record is the "+
+				"authority: copy its test names into the row.", r.File, rowSays, recordSays)
+		}
+		recordNothing := strings.EqualFold(strings.TrimSpace(r.EnforcedBy()), "nothing")
+		rowNothing := strings.HasPrefix(strings.TrimSpace(row), "nothing")
+		if recordNothing != rowNothing {
+			t.Errorf("adr/README.md's row for %s says %q and the record's "+
+				"Enforced-by says %q: one of them claims a gate the other "+
+				"does not", r.File, strings.TrimSpace(row), r.EnforcedBy())
+		}
+	}
+}
+
+// indexRows is the index table's last cell, keyed by the record file its first
+// cell links.
+func indexRows(index string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(index, "\n") {
+		if !strings.HasPrefix(line, "| [") {
+			continue
+		}
+		links := markdownLinks(line)
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		if len(links) == 0 || len(cells) < 3 {
+			continue
+		}
+		out[links[0]] = cells[len(cells)-1]
+	}
+	return out
+}
+
+// THE ROW READER, on rows whose answer is known. A reader that stopped finding
+// rows would leave the gate above passing over nothing.
+func TestAnIndexRowIsReadByTheRecordItLinks(t *testing.T) {
+	t.Parallel()
+	got := indexRows("| # | Decision | Enforced by |\n" +
+		"|---|---|---|\n" +
+		"| [0001](0001-a.md) | A | `TestOne`, `queuetest` |\n" +
+		"| [0002](0002-b.md) | B | nothing — declared |\n" +
+		"prose naming [0003](0003-c.md) | is not a row\n")
+	want := map[string]string{
+		"0001-a.md": " `TestOne`, `queuetest` ",
+		"0002-b.md": " nothing — declared ",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("read %d rows %q, want %d", len(got), got, len(want))
+	}
+	for file, cell := range want {
+		if got[file] != cell {
+			t.Errorf("row %s = %q, want %q", file, got[file], cell)
+		}
+	}
+	if real := indexRows(read(t, filepath.Join(sourcetree.Root(t), adr.Dir, "README.md"))); len(real) == 0 {
+		t.Fatal("read no rows from adr/README.md, so the row gate certifies nothing")
+	}
+}
+
 // AN UNENFORCED DECISION IS DECLARED, AND THE DECLARATION IS TWO-SIDED.
 //
 // `Enforced-by: nothing` is an allowed and often honest answer — this tree has
