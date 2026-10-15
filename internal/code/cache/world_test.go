@@ -201,9 +201,16 @@ func (n noObjects) Open(context.Context, objstore.Object) (io.ReadCloser, error)
 type logs struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+	// slow is a message whose lines are written a quarter of a second late,
+	// so a case can tell a line logged before what it watches from one logged
+	// after; set before the cache that logs here is opened.
+	slow string
 }
 
 func (l *logs) Write(p []byte) (int, error) {
+	if l.slow != "" && bytes.Contains(p, []byte(`"msg":"`+l.slow+`"`)) {
+		time.Sleep(250 * time.Millisecond)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.Write(p)
