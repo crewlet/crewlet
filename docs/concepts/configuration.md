@@ -453,7 +453,7 @@ Until a node's engine has a company — none in its store to boot on, and none a
 
 **What stays running:**
 
-- The Tier A resources — the stream, the store file, the API socket — all up.
+- The Tier A resources — the stream, the store's files, the API socket — all up.
 - The **core runtime**, on a data node ([Bootstrap Sequence](#bootstrap-sequence) step 10): every domain's state log, the node gate and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs a Tier A token's session in** — which is how the dashboard creates its company — and can be evicted from and readmitted to the logs it is counted on. What it cannot do yet is put anybody on a seat: every person holds a human seat the company declares, so an invitation or a create naming a seat answers `409 no_active_revision`, as `GET /iam/seats` does, until a company declaring one is applied. Then its first person is invited or created onto that seat under a Tier A token, exactly as everybody after them is (`crewlet iam invite -seat`, `crewlet iam create -seat`).
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.

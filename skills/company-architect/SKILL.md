@@ -491,8 +491,9 @@ are five copies of one agent with five times the bill.
 When you finish, the founder should have:
 
 1. `company.yaml` — Tier B, validated, `${VAR}` for every secret.
-2. `crewlet.yaml` — Tier A: the store's file path (one local file this
-   process owns — there is no DSN), the stream slot, `coordination.type`,
+2. `crewlet.yaml` — Tier A: the store's file path (two local files this
+   process owns, the node's own and the replicated estate beside it — there
+   is no DSN), the stream slot, `coordination.type`,
    and the API host/port with at least one auth token. Leave the stream
    `type: embedded` with a `store_dir` and `coordination.type: local`:
    that is one node with no broker to operate and no service to point

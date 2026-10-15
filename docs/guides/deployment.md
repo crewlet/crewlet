@@ -2,7 +2,7 @@
 
 **Crewlet requires no infrastructure services.** The engine is one
 binary: its event stream is a NATS JetStream server it embeds, and its store
-is a local file it creates and owns exclusively. A single host runs a whole
+is two local files it creates and owns exclusively. A single host runs a whole
 company with nothing else installed.
 
 One slot changes when a deployment outgrows one node — the stream, which
@@ -1687,9 +1687,12 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened by **Turso** — the only driver, so there is no
-setting that chooses one. The file is in the SQLite format, so any
-SQLite-compatible client can read it.
+Two local files per data node — the node's own (`store.path`) and the
+replicated estate beside it (`store.replicated_path`) — and one on a node
+without `data`, a scratch file it deletes at every boot (`store.scratch`).
+Each is opened by **Turso** — the only driver, so there is no setting that
+chooses one — and is in the SQLite format, so any SQLite-compatible client
+can read it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C

@@ -181,15 +181,16 @@ Conventions used by the [Datadog integration](../integrations/datadog.md).
 ## The store
 
 **There is no database environment variable, because there is no database
-server.** The store is a local file, named by `store.path` in the Tier A
-bootstrap YAML:
+server.** The store is two local files — the node's own, named by `store.path`
+in the Tier A bootstrap YAML, and the replicated estate beside it
+(`store.replicated_path`, beside `path` unless you name it):
 
 ```yaml
 store:
   path: "/var/lib/crewlet/company.db"
 ```
 
-That file is owned **exclusively** by one engine process. It is not a shared
+Each file is owned **exclusively** by one engine process. Neither is a shared
 database and there is no DSN to point anywhere; two engines opening one file
 corrupt it. Everything that genuinely has to be shared between nodes — seat
 leases, config activations, the completion ledger, dedupe and the rate
@@ -197,7 +198,7 @@ valves — lives in the `coordination` slot instead.
 
 There is no driver to pick: Turso is the store. `TURSO_GO_CACHE_DIR` (see Core
 above) is where its native database engine is extracted.
-The event store is a table in that same file, created by the engine's own
+The event store is a table in the node's own file, created by the engine's own
 migrations — there is no separate observability database to configure.
 
 ---

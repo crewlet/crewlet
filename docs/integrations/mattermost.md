@@ -1159,8 +1159,8 @@ Then, from the repo root:
 ```bash
 # 1. Mattermost and its own database (every service is profile-gated,
 #    so a bare `docker compose up` starts nothing). The engine needs no
-#    companion service of its own: the store is a file and the stream is
-#    embedded.
+#    companion service of its own: the store is two local files and the
+#    stream is embedded.
 docker compose --profile mattermost up -d --wait
 
 # 2. Admin account, PAT, team, channels -> .env, then the seven bots and

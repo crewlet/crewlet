@@ -120,7 +120,7 @@ flowchart TB
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i>")]
-    DB[("<b>Store</b><br/><i>one local file this<br/>process owns exclusively</i>")]
+    DB[("<b>Store</b><br/><i>two local files this<br/>process owns exclusively</i>")]
 
     ING --> ALWAYS --> STREAM --> SEATS
     SEATS -->|events| STREAM

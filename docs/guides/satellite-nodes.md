@@ -271,9 +271,11 @@ crewlet run
 ```
 
 `crewlet migrate` is **per node, not per fleet**. There is no shared database
-to migrate from elsewhere: it applies the pending schema migrations to the one
-local store file its Tier A config names, and every node owns its file
-exclusively.
+to migrate from elsewhere: it applies the pending schema migrations to the two
+local store files its Tier A config names — the node's own and the replicated
+estate beside it — and every node owns its files exclusively. A satellite
+without `data` has nothing to migrate: its store is scratch, and `migrate`
+refuses it.
 
 Or, if you would rather not put roles in the file:
 

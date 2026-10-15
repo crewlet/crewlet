@@ -32,7 +32,7 @@ make build        # or: go build ./...
 
 `make help` lists every target, and that is the whole setup — nothing to
 install beyond the prerequisites above. The engine embeds its own event
-stream (a NATS JetStream server) and its store is a local file it creates, so
+stream (a NATS JetStream server) and its store is two local files it creates, so
 `crewlet run` in an empty directory is a working company — there is no broker
 to operate and nothing to point a DSN at.
 
