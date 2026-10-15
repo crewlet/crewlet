@@ -101,7 +101,8 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// largest row a pushes page can hold — every command at the longest ref,
 	// with the longest code a recorded command carries, and every introduced
 	// id it lists — must fit the page's bytes, or a page that has to serve it
-	// is past the reply ceiling.
+	// is past the reply ceiling. The longest ref in ENCODED bytes: every byte
+	// after its number a `<`, which a ref may hold and JSON writes as six.
 	longest := code.Refusal("")
 	for _, r := range code.Refusals() {
 		if r.Recorded() && len(r) > len(longest) {
@@ -119,7 +120,7 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	for c := range code.MaxCommandsPerPush {
 		ref := fmt.Sprintf("refs/heads/%08d", c)
 		row.Commands = append(row.Commands, code.Command{
-			Ref: ref + strings.Repeat("x", code.MaxRefNameBytes-len(ref)),
+			Ref: ref + strings.Repeat("<", code.MaxRefNameBytes-len(ref)),
 			Old: oidOf(fmt.Sprint("old", c)), New: oidOf(fmt.Sprint("new", c)), Forced: true,
 			Result: code.ResultNG, Reason: longest,
 		})
