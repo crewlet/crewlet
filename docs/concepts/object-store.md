@@ -372,8 +372,11 @@ A read is bounded twice: by a deadline that grows with the file's size — a
 minute, plus thirty seconds a mebibyte on each of the two legs its bytes
 cross, from the store to the node and from the node to whoever is reading —
 and by a **stall** limit, which ends a read whose store has handed over
-nothing for a minute. A store that stops answering part way through a
-download therefore cuts it within a minute rather than holding it for hours.
+nothing for a minute — before its first byte as well as between two. A store
+that stops answering part way through a download therefore cuts it within a
+minute rather than holding it for hours, and so does one that keeps failing
+the request a download begins with: a file the store cannot begin to hand over
+in a minute is a failed read, not a wait as long as its whole budget.
 
 **A seat reads a file a page at a time** (`read_project_file`). A page is
 checked for its length only — a part of a file cannot be held to the whole

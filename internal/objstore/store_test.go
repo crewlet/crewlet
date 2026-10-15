@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -315,10 +316,14 @@ func TestAMissingObjectIsNotFoundAtOpen(t *testing.T) {
 
 // watching is a backend recording the deadline its reads were asked under,
 // whether its stream was closed, and — when block is set — a stream that
-// hands over nothing until its context ends.
+// hands over nothing until its context ends; and with openAfter set, a read
+// that begins no stream until that long has passed or its context ends — as a
+// bucket that keeps failing the request a read opens with is asked again
+// until the read's deadline.
 type watching struct {
 	objstore.Backend
-	block bool
+	block     bool
+	openAfter time.Duration
 
 	mu       sync.Mutex
 	deadline time.Time
@@ -329,6 +334,13 @@ func (b *watching) Get(ctx context.Context, name string, off, n int64) (io.ReadC
 	b.mu.Lock()
 	b.deadline, _ = ctx.Deadline()
 	b.mu.Unlock()
+	if b.openAfter > 0 {
+		select {
+		case <-time.After(b.openAfter):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	r, err := b.Backend.Get(ctx, name, off, n)
 	if err != nil {
 		return nil, err
@@ -419,6 +431,68 @@ func TestAStalledReadIsEndedAndAClosedOneStops(t *testing.T) {
 	}
 	if !backend.closed.Load() {
 		t.Fatal("closing a reader half way left the backend's stream open")
+	}
+}
+
+// A READ THAT BEGINS NOTHING IS ENDED AT THE STALL, the open of a whole read
+// and of a page alike: a backend that has handed back no stream for as long
+// as the watchdog lets a read hear nothing has its read cancelled — a bucket
+// failing the request a read opens with every time is asked again until the
+// read's deadline, which is hours for a large file, and the watchdog over the
+// stream never started. And an open that is merely slow, and begins inside
+// the stall, is read whole.
+func TestAReadThatBeginsNothingIsEndedAtTheStall(t *testing.T) {
+	t.Parallel()
+	backend := &watching{Backend: memobj.New()}
+	s := newStore(t, backend)
+	body := patterned(1000, 3)
+	o := put(t, s, body)
+	const stall = 200 * time.Millisecond
+	objstore.SetStall(s, stall)
+
+	backend.openAfter = time.Hour
+	for _, read := range []struct {
+		name string
+		do   func() error
+	}{
+		{"an open", func() error {
+			r, err := s.Open(t.Context(), o)
+			if err == nil {
+				_ = r.Close()
+			}
+			return err
+		}},
+		{"a page", func() error {
+			_, err := s.ReadAt(t.Context(), o, 10, 10)
+			return err
+		}},
+	} {
+		started := time.Now()
+		ended := make(chan error, 1)
+		go func() { ended <- read.do() }()
+		select {
+		case err := <-ended:
+			if err == nil {
+				t.Fatalf("%s whose backend began no stream succeeded", read.name)
+			}
+			if !strings.Contains(err.Error(), "stalled") {
+				t.Fatalf("%s whose backend began no stream = %v; want it ended as stalled", read.name, err)
+			}
+			if took := time.Since(started); took < stall {
+				t.Fatalf("%s whose backend began no stream ended after %v, before the %v stall",
+					read.name, took, stall)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s whose backend began no stream was still waiting after ten seconds, "+
+				"with a %v stall; want it ended at the stall, never at its budget of %v",
+				read.name, stall, objstore.ReadBudget(o.Size))
+		}
+	}
+
+	backend.openAfter = stall / 4
+	got, err := readAll(t, s, o)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("a read whose backend began its stream inside the stall = %d bytes, %v", len(got), err)
 	}
 }
 

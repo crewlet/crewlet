@@ -208,9 +208,10 @@ type Backend interface {
 	// deadline: a read that stops moving has to end somewhere, and a
 	// backend refuses one with none ([ErrNoDeadline]) rather than pick a
 	// bound of its own. Every backend begins with [CheckRead]. And ctx
-	// ENDING ends the stream: a Read blocked on the backend returns, with
-	// ctx's error, once ctx is done — which is how [Store]'s stall
-	// watchdog stops a read that has stopped moving.
+	// ENDING ends the read: a Get still opening the stream, and a Read
+	// blocked on the backend, each return with ctx's error once ctx is
+	// done — which is how [Store]'s stall watchdog stops a read that has
+	// stopped moving, or has never begun.
 	//
 	// The bytes are what the backend holds; checking them is [Store]'s.
 	Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error)
@@ -427,7 +428,10 @@ func PaceFor(n int64) time.Duration {
 // A MINUTE: every one of those is a round trip of milliseconds against a
 // healthy backend, and a minute is room for the leader election or the
 // reconnect that makes one of them slow — while a read that cannot even begin
-// in a minute is not going to.
+// in a minute is not going to, which [Store] holds it to: the backend's open
+// of the stream is watched by [ReadStall], a minute too, and a read that has
+// begun no stream by then is ended as stalled however long its budget, and
+// however often its backend would have asked again.
 const ReadBase = time.Minute
 
 // ReadBudget is the deadline [Store] reads an object of size bytes under,
@@ -445,13 +449,20 @@ const ReadBase = time.Minute
 func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 
 // ReadStall is the longest one read of an object may wait on its backend
-// before the read is ended as stalled.
+// before the read is ended as stalled — for the stream to begin, and for each
+// piece of it after.
 //
 // A MINUTE — two of [MiBPace], the time a mebibyte is given: no backend
 // streaming hands over its next piece more than a mebibyte apart, the largest
 // piece any of them moves is an eight-mebibyte part read in pieces far
 // smaller, and a read that has heard nothing for a minute is waiting on a
-// broker that lost the object's pieces or a connection that has gone, either
-// of which would otherwise hold the reader until its whole budget ran out —
-// hours, for a large file.
+// broker that lost the object's pieces, a connection that has gone or a
+// bucket that keeps failing the request it asks again — any of which would
+// otherwise hold the reader until its whole budget ran out, hours for a large
+// file. The open is held to it as each piece is ([ReadBase]): a backend asks
+// for its first bytes before it hands a stream back, and one whose client
+// asks a failed request again until its caller's deadline, or that reaches a
+// peer which accepts the request and never answers it, would otherwise make
+// of an open it cannot get answered a wait as long as the read's whole
+// budget.
 const ReadStall = 2 * MiBPace
