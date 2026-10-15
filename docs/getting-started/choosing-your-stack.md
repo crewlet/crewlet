@@ -292,7 +292,7 @@ plays out. Two backends ship.
 | Credentials per agent | 1 (bot token) | 2 (bot token + signing secret) |
 | Manual steps per agent | none | one OAuth **Allow** click |
 | Engine must be publicly reachable | no — the engine dials out | yes — the Events API POSTs to it |
-| Working status | fixed *"is typing…"* (default off) | free text, per turn phase |
+| Working status | fixed *"is typing…"* (`always` by default; `addressed` is cheaper) | free text, per turn phase |
 
 The two are interchangeable as far as the engine is concerned; they differ in
 what you have to stand up and where your people already are.
