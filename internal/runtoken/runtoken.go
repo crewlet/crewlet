@@ -43,6 +43,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"slices"
 	"strconv"
 	"strings"
@@ -163,6 +164,14 @@ func (s *Signer) sign(payload string) string {
 // both are HMACs over the same key, and the subject is just a string. It is
 // the same reason a signing key is never reused across protocols.
 //
+// EVERY FIELD IS LENGTH-PREFIXED, the domain and each entry alike, so the
+// hashed input is an encoding of the list rather than a concatenation of it.
+// Joined bare, two different keyrings hashed the same bytes — `ab`,`c` and
+// `a`,`bc` are both `abc` — and so did two domains that differed only in where
+// a `|` fell between the domain and the material: the derivation was not
+// injective, and the one property a key derivation owes its caller is that
+// different inputs are different keys.
+//
 // Empty material yields nil, which [New] turns into a per-process key — the
 // honest answer for a deployment with no keyring, and correct for a single
 // process. The caller logs what that costs, because only the caller knows
@@ -175,6 +184,16 @@ func KeyFrom(domain string, material []string) []byte {
 	// order derive the same key — a map iteration or a re-ordered config
 	// would otherwise silently split a fleet in two.
 	ordered := slices.Sorted(slices.Values(material))
-	sum := sha256.Sum256([]byte(domain + "|" + strings.Join(ordered, "")))
-	return sum[:]
+	h := sha256.New()
+	field := func(s string) {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(s)))
+		h.Write(n[:])
+		h.Write([]byte(s))
+	}
+	field(domain)
+	for _, m := range ordered {
+		field(m)
+	}
+	return h.Sum(nil)
 }
