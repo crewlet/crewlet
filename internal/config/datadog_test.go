@@ -165,6 +165,45 @@ func TestAPublicBaseURLWithoutASchemeIsRefused(t *testing.T) {
 	}
 }
 
+// A BASE CARRYING A QUERY, A FRAGMENT OR USERINFO IS REFUSED, in either field.
+// Every address is the base with a path appended as text, so a query swallows
+// the path (`https://x?k=v/webhooks/gitlab` is a request for `/`), a fragment
+// is never sent, and userinfo would be pasted into every link and manifest.
+// The refusal does not repeat the value, which is where a credential would be.
+//
+// Mutation: drop the originLeftover check and every case is accepted.
+func TestABaseURLWithAQueryFragmentOrUserinfoIsRefused(t *testing.T) {
+	t.Parallel()
+	const secret = "sk-in-the-base"
+	for _, field := range []string{"public_base_url", "dashboard_base_url"} {
+		for _, base := range []string{
+			"https://crewlet.example.com?key=" + secret,
+			"https://crewlet.example.com/#" + secret,
+			"https://ops:" + secret + "@crewlet.example.com",
+			"${CREWLET_PUBLIC_URL}?key=" + secret,
+		} {
+			t.Run(field+" "+base, func(t *testing.T) {
+				t.Parallel()
+				err := validateCompanyDoc(t, "integrations:\n  "+field+": \""+base+"\"")
+				if err == nil {
+					t.Fatalf("%s %q was accepted", field, base)
+				}
+				if !strings.Contains(err.Error(), field) {
+					t.Errorf("error %q does not name the field", err)
+				}
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("the refusal repeats the value: %v", err)
+				}
+			})
+		}
+	}
+	for _, base := range []string{"https://crewlet.example.com", "http://127.0.0.1:8080", "${CREWLET_PUBLIC_URL}"} {
+		if err := validateCompanyDoc(t, "integrations:\n  public_base_url: \""+base+"\"\n  dashboard_base_url: \""+base+"\""); err != nil {
+			t.Errorf("a bare origin %q was refused: %v", base, err)
+		}
+	}
+}
+
 // And a real one is accepted, so the rule is a check rather than a refusal of
 // everything.
 func TestAPublicBaseURLWithASchemeIsAccepted(t *testing.T) {
