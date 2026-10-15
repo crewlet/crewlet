@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
@@ -30,7 +31,7 @@ import (
 // node's other readers — or itself — behind its own checks. Each is about 2 ms
 // a process (M2-gitproc's measured section), so a thousand updates in series
 // were 2–5 s of a person's push.
-func (s *Server) forceChecks(ctx context.Context, dir string, cmds []code.Command, todo []int) (
+func (s *Server) forceChecks(ctx context.Context, sc *cache.Scratch, cmds []code.Command, todo []int) (
 	forced, stale map[int]bool, err error) {
 
 	forced, stale = map[int]bool{}, map[int]bool{}
@@ -57,7 +58,7 @@ func (s *Server) forceChecks(ctx context.Context, dir string, cmds []code.Comman
 				i := todo[next]
 				next++
 				mu.Unlock()
-				isForced, isStale, cerr := s.isForced(ctx, dir, cmds[i].Old, cmds[i].New)
+				isForced, isStale, cerr := s.isForced(ctx, sc, cmds[i].Old, cmds[i].New)
 				mu.Lock()
 				switch {
 				case cerr != nil && first == nil:
@@ -79,12 +80,12 @@ func (s *Server) forceChecks(ctx context.Context, dir string, cmds []code.Comman
 	return forced, stale, nil
 }
 
-// isForced asks whether old is an ancestor of new in dir: exit 0 is not
+// isForced asks whether old is an ancestor of new in sc: exit 0 is not
 // forced, exit 1 is forced, and an old this company holds no object for is
 // stale.
-func (s *Server) isForced(ctx context.Context, dir, old, new string) (forced, stale bool, err error) {
+func (s *Server) isForced(ctx context.Context, sc *cache.Scratch, old, new string) (forced, stale bool, err error) {
 	res, err := s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Args: []string{"merge-base", "--is-ancestor", old, new},
+		Dir: sc.Dir, Alternate: sc.Alternate, Args: []string{"merge-base", "--is-ancestor", old, new},
 		Class: gitproc.ClassRead, Answers: []int{1}, Deadline: gitproc.ReadDeadline,
 	})
 	switch {
@@ -103,7 +104,7 @@ var errFound = errors.New("host: found")
 // `cat-file --batch-check` over the pack's ids, streamed from its index, so the
 // scratch's alternate — the whole repository — is never listed, ending at the
 // first offender.
-func (s *Server) largestBlob(ctx context.Context, dir, idxPath string, packBytes, limit int64) (
+func (s *Server) largestBlob(ctx context.Context, sc *cache.Scratch, idxPath string, packBytes, limit int64) (
 	oid string, size int64, found bool, err error) {
 
 	_, ids, err := idxOIDs(idxPath)
@@ -127,7 +128,7 @@ func (s *Server) largestBlob(ctx context.Context, dir, idxPath string, packBytes
 		return errFound
 	})
 	_, err = s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Args: []string{"cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)", "--buffer"},
+		Dir: sc.Dir, Alternate: sc.Alternate, Args: []string{"cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)", "--buffer"},
 		Stdin: ids, Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
 	})
 	if errors.Is(err, errFound) {
@@ -147,7 +148,7 @@ func (s *Server) largestBlob(ctx context.Context, dir, idxPath string, packBytes
 // id, refused or not, since the pack carries the objects of all of them), past
 // what the repository already holds — or "(unreachable in this push)" for a
 // blob no new tree names.
-func (s *Server) pathOf(ctx context.Context, dir string, news []string, oid string, packBytes int64) string {
+func (s *Server) pathOf(ctx context.Context, sc *cache.Scratch, news []string, oid string, packBytes int64) string {
 	path := "(unreachable in this push)"
 	lines := gitproc.NewLines(func(line []byte) error {
 		id, p, ok := bytes.Cut(line, []byte{' '})
@@ -158,11 +159,11 @@ func (s *Server) pathOf(ctx context.Context, dir string, news []string, oid stri
 		return nil
 	})
 	_, err := s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Args: append(append([]string{"rev-list", "--objects"}, news...), "--not", "--alternate-refs"),
+		Dir: sc.Dir, Alternate: sc.Alternate, Args: append(append([]string{"rev-list", "--objects"}, news...), "--not", "--alternate-refs"),
 		Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
 	})
 	if err != nil && !errors.Is(err, errFound) {
-		s.log.Warn("code_push_blob_path", "dir", dir, "blob", oid, "error", err)
+		s.log.Warn("code_push_blob_path", "dir", sc.Dir, "blob", oid, "error", err)
 	}
 	return path
 }
@@ -170,7 +171,7 @@ func (s *Server) pathOf(ctx context.Context, dir string, news []string, oid stri
 // introduced is the commits the push introduces — reachable from its new
 // values and from no ref the repository holds — the first code.MaxIntroduced
 // of them in rev-list's order, and how many there are.
-func (s *Server) introduced(ctx context.Context, dir string, news []string, packBytes int64) ([]string, int, error) {
+func (s *Server) introduced(ctx context.Context, sc *cache.Scratch, news []string, packBytes int64) ([]string, int, error) {
 	var (
 		ids   []string
 		count int
@@ -183,7 +184,7 @@ func (s *Server) introduced(ctx context.Context, dir string, news []string, pack
 		return nil
 	})
 	_, err := s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Args: append(append([]string{"rev-list"}, news...), "--not", "--alternate-refs"),
+		Dir: sc.Dir, Alternate: sc.Alternate, Args: append(append([]string{"rev-list"}, news...), "--not", "--alternate-refs"),
 		Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
 	})
 	if err == nil {

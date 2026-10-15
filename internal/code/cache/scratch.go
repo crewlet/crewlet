@@ -52,6 +52,11 @@ type Scratch struct {
 	// Dir is the repository: absolute and clean, scratch/<push-id>.git or
 	// scratch/adv-<uuid>.git.
 	Dir string
+	// Alternate is the incarnation it leans on, whose objects its one
+	// alternates line names: what every git process run in it names as its
+	// gitproc.Cmd.Alternate, since the pool runs in no repository whose
+	// alternate the call did not name.
+	Alternate string
 
 	c    *Cache
 	e    *entry
@@ -124,7 +129,7 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 		}
 		return nil, fmt.Errorf("cache: making %s: %w", dir, err)
 	}
-	sc := &Scratch{Dir: dir, c: c, e: e, inc: inc, view: view}
+	sc := &Scratch{Dir: dir, Alternate: s.Dir, c: c, e: e, inc: inc, view: view}
 	sc.remove = sync.OnceFunc(sc.discard)
 	if err := sc.fill(s.Dir); err != nil {
 		sc.Remove()
@@ -150,8 +155,8 @@ func (s *Scratch) fill(from string) error {
 	}{
 		{"HEAD", head},
 		{"config", []byte(gitproc.RepoConfig)},
-		// One absolute, clean line ending in a newline: exactly what the
-		// pool's alternates guard admits.
+		// The one line naming the incarnation's objects: exactly what the
+		// pool holds a repository to for a call whose Alternate is from.
 		{filepath.Join("objects", "info", "alternates"), []byte(filepath.Join(from, "objects") + "\n")},
 	} {
 		if err := os.WriteFile(filepath.Join(s.Dir, f.name), f.body, hostbox.FileMode); err != nil {

@@ -105,6 +105,29 @@
 // are never decided on a stale read: anything that would refuse is read again
 // through the barrier first.
 //
+// # A damaged cache is repaired under the request that found it
+//
+// Every git process the host runs over a repository's cache — an
+// advertisement, upload-pack, the check of a fetch's wants, a push's
+// receive-pack in its scratch — that fails before its first byte with damage
+// the cache names (cache.DamageReason; only the shape, cache.ShapeReason, for
+// a process whose directory merely has the cache as its alternate) has the
+// cache REPAIRED — a shape in place, with no download, a pack or an object
+// into the next incarnation — and runs once more over the repaired one
+// (repair.go): the cache is disposable, so damage it can name is its own to
+// repair, never the client's to retry. And every failure before the first
+// byte is answered as what it is (refuse.go), identified by what failed and
+// never by elimination: the code log failing (marked where it is met, so its
+// sentence is never another failure's), the object store (the store's own
+// side of a download, never the node's files beside it), the node ending
+// git, git itself or an answer of git's the engine cannot read, a copy whose
+// repair did not end its damage, this node's own disk — or a refusal of the
+// engine's OWN call (the pool's: a key outside its allowlist, no deadline, a
+// capture a call site must stream; the cache's: an argument it never takes;
+// a read at a level no reader serves), a 500 that promises no retry, since
+// none ends a call-site bug. Table tests hold every error gitproc and the
+// cache export to a decided answer, both ways.
+//
 // # Who pushes
 //
 // A person, with their own Tier A token as the Basic password: a token bound to

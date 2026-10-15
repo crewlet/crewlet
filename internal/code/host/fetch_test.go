@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -462,7 +463,7 @@ func TestANotOurRefIsNeverARebuild(t *testing.T) {
 	// wherever it is asked.
 	for kind, repairs := range map[error]bool{gitproc.ErrNotOurRef: false, gitproc.ErrFailed: false,
 		gitproc.ErrCorrupt: true, gitproc.ErrMissingObject: true} {
-		if _, ok := host.RebuildReason(&gitproc.ExitError{Command: "upload-pack", Kind: kind}); ok != repairs {
+		if _, ok := cache.DamageReason(&gitproc.ExitError{Command: "upload-pack", Kind: kind}); ok != repairs {
 			t.Errorf("a cache's git failing with %v is a rebuild: %v, want %v", kind, ok, repairs)
 		}
 	}

@@ -65,21 +65,31 @@
 // at a path that can never exist. Every repository the engine runs git in is
 // one it wrote by hand: a cache, a push's scratch, an advertisement view.
 //
-// The guard reaches ONE REPOSITORY FURTHER than the process's own, because
-// git does: a repository with an alternate lists that alternate's refs by
-// starting another git in it with every variable this pool sets for a
-// repository CLEARED (git's local_repo_env — GIT_CONFIG_COUNT, GIT_GRAFT_FILE
-// and GIT_SHALLOW_FILE among them). That process is configured by the
-// alternate's own files and nothing else, so every repository an alternates
-// file names must pass the same shape check, and may name no alternate of
-// its own — checked at the REAL path git resolves the line to, since that is
-// where git runs, and an objects directory that is a link into another
-// repository would otherwise pass on the config of the one it is not.
+// NOR DOES A REPOSITORY CHOOSE WHERE ITS OBJECTS COME FROM. Its objects
+// directory must be its own — at its real path, never a link — and its one
+// alternate is the call's ([Cmd.Alternate]: a push's scratch and an
+// advertisement view the cache incarnation they lean on, everything else
+// none), the alternates file exactly the one line naming it or absent: under
+// protocol v2 every object either way reaches is fetchable by id through the
+// repository, so a cache with a planted alternates file or a linked objects
+// directory would serve another repository's objects. And the guard reaches
+// ONE REPOSITORY FURTHER than the process's own, because git does: a
+// repository with an alternate lists that alternate's refs by starting
+// another git in it with every variable this pool sets for a repository
+// CLEARED (git's local_repo_env — GIT_CONFIG_COUNT, GIT_GRAFT_FILE and
+// GIT_SHALLOW_FILE among them). That process is configured by the alternate's
+// own files and nothing else, so the alternate must pass the same shape
+// check, and may name no alternate of its own — and since git runs it at the
+// REAL path it resolves the line to, the alternate's objects directory being
+// its own is what makes that path the alternate checked.
 //
-// The refusal ([ErrRepoShape]) is a definite answer — a file absent, other
-// bytes, a commondir present — and a read that FAILED is never one: it is
-// returned as the read's own error, so a node out of descriptors is never
-// told its healthy caches were tampered with.
+// The refusal is a *[ShapeError] naming its [ShapeRule] and the repository
+// that broke it (errors.Is [ErrRepoShape]), a definite answer — a file absent,
+// other bytes, a commondir present — and a read that FAILED is never one: it
+// is returned as the read's own error, so a node out of descriptors is never
+// told its healthy caches were tampered with. [CheckShape] is that check,
+// exported for the git cache's sweep, which repairs a cache the pool refused
+// and holds what it leaves to the pool's own predicate.
 //
 // # Slots: three lanes, each sized by what it spends
 //

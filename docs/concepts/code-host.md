@@ -566,22 +566,41 @@ bitmap follows when the background indexing reaches the repository, which on
 a node that has just joined comes after every repository with more packs
 waiting. A cache without either is slower, never wrong.
 
-**Damage and repair.** When git finds a cache damaged — a pack or an index it
-cannot read, an object a row names that no pack holds — the node rebuilds it:
-the repository is read whole again from the rows and the object store into a
-new directory beside the damaged one, which replaces it once it is complete.
-Requests already reading the old copy finish on it, and any number of requests
-failing on one damaged cache cost one rebuild. A rebuild that does not end the
-failure is not repeated at once: the damage is then in the object store or in
-the rows rather than in the node's copy, and another rebuild would read the
-same bytes. So the next attempt waits ten minutes, each one after it twice as
-long, up to a day; a cache holding exactly what such a rebuild read is not
-rebuilt again for a day unless something writes into it; and every refusal is
-counted, and logged as `code_cache_rebuild_refused` at most once every ten
-minutes a repository. A pack the object store has lost — once a read at the
-log's head confirms a row still names it — or holds damaged fails the sync
-naming the pack, and the collector's daily audit raises the
-[`objects_missing`](object-store.md#alarms) alarm for the same object.
+**Damage and repair.** A damaged cache is repaired under the request that
+found it — a clone, a fetch, a push, or the node's own sync of the repository
+— and the request then served from the repaired copy; any number of requests
+failing on one damaged copy cost one repair. How depends on the damage:
+
+- **Its shape.** The node will not run git in a copy that is not the shape the
+  engine writes — its config edited, a `commondir`, an objects directory that
+  is not its own, or an alternates file planted in it (by a disk, or by
+  anything outside the engine; a copy's objects come only from its own packs,
+  so an alternates file there is refused whichever request meets it). Nothing
+  of what it holds is lost, so the copy is put right **in place**: read whole
+  again from the rows in the same directory, which rewrites its config, moves
+  aside whatever the engine never writes there, and reuses every pack it holds
+  — no download, and never held back, since it costs a read of the rows. Only
+  a copy that read leaves still refused — something that keeps writing into
+  it, or a filesystem that does not keep what it is given — is rebuilt as
+  below.
+- **Its packs.** When git finds a pack or an index it cannot read, or an
+  object a row names that no pack holds, the repository is read whole again
+  from the rows and the object store into a new directory beside the damaged
+  one, which replaces it once it is complete. Requests already reading the old
+  copy finish on it.
+
+A rebuild that does not end the failure is not repeated at once: the damage is
+then in the object store or in the rows rather than in the node's copy, and
+another rebuild would read the same bytes. So the next attempt waits ten
+minutes, each one after it twice as long, up to a day; a cache holding exactly
+what such a rebuild read is not rebuilt again for a day unless something writes
+into it — and a copy still refused for its shape always has, so only the
+doubling wait holds it back; and every refusal is counted, and logged as
+`code_cache_rebuild_refused` at most once every ten minutes a repository. A
+pack the object store has lost — once a read at the log's head confirms a row
+still names it — or holds damaged fails the sync naming the pack, and the
+collector's daily audit raises the [`objects_missing`](object-store.md#alarms)
+alarm for the same object.
 
 **Checking a copy.** An operator asks a git node to check its copy of a
 repository against the rows — every pack hashed as the bundle its push stored,
@@ -589,6 +608,9 @@ the refs against what was written, git's own connectivity check — and, asked
 to, to repair what it finds damaged, linking in every pack it found whole so
 the repair downloads only the rest ([`POST
 /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)).
+The sync that first brings the copy up to date repairs nothing for a check: damage
+its own git meets there is the check's first finding, repaired only when the
+check was asked to repair, so a check never hides what it was asked to name.
 A check reads every byte of the copy, so it runs on the node's own time — the
 request that asked for it is answered in place when the check ends within a
 quarter of a second, a small copy's, and otherwise the check is read until it
@@ -880,13 +902,17 @@ words, since git does not read the header.
 | The engine could not finish checking the push | `crewlet: the engine could not check this push: <why>` | Nothing landed; push again, or against another node. The node logs `code_push_unchecked`. |
 | Every git slot on the node is busy | `every git slot on this node stayed busy for 10 s: retry in 10 s` (503) | Retry, or against another node. |
 | The node ended git before it answered | `git on this node was stopped before it answered, stalled (…): retry in 10 s, or against another node` (503), or `past its deadline` | The node is too loaded to answer in time; retry, or against another node. |
-| The node cannot read the code log | `the code log could not be read here: …; retry in 10 s` (503) | The node is cut off from the fleet; retry against another. |
+| The node cannot read the code log — no quorum for a read at the log's head, a copy out of service, no data node answering | `the code log could not be read here: …; retry in 10 s` (503) | The node is cut off from the fleet; retry against another. Only the code log's own failure says this. |
+| The object store did not hand over a pack (a fetch) | `<repo>'s packs could not be read from the object store here (…): retry in 10 s, or against another node` (503) | Retry: a timeout or a throttle passes. The node logs `code_object_store_unavailable`; a store that stays unreachable is the operator's ([the object store](object-store.md)). |
+| The node itself failed — its disk refusing a write into its copy of the repository, or anything else the engine did not name | `this node could not serve <repo> (…): retry in 10 s, or against another node` (503) | Retry against another node. The sentence says what failed; the node logs `code_push_failed` or `code_fetch_failed` with `reason` `node`. A full disk is the operator's to free. |
 | The node is stopping | `this node's code host is stopping: retry in 30 s …` (503) | Retry against another node. |
 | A pack the rows name is gone, or damaged in the object store | `<repo>'s pack <id> is missing from the object store (the daily audit raises objects_missing for it); retry in 10 s`, or `<repo>'s pack <id> is damaged in the object store (…)` (503) | An operator's problem: see [`objects_missing`](object-store.md#alarms). |
 | A pack's bytes are not the bundle its row describes | `<repo>'s pack <id> in the object store is not the bundle its row describes (code_pack_checksum_mismatch): retrying does not end it — an operator must act on this node's code_pack_checksum_mismatch line, and until then only the node that received the push, which holds its own copy, can serve it` (500, no `Retry-After`) | Do not retry: every retry downloads the whole bundle again and fails the same way. The store handed back exactly the bytes the push stored, and they are not what the push's row says, so the row or what was uploaded is wrong. It is an operator's problem: the node logs `code_pack_checksum_mismatch` at `ERROR`. |
-| The rows cannot be read into a cache | `<repo>'s rows cannot be read into a cache on this node (code_bad_snapshot): <why>; retrying does not end it — an operator must act on this node's code_bad_snapshot line, and a node running a newer build may serve it` (500, no `Retry-After`) | Do not retry this node: it reads the same rows again. The rows hold something this build cannot install (a ref, an id or a pack's sizes), and the sentence names the row; a node of a newer build may install it. It is an operator's problem: the node logs `code_bad_snapshot` at `ERROR`. |
-| A damaged copy, rebuilt moments ago, is still damaged | `<repo>'s cache on this node was rebuilt moments ago and is still damaged: retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)), which says what the rebuild could not repair. |
+| The rows cannot be read into a cache | `<repo>'s rows cannot be read into a cache on this node (code_bad_snapshot): <why>; retrying does not end it — an operator must act on this node's code_bad_snapshot line, and a node running a newer build may serve it` (500, no `Retry-After`) | Do not retry this node: it reads the same rows again. The rows hold something this build cannot install (a ref, an id or a pack's sizes) or a push cannot be judged against (a protection rule's pattern), and the sentence names the row; a node of a newer build may install it. It is an operator's problem: the node logs `code_bad_snapshot` at `ERROR`. |
+| A damaged copy is still damaged after its last repair — a pack or an index git could not read, an object no pack holds, or a copy the node will not run git in because it is not the shape the engine writes | `<repo>'s cache on this node is still damaged after its last repair (<why>): retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)), which says what the repair could not end. A copy damaged once is repaired under the request that finds it and never shows this. It shows when git meets the same damage on the copy just repaired, and while the node holds back another rebuild ([damage and repair](#the-cache-on-a-git-node)): for a damaged pack or a missing object, one that did not end the damage is not repeated for up to a day unless something writes into the copy, and for a shape that reading the copy whole in place did not end, the wait starts at ten minutes and doubles with every rebuild in a row, up to a day. |
+| The node refused its own call serving the request — the engine's own call is wrong | `this node refused its own call serving this request (<the refusal>): the engine's call is wrong, and retrying does not end it — an operator must act on this node's code_git_refused line` (500, no `Retry-After`) | Do not retry: the request changes nothing about it. It is a bug in the build the node runs — a git configuration key or variable the engine never allows, a call without a deadline, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or a node whose git should never have started (git's HOME not empty, a git below the floor). The node logs `code_git_refused` at `ERROR`; report it. |
 | git failed on the node, for a reason the engine does not classify | `git <command> failed on this node (<kind>): <git's last line>` (500) | git's last line says why. A hand-built push of a line git's protocol does not have reads `protocol error` there. The node logs `code_push_failed` or `code_fetch_failed`. |
+| git's answer could not be read | `git's answer on this node could not be read (…); retrying does not end it` (500, no `Retry-After`) | git exited as if it had answered and its output stopped mid-line, or it wrote a line longer than the engine reads. Report it with the node's `code_push_failed` or `code_fetch_failed` line. |
 | A partial clone asks for `--filter=sparse:oid=…` | `fatal: remote error: filter 'sparse:oid' not supported` | Clone with `--filter=blob:none` and a sparse checkout: the files are fetched as the checkout needs them ([the filters served](#a-push-end-to-end)). |
 | A partial clone asks for `--filter=tree:<n>` with `<n>` past 0 | `fatal: remote error: tree filter allows max depth 0, but got <n>` | Clone with `--filter=tree:0` or `--filter=blob:none`. |
 | A fetch request past its repository's bound | `this fetch request is larger than any repository <name> holds could need …` (413) | Fetch in parts. |
@@ -916,9 +942,11 @@ reference](../reference/metrics.md)).
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_retention_duty_declined` | `WARN` | This node's copy of the code log is out of service, so it does not take the duty. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the token and the person it is bound to, the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
-| `code_fetch_retried` | `INFO` | git found this node's cache damaged during a fetch (`reason`: `corrupt`, `missing`); the cache was rebuilt and the fetch run again over the same request. |
-| `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut). |
-| `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a copy out of service, no data node answering), answered 503. |
+| `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request, or the node would not run git in it for its shape (`reason`: `corrupt`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape in place, damage to its packs by a rebuild — and git run again over the same request. |
+| `code_git_refused` | `ERROR` | The node refused its own call serving a request because the call is wrong — a git configuration key or variable outside what the node allows, a call without a deadline, a malformed command, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or because its git should never have started; answered 500 with no `Retry-After`. A bug in the build the node runs: report the line. |
+| `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut); or the request failed on the node itself before git answered (`reason`: `node` — its disk refusing a write into the repository's copy, or anything else the engine did not name; the `error` says what), answered 503. |
+| `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a copy out of service, no data node answering), answered 503. Only the code log's own failure is logged so. |
+| `code_object_store_unavailable` | `WARN` | A fetch's sync could not read a pack from the object store for a reason that is no answer about the pack — a timeout, a throttle past its retries, the store unreachable — answered 503. A pack the store does not hold, or holds damaged, is `code_pack_missing` instead. |
 | `code_cache_sized` | `INFO` | The node built its code host and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `git.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit and the request `spools`' allowance (64 MiB for each of the pool's `transfers`), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build its code host, and the error names the same figures and what to change. |
 | `code_git_ready` | `INFO` | The node's git is 2.40 or newer and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the `pack_reuse` it asks git for, and the empty `home` every git process runs with. |
 | `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`): past its deadline (`reason`: `deadline`), or having read and written nothing for its stall bound (`stall`) — a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
@@ -957,7 +985,9 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_log_rewound` | `WARN` | A read at the log's head found the code log behind what this node had already read from it: the log was restored from an older copy while the node ran. Every repository on the node is read whole at its next fetch and goes back to what the log holds. A restore is meant to be done with the fleet stopped; restart every node that ran across one. |
 | `code_cache_stream_changed` | `INFO` | A sync asked for what changed since its last read and was answered from a different code log than the one it last read — the log was recreated under it — so it reads the repository whole instead. |
 | `code_sync_restarted` | `INFO` | A repository's rows moved under a read that spans pages — the log under it re-anchored — and the read began again from its first page (`restart`); it begins again at most three times, and a sync whose history moves a fourth time fails. |
-| `code_cache_rebuilt` | `WARN` | git found a repository's copy damaged and the node rebuilt it beside the damaged one from the rows and the object store; `reason` is what git found (`corrupt`, `missing`), or `verify` for a repair asked for. One is a disk's bad moment; a run of them is a disk to replace. |
+| `code_sync_damaged` | `INFO` | The node's own sync of a repository — peeling the tags it sets, in the repository's copy — found the copy damaged, or the node would not run git in it for its shape, or still would not once the sync had read it whole (`reason`: `corrupt`, `missing`, `shape`, with git's `error`; `swept` true when the sync had read the copy whole); the copy is repaired as a request's would be — a shape the sync did not read whole in place, anything else by a rebuild — and the sync answered by the repair. A check's own sync repairs nothing: what it met is the check's first finding. |
+| `code_cache_reshaped` | `WARN` | A repository's copy the node would not run git in because it was not the shape the engine writes was read whole again in place, every pack it holds reused; `moved` is how many files the engine never writes there went to the trash. One is a disk's bad moment or a person's edit; a run of them is something outside the engine writing into the cache's directory. Counted as `crewlet.code.cache.rebuilds{reason=shape}`. |
+| `code_cache_rebuilt` | `WARN` | git found a repository's copy damaged, or the node still would not run git in it for its shape after reading it whole in place, and the node rebuilt it beside the damaged one from the rows and the object store; `reason` is what git found (`corrupt`, `missing`, `shape`), or `verify` for a repair asked for. One is a disk's bad moment; a run of them is a disk to replace — and a `shape` here, something that keeps writing into the cache's directory. |
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
 | `code_cache_rebuild_seeded` | `INFO` | A repair (`crewlet code verify` asked to repair) linked the `packs` it had found whole into the new copy, of the `whole` it checked, so it downloads only the rest. |
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead. The disk refusing a hard link. |

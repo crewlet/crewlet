@@ -79,38 +79,26 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	defer out.End()
 	w.Header().Set("Cache-Control", "no-cache")
 	if push {
-		s.advertisePush(ctx, w, r, adm, synced, out)
+		s.advertisePush(ctx, w, r, adm, &synced, out)
 		return
 	}
 	if protocolVersion(r.Header.Get("Git-Protocol")) != 2 {
 		out.prefix = serviceLine(svc)
 	}
-	for attempt := 0; ; attempt++ {
-		_, err = s.o.Git.Run(ctx, gitproc.Cmd{
-			Dir:  synced.Dir,
-			Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", synced.Dir},
+	// IN THE INCARNATION, so a damaged one is rebuilt under this request
+	// (repairing).
+	err = s.repairing(ctx, r, adm.name, &synced, cache.DamageReason, out.Started, func(in cache.Synced) error {
+		_, gerr := s.o.Git.Run(ctx, gitproc.Cmd{
+			Dir:  in.Dir,
+			Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", in.Dir},
 			// THE CACHE'S ONE SERVE CONFIGURATION, so the advertisement
 			// offers exactly what the fetch after it honours.
 			Config: s.o.Cache.ServeConfig(), Protocol: r.Header.Get("Git-Protocol"),
 			Stdout: out, Class: gitproc.ClassTransfer,
-			Deadline: gitproc.UploadPackDeadline(advertBytes(synced.Repo.Refs)), Stall: s.o.Timing.Stall,
+			Deadline: gitproc.UploadPackDeadline(advertBytes(in.Repo.Refs)), Stall: s.o.Timing.Stall,
 		})
-		if err == nil || out.Started() {
-			break
-		}
-		reason, repairs := rebuildReason(err)
-		if !repairs || attempt > 0 {
-			break
-		}
-		s.log.Info("code_fetch_retried", "repo", adm.name, "reason", string(reason), "error", err)
-		rebuilt, rerr := s.o.Cache.Rebuild(ctx, synced, reason)
-		if rerr != nil {
-			err = rerr
-			break
-		}
-		synced.Release()
-		synced = rebuilt
-	}
+		return gerr
+	})
 	s.finishFetch(w, r, adm.name, commandAdvertise, synced.Kind, start, out, err)
 }
 
@@ -120,22 +108,30 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 // with, so it offers the capabilities the push is honoured under. A push asks
 // no protocol v2 (measured: its info/refs carries no Git-Protocol), so no
 // GIT_PROTOCOL is passed and the service line is always written.
+//
+// The view's one alternate is the incarnation, so a pool that refuses the
+// incarnation's shape refuses the view, and the incarnation is rebuilt under
+// this request (repairing) — every push begins with this advertisement, so a
+// cache git refuses for its shape would otherwise refuse every push. *synced
+// is the rebuilt one after a rebuild, still the caller's to release.
 func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *http.Request, adm admission,
-	synced cache.Synced, out *sink) {
+	synced *cache.Synced, out *sink) {
 
-	view, err := s.o.Cache.AdvertiseView(ctx, synced)
-	if err != nil {
-		s.syncFailed(w, r, adm.name, err)
-		return
-	}
-	defer view.Remove()
 	out.prefix = serviceLine(receivePackService)
-	_, err = s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir:    view.Dir,
-		Args:   []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
-		Config: append(receiveConfig(s.limits()), s.o.Cache.AdvertiseConfig()...),
-		Stdout: out, Class: gitproc.ClassTransfer,
-		Deadline: gitproc.UploadPackDeadline(advertBytes(synced.Repo.Refs)), Stall: s.o.Timing.Stall,
+	err := s.repairing(ctx, r, adm.name, synced, cache.ShapeReason, out.Started, func(in cache.Synced) error {
+		view, err := s.o.Cache.AdvertiseView(ctx, in)
+		if err != nil {
+			return err
+		}
+		defer view.Remove()
+		_, err = s.o.Git.Run(ctx, gitproc.Cmd{
+			Dir: view.Dir, Alternate: view.Alternate,
+			Args:   []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
+			Config: append(receiveConfig(s.limits()), s.o.Cache.AdvertiseConfig()...),
+			Stdout: out, Class: gitproc.ClassTransfer,
+			Deadline: gitproc.UploadPackDeadline(advertBytes(in.Repo.Refs)), Stall: s.o.Timing.Stall,
+		})
+		return err
 	})
 	if err != nil && !out.Started() {
 		s.syncFailed(w, r, adm.name, err)

@@ -44,6 +44,22 @@ var (
 	// and asking again reads the same rows.
 	ErrBadSnapshot = errors.New("cache: a snapshot this build cannot install")
 
+	// ErrLogRead is the code log failing a sync's read of a repository's
+	// rows — no quorum for a linearizable read, a copy out of service or
+	// behind, no data node answering — wrapped with the estate's own
+	// error. The one failure of a sync that is the code log's: the host
+	// answers it as that, and nothing else as that. (A repository the
+	// rows do not hold is code.ErrRepoNotFound, an answer, which a sync
+	// reads at the log's head before concluding anything from.)
+	ErrLogRead = errors.New("cache: the code log could not be read")
+
+	// ErrStoreRead is the object store failing to hand a pack over for a
+	// reason that is no answer about the pack — a timeout, a throttle past
+	// its retries, the store unreachable — wrapped naming the pack and the
+	// store's own error. A definite answer about the pack is an
+	// *ErrPackMissing instead.
+	ErrStoreRead = errors.New("cache: the object store could not be read")
+
 	// ErrRebuildRefused is a rebuild that could not end the failure it was
 	// asked for: of an incarnation holding exactly what a rebuild that did
 	// not end it read, less than a day ago, or within the window after the

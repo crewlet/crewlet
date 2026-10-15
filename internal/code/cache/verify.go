@@ -218,6 +218,15 @@ func (v *Verification) Release() {
 // reusing every pack it holds on an incarnation a previous process left — ONCE:
 // a second Run, or one after Release, is refused ([ErrInvalid]).
 //
+// A SYNC WHOSE OWN GIT MEETS DAMAGE OF THE COPY — a delta's peel refused for
+// the directory's shape, or meeting an object gone from the packs — REPAIRS
+// NOTHING FOR THE CHECK: the check is handed the copy as it stands, at the
+// position it held, and names that damage first among its problems
+// (damagedRound). Repaired under it instead, a plain check would download the
+// repository and report the repaired copy clean, the damage it was asked to
+// name hidden; only Repair repairs, by the rebuild below. (A request waiting
+// on the same round is still answered by the repair its own damage asks.)
+//
 //  1. its directory listed against the image grammar (sweep.go) — every
 //     entry it does not admit is a problem — with the repository's rounds
 //     held off, so no step half done reads as damage, and the files a
@@ -275,7 +284,7 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	if fresh.Level == "" {
 		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
 	}
-	s, err := c.Sync(ctx, v.e.id, fresh)
+	s, damage, err := c.sync(ctx, v.e.id, fresh, true)
 	if err != nil {
 		return VerifyReport{Repo: v.e.id, Name: v.held.Repo.Name},
 			fmt.Errorf("cache: verify %s: %w", v.label, err)
@@ -286,6 +295,12 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 		return report, err
 	}
 	report, whole, err := v.pass(ctx, s, how.Checking)
+	if damage != nil {
+		// What the sync's own git met is a finding of the check's, first:
+		// the copy is checked as it stands, never repaired under it.
+		report.Problems = append([]string{fmt.Sprintf("the sync before the check met the copy damaged (%s): %v",
+			damage.reason, damage.err)}, report.Problems...)
+	}
 	if err != nil || !repair || len(report.Problems) == 0 {
 		return report, err
 	}

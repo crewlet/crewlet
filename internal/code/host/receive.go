@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -190,76 +193,29 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		s.syncFailed(w, r, adm.name, err)
 		return
 	}
-	defer synced.Release()
-	if s.refusedByStatus(synced.Repo, sec, refuseAll) {
-		return
-	}
-	rules, err := code.ParseProtections(synced.Repo.Protections)
-	if err != nil {
-		s.syncFailed(w, r, adm.name, err)
-		return
-	}
-	judged := make(map[judgedKey]bool, len(sec.Commands))
-	for _, c := range sec.Commands {
-		if _, refused := pre[c.Ref]; refused {
-			continue
-		}
-		cmd := code.Command{Ref: c.Ref, Old: c.Old, New: c.New}
-		judged[judgedKey{c.Ref, c.Old, c.New}] = true
-		if reason, rule := code.ProtectionRefusal(cmd, rules); reason != "" {
-			pre[c.Ref] = answered{Ref: c.Ref, Reason: reason, Detail: code.ProtectionDetail(rule, reason)}
-		}
-	}
-	if s.refusedEvery(sec, pre, refuseAll) {
-		return
-	}
-	if ferr := s.fault(ctx, codefault.HostAfterSync, 0); ferr != nil {
-		s.syncFailed(w, r, adm.name, ferr)
-		return
-	}
+	defer func() { synced.Release() }()
 
-	// 4–5 THE PUSH'S IDENTITY AND ITS SCRATCH.
-	pushID := uuid.Must(uuid.NewV7()).String()
-	scratch, err := s.o.Cache.NewScratch(ctx, synced, pushID)
-	if err != nil {
-		s.syncFailed(w, r, adm.name, err)
-		return
-	}
-	defer scratch.Remove()
-	if ferr := s.fault(ctx, codefault.HostAfterScratch, 0); ferr != nil {
-		s.syncFailed(w, r, adm.name, ferr)
-		return
-	}
-
-	// 6 THE SESSION its hook will name.
-	work, cancel := context.WithCancel(ctx)
-	defer cancel()
-	sess := newSession(work, cancel)
-	sess.synced, sess.scratch, sess.pushID = synced, scratch, pushID
-	sess.principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: adm.operatorID, Seat: adm.seat}
-	sess.receivedAt, sess.preRefused, sess.judged = s.now(), pre, judged
-	s.relay.open(sess)
-
-	// 7 RECEIVE-PACK, in the scratch. No GIT_PROTOCOL: git never asks
-	// protocol v2 of a push.
+	// 3–7 OVER THE SYNCED INCARNATION, and once more over a rebuilt one when
+	// the pool refused receive-pack for the incarnation's shape (repairing):
+	// the scratch's one alternate is the incarnation, so a cache git refuses
+	// for its shape would refuse every push to it, and the refusal comes
+	// before git starts or a byte of the body is read — the push is received
+	// whole on the second run. Everything judged on the row is judged again
+	// on the rebuilt one, from the refusals that needed no object.
 	out := newSink(w, "application/x-git-receive-pack-result", nil, s.now)
 	defer out.End()
-	res, runErr := s.o.Git.Run(work, gitproc.Cmd{
-		Dir: scratch.Dir, Args: []string{"receive-pack", "--stateless-rpc", scratch.Dir},
-		Config: receiveConfig(limits), Hooks: s.o.Cache.Hooks(),
-		Env: []gitproc.KV{
-			{Key: gitproc.EnvHookSocket, Value: s.relay.path},
-			{Key: gitproc.EnvHookToken, Value: sess.token},
-		},
-		Stdin: io.MultiReader(bytes.NewReader(sec.Raw), body), Stdout: out, Class: gitproc.ClassTransfer,
-		Deadline: gitproc.ReceivePackDeadline(limits.MaxPushBytes, HookBudget(s.o.Timing)),
-		Stall:    s.o.Timing.Stall, Indexed: sess.indexed,
-	})
-	// THE REQUEST'S OWN END — its client gone, or the host stopping — read
-	// BEFORE relay.close, which ends work whatever happened: judged after
-	// it, every failure would read as a process the engine killed.
-	ended := ctx.Err() != nil
-	claimed := s.relay.close(sess)
+	var rcv received
+	runErr := s.repairing(ctx, r, adm.name, &synced, cache.ShapeReason,
+		func() bool { return rcv.answered || rcv.claimed || rcv.ended || out.Started() },
+		func(in cache.Synced) error {
+			rcv = s.receiveOver(ctx, w, r, receiving{adm: adm, sec: sec, body: body, limits: limits,
+				synced: in, pre: maps.Clone(pre), refuseAll: refuseAll, out: out})
+			return rcv.runErr
+		})
+	if rcv.answered {
+		return
+	}
+	sess, pushID, res, ended, claimed := rcv.sess, rcv.pushID, rcv.res, rcv.ended, rcv.claimed
 
 	// 9 THE ANSWER AND THE RECORD. A push whose hook claimed its session
 	// is recorded as the session concluded it — applied, pending, unknown,
@@ -316,6 +272,119 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(ctx, adm, rec)
+}
+
+// receiving is what a push brings to one run of its steps 3 to 7: its
+// admission and command section, the body past the section, the epoch's
+// limits, the incarnation it is received over, the refusals made before it
+// (its own copy: the run adds what the row's protections refuse), and how a
+// refusal of every command is answered.
+type receiving struct {
+	adm       admission
+	sec       section
+	body      io.Reader
+	limits    code.Limits
+	synced    cache.Synced
+	pre       map[string]answered
+	refuseAll func(AuditRefusal, []answered)
+	out       *sink
+}
+
+// received is what one run of a push's steps 3 to 7 came to: answered when
+// it answered the request itself — a refusal judged on the row, a fault, a
+// scratch that could not be made — and otherwise the session its hook was
+// given and what receive-pack did.
+type received struct {
+	answered bool
+	sess     *session
+	pushID   string
+	res      gitproc.Result
+	runErr   error
+	// ended: the request's own context ended — its client gone, or the host
+	// stopping — by the time receive-pack returned. claimed: its hook
+	// claimed the session.
+	ended, claimed bool
+}
+
+// receiveOver is a push's steps 3 to 7 over p.synced: the status and the
+// protections judged on its row, the push's identity, its scratch over the
+// incarnation and its session, and receive-pack run there. The scratch is
+// removed and the session's work ended before it returns, so a second run
+// over a rebuilt incarnation starts from nothing of the first.
+func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http.Request, p receiving) received {
+	adm, sec, synced, pre := p.adm, p.sec, p.synced, p.pre
+	if s.refusedByStatus(synced.Repo, sec, p.refuseAll) {
+		return received{answered: true}
+	}
+	rules, err := code.ParseProtections(synced.Repo.Protections)
+	if err != nil {
+		// A RULE THIS BUILD CANNOT READ — a pattern a newer peer admitted —
+		// is a row of the snapshot this build cannot use, answered as one:
+		// asking again reads the same rule, and a node of a newer build may
+		// judge it.
+		s.syncFailed(w, r, adm.name, fmt.Errorf("%w: %w", cache.ErrBadSnapshot, err))
+		return received{answered: true}
+	}
+	judged := make(map[judgedKey]bool, len(sec.Commands))
+	for _, c := range sec.Commands {
+		if _, refused := pre[c.Ref]; refused {
+			continue
+		}
+		cmd := code.Command{Ref: c.Ref, Old: c.Old, New: c.New}
+		judged[judgedKey{c.Ref, c.Old, c.New}] = true
+		if reason, rule := code.ProtectionRefusal(cmd, rules); reason != "" {
+			pre[c.Ref] = answered{Ref: c.Ref, Reason: reason, Detail: code.ProtectionDetail(rule, reason)}
+		}
+	}
+	if s.refusedEvery(sec, pre, p.refuseAll) {
+		return received{answered: true}
+	}
+	if ferr := s.fault(ctx, codefault.HostAfterSync, 0); ferr != nil {
+		s.syncFailed(w, r, adm.name, ferr)
+		return received{answered: true}
+	}
+
+	// 4–5 THE PUSH'S IDENTITY AND ITS SCRATCH.
+	pushID := uuid.Must(uuid.NewV7()).String()
+	scratch, err := s.o.Cache.NewScratch(ctx, synced, pushID)
+	if err != nil {
+		s.syncFailed(w, r, adm.name, err)
+		return received{answered: true}
+	}
+	defer scratch.Remove()
+	if ferr := s.fault(ctx, codefault.HostAfterScratch, 0); ferr != nil {
+		s.syncFailed(w, r, adm.name, ferr)
+		return received{answered: true}
+	}
+
+	// 6 THE SESSION its hook will name.
+	work, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sess := newSession(work, cancel)
+	sess.synced, sess.scratch, sess.pushID = synced, scratch, pushID
+	sess.principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: adm.operatorID, Seat: adm.seat}
+	sess.receivedAt, sess.preRefused, sess.judged = s.now(), pre, judged
+	s.relay.open(sess)
+
+	// 7 RECEIVE-PACK, in the scratch. No GIT_PROTOCOL: git never asks
+	// protocol v2 of a push.
+	res, runErr := s.o.Git.Run(work, gitproc.Cmd{
+		Dir: scratch.Dir, Alternate: scratch.Alternate, Args: []string{"receive-pack", "--stateless-rpc", scratch.Dir},
+		Config: receiveConfig(p.limits), Hooks: s.o.Cache.Hooks(),
+		Env: []gitproc.KV{
+			{Key: gitproc.EnvHookSocket, Value: s.relay.path},
+			{Key: gitproc.EnvHookToken, Value: sess.token},
+		},
+		Stdin: io.MultiReader(bytes.NewReader(sec.Raw), p.body), Stdout: p.out, Class: gitproc.ClassTransfer,
+		Deadline: gitproc.ReceivePackDeadline(p.limits.MaxPushBytes, HookBudget(s.o.Timing)),
+		Stall:    s.o.Timing.Stall, Indexed: sess.indexed,
+	})
+	// THE REQUEST'S OWN END — its client gone, or the host stopping — read
+	// BEFORE relay.close, which ends work whatever happened: judged after
+	// it, every failure would read as a process the engine killed.
+	ended := ctx.Err() != nil
+	claimed := s.relay.close(sess)
+	return received{sess: sess, pushID: pushID, res: res, runErr: runErr, ended: ended, claimed: claimed}
 }
 
 // refusedByStatus refuses a push to a repository whose row refuses every push

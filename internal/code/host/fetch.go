@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -79,7 +80,15 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	// and only ever by a Synced a sync or a rebuild handed out.
 	defer func() { synced.Release() }()
 	if level == statelog.ReadStale && n.wants && (!v2 || n.command == commandFetch) {
-		missing, merr := s.o.Cache.Missing(ctx, synced, wantsOf(body.reader, body.length(), v2), body.length())
+		// cat-file IN THE INCARNATION, so a damaged one is rebuilt here
+		// (repairing) and asked again — the wants are read from the request
+		// afresh.
+		var missing string
+		merr := s.repairing(ctx, r, adm.name, &synced, cache.DamageReason, notStarted, func(in cache.Synced) error {
+			var cerr error
+			missing, cerr = s.o.Cache.Missing(ctx, in, wantsOf(body.reader, body.length(), v2), body.length())
+			return cerr
+		})
 		if merr != nil {
 			s.syncFailed(w, r, adm.name, merr)
 			return
@@ -104,33 +113,19 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	// read it (requestBody.feed): no retry reads it past that byte.
 	out.onStart = body.started
 	defer out.End()
-	for attempt := 0; ; attempt++ {
-		_, err = s.o.Git.Run(ctx, gitproc.Cmd{
-			Dir:    synced.Dir,
-			Args:   []string{"upload-pack", "--stateless-rpc", synced.Dir},
+	// A DAMAGED CACHE IS REBUILT AND THE FETCH RETRIED ONCE, over the same
+	// request (repairing) — never for `not our ref`, which a want the
+	// repository never served prints exactly as a lost pack does.
+	err = s.repairing(ctx, r, adm.name, &synced, cache.DamageReason, out.Started, func(in cache.Synced) error {
+		_, gerr := s.o.Git.Run(ctx, gitproc.Cmd{
+			Dir:    in.Dir,
+			Args:   []string{"upload-pack", "--stateless-rpc", in.Dir},
 			Config: s.o.Cache.ServeConfig(), Protocol: r.Header.Get("Git-Protocol"),
 			Stdin: body.feed(), Stdout: out, Class: gitproc.ClassTransfer,
-			Deadline: gitproc.UploadPackDeadline(synced.Repo.LiveBytes), Stall: s.o.Timing.Stall,
+			Deadline: gitproc.UploadPackDeadline(in.Repo.LiveBytes), Stall: s.o.Timing.Stall,
 		})
-		if err == nil || out.Started() {
-			break
-		}
-		// A DAMAGED CACHE IS REBUILT AND THE FETCH RETRIED ONCE, over the
-		// same request — never for `not our ref`, which a want the
-		// repository never served prints exactly as a lost pack does.
-		reason, repairs := rebuildReason(err)
-		if !repairs || attempt > 0 {
-			break
-		}
-		s.log.Info("code_fetch_retried", "repo", adm.name, "reason", string(reason), "error", err)
-		rebuilt, rerr := s.o.Cache.Rebuild(ctx, synced, reason)
-		if rerr != nil {
-			err = rerr
-			break
-		}
-		synced.Release()
-		synced = rebuilt
-	}
+		return gerr
+	})
 	s.finishFetch(w, r, adm.name, n.recorded(), synced.Kind, start, out, err)
 }
 
@@ -167,8 +162,11 @@ func (s *Server) boundOf(adm admission) func(context.Context, bool) (int64, erro
 		}
 		ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: adm.name,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
-		if err != nil {
+		switch {
+		case errors.Is(err, code.ErrRepoNotFound):
 			return 0, err
+		case err != nil:
+			return 0, fmt.Errorf("%w: %w", errLogRead, err)
 		}
 		return RequestBound(ref), nil
 	}

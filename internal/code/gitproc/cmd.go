@@ -1,7 +1,6 @@
 package gitproc
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -69,13 +68,28 @@ const (
 // Cmd is one git process, described entirely by the call site: nothing about
 // it comes from the environment, the HOME, or a configuration file.
 type Cmd struct {
-	// Dir is the repository: absolute, filepath.Clean'ed, holding
-	// RepoConfig and no commondir, its alternates (if any) naming only
-	// repositories of the same shape. It is GIT_DIR and the working
+	// Dir is the repository: absolute, filepath.Clean'ed, of the shape
+	// [CheckShape] holds it to — RepoConfig, no commondir, an objects
+	// directory of its own, and the alternate Alternate names or none. It is
+	// GIT_DIR and the working
 	// directory. "" runs with NO repository: the working directory is the
 	// pool's HOME and GIT_CEILING_DIRECTORIES is its parent, so git
 	// discovers none.
 	Dir string
+
+	// Alternate is the one repository Dir reads objects from beside its
+	// own — absolute and clean, never Dir — or "" for none. Dir's
+	// objects/info/alternates must be exactly the one line naming
+	// Alternate's objects directory, and with no Alternate there must be
+	// no such file: A REPOSITORY DOES NOT CHOOSE ITS OWN ALTERNATE
+	// ([ShapeAlternates]). Read from the file, an alternate is whatever a
+	// disk or anything outside the engine wrote there — and under
+	// protocol v2 every object an alternate holds is fetchable by id
+	// through the repository naming it, so a cache with a planted
+	// alternates file would serve another repository's objects. A push's
+	// scratch and an advertisement view name the cache incarnation they
+	// lean on; nothing else the engine runs git in has one.
+	Alternate string
 
 	// Args follow "git". Args[0] is a SUBCOMMAND (^[a-z][a-z0-9-]*$): a
 	// global option there (-c, --exec-path, --git-dir, --config-env) would
@@ -388,12 +402,17 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
 			return prepared{}, fmt.Errorf("%w: Cmd.Dir %q is not an absolute, clean path", ErrInvalid, c.Dir)
 		}
-		if err := checkRepo(c.Dir); err != nil {
+		if c.Alternate != "" && (!filepath.IsAbs(c.Alternate) || filepath.Clean(c.Alternate) != c.Alternate ||
+			c.Alternate == c.Dir) {
+			return prepared{}, fmt.Errorf("%w: Cmd.Alternate %q is not an absolute, clean path of a repository other than Cmd.Dir",
+				ErrInvalid, c.Alternate)
+		}
+		if err := CheckShape(c.Dir, c.Alternate); err != nil {
 			return prepared{}, err
 		}
-		if err := checkAlternates(c.Dir, false); err != nil {
-			return prepared{}, err
-		}
+	} else if c.Alternate != "" {
+		return prepared{}, fmt.Errorf("%w: Cmd.Alternate %q names an alternate for no repository: Cmd.Dir is empty",
+			ErrInvalid, c.Alternate)
 	}
 	if err := checkConfig(c.Config); err != nil {
 		return prepared{}, err
@@ -493,6 +512,67 @@ func checkEnv(env []KV) error {
 	return nil
 }
 
+// ShapeRule is one rule of the SHAPE the pool holds a repository to before it
+// runs git there ([CheckShape]): a closed set, [ShapeRules], each the reason a
+// [ShapeError] gives. Every rule is about a file that CONFIGURES the process —
+// what it reads its keys, its objects and its refs from — never about content
+// the engine wrote (refs, packs), which git classifies itself.
+type ShapeRule string
+
+const (
+	// ShapeConfig holds config to [RepoConfig] byte for byte, since every
+	// key the command line does not set is read from the file.
+	ShapeConfig ShapeRule = "config"
+	// ShapeCommondir refuses a commondir, which would move objects AND refs
+	// to another repository with no override.
+	ShapeCommondir ShapeRule = "commondir"
+	// ShapeObjects holds objects to a directory of the repository's OWN — at
+	// its real path, the repository's real path and "objects" — never a
+	// link, which would read another directory's objects as this
+	// repository's.
+	ShapeObjects ShapeRule = "objects"
+	// ShapeAlternates holds objects/info/alternates to exactly what the
+	// call's [Cmd.Alternate] makes it — no file for none, the one line
+	// naming the alternate's objects directory for one — and the alternate
+	// to holding none of its own.
+	ShapeAlternates ShapeRule = "alternates"
+)
+
+// ShapeRules is every [ShapeRule]: each holds the call's Dir, and the
+// alternate it names, alike.
+var ShapeRules = []ShapeRule{ShapeConfig, ShapeCommondir, ShapeObjects, ShapeAlternates}
+
+// Valid reports whether r is one of [ShapeRules].
+func (r ShapeRule) Valid() bool { return slices.Contains(ShapeRules, r) }
+
+// ShapeError is a repository the pool refused for its shape: the [ShapeRule]
+// it breaks and which repository breaks it. errors.Is(err, [ErrRepoShape]).
+// A DEFINITE answer and only that: a file that could not be READ is never one.
+type ShapeError struct {
+	// Rule is the rule broken.
+	Rule ShapeRule
+	// Dir is the repository that breaks it: the call's Dir, or — when
+	// InAlternate — the alternate the call names, at the real path git
+	// resolves it to. What a caller repairs is the one it names: a refusal
+	// of a scratch's alternate is a refusal of the cache it leans on.
+	Dir         string
+	InAlternate bool
+	// found is what was found, as the error says it.
+	found string
+}
+
+// Error is ErrRepoShape's text and what was found.
+func (e *ShapeError) Error() string { return ErrRepoShape.Error() + ": " + e.found }
+
+// Unwrap is ErrRepoShape.
+func (e *ShapeError) Unwrap() error { return ErrRepoShape }
+
+// misshapen is a refusal of dir under rule; alternate says dir is the
+// alternate a call names.
+func misshapen(rule ShapeRule, dir string, alternate bool, format string, args ...any) error {
+	return &ShapeError{Rule: rule, Dir: dir, InAlternate: alternate, found: fmt.Sprintf(format, args...)}
+}
+
 // A REPOSITORY CANNOT CONFIGURE ITS OWN PROCESS — and overriding dangerous
 // keys on the command line does not achieve it.
 //
@@ -501,10 +581,11 @@ func checkEnv(env []KV) error {
 // repository config naming uploadpack.allowAnySHA1InWant is honoured by every
 // git that does not set it, and an include.path there reads any file at all. A
 // planted commondir moves objects AND refs to another repository and has no
-// override (GIT_COMMON_DIR does not beat it). The engine writes every
-// repository it runs git in, by hand, so a check of their SHAPE costs nothing
-// legitimate and turns "a repository can configure git" from a hope into a
-// refusal.
+// override (GIT_COMMON_DIR does not beat it), and a planted alternates file
+// adds another repository's objects to this one's — every one of them
+// fetchable by id under protocol v2. The engine writes every repository it
+// runs git in, by hand, so a check of their SHAPE costs nothing legitimate and
+// turns "a repository can configure git" from a hope into a refusal.
 //
 // Not checked, deliberately: info/attributes and info/exclude (a
 // repository's own attributes — that file, and in a bare repository its
@@ -521,38 +602,89 @@ func checkEnv(env []KV) error {
 // neutralised by the environment rather than checked (GIT_GRAFT_FILE,
 // GIT_SHALLOW_FILE).
 
-// checkRepo holds dir to the shape of a repository the engine wrote.
+// CheckShape holds the repository at dir to every [ShapeRule], as a process
+// whose [Cmd.Alternate] is alternate ("" for none): exactly the check Run
+// makes of a Cmd's Dir before it starts anything. A refusal is a *[ShapeError];
+// a file that could not be read is the read's own error.
+//
+// Exported for the one caller that MAKES a directory this shape — the git
+// cache's sweep, which repairs a cache the pool refused — so what it leaves is
+// held to the pool's own predicate rather than to a copy of it, and the two
+// can never disagree about what the pool will run in.
+func CheckShape(dir, alternate string) error {
+	if err := checkRepo(dir, false); err != nil {
+		return err
+	}
+	return checkAlternates(dir, alternate)
+}
+
+// checkRepo holds dir to ShapeConfig, ShapeCommondir and ShapeObjects;
+// alternate says dir is the alternate a call names.
 //
 // ErrRepoShape is a DEFINITE answer and only that — the config absent or
-// holding other bytes, a commondir present. A read that FAILED (descriptors
-// exhausted on a busy node, an I/O error, a directory where the file should
-// be) says nothing about the shape, so it is returned as the read's own
-// error, wrapped and without ErrRepoShape: collapsing "could not be read"
-// into "definitely wrong" would tell a caller a healthy cache was tampered
-// with on a transient failure, and the operator reading it the same.
-func checkRepo(dir string) error {
+// holding other bytes, a commondir present, an objects directory that is a
+// link or none at all. A read that FAILED (descriptors exhausted on a busy
+// node, an I/O error, a directory where the file should be) says nothing
+// about the shape, so it is returned as the read's own error, wrapped and
+// without ErrRepoShape: collapsing "could not be read" into "definitely
+// wrong" would tell a caller a healthy cache was tampered with on a transient
+// failure, and the operator reading it the same.
+func checkRepo(dir string, alternate bool) error {
 	config, err := os.ReadFile(filepath.Join(dir, "config"))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("%w: %s holds no config: the engine writes one into every repository it runs git in", ErrRepoShape, dir)
+		return misshapen(ShapeConfig, dir, alternate,
+			"%s holds no config: the engine writes one into every repository it runs git in", dir)
 	case err != nil:
 		return fmt.Errorf("gitproc: reading %s's config: %w", dir, err)
 	case string(config) != RepoConfig:
-		return fmt.Errorf("%w: %s's config is not the one the engine writes: a repository's own config is read for every key the command line does not set",
-			ErrRepoShape, dir)
+		return misshapen(ShapeConfig, dir, alternate, "%s's config is not the one the engine writes: a "+
+			"repository's own config is read for every key the command line does not set", dir)
 	}
 	_, err = os.Lstat(filepath.Join(dir, "commondir"))
 	switch {
 	case err == nil:
-		return fmt.Errorf("%w: %s holds a commondir, which would point git at another repository's objects and refs", ErrRepoShape, dir)
+		return misshapen(ShapeCommondir, dir, alternate,
+			"%s holds a commondir, which would point git at another repository's objects and refs", dir)
 	case !errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("gitproc: reading whether %s holds a commondir: %w", dir, err)
+	}
+	return checkObjects(dir, alternate)
+}
+
+// checkObjects holds dir to ShapeObjects: its objects directory, resolved,
+// is its own — its real path's "objects" — and a directory. A link there
+// reads ANOTHER directory's objects as this repository's, every one of them
+// fetchable by id under protocol v2, which is exactly what an alternates file
+// the call did not name would do; the engine never makes one.
+func checkObjects(dir string, alternate bool) error {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("gitproc: resolving %s: %w", dir, err)
+	}
+	objects, err := filepath.EvalSymlinks(filepath.Join(dir, "objects"))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return misshapen(ShapeObjects, dir, alternate, "%s has no objects directory: %v", dir, err)
+	case err != nil:
+		return fmt.Errorf("gitproc: resolving %s's objects directory: %w", dir, err)
+	case objects != filepath.Join(real, "objects"):
+		return misshapen(ShapeObjects, dir, alternate, "%s's objects is a link to %s: a repository reads its own "+
+			"objects, and the engine never links them", dir, objects)
+	}
+	info, err := os.Stat(objects)
+	switch {
+	case err != nil:
+		return fmt.Errorf("gitproc: reading %s's objects directory: %w", dir, err)
+	case !info.IsDir():
+		return misshapen(ShapeObjects, dir, alternate, "%s's objects is no directory", dir)
 	}
 	return nil
 }
 
-// checkAlternates holds every repository dir's alternates file names to the
-// same shape — and refuses any alternate at all when nested.
+// checkAlternates holds dir's alternates file to the call's alternate: no
+// file for none, and for one the one line naming its objects directory — and
+// holds that alternate to the same shape, with no alternate of its own.
 //
 // THE GUARD REACHES ONE REPOSITORY FURTHER THAN THE PROCESS'S OWN, because git
 // does: a repository with an alternate lists that alternate's refs by running
@@ -565,57 +697,51 @@ func checkRepo(dir string) error {
 // allowlist. A chained alternate is refused because its second hop would be
 // read by the same unconfigured process, and the engine never builds one.
 //
-// THE REPOSITORY CHECKED IS THE ONE GIT RUNS IN, which is the alternate's
-// REAL path: git resolves each line (strbuf_realpath in
-// refs_from_alternate_cb), strips "/objects" and runs for-each-ref there. A
-// line whose objects directory is a link into another repository is
-// therefore configured by THAT repository's files, and checking the directory
-// the line merely passes through would accept a config git never reads while
-// git reads one nobody checked. So each line is resolved first, and what it
-// resolves to must itself be an objects directory.
+// THE REPOSITORY CHECKED IS THE ONE GIT RUNS IN. git resolves the line to its
+// real path (strbuf_realpath in refs_from_alternate_cb), strips "/objects" and
+// runs for-each-ref there — so a line whose objects directory were a link into
+// another repository would be configured by THAT repository's files, and
+// checking the directory the line merely passes through would accept a config
+// git never reads. ShapeObjects holds the alternate's objects directory to
+// its own real path, which makes the repository git resolves the line to the
+// alternate itself, and that is the one checked.
 //
 // As in checkRepo, ErrRepoShape is a definite answer, and a read that failed
 // is the read's own error.
-func checkAlternates(dir string, nested bool) error {
+func checkAlternates(dir, alternate string) error {
 	body, err := os.ReadFile(filepath.Join(dir, "objects", "info", "alternates"))
-	if errors.Is(err, fs.ErrNotExist) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && alternate == "":
 		return nil
-	}
-	if err != nil {
+	case errors.Is(err, fs.ErrNotExist):
+		return misshapen(ShapeAlternates, dir, false, "%s names no alternate, and the call reads %s as its one: the "+
+			"engine writes the line naming it", dir, alternate)
+	case err != nil:
 		return fmt.Errorf("gitproc: reading %s's alternates: %w", dir, err)
+	case alternate == "":
+		return misshapen(ShapeAlternates, dir, false, "%s holds an alternates file, and the call names no "+
+			"alternate: a repository does not choose where git reads objects from, and under protocol v2 every "+
+			"object an alternate holds is fetchable by id through it", dir)
 	}
-	if nested {
-		return fmt.Errorf("%w: %s names an alternate and is itself one: the engine never chains alternates, and git would read the second hop's files with no configuration of the pool's",
-			ErrRepoShape, dir)
+	// The one absolute, clean line ending in a newline that the engine
+	// writes — which also rules out the two first bytes git gives a meaning
+	// of its own, '#' (a comment) and '"' (a quoted path).
+	if want := filepath.Join(alternate, "objects") + "\n"; string(body) != want {
+		return misshapen(ShapeAlternates, dir, false, "%s's alternates reads %q, and the call's alternate is %s: "+
+			"the engine writes the one line naming its objects directory", dir, textcut.Ellipsis(string(body), 120),
+			alternate)
 	}
-	if len(body) == 0 || body[len(body)-1] != '\n' {
-		return fmt.Errorf("%w: %s's alternates is not a list of whole lines: the engine writes one line, ending in a newline", ErrRepoShape, dir)
+	if err = checkRepo(alternate, true); err != nil {
+		return err
 	}
-	for _, line := range bytes.Split(body[:len(body)-1], []byte{'\n'}) {
-		alt := string(line)
-		// An absolute path also rules out the two first bytes git gives a
-		// meaning of its own, '#' (a comment) and '"' (a quoted path): the
-		// engine writes neither.
-		if !filepath.IsAbs(alt) || filepath.Clean(alt) != alt || filepath.Base(alt) != "objects" {
-			return fmt.Errorf("%w: %s's alternates names %q: each line must be the absolute, clean path of a repository's objects directory",
-				ErrRepoShape, dir, textcut.Ellipsis(alt, 120))
-		}
-		resolved, err := filepath.EvalSymlinks(alt)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			return fmt.Errorf("%w: %s's alternates names %s, which does not exist: %w", ErrRepoShape, dir, alt, err)
-		case err != nil:
-			return fmt.Errorf("gitproc: resolving %s's alternate %s: %w", dir, alt, err)
-		case filepath.Base(resolved) != "objects":
-			return fmt.Errorf("%w: %s's alternate %s resolves to %s, which is no repository's objects directory", ErrRepoShape, dir, alt, resolved)
-		}
-		repo := filepath.Dir(resolved)
-		if err := checkRepo(repo); err != nil {
-			return err
-		}
-		if err := checkAlternates(repo, true); err != nil {
-			return err
-		}
+	_, err = os.Lstat(filepath.Join(alternate, "objects", "info", "alternates"))
+	switch {
+	case err == nil:
+		return misshapen(ShapeAlternates, alternate, true, "%s names an alternate and is itself one: the engine "+
+			"never chains alternates, and git would read the second hop's files with no configuration of the pool's",
+			alternate)
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("gitproc: reading whether %s holds an alternates file: %w", alternate, err)
 	}
 	return nil
 }

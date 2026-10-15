@@ -255,14 +255,17 @@ func TestAnUnreadableRepositoryIsNotCalledMisshapen(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
 	p := newPool(t, gitproc.Options{Path: recorder})
-	for name, spoil := range map[string]func(t *testing.T, bare string){
-		"its config": func(t *testing.T, bare string) {
+	// Each spoils bare and answers the alternate the call names, if any.
+	for name, spoil := range map[string]func(t *testing.T, bare string) string{
+		"its config": func(t *testing.T, bare string) string {
 			replaceWithDir(t, filepath.Join(bare, "config"))
+			return ""
 		},
-		"its alternates": func(t *testing.T, bare string) {
+		"its alternates": func(t *testing.T, bare string) string {
 			replaceWithDir(t, filepath.Join(bare, "objects", "info", "alternates"))
+			return ""
 		},
-		"its alternate's config": func(t *testing.T, bare string) {
+		"its alternate's config": func(t *testing.T, bare string) string {
 			c := gittest.Empty(t)
 			replaceWithDir(t, filepath.Join(c, "config"))
 			if err := os.MkdirAll(filepath.Join(bare, "objects", "info"), hostbox.DirMode); err != nil {
@@ -271,12 +274,13 @@ func TestAnUnreadableRepositoryIsNotCalledMisshapen(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(bare, "objects", "info", "alternates"), []byte(c+"/objects\n"), hostbox.FileMode); err != nil {
 				t.Fatal(err)
 			}
+			return c
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bare := gittest.Empty(t)
-			spoil(t, bare)
-			_, err := p.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"rev-parse", "--git-dir"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+			alternate := spoil(t, bare)
+			_, err := p.Run(t.Context(), gitproc.Cmd{Dir: bare, Alternate: alternate, Args: []string{"rev-parse", "--git-dir"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 			if err == nil || errors.Is(err, gitproc.ErrRepoShape) || !errors.Is(err, syscall.EISDIR) {
 				t.Fatalf("%v, want the read's own error (EISDIR) and not ErrRepoShape", err)
 			}
@@ -323,10 +327,14 @@ func TestACommondirIsRefused(t *testing.T) {
 	}
 }
 
-// AN ALTERNATE IS HELD TO THE SAME SHAPE, one hop further than the process's
-// own repository, because git lists an alternate's refs with a git it
-// configures with nothing of the pool's.
-func TestAnAlternateIsHeldToTheSameShape(t *testing.T) {
+// AN ALTERNATE IS THE CALL'S, AND HELD TO THE SAME SHAPE, one hop further than
+// the process's own repository, because git lists an alternate's refs with a
+// git it configures with nothing of the pool's. A repository does not choose
+// its alternate: an alternates file the call did not name is refused, so a
+// cache — which never has one — cannot be made to serve another repository's
+// objects by id through a file planted in it. Every refusal says which rule
+// it is and which repository broke it.
+func TestAnAlternateIsTheCallsAndHeldToTheSameShape(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
 	p := newPool(t, gitproc.Options{Path: recorder})
@@ -339,9 +347,10 @@ func TestAnAlternateIsHeldToTheSameShape(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	run := func(t *testing.T, scratch string) error {
+	run := func(t *testing.T, dir, alternate string) error {
 		t.Helper()
-		_, err := p.Run(t.Context(), gitproc.Cmd{Dir: scratch, Args: []string{"rev-parse", "--git-dir"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+		_, err := p.Run(t.Context(), gitproc.Cmd{Dir: dir, Alternate: alternate, Args: []string{"rev-parse", "--git-dir"},
+			Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 		return err
 	}
 	ranIn := func(dir string) bool {
@@ -352,47 +361,80 @@ func TestAnAlternateIsHeldToTheSameShape(t *testing.T) {
 		}
 		return false
 	}
+	// refused fails t unless err refuses under rule, naming dir — the
+	// alternate when inAlternate — and git never ran in s.
+	refused := func(t *testing.T, err error, s string, rule gitproc.ShapeRule, dir string, inAlternate bool) {
+		t.Helper()
+		var shape *gitproc.ShapeError
+		if !errors.As(err, &shape) || !errors.Is(err, gitproc.ErrRepoShape) {
+			t.Fatalf("%v, want a *ShapeError, ErrRepoShape", err)
+		}
+		if shape.Rule != rule || shape.InAlternate != inAlternate || !strings.Contains(err.Error(), dir) {
+			t.Fatalf("refused under %s (in the alternate %v): %v; want %s (in the alternate %v) naming %s", shape.Rule,
+				shape.InAlternate, err, rule, inAlternate, dir)
+		}
+		if ranIn(s) {
+			t.Fatal("git ran in the refused repository")
+		}
+	}
 	alternates := func(s string) string { return filepath.Join(s, "objects", "info", "alternates") }
 
-	t.Run("one cache", func(t *testing.T) {
+	t.Run("the call's one cache", func(t *testing.T) {
 		s, c := gittest.Empty(t), gittest.Empty(t)
 		write(t, alternates(s), c+"/objects\n")
-		if err := run(t, s); err != nil || !ranIn(s) {
+		if err := run(t, s, c); err != nil || !ranIn(s) {
 			t.Fatalf("a scratch reading one cache: %v (ran %v)", err, ranIn(s))
 		}
+	})
+	t.Run("an alternates file the call does not name", func(t *testing.T) {
+		// What a cache planted with an alternates file is to every process
+		// run in it: a well-formed line naming a repository of the engine's
+		// own shape — another repository's cache — refused all the same.
+		c, other := gittest.Empty(t), gittest.Empty(t)
+		write(t, alternates(c), other+"/objects\n")
+		refused(t, run(t, c, ""), c, gitproc.ShapeAlternates, c, false)
+	})
+	t.Run("no alternates file where the call names one", func(t *testing.T) {
+		s, c := gittest.Empty(t), gittest.Empty(t)
+		refused(t, run(t, s, c), s, gitproc.ShapeAlternates, s, false)
+	})
+	t.Run("an alternates file naming another than the call's", func(t *testing.T) {
+		s, c, other := gittest.Empty(t), gittest.Empty(t), gittest.Empty(t)
+		write(t, alternates(s), other+"/objects\n")
+		refused(t, run(t, s, c), s, gitproc.ShapeAlternates, s, false)
 	})
 	t.Run("two caches", func(t *testing.T) {
 		s, c1, c2 := gittest.Empty(t), gittest.Empty(t), gittest.Empty(t)
 		write(t, alternates(s), c1+"/objects\n"+c2+"/objects\n")
-		if err := run(t, s); err != nil {
-			t.Fatalf("a scratch reading two caches: %v", err)
-		}
+		refused(t, run(t, s, c1), s, gitproc.ShapeAlternates, s, false)
 	})
-	for name, spoil := range map[string]func(t *testing.T, c string){
-		"its config planted": func(t *testing.T, c string) {
+	for name, tc := range map[string]struct {
+		rule  gitproc.ShapeRule
+		spoil func(t *testing.T, c string)
+	}{
+		"its config planted": {gitproc.ShapeConfig, func(t *testing.T, c string) {
 			write(t, filepath.Join(c, "config"), gitproc.RepoConfig+"[uploadpack]\n\tallowAnySHA1InWant = true\n")
-		},
-		"a commondir": func(t *testing.T, c string) { write(t, filepath.Join(c, "commondir"), "/elsewhere\n") },
-		"an alternate of its own": func(t *testing.T, c string) {
+		}},
+		"a commondir": {gitproc.ShapeCommondir, func(t *testing.T, c string) {
+			write(t, filepath.Join(c, "commondir"), "/elsewhere\n")
+		}},
+		"an alternate of its own": {gitproc.ShapeAlternates, func(t *testing.T, c string) {
 			write(t, alternates(c), gittest.Empty(t)+"/objects\n")
-		},
+		}},
 	} {
 		t.Run("the cache with "+name, func(t *testing.T) {
 			s, c := gittest.Empty(t), gittest.Empty(t)
 			write(t, alternates(s), c+"/objects\n")
-			spoil(t, c)
-			err := run(t, s)
-			if !errors.Is(err, gitproc.ErrRepoShape) || !strings.Contains(err.Error(), c) {
-				t.Fatalf("%v, want ErrRepoShape naming the cache %s", err, c)
-			}
-			if ranIn(s) {
-				t.Fatal("git ran in the scratch whose alternate was refused")
-			}
+			tc.spoil(t, c)
+			refused(t, run(t, s, c), s, tc.rule, c, true)
 		})
 	}
 	// GIT LISTS AN ALTERNATE'S REFS AT ITS REAL PATH — the line resolved,
-	// "/objects" stripped — so the guard checks the repository a link leads
-	// to, never the one whose name the line merely passes through.
+	// "/objects" stripped — so an alternate whose objects directory is a link
+	// would be configured by the repository the link leads to. Its objects
+	// directory must be its own, which makes the alternate checked the one git
+	// runs in: a link is refused wherever it leads, a repository of the
+	// engine's own shape included.
 	link := func(t *testing.T, c, target string) {
 		t.Helper()
 		if err := os.RemoveAll(filepath.Join(c, "objects")); err != nil {
@@ -402,60 +444,31 @@ func TestAnAlternateIsHeldToTheSameShape(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	resolved := func(t *testing.T, path string) string {
-		t.Helper()
-		real, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return real
+	for name, target := range map[string]func(t *testing.T) string{
+		"a planted repository": func(t *testing.T) string {
+			other := gittest.Empty(t)
+			write(t, filepath.Join(other, "config"), gitproc.RepoConfig+"[uploadpack]\n\tallowAnySHA1InWant = true\n")
+			return filepath.Join(other, "objects")
+		},
+		"a repository of the engine's shape": func(t *testing.T) string {
+			return filepath.Join(gittest.Empty(t), "objects")
+		},
+		"a directory not named objects": func(t *testing.T) string {
+			other := gittest.Empty(t)
+			if err := os.Rename(filepath.Join(other, "objects"), filepath.Join(other, "store")); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(other, "store")
+		},
+		"nowhere": func(t *testing.T) string { return filepath.Join(t.TempDir(), "gone", "objects") },
+	} {
+		t.Run("the cache's objects a link to "+name, func(t *testing.T) {
+			s, c := gittest.Empty(t), gittest.Empty(t)
+			link(t, c, target(t))
+			write(t, alternates(s), c+"/objects\n")
+			refused(t, run(t, s, c), s, gitproc.ShapeObjects, c, true)
+		})
 	}
-	t.Run("the cache's objects a link into a planted repository", func(t *testing.T) {
-		s, c, other := gittest.Empty(t), gittest.Empty(t), gittest.Empty(t)
-		write(t, filepath.Join(other, "config"), gitproc.RepoConfig+"[uploadpack]\n\tallowAnySHA1InWant = true\n")
-		link(t, c, filepath.Join(other, "objects"))
-		write(t, alternates(s), c+"/objects\n")
-		err := run(t, s)
-		if !errors.Is(err, gitproc.ErrRepoShape) || !strings.Contains(err.Error(), resolved(t, other)) {
-			t.Fatalf("%v, want ErrRepoShape naming the repository the link leads to, %s", err, other)
-		}
-		if ranIn(s) {
-			t.Fatal("git ran in the scratch whose alternate leads to a planted repository")
-		}
-	})
-	t.Run("the cache's objects a link to a directory not named objects", func(t *testing.T) {
-		s, c, other := gittest.Empty(t), gittest.Empty(t), gittest.Empty(t)
-		if err := os.Rename(filepath.Join(other, "objects"), filepath.Join(other, "store")); err != nil {
-			t.Fatal(err)
-		}
-		link(t, c, filepath.Join(other, "store"))
-		write(t, alternates(s), c+"/objects\n")
-		if err := run(t, s); !errors.Is(err, gitproc.ErrRepoShape) {
-			t.Fatalf("%v, want ErrRepoShape", err)
-		}
-		if ranIn(s) {
-			t.Fatal("git ran in the scratch whose alternate is no repository's objects")
-		}
-	})
-	t.Run("the cache's objects a link that leads nowhere", func(t *testing.T) {
-		s, c := gittest.Empty(t), gittest.Empty(t)
-		link(t, c, filepath.Join(t.TempDir(), "gone", "objects"))
-		write(t, alternates(s), c+"/objects\n")
-		if err := run(t, s); !errors.Is(err, gitproc.ErrRepoShape) {
-			t.Fatalf("%v, want ErrRepoShape", err)
-		}
-		if ranIn(s) {
-			t.Fatal("git ran in the scratch whose alternate leads nowhere")
-		}
-	})
-	t.Run("the cache's objects a link to a repository of the engine's shape", func(t *testing.T) {
-		s, c, other := gittest.Empty(t), gittest.Empty(t), gittest.Empty(t)
-		link(t, c, filepath.Join(other, "objects"))
-		write(t, alternates(s), c+"/objects\n")
-		if err := run(t, s); err != nil || !ranIn(s) {
-			t.Fatalf("a scratch whose cache links to a well-shaped repository: %v (ran %v)", err, ranIn(s))
-		}
-	})
 	for name, line := range map[string]func(c string) string{
 		"a relative path":    func(string) string { return "objects\n" },
 		"an unclean path":    func(c string) string { return c + "/objects/\n" },
@@ -469,11 +482,101 @@ func TestAnAlternateIsHeldToTheSameShape(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, c := gittest.Empty(t), gittest.Empty(t)
 			write(t, alternates(s), line(c))
-			if err := run(t, s); !errors.Is(err, gitproc.ErrRepoShape) {
-				t.Fatalf("%v, want ErrRepoShape", err)
+			refused(t, run(t, s, c), s, gitproc.ShapeAlternates, s, false)
+		})
+	}
+	t.Run("an alternate the call cannot name", func(t *testing.T) {
+		s := gittest.Empty(t)
+		for name, cmd := range map[string]gitproc.Cmd{
+			"a relative path": {Dir: s, Alternate: "cache.git"},
+			"an unclean path": {Dir: s, Alternate: s + "/../c.git"},
+			"its own Dir":     {Dir: s, Alternate: s},
+			"no Dir":          {Alternate: s},
+		} {
+			cmd.Args, cmd.Class, cmd.Deadline = []string{"rev-parse", "--git-dir"}, gitproc.ClassRead, gitproc.ReadDeadline
+			if _, err := p.Run(t.Context(), cmd); !errors.Is(err, gitproc.ErrInvalid) {
+				t.Errorf("%s: %v, want ErrInvalid", name, err)
 			}
-			if ranIn(s) {
-				t.Fatal("git ran in the scratch whose alternates was refused")
+		}
+	})
+}
+
+// EVERY SHAPE RULE IS ONE THE POOL REFUSES BY, AND CheckShape IS THE POOL'S
+// OWN CHECK: a repository CheckShape refuses under a rule, Run refuses under
+// the same rule before any git starts, and one CheckShape accepts, Run runs
+// in. The cache's sweep holds what it repairs to CheckShape, so the two can
+// never disagree about what the pool runs in.
+func TestCheckShapeIsThePoolsOwnCheck(t *testing.T) {
+	t.Parallel()
+	recorder, calls := gittest.Recording(t)
+	p := newPool(t, gitproc.Options{Path: recorder})
+	for _, rule := range gitproc.ShapeRules {
+		if !rule.Valid() {
+			t.Errorf("%s is in ShapeRules and not Valid", rule)
+		}
+	}
+	if gitproc.ShapeRule("layout").Valid() {
+		t.Error("a rule ShapeRules does not hold is Valid")
+	}
+	spoil := map[gitproc.ShapeRule]func(t *testing.T, bare string){
+		gitproc.ShapeConfig: func(t *testing.T, bare string) {
+			if err := os.Remove(filepath.Join(bare, "config")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		gitproc.ShapeCommondir: func(t *testing.T, bare string) {
+			if err := os.WriteFile(filepath.Join(bare, "commondir"), []byte("..\n"), hostbox.FileMode); err != nil {
+				t.Fatal(err)
+			}
+		},
+		gitproc.ShapeObjects: func(t *testing.T, bare string) {
+			moved := filepath.Join(bare, "objects.d")
+			if err := os.Rename(filepath.Join(bare, "objects"), moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(moved, filepath.Join(bare, "objects")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		gitproc.ShapeAlternates: func(t *testing.T, bare string) {
+			path := filepath.Join(bare, "objects", "info", "alternates")
+			if err := os.MkdirAll(filepath.Dir(path), hostbox.DirMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(gittest.Empty(t)+"/objects\n"), hostbox.FileMode); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for rule := range spoil {
+		if !rule.Valid() {
+			t.Errorf("the spoils name %s, which is no ShapeRule", rule)
+		}
+	}
+	for _, rule := range gitproc.ShapeRules {
+		if spoil[rule] == nil {
+			t.Errorf("%s is a ShapeRule this test spoils no repository by: add its spoil", rule)
+			continue
+		}
+		t.Run(string(rule), func(t *testing.T) {
+			bare := gittest.Empty(t)
+			if err := gitproc.CheckShape(bare, ""); err != nil {
+				t.Fatalf("CheckShape of an empty repository: %v", err)
+			}
+			spoil[rule](t, bare)
+			var checked, ran *gitproc.ShapeError
+			if err := gitproc.CheckShape(bare, ""); !errors.As(err, &checked) || checked.Rule != rule {
+				t.Fatalf("CheckShape = %v, want a refusal under %s", err, rule)
+			}
+			_, err := p.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"rev-parse", "--git-dir"},
+				Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+			if !errors.As(err, &ran) || ran.Rule != rule || ran.Dir != bare || ran.InAlternate {
+				t.Fatalf("Run = %v, want the refusal CheckShape gave, under %s naming %s", err, rule, bare)
+			}
+			for _, call := range calls() {
+				if call.GitDir == bare {
+					t.Fatalf("git ran in the refused repository: %v", call.Args)
+				}
 			}
 		})
 	}

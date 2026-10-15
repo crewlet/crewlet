@@ -170,25 +170,47 @@
 // eviction is decided under the cache's lock and its directory moved into
 // trash/ after it, so no sync on the node waits on a rename.
 //
-// # Damage is repaired by a rebuild, once
+// # Damage is repaired once, in place where nothing is lost
 //
-// A git process the host ran in a cache that git found damaged — a pack or an
-// index it could not read, an object a row names that no pack holds — makes
-// the host [Cache.Rebuild] it: the repository read whole at the log's head
-// into the NEXT incarnation, beside the one its readers hold, which replaces
-// it once converged. Ten requests failing on one damaged cache cost one
-// rebuild, a request that failed on an incarnation already replaced costs
-// none, and a sync queued behind a rebuild that fails is answered by an
-// ordinary round on the incarnation still serving, never with the rebuild's
-// failure. A rebuild is not repeated where it cannot help: damage a rebuild
-// did not end is the object store's or the rows', so an incarnation holding
-// exactly what such a rebuild read is not rebuilt again for a day
-// ([RebuildBackoffCap]) unless something writes into it, and a line of
-// attempts that keep failing waits [RebuildCooldown] after the first and
-// twice as long after each one after it, up to that day — every refusal
-// counted, and logged once a cooldown. A line ends when the asking stops: a
-// repository with no rebuild asked of it for [RebuildQuiet] meets its next
-// failure as new damage.
+// A git process the host ran over a cache that git found damaged — a pack or
+// an index it could not read, an object a row names that no pack holds — or
+// that the pool refused to start because the directory is not the shape the
+// engine writes (gitproc.ErrRepoShape), makes the host [Cache.Rebuild] it,
+// read as [DamageReason] reads the failure; a round whose own git — the peel
+// of the tags it sets — names the same damage is answered the same way
+// (Cache.run), under the same rules. What the repair is follows from what
+// was lost:
+//
+//   - A SHAPE loses nothing — the pool refuses the directory before git reads
+//     a byte of it, so every pack is still whole — and is repaired IN PLACE:
+//     the incarnation is marked to be read whole (markWhole), and the next
+//     round's sweep puts its config right and moves aside whatever the image
+//     never holds there (a commondir, an alternates file, an objects
+//     directory that is not its own), reusing every pack it holds — no GET,
+//     no second copy on disk, and none of a rebuild's refusals, since it
+//     costs a read of the rows. The sweep then holds the directory to the
+//     pool's own check (gitproc.CheckShape), so a shape it did not end — a
+//     directory something keeps writing into — is seen there rather than by
+//     the next request, and only that goes on to a rebuild.
+//   - Everything else is read whole at the log's head into the NEXT
+//     incarnation, beside the one its readers hold, which replaces it once
+//     converged.
+//
+// Ten requests failing on one damaged cache cost one repair, a request that
+// failed on an incarnation already replaced costs none, and a sync queued
+// behind a rebuild that fails is answered by an ordinary round on the
+// incarnation still serving, never with the rebuild's failure. A rebuild is
+// not repeated where it cannot help: damage a rebuild did not end is the
+// object store's or the rows', so an incarnation holding exactly what such a
+// rebuild read is not rebuilt again for a day ([RebuildBackoffCap]) unless
+// something writes into it — and one still refused for its shape always has,
+// since no round makes a directory of another shape — and a line of attempts
+// that keep failing waits [RebuildCooldown] after the first and twice as long
+// after each one after it, up to that day — every refusal counted, and
+// logged once a cooldown. A line ends when the asking stops: a repository
+// with no rebuild asked of it for [RebuildQuiet] meets its next failure as
+// new damage. A check's own sync (below) repairs nothing: the damage it
+// meets is the check's to report.
 //
 // A check ([Cache.AdmitVerify], [Verification.Run]) is the operator's side of
 // it: every pack the rows name hashed against its row as the bundle the push

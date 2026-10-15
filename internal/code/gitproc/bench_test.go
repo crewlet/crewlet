@@ -69,12 +69,12 @@ func BenchmarkRun(b *testing.B) {
 
 	b.Run("rev-parse", func(b *testing.B) {
 		h := sharedHistory(b)
-		benchRevParse(b, p, h.dir, h.tip)
+		benchRevParse(b, p, h.dir, "", h.tip)
 	})
 
 	b.Run("rev-parse-in-scratch", func(b *testing.B) {
 		h := sharedHistory(b)
-		benchRevParse(b, p, scratchOver(b, h.dir), h.tip)
+		benchRevParse(b, p, scratchOver(b, h.dir), h.dir, h.tip)
 	})
 
 	b.Run("cat-file-batch-check-1000", func(b *testing.B) {
@@ -244,10 +244,11 @@ func BenchmarkIndexPack(b *testing.B) {
 	h := sharedHistory(b)
 
 	b.Run("new-objects", func(b *testing.B) {
-		benchReceiveIndex(b, p, h, scratchOver(b, gittest.Empty(b)))
+		empty := gittest.Empty(b)
+		benchReceiveIndex(b, p, h, scratchOver(b, empty), empty)
 	})
 	b.Run("known-objects", func(b *testing.B) {
-		benchReceiveIndex(b, p, h, scratchOver(b, h.dir))
+		benchReceiveIndex(b, p, h, scratchOver(b, h.dir), h.dir)
 	})
 }
 
@@ -255,10 +256,10 @@ func BenchmarkIndexPack(b *testing.B) {
 // of the history's pack in scratch, the pack it wrote removed after every
 // operation with the timer stopped, so each one writes the pack afresh into
 // a directory holding nothing else.
-func benchReceiveIndex(b *testing.B, p *gitproc.Pool, h *history, scratch string) {
+func benchReceiveIndex(b *testing.B, p *gitproc.Pool, h *history, scratch, alternate string) {
 	b.Helper()
 	c := gitproc.Cmd{
-		Dir: scratch,
+		Dir: scratch, Alternate: alternate,
 		Args: []string{"index-pack", "--stdin", fmt.Sprintf("--pack_header=%d,%d", h.packVersion, h.packObjects),
 			"--keep=receive-pack", "--strict", "--fix-thin"},
 		Config: []gitproc.KV{{Key: "pack.writeReverseIndex", Value: "true"}, {Key: "pack.indexVersion", Value: "2"}},
@@ -333,9 +334,10 @@ func revParse(dir, id string) gitproc.Cmd {
 }
 
 // benchRevParse is BenchmarkRun's rev-parse arms: id peeled in dir.
-func benchRevParse(b *testing.B, p *gitproc.Pool, dir, id string) {
+func benchRevParse(b *testing.B, p *gitproc.Pool, dir, alternate, id string) {
 	b.Helper()
 	c := revParse(dir, id)
+	c.Alternate = alternate
 	for b.Loop() {
 		res, err := p.Run(b.Context(), c)
 		if err != nil {
