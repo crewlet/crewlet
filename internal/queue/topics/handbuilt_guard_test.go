@@ -100,6 +100,9 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent.alice.inbox", "crewlet.agent.", "crewlet.events.>",
 		"crewlet.notifications.inbound", "crewlet.config.>", "dlq.x.y",
 		"agent-", "agent-alice", "agent-alice-control",
+		// A seat suffix, written as the literal a handle is concatenated
+		// with or after the verb a handle is formatted into.
+		".inbox", ".reflect", "%s.control", "%v.reflect", "%s.inbox.>",
 		// The state logs: a leaf, a wildcard, and a format string a
 		// hand-built subject would come from.
 		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
@@ -142,6 +145,12 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"CREWLET_LOG_FILE",
 		"crewlet.log",
 		"crewlet.tracker.logged",
+		// Dotted names that merely END in a seat suffix: a span name, and
+		// the shapes beside it. A suffix completes a subject only when it
+		// is appended to a handle, and a handle is never a literal word.
+		"learning.reflect",
+		"agent.turn.inbox",
+		"tool.control",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",
@@ -346,6 +355,17 @@ func violation(markers markerSet, value string) (string, bool) {
 // This NARROWS the matcher, so every literal it flagged before that really
 // is a subject is still flagged: the positives above cover each shape.
 func containsSubject(value, marker string) bool {
+	// A marker that BEGINS with a separator is a seat's suffix (`.inbox`,
+	// `.control`, `.reflect`), and a suffix completes a subject only where
+	// it is appended to a HANDLE: as the very literal a handle is
+	// concatenated with, or straight after the verb a handle is formatted
+	// into. Matched anywhere else, it reads every dotted name that happens
+	// to end the same way as a subject — `learning.reflect`, a span name,
+	// was the first. A subject written out in full is still caught, by the
+	// prefix it starts with.
+	if strings.HasPrefix(marker, ".") {
+		return value == marker || afterVerb(value, marker)
+	}
 	// A marker that already ENDS in a separator carries its own boundary —
 	// `dlq.` cannot be the start of a longer word — so containment is the
 	// whole test for it.
@@ -363,6 +383,25 @@ func containsSubject(value, marker string) bool {
 		}
 		switch value[end] {
 		case '.', '>', '*':
+			return true
+		}
+		at = end
+	}
+}
+
+// afterVerb reports a suffix marker written directly after a format verb
+// (`%s.inbox`), where whatever is formatted in front of it is a handle, and
+// followed by what may continue a subject.
+func afterVerb(value, marker string) bool {
+	for at := 0; ; {
+		i := strings.Index(value[at:], marker)
+		if i < 0 {
+			return false
+		}
+		start, end := at+i, at+i+len(marker)
+		verb := start >= 2 && value[start-2] == '%' && strings.ContainsRune("sqvd", rune(value[start-1]))
+		boundary := end == len(value) || strings.ContainsRune(".>*", rune(value[end]))
+		if verb && boundary {
 			return true
 		}
 		at = end
