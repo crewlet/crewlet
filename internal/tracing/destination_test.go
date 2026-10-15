@@ -109,10 +109,7 @@ func TestTheExporterSendsWhatTheResolverResolved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shutdown, err := Configure(context.Background(), Options{Env: envOf(env), Recorder: rec})
-	if err != nil {
-		t.Fatalf("Configure: %v", err)
-	}
+	shutdown := install(t, Options{Env: envOf(env), Recorder: rec})
 	_, span := Start(context.Background(), "test", "an.operation")
 	span.End()
 	// Something for the metric export to carry, so the flush has a reason
@@ -179,14 +176,11 @@ func TestAnUpperCaseHTTPSEndpointIsExportedOverTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shutdown, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
+	shutdown := install(t, Options{Env: envOf(map[string]string{
 		otlpenv.EndpointVar:           "HTTPS://" + u.Host,
 		otlpenv.CertificateVar:        ca,
 		otlpenv.Metrics.ExporterVar(): "none",
 	})})
-	if err != nil {
-		t.Fatalf("Configure: %v", err)
-	}
 	_, span := Start(context.Background(), "test", "an.operation")
 	span.End()
 	if err := shutdown(context.Background()); err != nil {
@@ -205,14 +199,11 @@ func TestAnUpperCaseHTTPSEndpointIsExportedOverTLS(t *testing.T) {
 // Destination.Declined, and a span reaches /v1/traces below.
 func TestADeclinedSignalIsNotExported(t *testing.T) {
 	c, server := newCollector(t)
-	shutdown, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
+	shutdown := install(t, Options{Env: envOf(map[string]string{
 		otlpenv.EndpointVar:           server.URL,
 		otlpenv.Traces.ExporterVar():  "none",
 		otlpenv.Metrics.ExporterVar(): "NONE",
 	})})
-	if err != nil {
-		t.Fatalf("Configure: %v", err)
-	}
 	ctx, span := Start(context.Background(), "test", "an.operation")
 	span.End()
 	if err := shutdown(context.Background()); err != nil {
@@ -401,10 +392,7 @@ func TestTheExporterHonoursTheCertificateAndCompressionAsTheSDKDoes(t *testing.T
 
 	t.Run("the engine from the resolver", func(t *testing.T) {
 		before := len(c.at("/v1/traces"))
-		shutdown, err := Configure(context.Background(), Options{Env: envOf(env)})
-		if err != nil {
-			t.Fatalf("Configure: %v", err)
-		}
+		shutdown := install(t, Options{Env: envOf(env)})
 		_, span := Start(context.Background(), "test", "an.operation")
 		span.End()
 		if err := shutdown(context.Background()); err != nil {

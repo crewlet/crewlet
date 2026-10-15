@@ -21,23 +21,19 @@ import (
 // every development deployment, so the code path nobody tests is the one
 // everybody runs.
 //
-// NOT PARALLEL: Configure replaces the process's global providers and its
-// flush terminates them, so it shares a process with every other test here
-// that starts a span.
+// NOT PARALLEL: Configure replaces the process's global providers, so it
+// shares a process with every other test here that starts a span — which is
+// why it installs through [install], whose cleanup puts them back.
 func TestTheProviderIsInstalledWithoutAnEndpoint(t *testing.T) {
 	rec, err := metrics.New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	flush, err := Configure(t.Context(), Options{
+	install(t, Options{
 		NodeID:   "node-a",
 		Env:      func(string) string { return "" },
 		Recorder: rec,
 	})
-	if err != nil {
-		t.Fatalf("Configure with no endpoint: %v", err)
-	}
-	defer func() { _ = flush(t.Context()) }()
 
 	// A METER THAT WORKS, not the API's no-op. The observable check is
 	// that building an instrument through the global provider succeeds:

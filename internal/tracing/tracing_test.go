@@ -24,22 +24,70 @@ func envOf(kv map[string]string) func(string) string {
 	return func(name string) string { return kv[name] }
 }
 
-// configure installs a provider for one test and tears it down after.
-//
-// TracerProvider.Shutdown is TERMINAL — a provider that has been shut down
-// silently drops every later span — so a test that forgot this would not fail,
-// it would quietly stop testing anything.
+// configure installs a provider for one test and tears it down after: see
+// [install], which every test that installs a provider goes through.
 func configure(t *testing.T, kv map[string]string) {
 	t.Helper()
-	shutdown, err := Configure(context.Background(), Options{Env: envOf(kv), NodeID: "node-a"})
+	install(t, Options{Env: envOf(kv), NodeID: "node-a"})
+}
+
+// install runs [Configure] for one test, and after it shuts that provider
+// down AND PUTS BACK the globals it replaced. It hands back the shutdown for a
+// test whose subject is the flush; the cleanup runs it only if the test did
+// not.
+//
+// The shutdown is not enough on its own. TracerProvider.Shutdown is TERMINAL —
+// a provider that has been shut down hands out no-op tracers, whose Start
+// opens no span and passes the parent's span context straight through — and
+// Configure installs its provider as the process global. Left there, every
+// later test in the package that opens a span without installing one runs on
+// a terminated provider and tests nothing: a span it believes it opened is
+// the zero context, or the parent it restored. Two such tests were silently
+// vacuous in package order while passing when run alone.
+//
+// So the tracer provider, the meter provider and the root rule are restored
+// together, as Configure's commit installs them. Cleanups run last in, first
+// out, so a test that installs twice unwinds to the provider it started on,
+// and TestMain holds the package to ending on the provider it began with.
+func install(t *testing.T, opts Options) Shutdown {
+	t.Helper()
+	tracers, meters, rule := otel.GetTracerProvider(), otel.GetMeterProvider(), root.Load()
+	shutdown, err := Configure(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
+	var done atomic.Bool
+	once := func(ctx context.Context) error {
+		if done.Swap(true) {
+			return nil
+		}
+		return shutdown(ctx)
+	}
 	t.Cleanup(func() {
-		if err := shutdown(context.Background()); err != nil {
+		if err := once(context.Background()); err != nil {
 			t.Errorf("shutdown: %v", err)
 		}
+		otel.SetMeterProvider(meters)
+		otel.SetTracerProvider(tracers)
+		root.Store(rule)
 	})
+	return once
+}
+
+// A TEST THAT CONFIGURES LEAVES A WORKING PROVIDER BEHIND IT, so a later test
+// that opens a span without configuring opens a real one.
+//
+// Mutation: stop restoring the globals in configure's cleanup and the span
+// opened after the subtest is the zero context of a terminated provider.
+func TestConfigureLeavesAWorkingProviderBehind(t *testing.T) {
+	t.Run("configures", func(t *testing.T) { configure(t, nil) })
+
+	_, span := Start(context.Background(), "test", "after")
+	defer span.End()
+	if sc := span.SpanContext(); !sc.IsValid() || !span.IsRecording() {
+		t.Fatalf("a span opened after a configured test is valid=%v recording=%v — "+
+			"the provider it left installed is terminated", sc.IsValid(), span.IsRecording())
+	}
 }
 
 // The load-bearing property of the whole design: with NO collector configured,
@@ -379,10 +427,7 @@ func TestASamplerRatioOfZeroIsRespected(t *testing.T) {
 // what woke the drain, and a flush that inherited it would return instantly
 // having exported nothing.
 func TestShutdownFlushesUnderACancelledContext(t *testing.T) {
-	shutdown, err := Configure(context.Background(), Options{Env: envOf(nil)})
-	if err != nil {
-		t.Fatalf("Configure: %v", err)
-	}
+	shutdown := install(t, Options{Env: envOf(nil)})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -396,13 +441,14 @@ func TestShutdownFlushesUnderACancelledContext(t *testing.T) {
 // connects lazily and retries, and refusing to start a company because a
 // telemetry backend is down would make tracing a liability.
 func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
-	shutdown, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
+	// install fails the test if Configure refuses: an unreachable
+	// collector must not be why a boot fails.
+	shutdown := install(t, Options{Env: envOf(map[string]string{
 		// Nothing listens here, and nothing should try until a span ends.
 		otlpenv.EndpointVar: "http://127.0.0.1:1",
 	})})
-	if err != nil {
-		t.Fatalf("an unreachable collector failed the boot: %v", err)
-	}
+	// Shut down here rather than in the cleanup, whose error is a failure:
+	// an export to nothing is expected to fail, and that is not the case.
 	t.Cleanup(func() { _ = shutdown(context.Background()) })
 
 	ctx, span := Start(context.Background(), "test", "op")
@@ -428,9 +474,9 @@ func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
 // identity check — the global is the half-built provider nothing can flush.
 // Store the root rule there too, and it goes red on the sampler check.
 func TestAFailedConfigureLeavesTheInstalledProviderAlone(t *testing.T) {
-	// Establish the precondition explicitly: a working provider, installed.
-	// Every test in this file that needs one does the same, because the
-	// previous test's cleanup leaves the global terminated.
+	// Establish the precondition explicitly: a working provider, installed
+	// by this test rather than inherited, so the identity check below is
+	// against a provider this case knows is live.
 	configure(t, nil)
 	before, beforeRoot := otel.GetTracerProvider(), rootSampler()
 
