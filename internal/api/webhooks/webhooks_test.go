@@ -35,19 +35,25 @@ import (
 // window: a suite on the real clock would assert about the window's edges by
 // sleeping.
 //
-// # RELATIVE TO NOW, and this is why
+// # IT NEVER REACHES THE EVENT LOG, and it is relative to now anyway
 //
-// It used to be an absolute date, and that is a TIME BOMB rather than a
-// fixture: every delivery here is written into the event log with THIS clock's
-// instant, and the log is read back over a window the store measures against
-// the WALL clock ([store.EventHistory], thirty days). A receiver's clock can
-// be pinned and the store's cannot — deliberately, so that a row's timestamp,
-// the read floor and the retention sweep cannot disagree about what "now" is.
+// This clock is what the receiver VERIFIES against — a replay window, a Forge
+// token's expiry, a delivery claim — and the time it writes into a Forge body
+// that carries none, but never a row's time. A delivery's ROW is the record
+// the receiver publishes, which [events.New] stamps with the wall clock, and
+// [edge.rows] reads the log back at the wall clock too — so the log's history
+// floor ([store.EventHistory], thirty days before the instant a read is asked
+// at) is measured on the clock the rows carry, and no value of this pin can
+// put a row below it.
 //
-// So an absolute date works until thirty days after the day somebody wrote
-// it, and then fails for ever, on every machine at once, with no change to
-// any file. That is exactly what happened: the rows were written, every
-// assertion read `0 rows`, and nothing in the failure named a clock.
+// It is relative rather than a literal date because that was not always so.
+// When the receiver appended its own row, stamped with THIS clock, an
+// absolute date was a TIME BOMB rather than a fixture: it worked until
+// thirty days after the day somebody wrote it and then failed for ever, on
+// every machine at once, with no change to any file — the rows were written,
+// every assertion read `0 rows`, and nothing in the failure named a clock. A
+// pin that stays within an hour of the run cannot do that again, whichever
+// clock a row is next stamped with.
 //
 // TRUNCATED TO THE HOUR so a rendered timestamp is stable within one run, and
 // an hour in the PAST rather than at `now` so no assertion here depends on a
