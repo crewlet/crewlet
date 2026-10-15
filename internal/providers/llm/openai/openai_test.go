@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1776,5 +1777,42 @@ func TestAUserMessageAfterToolResultsFollowsThem(t *testing.T) {
 	}
 	if note := messages[4].(map[string]any); note["content"] != "a note from the founder" {
 		t.Errorf("the note is %v", note)
+	}
+}
+
+// A QUERY OR FRAGMENT IN base_url IS NEVER SENT — openai-go's half of what
+// anthropic.TestABaseURLsQueryIsNeverSent pins, and the reason
+// config.CheckBaseURL refuses one on an openai, openai-compatible or embeddings
+// entry: an Azure-style `?api-version=…` never reaches the endpoint.
+func TestABaseURLsQueryIsNeverSent(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sent = append(sent, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"1","object":"chat.completion","created":1,"model":"gpt-test",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],`+
+			`"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer srv.Close()
+	for _, suffix := range []string{"/gw?api-version=2025", "/gw/?key=k", "/gw#frag"} {
+		mu.Lock()
+		sent = nil
+		mu.Unlock()
+		p := newProvider(t, srv.URL+suffix, nil)
+		if _, err := p.Complete(t.Context(), userTurn("hi")); err != nil {
+			t.Fatalf("%s: Complete: %v", suffix, err)
+		}
+		mu.Lock()
+		got := slices.Clone(sent)
+		mu.Unlock()
+		if want := []string{"/gw/chat/completions?"}; !slices.Equal(got, want) {
+			t.Errorf("base_url ending %q sent %q, want %q: the SDK now keeps part of a "+
+				"base_url's query or fragment, so config.CheckBaseURL's refusal is "+
+				"worth revisiting", suffix, got, want)
+		}
 	}
 }

@@ -488,3 +488,55 @@ func TestBuildAnthropicIsTheBuildASeatGets(t *testing.T) {
 		t.Error("built an openai entry as an anthropic provider")
 	}
 }
+
+// A RESOLVED base_url IS HELD TO THE RULE ITS TEXT WAS. A `${VAR}` is judged at
+// validation only around its references, so a query the VARIABLE carries is
+// first seen here, and the SDK would drop it without a word (see
+// config.CheckBaseURL). The build is refused naming the provider and the
+// variable, never the value, since a query is where a key gets written. The
+// embeddings provider is held to the same rule; userinfo, which is sent, builds.
+//
+// Mutation: drop the resolvedBaseURL check from resolveEndpoint, or from
+// buildEmbedder, and that half builds.
+func TestAResolvedBaseURLIsHeldToTheWrittenRule(t *testing.T) {
+	t.Parallel()
+	const secret = "sk-in-the-query"
+	r := tierB(map[string]string{
+		"LLM_BASE_URL":   "https://gw.example.com/v1?key=" + secret,
+		"LLM_NO_SCHEME":  "gw.example.com/v1",
+		"LLM_USERINFO":   "https://user:pass@gw.example.com/v1",
+		"EMBED_BASE_URL": "https://embed.example.com/v1#" + secret,
+	})
+	for _, kind := range []config.LLMProviderType{config.LLMAnthropic, config.LLMOpenAI, config.LLMOpenAICompatible} {
+		for variable, want := range map[string]string{"LLM_BASE_URL": "query", "LLM_NO_SCHEME": "http://"} {
+			_, _, err := buildProvider("gw", config.LLMProvider{
+				Type: kind, Model: "claude-opus-5-5", BaseURL: "${" + variable + "}",
+			}, r)
+			if err == nil {
+				t.Errorf("%s: built over a base_url whose %s holds a %s", kind, variable, want)
+				continue
+			}
+			for _, named := range []string{`"gw"`, variable, want} {
+				if !strings.Contains(err.Error(), named) {
+					t.Errorf("%s: %q does not name %s", kind, err, named)
+				}
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "gw.example.com") {
+				t.Errorf("%s: the refusal repeats the resolved value: %v", kind, err)
+			}
+		}
+		if _, _, err := buildProvider("gw", config.LLMProvider{
+			Type: kind, Model: "claude-opus-5-5", BaseURL: "${LLM_USERINFO}",
+		}, r); err != nil {
+			t.Errorf("%s: userinfo, which the SDK sends as Basic credentials, was refused: %v", kind, err)
+		}
+	}
+
+	e := &Engine{environ: config.MapSource{"EMBED_BASE_URL": "https://embed.example.com/v1#" + secret}}
+	_, err := e.buildEmbedder(companyWith(t, strings.Replace(fmt.Sprintf(embeddingDoc, 1536),
+		"    api_key: sk-embed\n", "    api_key: sk-embed\n    base_url: ${EMBED_BASE_URL}\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "EMBED_BASE_URL") || strings.Contains(err.Error(), secret) {
+		t.Errorf("an embeddings base_url resolving to a fragment: %v, want a refusal naming "+
+			"EMBED_BASE_URL and not the value", err)
+	}
+}

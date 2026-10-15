@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -645,8 +646,67 @@ func (l *LLMProvider) validate(path Path) error {
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible provider needs the endpoint to talk to")
 	}
+	if err := CheckBaseURL(l.BaseURL); err != nil {
+		p.add(at(path, "base_url"), ErrUnknownValue, "%v", err)
+	}
 	return p.err()
 }
+
+// CheckBaseURL holds a provider's `base_url` — an LLM entry's or the
+// embeddings provider's — to what the vendor SDK behind it can send: an
+// http:// or https:// URL with a host, and NO QUERY OR FRAGMENT.
+//
+// THE QUERY IS NEVER SENT, and nothing says so. Both SDKs resolve each
+// request's path against the base URL — the Anthropic SDK's and openai-go's
+// alike, measured against a server (anthropic.TestABaseURLsQueryIsNeverSent,
+// openai.TestABaseURLsQueryIsNeverSent) — and resolving a relative reference
+// replaces the base's query and drops its fragment (RFC 3986 §5.2.2). So an
+// `?api-version=…` or a gateway key written as `?key=…` reaches the endpoint
+// as nothing at all, and every call fails, or is answered under a default, at
+// an endpoint whose configuration looks complete. A fragment is never part of
+// a request in the first place. Userinfo IS sent — as Basic credentials, by
+// Go's HTTP client — and a gateway may take it that way, so it is allowed.
+//
+// A value written with ${VAR} references is judged on what it says around
+// them — a `?` or `#` in the text itself — because what a variable holds is
+// unknown until it resolves; the engine holds the resolved value to the whole
+// rule when it builds the provider, where a variable's value is first known.
+//
+// The error names neither the value nor its query, because a query is exactly
+// where a credential gets written into a URL.
+func CheckBaseURL(raw string) error {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	if envref.Has(s) {
+		// Every reference removed, the text the document itself wrote.
+		written, _ := envref.Expand(s, func(string) (string, bool) { return "", true })
+		if strings.ContainsAny(written, "?#") {
+			return errBaseURLQuery
+		}
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("is not an http:// or https:// URL with a host, so no call " +
+			"on this provider could be sent: write the endpoint in full, scheme " +
+			"included (https://gateway.example.com)")
+	}
+	if u.RawQuery != "" || u.ForceQuery || strings.Contains(s, "#") {
+		return errBaseURLQuery
+	}
+	return nil
+}
+
+// errBaseURLQuery is [CheckBaseURL]'s refusal of a query or fragment, which
+// says what to do instead: there is no field that adds a query to a provider's
+// requests, so what the query carried belongs where the endpoint also reads it.
+var errBaseURLQuery = errors.New("carries a query or a fragment, which is never sent: the " +
+	"provider's SDK resolves each request's path against base_url, and that drops both. " +
+	"Remove it. A key the endpoint takes belongs in api_keys (or api_key), which is sent " +
+	"as the provider's own key header; an endpoint that will only read a query " +
+	"parameter needs a proxy in front of it that adds one")
 
 // llmWarnings is every LLM entry that is valid and worth a second look, in
 // declaration order.
@@ -1993,6 +2053,9 @@ func (e *EmbeddingProvider) validate(path Path) error {
 	if e.Type == EmbeddingOpenAICompatible && strings.TrimSpace(e.BaseURL) == "" {
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible embedding provider needs the endpoint to talk to")
+	}
+	if err := CheckBaseURL(e.BaseURL); err != nil {
+		p.add(at(path, "base_url"), ErrUnknownValue, "%v", err)
 	}
 	return p.err()
 }

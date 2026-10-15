@@ -23,6 +23,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -154,6 +155,22 @@ func BuildAnthropic(key string, spec config.LLMProvider, r *config.Resolver) (*a
 	return buildAnthropic(key, spec, e)
 }
 
+// resolvedBaseURL holds a provider's base_url AS RESOLVED to the rule its
+// written text was held to at validation ([config.CheckBaseURL]), because a
+// value a `${VAR}` carries is first known here. The error names the variables
+// it was resolved from and never the value: a query is exactly where a
+// credential gets written into a URL.
+func resolvedBaseURL(written, resolved string) error {
+	err := config.CheckBaseURL(resolved)
+	if err == nil {
+		return nil
+	}
+	if names := envref.Names(written); len(names) > 0 {
+		return fmt.Errorf("base_url, resolved from %s, %w", strings.Join(names, ", "), err)
+	}
+	return fmt.Errorf("base_url %w", err)
+}
+
 // endpoint is what every entry resolves before its backend is built: the
 // values a Tier B document may write as a `${VAR}`, resolved, and the
 // config's defaults applied.
@@ -230,6 +247,12 @@ func resolveEndpoint(key string, spec config.LLMProvider, r *config.Resolver) (e
 			"engine: provider %q: %s. An openai-compatible entry needs an endpoint "+
 				"— without one every request would go to api.openai.com under "+
 				"this entry's own key", key, where)
+	}
+	// THE RESOLVED ENDPOINT, held to the rule the document's text already
+	// was (config.CheckBaseURL): a variable's value is first known here, and
+	// a query in it would otherwise reach the SDK, which never sends one.
+	if err := resolvedBaseURL(spec.BaseURL, baseURL); err != nil {
+		return endpoint{}, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
 	return endpoint{
 		model: model, baseURL: baseURL, keys: keys, timeout: timeout,
