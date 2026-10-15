@@ -101,31 +101,53 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 		timeout: js.Options().DefaultTimeout}, nil
 }
 
-// Last answers the newest message on subject, or [ErrNoMessage].
+// Last answers the newest message on subject, or [ErrNoMessage]. Subject may
+// be a FILTER — `$O.<bucket>.M.>` — and the answer is then the newest message
+// on any subject it matches.
 func (l *Leader) Last(ctx context.Context, subject string) (Message, error) {
 	msg, err := l.get(ctx, server.JSApiMsgGetRequest{LastFor: subject})
 	if err != nil {
 		return Message{}, err
 	}
-	if msg.Subject != subject {
-		// A LEADER THAT ANSWERED ABOUT ANOTHER SUBJECT did not do what it
-		// was asked, and a caller taking its message as this subject's
-		// would read a value the subject never held.
-		return Message{}, fmt.Errorf("jsapi: the leader of %s answered with %q for %q",
-			l.stream, msg.Subject, subject)
-	}
-	return msg, nil
+	return l.on(msg, subject)
 }
 
-// First answers the oldest message on subject, or [ErrNoMessage].
+// First answers the oldest message on subject, or [ErrNoMessage]; subject may
+// be a filter, as [Leader.Last]'s may.
 func (l *Leader) First(ctx context.Context, subject string) (Message, error) {
-	msg, err := l.get(ctx, server.JSApiMsgGetRequest{NextFor: subject})
+	return l.Next(ctx, subject, 0)
+}
+
+// Next answers the oldest message on subject at or after the sequence from,
+// or [ErrNoMessage] where the leader holds none there; subject may be a
+// filter, as [Leader.Last]'s may.
+//
+// It is the one question a reader of a REPLICA's copy has to ask before it
+// takes the end of that copy for the end of the stream: a consumer is made on
+// whichever replica the broker places it, one still catching up included, and
+// such a replica says it has nothing more where the leader has.
+func (l *Leader) Next(ctx context.Context, subject string, from uint64) (Message, error) {
+	msg, err := l.get(ctx, server.JSApiMsgGetRequest{Seq: from, NextFor: subject})
 	if err != nil {
 		return Message{}, err
 	}
-	if msg.Subject != subject {
-		// For [Leader.Last]'s reason: a message of another subject is
-		// not this one's oldest.
+	if msg.Sequence < from {
+		// A LEADER THAT ANSWERED FROM BEFORE where it was asked to look
+		// did not do what it was asked, and a reader taking its message
+		// for the next one would take one it already had.
+		return Message{}, fmt.Errorf("jsapi: the leader of %s answered with sequence %d for "+
+			"the next message on %q from %d", l.stream, msg.Sequence, subject, from)
+	}
+	return l.on(msg, subject)
+}
+
+// on is msg, which the leader answered for subject — refused unless subject
+// names or matches the subject msg is on.
+func (l *Leader) on(msg Message, subject string) (Message, error) {
+	if !server.SubjectMatchesFilter(msg.Subject, subject) {
+		// A LEADER THAT ANSWERED ABOUT ANOTHER SUBJECT did not do what it
+		// was asked, and a caller taking its message as this subject's
+		// would read a value the subject never held.
 		return Message{}, fmt.Errorf("jsapi: the leader of %s answered with %q for %q",
 			l.stream, msg.Subject, subject)
 	}

@@ -66,7 +66,13 @@
 //     message it asks its consumer, and makes it again if it never had the
 //     pull — which a cluster drops, routinely, at a consumer's creation —
 //     and at every later one it waits again, so the client sends a pull it
-//     skipped.
+//     skipped. And a consumer's end is its REPLICA's end, which the read
+//     holds to the LEADER's ([reading]): the broker places a consumer on any
+//     replica it counts as up, one still catching up included, so a get
+//     ending short of its object's size, a walk short of its offset and a
+//     listing short of the newest metadata the leader held when it began
+//     ask the leader what follows — the get and the walk going on from a
+//     consumer made again, the listing failing.
 //   - A DELETE IS A PURGE AND NOTHING ELSE: of the object's metadata, then
 //     of its pieces. The library's delete writes a delete MARKER in the
 //     metadata's place, which no later put of the name ever replaces — the
@@ -139,6 +145,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -640,48 +647,116 @@ func pulls(batch int) []jetstream.PullMessagesOpt {
 // the read's own stall or its caller's context ended.
 var errQuiet = errors.New("natsobj: no message yet")
 
+// errBehind is a read the broker kept placing on a replica behind the
+// stream's leader for as long as a read may wait for a message.
+var errBehind = errors.New("natsobj: every consumer the broker made for the read was on " +
+	"a replica behind the stream's leader")
+
+// everything is the [reading.through] of a read every message of which the
+// leader holds on its filter is its own: an object's pieces, every one of
+// them stored before the metadata a get read from the leader.
+const everything = math.MaxUint64
+
 // reading is one ordered consumer being read — a get's, a seek's or a
 // listing's — each message waited for no longer than stall, or for as long as
 // the caller's context allows where stall is zero.
+//
+// # THE END OF A REPLICA'S COPY IS NOT THE END OF THE STREAM
+//
+// The broker makes an ordered consumer on ONE of the stream's replicas, chosen
+// at random among those it counts as up — and a member just back from a
+// restart, still catching up, is up. A consumer there counts what follows each
+// message from that replica's copy, so its "nothing follows" is the end of
+// what the replica has stored, and the messages it is still catching up are
+// not delivered to a consumer made before they landed until somebody pulls
+// again. Taken for the end of the stream, that answered an object a replica
+// held none of as one with no pieces — read back as zero bytes, which the
+// store calls DAMAGED, a definite answer — a ranged read past what it held as
+// a range past the object's end, and a listing as one missing every object
+// written while the member was down. So a consumer's end is taken as the end
+// only where it is the end the read wanted (an object's last byte) or where
+// the stream's LEADER agrees ([reading.caughtUp]); otherwise the read goes on
+// from a consumer made again ([reading.resume]), which the broker places
+// afresh.
 type reading struct {
-	b     *Backend
-	cons  jetstream.Consumer
-	msgs  jetstream.MessagesContext
-	stall time.Duration
+	b *Backend
+	// filter is the subject the read is over, and cfg how its consumer is
+	// made — the filter included — so a consumer made again is made alike.
+	filter string
+	cfg    jetstream.OrderedConsumerConfig
+	batch  int
+	stall  time.Duration
+	// through is the newest sequence the read must reach on its filter:
+	// what the leader held there when a listing began — a message stored
+	// after it is no message the listing owes anybody — or [everything].
+	through uint64
+
+	cons jetstream.Consumer
+	msgs jetstream.MessagesContext
 }
 
-// consume makes an ordered consumer over cfg and reads it, batch messages in
-// hand, answering it with its first message — or no reading at all where the
-// consumer has nothing to deliver.
+// consume makes an ordered consumer over filter as cfg says and reads it,
+// batch messages in hand, answering it with its first message — or no reading
+// at all where the stream's leader holds nothing on filter that the read must
+// reach (see [reading.open]).
+func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.OrderedConsumerConfig,
+	batch int, stall time.Duration, through uint64) (*reading, jetstream.Msg, error) {
+
+	cfg.FilterSubjects = []string{filter}
+	r := &reading{b: b, filter: filter, cfg: cfg, batch: batch, stall: stall, through: through}
+	msg, err := r.open(ctx)
+	if err != nil || msg == nil {
+		return nil, nil, err
+	}
+	return r, msg, nil
+}
+
+// open makes r's consumer and answers its first message, or none where the
+// stream's leader holds nothing on r's filter that r must reach.
 //
 // THE FIRST MESSAGE IS THE ONE A CLUSTER CAN DROP THE PULL FOR ([quietWait]):
 // one that has not come in a second is asked about, and a consumer that never
 // got the pull is dropped and made again, up to [firstPullRemakes] times —
 // each with a whole stall of its own, since nothing the read made had begun.
-func (b *Backend) consume(ctx context.Context, cfg jetstream.OrderedConsumerConfig, batch int,
-	stall time.Duration) (*reading, jetstream.Msg, error) {
-
-	for remade := 0; ; remade++ {
-		cons, err := b.stream.OrderedConsumer(ctx, cfg)
+//
+// A CONSUMER WITH NOTHING TO DELIVER IS ASKED ABOUT TOO ([reading.caughtUp]):
+// where the leader holds what it should have delivered, it was made on a
+// replica behind the leader, and is dropped and made again — at once the
+// first time, since the broker places a new consumer afresh and one replica
+// behind is one of three, then a [quietWait] apart, while the replica catches
+// up — until the read has been behind for [objstore.ReadStall], the longest it
+// may wait for any one message, when it fails ([errBehind]).
+func (r *reading) open(ctx context.Context) (jetstream.Msg, error) {
+	var behind time.Time
+	for remade := 0; ; {
+		cons, err := r.b.stream.OrderedConsumer(ctx, r.cfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if info := cons.CachedInfo(); info == nil || info.NumPending == 0 {
-			b.drop(ctx, cons)
-			return nil, nil, nil
+			r.b.drop(ctx, cons)
+			done, cerr := r.caughtUp(ctx, r.after())
+			if cerr != nil || done {
+				return nil, cerr
+			}
+			if lerr := lagging(ctx, &behind); lerr != nil {
+				return nil, lerr
+			}
+			continue
 		}
-		msgs, err := cons.Messages(pulls(batch)...)
+		msgs, err := cons.Messages(pulls(r.batch)...)
 		if err != nil {
-			b.drop(ctx, cons)
-			return nil, nil, err
+			r.b.drop(ctx, cons)
+			return nil, err
 		}
-		r := &reading{b: b, cons: cons, msgs: msgs, stall: stall}
+		r.cons, r.msgs = cons, msgs
 		wait, cancel := r.waiting(ctx)
 		msg, err := r.quietly(ctx, wait)
 		if errors.Is(err, errQuiet) {
 			if remade < firstPullRemakes && r.unpulled(wait) {
 				cancel()
 				r.stop(ctx)
+				remade++
 				continue
 			}
 			msg, err = r.from(ctx, wait, wait)
@@ -689,10 +764,76 @@ func (b *Backend) consume(ctx context.Context, cfg jetstream.OrderedConsumerConf
 		cancel()
 		if err != nil {
 			r.stop(ctx)
-			return nil, nil, err
+			return nil, err
 		}
-		return r, msg, nil
+		return msg, nil
 	}
+}
+
+// lagging is the pause before a consumer is made again after one was made on
+// a replica behind the stream's leader, since behind: none the first time,
+// [quietWait] after that, and [errBehind] once the read has been behind for
+// [objstore.ReadStall].
+func lagging(ctx context.Context, behind *time.Time) error {
+	if behind.IsZero() {
+		*behind = time.Now()
+		return nil
+	}
+	if time.Since(*behind) >= objstore.ReadStall {
+		return fmt.Errorf("%w for %v", errBehind, objstore.ReadStall)
+	}
+	pause := time.NewTimer(quietWait)
+	defer pause.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-pause.C:
+		return nil
+	}
+}
+
+// after is the sequence r's consumer begins past: the one before its start
+// sequence, or none.
+func (r *reading) after() uint64 {
+	if r.cfg.DeliverPolicy == jetstream.DeliverByStartSequencePolicy && r.cfg.OptStartSeq > 0 {
+		return r.cfg.OptStartSeq - 1
+	}
+	return 0
+}
+
+// caughtUp reports whether the stream's LEADER holds nothing on r's filter
+// that r must reach past the sequence after — so that a consumer with nothing
+// past after has come to the end of what r reads, rather than to the end of
+// what a replica behind the leader holds. Asked only where a consumer says
+// nothing follows and the read cannot tell that from what it read, so a read
+// whose replica is current asks nothing.
+func (r *reading) caughtUp(ctx context.Context, after uint64) (bool, error) {
+	if after >= r.through {
+		return true, nil
+	}
+	msg, err := r.b.leader.Next(ctx, r.filter, after+1)
+	switch {
+	case errors.Is(err, jsapi.ErrNoMessage):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("ask the stream's leader what follows %d on %s: %w", after, r.filter, err)
+	}
+	return msg.Sequence > r.through, nil
+}
+
+// resume makes r's consumer again, reading from past the sequence after: the
+// end of what its replica held, where the leader holds more. It answers no
+// message where the leader holds nothing past after by now — what followed
+// was purged in between.
+//
+// A READ OF EVERY MESSAGE ONLY — a get's or a seek's. A listing's consumer
+// delivers the last message on each subject, and made again from a sequence
+// it would deliver every message from there, superseded ones included, so a
+// listing behind the leader fails instead ([Backend.eachMeta]).
+func (r *reading) resume(ctx context.Context, after uint64) (jetstream.Msg, error) {
+	r.stop(ctx)
+	r.cfg.DeliverPolicy, r.cfg.OptStartSeq = jetstream.DeliverByStartSequencePolicy, after+1
+	return r.open(ctx)
 }
 
 // next is r's next message: waited for [quietWait], then once more for the
@@ -756,10 +897,16 @@ func (r *reading) unpulled(wait context.Context) bool {
 }
 
 // stop ends r and deletes its consumer, rather than leaving it for the broker
-// to reap minutes later.
+// to reap minutes later — once: a read made again stops the consumer it
+// replaces, and has none at all where nothing followed.
 func (r *reading) stop(ctx context.Context) {
-	r.msgs.Stop()
-	r.b.drop(ctx, r.cons)
+	if r.msgs != nil {
+		r.msgs.Stop()
+	}
+	if r.cons != nil {
+		r.b.drop(ctx, r.cons)
+	}
+	r.cons, r.msgs = nil, nil
 }
 
 // Get implements [objstore.Backend].
@@ -777,6 +924,13 @@ func (r *reading) stop(ctx context.Context) {
 // and the object store's pieces cannot be addressed by their place in the
 // object, so the cost of an offset is a header per message before it rather
 // than every byte.
+//
+// ITS PIECES END WHERE THE LEADER'S DO: a consumer made on a replica still
+// catching up says nothing follows where the leader holds more ([reading]),
+// so a message its consumer calls the last that leaves the object short of
+// the size its metadata states is asked about, and the read goes on from a
+// consumer made again where the leader holds more. A healthy read asks
+// nothing: its last message ends the object exactly.
 func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	if err := objstore.CheckRead(ctx, off, n); err != nil {
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -791,7 +945,6 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 	}
 	subject := pieceSubject(info.NUID)
 	cfg := jetstream.OrderedConsumerConfig{
-		FilterSubjects:   []string{subject},
 		DeliverPolicy:    jetstream.DeliverAllPolicy,
 		MaxResetAttempts: listResets,
 	}
@@ -806,14 +959,14 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 		}
 		cfg.DeliverPolicy, cfg.OptStartSeq, skip = jetstream.DeliverByStartSequencePolicy, start, before
 	}
-	r, first, err := b.consume(ctx, cfg, readAhead, objstore.ReadStall)
+	r, first, err := b.consume(ctx, subject, cfg, readAhead, objstore.ReadStall, everything)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
 	case r == nil:
 		return b.gone(ctx, name)
 	}
-	o := &object{ctx: ctx, name: name, r: r, skip: skip, left: n}
+	o := &object{ctx: ctx, name: name, r: r, skip: skip, left: n, at: off - skip, size: size}
 	if err := o.hold(first); err != nil {
 		r.stop(ctx)
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -821,10 +974,10 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 	return o, nil
 }
 
-// gone answers a get whose object's pieces are not there: an object that ends
-// before it begins — which the store reads as one holding fewer bytes than its
-// row says — unless the object itself went between its metadata's read and
-// the pieces', which a second look tells apart.
+// gone answers a get whose object's pieces the stream's LEADER does not hold:
+// an object that ends before it begins — which the store reads as one holding
+// fewer bytes than its row says — unless the object itself went between its
+// metadata's read and the pieces', which a second look tells apart.
 func (b *Backend) gone(ctx context.Context, name string) (io.ReadCloser, error) {
 	if _, err := b.live(ctx, name); err != nil {
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -839,13 +992,14 @@ func (b *Backend) gone(ctx context.Context, name string) (io.ReadCloser, error) 
 // FROM THE HEADERS ALONE: a message delivered without its payload carries the
 // payload's size in a header (`Nats-Msg-Size`), so the walk costs a few dozen
 // bytes a message — never the bytes before off — and assumes nothing about
-// how the pieces were cut.
+// how the pieces were cut. A message its consumer calls the last, short of
+// off, ends the walk only where the stream's leader holds nothing after it
+// either ([reading]); otherwise the walk goes on from a consumer made again.
 func (b *Backend) seek(ctx context.Context, subject string, off int64) (uint64, int64, bool, error) {
-	r, msg, err := b.consume(ctx, jetstream.OrderedConsumerConfig{
-		FilterSubjects:   []string{subject},
+	r, msg, err := b.consume(ctx, subject, jetstream.OrderedConsumerConfig{
 		HeadersOnly:      true,
 		MaxResetAttempts: listResets,
-	}, walkAhead, objstore.ReadStall)
+	}, walkAhead, objstore.ReadStall, everything)
 	if err != nil || r == nil {
 		return 0, 0, false, err
 	}
@@ -864,11 +1018,23 @@ func (b *Backend) seek(ctx context.Context, subject string, off int64) (uint64, 
 			return meta.Sequence.Stream, off - at, true, nil
 		}
 		at += size
-		if meta.NumPending == 0 {
-			return 0, 0, false, nil
+		switch {
+		case meta.NumPending > 0:
+			msg, err = r.next(ctx)
+		default:
+			var done bool
+			if done, err = r.caughtUp(ctx, meta.Sequence.Stream); err != nil || done {
+				return 0, 0, false, err
+			}
+			msg, err = r.resume(ctx, meta.Sequence.Stream)
 		}
-		if msg, err = r.next(ctx); err != nil {
+		switch {
+		case err != nil:
 			return 0, 0, false, err
+		case msg == nil:
+			// NOTHING PAST IT AFTER ALL: what the leader held past the
+			// replica's end was purged in between.
+			return 0, 0, false, nil
 		}
 	}
 }
@@ -890,25 +1056,50 @@ type object struct {
 	skip int64
 	left int64
 
+	// at is where in the object the message after the current one begins,
+	// size where the object ends by its metadata, and seq the current
+	// message's stream sequence.
+	at, size int64
+	seq      uint64
+
 	// held is the rest of the current message, and last whether it is the
-	// object's final one.
+	// object's final one. more says it is the last its consumer's replica
+	// holds while the stream's leader holds more: the read goes on from a
+	// consumer made again past it ([reading.resume]).
 	held []byte
 	last bool
+	more bool
 
 	closeOnce sync.Once
 }
 
 // hold makes msg the message o hands over next, past what of it comes
 // before the range.
+//
+// A MESSAGE ITS CONSUMER CALLS THE LAST is the object's last where it ends
+// the object — or the range ends inside it, so nothing after it is read — and
+// otherwise only where the stream's leader holds nothing after it either: a
+// consumer on a replica still catching up calls its last message the last
+// whatever the leader holds ([reading]).
 func (o *object) hold(msg jetstream.Msg) error {
 	meta, err := msg.Metadata()
 	if err != nil {
 		return err
 	}
 	data := msg.Data()
+	o.at += int64(len(data))
+	o.seq = meta.Sequence.Stream
 	data = data[min(o.skip, int64(len(data))):]
 	o.skip = 0
-	o.held, o.last = data, meta.NumPending == 0
+	o.held, o.last, o.more = data, meta.NumPending == 0, false
+	if !o.last || o.at >= o.size || (o.left >= 0 && o.left <= int64(len(data))) {
+		return nil
+	}
+	end, err := o.r.caughtUp(o.ctx, o.seq)
+	if err != nil {
+		return err
+	}
+	o.last, o.more = end, !end
 	return nil
 }
 
@@ -926,9 +1117,21 @@ func (o *object) Read(p []byte) (int, error) {
 		if o.last {
 			return 0, io.EOF
 		}
-		msg, err := o.r.next(o.ctx)
+		var msg jetstream.Msg
+		var err error
+		if o.more {
+			msg, err = o.r.resume(o.ctx, o.seq)
+		} else {
+			msg, err = o.r.next(o.ctx)
+		}
 		if err != nil {
 			return 0, fmt.Errorf("natsobj: read %s: %w", o.name, err)
+		}
+		if msg == nil {
+			// NOTHING PAST IT AFTER ALL: what the leader held past the
+			// replica's end was purged in between, with the object.
+			o.last = true
+			return 0, io.EOF
 		}
 		if err := o.hold(msg); err != nil {
 			return 0, fmt.Errorf("natsobj: read %s: %w", o.name, err)
@@ -1033,6 +1236,18 @@ const listResets = 5
 // rather than gathered, too: the library's own List holds every object's info
 // in one slice, which is the company's whole inventory in memory at once.
 //
+// A LISTING REACHES WHAT THE STREAM'S LEADER HELD WHEN IT BEGAN, or fails:
+// its consumer is made on whichever replica the broker places it, and one
+// still catching up lists the names it has stored ([reading]). So the
+// listing first reads the leader's newest metadata, and a walk whose
+// consumer says nothing follows short of it ends only where the leader holds
+// nothing it missed — read from a replica behind, it fails, to be asked
+// again, because a name it skipped is an object the caller takes for gone:
+// [Backend.Pending] would hand the collector a finished upload's pieces to
+// abandon. It cannot go on from a consumer made again, as a get does: a
+// listing's consumer delivers each name's newest metadata, and one made from
+// a sequence delivers every message after it, superseded ones among them.
+//
 // Every name is visited as it is — what one means is not this backend's to
 // judge. A name holding only the delete marker the library's own delete left —
 // `nats object rm`, or any other client of the bucket's documented format — is
@@ -1056,13 +1271,20 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 // subject that spells no name at all. See [Backend.List] for why it is a
 // consumer of its own.
 func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo) error) error {
+	var through uint64
+	switch newest, err := b.leader.Last(ctx, metaSubjects); {
+	case errors.Is(err, jsapi.ErrNoMessage):
+	case err != nil:
+		return fmt.Errorf("natsobj: list the bucket: read its newest metadata from the stream's leader: %w", err)
+	default:
+		through = newest.Sequence
+	}
 	// NO STALL: a listing is waited on for as long as its caller allows,
 	// since a visitor that is slow holds the next name back on purpose.
-	r, msg, err := b.consume(ctx, jetstream.OrderedConsumerConfig{
-		FilterSubjects:   []string{metaSubjects},
+	r, msg, err := b.consume(ctx, metaSubjects, jetstream.OrderedConsumerConfig{
 		DeliverPolicy:    jetstream.DeliverLastPerSubjectPolicy,
 		MaxResetAttempts: listResets,
-	}, walkAhead, 0)
+	}, walkAhead, 0, through)
 	if err != nil {
 		return fmt.Errorf("natsobj: list the bucket: %w", err)
 	}
@@ -1100,6 +1322,15 @@ func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo
 			}
 		}
 		if meta.NumPending == 0 {
+			done, cerr := r.caughtUp(ctx, meta.Sequence.Stream)
+			switch {
+			case cerr != nil:
+				return fmt.Errorf("natsobj: list the bucket: %w", cerr)
+			case !done:
+				return fmt.Errorf("natsobj: list the bucket: %w: it ended at sequence %d, short "+
+					"of metadata the leader held when it began; list again", errBehind,
+					meta.Sequence.Stream)
+			}
 			return nil
 		}
 		if msg, err = r.next(ctx); err != nil {

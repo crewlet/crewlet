@@ -146,6 +146,20 @@ logs survive, on the same members:
   client now and then decides not to send its next request (measured on one
   member, one download in ten to twenty thousand); looking again sends it,
   and that costs a second too.
+- **A read on a member still catching up reads what the leader holds.** The
+  broker places a read's consumer on any member holding a copy, one just
+  back from a restart and still catching up included, and that member says a
+  file ends where its copy ends. So a download that ends short of the file's
+  size, a page's walk that ends short of its offset and a read that finds
+  nothing at all ask the stream's leader whether more follows, and go on from
+  a consumer made again — at once the first time, a second apart after that,
+  failing once the read has been behind for a minute — rather than hand back
+  part of a file, which reads as damaged. A listing reads the leader's newest
+  entry first, and one that ends short of it fails, to be run again, rather
+  than leave out the files the member had not caught up on: the collector
+  would otherwise have taken a finished upload's pieces for an unfinished
+  upload and, a day later, abandoned them. A healthy read asks the leader
+  nothing extra; a listing asks once.
 - **A delete marker another client left is no object.** The engine deletes by
   purging, but `nats object rm` — or any other client of the format — leaves a
   marker under the name. The engine reads the name as holding nothing, and

@@ -889,6 +889,305 @@ func TestAReadWhoseClientSkippedAPullGoesOn(t *testing.T) {
 	}
 }
 
+// A READ ON A REPLICA BEHIND THE STREAM'S LEADER READS WHAT THE LEADER HOLDS.
+//
+// The broker makes a read's consumer on whichever replica it places it, one
+// still catching up after a restart included, and that consumer counts what
+// follows from what its replica has stored: it says nothing follows where the
+// leader holds more. A [laggingStream] stages exactly that, the replica
+// holding none of the object or only its first piece. Taken for the end, the
+// get read back none or part of the object — DAMAGED to the store, a definite
+// answer, where the object was whole — and a range past what the replica held
+// was read as past the object's end. Seen on a three-member fleet: a cache
+// syncing from a member just back from a restart took a pushed pack for
+// damaged, `ended at 0 of the 1460 bytes`.
+func TestAReadOnAReplicaBehindTheLeaderReadsWhatTheLeaderHolds(t *testing.T) {
+	t.Parallel()
+	data := bytes.Repeat([]byte("caught up "), 3*natsobj.MessageBytes/10)
+	off := int64(2*natsobj.MessageBytes + 5)
+	for _, c := range []struct {
+		name string
+		// holds is how many of the object's pieces the replica behind has
+		// stored, and makes how many consumers the read makes: the one
+		// made there and its replacement, and a ranged get's own after
+		// its walk.
+		holds int
+		makes int32
+		off   int64
+	}{
+		{"get_on_a_replica_holding_none", 0, 2, 0},
+		{"get_on_a_replica_holding_one_piece", 1, 2, 0},
+		{"range_on_a_replica_holding_none", 0, 3, off},
+		{"range_on_a_replica_holding_one_piece", 1, 3, off},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			client := memberClient(t)
+			b := open(t, client)
+			before := lastSeq(t, client)
+			if err := b.Put(t.Context(), "asked", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			lag := &laggingStream{holds: before + uint64(c.holds)}
+			lag.lagging.Store(1)
+			natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { lag.Stream = s; return lag })
+			if err := readsBack(t, b, c.off, data[c.off:]); err != nil {
+				t.Fatalf("a read whose consumer was made on a replica behind the leader: %v", err)
+			}
+			if made := lag.made.Load(); made != c.makes {
+				t.Fatalf("the read made %d consumers, want %d: the one behind the leader and "+
+					"what read on past it", made, c.makes)
+			}
+			if left := consumers(t, client); left != 0 {
+				t.Fatalf("the read left %d consumers behind", left)
+			}
+		})
+	}
+}
+
+// A LISTING ON A REPLICA BEHIND THE STREAM'S LEADER NAMES WHAT THE LEADER HELD,
+// or fails — and a pass over the unfinished uploads fails with it, rather than
+// hand the collector the pieces of an upload the listing missed.
+//
+// The listing's consumer is made on whichever replica the broker places it,
+// and one still catching up has stored the metadata of the uploads before
+// "late" but not of "late" itself. Made there with nothing at all, it is made
+// again; made there part way through, it cannot go on from a consumer made
+// again — that would deliver every message past its end, superseded ones
+// among them — and fails, to be asked again. Taken for the end, the listing
+// named only "early", and [natsobj.Backend.Pending] answered "late"'s pieces
+// as an upload nobody finished: the collector abandons one of those a day
+// after it began, which purges the pieces of a whole object a replica a day
+// behind had not yet caught up on.
+func TestAListingOnAReplicaBehindTheLeaderNamesWhatTheLeaderHeld(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// holds is how many of the bucket's messages the replica behind
+		// has stored: none, or the first upload's piece and metadata.
+		holds uint64
+		// fails says the listing must fail; otherwise it names both
+		// names on a consumer made again.
+		fails bool
+	}{
+		{"on_a_replica_holding_none", 0, false},
+		{"on_a_replica_holding_part", 2, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			client := memberClient(t)
+			b := open(t, client)
+			before := lastSeq(t, client)
+			for _, name := range []string{"early", "late"} {
+				if err := b.Put(t.Context(), name, strings.NewReader(name), objstore.PutMeta{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := lastSeq(t, client) - before; got != 4 {
+				t.Fatalf("two one-piece uploads took %d messages, want a piece and a metadata each", got)
+			}
+			lag := &laggingStream{holds: before + c.holds}
+			natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { lag.Stream = s; return lag })
+
+			lag.lagging.Store(1)
+			var names []string
+			err := b.List(t.Context(), func(info objstore.Info) error {
+				names = append(names, info.Name)
+				return nil
+			})
+			switch {
+			case c.fails && err == nil:
+				t.Fatalf("a listing that ended short of the leader passed, naming %v", names)
+			case c.fails && !strings.Contains(err.Error(), "behind the stream's leader"):
+				t.Fatalf("a listing that ended short of the leader failed without saying why: %v", err)
+			case !c.fails && err != nil:
+				t.Fatalf("a listing whose first consumer held nothing: %v", err)
+			case !c.fails && !slices.Equal(names, []string{"early", "late"}):
+				t.Fatalf("a listing whose first consumer held nothing named %v, want both", names)
+			}
+
+			lag.lagging.Store(1)
+			var pending []objstore.Pending
+			err = b.Pending(t.Context(), func(p objstore.Pending) error {
+				pending = append(pending, p)
+				return nil
+			})
+			switch {
+			case len(pending) != 0:
+				t.Fatalf("Pending over a listing behind the leader answered %v: finished "+
+					"uploads, for the collector to abandon", pending)
+			case c.fails && err == nil:
+				t.Fatal("Pending over a listing that ended short of the leader passed")
+			case !c.fails && err != nil:
+				t.Fatalf("Pending over a listing whose first consumer held nothing: %v", err)
+			}
+			if left := consumers(t, client); left != 0 {
+				t.Fatalf("the listings left %d consumers behind", left)
+			}
+		})
+	}
+}
+
+// A READ WHOSE CONSUMER THE BROKER KEEPS PLACING BEHIND THE LEADER MAKES IT
+// AGAIN A QUIET SECOND APART: once at once, since a consumer is placed afresh,
+// and then [natsobj.QuietWait] apart while the replica catches up — never in
+// a loop that asks the cluster for a consumer as fast as it can answer.
+func TestAReadThatStaysBehindTheLeaderAsksAgainOnlySoOften(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	if err := b.Put(t.Context(), "asked", strings.NewReader("still behind"), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	lag := &laggingStream{}
+	lag.lagging.Store(1 << 20)
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { lag.Stream = s; return lag })
+	const pauses = 3
+	ctx, cancel := context.WithTimeout(t.Context(), pauses*natsobj.QuietWait+natsobj.QuietWait/2)
+	defer cancel()
+	if _, err := b.Get(ctx, "asked", 0, -1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a get whose every consumer is behind the leader = %v, want its deadline", err)
+	}
+	if made, most := lag.made.Load(), int32(2+pauses); made < 3 || made > most {
+		t.Fatalf("the get made %d consumers in %d quiet seconds, want the first, one at once "+
+			"and one a quiet second apart: %d at most", made, pauses, most)
+	}
+	if left := consumers(t, client); left != 0 {
+		t.Fatalf("the get left %d consumers behind", left)
+	}
+}
+
+// lastSeq is the newest sequence the bucket's stream has stored.
+func lastSeq(t *testing.T, client jetstream.JetStream) uint64 {
+	t.Helper()
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.State.LastSeq
+}
+
+// laggingStream stands between a backend and its bucket's stream, and makes
+// the next lagging ordered consumers it is asked for consumers on a REPLICA
+// BEHIND THE LEADER, one that has stored the stream through holds and no
+// further. Each is made on the broker as asked, so it is the broker's own,
+// but what it says stops at holds: one that would begin past holds has
+// nothing to deliver, the message at holds says nothing follows it, and a
+// wait after that is handed to a consumer over a subject nothing is on — as a
+// replica catching up tells a consumer made before nothing of what it stores
+// after. holds is a sequence the consumer delivers, or zero for none.
+type laggingStream struct {
+	jetstream.Stream
+	holds uint64
+	// lagging is how many more consumers to make behind the leader, and
+	// made how many ordered consumers the stream has been asked for.
+	lagging, made atomic.Int32
+}
+
+func (s *laggingStream) OrderedConsumer(ctx context.Context, cfg jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
+	s.made.Add(1)
+	cons, err := s.Stream.OrderedConsumer(ctx, cfg)
+	if err != nil || s.lagging.Add(-1) < 0 {
+		return cons, err
+	}
+	none := s.holds == 0 ||
+		(cfg.DeliverPolicy == jetstream.DeliverByStartSequencePolicy && cfg.OptStartSeq > s.holds)
+	return &laggingConsumer{Consumer: cons, s: s, none: none}, nil
+}
+
+// laggingConsumer is a consumer on a replica that has stored s's stream
+// through s.holds.
+type laggingConsumer struct {
+	jetstream.Consumer
+	s    *laggingStream
+	none bool
+}
+
+func (c *laggingConsumer) CachedInfo() *jetstream.ConsumerInfo {
+	info := c.Consumer.CachedInfo()
+	if info == nil || !c.none {
+		return info
+	}
+	behind := *info
+	behind.NumPending = 0
+	return &behind
+}
+
+func (c *laggingConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	msgs, err := c.Consumer.Messages(opts...)
+	if err != nil {
+		return nil, err
+	}
+	silent, err := c.s.Stream.OrderedConsumer(context.Background(), jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{"$O." + natsobj.Bucket + ".C.silent"}})
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	quiet, err := silent.Messages(opts...)
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	return &laggingMessages{MessagesContext: msgs, holds: c.s.holds,
+		quiet: &silentMessages{MessagesContext: quiet, silent: silent, stream: c.s.Stream}}, nil
+}
+
+// laggingMessages hands a reader its consumer's messages through holds, the
+// one at holds saying nothing follows, and every wait after it to quiet.
+type laggingMessages struct {
+	jetstream.MessagesContext
+	holds uint64
+	quiet *silentMessages
+	past  bool
+}
+
+func (m *laggingMessages) Next(opts ...jetstream.NextOpt) (jetstream.Msg, error) {
+	if m.past {
+		return m.quiet.Next(opts...)
+	}
+	msg, err := m.MessagesContext.Next(opts...)
+	if err != nil {
+		return msg, err
+	}
+	meta, err := msg.Metadata()
+	if err != nil {
+		return nil, err
+	}
+	switch seq := meta.Sequence.Stream; {
+	case seq > m.holds:
+		m.past = true
+		return m.quiet.Next(opts...)
+	case seq == m.holds:
+		m.past = true
+		return lastHeld{Msg: msg}, nil
+	}
+	return msg, nil
+}
+
+func (m *laggingMessages) Stop() {
+	m.MessagesContext.Stop()
+	m.quiet.Stop()
+}
+
+// lastHeld is the message a replica behind the leader has stored last, which
+// says nothing follows it.
+type lastHeld struct{ jetstream.Msg }
+
+func (m lastHeld) Metadata() (*jetstream.MsgMetadata, error) {
+	meta, err := m.Msg.Metadata()
+	if err != nil {
+		return nil, err
+	}
+	last := *meta
+	last.NumPending = 0
+	return &last, nil
+}
+
 // skippingStream stands between a backend and its bucket's stream, and makes
 // a reader of every ordered consumer it is asked for SPEND ONE WAIT ON
 // NOTHING once it has taken after messages: that wait is handed to a second
