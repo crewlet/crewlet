@@ -25,7 +25,7 @@ import (
 // dashboard is built on — the same tools again, under a person's own name. The
 // one gesture that belongs on a SHELL is the operation no seat may ever
 // perform: a purge, which destroys a task and every row it produced on every
-// node, which the write path restricts to a person or an operator token
+// data node, which the write path restricts to a person or an operator token
 // precisely because nothing else can be asked to confirm it, and which an
 // operator acting on an erasure request runs from a terminal and a runbook
 // rather than from a screen. It goes through that same surface's own route.
@@ -35,7 +35,7 @@ import (
 // resurrecting anything — and no CLI verb, no route and no tool reached it. So
 // a company could not destroy a task under any circumstances: an erasure
 // request had no mechanism, and a credential pasted into a task body stayed in
-// the durable rows of every node for ever. `remove` only hides a task and
+// the durable rows of every data node for ever. `remove` only hides a task and
 // `delete` only stops later records about it; neither takes the body out of a
 // single database.
 
@@ -98,7 +98,7 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 	case item == "" || strings.TrimSpace(*confirm) == "":
 		fmt.Fprintln(stderr, workletPurgeUsage)
 		return fmt.Errorf("a purge destroys the item and every row it produced " +
-			"on every node, and nothing undoes it — name the item's KEY in " +
+			"on every data node, and nothing undoes it — name the item's KEY in " +
 			"-confirm to run it")
 	case strings.TrimSpace(*reason) == "":
 		return fmt.Errorf("state why in -reason: the rows are destroyed and " +
@@ -189,11 +189,11 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 		firstNonEmpty(answer.OpID, operation))
 	if answer.Outcome == string(statelog.OutcomePending) {
 		// THE THREE-VALUED OUTCOME, said plainly and NOT as a failure.
-		// The record is on the log and every node applies it as it
+		// The record is on the log and every data node applies it as it
 		// reaches it; running the gesture again would append a second
 		// purge of an item the first one already destroyed.
 		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
-			"applied it yet: the rows go as each node reaches it. Do not "+
+			"applied it yet: the rows go as each data node reaches it. Do not "+
 			"run this again.")
 	}
 	// WHAT A PURGE DOES NOT REACH, every time rather than in the docs

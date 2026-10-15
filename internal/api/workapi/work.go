@@ -377,7 +377,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}, detail))
 }
 
-// postPurge destroys an item and every row it produced, on every node.
+// postPurge destroys an item and every row it produced, on every data node.
 //
 // # The confirmation is the item's KEY, and it is CHECKED
 //
@@ -414,7 +414,7 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
 			map[string]string{"detail": "repeat the item's KEY in ?confirm= — " +
 				"a purge removes the item and every row it produced on every " +
-				"node, and there is nothing that undoes it"})
+				"data node, and there is nothing that undoes it"})
 		return
 	case reason == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,

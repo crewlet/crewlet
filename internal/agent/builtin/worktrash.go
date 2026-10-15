@@ -33,7 +33,7 @@ import (
 //
 // A removal is REVERSIBLE AT ANY AGE and destroys nothing — the rows stay, the
 // history answers, and `list_work_items` with `removed: true` is the trash. A
-// purge destroys every row on every node and has no inverse; it is a CLI
+// purge destroys every row on every data node and has no inverse; it is a CLI
 // gesture with a typed confirmation and a required reason for that reason
 // alone. Somebody reaching for "delete" should land here.
 
