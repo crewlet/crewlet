@@ -1600,6 +1600,31 @@ func TestAStoppingCommitterAnswersNotServing(t *testing.T) {
 	}
 }
 
+// A PUSH A STOPPING COMMITTER HANDED BACK IS ANSWERED NOT SERVING, even when
+// its caller's context ends before the caller reads the answer.
+//
+// That is the order a node stops in: the committer first, which hands every
+// queued push back before its Stop returns, then the estate's serving
+// registration, whose withdrawal cancels the context of every answer in
+// flight — so by the time a caller's goroutine runs, its answer and its
+// cancellation are both there. A select between them picks at random, and the
+// cancellation won half the time: the refusal that sends the push to its
+// repository's runner-up under the same push id was answered `context
+// canceled` instead, a final failure for a push nothing decided. Run many
+// times, because a coin that lands right once proves nothing.
+func TestAPushHandedBackIsAnsweredWhenItsCallerHasGone(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	refused := fmt.Errorf("%w: the committer stopped before deciding the push", code.ErrNotServing)
+	for range 64 {
+		if res, err := code.AwaitAnsweredAndGone(c, refused); !errors.Is(err, code.ErrNotServing) {
+			t.Fatalf("a push handed back while its caller's context ended answered %+v, %v; "+
+				"want the refusal it was handed back with", res, err)
+		}
+	}
+}
+
 // AN IDLE REPOSITORY'S GOROUTINE EXITS, and a push after that starts another.
 func TestAnIdleRepositoryGoroutineExits(t *testing.T) {
 	t.Parallel()
