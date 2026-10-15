@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -207,7 +208,19 @@ func (r *verifications) sweep(now time.Time) int {
 // The check runs under the host's lifetime alone: its caller ending its
 // request ends nothing, and the host's Stop ends it, the verification then
 // failed with ErrStopping wrapping what the cut left.
-func (s *Server) StartVerify(ctx context.Context, name string, repair bool) (Verification, error) {
+//
+// AT A FLOOR ITS CALLER NAMES, or at the log's head. A floor — a position on
+// the code log the caller read at — is what the repository is resolved at
+// and its copy brought to before it is checked, with no barrier: a copy
+// already past it is checked as it is. With none, the copy is brought to the
+// log's head, which appends a barrier to the code log — single-flighted only
+// among requests in flight together, so an operator's sweep of every
+// repository one at a time appended one a repository: ten thousand a sweep
+// at config.CodeMaxRepos, on every git node it ran on, a log whose census
+// counts a day's barriers as its people's git reads. A sweep reads its
+// listing at the head once and names that listing's position for each.
+func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (
+	Verification, error) {
 	if !gitref.ValidRepoName(name) {
 		return Verification{}, code.ErrRepoNotFound
 	}
@@ -225,7 +238,11 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool) (Ver
 		}
 	}()
 
-	ref, err := s.resolveVerified(ctx, name)
+	if !floor.IsZero() && floor.Stream != topics.CodeLogStream {
+		return Verification{}, fmt.Errorf("%w: a verify's floor is on %s, and a repository's rows are on %s",
+			code.ErrInvalid, floor.Stream, topics.CodeLogStream)
+	}
+	ref, err := s.resolveVerified(ctx, name, floor)
 	if err != nil {
 		return Verification{}, err
 	}
@@ -251,20 +268,25 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool) (Ver
 		State: VerifyRunning, Started: now}
 	s.verifies.begin(v)
 	started = true
-	go s.runVerify(v.ID, checked, repair)
+	fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
+	if !floor.IsZero() {
+		fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: floor}
+	}
+	go s.runVerify(v.ID, checked, cache.VerifyRun{Repair: repair, Fresh: fresh})
 	return *v, nil
 }
 
-// resolveVerified is the repository a verify names, under ctx joined to the
-// host's lifetime — a Stop reaches the read — and ErrStopping, wrapping what
-// the cut left, when the stop cut it short rather than its caller.
-func (s *Server) resolveVerified(ctx context.Context, name string) (code.RepoRef, error) {
+// resolveVerified is the repository a verify names — read stale, at the
+// caller's floor where it names one — under ctx joined to the host's
+// lifetime — a Stop reaches the read — and ErrStopping, wrapping what the cut
+// left, when the stop cut it short rather than its caller.
+func (s *Server) resolveVerified(ctx context.Context, name string, floor statelog.Position) (code.RepoRef, error) {
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
 	//nolint:contextcheck // The host's lifetime ends the read too: Stop must reach it.
 	defer context.AfterFunc(s.life, cancel)()
 	ref, err := s.o.Estate.Resolve(work, code.ResolveQuery{Name: name,
-		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		Fresh: statelog.Freshness{Level: statelog.ReadStale, MinPosition: floor}})
 	if errors.Is(err, code.ErrRepoNotFound) {
 		ref, err = s.o.Estate.Resolve(work, code.ResolveQuery{Name: name,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
@@ -277,8 +299,9 @@ func (s *Server) resolveVerified(ctx context.Context, name string) (code.RepoRef
 
 // runVerify is one verification's check, on a goroutine of the host's
 // lifetime that StartVerify counted among the work Stop waits for, and the
-// record of how it ended.
-func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, repair bool) {
+// record of how it ended. how carries its repair and its freshness; its
+// Checking is this function's own.
+func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, how cache.VerifyRun) {
 	defer s.inflight.Done()
 	defer checked.Release()
 	// WHEN THE NODE ENDS WHAT IT IS DOING is said as each check pass begins,
@@ -294,7 +317,8 @@ func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, repair boo
 		}
 	}
 	//nolint:contextcheck // the host's lifetime, never a request's: see the file's doc
-	report, err := checked.Run(s.life, cache.VerifyRun{Repair: repair, Checking: checking})
+	how.Checking = checking
+	report, err := checked.Run(s.life, how)
 	if err != nil && s.life.Err() != nil {
 		err = fmt.Errorf("%w: %w", ErrStopping, err)
 	}
@@ -307,11 +331,11 @@ func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, repair boo
 	})
 	s.verifies.mu.Unlock()
 	if err != nil {
-		s.log.Warn("code_verify_failed", "repo", report.Name, "verify", id, "repair", repair,
+		s.log.Warn("code_verify_failed", "repo", report.Name, "verify", id, "repair", how.Repair,
 			"problems", len(report.Problems), "error", err)
 		return
 	}
-	s.log.Info("code_verify_finished", "repo", report.Name, "verify", id, "repair", repair,
+	s.log.Info("code_verify_finished", "repo", report.Name, "verify", id, "repair", how.Repair,
 		"packs", report.Packs, "problems", len(report.Problems), "rebuilt", report.Rebuilt)
 }
 

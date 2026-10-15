@@ -82,7 +82,7 @@ func (s *switchedCode) CodeReads() (api.CodeReads, error) {
 // start of a verify answers what start does — a running verification of the
 // name where it is nil — and whose verifications are what kept holds.
 type fakeGitRoutes struct {
-	start func(ctx context.Context, name string, repair bool) (host.Verification, error)
+	start func(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
 	kept  map[uuid.UUID]host.Verification
 }
 
@@ -98,12 +98,13 @@ func (fakeGitRoutes) InfoRefs() http.Handler    { return served("info/refs") }
 func (fakeGitRoutes) UploadPack() http.Handler  { return served("upload-pack") }
 func (fakeGitRoutes) ReceivePack() http.Handler { return served("receive-pack") }
 
-func (f fakeGitRoutes) StartVerify(ctx context.Context, name string, repair bool) (host.Verification, error) {
+func (f fakeGitRoutes) StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (
+	host.Verification, error) {
 	if f.start == nil {
 		return host.Verification{ID: uuid.Must(uuid.NewV7()), Repo: name, Repair: repair,
 			State: host.VerifyRunning, Started: time.Now()}, nil
 	}
-	return f.start(ctx, name, repair)
+	return f.start(ctx, name, repair, floor)
 }
 
 func (f fakeGitRoutes) Verification(name string, id uuid.UUID) (host.Verification, bool) {
@@ -497,6 +498,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	t.Parallel()
 	var (
 		repairs []bool
+		floors  []statelog.Position
 		mu      sync.Mutex
 	)
 	running := host.Verification{ID: uuid.Must(uuid.NewV7()), Repo: "racing", State: host.VerifyRunning,
@@ -520,9 +522,10 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	g := fakeGitRoutes{
 		kept: map[uuid.UUID]host.Verification{done.ID: done, stopped.ID: stopped, failed.ID: failed,
 			checking.ID: checking},
-		start: func(_ context.Context, name string, repair bool) (host.Verification, error) {
+		start: func(_ context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error) {
 			mu.Lock()
 			repairs = append(repairs, repair)
+			floors = append(floors, floor)
 			mu.Unlock()
 			switch name {
 			case "web":
@@ -536,6 +539,8 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 				return host.Verification{}, &host.VerifyRunningError{Running: running}
 			case "stopping":
 				return host.Verification{}, host.ErrStopping
+			case "astray":
+				return host.Verification{}, fmt.Errorf("%w: a verify's floor is on another log", code.ErrInvalid)
 			case "busy":
 				return host.Verification{}, fmt.Errorf("cache: verify busy: %w — run it again", gitproc.ErrBusy)
 			case "nobody":
@@ -551,7 +556,8 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		return ask(t, a, http.MethodPost, "/code/repos/"+path, true)
 	}
 
-	for _, bad := range []string{"web/verify?repair=maybe", "web/verify?repair=1", "web/verify?repair=true&repair=false"} {
+	for _, bad := range []string{"web/verify?repair=maybe", "web/verify?repair=1", "web/verify?repair=true&repair=false",
+		"web/verify?min_position=yesterday"} {
 		rec := post(bad)
 		if code, _ := errorBody(t, rec); rec.Code != http.StatusBadRequest || code != "bad_params" {
 			t.Errorf("POST %s answered %d %s, want 400 bad_params", bad, rec.Code, code)
@@ -579,10 +585,16 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 			rec.Body.String(), err)
 	}
 	post("web/verify?repair=true")
-	post("web/verify?repair=false")
+	post("web/verify?repair=false&min_position=CREWLET_CODE_LOG@1:4711")
 	mu.Lock()
 	if !slices.Equal(repairs, []bool{false, true, false}) {
 		t.Errorf("the host was asked repair %v, want false, true, false", repairs)
+	}
+	// THE CALLER'S FLOOR reaches the host as the position it named, and a
+	// verify naming none asks at the log's head.
+	if want := (statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 4711}); len(floors) != 3 ||
+		!floors[0].IsZero() || floors[2] != want {
+		t.Errorf("the host was asked at %v, want no floor and then %v", floors, want)
 	}
 	mu.Unlock()
 
@@ -601,6 +613,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		{"racing", "verify_running", "", running.ID.String(), "", http.StatusConflict},
 		{"stopping", "unavailable", "", "stopping", "30", http.StatusServiceUnavailable},
 		{"busy", "unavailable", "", "run it again", "10", http.StatusServiceUnavailable},
+		{"astray", "bad_params", "", "another log", "", http.StatusBadRequest},
 		{"nobody", "unavailable", "", "", "5", http.StatusServiceUnavailable},
 		{"large", "query_failed", "", "a node with more memory", "", http.StatusInternalServerError},
 	} {

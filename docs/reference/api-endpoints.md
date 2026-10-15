@@ -4098,6 +4098,16 @@ copy found damaged (every pack the check found whole linked rather than
 downloaded again) that is then checked the same way. `repair` is `true` or
 `false`; anything else is `400 bad_params`.
 
+Before it checks, the node brings its copy to the **log's head**, which
+appends a barrier to the code log — or, with `min_position`, to that position
+on the code log (the `position` a code read answered with), with no barrier:
+a copy already there is checked as it is. A sweep of many repositories reads
+its listing at `read_level=linearizable` once and names that listing's
+position on every verify, so the sweep costs the code log one barrier rather
+than one a repository — the log whose census counts a day's barriers as its
+people's git reads. A position that does not parse, or one on another log, is
+`400 bad_params`.
+
 **It is the one `/code/` route whose work grows with the repository**: it reads
 every byte of the copy — measured at about nine seconds a gigabyte, git's
 connectivity check nearly all of it, minutes for a large repository, and

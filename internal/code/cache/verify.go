@@ -213,10 +213,10 @@ func (v *Verification) Release() {
 	v.unhold()
 }
 
-// Run checks the repository's cache against its rows, after a linearizable
-// sync — of the copy this node holds, so a delta, or a full round reusing every
-// pack it holds on an incarnation a previous process left — ONCE: a second
-// Run, or one after Release, is refused ([ErrInvalid]).
+// Run checks the repository's cache against its rows, after a sync to what
+// how.Fresh asks — of the copy this node holds, so a delta, or a full round
+// reusing every pack it holds on an incarnation a previous process left — ONCE:
+// a second Run, or one after Release, is refused ([ErrInvalid]).
 //
 //  1. its directory listed against the image grammar (sweep.go) — every
 //     entry it does not admit is a problem — with the repository's rounds
@@ -271,7 +271,11 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	v.ran = true
 	v.mu.Unlock()
 	c := v.c
-	s, err := c.Sync(ctx, v.e.id, statelog.Freshness{Level: statelog.ReadLinearizable})
+	fresh := how.Fresh
+	if fresh.Level == "" {
+		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
+	}
+	s, err := c.Sync(ctx, v.e.id, fresh)
 	if err != nil {
 		return VerifyReport{Repo: v.e.id, Name: v.held.Repo.Name},
 			fmt.Errorf("cache: verify %s: %w", v.label, err)
@@ -311,6 +315,13 @@ type VerifyRun struct {
 	// Repair rebuilds a copy the check finds damaged, and checks the
 	// rebuilt one.
 	Repair bool
+	// Fresh is what the copy is brought to before it is checked: the zero
+	// value is the log's head — linearizable, a barrier appended to the
+	// code log — and a caller that already holds a position on the log
+	// names it as a session floor instead, which a copy at or past it
+	// answers at once and anything else reads with no barrier. The check
+	// itself holds the copy to its rows at whatever position it reached.
+	Fresh statelog.Freshness
 	// Checking, when set, is told the bound of each check pass as the pass
 	// begins (CheckBudget over what the copy it checks holds), and zero as
 	// a repair's rebuild begins: what the caller says of when the node ends
