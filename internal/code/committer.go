@@ -355,14 +355,31 @@ func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, err
 	// HELD UNTIL THIS CALLER HAS ITS ANSWER, whichever way it leaves — the
 	// one place every queued push's caller passes through.
 	defer c.release(q)
-	// THE DEADLINE IS WATCHED WHILE THE PUSH WAITS, here, on the caller's
-	// own goroutine: the repository's goroutine sees its queue only between
-	// batches, so a push queued behind batches that ran long reached the
-	// head after its asker had stopped waiting — silence, which the asker
-	// reads as a dead committer and answers by asking the runner-up.
+	return c.await(ctx, q)
+}
+
+// await is a queued push's wait for its answer, on its caller's goroutine.
+//
+// THE DEADLINE IS WATCHED WHILE THE PUSH WAITS, here: the repository's
+// goroutine sees its queue only between batches, so a push queued behind
+// batches that ran long reached the head after its asker had stopped waiting
+// — silence, which the asker reads as a dead committer and answers by asking
+// the runner-up.
+//
+// AN ANSWER ALREADY GIVEN WINS over the caller's context ending. A stopping
+// committer hands every queued push back [ErrNotServing] before its Stop
+// returns, and the engine withdraws the estate's serving registration next,
+// which CANCELS the context of every answer in flight — so the answer and the
+// cancellation are both ready by the time a caller's goroutine is scheduled,
+// and a select picks between ready cases at random. Lost to the coin, the
+// refusal that sends the push to the repository's runner-up with the same
+// push id became `context canceled` — a final failure for a push nothing
+// decided — or, sent as the serving node's broker went down, no answer at
+// all, which its asker waited out for a whole write attempt.
+func (c *Committer) await(ctx context.Context, q *queued) (ProposeResult, error) {
 	var expire <-chan time.Time
-	if !deadline.IsZero() {
-		timer := time.NewTimer(deadline.Sub(q.arrived) - CommitBudget - ReplyMargin)
+	if !q.deadline.IsZero() {
+		timer := time.NewTimer(q.deadline.Sub(q.arrived) - CommitBudget - ReplyMargin)
 		defer timer.Stop()
 		expire = timer.C
 	}
@@ -373,11 +390,16 @@ func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, err
 		case <-expire:
 			expire = nil
 			if q.withdraw() {
-				return c.busy(q, shortOfTime(deadline.Sub(c.clock()))), nil
+				return c.busy(q, shortOfTime(q.deadline.Sub(c.clock()))), nil
 			}
 			// A BATCH TOOK IT FIRST, with a whole budget and the margin
 			// still in hand: its answer comes inside the attempt.
 		case <-ctx.Done():
+			select {
+			case a := <-q.answer:
+				return a.res, a.err
+			default:
+			}
 			q.withdraw()
 			return ProposeResult{}, ctx.Err()
 		}

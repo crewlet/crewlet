@@ -64,6 +64,18 @@ func CommitterStopping(c *Committer) bool {
 	return c.stopped
 }
 
+// AwaitAnsweredAndGone is a queued push's wait on c when its answer, err, was
+// given and its caller's context ended before the wait looked — both ready at
+// once, as a stopping committer's refusals and the serving withdrawal's
+// cancellation of every answer in flight are.
+func AwaitAnsweredAndGone(c *Committer, err error) (ProposeResult, error) {
+	q := &queued{arrived: c.clock(), answer: make(chan answered, 1)}
+	q.answer <- answered{err: err}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return c.await(ctx, q)
+}
+
 // CommitterQueued is how many proposals wait in repoID's queue on c.
 func CommitterQueued(c *Committer, repoID string) int {
 	c.mu.Lock()
