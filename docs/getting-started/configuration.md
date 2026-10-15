@@ -359,7 +359,9 @@ providers:
                                         #   only symptom.
                                         #   On `openai` / `anthropic` it is genuinely optional and
                                         #   points the vendor's own wire format at a gateway or
-                                        #   proxy instead of the vendor host
+                                        #   proxy instead of the vendor host. REFUSED on cli-agent,
+                                        #   whose CLI makes its own calls: point it at a gateway in
+                                        #   its cli.env (ANTHROPIC_BASE_URL for Claude Code)
       timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
                                         #   a streamed call (every anthropic call, and an executor's rounds
                                         #   elsewhere) by its SILENCE — the longest
