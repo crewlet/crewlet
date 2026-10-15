@@ -133,7 +133,7 @@ var publishedRoutes = []string{
 	"POST /webhooks/forge",
 	"GET /webhooks/slack-oauth",
 	"GET /webhooks/github-app",
-	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
+	"POST " + auth.OTLPPrefix + "{token}/v1/traces",
 	mcpbridge.PathPrefix + "{token}",
 }
 

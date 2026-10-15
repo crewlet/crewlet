@@ -695,7 +695,10 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 // that span into the run's trace too, so nesting under it puts the engine's
 // half of the call beneath the step that asked for it. A request naming any
 // other trace is filed under the run's — the box holds a credential for this
-// run's tools, never for somebody else's trace. See [tracing.WithRemoteFrom].
+// run's tools, and a parent in the trace the run was launched in, never in any
+// other. That trace can hold other seats' turns and runs (an A2A exchange, one
+// webhook delivery's wakes), so the check is per trace, not per run, as the
+// OTLP receiver's is. See [tracing.WithRemoteFrom].
 //
 // The request itself holds no span to continue — the API's routes are not
 // spanned — so without this every bridged call was the root of a trace of its

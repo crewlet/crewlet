@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sync"
 
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -23,21 +24,17 @@ import (
 	"github.com/crewlet/crewlet/internal/otlpenv"
 )
 
-// otelForwarder sends one signal's decoded exports to its destination, in the
+// otelForwarder sends decoded traces exports to their destination, in the
 // destination's own protocol.
 type otelForwarder interface {
 	// send forwards one export, answering the upstream's response — nil
 	// when it carried none — or why it was not delivered.
-	send(ctx context.Context, req proto.Message) (proto.Message, error)
+	send(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error)
 	close() error
 }
 
-// newOtelForwarder builds the forwarder for one destination that exports.
-func newOtelForwarder(signal otlpenv.Signal, d otlpenv.Destination) (otelForwarder, error) {
-	codec, ok := otelCodecs[signal]
-	if !ok {
-		return nil, fmt.Errorf("no OTLP codec for signal %q", signal)
-	}
+// newOtelForwarder builds the forwarder for a destination that exports.
+func newOtelForwarder(d otlpenv.Destination) (otelForwarder, error) {
 	tlsConfig, err := d.Config()
 	if err != nil {
 		return nil, err
@@ -53,9 +50,9 @@ func newOtelForwarder(signal otlpenv.Signal, d otlpenv.Destination) (otelForward
 				t.TLSClientConfig = tlsConfig
 			})
 		}
-		return &otelHTTPForwarder{d: d, codec: codec, client: client}, nil
+		return &otelHTTPForwarder{d: d, client: client}, nil
 	case otlpenv.GRPC:
-		return newOtelGRPCForwarder(d, codec, tlsConfig)
+		return newOtelGRPCForwarder(d, tlsConfig)
 	}
 	// [otlpenv.Resolve] refuses any other protocol.
 	return nil, fmt.Errorf("no OTLP forwarder is built for protocol %q", d.Protocol)
@@ -64,13 +61,12 @@ func newOtelForwarder(signal otlpenv.Signal, d otlpenv.Destination) (otelForward
 // otelHTTPForwarder POSTs an export as OTLP/HTTP protobuf.
 type otelHTTPForwarder struct {
 	d      otlpenv.Destination
-	codec  otelCodec
 	client *http.Client
 }
 
 // send writes the message as the engine's own HTTP exporter would: protobuf,
 // gzipped when the destination compresses, with the destination's headers.
-func (f *otelHTTPForwarder) send(ctx context.Context, req proto.Message) (proto.Message, error) {
+func (f *otelHTTPForwarder) send(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
 	body, err := proto.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -105,10 +101,11 @@ func (f *otelHTTPForwarder) send(ctx context.Context, req proto.Message) (proto.
 	if resp.StatusCode >= 300 {
 		return nil, otelRefused{status: resp.StatusCode}
 	}
-	// The response is the signal's Export response, which carries a
-	// partial success when the backend dropped part of the export. One it
-	// cannot read is not a failure of the forward: the export was accepted.
-	out := f.codec.response()
+	// The response is the trace service's Export response, which carries
+	// a partial success when the backend dropped part of the export. One
+	// it cannot read is not a failure of the forward: the export was
+	// accepted.
+	out := &coltracepb.ExportTraceServiceResponse{}
 	if proto.Unmarshal(answer, out) != nil {
 		return nil, nil
 	}
@@ -150,7 +147,6 @@ func (e otelRefused) Error() string { return fmt.Sprintf("the upstream answered 
 type otelGRPCForwarder struct {
 	target string
 	opts   []grpc.DialOption
-	codec  otelCodec
 	md     metadata.MD
 
 	mu     sync.Mutex
@@ -166,7 +162,7 @@ type otelGRPCForwarder struct {
 // and in plaintext for an http one; the destination's headers as metadata; and
 // gzip when the destination compresses. The URL's path means nothing to gRPC,
 // which addresses the service by its method name.
-func newOtelGRPCForwarder(d otlpenv.Destination, codec otelCodec, tlsConfig *tls.Config) (*otelGRPCForwarder, error) {
+func newOtelGRPCForwarder(d otlpenv.Destination, tlsConfig *tls.Config) (*otelGRPCForwarder, error) {
 	u, err := url.Parse(d.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("%s does not parse as a URL", d.EndpointVar)
@@ -179,15 +175,15 @@ func newOtelGRPCForwarder(d otlpenv.Destination, codec otelCodec, tlsConfig *tls
 	if d.Compression == otlpenv.Gzip {
 		opts = append(opts, grpc.WithDefaultCallOptions(grpc.UseCompressor(grpcgzip.Name)))
 	}
-	return &otelGRPCForwarder{target: u.Host, opts: opts, codec: codec, md: metadata.New(d.Headers)}, nil
+	return &otelGRPCForwarder{target: u.Host, opts: opts, md: metadata.New(d.Headers)}, nil
 }
 
-func (f *otelGRPCForwarder) send(ctx context.Context, req proto.Message) (proto.Message, error) {
+func (f *otelGRPCForwarder) send(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
 	conn, err := f.connection()
 	if err != nil {
 		return nil, err
 	}
-	return f.codec.export(metadata.NewOutgoingContext(ctx, f.md), conn, req)
+	return coltracepb.NewTraceServiceClient(conn).Export(metadata.NewOutgoingContext(ctx, f.md), req)
 }
 
 // connection is the client, made on first use.

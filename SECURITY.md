@@ -80,10 +80,14 @@ A few things worth knowing when deploying Crewlet:
   none of that back on, but `role.sandbox.env` can, deliberately: it wins over
   every variable the engine sets in a box. The box holds a token in its
   endpoint, readable by whatever runs there, valid for a day after the launch:
-  with it, code in the box can send its own run's spans and arbitrary metrics
-  into your telemetry backend through the receiver until it expires — never the
-  backend's credential, and never a span into another run's trace, which the
-  receiver refuses
+  with it, code in the box can send spans in the trace its run was launched in
+  into your telemetry backend through the receiver until it expires, and
+  nothing else — never the backend's credential, never a metric or a log
+  record (the receiver serves traces only), and never a span in any other
+  trace, which the receiver refuses. The scope is that TRACE, not the run: a
+  trace can also hold other seats' turns and coding runs — an agent-to-agent
+  ask and the turn that answers it, every seat one webhook delivery woke — and
+  the token admits spans among theirs too
   (`docs/concepts/code-sandbox.md#durability-completion-and-observability`).
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see

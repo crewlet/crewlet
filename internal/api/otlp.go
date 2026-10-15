@@ -22,10 +22,20 @@ import (
 //
 // It has to be: the exporter inside the box holds no API token, and giving it
 // one would be handing a sandbox the credential that reads the whole company.
-// What authenticates a request instead is the per-run, trace-scoped, expiring
-// token in its own PATH (see [sandbox.OtelTokens] for what the scope holds), and the auth package exempts `/otlp/` by prefix for
-// exactly that reason. So this handler verifies before it does anything, on
-// the same terms as the webhook edge beside it.
+// What authenticates a request instead is the token minted for one run in its
+// own PATH — scoped to that run's trace and expiring (see [sandbox.OtelTokens]
+// for what the scope holds) — and the auth package exempts `/otlp/` by prefix
+// for exactly that reason. So this handler verifies before it does anything,
+// on the same terms as the webhook edge beside it.
+//
+// # Traces only
+//
+// The route is `/otlp/{token}/v1/traces` and nothing else: a box exports its
+// traces here, and a metrics or a logs path under a valid token is the mux's
+// own 404, never read and never forwarded. No runner the engine ships exports
+// either through a box's endpoint, so serving them only gave a token copied
+// out of a box a channel the runners never use (internal/sandbox/otelwire.go
+// says why).
 
 // mountOTLP registers the receiver, or says why it did not.
 //
@@ -37,22 +47,14 @@ func (a *App) mountOTLP(mux httpjson.Router, receiver *sandbox.OtelReceiver) {
 	if receiver == nil {
 		return
 	}
-	mux.Handle("POST "+auth.OTLPPrefix+"{token}/v1/{signal}", http.HandlerFunc(
+	mux.Handle("POST "+auth.OTLPPrefix+"{token}"+otlpenv.Traces.Path(), http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			a.serveOTLP(w, r, receiver)
 		}))
-	log.Info("sandbox_otlp_receiver_mounted", "forwards", receiver.Forwarding())
+	log.Info("sandbox_otlp_receiver_mounted", "forwards", receiver.Forwards())
 }
 
 func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbox.OtelReceiver) {
-	signal := otlpenv.Signal(r.PathValue("signal"))
-	// THE SIGNAL IS CHECKED AGAINST A CLOSED SET, because it selects the
-	// upstream the engine's OWN credential is sent to — an unchecked
-	// segment would let a caller choose part of that address.
-	if !signal.Valid() {
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoRoute)
-		return
-	}
 	// VERIFIED BEFORE THE BODY IS READ, so an unauthenticated caller
 	// cannot make this process buffer four megabytes per request.
 	traceID := receiver.Validate(r.PathValue("token"))
@@ -96,7 +98,6 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 	// one that does not decode — each final, so the exporter drops the
 	// batch rather than sending it again.
 	reply, err := receiver.Accept(r.Context(), traceID, sandbox.OtelExport{
-		Signal:          signal,
 		Body:            body,
 		ContentType:     r.Header.Get("Content-Type"),
 		ContentEncoding: r.Header.Get("Content-Encoding"),
@@ -109,13 +110,12 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
 		return
 	case err != nil:
-		log.Debug("sandbox_otlp_refused", "signal", signal, "trace_id", traceID, "error", err.Error())
+		log.Debug("sandbox_otlp_refused", "trace_id", traceID, "error", err.Error())
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
 	w.Header().Set("Content-Type", reply.ContentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(reply.Body)
-	log.Debug("sandbox_otlp_received", "signal", signal, "trace_id", traceID,
-		"bytes", len(body))
+	log.Debug("sandbox_otlp_received", "trace_id", traceID, "bytes", len(body))
 }

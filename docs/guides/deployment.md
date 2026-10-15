@@ -681,7 +681,7 @@ api:
 | Route | Served on |
 |---|---|
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
-| `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
+| `/otlp/{token}/v1/traces` — sandbox traces | `api.public` only |
 | `/mcp/{token}` — the agent-mode tool bridge | `api.public` only |
 | everything else: `/health`, `/ready`, `/dashboard` and its assets, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
 
@@ -820,7 +820,7 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/traces` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
@@ -1504,7 +1504,10 @@ is a `tool.call` in the same trace, nested under the `claude_code.tool` span
 whose `traceparent` the request carries — or under the launching span when it
 carries none — and never in any other trace. Its metrics and log events stay
 off: the metrics count what the engine already records for the run, and the
-log events are Claude Code's content channel. With no receiver URL the engine
+log events are Claude Code's content channel. The receiver serves **traces
+only** — a metrics or logs export under a box's token is a `404` — so what the
+token in a box is worth to anything else running there is spans in its run's
+trace, a trace other seats' turns and runs can share, and nothing more. With no receiver URL the engine
 switches nothing on in a box, and Claude Code's spans of a run reach a
 collector only if the seat's `role.sandbox.env` points them at one.
 

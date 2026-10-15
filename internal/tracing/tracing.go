@@ -92,7 +92,7 @@
 // There is a hazard on that path worth writing down, because the obvious
 // middleware placement walks straight into it: a tracing middleware sits
 // OUTSIDE [github.com/crewlet/crewlet/internal/api/auth.Guard], and
-// `/otlp/{token}/v1/{signal}` is exempt from the guard by prefix because THE
+// `/otlp/{token}/v1/traces` is exempt from the guard by prefix because THE
 // TOKEN IN ITS PATH IS THE CREDENTIAL. Any middleware recording `http.route` or
 // `http.target` as a span attribute would ship a live credential to the
 // telemetry backend. If server spans are ever added, that route has to be

@@ -25,11 +25,7 @@ import (
 	"testing"
 	"time"
 
-	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
-	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
-	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -71,21 +67,6 @@ func spansIn(traceHex string) *coltracepb.ExportTraceServiceRequest {
 	}}}
 }
 
-// emptyRequest is a well-formed export of signal carrying one record of it.
-func emptyRequest(signal otlpenv.Signal) proto.Message {
-	switch signal {
-	case otlpenv.Metrics:
-		return &colmetricspb.ExportMetricsServiceRequest{ResourceMetrics: []*metricspb.ResourceMetrics{{
-			ScopeMetrics: []*metricspb.ScopeMetrics{{Metrics: []*metricspb.Metric{{Name: "probe"}}}},
-		}}}
-	case otlpenv.Logs:
-		return &collogspb.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
-			ScopeLogs: []*logspb.ScopeLogs{{LogRecords: []*logspb.LogRecord{{SeverityText: "INFO"}}}},
-		}}}
-	}
-	return spansIn(launchedFrom.TraceID)
-}
-
 func mustHex(s string) []byte {
 	b, err := hex.DecodeString(s)
 	if err != nil {
@@ -95,13 +76,13 @@ func mustHex(s string) []byte {
 }
 
 // protobufExport is msg as a box's OTLP/HTTP exporter sends it.
-func protobufExport(t *testing.T, signal otlpenv.Signal, msg proto.Message) sandbox.OtelExport {
+func protobufExport(t *testing.T, msg *coltracepb.ExportTraceServiceRequest) sandbox.OtelExport {
 	t.Helper()
 	body, err := proto.Marshal(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sandbox.OtelExport{Signal: signal, Body: body, ContentType: "application/x-protobuf"}
+	return sandbox.OtelExport{Body: body, ContentType: "application/x-protobuf"}
 }
 
 // accept hands the receiver an export under launchedFrom's token and requires
@@ -182,7 +163,7 @@ func TestACompressedExportIsReadNotRelabelled(t *testing.T) {
 	receiver := receiverTo(t, map[string]string{otlpenv.EndpointVar: server.URL})
 
 	sent := spansIn(launchedFrom.TraceID)
-	e := protobufExport(t, otlpenv.Traces, sent)
+	e := protobufExport(t, sent)
 	e.Body, e.ContentEncoding = gzipped(t, e.Body), "gzip"
 	accept(t, receiver, e)
 
@@ -229,7 +210,7 @@ func TestAnExportThatInflatesPastTheBoundIsRefused(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 	_, err := receiver.Accept(t.Context(), launchedFrom.TraceID, sandbox.OtelExport{
-		Signal: otlpenv.Traces, Body: bomb.Bytes(),
+		Body:        bomb.Bytes(),
 		ContentType: "application/x-protobuf", ContentEncoding: "gzip",
 	})
 	runtime.ReadMemStats(&after)
@@ -251,7 +232,7 @@ func TestWhatTheReceiverCannotReadIsRefused(t *testing.T) {
 	server := httptest.NewServer(upstream)
 	t.Cleanup(server.Close)
 	receiver := receiverTo(t, map[string]string{otlpenv.EndpointVar: server.URL})
-	good := protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID))
+	good := protobufExport(t, spansIn(launchedFrom.TraceID))
 
 	for _, tc := range []struct {
 		name string
@@ -316,9 +297,7 @@ func TestAJSONExportKeepsItsIDs(t *testing.T) {
 		`"startTimeUnixNano":"1760000000000000000","endTimeUnixNano":"1760000001000000000",` +
 		`"links":[{"traceId":"4bf92f3577b34da6a3ce929d0e0e4736","spanId":"2ab8283139d528ed"}],` +
 		`"aFieldFromANewerOTLP":true}]}]}]}`)
-	reply := accept(t, receiver, sandbox.OtelExport{
-		Signal: otlpenv.Traces, Body: body, ContentType: "application/json",
-	})
+	reply := accept(t, receiver, sandbox.OtelExport{Body: body, ContentType: "application/json"})
 
 	got := upstream.tracesAt(t)
 	if len(got) != 1 {
@@ -354,7 +333,7 @@ func TestAGzipUpstreamIsSentGzip(t *testing.T) {
 	})
 
 	sent := spansIn(launchedFrom.TraceID)
-	accept(t, receiver, protobufExport(t, otlpenv.Traces, sent))
+	accept(t, receiver, protobufExport(t, sent))
 	if enc := upstream.seen[0].Get("Content-Encoding"); enc != "gzip" {
 		t.Fatalf("Content-Encoding = %q, want gzip", enc)
 	}
@@ -440,7 +419,7 @@ func TestAnHTTPSUpstreamIsVerifiedAgainstTheNamedAuthority(t *testing.T) {
 	// Without the authority, the handshake fails, and that is the
 	// backend's problem rather than the box's.
 	untrusting := receiverTo(t, map[string]string{otlpenv.EndpointVar: server.URL})
-	accept(t, untrusting, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
+	accept(t, untrusting, protobufExport(t, spansIn(launchedFrom.TraceID)))
 	if got := upstream.saw(); len(got) != 0 {
 		t.Fatalf("a collector nobody trusted was sent %v", got)
 	}
@@ -448,23 +427,19 @@ func TestAnHTTPSUpstreamIsVerifiedAgainstTheNamedAuthority(t *testing.T) {
 	trusting := receiverTo(t, map[string]string{
 		otlpenv.EndpointVar: server.URL, otlpenv.CertificateVar: ca,
 	})
-	accept(t, trusting, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
+	accept(t, trusting, protobufExport(t, spansIn(launchedFrom.TraceID)))
 	if got := upstream.saw(); len(got) != 1 {
 		t.Fatalf("the collector the environment trusts received %v", got)
 	}
 }
 
-// grpcCollector is an in-process OTLP/gRPC collector, recording every Export
-// call it is made and the metadata it came with.
+// grpcCollector is an in-process OTLP/gRPC trace collector, recording every
+// Export call it is made and the metadata it came with.
 type grpcCollector struct {
 	coltracepb.UnimplementedTraceServiceServer
-	colmetricspb.UnimplementedMetricsServiceServer
-	collogspb.UnimplementedLogsServiceServer
 
 	mu       sync.Mutex
 	traces   []*coltracepb.ExportTraceServiceRequest
-	metrics  []*colmetricspb.ExportMetricsServiceRequest
-	logs     []*collogspb.ExportLogsServiceRequest
 	metadata []metadata.MD
 }
 
@@ -481,29 +456,7 @@ func (c *grpcCollector) Export(ctx context.Context, req *coltracepb.ExportTraceS
 	return &coltracepb.ExportTraceServiceResponse{}, nil
 }
 
-// metricsService and logsService adapt the collector to the two other
-// services, whose method is also named Export.
-type metricsService struct{ *grpcCollector }
-
-func (s metricsService) Export(ctx context.Context, req *colmetricspb.ExportMetricsServiceRequest) (*colmetricspb.ExportMetricsServiceResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.note(ctx)
-	s.metrics = append(s.metrics, req)
-	return &colmetricspb.ExportMetricsServiceResponse{}, nil
-}
-
-type logsService struct{ *grpcCollector }
-
-func (s logsService) Export(ctx context.Context, req *collogspb.ExportLogsServiceRequest) (*collogspb.ExportLogsServiceResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.note(ctx)
-	s.logs = append(s.logs, req)
-	return &collogspb.ExportLogsServiceResponse{}, nil
-}
-
-// startGRPCCollector serves the three collector services on a loopback port,
+// startGRPCCollector serves the trace collector service on a loopback port,
 // with opts (TLS, say), and answers the endpoint to reach it at.
 func startGRPCCollector(t *testing.T, scheme string, opts ...grpc.ServerOption) (*grpcCollector, string) {
 	t.Helper()
@@ -514,21 +467,19 @@ func startGRPCCollector(t *testing.T, scheme string, opts ...grpc.ServerOption) 
 	c := &grpcCollector{}
 	srv := grpc.NewServer(opts...)
 	coltracepb.RegisterTraceServiceServer(srv, c)
-	colmetricspb.RegisterMetricsServiceServer(srv, metricsService{c})
-	collogspb.RegisterLogsServiceServer(srv, logsService{c})
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return c, scheme + "://" + lis.Addr().String()
 }
 
-func (c *grpcCollector) counts() (traces, metrics, logs int) {
+func (c *grpcCollector) counts() (traces int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.traces), len(c.metrics), len(c.logs)
+	return len(c.traces)
 }
 
-// A GRPC UPSTREAM IS MADE THE COLLECTOR'S OWN EXPORT CALL, for every signal,
-// with the destination's headers as metadata. The receiver used to POST every
+// A GRPC UPSTREAM IS MADE THE COLLECTOR'S OWN EXPORT CALL, with the
+// destination's headers as metadata. The receiver used to POST every
 // box's export as OTLP/HTTP whatever protocol the engine exported in, so a
 // deployment on gRPC received the engine's spans and none of a box's.
 //
@@ -544,14 +495,9 @@ func TestAGRPCUpstreamGetsTheCollectorsExportCall(t *testing.T) {
 	})
 
 	sent := spansIn(launchedFrom.TraceID)
-	reply := accept(t, receiver, protobufExport(t, otlpenv.Traces, sent))
-	for _, signal := range []otlpenv.Signal{otlpenv.Metrics, otlpenv.Logs} {
-		accept(t, receiver, protobufExport(t, signal, emptyRequest(signal)))
-	}
-
-	if traces, metrics, logs := collector.counts(); traces != 1 || metrics != 1 || logs != 1 {
-		t.Fatalf("the collector received %d traces, %d metrics, %d logs exports; want one each",
-			traces, metrics, logs)
+	reply := accept(t, receiver, protobufExport(t, sent))
+	if traces := collector.counts(); traces != 1 {
+		t.Fatalf("the collector received %d traces exports, want one", traces)
 	}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
@@ -589,8 +535,8 @@ func TestAGRPCUpstreamOverTLSPresentsTheClientCertificate(t *testing.T) {
 		otlpenv.ProtocolVar:    "grpc",
 		otlpenv.CertificateVar: server.certFile,
 	})
-	accept(t, without, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
-	if traces, _, _ := collector.counts(); traces != 0 {
+	accept(t, without, protobufExport(t, spansIn(launchedFrom.TraceID)))
+	if traces := collector.counts(); traces != 0 {
 		t.Fatal("a collector requiring a client certificate accepted a forward without one")
 	}
 
@@ -602,8 +548,8 @@ func TestAGRPCUpstreamOverTLSPresentsTheClientCertificate(t *testing.T) {
 		otlpenv.ClientKeyVar:         client.keyFile,
 		otlpenv.CompressionVar:       "gzip",
 	})
-	accept(t, with, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
-	if traces, _, _ := collector.counts(); traces != 1 {
+	accept(t, with, protobufExport(t, spansIn(launchedFrom.TraceID)))
+	if traces := collector.counts(); traces != 1 {
 		t.Fatalf("the collector received %d traces exports over mutual TLS, want one", traces)
 	}
 }
@@ -629,8 +575,8 @@ func TestAnUpperCaseHTTPSUpstreamIsDialledOverTLS(t *testing.T) {
 		otlpenv.ProtocolVar:    "grpc",
 		otlpenv.CertificateVar: server.certFile,
 	})
-	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
-	if traces, _, _ := collector.counts(); traces != 1 {
+	accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
+	if traces := collector.counts(); traces != 1 {
 		t.Fatalf("a TLS collector at %s received %d traces exports, want one", endpoint, traces)
 	}
 }
@@ -654,8 +600,8 @@ func TestAGRPCUpstreamIsCompressedAsTheDestinationSays(t *testing.T) {
 		if tc.compression != "" {
 			env[otlpenv.CompressionVar] = tc.compression
 		}
-		accept(t, receiverTo(t, env), protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
-		if traces, _, _ := collector.counts(); traces != 1 {
+		accept(t, receiverTo(t, env), protobufExport(t, spansIn(launchedFrom.TraceID)))
+		if traces := collector.counts(); traces != 1 {
 			t.Fatalf("compression %q: the collector received %d traces exports, want one", tc.compression, traces)
 		}
 		if got := seen.compressions(); len(got) != 1 || got[0] != tc.want {
@@ -704,30 +650,28 @@ func TestAClosedReceiverForwardsNothing(t *testing.T) {
 	receiver := receiverTo(t, map[string]string{
 		otlpenv.EndpointVar: endpoint, otlpenv.ProtocolVar: "grpc",
 	})
-	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
+	accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
 	if err := receiver.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := receiver.Close(); err != nil {
 		t.Fatalf("a second close: %v", err)
 	}
-	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
-	if traces, _, _ := collector.counts(); traces != 1 {
+	accept(t, receiver, protobufExport(t, spansIn(launchedFrom.TraceID)))
+	if traces := collector.counts(); traces != 1 {
 		t.Errorf("the collector received %d exports, want only the one before the close", traces)
 	}
 }
 
 // AN EXPORT IS HELD TO ITS TOKEN'S TRACE. The token is minted for the trace a
 // run was launched in, and the box is handed that trace's TRACEPARENT, so
-// every span its agent records descends from it; a span — or a log record
-// naming a trace — in any other trace was written into somebody else's trace
-// by something else in the box, and is refused. It is reported to the box as a
-// partial success, which an exporter neither retries nor fails its batch for,
-// and the rest of the export still goes on. Metrics name no trace and pass.
+// every span its agent records descends from it; a span in any other trace —
+// or naming none — was written by something else in the box, and is refused.
+// It is reported to the box as a partial success, which an exporter neither
+// retries nor fails its batch for, and the rest of the export still goes on.
 //
-// Mutation: forward the decoded export without scoping it and the foreign span
-// reaches the backend; scope log records that name no trace and the plain log
-// line is lost.
+// Mutation: forward the decoded export without scoping it and the foreign and
+// trace-less spans reach the backend.
 func TestAnExportIsHeldToItsTokensTrace(t *testing.T) {
 	t.Parallel()
 	collector, endpoint := startGRPCCollector(t, "http")
@@ -738,54 +682,36 @@ func TestAnExportIsHeldToItsTokensTrace(t *testing.T) {
 
 	mixed := spansIn(launchedFrom.TraceID)
 	foreign := spansIn(elsewhere).GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()[0]
+	traceless := &tracepb.Span{SpanId: mustHex("3c9de682dcad293d"), Name: "names no trace"}
 	ss := mixed.GetResourceSpans()[0].GetScopeSpans()[0]
-	ss.Spans = append(ss.Spans, foreign)
-	reply := accept(t, receiver, protobufExport(t, otlpenv.Traces, mixed))
+	ss.Spans = append(ss.Spans, foreign, traceless)
+	reply := accept(t, receiver, protobufExport(t, mixed))
 
 	answer := &coltracepb.ExportTraceServiceResponse{}
 	if err := proto.Unmarshal(reply.Body, answer); err != nil {
 		t.Fatal(err)
 	}
-	if got := answer.GetPartialSuccess().GetRejectedSpans(); got != 1 {
-		t.Errorf("the box was told %d spans were refused, want 1", got)
+	if got := answer.GetPartialSuccess().GetRejectedSpans(); got != 2 {
+		t.Errorf("the box was told %d spans were refused, want 2", got)
 	}
 
 	// An export wholly in another trace goes nowhere at all.
-	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(elsewhere)))
-
-	logs := &collogspb.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
-		ScopeLogs: []*logspb.ScopeLogs{{LogRecords: []*logspb.LogRecord{
-			{SeverityText: "names no trace"},
-			{SeverityText: "names this one", TraceId: mustHex(launchedFrom.TraceID)},
-			{SeverityText: "names another", TraceId: mustHex(elsewhere)},
-		}}},
-	}}}
-	accept(t, receiver, protobufExport(t, otlpenv.Logs, logs))
-	accept(t, receiver, protobufExport(t, otlpenv.Metrics, emptyRequest(otlpenv.Metrics)))
+	accept(t, receiver, protobufExport(t, spansIn(elsewhere)))
 
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	if len(collector.traces) != 1 {
 		t.Fatalf("the collector received %d traces exports, want only the mixed one", len(collector.traces))
 	}
-	for _, span := range collector.traces[0].GetResourceSpans()[0].GetScopeSpans()[0].GetSpans() {
+	spans := collector.traces[0].GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()
+	if len(spans) != 1 {
+		t.Errorf("the collector received %d spans, want the one in the token's trace", len(spans))
+	}
+	for _, span := range spans {
 		if hex.EncodeToString(span.GetTraceId()) != launchedFrom.TraceID {
 			t.Errorf("a span in trace %x reached the collector under a token for %s",
 				span.GetTraceId(), launchedFrom.TraceID)
 		}
-	}
-	if len(collector.logs) != 1 {
-		t.Fatalf("the collector received %d logs exports", len(collector.logs))
-	}
-	var kept []string
-	for _, r := range collector.logs[0].GetResourceLogs()[0].GetScopeLogs()[0].GetLogRecords() {
-		kept = append(kept, r.GetSeverityText())
-	}
-	if len(kept) != 2 || kept[0] != "names no trace" || kept[1] != "names this one" {
-		t.Errorf("the collector kept the log records %q", kept)
-	}
-	if len(collector.metrics) != 1 {
-		t.Errorf("metrics, which name no trace, were held back")
 	}
 }
 
@@ -798,11 +724,11 @@ func TestATokenNamingNoTraceForwardsNoSpan(t *testing.T) {
 	receiver := receiverTo(t, map[string]string{
 		otlpenv.EndpointVar: endpoint, otlpenv.ProtocolVar: "grpc",
 	})
-	if _, err := receiver.Accept(t.Context(), "not-a-trace", protobufExport(t,
-		otlpenv.Traces, spansIn(launchedFrom.TraceID))); err != nil {
+	if _, err := receiver.Accept(t.Context(), "not-a-trace",
+		protobufExport(t, spansIn(launchedFrom.TraceID))); err != nil {
 		t.Fatal(err)
 	}
-	if traces, _, _ := collector.counts(); traces != 0 {
+	if traces := collector.counts(); traces != 0 {
 		t.Errorf("a token naming no trace forwarded %d exports", traces)
 	}
 }

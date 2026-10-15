@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,19 +35,19 @@ import (
 // the base endpoint upstream ("" forwards nothing).
 func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	t.Helper()
-	destinations, err := otlpenv.ResolveAll(func(name string) string {
+	destination, err := otlpenv.Resolve(func(name string) string {
 		if name == otlpenv.EndpointVar {
 			return upstream
 		}
 		return ""
-	})
+	}, otlpenv.Traces)
 	if err != nil {
 		t.Fatal(err)
 	}
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:  "https://engine.internal",
 		Tokens:   sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("test-key")}),
-		Upstream: destinations,
+		Upstream: destination,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -196,20 +197,42 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 	}
 }
 
-// AN UNKNOWN SIGNAL IS REFUSED, because the segment selects the upstream the
-// engine's own credential is sent to — an unchecked one lets a caller choose
-// part of that address.
-func TestAnUnknownSignalIsRefused(t *testing.T) {
+// A BOX TOKEN ADMITS TRACES AND NOTHING ELSE. The runners declare a box's
+// export traces-only — Claude Code's metrics and logs are switched off, and
+// OpenCode is minted no endpoint — so a metrics or logs export under a box
+// token comes from something in the box other than its agent; the receiver
+// used to forward it with the backend's credential, log records naming no
+// trace and metric exemplars naming any. Every other path under a valid token
+// is the mux's 404, a final answer an exporter does not retry, and reaches no
+// backend.
+//
+// Mutation: serve `/v1/{signal}` again and the metrics and logs cases reach the
+// upstream.
+func TestABoxTokenAdmitsTracesAndNothingElse(t *testing.T) {
 	t.Parallel()
-	receiver := otlpReceiver(t, "")
+	var reached []string
+	var mu sync.Mutex
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reached = append(reached, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	receiver := otlpReceiver(t, upstream.URL)
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 	token := tokenFor(t, receiver, otlpTrace)
 
-	for _, signal := range []string{"profiles", "admin", "TRACES"} {
-		res := postOTLP(a, "/otlp/"+token+"/v1/"+signal, "x")
+	for _, signal := range []string{"metrics", "logs", "profiles", "admin", "TRACES"} {
+		res := postOTLP(a, "/otlp/"+token+"/v1/"+signal, spans(t))
 		if res.StatusCode != http.StatusNotFound {
 			t.Errorf("signal %q: status = %d, want 404", signal, res.StatusCode)
 		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reached) != 0 {
+		t.Errorf("a non-traces export reached the backend at %v", reached)
 	}
 }
 
