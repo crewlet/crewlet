@@ -1,11 +1,18 @@
 package api_test
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
@@ -62,11 +69,35 @@ func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) stri
 }
 
 func postOTLP(a *api.App, path string, body string) *http.Response {
+	return postOTLPAs(a, path, body, "application/x-protobuf", "")
+}
+
+func postOTLPAs(a *api.App, path, body, contentType, encoding string) *http.Response {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Content-Type", contentType)
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
+	}
 	a.ServeHTTP(rec, req)
 	return rec.Result()
+}
+
+// spans is a traces export of one span, as a box's exporter sends it.
+func spans(t *testing.T) string {
+	t.Helper()
+	body, err := proto.Marshal(&coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{
+				TraceId: bytes.Repeat([]byte{0xab}, 16), SpanId: bytes.Repeat([]byte{0xcd}, 8),
+				Name: "claude_code.interaction",
+			}},
+		}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }
 
 // A VALID TOKEN IS ACCEPTED AND THE PAYLOAD REACHES THE BACKEND, with the
@@ -78,8 +109,7 @@ func TestAnExportWithAValidTokenIsForwarded(t *testing.T) {
 		body string
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		buf := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(buf)
+		buf, _ := io.ReadAll(r.Body)
 		got.path, got.body = r.URL.Path, string(buf)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -88,12 +118,48 @@ func TestAnExportWithAValidTokenIsForwarded(t *testing.T) {
 	receiver := otlpReceiver(t, upstream.URL)
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 
-	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces", "spans")
+	body := spans(t)
+	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces", body)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
-	if got.path != "/v1/traces" || got.body != "spans" {
+	if got.path != "/v1/traces" || got.body != body {
 		t.Errorf("the upstream received %q at %q", got.body, got.path)
+	}
+	// ANSWERED AS OTLP/HTTP ASKS: the signal's Export response, in the
+	// media type the export came in.
+	if ct := res.Header.Get("Content-Type"); ct != "application/x-protobuf" {
+		t.Errorf("the box was answered as %q", ct)
+	}
+}
+
+// AN EXPORT THE RECEIVER CANNOT READ IS REFUSED AS THE SPECIFICATION SAYS —
+// each answer final, so the exporter drops the batch rather than retrying it:
+// 415 for a media type or an encoding the route does not speak, 400 for a
+// body that does not decode, 413 for one that inflates past the cap.
+func TestAnExportTheReceiverCannotReadIsRefused(t *testing.T) {
+	t.Parallel()
+	receiver := otlpReceiver(t, "")
+	a := newApp(t, api.Options{OtelReceiver: receiver})
+	path := "/otlp/" + tokenFor(t, receiver, "trace-abc") + "/v1/traces"
+
+	var bomb bytes.Buffer
+	zw := gzip.NewWriter(&bomb)
+	_, _ = zw.Write(make([]byte, sandbox.MaxOtelPayload+1))
+	_ = zw.Close()
+
+	for _, tc := range []struct {
+		name, body, contentType, encoding string
+		want                              int
+	}{
+		{"a media type OTLP does not define", spans(t), "text/plain", "", http.StatusUnsupportedMediaType},
+		{"an encoding the route does not read", spans(t), "application/x-protobuf", "br", http.StatusUnsupportedMediaType},
+		{"a body that is not an export", "spans", "application/x-protobuf", "", http.StatusBadRequest},
+		{"gzip inflating past the cap", bomb.String(), "application/x-protobuf", "gzip", http.StatusRequestEntityTooLarge},
+	} {
+		if res := postOTLPAs(a, path, tc.body, tc.contentType, tc.encoding); res.StatusCode != tc.want {
+			t.Errorf("%s: status = %d, want %d", tc.name, res.StatusCode, tc.want)
+		}
 	}
 }
 
@@ -153,7 +219,7 @@ func TestTheExportRouteNeedsNoAPIToken(t *testing.T) {
 		Bootstrap: closedToReads(),
 	})
 
-	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces", "spans")
+	res := postOTLP(a, "/otlp/"+tokenFor(t, receiver, "trace-abc")+"/v1/traces", spans(t))
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d — a sandbox cannot carry an API token, so this "+
 			"route has to authenticate by its own path", res.StatusCode)

@@ -296,6 +296,11 @@ type Engine struct {
 	// keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
+	// ownsOtel says this engine BUILT sandboxOtel, and so closes it at the
+	// teardown — its gRPC connections to the collector. One handed in
+	// through [Options.OtelReceiver] is its builder's to close.
+	ownsOtel bool
+
 	// bridge serves a running seat's tool surface to a coding agent over
 	// MCP. Nil where no bridge URL is configured, which is every
 	// deployment that runs no agent mode.
@@ -832,7 +837,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if environ == nil {
 		environ = config.EnvSource{}
 	}
-	otel := opts.OtelReceiver
+	otel, ownsOtel := opts.OtelReceiver, false
 	if otel == nil {
 		built, err := sandbox.BuildOtelReceiver(getenv(environ),
 			keyMaterial(opts.Bootstrap))
@@ -843,7 +848,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			// config that looks complete and exports nothing.
 			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
-		otel = built
+		otel, ownsOtel = built, built != nil
 	}
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
 	// receiver above is built here: a fleet mints on one node and may
@@ -931,6 +936,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		steers:              newSteerDesk(),
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
+		ownsOtel:            ownsOtel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		usageEvery:          opts.usageEvery,
 		seatRetryBase:       opts.seatRetryBase,

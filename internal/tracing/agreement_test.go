@@ -1,6 +1,11 @@
 package tracing_test
 
 import (
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -34,6 +39,7 @@ import (
 func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 	t.Parallel()
 	const base = "http://collector.example.com:4318"
+	ca := certificateFile(t)
 	for _, tc := range []struct {
 		name string
 		env  map[string]string
@@ -76,6 +82,16 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 			otlpenv.Traces.ExporterVar():  "none",
 			otlpenv.Metrics.ExporterVar(): "none",
 		}},
+		{"gzip, and a signal's own choice", map[string]string{
+			otlpenv.EndpointVar:              base,
+			otlpenv.CompressionVar:           "gzip",
+			otlpenv.Metrics.CompressionVar(): "none",
+		}},
+		{"a private authority for an https collector", map[string]string{
+			otlpenv.EndpointVar:          "https://collector.example.com:4318",
+			otlpenv.CertificateVar:       ca,
+			otlpenv.Traces.InsecureVar(): "false",
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -105,6 +121,9 @@ func TestTheExporterAndTheReceiverResolveOneDestination(t *testing.T) {
 		otlpenv.ProtocolVar:           "http/json",
 		otlpenv.Metrics.ProtocolVar(): "otlp",
 		otlpenv.Traces.ExporterVar():  "console",
+		otlpenv.CompressionVar:        "zstd",
+		otlpenv.CertificateVar:        "/nonexistent/ca.pem",
+		otlpenv.InsecureVar:           "maybe",
 	} {
 		env := lookup(map[string]string{name: value})
 		_, recvErr := sandbox.BuildOtelReceiver(env, []string{"k1:test-material"})
@@ -126,4 +145,19 @@ func lookup(kv map[string]string) func(string) string {
 		}
 		return kv[name]
 	}
+}
+
+// certificateFile writes a certificate a collector could serve as a PEM file,
+// for a case that names one.
+func certificateFile(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewTLSServer(http.NotFoundHandler())
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: server.Certificate().Raw,
+	}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

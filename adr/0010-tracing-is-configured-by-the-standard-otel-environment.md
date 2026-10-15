@@ -9,7 +9,8 @@
 
 ## The decision
 
-The OTLP endpoints, headers, protocols and exporter switches, the service name
+The OTLP endpoints, headers, protocols, compression, TLS material and exporter
+switches, the service name
 and resource attributes, and the sampler and its ratio are the `OTEL_*`
 environment variables every collector's own documentation uses. There is no
 `tracing:` block in the Tier A file, and there will not be one.
@@ -20,7 +21,10 @@ rather than a package doc: the engine's own exporters in `internal/tracing`
 which stamps a trace context into a coding box so the box's spans nest under the
 turn that started them, and forwards what the box exports. **Both resolve the
 OTLP variables through one resolver, `internal/otlpenv`**, and neither reads
-them itself.
+them itself — the engine hands its exporters everything the resolver read, so
+the SDK's own reading of the same variables never decides anything, and the
+forwarder sends what a box exported the way those exporters send: the resolved
+protocol (a gRPC `Export` call to a gRPC collector), compression and TLS.
 
 **The tracer is always running; only the exporter is optional.** A trace id is
 not merely an exporter's concern here — it is an indexed column in the event
@@ -117,8 +121,18 @@ asserted the two variable NAMES were equal, which they were.
 So the variables are read in one place, `internal/otlpenv`, which mirrors the
 OTel Go SDK's own reading of them, and two tests hold the arrangement: the
 agreement test resolves a table of environments through each half's own entry
-point and requires equal destinations — endpoint, headers, protocol, whether the
-signal was switched off — and equal refusals; the conformance test builds the
-SDK's exporter from the environment alone and requires it to send where, and
-with what, the resolver said. Each half's wire behaviour is held to its own
+point and requires equal destinations — endpoint, headers, protocol, compression,
+TLS material, whether the signal was switched off — and equal refusals; the
+conformance tests build the SDK's exporter from the environment alone and
+require it to send where, with what, compressed as and trusting what the
+resolver said.
+
+The forwarder once honoured the shared destination only as far as an address:
+it re-sent a box's body over OTLP/HTTP whatever protocol was resolved, without
+the box's Content-Encoding and with none of the certificate variables, so a
+deployment on gRPC, on gzip from inside its boxes, or behind a private
+certificate authority received the engine's spans and refused every box's. So
+it decodes what it receives and writes the message itself, and
+`internal/sandbox` holds it to a gRPC collector, an https one behind a private
+authority with a client certificate, and both compressions. Each half's wire behaviour is held to its own
 resolution beside them, so "resolved alike" and "sent alike" are the same claim.

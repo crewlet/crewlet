@@ -1687,6 +1687,14 @@ func (e *Engine) stopSandbox() {
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Stop()
 	}
+	// The OTLP receiver's upstream connections, once nothing can forward
+	// through them: the listeners are closed before the teardown begins,
+	// and every box this node launched has been left to the waiter above.
+	if e.ownsOtel && e.sandboxOtel != nil {
+		if err := e.sandboxOtel.Close(); err != nil {
+			log.Warn("sandbox_otel_receiver_close_failed", "error", err.Error())
+		}
+	}
 }
 
 // sandboxSeatRuns is the inbox screening's two sandbox answers for a seat, read

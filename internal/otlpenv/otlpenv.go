@@ -43,6 +43,18 @@
 //     default.
 //   - EXPORTER. OTEL_<SIGNAL>_EXPORTER=none switches the signal off whatever
 //     the endpoint says.
+//   - COMPRESSION. OTEL_EXPORTER_OTLP_<SIGNAL>_COMPRESSION, else
+//     OTEL_EXPORTER_OTLP_COMPRESSION: `gzip`, or `none`, the default.
+//   - TLS. The endpoint's SCHEME decides whether an export is encrypted. An
+//     https endpoint verifies the collector against the system's roots, or
+//     against the PEM file OTEL_EXPORTER_OTLP_<SIGNAL>_CERTIFICATE, else
+//     OTEL_EXPORTER_OTLP_CERTIFICATE, names; and presents the client
+//     certificate and key the CLIENT_CERTIFICATE and CLIENT_KEY pair name —
+//     the signal's own pair when both halves are set, else the base pair.
+//     OTEL_EXPORTER_OTLP_INSECURE says nothing the scheme does not already:
+//     the specification applies it only to an endpoint written WITHOUT a
+//     scheme, which this package refuses, and the SDK the engine's exporters
+//     are built on lets the scheme overrule it.
 //
 // # Where this is stricter than the SDK, and why
 //
@@ -64,9 +76,24 @@
 //     specification asks of every enumerated variable.
 //   - An exporter must be `otlp` or `none`. A list, or a name such as
 //     `console` or `zipkin`, names an exporter this build does not have.
+//   - A compression must be `gzip` or `none`. The SDK reads anything else as
+//     `none`, so `GZIP` — or a typo — exported uncompressed with no word.
+//   - A certificate or a client key pair must be readable, PEM, and — for a
+//     pair — a certificate and the key that matches it. The SDK reports a
+//     file it cannot use through its error handler and exports without it:
+//     to a collector that then refuses the handshake, or with a client
+//     certificate quietly missing. Half a pair is refused too, where the SDK
+//     skips it.
+//   - Certificate material beside an `http://` endpoint is refused: it can
+//     never be used, and the SDK's two exporters disagree about it — the
+//     HTTP one refuses to start, the gRPC one encrypts the connection the
+//     scheme said was plaintext. So is an OTEL_EXPORTER_OTLP_INSECURE that
+//     contradicts the scheme, and one that is neither `true` nor `false`.
 //
 // The error names the variable to change and never quotes an endpoint's value,
-// which is the one place an operator is likely to have put a credential.
+// which is the one place an operator is likely to have put a credential. A
+// certificate's PATH is quoted — it is a file name, not a secret, and the
+// thing an operator has to go and check.
 //
 // # Imports nothing from the engine
 //
@@ -76,8 +103,11 @@
 package otlpenv
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 )
@@ -120,6 +150,24 @@ func (s Signal) ProtocolVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() 
 // ExporterVar is the variable that switches the signal off with `none`.
 func (s Signal) ExporterVar() string { return "OTEL_" + s.upper() + "_EXPORTER" }
 
+// CompressionVar is the signal-specific compression variable.
+func (s Signal) CompressionVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_COMPRESSION" }
+
+// CertificateVar is the signal-specific trusted-certificate file variable.
+func (s Signal) CertificateVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_CERTIFICATE" }
+
+// ClientCertificateVar is the signal-specific client-certificate file variable.
+func (s Signal) ClientCertificateVar() string {
+	return "OTEL_EXPORTER_OTLP_" + s.upper() + "_CLIENT_CERTIFICATE"
+}
+
+// ClientKeyVar is the signal-specific client-key file variable.
+func (s Signal) ClientKeyVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_CLIENT_KEY" }
+
+// InsecureVar is the signal-specific insecure switch, checked against the
+// endpoint's scheme and otherwise without effect.
+func (s Signal) InsecureVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_INSECURE" }
+
 func (s Signal) upper() string { return strings.ToUpper(string(s)) }
 
 // The base variables, which every signal reads unless its own is set.
@@ -133,7 +181,38 @@ const (
 
 	// ProtocolVar selects the transport.
 	ProtocolVar = "OTEL_EXPORTER_OTLP_PROTOCOL"
+
+	// CompressionVar selects `gzip` or `none` for every signal.
+	CompressionVar = "OTEL_EXPORTER_OTLP_COMPRESSION"
+
+	// CertificateVar names the PEM file of the authorities an https
+	// collector's certificate is verified against.
+	CertificateVar = "OTEL_EXPORTER_OTLP_CERTIFICATE"
+
+	// ClientCertificateVar and ClientKeyVar name the PEM files of the client
+	// certificate an https export presents, and its key — a pair.
+	ClientCertificateVar = "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE"
+	ClientKeyVar         = "OTEL_EXPORTER_OTLP_CLIENT_KEY"
+
+	// InsecureVar is the specification's switch for an endpoint written
+	// without a scheme; see the package doc.
+	InsecureVar = "OTEL_EXPORTER_OTLP_INSECURE"
 )
+
+// Compression is how an export's body is compressed on the wire.
+type Compression string
+
+// The compressions, and the closed set an unknown value is refused against.
+const (
+	NoCompression Compression = "none"
+	Gzip          Compression = "gzip"
+)
+
+// Compressions is every [Compression], the default first.
+var Compressions = []Compression{NoCompression, Gzip}
+
+// Valid reports a compression the exporters apply.
+func (c Compression) Valid() bool { return slices.Contains(Compressions, c) }
 
 // Protocol is an OTLP transport this build can speak.
 type Protocol string
@@ -181,6 +260,15 @@ type Destination struct {
 	// operator switched this signal off whatever the endpoint says.
 	Declined bool
 
+	// Compression is how an export's body is compressed, [NoCompression]
+	// when nothing says otherwise.
+	Compression Compression
+
+	// TLS is the certificate material an https export uses beyond the
+	// system's roots, by the files it names; the zero value is none. Always
+	// zero for an http endpoint, which carries no TLS at all.
+	TLS TLS
+
 	// Dropped are the header entries the resolution could not use, in the
 	// order they were written. The SDK drops the same entries; this records
 	// them, because a dropped credential is an export the backend refuses,
@@ -190,6 +278,57 @@ type Destination struct {
 
 // Exports reports whether this signal is exported anywhere.
 func (d Destination) Exports() bool { return d.Endpoint != "" && !d.Declined }
+
+// Secure reports whether exports go over TLS: the endpoint's scheme is https.
+func (d Destination) Secure() bool { return strings.HasPrefix(d.Endpoint, "https://") }
+
+// TLS is the certificate material one destination is dialled with, by the
+// files that hold it — which keeps a [Destination] comparable, and keeps a
+// private key out of every value a test or a log line might print.
+type TLS struct {
+	// Certificate is the PEM file of the authorities the collector's
+	// certificate is verified against, read from CertificateVar. Empty
+	// verifies against the system's roots.
+	Certificate    string
+	CertificateVar string
+
+	// ClientCertificate and ClientKey are the PEM files of the client
+	// certificate presented to the collector, and its key, read from the
+	// pair ClientCertificateVar names. Both empty presents none.
+	ClientCertificate    string
+	ClientKey            string
+	ClientCertificateVar string
+}
+
+// Config builds the TLS configuration an exporter or a forwarder dials this
+// destination with, or nil when the destination names no material of its own
+// — an http endpoint, or an https one verified against the system's roots,
+// which is what every client does with no configuration at all.
+//
+// The files are READ HERE, at the moment a client is built, which is when the
+// SDK reads them too. [Resolve] has already read them once and refused what
+// could not be used, so an error here is a file that changed in between.
+func (d Destination) Config() (*tls.Config, error) {
+	if !d.Secure() || d.TLS == (TLS{}) {
+		return nil, nil
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if d.TLS.Certificate != "" {
+		pool, err := certPool(d.TLS.CertificateVar, d.TLS.Certificate)
+		if err != nil {
+			return nil, err
+		}
+		cfg.RootCAs = pool
+	}
+	if d.TLS.ClientCertificate != "" {
+		pair, err := keyPair(d.TLS.ClientCertificateVar, d.TLS.ClientCertificate, d.TLS.ClientKey)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	return cfg, nil
+}
 
 // Dropped is one header entry that was not used.
 //
@@ -273,7 +412,149 @@ func Resolve(env func(string) string, s Signal) (Destination, error) {
 	if raw := get(headersVar); raw != "" {
 		d.Headers, d.Dropped = parseHeaders(headersVar, raw)
 	}
+
+	if d.Compression, err = compressionFor(get, s); err != nil {
+		return Destination{}, err
+	}
+	if err := d.resolveTLS(get, s); err != nil {
+		return Destination{}, err
+	}
 	return d, nil
+}
+
+// compressionFor applies the compression rule: the signal's own variable, else
+// the base, else none.
+func compressionFor(get func(string) string, s Signal) (Compression, error) {
+	name, raw := s.CompressionVar(), get(s.CompressionVar())
+	if raw == "" {
+		name, raw = CompressionVar, get(CompressionVar)
+	}
+	if raw == "" {
+		return NoCompression, nil
+	}
+	c := Compression(strings.ToLower(raw))
+	if !c.Valid() {
+		return "", fmt.Errorf("%s=%q is not a compression the exporter applies: set it "+
+			"to %s or %s", name, raw, Gzip, NoCompression)
+	}
+	return c, nil
+}
+
+// resolveTLS applies the TLS rule — see the package doc — and refuses
+// material that can never be used.
+//
+// The SIGNAL'S OWN VARIABLE WINS, as the SDK applies the two in turn and the
+// later assignment stands: its certificate over the base certificate, and its
+// client pair over the base pair. A pair is taken from one level whole, never
+// a certificate from one and a key from the other.
+func (d *Destination) resolveTLS(get func(string) string, s Signal) error {
+	insecureVar, insecure := s.InsecureVar(), get(s.InsecureVar())
+	if insecure == "" {
+		insecureVar, insecure = InsecureVar, get(InsecureVar)
+	}
+	if insecure != "" {
+		var plaintext bool
+		switch strings.ToLower(insecure) {
+		case "true":
+			plaintext = true
+		case "false":
+		default:
+			return fmt.Errorf("%s=%q is neither true nor false", insecureVar, insecure)
+		}
+		if d.Endpoint != "" && plaintext == d.Secure() {
+			scheme := "https://"
+			if plaintext {
+				scheme = "http://"
+			}
+			return fmt.Errorf("%s=%s contradicts %s's scheme, and the scheme is what "+
+				"decides whether an export uses TLS: write the endpoint as %s, or unset %s",
+				insecureVar, insecure, d.EndpointVar, scheme, insecureVar)
+		}
+	}
+
+	tlsCfg := TLS{}
+	tlsCfg.CertificateVar, tlsCfg.Certificate = s.CertificateVar(), get(s.CertificateVar())
+	if tlsCfg.Certificate == "" {
+		tlsCfg.CertificateVar, tlsCfg.Certificate = CertificateVar, get(CertificateVar)
+	}
+	if tlsCfg.Certificate == "" {
+		tlsCfg.CertificateVar = ""
+	} else if _, err := certPool(tlsCfg.CertificateVar, tlsCfg.Certificate); err != nil {
+		return err
+	}
+
+	for _, pair := range [][2]string{
+		{s.ClientCertificateVar(), s.ClientKeyVar()},
+		{ClientCertificateVar, ClientKeyVar},
+	} {
+		cert, key := get(pair[0]), get(pair[1])
+		switch {
+		case cert == "" && key == "":
+			continue
+		case cert == "":
+			return fmt.Errorf("%s is set without %s: a client key is presented with "+
+				"its certificate, so set both or neither", pair[1], pair[0])
+		case key == "":
+			return fmt.Errorf("%s is set without %s: a client certificate is "+
+				"presented with its key, so set both or neither", pair[0], pair[1])
+		}
+		if _, err := keyPair(pair[0], cert, key); err != nil {
+			return err
+		}
+		tlsCfg.ClientCertificateVar, tlsCfg.ClientCertificate, tlsCfg.ClientKey = pair[0], cert, key
+		break
+	}
+
+	if tlsCfg == (TLS{}) {
+		return nil
+	}
+	if d.Endpoint != "" && !d.Secure() {
+		named := tlsCfg.CertificateVar
+		if named == "" {
+			named = tlsCfg.ClientCertificateVar
+		}
+		return fmt.Errorf("%s names certificate material for %s, which is an http:// "+
+			"endpoint and so carries no TLS to use it with: write the endpoint as "+
+			"https://, or unset %s", named, d.EndpointVar, named)
+	}
+	d.TLS = tlsCfg
+	return nil
+}
+
+// certPool reads a PEM file of certificate authorities.
+func certPool(name, path string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s=%q cannot be read: %w", name, path, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("%s=%q holds no PEM certificate: it must name a "+
+			"file of one or more -----BEGIN CERTIFICATE----- blocks", name, path)
+	}
+	return pool, nil
+}
+
+// keyPair reads a client certificate and its key, each a PEM file.
+//
+// The key file's CONTENT is never quoted, and neither is the parser's own
+// error, which can echo a fragment of what it failed to read.
+func keyPair(name, certPath, keyPath string) (tls.Certificate, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("%s=%q cannot be read: %w", name, certPath, err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("the client key %q beside %s cannot be read: %w",
+			keyPath, name, err)
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("%s=%q and its key %q are not a PEM "+
+			"certificate and the private key that matches it", name, certPath, keyPath)
+	}
+	return pair, nil
 }
 
 // ResolveAll resolves every signal, for a reader that serves all three.
