@@ -639,6 +639,18 @@ type RunRequest struct {
 	Env    map[string]string
 	Limits Limits
 
+	// Telemetry is the part of Env the launch added for the agent's OWN
+	// telemetry — the runner's declaration ([Runner.Telemetry]) and the
+	// receiver's endpoint beside it ([OtelReceiver.RunEnv]) — at the values
+	// Env carries them, so an operator's own value in role.sandbox.env is
+	// the one here too. Nil when the launch added none.
+	//
+	// NAMED APART from Env for a runner that can hand its agent these values
+	// somewhere the box cannot outrank them: an environment is the lowest
+	// layer an agent reads, and a settings file the image carries can
+	// replace any of it.
+	Telemetry map[string]string
+
 	// Placement is the cell the box is in, for a runner whose invocation
 	// depends on it: what a process there may be told about where it runs.
 	Placement Placement

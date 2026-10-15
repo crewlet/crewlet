@@ -492,6 +492,7 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 		return RunHandle{}, r.StartErr
 	}
 	req.Env = maps.Clone(req.Env)
+	req.Telemetry = maps.Clone(req.Telemetry)
 	r.started = append(r.started, req)
 	return RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}, nil
 }

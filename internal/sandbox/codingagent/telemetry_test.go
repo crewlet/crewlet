@@ -1,8 +1,10 @@
 package codingagent_test
 
 import (
+	"encoding/json"
 	"maps"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,5 +117,81 @@ func TestTheRunnerHandsOutItsCLIsDeclarationFresh(t *testing.T) {
 	}
 	if codingagent.NewOpenCode().Telemetry() != nil {
 		t.Error("the OpenCode runner declares telemetry its CLI does not")
+	}
+}
+
+// THE RUN'S TELEMETRY IS PINNED ABOVE EVERY SETTINGS FILE THE BOX CARRIES but
+// a managed one, and its values never reach the command line.
+//
+// Claude Code reads the `env` of its settings files over its environment, so
+// a ~/.claude/settings.json an E2B template carries, or one a previous run
+// wrote into a reused box, switched the prompt capture back on and sent the
+// whole export to another collector — measured against 2.1.300, where flag
+// settings (`--settings`, a file or a JSON string) beat that file and an
+// empty value there beat a non-empty one in it. So the launch's telemetry is
+// written as flag settings, EXACTLY as the launch merged it — an empty
+// per-signal endpoint stays empty, an operator's value stays the operator's —
+// to a file the invocation names, because the endpoint carries the run's
+// token and a process's argv is listed by every ps on the host. A run handed
+// no telemetry is handed no settings, and a reused box loses the last run's.
+//
+// Mutation: render the settings from the CLI's own declaration rather than
+// the run's, put the JSON on the command line, or pass --settings for a run
+// with no telemetry, and the matching check goes red.
+func TestClaudeCodeIsHandedTheRunsTelemetryAboveItsSettingsFiles(t *testing.T) {
+	t.Parallel()
+	telemetry := map[string]string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT":        "https://engine.example/otlp/v1.secret-token",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "",
+		"OTEL_LOG_USER_PROMPTS":              "false",
+		// The operator's own value, which the launch already merged.
+		"CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+	}
+	env := maps.Clone(telemetry)
+	env["ANTHROPIC_API_KEY"] = "sk-ant-not-telemetry"
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+
+	if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{
+		Brief: "fix the flake", Env: env, Telemetry: telemetry,
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	blob, err := b.ReadFile(t.Context(), p.Settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(blob, &settings); err != nil {
+		t.Fatalf("the settings file is not JSON: %v\n%s", err, blob)
+	}
+	if !maps.Equal(settings.Env, telemetry) {
+		t.Errorf("the settings carry %v, want the run's telemetry exactly: %v", settings.Env, telemetry)
+	}
+	script := lastBackground(t, b)
+	if !strings.Contains(script, "--settings") || !strings.Contains(script, p.Settings()) {
+		t.Errorf("the invocation names no settings file:\n%s", script)
+	}
+	if strings.Contains(script, "secret-token") {
+		t.Errorf("a telemetry value reached the command line:\n%s", script)
+	}
+
+	// A RUN HANDED NO TELEMETRY is handed no settings, and the box's last
+	// ones are cleared before it starts.
+	if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "again", Env: env}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if script := lastBackground(t, b); strings.Contains(script, "--settings") {
+		t.Errorf("a run with no telemetry was handed settings:\n%s", script)
+	}
+	cleared := false
+	for _, cmd := range b.Commands() {
+		cleared = cleared || (strings.HasPrefix(cmd, "rm -f ") && strings.Contains(cmd, p.Settings()))
+	}
+	if !cleared {
+		t.Errorf("the last run's settings, token included, were not cleared: %q", b.Commands())
 	}
 }
