@@ -93,8 +93,9 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 		}
 	}
 
-	// EXPIRY RIDES IN THE TOKEN, so nothing is reaped and a restart does
-	// not invalidate a live run's endpoint.
+	// EXPIRY RIDES IN THE TOKEN, so nothing is reaped — and, with a key
+	// derived from the keyring, a restart does not invalidate a live run's
+	// endpoint (TestAnOtelTokenVerifiesInAnotherProcess).
 	clock = at.Add(11 * time.Minute)
 	if got := tokens.Validate(good); got != "" {
 		t.Errorf("an expired token validated to %q", got)
@@ -399,7 +400,6 @@ func TestTheBoxsTraceparentFollowsTheTurnsDecision(t *testing.T) {
 	}{
 		{"sampled", launchedFrom, "00-" + launchedFrom.TraceID + "-" + launchedFrom.SpanID + "-01"},
 		{"unsampled", unsampled, "00-" + launchedFrom.TraceID + "-" + launchedFrom.SpanID + "-00"},
-		{"no span to nest under", noSpan, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := receiver.RunEnv(t.Context(), tc.trace, "turn-1", "engineer", time.Hour)
@@ -411,6 +411,13 @@ func TestTheBoxsTraceparentFollowsTheTurnsDecision(t *testing.T) {
 				t.Error("a run with a trace got no endpoint")
 			}
 		})
+	}
+
+	// A RUN WITH NO SPAN TO NEST UNDER IS HANDED NOTHING — no TRACEPARENT,
+	// and so no endpoint either: its agent would root traces of its own,
+	// every span of which is outside its token's trace and refused.
+	if env := receiver.RunEnv(t.Context(), noSpan, "turn-1", "engineer", time.Hour); len(env) != 0 {
+		t.Errorf("a run with no span to nest under got %v", env)
 	}
 }
 
@@ -725,5 +732,55 @@ func TestTheBoxWaitsForTheReceiversAnswer(t *testing.T) {
 	if got := time.Duration(ms) * time.Millisecond; got <= sandbox.OtelForwardTimeout {
 		t.Errorf("the box waits %v for an answer the receiver may take %v to forward",
 			got, sandbox.OtelForwardTimeout)
+	}
+}
+
+// A RUN'S ENDPOINT OUTLIVES ITS BOX'S TIMEOUT. The box's environment is fixed
+// when its agent starts, so the token cannot be renewed; tied to the box's TTL
+// (twice the keepalive window plus the pause TTL — an hour at the defaults),
+// every run past that lost the tail of its telemetry, the part that says how it
+// ended. It lasts a day, and not past it.
+//
+// Mutation: mint with the old box-TTL formula and the late-run case goes red;
+// mint for longer than a day and the expiry case does.
+func TestARunsEndpointLastsADay(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	clock := start
+	now := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k"), Now: now}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := launchOf(nil)
+	req.Spec.TimeoutSec, req.Spec.PauseTTLSec = 900, 1800
+	env := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), req)
+	token := strings.TrimPrefix(env[otlpenv.EndpointVar], "https://engine.internal/otlp/")
+
+	for _, tc := range []struct {
+		after time.Duration
+		valid bool
+	}{
+		{2 * time.Hour, true},  // past the box's own TTL, still exporting
+		{23 * time.Hour, true}, // late in a very long run
+		{sandbox.OtelTokenLifetime + time.Second, false},
+	} {
+		mu.Lock()
+		clock = start.Add(tc.after)
+		mu.Unlock()
+		if got := receiver.Validate(token) != ""; got != tc.valid {
+			t.Errorf("%v after the launch the endpoint validates: %v, want %v", tc.after, got, tc.valid)
+		}
+	}
+	if sandbox.OtelTokenLifetime != 24*time.Hour {
+		t.Errorf("the lifetime is %v; the documentation promises a day", sandbox.OtelTokenLifetime)
 	}
 }

@@ -23,7 +23,7 @@ import (
 // It has to be: the exporter inside the box holds no API token, and giving it
 // one would be handing a sandbox the credential that reads the whole company.
 // What authenticates a request instead is the per-run, trace-scoped, expiring
-// token in its own PATH, and the auth package exempts `/otlp/` by prefix for
+// token in its own PATH (see [sandbox.OtelTokens] for what the scope holds), and the auth package exempts `/otlp/` by prefix for
 // exactly that reason. So this handler verifies before it does anything, on
 // the same terms as the webhook edge beside it.
 

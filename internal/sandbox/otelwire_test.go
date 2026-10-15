@@ -626,3 +626,93 @@ func TestAClosedReceiverForwardsNothing(t *testing.T) {
 		t.Errorf("the collector received %d exports, want only the one before the close", traces)
 	}
 }
+
+// AN EXPORT IS HELD TO ITS TOKEN'S TRACE. The token is minted for the trace a
+// run was launched in, and the box is handed that trace's TRACEPARENT, so
+// every span its agent records descends from it; a span — or a log record
+// naming a trace — in any other trace was written into somebody else's trace
+// by something else in the box, and is refused. It is reported to the box as a
+// partial success, which an exporter neither retries nor fails its batch for,
+// and the rest of the export still goes on. Metrics name no trace and pass.
+//
+// Mutation: forward the decoded export without scoping it and the foreign span
+// reaches the backend; scope log records that name no trace and the plain log
+// line is lost.
+func TestAnExportIsHeldToItsTokensTrace(t *testing.T) {
+	t.Parallel()
+	collector, endpoint := startGRPCCollector(t, "http")
+	receiver := receiverTo(t, map[string]string{
+		otlpenv.EndpointVar: endpoint, otlpenv.ProtocolVar: "grpc",
+	})
+	const elsewhere = "0af7651916cd43dd8448eb211c80319c"
+
+	mixed := spansIn(launchedFrom.TraceID)
+	foreign := spansIn(elsewhere).GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()[0]
+	ss := mixed.GetResourceSpans()[0].GetScopeSpans()[0]
+	ss.Spans = append(ss.Spans, foreign)
+	reply := accept(t, receiver, protobufExport(t, otlpenv.Traces, mixed))
+
+	answer := &coltracepb.ExportTraceServiceResponse{}
+	if err := proto.Unmarshal(reply.Body, answer); err != nil {
+		t.Fatal(err)
+	}
+	if got := answer.GetPartialSuccess().GetRejectedSpans(); got != 1 {
+		t.Errorf("the box was told %d spans were refused, want 1", got)
+	}
+
+	// An export wholly in another trace goes nowhere at all.
+	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(elsewhere)))
+
+	logs := &collogspb.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
+		ScopeLogs: []*logspb.ScopeLogs{{LogRecords: []*logspb.LogRecord{
+			{SeverityText: "names no trace"},
+			{SeverityText: "names this one", TraceId: mustHex(launchedFrom.TraceID)},
+			{SeverityText: "names another", TraceId: mustHex(elsewhere)},
+		}}},
+	}}}
+	accept(t, receiver, protobufExport(t, otlpenv.Logs, logs))
+	accept(t, receiver, protobufExport(t, otlpenv.Metrics, emptyRequest(otlpenv.Metrics)))
+
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if len(collector.traces) != 1 {
+		t.Fatalf("the collector received %d traces exports, want only the mixed one", len(collector.traces))
+	}
+	for _, span := range collector.traces[0].GetResourceSpans()[0].GetScopeSpans()[0].GetSpans() {
+		if hex.EncodeToString(span.GetTraceId()) != launchedFrom.TraceID {
+			t.Errorf("a span in trace %x reached the collector under a token for %s",
+				span.GetTraceId(), launchedFrom.TraceID)
+		}
+	}
+	if len(collector.logs) != 1 {
+		t.Fatalf("the collector received %d logs exports", len(collector.logs))
+	}
+	var kept []string
+	for _, r := range collector.logs[0].GetResourceLogs()[0].GetScopeLogs()[0].GetLogRecords() {
+		kept = append(kept, r.GetSeverityText())
+	}
+	if len(kept) != 2 || kept[0] != "names no trace" || kept[1] != "names this one" {
+		t.Errorf("the collector kept the log records %q", kept)
+	}
+	if len(collector.metrics) != 1 {
+		t.Errorf("metrics, which name no trace, were held back")
+	}
+}
+
+// A TOKEN WHOSE SUBJECT IS NOT A TRACE SCOPES EVERY SPAN OUT, rather than
+// none: a subject the receiver cannot read as an id is not a licence for
+// every trace.
+func TestATokenNamingNoTraceForwardsNoSpan(t *testing.T) {
+	t.Parallel()
+	collector, endpoint := startGRPCCollector(t, "http")
+	receiver := receiverTo(t, map[string]string{
+		otlpenv.EndpointVar: endpoint, otlpenv.ProtocolVar: "grpc",
+	})
+	if _, err := receiver.Accept(t.Context(), "not-a-trace", protobufExport(t,
+		otlpenv.Traces, spansIn(launchedFrom.TraceID))); err != nil {
+		t.Fatal(err)
+	}
+	if traces, _, _ := collector.counts(); traces != 0 {
+		t.Errorf("a token naming no trace forwarded %d exports", traces)
+	}
+}

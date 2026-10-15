@@ -21,8 +21,11 @@
 // An in-memory store makes those the same process by assumption, and a fleet
 // then refuses every request that reached any other node, from every run,
 // visible only as retry noise inside a sandbox nobody is watching. Expiry
-// rides in the token too, so nothing is reaped and a restart does not
-// invalidate a live run's endpoint.
+// rides in the token too, so nothing is reaped — and a restart does not
+// invalidate a live run's endpoint PROVIDED THE KEY SURVIVES IT: one derived
+// from the fleet's keyring ([KeyFrom]) does, and the random per-process key
+// [New] takes without one goes with the process, along with every token it
+// signed.
 //
 // # One implementation, because it was two
 //

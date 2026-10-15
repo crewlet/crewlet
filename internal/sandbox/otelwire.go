@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"slices"
 	"strings"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -91,7 +94,8 @@ const (
 )
 
 // otelCodec is what differs by signal: the message an export decodes into, the
-// empty response, and the gRPC call that carries the message upstream.
+// response, the gRPC call that carries the message upstream, and what of an
+// export the token's trace scopes.
 //
 // A TABLE rather than a type switch at each use, so a signal is either wholly
 // handled or not handled at all — a fourth signal added to [otlpenv.Signals]
@@ -102,6 +106,12 @@ type otelCodec struct {
 	export   func(ctx context.Context, conn grpc.ClientConnInterface, req proto.Message) (proto.Message, error)
 	// rejected is what an upstream's answer said it dropped, and why.
 	rejected func(resp proto.Message) (int64, string)
+	// scope removes from req every record naming a trace other than trace,
+	// and reports how many records it removed and how many it kept. Nil
+	// for a signal whose records name no trace.
+	scope func(req proto.Message, trace []byte) (removed, kept int64)
+	// partial is the response reporting that removed records were refused.
+	partial func(removed int64, why string) proto.Message
 }
 
 var otelCodecs = map[otlpenv.Signal]otelCodec{
@@ -114,6 +124,26 @@ var otelCodecs = map[otlpenv.Signal]otelCodec{
 		rejected: func(resp proto.Message) (int64, string) {
 			p := resp.(*coltracepb.ExportTraceServiceResponse).GetPartialSuccess()
 			return p.GetRejectedSpans(), p.GetErrorMessage()
+		},
+		scope: func(req proto.Message, trace []byte) (removed, kept int64) {
+			for _, rs := range req.(*coltracepb.ExportTraceServiceRequest).GetResourceSpans() {
+				for _, ss := range rs.GetScopeSpans() {
+					ss.Spans = slices.DeleteFunc(ss.Spans, func(span *tracepb.Span) bool {
+						if bytes.Equal(span.GetTraceId(), trace) {
+							kept++
+							return false
+						}
+						removed++
+						return true
+					})
+				}
+			}
+			return removed, kept
+		},
+		partial: func(removed int64, why string) proto.Message {
+			return &coltracepb.ExportTraceServiceResponse{PartialSuccess: &coltracepb.ExportTracePartialSuccess{
+				RejectedSpans: removed, ErrorMessage: why,
+			}}
 		},
 	},
 	otlpenv.Metrics: {
@@ -136,6 +166,28 @@ var otelCodecs = map[otlpenv.Signal]otelCodec{
 		rejected: func(resp proto.Message) (int64, string) {
 			p := resp.(*collogspb.ExportLogsServiceResponse).GetPartialSuccess()
 			return p.GetRejectedLogRecords(), p.GetErrorMessage()
+		},
+		// A log record need not name a trace; one that names ANOTHER is
+		// refused, as a span in another trace is.
+		scope: func(req proto.Message, trace []byte) (removed, kept int64) {
+			for _, rl := range req.(*collogspb.ExportLogsServiceRequest).GetResourceLogs() {
+				for _, sl := range rl.GetScopeLogs() {
+					sl.LogRecords = slices.DeleteFunc(sl.LogRecords, func(r *logspb.LogRecord) bool {
+						if id := r.GetTraceId(); len(id) == 0 || bytes.Equal(id, trace) {
+							kept++
+							return false
+						}
+						removed++
+						return true
+					})
+				}
+			}
+			return removed, kept
+		},
+		partial: func(removed int64, why string) proto.Message {
+			return &collogspb.ExportLogsServiceResponse{PartialSuccess: &collogspb.ExportLogsPartialSuccess{
+				RejectedLogRecords: removed, ErrorMessage: why,
+			}}
 		},
 	},
 }

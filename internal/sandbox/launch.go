@@ -517,7 +517,7 @@ func withTelemetry(ctx context.Context, m *Manager, runner Runner, req LaunchReq
 		return req.Spec.Env
 	}
 	minted := m.telemetry.RunEnv(ctx, req.Turn.Trace(),
-		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
+		req.Turn.TurnID, req.Turn.AgentHandle, OtelTokenLifetime)
 	if len(minted) == 0 {
 		return req.Spec.Env
 	}
@@ -528,25 +528,27 @@ func withTelemetry(ctx context.Context, m *Manager, runner Runner, req LaunchReq
 	return env
 }
 
-// otelTokenTTL is how long a run's export endpoint stays valid.
+// OtelTokenLifetime is how long a run's export endpoint stays valid.
 //
-// TIED TO THE BOX'S OWN LIFETIME rather than picked: a token that expires
-// while its box is still running loses the tail of the run's telemetry —
-// exactly the part that explains a failure — and one that outlives the box is
-// a credential nothing needs. The pause TTL is added because a run parked on
-// a human's answer resumes into the same box and keeps exporting, and the
-// doubling covers the keepalive refreshing the box's own timer.
-func otelTokenTTL(spec Spec) time.Duration {
-	ttl := time.Duration(spec.TimeoutSec) * time.Second
-	if ttl <= 0 {
-		ttl = DefaultBoxTimeout
-	}
-	ttl *= 2
-	if pause := time.Duration(spec.PauseTTLSec) * time.Second; pause > 0 {
-		ttl += pause
-	}
-	return ttl
-}
+// A FIXED DAY, because nothing can renew it. The token rides in the
+// endpoint, the endpoint in the agent's environment, and an agent's
+// environment is fixed when it starts — while a coding run is uncapped by
+// design, and a run parked on a person's answer resumes in the same box, the
+// same process, with the same endpoint. The lifetime this replaced was tied
+// to the box's TTL (twice the keepalive window, plus the pause TTL: an hour
+// at the defaults), which is the orphan-reclaim grace of a box rather than how
+// long a run lasts — so every run past an hour lost the tail of its
+// telemetry, exactly the part that says how it ended.
+//
+// A DAY, and not longer, because the token is a credential a box can read:
+// whatever runs in the box can export with it until it expires. What that
+// buys is junk in the company's telemetry backend, through the receiver —
+// never the backend's own credential, and never a span in another run's trace
+// ([OtelReceiver.Accept]) — and a day bounds it. A JUDGMENT, not a
+// measurement: it sits far past any coding run a working day produces, and a
+// run whose box is still exporting a day after it started is refused from
+// then on, which costs that run's late telemetry and nothing else.
+const OtelTokenLifetime = 24 * time.Hour
 
 // RunEnvFor is [withTelemetry] under a name a test can reach, with the runner
 // the launch would acquire for the spec's coding agent — or the spec's own
