@@ -1645,10 +1645,14 @@ providers:
 **`base_url` is not an `openai-compatible` field.** It is honoured on
 `anthropic` and `openai` entries too — it is only *required* for
 `openai-compatible`, which has no vendor default to fall back to — and it is
-refused on a `cli-agent` entry, whose CLI makes its own calls: a gateway for
+refused on a `cli-agent` write, whose CLI makes its own calls: a gateway for
 one is the CLI's own variable in its `cli.env`, `ANTHROPIC_BASE_URL` for Claude
 Code. It is a URL with no query or fragment, because the SDK behind an HTTP
-entry never sends either. The
+entry never sends either, and its userinfo reaches the proxy as Basic
+credentials only where nothing else takes the `Authorization` header — always
+on `anthropic`, and on `openai` and `openai-compatible` only from an entry
+running on no key, so userinfo beside `api_keys` there is refused on a write
+(see [`base_url`](../getting-started/configuration.md#providers)). The
 same field is what points an entry at a corporate egress proxy or an
 Anthropic-API gateway, and the [code sandbox](code-sandbox.md) forwards
 an `anthropic` entry's value to Claude Code as `ANTHROPIC_BASE_URL`.

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -525,19 +524,104 @@ func (l *LLMProvider) validate(path Path) error {
 			"name the model this provider serves")
 	}
 
+	// The one REASONING rule that is RUNNABLE, unlike the inert dials
+	// [LLMProvider.validateDials] refuses on write: an openai-compatible
+	// entry's backend SENDS reasoning_effort on every call once reasoning is
+	// on, to an endpoint that is by definition not OpenAI's, so this is a
+	// request the endpoint may refuse rather than a setting nothing reads.
+	if l.Reasoning && kind == LLMOpenAICompatible {
+		p.add(at(path, "reasoning"), ErrConflict,
+			"reasoning is not supported for openai-compatible providers; "+
+				"use type openai")
+	}
+	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
+		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
+			l.ReasoningEffort, names(ReasoningEfforts))
+	}
+	if l.ReasoningBudgetTokens < 0 {
+		p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange,
+			"must not be negative, got %d", l.ReasoningBudgetTokens)
+	}
+	if kind == LLMAnthropic {
+		p.wrap(l.validateClaudeShape(path))
+	}
+
+	// Left unbounded, a timeout of 0 or a negative one passes validation
+	// and reaches an HTTP client that reads it as
+	// "expire immediately" — every call failing instantly, with nothing in
+	// the config looking wrong.
+	if l.TimeoutSeconds < 0 {
+		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
+			"must be 0 (the %v s default) or positive, got %v",
+			defaultLLMTimeoutSeconds, l.TimeoutSeconds)
+	}
+	p.wrap(l.Cooldowns.validate(at(path, "cooldowns")))
+
+	// Both directions matter. A cli-agent entry with no block would
+	// silently construct the default Claude Code profile, which may be the
+	// wrong CLI entirely. A cli block on an HTTP provider is refused here,
+	// as a RUNNABLE rule, unlike the inert dials [LLMProvider.validateDials]
+	// refuses on write: it is not inert to this package, whose executor
+	// rules read how a seat's executor runs off the entry's block
+	// ([CLIAgent.AgentMode]) while the engine runs the entry by its type, so
+	// the two would disagree about the seat's runtime.
+	switch {
+	case kind == LLMCLIAgent && l.CLI == nil:
+		p.add(at(path, "cli"), ErrMissing,
+			"type cli-agent needs a `cli:` block naming the CLI to drive, "+
+				"e.g. `cli: {agent: claude-code}`")
+	case kind != LLMCLIAgent && l.CLI != nil:
+		p.add(at(path, "cli"), ErrConflict,
+			"`cli:` only applies to type cli-agent (this entry is type %q). "+
+				"Remove the block, or change the type", kind)
+	case l.CLI != nil:
+		p.wrap(l.CLI.validate(at(path, "cli")))
+		p.wrap(l.validateCLIProfile(path))
+	}
+
+	if kind == LLMOpenAICompatible && strings.TrimSpace(l.BaseURL) == "" {
+		// An openai-compatible provider with no endpoint is an OpenAI
+		// provider wearing a different label: it silently talks to
+		// api.openai.com with whatever key it was given.
+		p.add(at(path, "base_url"), ErrMissing,
+			"an openai-compatible provider needs the endpoint to talk to")
+	}
+	// THE RUNNABLE HALF of the base_url rule: a value no call can be sent
+	// on. What a sendable value carries that is never sent is the admission
+	// half ([LLMProvider.validateDials]).
+	if err := CheckBaseURL(l.BaseURL); kind != LLMCLIAgent && err != nil {
+		p.add(at(path, "base_url"), ErrUnknownValue, "%v", err)
+	}
+	return p.err()
+}
+
+// validateDials refuses a setting this entry's backend NEVER SENDS: a dial
+// its type does not read, and the parts of a base_url its SDK drops
+// ([BaseURLUnsent]).
+//
+// AN ADMISSION RULE, every one of them ([Company.ValidateAdmission]). Each is
+// the "configured it and nothing happened" this file refuses everywhere — an
+// operator sent here by an error telling them to raise a model's effort sets
+// one, sees no change and has nothing to look at — so a write keeping one is
+// refused. But the entry RUNS: the backend builds and every call is sent,
+// only without the setting, and a later build is free to start sending one
+// (a CLI that grows an effort flag, a backend that keeps base_url's query).
+// Refused at apply, a revision such a newer peer admitted would split the
+// fleet's epoch, so a stored revision carrying one is applied with a warning.
+func (l *LLMProvider) validateDials(path Path) error {
+	var p problems
+	kind := l.Type
+	if kind == "" {
+		kind = LLMOpenAI
+	}
 	if l.Reasoning {
 		switch kind {
-		case LLMOpenAICompatible:
-			p.add(at(path, "reasoning"), ErrConflict,
-				"reasoning is not supported for openai-compatible providers; "+
-					"use type openai")
 		case LLMAnthropic:
 			// Not a switch on a Claude model: every current one thinks on
 			// every call — Opus 5.5, Fable and Mythos refuse to be told
 			// otherwise, and Opus 4.8 and 5 with thinking off write a tool
-			// call into their prose instead of making it. Accepting the
-			// field and ignoring it would be the "configured it and nothing
-			// happened" this file refuses everywhere else.
+			// call into their prose instead of making it — so the backend
+			// takes no switch to send.
 			p.add(at(path, "reasoning"), ErrConflict,
 				"thinking always runs on an anthropic entry, so there is nothing to "+
 					"switch: drop reasoning, and tune how hard it thinks with "+
@@ -552,19 +636,12 @@ func (l *LLMProvider) validate(path Path) error {
 					"CLI's reasoning model with `model`")
 		}
 	}
-	// The two DIALS beside that switch are refused on the same entry for the
-	// same reason, and refused rather than wired up: both are per-call API
-	// parameters (an effort level and an Anthropic thinking budget), and a
-	// coding CLI driven headlessly takes neither — it exposes no flag for
-	// either and reads its reasoning setup from its own plan. Accepted, they
-	// would validate clean and be read by nobody, which is the worst of the
-	// three possible behaviours: an operator sent here by an error message
-	// telling them to raise the model's effort would set one, see no change,
-	// and have nothing to look at. The honest fix for an under-reasoning CLI
-	// entry is its `model`.
-	//
-	// The same rule, applied to every type: a dial is refused wherever the
-	// backend it would reach does not send it.
+	// The two DIALS beside that switch, refused wherever the backend they
+	// would reach does not send them — both are per-call API parameters (an
+	// effort level and an Anthropic thinking budget), and a coding CLI
+	// driven headlessly takes neither: it exposes no flag for either and
+	// reads its reasoning setup from its own plan. The honest fix for an
+	// under-reasoning CLI entry is its `model`.
 	switch kind {
 	case LLMCLIAgent:
 		// NOTHING READS IT: the CLI makes its own calls, and the engine
@@ -606,119 +683,58 @@ func (l *LLMProvider) validate(path Path) error {
 					"a reasoning model thinks", kind)
 		}
 	}
-	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
-		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
-			l.ReasoningEffort, names(ReasoningEfforts))
-	}
-	if l.ReasoningBudgetTokens < 0 {
-		p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange,
-			"must not be negative, got %d", l.ReasoningBudgetTokens)
-	}
-	if kind == LLMAnthropic {
-		p.wrap(l.validateClaudeShape(path))
-	} else if l.ClaudeModel != "" {
+	if kind != LLMAnthropic && l.ClaudeModel != "" {
 		p.add(at(path, "claude_model"), ErrConflict,
 			"claude_model names the request shape of an anthropic entry and does "+
 				"nothing on a %s provider: drop it", kind)
 	}
-
-	// Left unbounded, a timeout of 0 or a negative one passes validation
-	// and reaches an HTTP client that reads it as
-	// "expire immediately" — every call failing instantly, with nothing in
-	// the config looking wrong.
-	if l.TimeoutSeconds < 0 {
-		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultLLMTimeoutSeconds, l.TimeoutSeconds)
-	}
-	p.wrap(l.Cooldowns.validate(at(path, "cooldowns")))
-
-	// Both directions matter. A cli-agent entry with no block would
-	// silently construct the default Claude Code profile, which may be the
-	// wrong CLI entirely; a cli block on an HTTP provider is read by
-	// nobody, which is the classic "I configured it and nothing happened".
-	switch {
-	case kind == LLMCLIAgent && l.CLI == nil:
-		p.add(at(path, "cli"), ErrMissing,
-			"type cli-agent needs a `cli:` block naming the CLI to drive, "+
-				"e.g. `cli: {agent: claude-code}`")
-	case kind != LLMCLIAgent && l.CLI != nil:
-		p.add(at(path, "cli"), ErrConflict,
-			"`cli:` only applies to type cli-agent (this entry is type %q). "+
-				"Remove the block, or change the type", kind)
-	case l.CLI != nil:
-		p.wrap(l.CLI.validate(at(path, "cli")))
-		p.wrap(l.validateCLIProfile(path))
-	}
-
-	if kind == LLMOpenAICompatible && strings.TrimSpace(l.BaseURL) == "" {
-		// An openai-compatible provider with no endpoint is an OpenAI
-		// provider wearing a different label: it silently talks to
-		// api.openai.com with whatever key it was given.
-		p.add(at(path, "base_url"), ErrMissing,
-			"an openai-compatible provider needs the endpoint to talk to")
-	}
-	if err := CheckBaseURL(l.BaseURL); kind != LLMCLIAgent && err != nil {
-		p.add(at(path, "base_url"), ErrUnknownValue, "%v", err)
+	if kind != LLMCLIAgent {
+		for _, err := range BaseURLUnsent(l.BaseURL, l.bearerKeyed()) {
+			p.add(at(path, "base_url"), ErrConflict, "%v", err)
+		}
 	}
 	return p.err()
 }
 
-// CheckBaseURL holds a provider's `base_url` — an LLM entry's or the
-// embeddings provider's — to what the vendor SDK behind it can send: an
-// http:// or https:// URL with a host, and NO QUERY OR FRAGMENT.
-//
-// THE QUERY IS NEVER SENT, and nothing says so. Both SDKs resolve each
-// request's path against the base URL — the Anthropic SDK's and openai-go's
-// alike, measured against a server (anthropic.TestABaseURLsQueryIsNeverSent,
-// openai.TestABaseURLsQueryIsNeverSent) — and resolving a relative reference
-// replaces the base's query and drops its fragment (RFC 3986 §5.2.2). So an
-// `?api-version=…` or a gateway key written as `?key=…` reaches the endpoint
-// as nothing at all, and every call fails, or is answered under a default, at
-// an endpoint whose configuration looks complete. A fragment is never part of
-// a request in the first place. Userinfo IS sent — as Basic credentials, by
-// Go's HTTP client — and a gateway may take it that way, so it is allowed.
-//
-// A value written with ${VAR} references is judged on what it says around
-// them — a `?` or `#` in the text itself — because what a variable holds is
-// unknown until it resolves; the engine holds the resolved value to the whole
-// rule when it builds the provider, where a variable's value is first known.
-//
-// The error names neither the value nor its query, because a query is exactly
-// where a credential gets written into a URL.
-func CheckBaseURL(raw string) error {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return nil
-	}
-	if envref.Has(s) {
-		// Every reference removed, the text the document itself wrote.
-		written, _ := envref.Expand(s, func(string) (string, bool) { return "", true })
-		if strings.ContainsAny(written, "?#") {
-			return errBaseURLQuery
-		}
-		return nil
-	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return errors.New("is not an http:// or https:// URL with a host, so no call " +
-			"on this provider could be sent: write the endpoint in full, scheme " +
-			"included (https://gateway.example.com)")
-	}
-	if u.RawQuery != "" || u.ForceQuery || strings.Contains(s, "#") {
-		return errBaseURLQuery
-	}
-	return nil
+// bearerKeyed reports whether this entry, as WRITTEN, sends a key in the
+// `Authorization` header: an openai or openai-compatible entry that names
+// api_keys. One that names none reads OPENAI_API_KEY, which a write cannot
+// see, so the build judges that case on the key it resolved
+// ([LLMProvider.ResolveBaseURL]).
+func (l *LLMProvider) bearerKeyed() bool {
+	return l.bearer() && len(l.APIKeys) > 0
 }
 
-// errBaseURLQuery is [CheckBaseURL]'s refusal of a query or fragment, which
-// says what to do instead: there is no field that adds a query to a provider's
-// requests, so what the query carried belongs where the endpoint also reads it.
-var errBaseURLQuery = errors.New("carries a query or a fragment, which is never sent: the " +
-	"provider's SDK resolves each request's path against base_url, and that drops both. " +
-	"Remove it. A key the endpoint takes belongs in api_keys (or api_key), which is sent " +
-	"as the provider's own key header; an endpoint that will only read a query " +
-	"parameter needs a proxy in front of it that adds one")
+// bearer reports whether this entry's backend sends its key as
+// `Authorization: Bearer` — openai-go's shape, on an openai or
+// openai-compatible entry — rather than in a header of its own, as the
+// Anthropic SDK sends `x-api-key`.
+func (l *LLMProvider) bearer() bool {
+	switch l.Type {
+	case LLMOpenAI, LLMOpenAICompatible, "":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateProviderDials is [LLMProvider.validateDials] over every LLM entry of
+// the company, in key order, and the embeddings provider's base_url beside
+// them ([EmbeddingProvider.validateDials]).
+func (c *Company) validateProviderDials() error {
+	var p problems
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		spec := c.Providers.LLM[key]
+		if spec.Type != "" && !slices.Contains(LLMProviderTypes, spec.Type) {
+			continue // the runnable rule refuses the type, and every dial keys on it
+		}
+		p.wrap(spec.validateDials(entryPath(key)))
+	}
+	if c.Providers.Embeddings != nil {
+		p.wrap(c.Providers.Embeddings.validateDials(at(field("providers"), "embeddings")))
+	}
+	return p.err()
+}
 
 // llmWarnings is every LLM entry that is valid and worth a second look, in
 // declaration order.
@@ -2066,6 +2082,8 @@ func (e *EmbeddingProvider) validate(path Path) error {
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible embedding provider needs the endpoint to talk to")
 	}
+	// The RUNNABLE half of the base_url rule; what a sendable value carries
+	// that is never sent is the admission half ([EmbeddingProvider.validateDials]).
 	if err := CheckBaseURL(e.BaseURL); err != nil {
 		p.add(at(path, "base_url"), ErrUnknownValue, "%v", err)
 	}

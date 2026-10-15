@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -50,25 +51,9 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 	// an input past them before sending it, and packs a batch into requests
 	// they admit.
 	limits := cfg.Limits()
-	baseURL, baseURLMissing := env.Expand(cfg.BaseURL)
-	// AN OPENAI-COMPATIBLE EMBEDDER WITH NO ENDPOINT IS REFUSED, for the
-	// reason the chat entries' is ([resolveEndpoint]): validation refuses an
-	// empty field, but a `${VAR}` that resolved to nothing reaches here
-	// empty, and the provider's default endpoint is api.openai.com — so
-	// every document the company indexes, and every query, would be sent to
-	// a third party under a key that is not an OpenAI key.
-	if cfg.Type == config.EmbeddingOpenAICompatible && strings.TrimSpace(baseURL) == "" {
-		where := "base_url is empty"
-		if len(baseURLMissing) > 0 {
-			where = fmt.Sprintf("base_url is %q and %s resolved to nothing",
-				cfg.BaseURL, strings.Join(baseURLMissing, ", "))
-		}
-		return nil, fmt.Errorf("engine: providers.embeddings: %s. An "+
-			"openai-compatible embedder needs an endpoint — without one every "+
-			"request would go to api.openai.com under this provider's own key", where)
-	}
-	if err := resolvedBaseURL(cfg.BaseURL, baseURL); err != nil {
-		return nil, fmt.Errorf("engine: providers.embeddings: %w", err)
+	baseURL, err := embeddingsBaseURL(log, cfg, env)
+	if err != nil {
+		return nil, err
 	}
 	provider, err := embeddings.New(embeddings.Config{
 		Model:      env.Value(cfg.Model),
@@ -91,6 +76,35 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 		return nil, err
 	}
 	return provider, nil
+}
+
+// embeddingsBaseURL is the endpoint the embedder is handed, by the one
+// resolution the chat entries' is ([resolveEndpoint]): trimmed once, that
+// string judged and handed on, refused only when no call on it can be sent,
+// and what its backend drops of it warned about on logger.
+func embeddingsBaseURL(logger *slog.Logger, cfg *config.EmbeddingProvider, env *config.Resolver) (string, error) {
+	base, err := cfg.ResolveBaseURL(env)
+	if err != nil {
+		return "", fmt.Errorf("engine: providers.embeddings: %w", err)
+	}
+	warnUnsentBaseURL(logger, "embeddings", base)
+	// AN OPENAI-COMPATIBLE EMBEDDER WITH NO ENDPOINT IS REFUSED, for the
+	// reason the chat entries' is ([resolveEndpoint]): validation refuses an
+	// empty field, but a `${VAR}` that resolved to nothing reaches here
+	// empty, and the provider's default endpoint is api.openai.com — so
+	// every document the company indexes, and every query, would be sent to
+	// a third party under a key that is not an OpenAI key.
+	if cfg.Type == config.EmbeddingOpenAICompatible && base.URL == "" {
+		where := "base_url is empty"
+		if len(base.Missing) > 0 {
+			where = fmt.Sprintf("base_url is %q and %s resolved to nothing",
+				cfg.BaseURL, strings.Join(base.Missing, ", "))
+		}
+		return "", fmt.Errorf("engine: providers.embeddings: %s. An "+
+			"openai-compatible embedder needs an endpoint — without one every "+
+			"request would go to api.openai.com under this provider's own key", where)
+	}
+	return base.URL, nil
 }
 
 // storeWidth is the width this node's store was opened at, or 0.
