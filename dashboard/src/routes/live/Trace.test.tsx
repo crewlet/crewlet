@@ -168,3 +168,47 @@ test("a looping parent chain still draws every event", async () => {
   await mount({ trace_id: TRACE, events, truncated: false });
   expect(document.querySelectorAll("a.trace-row")).toHaveLength(2);
 });
+
+// AN EVENT NO SPAN PUBLISHED SITS UNDER THE SPAN IT NAMES. Code that publishes
+// without opening a span — the notification service relaying a delivery into
+// a wake, the sandbox coordinator announcing a run — sends no `span_id` and
+// names the span it acted beneath as `parent_span_id`; a root minted where no
+// span was open sends neither. The arranger drew every event with no span id
+// as a root, so a wake sat at the top of its trace beside the webhook that
+// caused it, and the "Spans" fact counted each such event as a span.
+//
+// Mutations: skip the parent lookup for an event with no span id (the wake and
+// the announcement go to the top); count a span-less event as a span.
+test("an event with no span of its own sits under the span it names", async () => {
+  const events = [
+    ev("e-1", "00", "hook", "", "Delivery from slack"),
+    ev("e-2", "01", "", "hook", "Wake for Agent PM"),
+    ev("e-3", "02", "turn", "hook", "Agent PM started a turn"),
+    ev("e-4", "03", "phase", "turn", "Agent PM execute → running"),
+    ev("e-5", "04", "", "turn", "Coding run started"),
+    ev("e-6", "05", "", "", "Change feed woke Agent PM"),
+  ];
+  await mount({ trace_id: TRACE, events, truncated: false });
+  const pad = (text: string) =>
+    (
+      (
+        screen
+          .getAllByText(text)
+          .map((el) => el.closest("a.trace-row"))
+          .find(Boolean) as HTMLElement
+      ).querySelector(".feed-actor") as HTMLElement
+    ).style.paddingLeft;
+  expect(pad("Delivery from slack")).toBe("0px");
+  expect(pad("Wake for Agent PM")).toBe("12px");
+  expect(pad("Agent PM started a turn")).toBe("12px");
+  expect(pad("Agent PM execute → running")).toBe("24px");
+  expect(pad("Coding run started")).toBe("24px");
+  // A ROOT NOBODY SPANNED is a root: it names no parent to sit under.
+  expect(pad("Change feed woke Agent PM")).toBe("0px");
+  // THREE SPANS — hook, turn, phase — not six: an event no span published
+  // is not one.
+  const spans = [...document.querySelectorAll(".fact")].find(
+    (f) => f.querySelector(".fact-label")?.textContent === "Spans",
+  );
+  expect(spans?.querySelector(".fact-value")?.textContent).toBe("3");
+});
