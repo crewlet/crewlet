@@ -5641,7 +5641,7 @@ what makes it a retry.
 ### A purge
 
 `POST /work/items/{key}/purge?confirm=<KEY>&reason=<why>` destroys an item and
-every row it produced, on every node, and nothing undoes it. It replaced
+every row it produced, on every data node, and nothing undoes it. It replaced
 the purge route that stood beside the retention gestures, and it differs in the
 three places that one was wrong:
 
