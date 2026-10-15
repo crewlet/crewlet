@@ -1,18 +1,17 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"maps"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/otlpenv"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -70,11 +69,15 @@ func (t *OtelTokens) Mint(traceID string, ttl time.Duration) string {
 func (t *OtelTokens) Validate(token string) string { return t.signer.Validate(token) }
 
 // OtelReceiver mints a run's endpoint and forwards what the box exports.
+//
+// It holds a CONNECTION per gRPC upstream once one has forwarded, for the rest
+// of its life — a forward is one call on it, not a dial and a TLS handshake
+// per batch — so whoever built it closes it ([OtelReceiver.Close]).
 type OtelReceiver struct {
 	base     string
 	tokens   *OtelTokens
 	upstream map[otlpenv.Signal]otlpenv.Destination
-	http     *http.Client
+	forward  map[otlpenv.Signal]otelForwarder
 }
 
 // OtelReceiverOptions configure [NewOtelReceiver].
@@ -98,8 +101,6 @@ type OtelReceiverOptions struct {
 	// the engine's own per-turn span still carries the trace, and a
 	// deployment with no backend should not have every export fail.
 	Upstream map[otlpenv.Signal]otlpenv.Destination
-
-	HTTP *http.Client
 }
 
 // OtelForwardTimeout bounds one forwarded payload.
@@ -135,7 +136,15 @@ const otelAnswerMargin = 2 * time.Second
 // SDK, which reads the same variable from this process's environment.
 const OtelTimeoutVar = "OTEL_EXPORTER_OTLP_TIMEOUT"
 
-// NewOtelReceiver builds the receiver.
+// NewOtelReceiver builds the receiver, and a forwarder for every signal with a
+// destination that exports.
+//
+// A FORWARDER SPEAKS ITS DESTINATION'S PROTOCOL, compression and TLS — the
+// engine's own exporter's, since both resolve through [otlpenv] — so a box's
+// export reaches a gRPC collector as a gRPC Export call and an https one
+// verified against the certificate the environment names. A gRPC connection
+// is made on the first forward, so building a receiver dials nothing and
+// starts nothing.
 func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	if strings.TrimSpace(opts.BaseURL) == "" {
 		return nil, fmt.Errorf(
@@ -146,23 +155,41 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	if opts.Tokens == nil {
 		return nil, fmt.Errorf("sandbox: the OTLP receiver needs a token minter")
 	}
-	client := opts.HTTP
-	if client == nil {
-		client = httpx.Client(OtelForwardTimeout)
+	r := &OtelReceiver{
+		base:     strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
+		tokens:   opts.Tokens,
+		upstream: make(map[otlpenv.Signal]otlpenv.Destination, len(opts.Upstream)),
+		forward:  map[otlpenv.Signal]otelForwarder{},
 	}
 	// COPIED, headers included, so a caller that goes on to change its
 	// map cannot change where — or with what credential — this forwards.
-	upstream := make(map[otlpenv.Signal]otlpenv.Destination, len(opts.Upstream))
 	for s, d := range opts.Upstream {
 		d.Headers = maps.Clone(d.Headers)
-		upstream[s] = d
+		r.upstream[s] = d
 	}
-	return &OtelReceiver{
-		base:     strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
-		tokens:   opts.Tokens,
-		upstream: upstream,
-		http:     client,
-	}, nil
+	for _, s := range otlpenv.Signals {
+		d := r.upstream[s]
+		if !d.Exports() {
+			continue
+		}
+		f, err := newOtelForwarder(s, d)
+		if err != nil {
+			_ = r.Close()
+			return nil, fmt.Errorf("sandbox: the OTLP receiver's %s upstream: %w", s, err)
+		}
+		r.forward[s] = f
+	}
+	return r, nil
+}
+
+// Close releases the receiver's upstream connections. Exports accepted after
+// it are answered as ever and forwarded nowhere, with a warning each.
+func (r *OtelReceiver) Close() error {
+	var errs []error
+	for _, f := range r.forward {
+		errs = append(errs, f.close())
+	}
+	return errors.Join(errs...)
 }
 
 // EndpointFor mints one run's OTLP endpoint.
@@ -206,7 +233,13 @@ func (r *OtelReceiver) Forwarding() []otlpenv.Signal {
 	return out
 }
 
-// Forward sends a validated payload to the real backend.
+// Accept takes one export a box made under the token for trace, forwards it,
+// and answers what the route sends the box.
+//
+// DECODED FIRST, so an export the receiver cannot read is refused as what it
+// is — [ErrOtelUnsupported], [ErrOtelMalformed], [ErrOtelTooLarge] — which an
+// exporter takes as final rather than retrying. See otelwire.go for why the
+// receiver decodes at all.
 //
 // TO THE SIGNAL'S OWN DESTINATION, which is the endpoint the engine's exporter
 // would send that signal to — its OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT when
@@ -214,38 +247,45 @@ func (r *OtelReceiver) Forwarding() []otlpenv.Signal {
 // to the base with the path appended is what dropped every box's spans on a
 // deployment that set only the traces endpoint.
 //
-// FAILURES ARE LOGGED, NEVER RETURNED as something the caller reports to the
-// box. An exporter that gets a 5xx retries, and retries against a backend
-// that is down turn one outage into two: the coding run's own traffic
-// multiplies while nothing it carries is recoverable anyway.
-func (r *OtelReceiver) Forward(ctx context.Context, signal otlpenv.Signal, body []byte, contentType string) {
-	upstream := r.upstream[signal]
-	if !upstream.Exports() {
-		return
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		upstream.Endpoint, bytes.NewReader(body))
+// A FORWARD'S FAILURE IS LOGGED, NEVER RETURNED as something the caller
+// reports to the box. An exporter that gets a 5xx retries, and retries against
+// a backend that is down turn one outage into two: the coding run's own
+// traffic multiplies while nothing it carries is recoverable anyway. So an
+// export that decodes is answered as accepted whatever the backend did.
+func (r *OtelReceiver) Accept(ctx context.Context, trace string, e OtelExport) (OtelReply, error) {
+	decoded, err := decodeExport(e)
 	if err != nil {
-		log.WarnContext(ctx, "sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
-		return
+		return OtelReply{}, err
 	}
-	for k, v := range upstream.Headers {
-		req.Header.Set(k, v)
-	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
+	r.forwardTo(ctx, e.Signal, decoded.request)
+	return encodeReply(otelCodecs[e.Signal].response(), decoded.mediaType)
+}
 
-	resp, err := r.http.Do(req)
+// forwardTo sends a decoded export upstream, bounded by [OtelForwardTimeout].
+func (r *OtelReceiver) forwardTo(ctx context.Context, signal otlpenv.Signal, req proto.Message) {
+	f, ok := r.forward[signal]
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, OtelForwardTimeout)
+	defer cancel()
+	resp, err := f.send(ctx, req)
+	if refused := (otelRefused{}); errors.As(err, &refused) {
+		log.WarnContext(ctx, "sandbox_otel_forward_refused", "signal", signal, "status", refused.status)
+		return
+	}
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
 		return
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 400 {
-		log.WarnContext(ctx, "sandbox_otel_forward_refused",
-			"signal", signal, "status", resp.StatusCode)
+	// A PARTIAL SUCCESS is the backend saying it dropped part of what it
+	// was sent and why, on a 200 — the one refusal an exporter never
+	// retries and so never reports twice.
+	if resp != nil {
+		if n, why := otelCodecs[signal].rejected(resp); n > 0 || why != "" {
+			log.WarnContext(ctx, "sandbox_otel_forward_partial",
+				"signal", signal, "rejected", n, "reason", why)
+		}
 	}
 }
 

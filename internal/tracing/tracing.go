@@ -18,8 +18,8 @@
 //
 // # Why the environment configures it and Tier A does not — ADR-0010
 //
-// The OTLP endpoint, headers, protocol and exporter switches are the standard
-// OTEL_* variables, "the standard OTel spelling every collector's own
+// The OTLP endpoint, headers, protocol, compression, TLS material and exporter
+// switches are the standard OTEL_* variables, "the standard OTel spelling every collector's own
 // documentation uses. An operator wiring a collector should not have to
 // translate it into a Crewlet-shaped block." The sandbox OTLP receiver reads
 // the same variables to find the backend it forwards a coding box's
@@ -33,7 +33,10 @@
 // through [github.com/crewlet/crewlet/internal/otlpenv] rather than reading
 // the environment themselves: with one set of names they still disagreed
 // about the signal endpoint, the protocol and how a header value is decoded.
-// TestTheExporterAndTheReceiverResolveOneDestination holds them together.
+// TestTheExporterAndTheReceiverResolveOneDestination holds them together, and
+// every exporter here is handed the whole resolution explicitly — endpoint,
+// headers, compression, TLS ([exporterOptions]) — so the SDK's own reading of
+// the same variables is never a third opinion.
 //
 // A second reason, specific to this engine: Tier A is the root of trust and
 // resolves with EnvOnly, and it holds to the rule that two keys setting one
@@ -122,6 +125,7 @@ package tracing
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"os"
@@ -132,6 +136,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
@@ -139,6 +145,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/otlpenv"
@@ -529,25 +536,26 @@ func shutdownTracer(ctx context.Context, tp *sdktrace.TracerProvider) error {
 
 // newExporter builds the span exporter for a resolved destination.
 //
-// The endpoint and the headers are passed EXPLICITLY, although the SDK would
-// read the same variables itself: an explicit option replaces what the SDK
-// read, so the exporter sends exactly what [otlpenv] resolved — which is what
-// the sandbox receiver forwards with — rather than the SDK's own reading of
-// the environment, which is the second opinion the resolver exists to remove.
+// The endpoint, the headers, the compression and the TLS material are passed
+// EXPLICITLY, although the SDK would read the same variables itself: an
+// explicit option replaces what the SDK read, so the exporter sends exactly
+// what [otlpenv] resolved — which is what the sandbox receiver forwards with —
+// rather than the SDK's own reading of the environment, which is the second
+// opinion the resolver exists to remove. See [exporterOptions].
 func newExporter(ctx context.Context, d otlpenv.Destination) (sdktrace.SpanExporter, error) {
+	opts, err := exporterOptions(d)
+	if err != nil {
+		return nil, err
+	}
 	switch d.Protocol {
 	case otlpenv.GRPC:
-		exp, err := otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpointURL(d.Endpoint),
-			otlptracegrpc.WithHeaders(d.Headers))
+		exp, err := otlptracegrpc.New(ctx, opts.traceGRPC()...)
 		if err != nil {
 			return nil, fmt.Errorf("otlp grpc exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
 		return exp, nil
 	case otlpenv.HTTPProtobuf:
-		exp, err := otlptracehttp.New(ctx,
-			otlptracehttp.WithEndpointURL(d.Endpoint),
-			otlptracehttp.WithHeaders(d.Headers))
+		exp, err := otlptracehttp.New(ctx, opts.traceHTTP()...)
 		if err != nil {
 			return nil, fmt.Errorf("otlp http exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
@@ -556,6 +564,97 @@ func newExporter(ctx context.Context, d otlpenv.Destination) (sdktrace.SpanExpor
 	// [otlpenv.Resolve] refuses any other protocol, so reaching here is a
 	// protocol added to the closed set with no exporter built for it.
 	return nil, fmt.Errorf("tracing: no span exporter is built for protocol %q", d.Protocol)
+}
+
+// exporterSettings is one resolved destination as the four OTLP exporters'
+// options spell it — the one translation, so a span exporter and a metric
+// exporter never differ in what they took from the same resolution.
+type exporterSettings struct {
+	d   otlpenv.Destination
+	tls *tls.Config
+}
+
+// exporterOptions reads the destination's TLS material once, for whichever
+// exporter is built from it.
+//
+// NIL TLS MEANS THE SDK'S OWN DEFAULT: the scheme decides, and an https
+// endpoint is verified against the system's roots. A certificate the
+// environment names is therefore never left to the SDK's own reading — that
+// reading reports a file it cannot use and exports without it, where
+// [otlpenv.Resolve] refused the file by name before anything got this far.
+func exporterOptions(d otlpenv.Destination) (exporterSettings, error) {
+	cfg, err := d.Config()
+	if err != nil {
+		return exporterSettings{}, fmt.Errorf("tracing: %w", err)
+	}
+	return exporterSettings{d: d, tls: cfg}, nil
+}
+
+// gzip reports whether the destination compresses.
+//
+// A gRPC exporter is told only "gzip": its option takes no other value without
+// reporting one as invalid, and its default is uncompressed — which is what
+// [otlpenv] resolved whenever it did not resolve gzip.
+func (e exporterSettings) gzip() bool { return e.d.Compression == otlpenv.Gzip }
+
+func (e exporterSettings) traceGRPC() []otlptracegrpc.Option {
+	opts := []otlptracegrpc.Option{
+		otlptracegrpc.WithEndpointURL(e.d.Endpoint),
+		otlptracegrpc.WithHeaders(e.d.Headers),
+	}
+	if e.gzip() {
+		opts = append(opts, otlptracegrpc.WithCompressor(string(otlpenv.Gzip)))
+	}
+	if e.tls != nil {
+		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(e.tls)))
+	}
+	return opts
+}
+
+func (e exporterSettings) traceHTTP() []otlptracehttp.Option {
+	compression := otlptracehttp.NoCompression
+	if e.gzip() {
+		compression = otlptracehttp.GzipCompression
+	}
+	opts := []otlptracehttp.Option{
+		otlptracehttp.WithEndpointURL(e.d.Endpoint),
+		otlptracehttp.WithHeaders(e.d.Headers),
+		otlptracehttp.WithCompression(compression),
+	}
+	if e.tls != nil {
+		opts = append(opts, otlptracehttp.WithTLSClientConfig(e.tls))
+	}
+	return opts
+}
+
+func (e exporterSettings) metricGRPC() []otlpmetricgrpc.Option {
+	opts := []otlpmetricgrpc.Option{
+		otlpmetricgrpc.WithEndpointURL(e.d.Endpoint),
+		otlpmetricgrpc.WithHeaders(e.d.Headers),
+	}
+	if e.gzip() {
+		opts = append(opts, otlpmetricgrpc.WithCompressor(string(otlpenv.Gzip)))
+	}
+	if e.tls != nil {
+		opts = append(opts, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(e.tls)))
+	}
+	return opts
+}
+
+func (e exporterSettings) metricHTTP() []otlpmetrichttp.Option {
+	compression := otlpmetrichttp.NoCompression
+	if e.gzip() {
+		compression = otlpmetrichttp.GzipCompression
+	}
+	opts := []otlpmetrichttp.Option{
+		otlpmetrichttp.WithEndpointURL(e.d.Endpoint),
+		otlpmetrichttp.WithHeaders(e.d.Headers),
+		otlpmetrichttp.WithCompression(compression),
+	}
+	if e.tls != nil {
+		opts = append(opts, otlpmetrichttp.WithTLSClientConfig(e.tls))
+	}
+	return opts
 }
 
 // serviceName is the service.name the resource settled on, for the log line —

@@ -1329,9 +1329,13 @@ The full set of variables, including per-signal endpoints, headers and protocols
 the resource attributes and the service name, is in
 [Environment Variables](../reference/environment-variables.md#opentelemetry-optional).
 The engine's exporters and the sandbox OTLP forwarder resolve the endpoints,
-headers and exporter switches through **one** resolver, on purpose: a coding
-agent's spans land in the same backend as the turn that started them, nested
-underneath it.
+headers, protocols, compression, TLS material and exporter switches through
+**one** resolver, on purpose: a coding agent's spans land in the same backend as
+the turn that started them, nested underneath it. A collector behind a private
+certificate authority takes `OTEL_EXPORTER_OTLP_CERTIFICATE`, and one that wants
+a client certificate the `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and
+`OTEL_EXPORTER_OTLP_CLIENT_KEY` pair; a file that cannot be used is refused at
+startup by name.
 
 #### Spans from Claude
 

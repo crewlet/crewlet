@@ -251,22 +251,22 @@ func attrSet(in map[string]string) []attribute.KeyValue {
 }
 
 // newMetricExporter builds the OTLP metric exporter for a resolved
-// destination, passing the endpoint and headers explicitly for the reason
-// [newExporter] gives.
+// destination, passing everything [otlpenv] resolved explicitly for the reason
+// [newExporter] gives — through the same translation, [exporterOptions].
 func newMetricExporter(ctx context.Context, d otlpenv.Destination) (sdkmetric.Exporter, error) {
+	opts, err := exporterOptions(d)
+	if err != nil {
+		return nil, err
+	}
 	switch d.Protocol {
 	case otlpenv.GRPC:
-		exp, err := otlpmetricgrpc.New(ctx,
-			otlpmetricgrpc.WithEndpointURL(d.Endpoint),
-			otlpmetricgrpc.WithHeaders(d.Headers))
+		exp, err := otlpmetricgrpc.New(ctx, opts.metricGRPC()...)
 		if err != nil {
 			return nil, fmt.Errorf("otlp grpc metric exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}
 		return exp, nil
 	case otlpenv.HTTPProtobuf:
-		exp, err := otlpmetrichttp.New(ctx,
-			otlpmetrichttp.WithEndpointURL(d.Endpoint),
-			otlpmetrichttp.WithHeaders(d.Headers))
+		exp, err := otlpmetrichttp.New(ctx, opts.metricHTTP()...)
 		if err != nil {
 			return nil, fmt.Errorf("otlp http metric exporter for %s=%s: %w", d.EndpointVar, d.Endpoint, err)
 		}

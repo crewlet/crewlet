@@ -2,12 +2,14 @@ package tracing
 
 import (
 	"context"
+	"encoding/pem"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -274,4 +276,97 @@ func TestTheResolverReadsTheEnvironmentAsTheSDKDoes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newTLSCollector is [newCollector] behind TLS, with the PEM file of the
+// certificate it serves — the authority an exporter must be told to trust.
+func newTLSCollector(t *testing.T) (*collector, *httptest.Server, string) {
+	t.Helper()
+	c := &collector{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		c.mu.Lock()
+		c.seen = append(c.seen, received{path: r.URL.Path, header: r.Header.Clone()})
+		c.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	ca := filepath.Join(t.TempDir(), "collector.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: server.Certificate().Raw,
+	}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return c, server, ca
+}
+
+// THE ENGINE'S EXPORTERS TAKE THE CERTIFICATE AND THE COMPRESSION FROM THE
+// RESOLVER, AND THE RESOLVER READS THEM AS THE SDK DOES.
+//
+// Two halves. The SDK's own exporter, built from the environment alone, trusts
+// a collector the CERTIFICATE variable names and gzips what COMPRESSION says —
+// which is the reading otlpenv mirrors. And the engine, given the same
+// environment ONLY through Options.Env, reaches that collector the same way:
+// so what the engine sends is the resolver's reading passed explicitly, never
+// the SDK's own second reading — which is what the sandbox receiver forwards
+// with, and why the two cannot drift.
+//
+// Mutation: drop the TLS option from exporterSettings and the engine's export
+// never completes its handshake; drop the compression option and it arrives
+// uncompressed.
+//
+// NOT PARALLEL: the SDK half sets the process environment.
+func TestTheExporterHonoursTheCertificateAndCompressionAsTheSDKDoes(t *testing.T) {
+	c, server, ca := newTLSCollector(t)
+	env := map[string]string{
+		otlpenv.EndpointVar:    server.URL,
+		otlpenv.CertificateVar: ca,
+		otlpenv.CompressionVar: "gzip",
+	}
+	want, err := otlpenv.Resolve(envOf(env), otlpenv.Traces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want.TLS.Certificate != ca || want.Compression != otlpenv.Gzip {
+		t.Fatalf("otlpenv resolved %+v", want)
+	}
+
+	t.Run("the SDK from the environment alone", func(t *testing.T) {
+		for k, v := range env {
+			t.Setenv(k, v)
+		}
+		before := len(c.at("/v1/traces"))
+		exp, err := otlptracehttp.New(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
+		_, span := tp.Tracer("conformance").Start(context.Background(), "probe")
+		span.End()
+		if err := tp.Shutdown(context.Background()); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		got := c.at("/v1/traces")
+		if len(got) != before+1 || got[len(got)-1].header.Get("Content-Encoding") != "gzip" {
+			t.Fatalf("the SDK did not export gzip to the collector it was told to trust: %v", got)
+		}
+	})
+
+	t.Run("the engine from the resolver", func(t *testing.T) {
+		before := len(c.at("/v1/traces"))
+		shutdown, err := Configure(context.Background(), Options{Env: envOf(env)})
+		if err != nil {
+			t.Fatalf("Configure: %v", err)
+		}
+		_, span := Start(context.Background(), "test", "an.operation")
+		span.End()
+		if err := shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown: %v", err)
+		}
+		got := c.at("/v1/traces")
+		if len(got) != before+1 || got[len(got)-1].header.Get("Content-Encoding") != "gzip" {
+			t.Fatalf("the engine did not export gzip to the collector the resolver "+
+				"trusts: %v", got)
+		}
+	})
 }

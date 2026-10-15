@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -25,14 +26,6 @@ import (
 // token in its own PATH, and the auth package exempts `/otlp/` by prefix for
 // exactly that reason. So this handler verifies before it does anything, on
 // the same terms as the webhook edge beside it.
-
-// maxOtelBody bounds one exported payload.
-//
-// An OTLP batch is small — spans and metric points, not artefacts — and the
-// exporter inside the box splits its own batches. A cap keeps a box that
-// exports garbage from allocating the engine's memory on an endpoint that
-// needs no other credential to reach.
-const maxOtelBody = 4 << 20
 
 // mountOTLP registers the receiver, or says why it did not.
 //
@@ -72,12 +65,12 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxOtelBody+1))
+	body, err := io.ReadAll(io.LimitReader(r.Body, sandbox.MaxOtelPayload+1))
 	if err != nil {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeUnreadableBody)
 		return
 	}
-	if len(body) > maxOtelBody {
+	if len(body) > sandbox.MaxOtelPayload {
 		// The SHARED spelling of a 413. This route answered "payload too
 		// large" as text/plain while two others answered JSON with two
 		// different codes.
@@ -85,7 +78,7 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 		return
 	}
 
-	// FORWARDED SYNCHRONOUSLY, AND ACCEPTED WHATEVER HAPPENS.
+	// FORWARDED SYNCHRONOUSLY, AND ACCEPTED WHATEVER THE BACKEND DID.
 	//
 	// The forward is bounded by the receiver's own timeout, so the caller
 	// waits at most that long — which is the right trade against the two
@@ -96,9 +89,33 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 	// retry storm from every running sandbox.
 	//
 	// So a failed forward costs a gap in a trace, is logged where an
-	// operator can see it, and is never the box's problem.
-	receiver.Forward(r.Context(), signal, body, r.Header.Get("Content-Type"))
+	// operator can see it, and is never the box's problem. What IS the
+	// box's is an export the receiver cannot read, which is answered as
+	// the OTLP/HTTP specification asks: 415 for a media type or an encoding
+	// it does not speak, 413 for one that inflates past the bound, 400 for
+	// one that does not decode — each final, so the exporter drops the
+	// batch rather than sending it again.
+	reply, err := receiver.Accept(r.Context(), traceID, sandbox.OtelExport{
+		Signal:          signal,
+		Body:            body,
+		ContentType:     r.Header.Get("Content-Type"),
+		ContentEncoding: r.Header.Get("Content-Encoding"),
+	})
+	switch {
+	case errors.Is(err, sandbox.ErrOtelUnsupported):
+		httpjson.Fail(w, http.StatusUnsupportedMediaType, httpjson.CodeInvalidBody)
+		return
+	case errors.Is(err, sandbox.ErrOtelTooLarge):
+		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
+		return
+	case err != nil:
+		log.Debug("sandbox_otlp_refused", "signal", signal, "trace_id", traceID, "error", err.Error())
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
+		return
+	}
+	w.Header().Set("Content-Type", reply.ContentType)
 	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(reply.Body)
 	log.Debug("sandbox_otlp_received", "signal", signal, "trace_id", traceID,
 		"bytes", len(body))
 }

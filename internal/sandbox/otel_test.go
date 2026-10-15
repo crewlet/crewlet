@@ -1,7 +1,7 @@
 package sandbox_test
 
 import (
-	"context"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/otlpenv"
@@ -123,24 +126,20 @@ func upstreamOf(t *testing.T, kv map[string]string) map[otlpenv.Signal]otlpenv.D
 	return upstream
 }
 
-// otelUpstream is a stand-in for the real telemetry backend.
+// otelUpstream is a stand-in for the real telemetry backend, over OTLP/HTTP.
 type otelUpstream struct {
-	mu       sync.Mutex
-	paths    []string
-	headers  http.Header
-	seen     []http.Header
-	bodies   [][]byte
-	status   int
-	received chan struct{}
+	mu      sync.Mutex
+	paths   []string
+	headers http.Header
+	seen    []http.Header
+	bodies  [][]byte
+	status  int
 }
 
-func newOtelUpstream() *otelUpstream {
-	return &otelUpstream{received: make(chan struct{}, 8)}
-}
+func newOtelUpstream() *otelUpstream { return &otelUpstream{} }
 
 func (u *otelUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body := make([]byte, r.ContentLength)
-	_, _ = r.Body.Read(body)
+	body, _ := io.ReadAll(r.Body)
 	u.mu.Lock()
 	u.paths = append(u.paths, r.URL.Path)
 	u.headers = r.Header.Clone()
@@ -153,10 +152,6 @@ func (u *otelUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	select {
-	case u.received <- struct{}{}:
-	default:
-	}
 }
 
 func (u *otelUpstream) saw() []string {
@@ -165,8 +160,9 @@ func (u *otelUpstream) saw() []string {
 	return append([]string(nil), u.paths...)
 }
 
-// THE BACKEND'S CREDENTIAL IS ADDED ON THE WAY OUT, and the payload reaches
-// it unchanged. That hop is the whole reason the receiver exists.
+// THE BACKEND'S CREDENTIAL IS ADDED ON THE WAY OUT, and the export reaches it
+// as the message the box sent. That hop is the whole reason the receiver
+// exists.
 //
 // The credential is written as the documentation writes it, percent-encoded,
 // and must arrive DECODED: the receiver once sent `Bearer%20ingest-secret`
@@ -192,19 +188,25 @@ func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 		t.Fatal("a receiver with an upstream reports it forwards nothing")
 	}
 
-	receiver.Forward(context.Background(), otlpenv.Traces, []byte("payload"), "application/x-protobuf")
+	sent := spansIn(launchedFrom.TraceID)
+	accept(t, receiver, protobufExport(t, otlpenv.Traces, sent))
 	if got := upstream.saw(); len(got) != 1 || got[0] != "/v1/traces" {
 		t.Fatalf("forwarded to %v", got)
 	}
 	upstream.mu.Lock()
 	auth := upstream.headers.Get("Authorization")
 	contentType := upstream.headers.Get("Content-Type")
+	body := upstream.bodies[0]
 	upstream.mu.Unlock()
 	if auth != "Bearer ingest-secret" {
 		t.Errorf("the upstream credential was not added: %q", auth)
 	}
 	if contentType != "application/x-protobuf" {
-		t.Errorf("the payload's content type was not carried: %q", contentType)
+		t.Errorf("the export went upstream as %q", contentType)
+	}
+	got := &coltracepb.ExportTraceServiceRequest{}
+	if err := proto.Unmarshal(body, got); err != nil || !proto.Equal(got, sent) {
+		t.Errorf("the upstream received a different export (%v)", err)
 	}
 }
 
@@ -225,8 +227,8 @@ func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 		if receiver.Forwards(signal) {
 			t.Fatalf("a receiver with no upstream claims to forward %s", signal)
 		}
-		// Must not panic or block.
-		receiver.Forward(context.Background(), signal, []byte("payload"), "")
+		// Must not fail, panic or block.
+		accept(t, receiver, protobufExport(t, signal, emptyRequest(signal)))
 	}
 }
 
@@ -260,10 +262,9 @@ func TestEachSignalIsForwardedToItsOwnDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := context.Background()
-	receiver.Forward(ctx, otlpenv.Traces, []byte("spans"), "application/x-protobuf")
-	receiver.Forward(ctx, otlpenv.Metrics, []byte("points"), "application/x-protobuf")
-	receiver.Forward(ctx, otlpenv.Logs, []byte("records"), "application/x-protobuf")
+	for _, signal := range otlpenv.Signals {
+		accept(t, receiver, protobufExport(t, signal, emptyRequest(signal)))
+	}
 
 	if got := upstream.saw(); len(got) != 2 || got[0] != "/custom/traces" ||
 		got[1] != "/base/v1/metrics" {
@@ -303,9 +304,12 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Forward returns nothing at all: there is no error for a caller to
-	// mistakenly report to the sandbox.
-	receiver.Forward(context.Background(), otlpenv.Traces, []byte("payload"), "")
+	// Accepted, though the backend refused it: there is no error for a
+	// caller to mistakenly report to the sandbox.
+	accept(t, receiver, protobufExport(t, otlpenv.Traces, spansIn(launchedFrom.TraceID)))
+	if len(upstream.saw()) != 1 {
+		t.Fatal("the export was never offered to the backend")
+	}
 }
 
 // THE RUN ENVIRONMENT CARRIES AN ENDPOINT AND NO CREDENTIAL.

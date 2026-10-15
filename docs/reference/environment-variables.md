@@ -252,8 +252,8 @@ makes a running fleet re-read them.
 ## OpenTelemetry (Optional)
 
 Read by `crewlet run` at startup, never by `crewlet validate`. The endpoint, header,
-protocol and exporter variables are resolved by **one resolver** for every reader in the
-engine, so its own exporters and the [sandbox OTLP forwarder](../concepts/code-sandbox.md)
+protocol, compression, TLS and exporter variables are resolved by **one resolver** for
+every reader in the engine, so its own exporters and the [sandbox OTLP forwarder](../concepts/code-sandbox.md)
 send each signal to the same place with the same credential. A value that can never work
 is refused at startup, naming the variable to change; a telemetry *typo* that has a safe
 reading (a sampler ratio, an export interval) warns and carries on.
@@ -266,8 +266,14 @@ reading (a sampler ratio, an export interval) warns and carries on.
 | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | The same, for logs. The engine exports no logs of its own; this is where the sandbox forwarder sends a coding box's. Every logs variable is read — and refused when it can never work — only on a node with `CREWLET_SANDBOX_OTEL_RECEIVER_URL` set, since nothing else sends logs. | `https://collector.example.com/otlp/v1/logs` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | `name=value` pairs, comma-separated, sent with every export — the backend's ingest credential. Each value is **percent-decoded** and then trimmed, so write a space as `%20`, a comma as `%2C` and a literal `%` as `%25`. An entry that cannot be used — no `=`, a name that is not a valid header name, broken percent-encoding — is dropped, as the OpenTelemetry SDK drops it, with an `otel_header_dropped` warning naming the variable and the entry's position, never its value. Applied engine-side to forwarded sandbox telemetry too, and never handed to the sandbox. | `authorization=Bearer%20sk-...` |
 | `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_METRICS_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS` | One signal's headers, in the same form. When set they **replace** the base set for that signal rather than adding to it — even when none of their entries is usable. | `authorization=Bearer%20sk-traces` |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | How the **engine** talks to the collector: `http/protobuf` (default) or `grpc`, in any case. Anything else — `http/json` included — is refused at startup, naming the two that work. | `grpc` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | How the engine **and the sandbox forwarder** talk to the collector: `http/protobuf` (default) or `grpc`, in any case. Anything else — `http/json` included — is refused at startup, naming the two that work. | `grpc` |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`, `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | One signal's protocol, overriding the base. Same values. | `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | `gzip`, or `none` (the default), in any case, for every export — the engine's and the forwarder's. Anything else is refused at startup: the OpenTelemetry SDK reads an unknown value as `none` without a word. | `gzip` |
+| `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION`, `OTEL_EXPORTER_OTLP_METRICS_COMPRESSION`, `OTEL_EXPORTER_OTLP_LOGS_COMPRESSION` | One signal's compression, overriding the base. Same values. | `none` |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE` | The PEM file of the certificate authorities an `https://` collector is verified against, instead of the system's roots. A file that cannot be read or holds no PEM certificate is refused at startup naming the variable and the path, and so is one beside an `http://` endpoint, which has no TLS to use it with. | `/etc/crewlet/collector-ca.pem` |
+| `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | The PEM files of the client certificate presented to an `https://` collector that requires one, and its private key — a **pair**: one without the other, or a key that does not match the certificate, is refused at startup. | `/etc/crewlet/client.pem` |
+| `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `…_TRACES_CLIENT_CERTIFICATE`, `…_TRACES_CLIENT_KEY` (and the `METRICS_` and `LOGS_` forms) | One signal's TLS material, overriding the base: its certificate replaces the base certificate, and its pair — both halves set — replaces the base pair. A pair is never taken half from one level and half from the other. | `/etc/crewlet/traces-ca.pem` |
+| `OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_<SIGNAL>_INSECURE` | Says nothing the endpoint's scheme does not: `http://` is plaintext and `https://` is TLS. Accepted when it agrees with the scheme; `true` beside `https://`, `false` beside `http://`, or a value that is neither `true` nor `false` is refused at startup. | `true` |
 | `OTEL_TRACES_EXPORTER` | `otlp` (default) or `none`. `none` switches trace export off whatever the endpoint says — the engine's own spans and the traces the sandbox forwarder would pass on alike. Span ids still flow into every event either way. Anything else, a list included, is refused at startup. | `none` |
 | `OTEL_METRICS_EXPORTER` | The same, for metrics: `none` with an endpoint set is "traces yes, metrics no". | `none` |
 | `OTEL_LOGS_EXPORTER` | The same, for the logs the sandbox forwarder passes on — read only where the receiver is configured. | `none` |
@@ -316,17 +322,18 @@ spans are never the engine's to export: the API sends them to the destination an
 organization admin configures in the Claude Console, nested under the `traceparent` each
 call carries ([Spans from Claude](../guides/deployment.md#spans-from-claude)).
 
-The engine's exporters and the sandbox forwarder resolve the endpoints, headers and
-exporter switches **identically**, on purpose, so a coding agent's spans land in the same
-backend as the turn that started it and nest underneath it. The forwarder re-sends a box's
-export over OTLP/HTTP to that destination whatever the resolved protocol says.
+The engine's exporters and the sandbox forwarder resolve the endpoints, headers,
+protocols, compression, TLS material and exporter switches **identically**, on purpose, so
+a coding agent's spans land in the same backend as the turn that started it and nest
+underneath it. The forwarder reads each export a box makes — OTLP/HTTP protobuf or JSON,
+compressed or not — and sends it to that destination the way the engine's own exporter
+sends: a gRPC `Export` call where the protocol is `grpc`, gzipped where the compression
+is, verified against the certificate and presenting the client pair the TLS variables
+name.
 
-The OpenTelemetry SDK's exporters also read `OTEL_EXPORTER_OTLP_COMPRESSION`,
-`OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
-`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and their
-per-signal forms) themselves, for the engine's own exports; the sandbox forwarder applies
-none of them. `OTEL_EXPORTER_OTLP_INSECURE` has no effect, because the endpoint's scheme
-decides TLS.
+`OTEL_EXPORTER_OTLP_TIMEOUT` and its per-signal forms are read by the OpenTelemetry SDK
+itself, for the engine's own exports; the forwarder bounds each forward with a timeout of
+its own (ten seconds), since a box waits on it.
 
 ---
 
