@@ -396,6 +396,15 @@ func (s *Service) Sources() []string {
 // attached to — so it comes straight back, is shed again and republished
 // again as fast as the broker will serve it. A deferral cannot spin.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
+	// THE DELIVERY'S TRACE, restored before anything is logged or recorded,
+	// so a skip is filed where the docs promise a reader finds it — in the
+	// webhook's trace, beneath the span the delivery was published in — and
+	// every line about the delivery names that trace. The service opens no
+	// span, so what it publishes on this context is published beneath the
+	// delivery's ([tracing.TraceOf]). Read through TraceOf without it, every
+	// skip minted a root of its own, and "why did my webhook not reach an
+	// agent" was answered in a trace nobody would ever open.
+	ctx = tracing.WithRemote(ctx, ev.Trace())
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
 			"event", ev.ID, "reason", "config posture is shedding")
@@ -727,7 +736,8 @@ func (r SkipReason) Valid() bool {
 }
 
 // skip records why a delivery did not wake anybody: the reason, and cause's
-// text as the record's Detail when there is one ([ReasonParseFailed]).
+// text as the record's Detail when there is one ([ReasonParseFailed]). Filed
+// beneath the delivery, whose trace [Service.Handle] restored onto ctx.
 //
 // Best effort and never fatal: the delivery has already been decided, and
 // failing it because the bookkeeping could not be published would turn a

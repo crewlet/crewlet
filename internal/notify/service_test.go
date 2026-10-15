@@ -229,10 +229,14 @@ func newService(t *testing.T, mutate func(*notify.Options, *harness)) *harness {
 	return h
 }
 
+// delivery is a webhook as the edge publishes it: from inside its
+// `webhook.receive` span, so its trace names that span — which is what a wake
+// and a skip are filed beneath, and what a fixture with no span would let
+// either drop without a test noticing.
 func delivery(source string) *events.Event {
 	ev := events.New(types.RawWebhook{
 		Body: map[string]any{"issue": "ENG-42"}, Headers: map[string]string{},
-	}, events.NewTrace())
+	}, events.TraceContext{TraceID: events.NewTrace().TraceID, SpanID: "00f067aa0ba902b7"})
 	ev.Source = source
 	return ev
 }
@@ -544,6 +548,38 @@ func TestADisconnectedSourceIsRecordedAsDisconnected(t *testing.T) {
 	skips := h.skips(t)
 	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonRetired {
 		t.Fatalf("skips = %+v, want one %q", skips, notify.ReasonRetired)
+	}
+}
+
+// A SKIP IS FILED IN THE DELIVERY'S TRACE, beneath the span the delivery was
+// published in and under its decision — where a reader following a webhook
+// finds why it reached nobody. Every gate's skip, the ones before a parser
+// runs and the ones after it. The service opened no span and restored no
+// trace, so each skip was minted a root of its own.
+//
+// Mutation, red here: drop the restore at the top of Handle.
+func TestASkipIsFiledInTheDeliverysTrace(t *testing.T) {
+	for name, tc := range map[string]struct {
+		source string
+		routed []notify.Routed
+	}{
+		"before a parser runs": {source: "mystery"},
+		"after it":             {source: "tracker", routed: []notify.Routed{to(notify.Recipient{Handle: "nobody-here"}, "hello")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newService(t, nil)
+			h.parser.out = tc.routed
+			in := delivery(tc.source)
+			in.TraceUnsampled = true
+			h.svc.Handle(t.Context(), in)
+			recorded := h.settled(t, skipTopic)
+			if len(recorded) != 1 {
+				t.Fatalf("%d skips recorded, want one", len(recorded))
+			}
+			if got, want := recorded[0].Trace(), in.Trace().Beneath(); got != want {
+				t.Errorf("the skip is filed under %+v, want beneath the delivery: %+v", got, want)
+			}
+		})
 	}
 }
 
