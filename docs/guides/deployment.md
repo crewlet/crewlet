@@ -1239,6 +1239,7 @@ flowchart TD
     A --> B --> C --> D
     D --> E
     D --> F
+    D -->|"agent.turn.judge's own call"| H
     E --> H
     C --> L
     C --> R
@@ -1276,14 +1277,15 @@ and one root per tick of a background learning pass, named for it
 the command line rather than a node: [`crewlet llm doctor`](../reference/cli.md#crewlet-llm)
 examines each entry in a root `llm.doctor` of its own, naming it
 (`crewlet.provider`).
-Beneath `llm.round`, `llm.auxiliary` or `llm.doctor`, a call an `anthropic` provider makes is
+Beneath `llm.round`, `llm.auxiliary`, `agent.turn.judge` (the judge's own call) or `llm.doctor`, a call an `anthropic` provider makes is
 a span of the Anthropic SDK's own, `anthropic.messages.create`, which is what
 the Claude API's spans nest under; a text-mode Claude Code call spans nothing
 and hands the round's own context on, so the API's spans nest under `llm.round`
 itself — see [Spans from Claude](#spans-from-claude).
 
-**Every model call has a parent.** A call is made in `llm.round` or in
-`llm.auxiliary`, so the SDK's span and the API's are never the root of a trace
+**Every model call has a parent.** A call is made in `llm.round`, in
+`llm.auxiliary`, or — the extension judge's own — in `agent.turn.judge`, so
+the SDK's span and the API's are never the root of a trace
 of their own, and the callers that used to hold no span hold one now: a
 reflection pass runs in `learning.reflect` under the turn it reflects on, a
 background pass in a root of its own, and a person's question on the operator

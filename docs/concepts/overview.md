@@ -47,7 +47,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 - **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
-- **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
+- **Observable**: structured logging, OpenTelemetry traces and metrics, and an event store the dashboard reads, from day one
 
 ---
 
@@ -92,7 +92,7 @@ node, the hop-by-hop path a trigger takes across a fleet, what a turn does,
 where every table and bucket lives, and what changes when a second node
 appears.
 
-**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for distributed tracing.
+**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for traces and metrics.
 
 **One node type**: `crewlet run` is the node, and what it does is a config value: `node.roles` picks from `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all four: one process holding the company's records, serving the API and the dashboard and running every agent, which is the whole stack. Giving the API nodes of its own is the same command with `-roles data,ingress`: an engine that serves the API and claims no seats, so both topologies are the same code path rather than two wirings that have to be kept in step. And an agent host can hold **no data at all** — `-roles seats` on a scratch store, joined to the fleet as a leaf — which keeps it small and disposable while its seats read and write through a node that holds the data ([ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)).
 
@@ -112,7 +112,7 @@ appears.
 | Event store | A table in that file | LLM-invocation observability and the event dashboards, written inline by a publish listener |
 | Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV riding the stream's own NATS connection — never the store file, and never a second connection that could fail on its own |
 | Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the schema editors read, and the docs |
-| Tracing | OpenTelemetry | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
+| Tracing and metrics | OpenTelemetry | W3C Trace Context alone, carried across the queue with its sampling decision; OTLP export of traces and metrics, configured by the standard `OTEL_*` environment; the Anthropic SDK's span of each Claude call, under which the Claude API nests its own |
 | LLM clients | Official vendor SDKs | Anthropic and OpenAI, plus any OpenAI-compatible endpoint |
 | Structured logging | `log/slog` | Standard library, machine-parsable, one component-bound logger per subsystem |
 | Testing | `testing` | Standard library, no assertion framework; one shared conformance suite per multi-backend contract |
@@ -137,7 +137,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any O
 
 **Prompt caching.** Each call's large static prefix, the per-phase system prompt plus the tool-definition array, is the dominant repeated content of an agent turn: it is re-sent on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy) and is byte-stable across successive turns for the same agent within an epoch. Both built-in HTTP providers cache it so it is re-read at a fraction of the base input price instead of re-billed in full each round. The Anthropic provider sets explicit cache breakpoints on the system block and the final tool definition (caching the whole tools and system prefix) and, on a call that offers tools, one more on the last block of the conversation, which moves forward with it — so each round of a tool loop reads the history the previous round wrote instead of re-billing it, which by the twentieth round is most of what a round sends. That third one is an explicit marker on the block rather than the request's top-level `cache_control` (the API's "automatic" breakpoint, which lands in the same place), because the legacy Bedrock integration (Opus 4.6 and earlier) answers the top-level field with a 400, and an entry reaches Bedrock through any gateway that forwards the body. A call offering no tools (a judge, a knowledge or learning pass) is asked once, so its tail is not cached: the write would cost a premium for a read that never comes. Three breakpoints, inside the API's four, all on the 5-minute TTL. The OpenAI provider relies on the platform's automatic prefix caching, which works because the static system prompt is already first in the message array. This is why the per-phase prompts can carry their full incident-hardened guidance (see [Turn Engine](turn-engine.md)) without the repetition dominating cost.
 
-`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the token budget stays correct: Anthropic reports cache reads and writes *separately* from its raw input tokens, so the provider sums all three; OpenAI's prompt tokens already include the cached portion. `Completion.CacheRead` and `Completion.CacheWrite` break that total down for cost reporting only, and each tool-loop round records the model, the input and output tokens and the cache reads on its trace span.
+`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the token budget stays correct: Anthropic reports cache reads and writes *separately* from its raw input tokens, so the provider sums all three; OpenAI's prompt tokens already include the cached portion. `Completion.CacheRead` and `Completion.CacheWrite` break that total down for cost reporting only, and each tool-loop round records the model, its input, output, cache-read and cache-write tokens, its tool calls and its stop reason on its `llm.round` span — as `crewlet.*` attributes, so a collector summing the GenAI conventions' `gen_ai.usage.*` never counts a round beside the Anthropic SDK's span of the same call beneath it ([Spans from Claude](../guides/deployment.md#spans-from-claude)).
 
 ### Embedding Provider
 
@@ -277,9 +277,10 @@ internal/
 │                         #   dashboard's /operator/act), and pagepolicy/:
 │                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
-├── tracing/              # OpenTelemetry: one provider, W3C trace-context
-│                         #   propagation, a parent-based sampler, and the
-│                         #   bridge to the envelope's trace fields
+├── tracing/              # OpenTelemetry: one tracer provider and one meter
+│                         #   provider, W3C trace-context propagation, a
+│                         #   parent-based sampler, and the bridge to the
+│                         #   envelope's trace fields
 ├── otlpenv/              # The standard OTLP environment, resolved once per
 │                         #   signal for the engine's exporters and the
 │                         #   sandbox forwarder alike
