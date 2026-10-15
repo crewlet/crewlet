@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -77,13 +78,13 @@ func (e *estate) seedNarrow(id string, n int) {
 		n, id, id, commands, len(commands))
 }
 
-// seedTombstones writes n expired ref tombstones into a repository and counts
-// them, as a sweep finds them.
-func (e *estate) seedTombstones(id string, n int) {
+// seedTombstones writes n ref tombstones into a repository, deleted at, and
+// counts them, as a sweep finds them.
+func (e *estate) seedTombstones(id string, n int, at time.Time) {
 	e.t.Helper()
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 		INSERT INTO code_refs (repo_id, ref, target, position, at)
-		SELECT ?, printf('refs/heads/gone-%06d', i), '', 1, 0 FROM k`, n, id)
+		SELECT ?, printf('refs/heads/gone-%06d', i), '', 1, ? FROM k`, n, id, store.EncodeTime(at))
 	e.exec(`UPDATE code_repos SET tombstones = tombstones + ? WHERE id = ?`, n, id)
 }
 
@@ -115,27 +116,70 @@ func (e *estate) applyTimed(b *testing.B, a *Applier, r built, rows int) {
 	}
 }
 
+// fullest is the pushes of the record the committer forms with the most
+// commands of one kind: pushes of MaxCommandsPerPush commands, each with its
+// pack, and a last push of whatever room the record's row bound leaves —
+// held, by [rowBound] and [recordRows] themselves, to fill the bound exactly,
+// so a shape priced here is one the committer admits and the largest of its
+// kind. command is the c-th command of push p.
+func fullest(b *testing.B, prefix string, i int, command func(p, c int) Command) []PushEntry {
+	b.Helper()
+	var entries []PushEntry
+	var rows int
+	for p := 0; ; p++ {
+		e := pushEntry(fmt.Sprint(prefix, "-", i, "-", p))
+		for c := 0; c < MaxCommandsPerPush; c++ {
+			e.Commands = append(e.Commands, command(p, c))
+			if recordRows(rows+rowBound(Proposal{Commands: e.Commands, Pack: e.Pack})) > MaxRecordRows {
+				e.Commands = e.Commands[:c]
+				break
+			}
+		}
+		if len(e.Commands) == 0 {
+			break
+		}
+		entries = append(entries, e)
+		rows += rowBound(Proposal{Commands: e.Commands, Pack: e.Pack})
+	}
+	if recordRows(rows) != MaxRecordRows {
+		b.Fatalf("the fullest record of %s bounds %d rows, not MaxRecordRows (%d)", prefix,
+			recordRows(rows), MaxRecordRows)
+	}
+	return entries
+}
+
 // BenchmarkApplyAPushRecord is a push record APPLIED AND COMMITTED — the time
 // it holds the replicated estate's one write lane, which every other domain's
 // applier on the node waits behind — into a repository of its own each
 // iteration, set up outside the timer: one holding 10 000 refs, or, for the
-// sweeps, one holding a whole record's budget of expired tombstones. Its
-// shapes are the records the committer forms and the ones the horizons make
-// longest:
+// sweeps, one holding expired tombstones. Its shapes are the records the
+// committer forms and the ones the horizons make longest:
 //
-//   - maximal: three pushes of MaxCommandsPerPush ref creations, the largest
-//     record by rows (3 007, and the sweep's 992 more when tombstones wait);
+//   - maximal: the most ref creations a record the committer forms carries —
+//     three pushes of MaxCommandsPerPush and a fourth of the 926 the row
+//     bound leaves, 3 935 rows — with nothing left for the sweep, since it
+//     makes no tombstone;
+//   - maximal+history: that, with HorizonDeletesPerRecord expired push rows
+//     waiting, each at the widest a row can be — the history's removal is
+//     bounded by HorizonBytesPerRecord and takes three of them;
 //   - group: MaxPushesPerRecord pushes of one command each, what group commit
 //     turns a CI's burst of tag pushes into;
 //   - one: one push of one command, the common case;
 //   - sweep: one push of one command whose record sweeps every expired
 //     tombstone its row budget leaves room for — 3 995;
-//   - maximal+sweep: the largest record with expired tombstones waiting,
-//     which sweeps the 992 its own rows leave;
-//   - maximal+sweep+history: that, with HorizonDeletesPerRecord expired push
-//     rows waiting too, each at the widest a row can be — the longest a push
-//     record can hold the lane, since the history's removal is bounded by
-//     HorizonBytesPerRecord and takes three of them.
+//   - deletions: the most ref deletions a record the committer forms carries
+//     — a push of MaxCommandsPerPush and one of the 965 left, each deletion
+//     counted twice in the bound (rowBound) — at a repository holding
+//     MaxTombstonesPerRepo expired tombstones, so the record writes 1 965
+//     tombstones and sweeps the 2 029 its rows leave: the most rows a record
+//     can both write and delete;
+//   - deletions+history: that, with the widest expired push rows waiting too
+//     — the longest shape a record the committer forms has;
+//   - removal: three pushes of MaxCommandsPerPush ref deletions at a
+//     repository already holding MaxTombstonesPerRepo fresh tombstones, so
+//     the record writes its deletions as removals — a record no committer of
+//     this build forms (it counts each deletion twice, and two such pushes
+//     never share a record), whose cost the applier still bounds.
 //
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which a record
 // is checked against only at its boundary; doc.go's measured section records
@@ -145,16 +189,16 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 	// pushes carry their own: a repeated one is a redelivery and applies as
 	// nothing.
 	maximal := func(i int) []PushEntry {
-		var entries []PushEntry
-		for p := range 3 {
-			var cmds []Command
-			for c := range MaxCommandsPerPush {
-				cmds = append(cmds, move(fmt.Sprintf("refs/heads/new/%d/%04d", p, c), ZeroOID,
-					oid(fmt.Sprint(p, c))))
-			}
-			entries = append(entries, pushEntry(fmt.Sprint("max-", i, "-", p), cmds...))
-		}
-		return entries
+		return fullest(b, "max", i, func(p, c int) Command {
+			return move(fmt.Sprintf("refs/heads/new/%d/%04d", p, c), ZeroOID, oid(fmt.Sprint(p, c)))
+		})
+	}
+	// THE DELETIONS OF e.seed's refs, as many as the committer puts in one
+	// record.
+	deleting := func(i int) []PushEntry {
+		return fullest(b, "deleting", i, func(p, c int) Command {
+			return move(fmt.Sprintf("refs/heads/r%06d", p*MaxCommandsPerPush+c), oid("seeded"), ZeroOID)
+		})
 	}
 	group := func(i int) []PushEntry {
 		var entries []PushEntry
@@ -167,20 +211,60 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 	one := func(i int) []PushEntry {
 		return []PushEntry{pushEntry(fmt.Sprint("one-", i), move("refs/heads/main", ZeroOID, oid("main")))}
 	}
+	// THE DELETIONS OF e.seed's refs, three maximal pushes of them, which no
+	// committer of this build puts in one record.
+	removing := func(i int) []PushEntry {
+		var entries []PushEntry
+		for p := range 3 {
+			var cmds []Command
+			for c := range MaxCommandsPerPush {
+				cmds = append(cmds, move(fmt.Sprintf("refs/heads/r%06d", p*MaxCommandsPerPush+c),
+					oid("seeded"), ZeroOID))
+			}
+			entries = append(entries, pushEntry(fmt.Sprint("del-", i, "-", p), cmds...))
+		}
+		return entries
+	}
+	expired := time.Unix(0, 0)
+	// THE ROWS EACH SHAPE MUST TOUCH, from the entries themselves: a ref,
+	// a pack and a push row an entry, and the counters.
+	written := func(entries []PushEntry) int {
+		n := 1
+		for _, e := range entries {
+			n += len(e.Commands) + 2
+		}
+		return n
+	}
+	deletionsAt := func(e *estate, repo string) {
+		e.seed(repo, 0, 2*MaxCommandsPerPush, 0)
+		e.seedTombstones(repo, MaxTombstonesPerRepo, expired)
+	}
 	for _, shape := range []struct {
 		name    string
 		entries func(int) []PushEntry
-		stones  bool
+		seed    func(e *estate, repo string)
 		history bool
 		rows    int
 	}{
-		{"maximal", maximal, false, false, 3 * (1 + MaxCommandsPerPush + 1)},
-		{"group", group, false, false, 2 * MaxPushesPerRecord},
-		{"one", one, false, false, 3},
-		{"sweep", one, true, false, MaxRecordRows},
-		{"maximal+sweep", maximal, true, false, MaxRecordRows},
-		{"maximal+sweep+history", maximal, true, true, MaxRecordRows},
+		{"maximal", maximal, nil, false, written(maximal(0))},
+		{"maximal+history", maximal, nil, true, written(maximal(0))},
+		{"group", group, nil, false, 2 * MaxPushesPerRecord},
+		{"one", one, nil, false, 3},
+		{"sweep", one, func(e *estate, repo string) { e.seedTombstones(repo, MaxRecordRows, expired) },
+			false, MaxRecordRows},
+		// EVERY ROW OF THE BUDGET TOUCHED: the deletions' tombstones and
+		// their record's own rows, and the sweep taking what they leave.
+		{"deletions", deleting, deletionsAt, false, MaxRecordRows},
+		{"deletions+history", deleting, deletionsAt, true, MaxRecordRows},
+		// A RECORD THAT REMOVES: every ref it deletes at a repository already
+		// holding MaxTombstonesPerRepo fresh tombstones, which no sweep can
+		// take, so its 3 000 deletions are removals rather than rows.
+		{"removal", removing, func(e *estate, repo string) {
+			e.seed(repo, 0, 3*MaxCommandsPerPush, 0)
+			e.seedTombstones(repo, MaxTombstonesPerRepo, applyClock.Add(-time.Hour))
+		}, false, 3 * (1 + MaxCommandsPerPush + 1)},
 	} {
+		removal := shape.name == "removal"
 		b.Run(shape.name, func(b *testing.B) {
 			e := openApplyEstate(b)
 			a := NewApplier()
@@ -193,12 +277,28 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 				if shape.history {
 					e.seedWide(b, repo, HorizonDeletesPerRecord)
 				}
-				if shape.stones {
-					e.seedTombstones(repo, MaxRecordRows)
+				if shape.seed != nil {
+					shape.seed(e, repo)
 				} else {
 					e.seed(repo, 0, 10_000, 0)
 				}
 				e.applyTimed(b, a, pushOf(b, repo, shape.entries(i)...), shape.rows)
+				// THE SHAPE IT NAMES: every deletion a removal, the count held.
+				if removal && (e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target = ''`,
+					repo) != MaxTombstonesPerRepo || e.num(`SELECT refs FROM code_repos WHERE id = ?`, repo) != 0) {
+					b.Fatal("the removal shape's record did not write its deletions as removals")
+				}
+				// AND A RECORD THE COMMITTER FORMS KEEPS EVERY DELETION A ROW.
+				if strings.HasPrefix(shape.name, "deletions") {
+					made := 0
+					for _, p := range shape.entries(i) {
+						made += len(p.Commands)
+					}
+					if kept := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target = ''
+						AND ref LIKE 'refs/heads/r%'`, repo); kept != int64(made) {
+						b.Fatalf("the deletions shape kept %d of its %d deletions as tombstones", kept, made)
+					}
+				}
 			}
 		})
 	}

@@ -32,9 +32,10 @@ import (
 //     forms — one that arbitrated one object and claims another — because
 //     applying it would be the corruption the subject exists to prevent.
 //  4. EVERY HORIZON IS A FUNCTION OF THE RECORD: the push history and the ref
-//     tombstones a push record removes are chosen by its broker instant,
-//     inside its own repository, never by a sweep that would be a second
-//     writer of the replicated estate.
+//     tombstones a push record removes are chosen by its broker instant and
+//     its own repository's rows — the tombstones also by their count against
+//     MaxTombstonesPerRepo — never by a sweep that would be a second writer
+//     of the replicated estate.
 
 // Applier writes this node's copy of the code host.
 //

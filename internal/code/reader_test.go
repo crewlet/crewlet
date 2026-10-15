@@ -156,8 +156,96 @@ func TestASnapshotIsFullAfterTombstonesAreSwept(t *testing.T) {
 	}
 }
 
+// A DELTA IS NEVER LARGER THAN THE FULL ANSWER IT WOULD REPLACE: a delta from
+// below a clean-up that deleted more refs than the repository keeps carries a
+// row for every deletion, where the full answer carries only what is left, so
+// that delta is answered in full — while a delta from after it, carrying one
+// push's change, is still a delta. And the comparison is of every row each
+// answer carries, PACKS INCLUDED: a delta's packs are only those added since
+// it, a full answer's every pack, so a repository with many packs keeps its
+// delta past a clean-up a repository with few would not.
+//
+// Mutation: drop the count, and the delta from below the clean-up is a delta
+// of sixty tombstones beside a full answer of forty refs; compare the refs
+// alone, and the repository of many packs is answered in full — 343 rows — for
+// a delta of 63, under a fifth of its size.
+func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
+	t.Parallel()
+	const made, deleted = 100, 60
+	name := func(i int) string { return fmt.Sprintf("refs/heads/b%03d", i) }
+	cleanedUp := func(t *testing.T, packs int) (n *node, id string, before, after statelog.Position) {
+		n = newNode(t)
+		id = seededRepo(t, n, "app")
+		n.seedRefs(id, 0, packs)
+		var create []code.Command
+		for i := range made {
+			create = append(create, set(name(i), code.ZeroOID, oidOf(name(i))))
+		}
+		n.push(id, entry("made", create...))
+		before = n.waiter.Committed()
+		var drop []code.Command
+		for i := range deleted {
+			drop = append(drop, set(name(i), oidOf(name(i)), code.ZeroOID))
+		}
+		n.push(id, entry("cleaned", drop...))
+		after = n.waiter.Committed()
+		n.push(id, entry("moved", set(name(made-1), oidOf(name(made-1)), oidOf("moved"))))
+		return n, id, before, after
+	}
+
+	t.Run("few packs", func(t *testing.T) {
+		t.Parallel()
+		n, id, before, after := cleanedUp(t, 0)
+		pages := snapshot(t, n.reader, id, before)
+		if !pages[0].Full {
+			t.Fatalf("a delta from below a clean-up of %d refs, of a repository left with %d, was "+
+				"answered as a delta of %d refs where the full answer is %d", deleted, made-deleted,
+				len(unionOf(pages).refs), made-deleted)
+		}
+		u := unionOf(pages)
+		if len(u.refs) != made-deleted || len(u.packs) != 3 {
+			t.Fatalf("the full answer serves %d refs and %d packs, want the %d live and all 3",
+				len(u.refs), len(u.packs), made-deleted)
+		}
+		for ref, oid := range u.refs {
+			if oid == "" {
+				t.Fatalf("the full answer serves %s as a deletion", ref)
+			}
+		}
+		delta := snapshot(t, n.reader, id, after)
+		if delta[0].Full {
+			t.Fatal("a delta of one push's change was answered in full")
+		}
+		if u := unionOf(delta); len(u.refs) != 1 || len(u.packs) != 1 {
+			t.Fatalf("the delta from after the clean-up serves %d refs and %d packs, want the "+
+				"one ref and the one pack the push after it moved", len(u.refs), len(u.packs))
+		}
+	})
+
+	t.Run("many packs", func(t *testing.T) {
+		t.Parallel()
+		// Three hundred seeded packs, and one for each of the three pushes.
+		const packs = 300 + 3
+		n, id, before, _ := cleanedUp(t, 300)
+		pages := snapshot(t, n.reader, id, before)
+		if live := pages[0].Repo.LivePacks; live != packs {
+			t.Fatalf("the repository counts %d live packs, want the %d it holds", live, packs)
+		}
+		if pages[0].Full {
+			t.Fatalf("a delta of %d refs and 2 packs beside a full answer of %d refs and %d "+
+				"packs was answered in full", deleted+1, made-deleted, packs)
+		}
+		if u := unionOf(pages); len(u.refs) != deleted+1 || len(u.packs) != 2 {
+			t.Fatalf("the delta serves %d refs and %d packs, want the %d the clean-up deleted with "+
+				"the one moved after it, and the 2 packs added since", len(u.refs), len(u.packs),
+				deleted+1)
+		}
+	})
+}
+
 // seedRefs writes count live refs and packs packs straight into a node's
-// estate at position 1 — the bulk a paging case needs.
+// estate at position 1 — the bulk a paging case needs — and counts them, as
+// the applier would: a snapshot decides full or delta by the counts.
 func (n *node) seedRefs(repoID string, refs, packs int) {
 	n.t.Helper()
 	ctx := n.t.Context()
@@ -183,6 +271,8 @@ func (n *node) seedRefs(repoID string, refs, packs int) {
 	}); err != nil {
 		n.t.Fatalf("seed %s: %v", repoID, err)
 	}
+	n.exec(`UPDATE code_repos SET refs = refs + ?, branches = branches + ?, live_packs = live_packs + ?
+		WHERE id = ?`, refs, refs, packs, repoID)
 }
 
 // MANY PAGES EQUAL ONE PAGE: a repository past a page's row limit is served

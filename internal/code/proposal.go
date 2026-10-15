@@ -460,12 +460,37 @@ func entryBound(p Proposal) (int, error) {
 	return len(b) + len(p.Commands)*commandResultBound + 1, nil
 }
 
-// rowBound is the most rows p's entry can make its record's apply write: its
-// push row, a ref for every command the receiver did not refuse, and its pack.
+// rowBound is the most rows p's entry can make its record's apply touch: its
+// push row, a ref for every command the receiver did not refuse, its pack —
+// and a second row for every DELETION among those commands, which is the old
+// tombstone the record's sweep may have to take to keep the repository inside
+// MaxTombstonesPerRepo once the deletion's own tombstone is written.
+//
+// # A deletion counts twice so no record this committer forms removes
+//
+// The applier holds MaxTombstonesPerRepo after every record with two moves:
+// its sweep takes the oldest past the bound within what the record's rows
+// leave of MaxRecordRows, and a record whose new tombstones that room cannot
+// match writes its deletions as REMOVALS and raises the repository's mark to
+// its own position (apply_push.go) — which sends every cache synced before the
+// record, on every git node holding the repository, to read it whole, and
+// stops each such node's maintenance on it for the full round. Counted once,
+// a deletion left the sweep less room than the record's own deletions need:
+// three pushes of a thousand deletions shared one record whose sweep had 995
+// rows for 3 000 new tombstones, and a record filled to the row bound left it
+// none. Counted twice, a record's sweep always has a row for every tombstone
+// it makes, the removal is left to records no committer of this build forms,
+// and what that costs is batching alone: one maximal deletion push a record
+// rather than three, a record still under half the lane's time budget
+// (doc.go's measured section).
 func rowBound(p Proposal) int {
 	rows := 1
 	for _, c := range p.Commands {
-		if c.Result != ResultNG {
+		switch {
+		case c.Result == ResultNG:
+		case c.New == ZeroOID:
+			rows += 2
+		default:
 			rows++
 		}
 	}
@@ -476,9 +501,10 @@ func rowBound(p Proposal) int {
 }
 
 // recordRows is the row bound of a record carrying a batch whose entries
-// bound rows rows between them: those, the repository's counters, the push
-// history's share of the horizon and the tombstone mark. The tombstone sweep
-// takes what the record leaves and is never in the bound (apply_push.go).
+// bound rows rows between them ([rowBound], the tombstone sweep's room for the
+// entries' own deletions among them): those, the repository's counters, the
+// push history's share of the horizon and the tombstone mark. Whatever else
+// the record leaves the sweep takes for tombstones past their horizon.
 func recordRows(rows int) int { return rows + 1 + HorizonDeletesPerRecord + 1 }
 
 // refuseAll is p answered with a refusal of the whole push: every command the

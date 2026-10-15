@@ -20,8 +20,8 @@ import (
 // only thing that knows whether the statement reaches the index. So this runs
 // EXPLAIN QUERY PLAN over every statement the package issues against the
 // tables a repository's history lives in — the guards, the applier's reads
-// and writes, the lifecycle store's decides, the push decide's reads (the
-// expired tombstones it counts among them), the reader's pages in their
+// and writes (the tombstones a push sweeps, oldest first, among them), the
+// lifecycle store's decides, the push decide's reads, the reader's pages in their
 // first and keyset forms, the purge's bounded count and the object store's
 // two statements over code_packs — and holds each to the EXACT seek it names:
 // the index and every column of it the statement bounds. Seeking an index is
@@ -119,10 +119,11 @@ func registeredStatements() map[string]statement {
 		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "main", "", "active", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
-		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"tombstones held":     {tombstonesHeldSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"expired pushes":      {expiredPushesSQL, []any{"repo-1", 100, HorizonDeletesPerRecord}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND at<?)"}},
 		"delete pushes":       {deletePushesSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
-		"expired tombstones":  {expiredTombstonesSQL, []any{"repo-1", 100, MaxRecordRows}, []string{"code_refs_tombstones_idx (repo_id=? AND at<?)"}},
+		"oldest tombstones":   {tombstonesOldestSQL, []any{"repo-1", MaxRecordRows}, []string{"code_refs_tombstones_idx (repo_id=?)"}},
 		"delete refs":         {deleteRefsSQL, []any{"repo-1", sweep}, []string{refsKey + " (repo_id=? AND ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"swept tombstones":    {sweptTombstonesSQL, []any{1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"purge parts":         {purgePartsSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
@@ -153,6 +154,7 @@ func registeredStatements() map[string]statement {
 		"refs full after":     {refsFullAfterSQL, []any{"repo-1", "refs/heads/r000100", 100}, []string{refsKey + " (repo_id=? AND ref>?)"}},
 		"refs delta first":    {refsDeltaFirstSQL, []any{"repo-1", 400, 100}, []string{"code_refs_changed_idx (repo_id=? AND position>?)"}},
 		"refs delta after":    {refsDeltaAfterSQL, []any{"repo-1", 400, 400, "refs/heads/r", 100}, []string{"code_refs_changed_idx (repo_id=? AND position>=?)"}},
+		"delta rows":          {deltaRowsSQL, []any{"repo-1", 400, 551}, []string{"COVERING INDEX code_refs_changed_idx (repo_id=? AND position>?)", "COVERING INDEX code_packs_added_idx (repo_id=? AND added_position>?)"}},
 		"push":                {pushSQL, []any{"repo-1-push-000001"}, []string{pushKey + " (push_id=?)"}},
 		"pushes first":        {pushesFirstSQL, []any{"repo-1", 50}, []string{"code_pushes_repo_idx (repo_id=?)"}},
 		"pushes after":        {pushesAfterSQL, []any{"repo-1", 100, 100, 100, 100, "p", 50}, []string{"code_pushes_repo_idx (repo_id=? AND at<=?)"}},
@@ -167,8 +169,6 @@ func registeredStatements() map[string]statement {
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"pushes named":        {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
-		"expired tombstones counted": {expiredTombstoneCountSQL, []any{"repo-1", 100, MaxRecordRows},
-			[]string{"COVERING INDEX code_refs_tombstones_idx (repo_id=? AND at<?)"}},
 	}
 	among, err := PackReferences.ObjectsAmong(3)
 	if err != nil {

@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -66,16 +69,17 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			"(MaxRecordRows)", final, code.PurgePartRows, code.MaxProtectionsPerRepo,
 			code.MaxRecordRows)
 	}
-	// THREE MAXIMAL PUSHES FIT ONE RECORD'S ROWS with the sweep still given
-	// room: a push row, its refs and its pack each, the repository's
-	// counters, the push history's share and the tombstone mark — and the
-	// tombstone sweep takes what is left.
-	rows := 3*(1+code.MaxCommandsPerPush+1) + 1 + code.HorizonDeletesPerRecord + 1
-	if rows >= code.MaxRecordRows {
-		t.Errorf("three maximal pushes write %d rows (3 × (1 + MaxCommandsPerPush %d + 1) + 1 + "+
-			"HorizonDeletesPerRecord %d + 1), leaving the tombstone sweep nothing of the %d "+
-			"budget (MaxRecordRows)", rows, code.MaxCommandsPerPush,
-			code.HorizonDeletesPerRecord, code.MaxRecordRows)
+	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's
+	// room: a push row, its pack and its refs, an old tombstone swept for
+	// each deletion's new one, the repository's counters, the push history's
+	// share and the tombstone mark — or no push could delete a thousand refs
+	// at a repository holding its bound of tombstones without its record
+	// writing them as removals.
+	rows := 1 + 2*code.MaxCommandsPerPush + 1 + 1 + code.HorizonDeletesPerRecord + 1
+	if rows > code.MaxRecordRows {
+		t.Errorf("a maximal push of deletions touches %d rows (1 + 2 × MaxCommandsPerPush %d + 1 + "+
+			"1 + HorizonDeletesPerRecord %d + 1), past the %d budget (MaxRecordRows)", rows,
+			code.MaxCommandsPerPush, code.HorizonDeletesPerRecord, code.MaxRecordRows)
 	}
 	if code.MaxRecordRows != statelog.ApplyTxRowBudget {
 		t.Errorf("MaxRecordRows is %d and the framework's budget %d", code.MaxRecordRows,
@@ -197,6 +201,122 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	}
 }
 
+// A DELTA PASSES THE WIDEST FULL ANSWER ONLY BY TOMBSTONES IN PLACE OF PACKS.
+// The reader answers a delta only while it carries no more ROWS than the full
+// answer would — live changes and tombstones together, against the live refs
+// and every pack (TestADeltaLargerThanTheFullAnswerIsAnsweredInFull holds that
+// through the real reader) — so by rows the tombstones give it no new worst
+// case. What is held here is what that rule leaves in BYTES, every row at its
+// widest — every name at MaxRefNameBytes, every position the widest the packed
+// form admits — against the full answer of a repository of as many live refs
+// and packs: the widest delta of that many rows, filled widest row first from
+// what a delta can carry, passes it by at most one tombstone less one pack row
+// (the narrowest a repository holds) for each pack, up to MaxTombstonesPerRepo
+// of them — by nothing for names JSON writes as themselves, and by the figures
+// MaxTombstonesPerRepo states for names JSON spells longest. And the bound
+// itself is the live refs' own, for the reasons MaxTombstonesPerRepo gives.
+func TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks(t *testing.T) {
+	t.Parallel()
+	if code.MaxTombstonesPerRepo != code.MaxRefsPerRepo {
+		t.Errorf("MaxTombstonesPerRepo is %d and MaxRefsPerRepo %d: the reasons the tombstones' "+
+			"bound gives — a clean-up of a full repository keeps its whole horizon, and what a "+
+			"delta of them costs the reader — are the live refs' own bound",
+			code.MaxTombstonesPerRepo, code.MaxRefsPerRepo)
+	}
+	width := func(row any) int {
+		b, err := json.Marshal(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(b)
+	}
+	widest := statelog.Position{Stream: topics.CodeLogStream, Generation: statelog.MaxGeneration,
+		Seq: statelog.GenerationStride - 1}
+	narrowest := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
+	// A name at MaxRefNameBytes of the character JSON spells longest (`<`, six
+	// bytes), and of one it writes as itself.
+	name := func(c string) string {
+		ref := "refs/heads/" + strings.Repeat(c, code.MaxRefNameBytes-len("refs/heads/"))
+		if !gitref.ValidRef(ref) {
+			t.Fatalf("%.24s… is no ref a repository holds", ref)
+		}
+		return ref
+	}
+	long, plain := name("<"), name("x")
+	tomb := width(code.RefRow{Ref: long, Position: widest})
+	live := width(code.RefRow{Ref: long, OID: oidOf("x"), Position: widest})
+	plainTomb := width(code.RefRow{Ref: plain, Position: widest})
+	plainLive := width(code.RefRow{Ref: plain, OID: oidOf("x"), Position: widest})
+	// THE NARROWEST PACK ROW a repository holds — the one a tombstone gains
+	// most by standing in for: one object, in the least bundle of it
+	// PackRef.Check admits, added at the narrowest position.
+	pack := *suitePack("narrowest")
+	pack.PackID = "0190f3c4-0000-7000-8000-000000000001"
+	if err := pack.Check(); err != nil {
+		t.Fatalf("the narrowest pack is no pack a repository holds: %v", err)
+	}
+	smaller := pack
+	smaller.Size--
+	if smaller.Check() == nil {
+		t.Fatalf("a bundle of %d bytes is admitted: the pack row is not the narrowest", smaller.Size)
+	}
+	packRow := width(code.PackRow{PackID: pack.PackID, Part: "pack", Object: pack.Object,
+		Hash: pack.Hash, Size: pack.Size, IndexBytes: pack.IndexBytes, ReverseBytes: pack.ReverseBytes,
+		GitChecksum: pack.GitChecksum, Objects: pack.Objects, Kind: "push", State: "live",
+		Added: narrowest})
+
+	// THE FIGURES MaxTombstonesPerRepo's doc states.
+	if tomb != 1_567 || plainTomb != 347 || packRow != 396 {
+		t.Errorf("at their widest a tombstone is %d bytes and one of a plain name %d, and the "+
+			"narrowest pack row %d: MaxTombstonesPerRepo states 1 567, 347 and 396", tomb,
+			plainTomb, packRow)
+	}
+
+	// widestDelta is the most bytes a delta of rows rows can carry: filled
+	// widest row first from what a delta may hold — the repository's live
+	// refs, its tombstones and its packs.
+	type kind struct{ rows, width int }
+	widestDelta := func(rows int, kinds ...kind) int {
+		slices.SortFunc(kinds, func(a, b kind) int { return b.width - a.width })
+		bytes := 0
+		for _, k := range kinds {
+			n := min(rows, k.rows)
+			bytes, rows = bytes+n*k.width, rows-n
+		}
+		return bytes
+	}
+	for _, packs := range []int{0, 1, 20_000, code.MaxTombstonesPerRepo, 2 * code.MaxTombstonesPerRepo} {
+		rows := code.MaxRefsPerRepo + packs // the full answer's: the most a delta is let carry
+		stones := min(packs, code.MaxTombstonesPerRepo)
+
+		// NAMES JSON SPELLS LONGEST: a tombstone less a pack row a pack.
+		full := code.MaxRefsPerRepo*live + packs*packRow
+		delta := widestDelta(rows, kind{code.MaxRefsPerRepo, live},
+			kind{code.MaxTombstonesPerRepo, tomb}, kind{packs, packRow})
+		if over, stated := delta-full, stones*(tomb-packRow); over > stated {
+			t.Errorf("with %d packs the widest delta passes the widest full answer (%d bytes) by %d "+
+				"bytes, past the %d MaxTombstonesPerRepo states (%d bytes a pack, for %d of them)",
+				packs, full, over, stated, tomb-packRow, stones)
+		}
+		if packs == 20_000 && (megabytes(delta-full) != 23 || megabytes(full) != 170) {
+			t.Errorf("with 20 000 packs the widest delta passes the %d-byte widest full answer by %d "+
+				"bytes: MaxTombstonesPerRepo states 23 MB beside 170 MB", full, delta-full)
+		}
+
+		// NAMES JSON WRITES AS THEMSELVES: not a byte.
+		plainFull := code.MaxRefsPerRepo*plainLive + packs*packRow
+		if plainDelta := widestDelta(rows, kind{code.MaxRefsPerRepo, plainLive},
+			kind{code.MaxTombstonesPerRepo, plainTomb}, kind{packs, packRow}); plainDelta > plainFull {
+			t.Errorf("with %d packs and plain names the widest delta is %d bytes, past the widest "+
+				"full answer's %d: a tombstone of a plain name (%d bytes) is wider than a pack row (%d)",
+				packs, plainDelta, plainFull, plainTomb, packRow)
+		}
+	}
+}
+
+// megabytes is bytes in whole megabytes, to the nearest.
+func megabytes(bytes int) int { return (bytes + 500_000) / 1_000_000 }
+
 // THE COMMITTER'S BOUNDS FIT A RECORD'S BUDGETS: what a batch is formed by is
 // what the record it becomes is held to, so the committer never forms a record
 // its own decide refuses, and a queue's bounds say what they claim.
@@ -260,6 +380,27 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	}
 	if got := code.RecordRows(4 * code.RowBound(maximal)); got <= code.MaxRecordRows {
 		t.Errorf("four maximal pushes bound %d rows, within MaxRecordRows (%d)", got, code.MaxRecordRows)
+	}
+	// A DELETION IS COUNTED TWICE — its ref, and the old tombstone the sweep
+	// may take for the new one — so ONE maximal push of deletions shares a
+	// record's rows with nothing of its size, and a record's sweep always has
+	// a row for every tombstone its deletions make.
+	deleting := maximal
+	deleting.Commands = nil
+	for _, c := range maximal.Commands {
+		deleting.Commands = append(deleting.Commands, code.Command{Ref: c.Ref, Old: c.Old, New: code.ZeroOID})
+	}
+	if rows := code.RowBound(deleting); rows != 2*code.MaxCommandsPerPush+2 {
+		t.Errorf("a maximal push of deletions bounds %d rows, want two a deletion (%d) + its row + "+
+			"its pack", rows, 2*code.MaxCommandsPerPush)
+	}
+	if got := code.RecordRows(code.RowBound(deleting)); got > code.MaxRecordRows {
+		t.Errorf("a maximal push of deletions bounds %d rows with the record's own, past "+
+			"MaxRecordRows (%d)", got, code.MaxRecordRows)
+	}
+	if got := code.RecordRows(2 * code.RowBound(deleting)); got <= code.MaxRecordRows {
+		t.Errorf("two maximal pushes of deletions bound %d rows, within MaxRecordRows (%d)", got,
+			code.MaxRecordRows)
 	}
 	// A FULL BATCH OF THE SMALLEST PUSHES FITS BOTH.
 	if got := code.RecordOverheadBytes + code.MaxPushesPerRecord*small; got > code.MaxRecordBytes {

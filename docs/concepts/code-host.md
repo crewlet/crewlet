@@ -284,7 +284,14 @@ either a push is refused `busy` undecided and the client pushes again (the
 one push may send, the largest file it may carry, and the most one repository
 may hold — is read off the **deciding node's current revision** at every
 decision, so a change holds from its activation with no restart. A repository
-also holds at most 100 000 refs, and a push moves at most 1 000 of them.
+also holds at most 100 000 live refs, and a push moves at most 1 000 of them;
+the refs it deleted within 48 hours are kept apart, up to another 100 000, the
+oldest forgotten sooner past that — a node last synced before them reads the
+repository whole, and so does a node whose last sync is behind more changes
+than the repository now holds, since what is left is then fewer rows to read.
+A deletion never counts against the live refs, and never refuses a push: a
+push that deletes refs and creates others is judged on what it leaves, so at
+the limit `git push origin :old new` — or a `--prune` push — goes through.
 
 A push's ref updates must also fit the one record its committer writes for
 it: about 1 MiB of them, as the code log spells them. A thousand plain refs of
@@ -324,7 +331,13 @@ repository, never by a sweep:
   (`refs/heads/x… [60013 bytes, sha256 <32 hex>]`), so a ref nothing can ever
   name costs every node's history no more than one that could.
 - **Ref tombstones** — a deleted ref is kept as a tombstone for **48 hours**,
-  so a node bringing a repository up to date learns of the deletion.
+  so a node bringing a repository up to date learns of the deletion — or
+  sooner, oldest first, once the repository holds **100 000** of them. Each
+  push's record always has room to forget as many old ones as it deletes,
+  so a repository at that bound keeps every new deletion and forgets the
+  oldest. A node last brought up to date before a forgotten deletion reads
+  the repository whole: it re-reads the refs and keeps every pack it holds,
+  and downloads nothing again.
 - **A purge** — below.
 
 ### Deletion and purge
