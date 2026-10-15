@@ -221,12 +221,12 @@ type Backend struct {
 // the bucket's configuration for everybody.
 //
 // So Open asks whether the bucket exists — a READ, asked again at the read
-// term while nobody answers ([jsprovision.Timing.Read]) — and creates it only
+// term while nobody answers ([jsprovision.ReadWith]) — and creates it only
 // when told it is absent or when nobody answered, through
 // [jsprovision.Timing.Place] as every replicated create at boot is. A create
 // that is not refused outright may have landed, or found the name taken by a
 // peer that won the race, so the bucket is then read back
-// ([jsprovision.Timing.Settle]) rather than written again. Nothing here applies
+// ([jsprovision.SettleWith]) rather than written again. Nothing here applies
 // a configuration to a bucket that exists.
 //
 // A BUCKET REPLICATED BELOW THIS NODE IS REFUSED, as the queue refuses such a
@@ -284,12 +284,9 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	// THE STREAM BEHIND IT, which a get and a listing consume — read back
 	// rather than read once, because a bucket a peer has just made can still
 	// be not there on the member that answers.
-	var stream jetstream.Stream
-	if err = timing.Settle(ctx, func(ctx context.Context) error {
-		var e error
-		stream, e = js.Stream(ctx, Stream)
-		return e
-	}); err != nil {
+	stream, err := jsprovision.SettleWith(ctx, timing,
+		func(ctx context.Context) (jetstream.Stream, error) { return js.Stream(ctx, Stream) })
+	if err != nil {
 		return nil, fmt.Errorf("natsobj: bind the %s stream: %w", Stream, err)
 	}
 	if got := stream.CachedInfo().Config.Replicas; got < replicas {
@@ -311,13 +308,8 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing) (jetstream.ObjectStore, error) {
 	lookupCtx, cancel := context.WithTimeout(ctx, timing.Lookup)
 	defer cancel()
-	var store jetstream.ObjectStore
-	err := timing.Read(lookupCtx, func(ctx context.Context) error {
-		var e error
-		store, e = js.ObjectStore(ctx, Bucket)
-		return e
-	}, nil)
-	return store, err
+	return jsprovision.ReadWith(lookupCtx, timing,
+		func(ctx context.Context) (jetstream.ObjectStore, error) { return js.ObjectStore(ctx, Bucket) }, nil)
 }
 
 // createBucket creates the bucket at replicas copies, or reads back the one a
@@ -325,7 +317,7 @@ func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 //
 // ctx IS OPEN'S, and the create's own deadline is derived here, because the
 // read-back runs precisely when that deadline may have expired — see
-// [jsprovision.Settle].
+// [jsprovision.SettleWith].
 func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing,
 	replicas int) (jetstream.ObjectStore, error) {
 
@@ -377,11 +369,8 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 	}
 	// THE NAME WAS TAKEN — a peer won the race — or nobody said whether the
 	// create landed: read back what is there, ON ctx, NOT createCtx.
-	readErr := timing.Settle(ctx, func(ctx context.Context) error {
-		var e error
-		store, e = js.ObjectStore(ctx, Bucket)
-		return e
-	})
+	store, readErr := jsprovision.SettleWith(ctx, timing,
+		func(ctx context.Context) (jetstream.ObjectStore, error) { return js.ObjectStore(ctx, Bucket) })
 	if readErr != nil {
 		// BOTH WRAPPED, as at every other create site: the create's error
 		// says what went wrong and the read-back's whether the bucket is

@@ -433,11 +433,8 @@ var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve th
 // every log's at once, and the sizing costs one ceiling rather than one per
 // log.
 func (q *Queue) DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error) {
-	var s jetstream.Stream
-	err := q.askRead(ctx, func(ctx context.Context) error {
-		var e error
-		s, e = q.js.Stream(ctx, stream)
-		return e
+	s, err := askRead(ctx, q, func(ctx context.Context) (jetstream.Stream, error) {
+		return q.js.Stream(ctx, stream)
 	})
 	switch {
 	case errors.Is(err, jetstream.ErrStreamNotFound):

@@ -55,7 +55,8 @@
 //
 // [Timing] carries every duration this package decides, and [Clustered.Timing]
 // is the one place a topology is turned into them. [Settle], [Ask], [Read] and
-// [Place] are that value's methods at the production numbers; a caller that
+// [Place] are [SettleWith], [Timing.Ask], [ReadWith] and [Timing.Place] at the
+// production numbers; a caller that
 // holds a [Timing] of its own — a test, through the one seam its package keeps
 // for it — runs the same branches in milliseconds.
 //
@@ -202,8 +203,8 @@ const LookupBudget = 30 * time.Second
 // Timing is every duration a provisioning call waits on, for one topology.
 //
 // [Clustered.Timing] is the production value; nothing else in the engine
-// builds one. A test builds its own to run [Timing.Settle], [Timing.Ask] and
-// [Timing.Place] — and the callers that sit on them — at a scale it can afford,
+// builds one. A test builds its own to run [SettleWith], [ReadWith],
+// [Timing.Ask] and [Timing.Place] — and the callers that sit on them — at a scale it can afford,
 // keeping the relations between the fields that the production numbers keep
 // (this package's tests hold both to the same ones).
 //
@@ -235,8 +236,8 @@ type Timing struct {
 	// ReadBack bounds a whole read-back — see [ReadBack].
 	ReadBack time.Duration
 	// ReadTerm is how long one metadata READ waits before it is presumed
-	// dropped and re-issued — every attempt of a read-back and of
-	// [Timing.Read] — see [ReadTerm].
+	// dropped and the next is sent beside it — every request of a
+	// read-back and of [ReadWith] — see [ReadTerm].
 	ReadTerm time.Duration
 	// PlacementRetry is how often an answered refusal is asked again — see
 	// [PlacementRetry].
@@ -297,13 +298,14 @@ func withTerm(term time.Duration) Timing {
 	return t
 }
 
-// Settle is [Timing.Settle] at the production cadences, which no topology
+// Settle is [SettleWith] at the production cadences, which no topology
 // changes.
-func Settle(ctx context.Context, ask func(context.Context) error) error {
-	return Clustered(false).Timing().Settle(ctx, ask)
+func Settle[T any](ctx context.Context, ask func(context.Context) (T, error)) (T, error) {
+	return SettleWith(ctx, Clustered(false).Timing(), ask)
 }
 
-// Settle re-runs ask while it answers [NotYetVisible], for up to [ReadBack].
+// SettleWith re-runs ask while it answers [NotYetVisible], for up to
+// [ReadBack], at t's cadences.
 //
 // # Why every read-back on this path needs it
 //
@@ -344,70 +346,73 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 //
 // # An attempt nobody answered is not an answer, and gets its own cadence
 //
-// Inside that window each attempt gets its own short term ([ReadTerm]), for
-// [Ask]'s reason arriving on the read-back path: a request put to a group that
-// has no leader yet is DROPPED rather than refused, so handing one attempt the
-// whole window spends all of it waiting for a reply nobody is going to send —
-// and returning what that produced reports "the object is not there" on the
-// strength of having heard nothing, which is the collapse [Unanswered] exists
-// to prevent. Measured on three members creating one stream at three ceilings:
-// the loser of each race read back once, was never answered, and failed its
-// boot over a stream that existed a moment later.
+// Inside that window each question is asked as every read is ([ReadWith]):
+// a request is presumed lost after [ReadTerm], for [Ask]'s reason arriving on
+// the read-back path — a request put to a group that has no leader yet is
+// DROPPED rather than refused, so handing one request the whole window spends
+// all of it waiting for a reply nobody is going to send, and returning what
+// that produced reports "the object is not there" on the strength of having
+// heard nothing, which is the collapse [Unanswered] exists to prevent.
+// Measured on three members creating one stream at three ceilings: the loser
+// of each race read back once, was never answered, and failed its boot over a
+// stream that existed a moment later. And a request presumed lost is kept
+// OUTSTANDING while the next is sent ([hedge]), because one behind a backed-up
+// API queue is answered late rather than never, and a read-back that threw
+// each away at its term heard nothing for as long as the queue stayed slower
+// than the term.
 //
 // So this loop now serves TWO conditions, and they keep the two cadences
 // [ReAsk] states rather than sharing one. A not-yet-visible is an ANSWER, and
 // it clears on this member's next metadata update: [PlacementRetry], four
-// times a second. A request nobody replied to was DESTROYED, and what has to
-// change is which member holds the group: [ReAsk]. Merging them is not
-// academic — `nats.ErrNoResponders` comes back in microseconds, so at the
-// placement cadence a broker whose JetStream is not serving yet is asked four
-// times a second, for every object a boot provisions, which is the load ReAsk
-// exists to remove.
+// times a second, each a question of its own. A request nobody replied to was
+// DESTROYED, and what has to change is which member holds the group: [ReAsk].
+// Merging them is not academic — `nats.ErrNoResponders` comes back in
+// microseconds, so at the placement cadence a broker whose JetStream is not
+// serving yet is asked four times a second, for every object a boot
+// provisions, which is the load ReAsk exists to remove.
 //
 // The ERROR IT RETURNS IS THE ASK'S OWN, never a deadline of this function's:
 // "stream not found" names the object and "deadline exceeded" does not. That
 // holds for the last attempt too — the one the window interrupts — so the
 // answer a caller wraps is what the object said, not what this function's
 // patience did.
-func (t Timing) Settle(ctx context.Context, ask func(context.Context) error) error {
+func SettleWith[T any](ctx context.Context, t Timing, ask func(context.Context) (T, error)) (T, error) {
+	var zero T
 	if err := t.unset(); err != nil {
-		return err
+		return zero, err
 	}
 	window, cancel := context.WithTimeout(ctx, t.ReadBack)
 	defer cancel()
 
-	var absent, unanswered error
+	var absent error
 	for {
-		attempt, endAttempt := context.WithTimeout(window, t.ReadTerm)
-		err := ask(attempt)
-		endAttempt()
-		// THE CADENCE FOLLOWS THE CONDITION, never the loop: see the
-		// section above, and [ReAsk] for why the two must not merge.
-		pause := t.PlacementRetry
+		// ONE QUESTION, asked until something answers it: a request
+		// nobody replied to is the third answer and not the second, so
+		// it never comes back here while the window is open — the hedge
+		// re-asks it at a destroyed request's own interval ([ReAsk]),
+		// and reports the silence only once the window closes.
+		v, err := hedge(window, t, ask, nil)
 		switch {
 		case err == nil:
-			return nil
+			return v, nil
 		case NotYetVisible(err):
 			absent = err
-		case Unanswered(window, err):
-			// NOBODY REPLIED, which is the third answer and not the
-			// second: re-asked at a destroyed request's own
-			// interval, and kept in case the window closes with the
-			// object never having said anything at all.
-			unanswered, pause = namedSilence(unanswered, err), t.ReAsk
-		case heard(absent, unanswered) != nil && errors.Is(err, context.DeadlineExceeded):
-			// THE WINDOW CLOSED MID-ASK, so what came back describes
-			// this function's patience rather than the object. The
-			// last thing that was heard is the honest answer, and it
-			// is the one that names something.
-			return heard(absent, unanswered)
+		case window.Err() != nil && silent(err):
+			// THE WINDOW CLOSED with the question unanswered, so what
+			// came back describes the silence or this function's
+			// patience rather than the object. What the object last
+			// said outranks it, and the silence that names something
+			// outranks the deadline ([heard]).
+			return zero, heard(absent, err)
 		default:
-			return err
+			return zero, err
 		}
+		// THE CADENCE FOLLOWS THE CONDITION, never the loop: a not-found
+		// is an answer that clears on this member's next metadata update.
 		select {
 		case <-window.Done():
-			return heard(absent, unanswered)
-		case <-time.After(pause):
+			return zero, heard(absent, nil)
+		case <-time.After(t.PlacementRetry):
 		}
 	}
 }
@@ -447,16 +452,21 @@ func heard(absent, unanswered error) error {
 }
 
 // ReadTerm is how long ONE metadata READ — a stream's or a consumer's info —
-// waits for a reply before it is presumed dropped and re-issued: each attempt
-// of [Settle]'s, and each of [Timing.Read]'s.
+// waits for a reply before it is presumed dropped and the next request is sent:
+// each request of [SettleWith]'s, and each of [ReadWith]'s. Presumed, not
+// abandoned: the request stays outstanding and its reply is taken if it comes
+// ([hedge]).
 //
-// # A READ IS ANSWERED WHEN IT ARRIVES OR NEVER
+// # A READ IS ANSWERED WHEN IT IS PROCESSED OR NEVER
 //
 // Which is what separates it from the writes [AskTerm] is sized for. The
 // vendored server decides an info request when it PROCESSES it
 // (server/jetstream_api.go, jsStreamInfoRequest and jsConsumerInfoRequest): it
 // replies, or it returns without replying, and nothing keeps the request to be
-// answered later. And a whole fleet returns without replying in an ordinary
+// answered later. It processes it when a worker takes it from the API queue
+// every routed request waits in — at once while that queue is idle, and late
+// behind a backlog — which is why a request past its term is presumed lost and
+// never thrown away. And a whole fleet returns without replying in an ordinary
 // moment of every clustered boot. An object another node has just asked for is
 // IN FLIGHT — assigned by the metadata leader, not yet applied by the member
 // preferred to lead it — and a group with no leader yet may be answered for
@@ -474,9 +484,10 @@ func heard(absent, unanswered error) error {
 // the shortest interval over which a group's state can have changed, so a read
 // re-sent sooner meets the state that dropped it and is dropped again. A read
 // that IS answered comes back in a round trip, far inside it. One slower than
-// that has its reply missed and is simply asked again, and what a read nobody
-// answered leaves open is decided elsewhere — a lookup's create covers it
-// ([Unanswered]), and a read-back reports the silence when its window closes.
+// that — queued behind a backlog — is still listened for while the next is
+// asked, and what a read nobody answered leaves open is decided elsewhere — a
+// lookup's create covers it ([Unanswered]), and a read-back reports the
+// silence when its window closes.
 //
 // WHAT IT BUYS IS THAT ONE DROPPED READ COSTS A SECOND AND A [ReAsk], NOT AN
 // ELECTION — and that one hung ask is not a whole read-back. A hung ask costs
@@ -597,39 +608,16 @@ func Place(ctx context.Context, term time.Duration,
 //
 // Each request waits t.AskTerm, and the next is sent t.ReAsk after it. That is
 // a WRITE's term, sized for a reply the server holds until the object it made
-// has a leader ([AskTerm]); a read is never held, and asks through
-// [Timing.Read] at the read term instead.
+// has a leader ([AskTerm]) — and the one request is abandoned before the next
+// is sent, since a second create while the first is held is a second write. A
+// read is never held, is answered when it is processed, and asks through
+// [ReadWith] at the read term instead, keeping every request outstanding.
 func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
-	return t.ask(ctx, t.AskTerm, one, again)
-}
-
-// Read is [Timing.Ask] for a metadata READ — a stream's or a consumer's info —
-// each request waiting t.ReadTerm rather than t.AskTerm.
-//
-// A read is answered when the server processes it or never ([ReadTerm]), so
-// the term that spans an election for a write whose reply the server holds
-// would only wait out a request that is already gone. Everything else is
-// [Timing.Ask]'s: any answer ends it, only [Unanswered] is asked again, and
-// the next request goes t.ReAsk after the last one's term.
-func (t Timing) Read(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
-	return t.ask(ctx, t.ReadTerm, one, again)
-}
-
-// Read is [Timing.Read] at the production cadences, which no topology changes.
-func Read(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
-	return Clustered(false).Timing().Read(ctx, one, again)
-}
-
-// ask is the loop [Timing.Ask] and [Timing.Read] share, each request given
-// term.
-func (t Timing) ask(ctx context.Context, term time.Duration,
-	one func(context.Context) error, again func(asks int)) error {
-
 	if err := t.unset(); err != nil {
 		return err
 	}
 	for asks := 1; ; asks++ {
-		attempt, cancel := context.WithTimeout(ctx, term)
+		attempt, cancel := context.WithTimeout(ctx, t.AskTerm)
 		err := one(attempt)
 		cancel()
 		if !Unanswered(ctx, err) {
@@ -673,7 +661,7 @@ func Ask(ctx context.Context, term time.Duration,
 // unanswered request.
 //
 // A READ IS NOT HELD — the server answers it when it processes it or never —
-// so a read waits [ReadTerm] instead, through [Timing.Read]. Sized by this
+// so a read waits [ReadTerm] instead, through [ReadWith]. Sized by this
 // term, one dropped stream lookup was measured costing a fleet's boot sixteen
 // idle seconds.
 //

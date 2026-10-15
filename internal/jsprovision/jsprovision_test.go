@@ -40,6 +40,24 @@ var fast = Timing{
 	PlacementRetry: 5 * time.Millisecond,
 }
 
+// settle is [SettleWith] for an ask that reads back nothing but its error,
+// which is every case here: what they discriminate on is the error and the
+// cadence, not a value.
+func settle(ctx context.Context, tm Timing, ask func(context.Context) error) error {
+	_, err := SettleWith(ctx, tm, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, ask(ctx)
+	})
+	return err
+}
+
+// read is [ReadWith] for the same kind of ask.
+func read(ctx context.Context, tm Timing, one func(context.Context) error) error {
+	_, err := ReadWith(ctx, tm, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, one(ctx)
+	}, nil)
+	return err
+}
+
 // relationsBroken lists every relation between a [Timing]'s fields that the
 // mechanism rests on and tm does not keep.
 func relationsBroken(tm Timing) []string {
@@ -164,10 +182,10 @@ func TestATimingWithAnyFieldUnsetIsRefused(t *testing.T) {
 	asked := 0
 	ask := func(context.Context) error { asked++; return nil }
 	methods := map[string]func(Timing) error{
-		"Settle": func(tm Timing) error { return tm.Settle(t.Context(), ask) },
-		"Ask":    func(tm Timing) error { return tm.Ask(t.Context(), ask, nil) },
-		"Read":   func(tm Timing) error { return tm.Read(t.Context(), ask, nil) },
-		"Place":  func(tm Timing) error { return tm.Place(t.Context(), ask, nil) },
+		"SettleWith": func(tm Timing) error { return settle(t.Context(), tm, ask) },
+		"Ask":        func(tm Timing) error { return tm.Ask(t.Context(), ask, nil) },
+		"ReadWith":   func(tm Timing) error { return read(t.Context(), tm, ask) },
+		"Place":      func(tm Timing) error { return tm.Place(t.Context(), ask, nil) },
 	}
 	unset := map[string]func(*Timing){
 		"Budget":         func(tm *Timing) { tm.Budget = 0 },
@@ -374,7 +392,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 
 	// NOT VISIBLE, THEN VISIBLE: the answer is the later one.
 	calls := 0
-	err := fast.Settle(t.Context(), func(context.Context) error {
+	err := settle(t.Context(), fast, func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return jetstream.ErrStreamNotFound
@@ -392,7 +410,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 	// would be waiting for something nobody is going to do.
 	calls = 0
 	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
-	if err := fast.Settle(t.Context(), func(context.Context) error {
+	if err := settle(t.Context(), fast, func(context.Context) error {
 		calls++
 		return placement
 	}); !errors.Is(err, placement) {
@@ -404,7 +422,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 
 	// AND AN OBJECT THAT NEVER APPEARS reports the broker's own not-found,
 	// which names it, rather than a bare deadline.
-	err = fast.Settle(t.Context(), func(context.Context) error { return jetstream.ErrStreamNotFound })
+	err = settle(t.Context(), fast, func(context.Context) error { return jetstream.ErrStreamNotFound })
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		t.Errorf("an absent object reported %v, want the not-found that names it", err)
 	}
@@ -541,7 +559,7 @@ func TestCancellingTheCallerStopsTheReAsking(t *testing.T) {
 
 	calls := 0
 	start := time.Now()
-	err := Settle(ctx, func(context.Context) error {
+	err := settle(ctx, Clustered(false).Timing(), func(context.Context) error {
 		calls++
 		return jetstream.ErrStreamNotFound
 	})
@@ -578,7 +596,7 @@ func TestTheWindowBoundsEachLookupAndTheAnswerStillNamesTheObject(t *testing.T) 
 	// EVERY ATTEMPT CARRIES A DEADLINE, and it is this function's window
 	// rather than the caller's: the caller here has none at all.
 	var seen time.Time
-	if err := Settle(t.Context(), func(ctx context.Context) error {
+	if err := settle(t.Context(), Clustered(false).Timing(), func(ctx context.Context) error {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Error("an attempt ran with no deadline of its own, so one " +
@@ -599,10 +617,11 @@ func TestTheWindowBoundsEachLookupAndTheAnswerStillNamesTheObject(t *testing.T) 
 	// slow. The not-found is the last thing anything said about the
 	// stream, so it is what comes back. At [fast], because the ask waits
 	// the whole window out.
-	calls := 0
-	err := fast.Settle(t.Context(), func(ctx context.Context) error {
-		calls++
-		if calls == 1 {
+	// ATOMIC: a request blocked on its context stays outstanding while the
+	// next is asked, so two of them may count at once.
+	var calls atomic.Int64
+	err := settle(t.Context(), fast, func(ctx context.Context) error {
+		if calls.Add(1) == 1 {
 			return jetstream.ErrStreamNotFound
 		}
 		<-ctx.Done()
@@ -630,7 +649,7 @@ func TestTheCallersDeadlineWinsWhenItIsShorter(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := Settle(ctx, func(context.Context) error { return jetstream.ErrStreamNotFound })
+	err := settle(ctx, Clustered(false).Timing(), func(context.Context) error { return jetstream.ErrStreamNotFound })
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		t.Errorf("reported %v, want the ask's own error", err)
 	}
@@ -925,6 +944,62 @@ func TestAnUnansweredRequestIsAskedAgain(t *testing.T) {
 	}
 }
 
+// A READ ANSWERED LATE IS TAKEN, NOT THROWN AWAY — by a read and by a
+// read-back alike, which ask the one way.
+//
+// The server queues a read for a pool of workers and answers it when one takes
+// it, so behind a backlog it answers late rather than never. Every request
+// here is answered half a term after its term ends: thrown away at its term,
+// each one was abandoned before its answer came, every re-ask joined the same
+// queue a term behind it, and the read failed at its caller's deadline over a
+// leader that answered everything it was asked. Kept outstanding, the first
+// request's answer is taken while the second waits — and every request has
+// ended by the time the call returns, so none outlives it.
+func TestALateReadIsTakenRatherThanAbandoned(t *testing.T) {
+	t.Parallel()
+	for name, ask := range map[string]func(context.Context, func(context.Context) (int64, error)) (int64, error){
+		"a read": func(ctx context.Context, one func(context.Context) (int64, error)) (int64, error) {
+			return ReadWith(ctx, fast, one, nil)
+		},
+		"a read-back": func(ctx context.Context, one func(context.Context) (int64, error)) (int64, error) {
+			return SettleWith(ctx, fast, one)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			late := fast.ReadTerm + fast.ReadTerm/2
+			// TEN REQUESTS' WORTH OF DEADLINE, the read-back's own window
+			// inside it: an abandoned request reaches the end of neither
+			// with an answer.
+			ctx, cancel := context.WithTimeout(t.Context(), 10*(fast.ReadTerm+fast.ReAsk))
+			defer cancel()
+			var asks, outstanding atomic.Int64
+			got, err := ask(ctx, func(ctx context.Context) (int64, error) {
+				n := asks.Add(1)
+				outstanding.Add(1)
+				defer outstanding.Add(-1)
+				select {
+				case <-time.After(late):
+					return n, nil
+				case <-ctx.Done():
+					return 0, ctx.Err()
+				}
+			})
+			if err != nil {
+				t.Fatalf("a read answered %v late, after its %v term, failed: %v", late,
+					fast.ReadTerm, err)
+			}
+			if got != 1 {
+				t.Errorf("the answer taken was request %d's, want the first's — the one "+
+					"presumed lost at its term and answered after it", got)
+			}
+			if n := outstanding.Load(); n != 0 {
+				t.Errorf("%d request(s) still running after the call returned", n)
+			}
+		})
+	}
+}
+
 // A DROPPED READ IS ASKED AGAIN AT THE READ TERM, never at a write's.
 //
 // The server answers a read when it processes it or never, so a read held for
@@ -941,13 +1016,13 @@ func TestADroppedReadIsAskedAgainAtTheReadTerm(t *testing.T) {
 	defer cancel()
 
 	var asks atomic.Int64
-	err := tm.Read(ctx, func(ctx context.Context) error {
+	err := read(ctx, tm, func(ctx context.Context) error {
 		if asks.Add(1) <= 2 {
 			<-ctx.Done() // dropped on arrival; nothing will ever answer it
 			return ctx.Err()
 		}
 		return nil
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("Read returned %v after %d request(s), want the answer the third "+
 			"got — a dropped read waited out a write's term rather than its own",
@@ -1184,7 +1259,7 @@ func TestAnUnansweredReadBackIsReAskedAtItsOwnCadence(t *testing.T) {
 	// are forty times apart where production's are four — see it for why
 	// that margin is what keeps the half below biting on a loaded runner.
 	calls := 0
-	err := fast.Settle(t.Context(), func(context.Context) error {
+	err := settle(t.Context(), fast, func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return nats.ErrNoResponders
@@ -1204,7 +1279,7 @@ func TestAnUnansweredReadBackIsReAskedAtItsOwnCadence(t *testing.T) {
 	// cadence back is what turns this red.
 	calls = 0
 	start := time.Now()
-	_ = fast.Settle(t.Context(), func(context.Context) error {
+	_ = settle(t.Context(), fast, func(context.Context) error {
 		calls++
 		if calls < 2 {
 			return nats.ErrNoResponders
@@ -1233,10 +1308,10 @@ func TestAReadBackNobodyEverAnsweredNamesTheSilence(t *testing.T) {
 	// window rather than returning: that attempt comes back as the
 	// window's own deadline, which is not an answer and must not be
 	// reported as one.
-	calls := 0
-	err := fast.Settle(t.Context(), func(ctx context.Context) error {
-		calls++
-		if calls <= 2 {
+	// ATOMIC, for the reason the window case above gives.
+	var calls atomic.Int64
+	err := settle(t.Context(), fast, func(ctx context.Context) error {
+		if calls.Add(1) <= 2 {
 			return nats.ErrNoResponders
 		}
 		<-ctx.Done()
@@ -1252,7 +1327,7 @@ func TestAReadBackNobodyEverAnsweredNamesTheSilence(t *testing.T) {
 
 	// A NOT-FOUND STILL OUTRANKS IT: the object DID answer once, and what
 	// it said names it.
-	err = fast.Settle(t.Context(), func(ctx context.Context) error {
+	err = settle(t.Context(), fast, func(ctx context.Context) error {
 		return jetstream.ErrStreamNotFound
 	})
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
