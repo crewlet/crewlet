@@ -335,6 +335,13 @@ name.
 itself, for the engine's own exports; the forwarder bounds each forward with a timeout of
 its own (ten seconds), since a box waits on it.
 
+None of these variables reaches a coding box from the engine's environment. A box is handed
+an OTLP environment of its own — the receiver as its base endpoint, empty headers, the
+route's protocol and a timeout past the forward's — and each signal's own endpoint,
+headers, protocol and timeout variable written **empty**, the logs signal's included, so a
+value an image bakes in for one signal cannot redirect it (see
+[Code sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
+
 ---
 
 ## Code Runtime (Sandbox, Optional)

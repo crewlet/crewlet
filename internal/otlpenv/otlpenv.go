@@ -123,17 +123,30 @@ import (
 // exported under.
 type Signal string
 
-// The signals this engine resolves: the two it sends. OTLP's third, logs, has
-// no reader — the engine exports no logs of its own, and the sandbox receiver
-// forwards a box's traces and nothing else — so its variables are not read,
-// and a value in one is neither honoured nor refused.
+// The signals this engine resolves: the two it sends.
 const (
 	Traces  Signal = "traces"
 	Metrics Signal = "metrics"
 )
 
-// Signals is every [Signal], in the order the specification lists them.
+// Signals is every [Signal] this package resolves, in the order the
+// specification lists them.
 var Signals = []Signal{Traces, Metrics}
+
+// Logs is OTLP's third signal, which nothing in this engine resolves: the
+// engine exports no logs of its own, and the sandbox receiver forwards a box's
+// traces and nothing else. So it is not [Signal.Valid], [Resolve] refuses it,
+// and a value in one of its variables is neither honoured nor refused here.
+//
+// IT IS NAMED for a caller that writes the environment of an exporter the
+// engine does not build — a coding box's — which reads a signal's variables
+// whether or not the engine does, and so has to be able to name them.
+const Logs Signal = "logs"
+
+// Specified is every signal the OTLP exporter specification names, in its
+// order: [Signals] and [Logs]. It is what a caller writing ANOTHER exporter's
+// environment covers, never what this package resolves.
+var Specified = []Signal{Traces, Metrics, Logs}
 
 // Valid reports a signal this package resolves.
 //
@@ -176,6 +189,9 @@ func (s Signal) ClientKeyVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper()
 // endpoint's scheme and otherwise without effect.
 func (s Signal) InsecureVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_INSECURE" }
 
+// TimeoutVar is the signal-specific export wait, in milliseconds ([TimeoutVar]).
+func (s Signal) TimeoutVar() string { return "OTEL_EXPORTER_OTLP_" + s.upper() + "_TIMEOUT" }
+
 func (s Signal) upper() string { return strings.ToUpper(string(s)) }
 
 // The base variables, which every signal reads unless its own is set.
@@ -205,6 +221,12 @@ const (
 	// InsecureVar is the specification's switch for an endpoint written
 	// without a scheme; see the package doc.
 	InsecureVar = "OTEL_EXPORTER_OTLP_INSECURE"
+
+	// TimeoutVar is how long an exporter waits for one export to be
+	// answered, in milliseconds. NAMED HERE AND NOT RESOLVED: the engine's
+	// own exporters leave it to the SDK, which reads it from this process's
+	// environment, and what writes it is the sandbox, into a box's.
+	TimeoutVar = "OTEL_EXPORTER_OTLP_TIMEOUT"
 )
 
 // Compression is how an export's body is compressed on the wire.

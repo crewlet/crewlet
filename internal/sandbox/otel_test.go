@@ -594,6 +594,80 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	if env["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("the run environment lost a credential: %q", env["ANTHROPIC_API_KEY"])
 	}
+	// AND WHAT AN EXPORTER RESOLVES from it is the operator's collector,
+	// not the base key alone: the box writes each signal's own variables
+	// too, and an exporter reads those first. Written with the receiver's
+	// values rather than empty, they would win over the operator's base
+	// endpoint while the key above still read as the operator's.
+	traces, err := otlpenv.Resolve(func(k string) string { return env[k] }, otlpenv.Traces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://our-own-collector.example/v1/traces"; traces.Endpoint != want {
+		t.Errorf("the box's traces resolve to %q, want the operator's %q", traces.Endpoint, want)
+	}
+}
+
+// AN IMAGE'S PER-SIGNAL VARIABLES DECIDE NOTHING.
+//
+// An exporter reads a signal's own OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT,
+// _HEADERS, _PROTOCOL and _TIMEOUT before the base variables the run writes,
+// so one an image or a template bakes in would send the box's spans to its own
+// collector, carry its header to the engine, switch the export to a protocol
+// the route does not speak, or give up before the receiver answers — measured
+// against Claude Code. The run env is laid over the image's as the container's
+// env-file and E2B's process environment lay it, and every signal must then
+// resolve to the receiver with no headers.
+//
+// Mutation: leave the per-signal variables unwritten and every signal goes red.
+func TestAnImagesPerSignalVariablesDecideNothing(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := map[string]string{}
+	for _, s := range otlpenv.Specified {
+		image[s.EndpointVar()] = "https://image-collector.example/v1/" + string(s)
+		image[s.HeadersVar()] = "authorization=Bearer%20baked-image-credential"
+		image[s.ProtocolVar()] = string(otlpenv.GRPC)
+		image[s.TimeoutVar()] = "1000"
+	}
+	run := sandbox.RunEnvFor(t.Context(), exportingManager(t, receiver, exporting()), launchOf(nil))
+	box := maps.Clone(image)
+	maps.Copy(box, run)
+	lookup := func(k string) string { return box[k] }
+
+	base := box[otlpenv.EndpointVar]
+	if !strings.HasPrefix(base, "https://engine.internal/otlp/") {
+		t.Fatalf("no endpoint was minted: %q", base)
+	}
+	for _, s := range otlpenv.Signals {
+		d, err := otlpenv.Resolve(lookup, s)
+		if err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+		if d.Endpoint != base+s.Path() || d.Protocol != otlpenv.HTTPProtobuf || len(d.Headers) != 0 {
+			t.Errorf("%s resolves to %s over %s with headers %v, want the receiver's %s over %s with none",
+				s, d.Endpoint, d.Protocol, d.Headers, base+s.Path(), otlpenv.HTTPProtobuf)
+		}
+	}
+	// LOGS TOO, which nothing in the engine resolves but an exporter in the
+	// box reads, and the TIMEOUT, which no resolver here reads: each signal's
+	// own variable is written empty, so the base the run wrote decides.
+	for _, s := range otlpenv.Specified {
+		for _, name := range []string{s.EndpointVar(), s.HeadersVar(), s.ProtocolVar(), s.TimeoutVar()} {
+			if got, set := box[name]; !set || got != "" {
+				t.Errorf("%s = %q in the box, want it written empty", name, got)
+			}
+		}
+	}
+	if box[otlpenv.TimeoutVar] != strconv.FormatInt(sandbox.OtelAnswerWithin.Milliseconds(), 10) {
+		t.Errorf("%s = %q, want the receiver's answer time", otlpenv.TimeoutVar, box[otlpenv.TimeoutVar])
+	}
 }
 
 // exporting is a runner declaration shaped like Claude Code's — a switch, an
@@ -719,10 +793,10 @@ func TestTheBoxWaitsForTheReceiversAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := receiver.RunEnv(t.Context(), launchedFrom, "turn-1", "engineer", time.Hour)[sandbox.OtelTimeoutVar]
+	raw := receiver.RunEnv(t.Context(), launchedFrom, "turn-1", "engineer", time.Hour)[otlpenv.TimeoutVar]
 	ms, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		t.Fatalf("%s = %q, not milliseconds", sandbox.OtelTimeoutVar, raw)
+		t.Fatalf("%s = %q, not milliseconds", otlpenv.TimeoutVar, raw)
 	}
 	if got := time.Duration(ms) * time.Millisecond; got <= sandbox.OtelForwardTimeout {
 		t.Errorf("the box waits %v for an answer the receiver may take %v to forward",
