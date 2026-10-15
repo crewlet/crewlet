@@ -57,8 +57,9 @@
 __pycache__/
 *.py[cod]
 
-# The store is a local file this node owns exclusively, and the embedded
-# stream persists beside it. Both are per-checkout state, never committed.
+# The store is two local files this node owns exclusively — its own and the
+# replicated estate beside it — and the embedded stream persists beside them.
+# All of it is per-checkout state, never committed.
 *.db
 *.db-shm
 *.db-wal
