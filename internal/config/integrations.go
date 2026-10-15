@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -234,6 +235,23 @@ func (i *Integrations) validate(path Path) error {
 			"%q must start with http:// or https://: it is the base every link "+
 				"an agent composes for a person is built on, so a value without "+
 				"a scheme yields a link nobody can follow", i.DashboardBaseURL)
+	}
+	// A QUERY, A FRAGMENT OR USERINFO in either base is refused too: every
+	// consumer appends a rooted path to the base as text, so a query swallows
+	// that path — `https://x.example.com?k=v/webhooks/gitlab` is a request
+	// for `/` — a fragment is never sent at all, and userinfo would be pasted
+	// into every manifest and every link a person is handed. The value is not
+	// repeated, since those are the parts a credential is written into.
+	for _, field := range []struct{ name, value string }{
+		{"public_base_url", i.PublicBaseURL},
+		{"dashboard_base_url", i.DashboardBaseURL},
+	} {
+		if part := originLeftover(field.value); part != "" {
+			p.add(at(path, field.name), ErrUnknownValue,
+				"carries %s, and every address is built by appending a path to "+
+					"this base, so it would land in the middle of each one: write "+
+					"the bare origin, scheme://host[:port]", part)
+		}
 	}
 
 	// A CHECK INTERVAL BELOW THE FLOOR IS REFUSED RATHER THAN CLAMPED.
@@ -895,6 +913,34 @@ func noSpaces(p *problems, path Path, value string) {
 				"address, an identifier and an email each name one thing, "+
 				"so a space inside is a value nothing answers to", value)
 	}
+}
+
+// originLeftover names the part of a base URL that no address built on it can
+// carry — a query, a fragment or userinfo — or "" when it has none. A value
+// written around a ${VAR} is judged on its own text: a `?` or `#` outside the
+// references, since what a variable holds is known only where it resolves.
+func originLeftover(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	written := s
+	if envref.Has(s) {
+		written, _ = envref.Expand(s, func(string) (string, bool) { return "", true })
+	}
+	switch {
+	case strings.Contains(written, "?"):
+		return "a query"
+	case strings.Contains(written, "#"):
+		return "a fragment"
+	}
+	if envref.Has(s) {
+		return ""
+	}
+	if u, err := url.Parse(s); err == nil && u.User != nil {
+		return "userinfo"
+	}
+	return ""
 }
 
 // hasHTTPScheme reports a URL the clients can actually use, treating a
