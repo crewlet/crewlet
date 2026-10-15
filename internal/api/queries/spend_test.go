@@ -88,7 +88,7 @@ func (f *spendFixture) agentID(handle string) string {
 }
 
 // day publishes one node's seat-day through the shipped applier — the rows a
-// node's usage publisher would have replicated to every node.
+// data node's usage publisher would have replicated to every data node.
 func (f *spendFixture) day(node, day, handle string, turns, failed int64, cells ...usage.Tokens) {
 	f.t.Helper()
 	f.seq++
@@ -141,10 +141,10 @@ func seriesOf(t *testing.T, r *queries.Registry, params map[string]any) tokens.S
 	return got
 }
 
-// ONE NODE ANSWERS FOR EVERY NODE. The rows node A's publisher replicated are
-// in the estate node B reads, so B's answer carries A's spend — which is the
-// whole point of the domain. Read from B's own event log, this answer
-// described B alone, under the company's name.
+// ONE NODE ANSWERS FOR EVERY DATA NODE. The rows node A's publisher
+// replicated are in the estate node B reads, so B's answer carries A's spend —
+// which is the whole point of the domain. Read from B's own event log, this
+// answer described B alone, under the company's name.
 func TestANamedWindowAnswersEveryNodesSpend(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
@@ -218,8 +218,8 @@ func TestThePreviousWindowIsServedAtSevenThirtyAndNinetyDays(t *testing.T) {
 }
 
 // A WINDOW THAT STARTS BEFORE THE HORIZON IS REFUSED rather than floored: the
-// rows are gone on every node, and an answer floored to what remains would put
-// a heading over fewer days than it names.
+// rows are gone on every data node, and an answer floored to what remains
+// would put a heading over fewer days than it names.
 func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)

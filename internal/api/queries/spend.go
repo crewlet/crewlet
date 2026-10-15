@@ -360,7 +360,7 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	}
 	if !interval.Valid() {
 		return nil, fmt.Errorf("%w: bucket must be one of %v, and %q is not — a "+
-			"company day is the finest thing every node's usage agrees on",
+			"company day is the finest thing every data node's usage agrees on",
 			ErrBadParams, tokens.Intervals, interval)
 	}
 	w, err := s.spendWindowOf(p)
