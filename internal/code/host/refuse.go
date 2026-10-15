@@ -12,8 +12,9 @@ import (
 )
 
 // ERRORS ON THE WIRE, before a git process has written a byte: every one a
-// status and a GitText sentence, and every 503 a Retry-After that its sentence
-// says again in words — git does not read the header.
+// status and a GitText sentence, every 503 a Retry-After that its sentence
+// says again in words — git does not read the header — and a failure no retry
+// ends a 500 that promises none.
 
 // syncFailed answers a request whose cache could not be synced, or whose git
 // process failed before writing anything: what each failure means to the
@@ -44,18 +45,31 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 		auth.GitText(w, http.StatusServiceUnavailable, name+"'s pack "+missing.Pack.PackID+" "+what+
 			" (the daily audit raises objects_missing for it); retry in "+seconds(UnavailableRetryAfter))
 	case errors.As(err, &corrupt):
+		// NO RETRY ENDS IT, so none is promised (cache.ErrCorruptPack): the
+		// store has just verified these are the bytes the push stored, so
+		// the row or the upload is wrong, and every retry would start a sync
+		// that downloads the whole bundle again — up to code.MaxPackBytes a
+		// time, from a client or a balancer obeying the promise. A 500 with
+		// no Retry-After, then: only an operator ends it, and only the node
+		// that received the push, which holds its own copy, serves it until
+		// then.
 		s.log.Error("code_pack_checksum_mismatch", "repo", name, "pack_id", corrupt.Pack.PackID,
 			"object", corrupt.Pack.Object.String(), "error", err)
-		retry(w, UnavailableRetryAfter)
-		auth.GitText(w, http.StatusServiceUnavailable, name+"'s pack "+corrupt.Pack.PackID+
-			" in the object store is not the bundle its row describes (code_pack_checksum_mismatch); "+
-			"retry in "+seconds(UnavailableRetryAfter))
+		auth.GitText(w, http.StatusInternalServerError, name+"'s pack "+corrupt.Pack.PackID+
+			" in the object store is not the bundle its row describes (code_pack_checksum_mismatch): "+
+			"retrying does not end it — an operator must act on this node's code_pack_checksum_mismatch "+
+			"line, and until then only the node that received the push, which holds its own copy, can "+
+			"serve it")
 	case errors.Is(err, cache.ErrBadSnapshot):
+		// NOR THIS ONE (cache.ErrBadSnapshot): the rows hold what this
+		// build cannot install, and asking again reads the same rows. Only
+		// an operator, or a node of a newer build that installs them,
+		// ends it.
 		s.log.Error("code_bad_snapshot", "repo", name, "error", err,
 			"detail", "the rows and the bytes disagree: an operator's problem, not a client's")
-		retry(w, UnavailableRetryAfter)
-		auth.GitText(w, http.StatusServiceUnavailable, name+"'s rows cannot be read into a cache on this "+
-			"node: "+sentence(err.Error()))
+		auth.GitText(w, http.StatusInternalServerError, name+"'s rows cannot be read into a cache on this "+
+			"node (code_bad_snapshot): "+sentence(err.Error())+"; retrying does not end it — an operator "+
+			"must act on this node's code_bad_snapshot line, and a node running a newer build may serve it")
 	case errors.Is(err, cache.ErrRebuildRefused):
 		retry(w, UnavailableRetryAfter)
 		auth.GitText(w, http.StatusServiceUnavailable, name+"'s cache on this node was rebuilt moments ago "+

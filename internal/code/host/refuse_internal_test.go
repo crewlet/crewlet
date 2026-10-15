@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
@@ -63,5 +65,49 @@ func TestEveryWayTheNodeEndsGitIsAnsweredAsThat(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A FAILURE NO RETRY ENDS PROMISES NO RETRY: a pack whose verified bytes are
+// not the bundle its row describes, and rows this build cannot install into a
+// cache, are each answered 500 with no Retry-After and a sentence that says
+// retrying does not end it and names the line an operator acts on. Promised
+// "retry in 10 s" and a Retry-After of 10, a client or a balancer obeying
+// either started a sync every ten seconds, and for a corrupt pack each one
+// downloaded the whole bundle again — up to code.MaxPackBytes — to fail the
+// same way.
+func TestAFailureNoRetryEndsPromisesNone(t *testing.T) {
+	for _, tc := range []struct {
+		name, line, want string
+		err              error
+	}{
+		{name: "a corrupt pack", line: "code_pack_checksum_mismatch",
+			err: &cache.ErrCorruptPack{Repo: "acme", Pack: code.PackRow{PackID: "p1"},
+				Err: fmt.Errorf("%w: index_bytes", code.ErrBadBundle)},
+			want: "only the node that received the push, which holds its own copy, can serve it"},
+		{name: "rows this build cannot install", line: "code_bad_snapshot",
+			err:  fmt.Errorf("%w: page 1, row 3: a ref the grammar refuses", cache.ErrBadSnapshot),
+			want: "a node running a newer build may serve it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log lockedBuffer
+			s := &Server{log: slog.New(slog.NewJSONHandler(&log, nil))}
+			s.life, s.end = context.WithCancel(context.Background())
+			defer s.end()
+			w := httptest.NewRecorder()
+			s.syncFailed(w, httptest.NewRequest(http.MethodPost, "/git/acme/git-upload-pack", nil), "acme", tc.err)
+			body := w.Body.String()
+			if w.Code != http.StatusInternalServerError || w.Header().Get("Retry-After") != "" {
+				t.Errorf("answered %d with Retry-After %q, want 500 and none", w.Code, w.Header().Get("Retry-After"))
+			}
+			if strings.Contains(body, "retry in") || !strings.Contains(body, "retrying does not end it") ||
+				!strings.Contains(body, "an operator must act on this node's "+tc.line+" line") ||
+				!strings.Contains(body, tc.want) {
+				t.Errorf("answered %q", body)
+			}
+			if !strings.Contains(log.String(), `"level":"ERROR","msg":"`+tc.line+`"`) {
+				t.Errorf("logged %q, want %s at ERROR", log.String(), tc.line)
+			}
+		})
 	}
 }
