@@ -191,9 +191,9 @@ func sampledRoot(ctx context.Context, hex string) bool {
 // to do with this trace.
 //
 // An unusable id returns ctx unchanged rather than erroring. This is fed by the
-// wire, and some wakes carry no trace — one published outside any span, such
-// as an A2A ask or reply or an answer to a sandbox question — and the honest
-// answer for one of those is a new root, not a refusal to run the turn.
+// wire: every event this build publishes carries a trace — [TraceOf] mints one
+// where there is no span — so one with none is foreign or hand-built, and the
+// honest answer for it is a new root, not a refusal to run the turn.
 func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 	traceID, err := trace.TraceIDFromHex(tc.TraceID)
 	if err != nil {

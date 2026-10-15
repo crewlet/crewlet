@@ -2019,9 +2019,11 @@ func notificationSourceOf(evs []*events.Event) string {
 // continues the trigger's trace as its root decided it — see
 // [events.TraceContext.Unsampled].
 //
-// An empty result is ordinary rather than exceptional: an event its publisher
-// gave no trace context (an A2A wake, an operator's answer to a parked run)
-// carries no ids, and WithRemote turns that into a fresh root.
+// An empty result is a fresh root, through WithRemote. No wake this build
+// publishes carries none — an A2A ask carries the asker's trace and its answer
+// the ask's, an answer by turn the operator call's — so an empty one is a
+// foreign or hand-built event, and refusing to run its turn would be worse
+// than starting a trace for it.
 func triggerTrace(evs []*events.Event) events.TraceContext {
 	for _, ev := range evs {
 		if ev == nil {

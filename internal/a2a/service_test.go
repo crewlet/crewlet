@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 type published struct {
@@ -352,6 +353,39 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
 	if reply.Trace() != ask.Trace() {
 		t.Errorf("reply trace = %+v, want the ask's %+v", reply.Trace(), ask.Trace())
+	}
+}
+
+// THE WHOLE EXCHANGE IS ONE TRACE: the ask wakes its target in the asker's
+// trace — the `a2a_ask` call's span, its decision included — and the answer,
+// which inherits the ask's, wakes the asker back in the same one. The wake
+// went out with no trace at all, so the answering turn and the asker's next
+// each rooted a trace of their own, decided by their own nodes, while the
+// channel's own records sat in the asker's.
+//
+// Mutation, red here: wake the target under an empty trace again.
+func TestAnAskAndItsAnswerAreOneTraceWithTheAsker(t *testing.T) {
+	t.Parallel()
+	svc, _, rec := service(t, dir{"bob": true, "alice": true})
+	asker := events.TraceContext{TraceID: "0af7651916cd43dd8448eb211c80319c",
+		SpanID: "b7ad6b7169203331", Unsampled: true}
+	id, err := svc.Open(tracing.WithRemote(context.Background(), asker),
+		a2a.Ask{Requester: "alice", Target: "bob", Brief: "?"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ask := rec.onlyTo(topics.AgentInbox("bob"))[0]
+	if got := ask.Trace(); got != asker {
+		t.Fatalf("the ask's wake is filed under %+v, want the asker's %+v", got, asker)
+	}
+
+	if err := svc.Reply(context.Background(), a2a.Answer{
+		ChannelID: id, Sender: "bob", Content: "yes", CausedBy: ask,
+	}); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if got := rec.onlyTo(topics.AgentInbox("alice"))[0].Trace(); got != asker {
+		t.Errorf("the answer wakes the asker under %+v, want the asker's own %+v", got, asker)
 	}
 }
 
