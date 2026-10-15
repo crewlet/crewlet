@@ -1559,7 +1559,7 @@ because each backend sends its vendor's native one:
 
 | Entry type | Credential arrives as |
 |---|---|
-| `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
+| `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth. Beside it every call carries a W3C `traceparent` (and a `tracestate`, when the trace has one) naming the call's span in the engine's trace — not a credential, but an identifier the proxy may log or pass on to Anthropic, whose API nests its own spans under it ([Spans from Claude](../guides/deployment.md#spans-from-claude)) |
 | `openai`, `openai-compatible` | `Authorization: Bearer` — and nothing else from the engine's environment. The SDK would add `OpenAI-Organization`, `OpenAI-Project` and every `OPENAI_CUSTOM_HEADERS` line from the process it runs in; the backend undoes each, so a proxy never receives headers an operator exported for some other tool. The OpenAI embeddings provider builds its client the same way |
 
 **The request is shaped for the model the entry names.** An `anthropic`

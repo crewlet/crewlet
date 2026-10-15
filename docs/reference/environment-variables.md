@@ -276,6 +276,7 @@ reading (a sampler ratio, an export interval) warns and carries on.
 | `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes, `key=value` pairs with percent-encoded values. They **win** over the engine's own `service.name` (`crewlet`), `service.version` (the build) and `service.instance.id` (the node id), so naming `service.instance.id` here replaces the node id a fleet's spans are told apart by. An entry with no `=` is skipped with an `otel_resource_attributes_partial` warning and the rest kept. | `deployment.environment.name=prod` |
 | `OTEL_TRACES_SAMPLER` | Which traces this node records, decided where a trace **starts**: `parentbased_always_on` (the default), `parentbased_always_off` or `parentbased_traceidratio`, in any case. Only parent-based samplers are accepted — `always_on`, `always_off` and `traceidratio` are refused at startup with the `parentbased_` spelling to use, and any other sampler (`jaeger_remote`, `xray`, …) is refused naming the three that work. | `parentbased_traceidratio` |
 | `OTEL_TRACES_SAMPLER_ARG` | The ratio, `0`–`1`, for `parentbased_traceidratio` (default `1`). Set **alone**, with no `OTEL_TRACES_SAMPLER`, it means `parentbased_traceidratio`. The other two samplers take no ratio and warn that it is ignored. An unparseable or out-of-range value (`NaN` included) warns and falls back to sampling everything rather than refusing to boot. | `0.1` |
+| `ANTHROPIC_OPEN_TELEMETRY`, `ANTHROPIC_OPEN_TELEMETRY_PROPAGATION`, `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE`, `ANTHROPIC_OPEN_TELEMETRY_TRACES_MAX_CONTENT_BYTES` | **Never honoured by the engine.** The Anthropic Go SDK reads each on every call an `anthropic` provider makes, and would let it switch off the SDK's span of the call, stop the `traceparent` that ties the Claude API's own spans to the round that made it, or put prompts and answers on that span. The provider pins what they control in code instead — spans on, trace context sent, metadata only, which leaves the fourth's content byte cap nothing to bound — so tracing stays the `OTEL_*` variables' alone and content stays in the event store. See [Deployment § Spans from Claude](../guides/deployment.md#spans-from-claude) | — |
 
 > **The base and the signal endpoint are different settings.** `OTEL_EXPORTER_OTLP_ENDPOINT`
 > is a base that `/v1/traces` is appended to; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
@@ -292,7 +293,9 @@ envelope (`trace_unsampled`, written only when a trace is not sampled) to the tu
 delivery wakes, on whichever node runs it; it is kept on a suspended coding run's record,
 so the resumed half — days later, possibly on another node — continues as the first half
 was decided; and it is the flag of the `TRACEPARENT` a sandbox is handed (`-00` for a run
-launched from an unsampled turn). So a node's sampler decides only the traces that node
+launched from an unsampled turn); and it is the flag of the `traceparent` every call to
+the Claude API carries, so the API emits no spans for a call made in a trace that is not
+sampled. So a node's sampler decides only the traces that node
 starts — a webhook delivery, a schedule's fire, a committed tracker or knowledge-base
 change that wakes a seat, an event published outside any span — and a fleet whose nodes
 are configured differently splits no tree. Sampling does not depend
@@ -305,12 +308,17 @@ sent on: this engine writes none, so the only baggage it could carry is what a t
 party put on a webhook.
 
 When an endpoint is set, the engine exports spans and metrics to it — Jaeger, Grafana
-Tempo, or any OTLP backend. Without one, spans are still created and their ids still flow
-into every event, the event store and the dashboard's trace view; nothing is shipped
-anywhere. The engine's exporters and the sandbox forwarder resolve the endpoints, headers
-and exporter switches **identically**, on purpose, so a coding agent's spans land in the
-same backend as the turn that started it and nest underneath it. The forwarder re-sends a
-box's export over OTLP/HTTP to that destination whatever the resolved protocol says.
+Tempo, or any OTLP backend — the Anthropic SDK's span of each Claude call among them.
+Without one, spans are still created and their ids still flow into every event, the event
+store and the dashboard's trace view; nothing is shipped anywhere. The Claude API's own
+spans are never the engine's to export: the API sends them to the destination an
+organization admin configures in the Claude Console, nested under the `traceparent` each
+call carries ([Spans from Claude](../guides/deployment.md#spans-from-claude)).
+
+The engine's exporters and the sandbox forwarder resolve the endpoints, headers and
+exporter switches **identically**, on purpose, so a coding agent's spans land in the same
+backend as the turn that started it and nest underneath it. The forwarder re-sends a box's
+export over OTLP/HTTP to that destination whatever the resolved protocol says.
 
 The OpenTelemetry SDK's exporters also read `OTEL_EXPORTER_OTLP_COMPRESSION`,
 `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,

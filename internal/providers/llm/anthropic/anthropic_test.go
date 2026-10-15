@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,12 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
@@ -33,11 +40,25 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
+// recorded is every span this test binary ended. The SDK resolves the global
+// provider on each call, so the one TestMain installs sees every call every
+// case makes; a case reads only the spans of its own trace ([spansOf]).
+var recorded = tracetest.NewSpanRecorder()
+
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
 	// The package logger bound its handler at package-var init, which
 	// runs before this. Rebind it or every case prints its own log.
 	log = logging.Get("llm.anthropic")
+	// THE ENGINE'S TRACING, AS FAR AS THE SDK CAN SEE IT. This binary does
+	// not link internal/tracing, whose init installs the real globals, so
+	// they are installed here as it installs them: a parent-based provider
+	// and W3C trace context alone. Once, before any case runs, because both
+	// are process-wide and a case swapping them would race every other.
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+		sdktrace.WithSpanProcessor(recorded)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 	os.Exit(m.Run())
 }
 
@@ -51,8 +72,11 @@ type attempt struct {
 	// token that arrived alongside a correct x-api-key would answer every
 	// call while the pool rotated keys nothing was using.
 	authorization string
-	path          string
-	body          map[string]any
+	// traceparent is the W3C trace context the attempt carried: what the
+	// API's own span would nest under.
+	traceparent string
+	path        string
+	body        map[string]any
 	// raw is the body as it arrived, for the assertions that are about
 	// BYTES — a replayed turn is held to what the API sent, and a decoded
 	// map would hide every difference a vendor's history check can see.
@@ -77,6 +101,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.attempts = append(f.attempts, attempt{
 		apiKey:        r.Header.Get("X-Api-Key"),
 		authorization: r.Header.Get("Authorization"),
+		traceparent:   r.Header.Get("Traceparent"),
 		path:          r.URL.Path,
 		body:          body,
 		raw:           raw,
@@ -2665,6 +2690,283 @@ func TestAStreamCutBeforeItsEndIsAServerFailure(t *testing.T) {
 				if s.Cooling != 0 {
 					t.Fatal("a stream cut short benched the credential")
 				}
+			}
+		})
+	}
+}
+
+// --- OpenTelemetry -------------------------------------------------------
+
+// sdkSpan is the name the SDK gives the CLIENT span of a Messages call, and
+// sdkScope the instrumentation scope it files it under. They are what an
+// operator filters a backend by (docs/guides/deployment.md), so they are held
+// here rather than trusted.
+const (
+	sdkSpan  = "anthropic.messages.create"
+	sdkScope = "com.anthropic.sdk.go"
+)
+
+// round opens the span a tool loop's round holds around its call: a fresh
+// sampled root, or, unsampled, one beneath a remote parent the operator's
+// sampler decided against — which is what every round of such a trace is.
+// Each is a trace of its own, so a case reads only its own spans.
+func round(t *testing.T, sampled bool) (context.Context, trace.Span) {
+	t.Helper()
+	ctx := context.Background()
+	if !sampled {
+		var tid trace.TraceID
+		var sid trace.SpanID
+		_, _ = rand.Read(tid[:])
+		_, _ = rand.Read(sid[:])
+		// No trace.FlagsSampled: the root was decided against.
+		ctx = trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: tid, SpanID: sid, Remote: true,
+		}))
+	}
+	ctx, span := otel.Tracer("test").Start(ctx, "llm.round")
+	t.Cleanup(func() { span.End() })
+	return ctx, span
+}
+
+// spansOf is every span the SDK ended beneath parent's trace, oldest first.
+func spansOf(parent trace.Span) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range recorded.Ended() {
+		if s.SpanContext().TraceID() == parent.SpanContext().TraceID() &&
+			s.SpanContext().SpanID() != parent.SpanContext().SpanID() {
+			out = append(out, s)
+		}
+	}
+	slices.SortFunc(out, func(a, b sdktrace.ReadOnlySpan) int { return a.StartTime().Compare(b.StartTime()) })
+	return out
+}
+
+// sentContext is the trace context an attempt carried, read as the API reads
+// its `traceparent`.
+func sentContext(t *testing.T, a attempt) trace.SpanContext {
+	t.Helper()
+	sc := trace.SpanContextFromContext(propagation.TraceContext{}.Extract(context.Background(),
+		propagation.HeaderCarrier{"Traceparent": {a.traceparent}}))
+	if !sc.IsValid() {
+		t.Fatalf("the attempt carried traceparent %q, which names no trace context", a.traceparent)
+	}
+	return sc
+}
+
+// clientSpan fails unless s is the SDK's span of one Messages call, made
+// beneath parent, and the attempt it covers carried s's own trace context.
+func clientSpan(t *testing.T, s sdktrace.ReadOnlySpan, parent trace.Span, sent attempt) {
+	t.Helper()
+	if s.Name() != sdkSpan || s.InstrumentationScope().Name != sdkScope || s.SpanKind() != trace.SpanKindClient {
+		t.Fatalf("span %q (scope %q, kind %s), want a CLIENT span %q of %q",
+			s.Name(), s.InstrumentationScope().Name, s.SpanKind(), sdkSpan, sdkScope)
+	}
+	if got, want := s.Parent().SpanID(), parent.SpanContext().SpanID(); got != want {
+		t.Fatalf("the call's span is beneath %s, want the round's %s", got, want)
+	}
+	if sc := sentContext(t, sent); sc.TraceID() != s.SpanContext().TraceID() ||
+		sc.SpanID() != s.SpanContext().SpanID() || !sc.IsSampled() {
+		t.Fatalf("the attempt carried %q, want the sampled context of its own span %s",
+			sent.traceparent, s.SpanContext().SpanID())
+	}
+}
+
+// attributeOf is the value of key on s, "" where s does not carry it.
+func attributeOf(s sdktrace.ReadOnlySpan, key string) string {
+	for _, kv := range s.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.String()
+		}
+	}
+	return ""
+}
+
+// tracedCall makes one call beneath a sampled round and holds its span to
+// what an operator is told it is.
+func tracedCall(t *testing.T) {
+	t.Helper()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("hi")) })
+	p := newProvider(t, url, nil)
+	ctx, parent := round(t, true)
+	if _, err := p.Complete(ctx, userTurn("hello")); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	spans, seen := spansOf(parent), api.seen()
+	if len(spans) != 1 || len(seen) != 1 {
+		t.Fatalf("%d spans for %d attempts, want one of each", len(spans), len(seen))
+	}
+	clientSpan(t, spans[0], parent, seen[0])
+	if spans[0].Status().Code != codes.Ok {
+		t.Fatalf("an answered call's span ended %v, want Ok", spans[0].Status())
+	}
+}
+
+// THE API'S SPAN HAS A PARENT IN THE ENGINE'S TRACE. Each call is one CLIENT
+// span beneath the round that made it, and the attempt carries THAT span's
+// trace context, which is the parent the Claude API files its own SERVER span
+// under. A header naming the round would skip the attempt; one naming nothing
+// would leave the API's spans in a trace of their own.
+//
+// Not parallel, here and below: every case reads the one process-wide
+// recorder, and the ones that set a variable change the whole process.
+func TestTheAttemptCarriesTheTraceContextOfItsOwnSpan(t *testing.T) {
+	tracedCall(t)
+}
+
+// THE VENDOR'S SWITCHES ARE NOT THE OPERATOR'S. Tracing is configured by the
+// standard OTEL_* environment alone and nothing branches on whether it is on
+// (ADR-0010), so an inherited ANTHROPIC_OPEN_TELEMETRY=false, which would cut
+// every Claude call out of the trace, or ANTHROPIC_OPEN_TELEMETRY_PROPAGATION=
+// false, which would leave the API's spans with no parent, changes nothing.
+func TestTheVendorSwitchesTurnNothingOff(t *testing.T) {
+	for _, variable := range []string{"ANTHROPIC_OPEN_TELEMETRY", "ANTHROPIC_OPEN_TELEMETRY_PROPAGATION"} {
+		t.Run(variable, func(t *testing.T) {
+			t.Setenv(variable, "false")
+			tracedCall(t)
+		})
+	}
+}
+
+// AN UNSAMPLED ROUND STAYS UNSAMPLED AT THE API. The decision is the
+// operator's, made once where the trace began; the attempt carries it as the
+// trace context's -00 flag, which the Claude API reads as "emit nothing", and
+// the SDK records no span of its own. A header claiming sampled would have the
+// API export spans beneath a parent the collector was never sent.
+func TestAnUnsampledRoundSendsItsDecisionAndRecordsNothing(t *testing.T) {
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("hi")) })
+	p := newProvider(t, url, nil)
+	ctx, parent := round(t, false)
+	if _, err := p.Complete(ctx, userTurn("hello")); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if spans := spansOf(parent); len(spans) != 0 {
+		t.Fatalf("an unsampled round recorded %d spans, want none", len(spans))
+	}
+	seen := api.seen()
+	if sc := sentContext(t, seen[0]); sc.TraceID() != parent.SpanContext().TraceID() || sc.IsSampled() {
+		t.Fatalf("the attempt carried %q, want the round's trace %s marked unsampled",
+			seen[0].traceparent, parent.SpanContext().TraceID())
+	}
+}
+
+// THE SPANS CARRY NO CONTENT, WHATEVER THE ENVIRONMENT SAYS. Prompts and
+// answers are the event store's — a span carries duration and an event carries
+// content (ADR-0010) — and the SDK would otherwise put the system prompt, the
+// whole conversation and the answer on the span of every call made by a
+// process that inherited ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content,
+// and ship them to whoever collects the traces.
+func TestTheSpanCarriesNoContentWhateverTheEnvironmentSays(t *testing.T) {
+	t.Setenv("ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "content")
+	const system, prompt, answer = "words-of-the-system", "words-of-the-prompt", "words-of-the-answer"
+	_, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage(answer)) })
+	p := newProvider(t, url, nil)
+	ctx, parent := round(t, true)
+	if _, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: system},
+		{Role: llm.RoleUser, Content: prompt},
+	}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	spans := spansOf(parent)
+	if len(spans) != 1 {
+		t.Fatalf("%d spans, want one", len(spans))
+	}
+	// The span is there and records metadata, so an absence below is the
+	// content being left out rather than a span that recorded nothing.
+	if got := attributeOf(spans[0], "gen_ai.request.model"); got != "claude-test" {
+		t.Fatalf("gen_ai.request.model = %q, want the model the call named", got)
+	}
+	for _, kv := range spans[0].Attributes() {
+		for _, words := range []string{system, prompt, answer} {
+			if strings.Contains(kv.Value.String(), words) {
+				t.Fatalf("the span carries %s = %q: a call's content reached its span", kv.Key, kv.Value.String())
+			}
+		}
+	}
+}
+
+// A ROTATION IS TWO SIBLINGS. The pool tries the next key within one call, so
+// the key the API refused and the key that answered are two attempts beneath
+// one round: the first ends in error naming what the API said, the second
+// answers, and each attempt carries ITS OWN span's context — the API's span of
+// the refused request nests under the span that failed.
+func TestARotationIsTwoSiblingSpansTheFirstInError(t *testing.T) {
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 429, apiError("rate_limit_error"))
+			return
+		}
+		writeJSON(w, 200, okMessage("hi"))
+	})
+	p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+	ctx, parent := round(t, true)
+	if _, err := p.Complete(ctx, userTurn("hello")); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	spans, seen := spansOf(parent), api.seen()
+	if len(spans) != 2 || len(seen) != 2 {
+		t.Fatalf("%d spans for %d attempts, want two of each", len(spans), len(seen))
+	}
+	for i, s := range spans {
+		clientSpan(t, s, parent, seen[i])
+	}
+	refused, answered := spans[0], spans[1]
+	if refused.Status().Code != codes.Error || attributeOf(refused, "error.type") != "rate_limit_error" {
+		t.Fatalf("the refused attempt ended %v with error.type %q, want an error naming rate_limit_error",
+			refused.Status(), attributeOf(refused, "error.type"))
+	}
+	if answered.Status().Code != codes.Ok {
+		t.Fatalf("the answered attempt ended %v, want Ok", answered.Status())
+	}
+}
+
+// THE CALL'S SPAN ENDS BY THE SDK'S READING, which is not always the engine's,
+// and the package doc and the deployment guide say where they part. A stall
+// before the first byte reaches the SDK only as a cancelled context, which it
+// files as the application's own doing and leaves without a status, so the
+// engine's classification (a timeout, on the phase event and on llm.round when
+// the round fails) is the one that names it; once the stream has begun, the
+// same stall is a client timeout to the SDK too.
+func TestTheCallsSpanEndsAsTheDocsSay(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name      string
+		handle    func(w http.ResponseWriter)
+		status    codes.Code
+		errorType string
+	}{
+		{"answered", func(w http.ResponseWriter) {
+			writeJSON(w, 200, okMessage("hi"))
+		}, codes.Ok, ""},
+		{"cut before message_stop", func(w http.ResponseWriter) {
+			writeStream(w, streamOf(streamStart(), textBlock(0, "nearly"))...)
+		}, codes.Error, "api_error"},
+		{"an error event mid-stream", func(w http.ResponseWriter) {
+			writeStream(w, streamStart(),
+				sseEvent{"error", `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`})
+		}, codes.Error, "overloaded_error"},
+		{"silent before the first byte", func(w http.ResponseWriter) {
+			time.Sleep(3 * timeout)
+		}, codes.Unset, ""},
+		{"silent mid-stream", func(w http.ResponseWriter) {
+			writeStream(w, streamStart())
+			time.Sleep(3 * timeout)
+		}, codes.Error, "client_timeout_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, url := serve(t, func(w http.ResponseWriter, _ int) { tc.handle(w) })
+			p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+			ctx, parent := round(t, true)
+			_, _ = p.Complete(ctx, userTurn("hello"))
+			spans := spansOf(parent)
+			if len(spans) != 1 {
+				t.Fatalf("%d spans, want one", len(spans))
+			}
+			if got := spans[0].Status().Code; got != tc.status {
+				t.Fatalf("the span ended %v, want %v", spans[0].Status(), tc.status)
+			}
+			if got := attributeOf(spans[0], "error.type"); got != tc.errorType {
+				t.Fatalf("error.type = %q, want %q", got, tc.errorType)
 			}
 		})
 	}

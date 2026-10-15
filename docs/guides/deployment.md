@@ -1224,26 +1224,38 @@ flowchart TD
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
+    H["<b>anthropic.messages.create</b> (CLIENT)<br/>the Anthropic SDK's span of each HTTP attempt"]
+    I["<b>anthropic.messages.create</b> (SERVER) and its children<br/><i>the Claude API's own spans, exported by Anthropic</i>"]
     A --> B --> C --> D
     D --> E
     D --> F
+    E --> H
+    H -.->|"traceparent"| I
     C -.->|"suspend, then resume"| G
 ```
 
-**Five span names, and that is the whole set.** `webhook.receive`,
-`agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.round` and
-`tool.call`, alongside `schedule.fire` for cron-started work.
+**The engine's own spans are these, and only these:** `webhook.receive` and
+`schedule.fire`, which start work; `agent.turn`, and `agent.turn.resume` for a
+suspended run re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
+`execute`, `review` and `judge`; `llm.round`; and `tool.call`. Beneath
+`llm.round`, a call an `anthropic` provider makes is a span of the Anthropic
+SDK's own, `anthropic.messages.create`, which is what the Claude API's spans
+nest under — see [Spans from Claude](#spans-from-claude). A call made where no
+span is open has no parent, so its span starts a trace of its own.
 
-Span attributes are deliberately thin: the seat, the phase, the model, the
-round, the tool and its outcome, and token counts. Everything about what a turn
-*did* — prompts and responses verbatim, tool arguments and results, the
-decision — is already in the [event store](#the-event-store), and a span
+The engine's span attributes are deliberately thin: the seat, the phase, the
+model, the round, the tool and its outcome, and token counts. Everything about
+what a turn *did* — prompts and responses verbatim, tool arguments and results,
+the decision — is already in the [event store](#the-event-store), and a span
 carries what no event does, which is **duration**.
 
-Only the LLM *round* is spanned, not the fallback chain, each member's backend
-and the credential pool beneath it — on a three-member chain over a four-key
-pool that would nest a dozen spans per round and tell you nothing you could act
-on. Which member and which credential answered is on the phase event.
+The engine spans the *round*, not the fallback chain, each member's backend or
+the credential pool beneath it — on a three-member chain over a four-key pool
+that would nest a dozen spans per round. On the `anthropic` backend the
+attempts show anyway, because the SDK spans each one: a key the pool rotated off
+is a span in error beside the span of the key that answered, and a chain member
+that failed leaves its attempts the same way. Which member and which credential
+answered is on the phase event, for every backend.
 
 **A suspended run is two spans, not one.** A [code sandbox](../concepts/code-sandbox.md)
 run detaches: the phase returns, the process may exit, the seat may move node,
@@ -1296,10 +1308,11 @@ The sampler is the standard `OTEL_TRACES_SAMPLER`, and it is always parent-based
 that would re-decide a trace already in flight — `always_on`, `traceidratio` — is
 refused at startup with the parent-based spelling to use. The decision is made
 once, where a trace starts, and **travels with it**: in the event envelope across
-the queue (`trace_unsampled`), on a suspended coding run's record, and as the
-flag of the `TRACEPARENT` a sandbox is handed — so the turn a delivery wakes, the
-resumed half of a run and a coding box are recorded exactly when the trace they
-continue was, whichever node runs them. Only W3C trace context propagates;
+the queue (`trace_unsampled`), on a suspended coding run's record, as the flag
+of the `TRACEPARENT` a sandbox is handed, and as the flag of the `traceparent`
+each call to the Claude API carries — so the turn a delivery wakes, the resumed
+half of a run, a coding box and the API's own spans are recorded exactly when
+the trace they continue was, whichever node runs them. Only W3C trace context propagates;
 baggage is neither accepted nor sent.
 
 The full set of variables, including per-signal endpoints, headers and protocols,
@@ -1309,6 +1322,89 @@ The engine's exporters and the sandbox OTLP forwarder resolve the endpoints,
 headers and exporter switches through **one** resolver, on purpose: a coding
 agent's spans land in the same backend as the turn that started them, nested
 underneath it.
+
+#### Spans from Claude
+
+Two more producers put spans in the engine's traces, both Anthropic's.
+
+**The Anthropic SDK, inside the engine.** Every call an `anthropic` provider
+makes is a CLIENT span named `anthropic.messages.create` (instrumentation scope
+`com.anthropic.sdk.go`), recorded by the engine's own tracer provider and
+exported with its other spans, beneath the `llm.round` that made the call. The
+SDK's own retries are off, so it is one span per HTTP attempt. Its content mode
+is pinned off, so it records metadata only, chiefly:
+
+| Attributes | What they say |
+|---|---|
+| `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.reasoning.level`, `anthropic.thinking.type`, `gen_ai.request.stream` | the request's shape |
+| `gen_ai.response.id`, `gen_ai.response.model`, `anthropic.message.stop_reason` | the response |
+| `gen_ai.usage.input_tokens` (cache reads and writes included), `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens` | the attempt's usage |
+| `http.response.status_code`, `error.type` | how it ended |
+| `server.address`, `server.port`, `url.full` | where it went — the scheme, host, port and the `base_url`'s own path, never a `base_url`'s userinfo |
+| `anthropic.request.id`, `anthropic.organization.id`, `anthropic.workspace.id` | read from the response's headers, when the endpoint sends them |
+
+It ends by the SDK's reading, which is not always the engine's. A key the API
+refused, an `error` event and a stream cut before its end are an error carrying
+the API's `error.type` (`rate_limit_error`, `overloaded_error`, `api_error`), and
+a stream that goes silent part-way is a `client_timeout_error`. A stream that is
+silent **before its first byte** reaches the SDK only as a cancelled request,
+which it leaves with no status: the engine's timeout is on the phase event, and
+on `llm.round` when the round fails.
+
+**The Claude API, at Anthropic.** Each attempt sends its span's W3C
+`traceparent`, and the Claude API nests its own spans beneath it — a SERVER
+`anthropic.messages.create`, an `anthropic.model_request` per model request and
+a span per server tool, under `service.name` `claude-platform`. The API exports
+them itself, to an OTLP destination an **organization admin configures in the
+Claude Console**: nothing in Crewlet sets it, and the engine never sees those
+spans. Point that destination at the backend the engine exports to and the two
+halves meet in one trace; send it anywhere else and the API's spans name a
+parent that backend never received. Filter on `service.name = claude-platform`
+for Anthropic's half alone.
+
+- **The sampling decision goes with it.** A call made in a trace the engine's
+  sampler decided against carries the unsampled flag (`-00`): the SDK records
+  no span and the API emits nothing for that request. The decision is the
+  [sampler](#otlp-export)'s alone — whether the engine exports anything does
+  not change it, so a node with no `OTEL_EXPORTER_OTLP_ENDPOINT` still sends a
+  sampled `traceparent`, and an organization's Console destination still
+  receives the API's spans, under the `trace_id` the event store already
+  records for the turn.
+- **A gateway receives it too.** The header goes wherever `base_url` points,
+  so a gateway or proxy in front of the API is handed a `traceparent` (and a
+  `tracestate`, when the trace carries one) on every call.
+- **Claude Platform on AWS ignores it**, so its spans are not linked to the
+  engine's trace.
+- **What the API's spans carry is the Console's setting.** In its full-content
+  mode they carry prompts and answers; that is the organization admin's
+  choice, made at Anthropic. The engine's own spans of those calls never do.
+
+**What the engine pins.** The SDK reads four variables of its own on every
+call — `ANTHROPIC_OPEN_TELEMETRY`, `ANTHROPIC_OPEN_TELEMETRY_PROPAGATION`,
+`ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE` and
+`ANTHROPIC_OPEN_TELEMETRY_TRACES_MAX_CONTENT_BYTES` — and the engine ignores
+all four: its spans are always on, the trace context is always sent, and the
+content mode is always metadata only. Tracing is configured by the standard
+`OTEL_*` variables and nothing else, and what a call said belongs to the
+[event store](#the-event-store), not to a span. So there is no switch for
+Claude's spans alone. The SDK's go wherever the engine's go, and
+`OTEL_TRACES_EXPORTER=none` ships neither. The API's go wherever the Console
+sends them, and the one thing the engine decides about them is the sampling
+flag: `OTEL_TRACES_SAMPLER=parentbased_always_off` leaves every trace the engine
+starts unsampled, and the API emits nothing for a call made in one.
+
+**Count tokens once.** One call's tokens can be on three spans: `llm.round`
+(`crewlet.input_tokens`, `crewlet.output_tokens`, `crewlet.cache_read_tokens`,
+`crewlet.cache_write_tokens`), the SDK's span and the API's span (both
+`gen_ai.usage.*`). The round's are named `crewlet.*` so that a dashboard summing
+the GenAI conventions' `gen_ai.usage.*` never adds the engine's copy to
+Anthropic's — but the SDK's and the API's spans are two copies of the same
+usage, so sum one or the other, never both. The figure the engine bills and
+budgets by is its own, on the phase events, and not any span's.
+
+A [`cli-agent`](../concepts/subscription-llm-backends.md) entry on Claude Code
+does not call the API through this SDK: the CLI makes its own calls, so none of
+the SDK's spans above are recorded for it.
 
 #### Correlating logs with traces
 

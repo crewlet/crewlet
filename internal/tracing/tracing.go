@@ -45,9 +45,10 @@
 // The global propagator is TraceContext alone — no Baggage. This engine never
 // writes baggage, so the only baggage a context here could carry is what a
 // third party put on a webhook, and a propagator that extracted it would hand
-// it to every outbound call that injects through the global propagator: a
-// vendor's key-value pairs forwarded, under this engine's name, to whoever it
-// calls next. TraceContext is the half that does a job here — it is what makes
+// it to every outbound call that injects through the global propagator — the
+// Anthropic SDK does, on every call to the Claude API or the gateway in its
+// place: a vendor's key-value pairs forwarded, under this engine's name, to
+// whoever it calls next. TraceContext is the half that does a job here — it is what makes
 // an inbound `traceparent` join an existing trace.
 //
 // # Sampling is decided once per trace, at its root
@@ -89,13 +90,25 @@
 // telemetry backend. If server spans are ever added, that route has to be
 // excluded, or its path redacted before anything reads it.
 //
-// OUTBOUND HTTP. The LLM and embeddings clients share one builder and could
-// take an instrumented transport; the six third-party app clients each build
-// their own. The round is already spanned one layer up (`llm.round`), which is
+// OUTBOUND HTTP. Every outbound client is built on the one transport
+// [github.com/crewlet/crewlet/internal/httpx] holds, and that transport is not
+// instrumented. A model round is spanned one layer up (`llm.round`), which is
 // where the latency an operator can act on lives, and a third-party app call is
-// made by a tool whose `tool.call` span covers it. Instrumenting the transports
-// as well would add a span per HTTP request underneath spans already reporting
-// the same wait.
+// made by a tool whose `tool.call` span covers it; a span per HTTP request
+// beneath those would report the same wait again.
+//
+// THE ONE EXCEPTION IS THE VENDOR'S OWN, AND IT IS KEPT. The Anthropic Go SDK
+// opens a CLIENT span around each call it makes (`anthropic.messages.create`),
+// beneath `llm.round`, and sends that span's `traceparent` through the global
+// propagator above. That span is the parent the Claude API's own SERVER spans
+// name, so an organisation that points its Claude Console telemetry
+// destination at the same backend sees the API's spans inside the engine's
+// trace; and with the SDK's retries off it is one span per HTTP attempt, so a
+// key the pool rotated off shows beside the key that answered. Its switches are
+// pinned in code (internal/providers/llm/anthropic) rather than read from the
+// SDK's ANTHROPIC_OPEN_TELEMETRY* variables, because tracing is the standard
+// OTEL_* environment's alone, and it resolves the global provider on every
+// call, so whatever [Configure] installed is what records it.
 package tracing
 
 import (

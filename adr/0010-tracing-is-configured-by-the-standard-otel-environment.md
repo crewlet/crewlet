@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracing`
-- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, and `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made
+- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables
 - **Measured:** the provider is installed unconditionally and only the exporter is switched on, so `trace_id` reaches `crewlet_events` — an indexed column, and what `GET /events/trace/{id}` answers on — with no collector anywhere
 - **Cost-when-tried:** OTel's own built-in default provider is a no-op that passes the parent's span context through, which silently reinstates the bug this package removed. `internal/tracing`'s `init` installs a working one for that reason. And two readers of one set of variable names disagreed three ways while a test asserting the names passed — see "How it is held"
 - **Tag-status:** unreleased
@@ -44,6 +44,21 @@ event envelope, a suspended run's record, a box's `TRACEPARENT` — so whatever
 as decided. The propagator is W3C trace context alone and `OTEL_PROPAGATORS` is not
 read: the engine writes no baggage, so the only baggage a context could carry
 is a third party's off a webhook.
+
+**A vendor library's own switches are pinned in code, never read.** The
+Anthropic Go SDK spans every call it makes and sends that span's
+`traceparent`, which is what the Claude API's own spans nest under, and it reads
+four variables of its own on every call — `ANTHROPIC_OPEN_TELEMETRY`,
+`ANTHROPIC_OPEN_TELEMETRY_PROPAGATION`,
+`ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE` and
+`ANTHROPIC_OPEN_TELEMETRY_TRACES_MAX_CONTENT_BYTES` — to switch the span or the
+header off or to put prompts and answers on the span. Honoured, they would be a
+second configuration of tracing beside this one, and the third would ship a
+seat's conversation to a collector. So `internal/providers/llm/anthropic` passes
+the SDK's options in code — spans on, trace context sent, metadata only — and
+the variables are documented as ignored, as the OpenAI SDK's are. The SDK
+records through the global provider `internal/tracing` installs, resolved on
+every call, so it follows this configuration and no other.
 
 ## Why the obvious alternative is wrong
 

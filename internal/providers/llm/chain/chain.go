@@ -11,9 +11,13 @@
 // request round the models until one does is circumventing the decision.
 //
 // Fallback is per CALL, not per round. A member that fails is dropped along
-// with whatever it produced, and the next one starts the call from scratch,
-// which keeps one telemetry span per attempt instead of a conversation
-// stitched from two models.
+// with whatever it produced, and the next one starts the call from scratch, so
+// a round's answer is always one model's rather than a conversation stitched
+// from two. This package opens no span: on the Anthropic backend every attempt
+// is one already — the SDK's CLIENT span per HTTP attempt, beneath the round's
+// `llm.round` — so a member that failed there leaves its attempts in the trace
+// as spans in error beneath the round, and on the other backends the attempts
+// are not spanned at all.
 package chain
 
 import (
