@@ -162,17 +162,24 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// read-only run holding the address still writes nothing at the
 		// third-party app. What it gains is the ability to say what is
 		// TRUE: the webhook points somewhere else, or there is no address
-		// at all.
-		WebhookBase: company.Integrations.WebhookBase(s.resolve),
+		// at all — and, through WebhookBaseErr, why not.
 	}
+	in.WebhookBase, in.WebhookBaseErr = company.Integrations.WebhookBase(s.resolve)
 	if !readOnly {
 		if in.WebhookBase == "" {
 			// A WRITING PASS WITH NO ADDRESS IS REFUSED BY NAME, rather
-			// than run to register nothing and report success.
+			// than run to register nothing and report success — and a
+			// base the company names and this node cannot use names its
+			// variable rather than being called unset.
+			hint := "set the HTTPS address third-party apps reach this deployment on; " +
+				"without it the pass can register no webhook"
+			if in.WebhookBaseErr != nil {
+				hint = in.WebhookBaseErr.Error() + "; without a usable address the " +
+					"pass can register no webhook"
+			}
 			httpjson.FailWith(w, http.StatusConflict, codeNoPublicBaseURL, map[string]string{
 				"config_path": "integrations.public_base_url",
-				"hint": "set the HTTPS address third-party apps reach this deployment on; " +
-					"without it the pass can register no webhook",
+				"hint":        hint,
 			})
 			return
 		}
@@ -434,7 +441,9 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	// through the same helper, so a row cannot mean one thing when a tick
 	// wrote it and another when a button did.
 	if company := s.company(); company != nil {
-		integration.StampEndpoint(&next, kind, company.Integrations.WebhookBase(s.resolve))
+		// No usable base is no address to stamp; the listing says why.
+		base, _ := company.Integrations.WebhookBase(s.resolve)
+		integration.StampEndpoint(&next, kind, base)
 	}
 	if forget {
 		if err := s.status.ForgetIntegration(ctx, kind); err != nil {

@@ -2118,6 +2118,22 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 		t.Errorf("the finding names %q rather than the setting to fill in",
 			findings[0].Subject)
 	}
+	// AND A BASE THE COMPANY NAMES AND THIS NODE CANNOT USE IS NOT CALLED
+	// UNSET: the finding opens with why, naming the variable to correct.
+	named, err := reconcileWith(t, newAdminInstance(), newRecordingSink(), map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.WebhookBase = ""
+			o.WebhookBaseErr = &config.BaseError{
+				Field: "integrations.public_base_url", Variables: []string{"CREWLET_PUBLIC_URL"},
+				Unresolved: []string{"CREWLET_PUBLIC_URL"},
+			}
+		})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := named.Findings(); len(got) != 1 || !strings.Contains(got[0].Detail, "CREWLET_PUBLIC_URL") {
+		t.Errorf("findings = %+v, want the variable named", got)
+	}
 	if report := integration.Classify(findings); report.Phase == integration.PhaseReady {
 		t.Errorf("a GitLab that delivers nothing classifies as %+v", report)
 	}

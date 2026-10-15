@@ -38,6 +38,13 @@ type Options struct {
 	// registering the inbound webhook at Datadog.
 	WebhookBase string
 
+	// WebhookBaseErr is why WebhookBase is empty when the deployment NAMES a
+	// base this process cannot use (config.Integrations.WebhookBase's error),
+	// nil when it names none: the run's no-ingress report opens with it
+	// (config.NoWebhookBase), so it names the variable to correct rather
+	// than calling a filled-in field unset.
+	WebhookBaseErr error
+
 	// WebhookToken is the resolved shared token the definition carries and
 	// the route checks. Empty skips registration for the same reason an
 	// empty base does: a definition that cannot deliver is worse than none.

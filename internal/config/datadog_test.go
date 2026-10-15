@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -169,9 +170,14 @@ func TestAPublicBaseURLWithoutASchemeIsRefused(t *testing.T) {
 // Every address is the base with a path appended as text, so a query swallows
 // the path (`https://x?k=v/webhooks/gitlab` is a request for `/`), a fragment
 // is never sent, and userinfo would be pasted into every link and manifest.
-// The refusal does not repeat the value, which is where a credential would be.
+// ONE refusal per field — a scheme-less value carrying a query is one fault to
+// fix, not two — and none repeats the value, which is where a credential
+// would be: the scheme refusal used to quote it whole, query and password
+// included.
 //
-// Mutation: drop the originLeftover check and every case is accepted.
+// Mutation: drop the leftover half of CheckOrigin and the bases with a scheme
+// are accepted; quote the value in the scheme refusal and the scheme-less
+// cases repeat the secret.
 func TestABaseURLWithAQueryFragmentOrUserinfoIsRefused(t *testing.T) {
 	t.Parallel()
 	const secret = "sk-in-the-base"
@@ -181,6 +187,9 @@ func TestABaseURLWithAQueryFragmentOrUserinfoIsRefused(t *testing.T) {
 			"https://crewlet.example.com/#" + secret,
 			"https://ops:" + secret + "@crewlet.example.com",
 			"${CREWLET_PUBLIC_URL}?key=" + secret,
+			"https://${CREWLET_USER}:" + secret + "@crewlet.example.com",
+			"crewlet.example.com?key=" + secret,
+			"ops:" + secret + "@crewlet.example.com",
 		} {
 			t.Run(field+" "+base, func(t *testing.T) {
 				t.Parallel()
@@ -194,13 +203,86 @@ func TestABaseURLWithAQueryFragmentOrUserinfoIsRefused(t *testing.T) {
 				if strings.Contains(err.Error(), secret) {
 					t.Errorf("the refusal repeats the value: %v", err)
 				}
+				if n := len(config.Problems(err)); n != 1 {
+					t.Errorf("%d problems for one base, want one:\n%v", n, err)
+				}
 			})
 		}
 	}
-	for _, base := range []string{"https://crewlet.example.com", "http://127.0.0.1:8080", "${CREWLET_PUBLIC_URL}"} {
+	for _, base := range []string{
+		"https://crewlet.example.com", "http://127.0.0.1:8080", "${CREWLET_PUBLIC_URL}",
+		"https://${CREWLET_HOST}", "${CREWLET_SCHEME}://crewlet.example.com", "https://crewlet.example.com/crewlet",
+	} {
 		if err := validateCompanyDoc(t, "integrations:\n  public_base_url: \""+base+"\"\n  dashboard_base_url: \""+base+"\""); err != nil {
-			t.Errorf("a bare origin %q was refused: %v", base, err)
+			t.Errorf("a usable base %q was refused: %v", base, err)
 		}
+	}
+}
+
+// THE RESOLVED VALUE IS HELD TO THE SAME JUDGE, which is the form the docs and
+// the shipped example write: a whole `${VAR}`. Validation sees nothing around
+// the reference, so a variable holding a query, a fragment, userinfo or no
+// scheme used to reach every vendor as a hook that delivers nowhere. Read now,
+// it is NO base — "" and a [config.BaseError] naming the field and the
+// variable, never the value — for both fields, and a reference that resolved
+// to nothing is told apart from one that resolved to something unusable.
+//
+// Mutation: drop the CheckOrigin call from resolveBase, and every bad case
+// builds an address.
+func TestAResolvedBaseIsHeldToTheOriginJudge(t *testing.T) {
+	t.Parallel()
+	const secret = "sk-in-the-base"
+	values := map[string]string{
+		"A_QUERY":     "https://crewlet.example.com?tenant=" + secret,
+		"A_FRAGMENT":  "https://crewlet.example.com#" + secret,
+		"A_USERINFO":  "https://ops:" + secret + "@crewlet.example.com",
+		"NO_SCHEME":   "crewlet.example.com/" + secret,
+		"FINE":        "https://crewlet.example.com/",
+		"FINE_HOST":   "crewlet.example.com",
+		"EMPTY_VALUE": "  ",
+	}
+	resolve := func(name string) (string, bool) { v, ok := values[name]; return v, ok }
+	for _, field := range []string{"public_base_url", "dashboard_base_url"} {
+		read := func(raw string) (string, error) {
+			in := config.Integrations{PublicBaseURL: raw, DashboardBaseURL: raw}
+			if field == "public_base_url" {
+				return in.WebhookBase(resolve)
+			}
+			return in.DashboardBase(resolve)
+		}
+		for _, name := range []string{"A_QUERY", "A_FRAGMENT", "A_USERINFO", "NO_SCHEME"} {
+			got, err := read("${" + name + "}")
+			var base *config.BaseError
+			if got != "" || !errors.As(err, &base) || errors.Is(err, config.ErrBaseUnresolved) {
+				t.Errorf("%s from %s = %q, %v; want no base and an unusable BaseError", field, name, got, err)
+				continue
+			}
+			for _, named := range []string{"integrations." + field, name} {
+				if !strings.Contains(err.Error(), named) {
+					t.Errorf("%s from %s: %q does not name %s", field, name, err, named)
+				}
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("%s from %s: the error repeats the value: %v", field, name, err)
+			}
+		}
+		for _, raw := range []string{"${UNSET}", "${EMPTY_VALUE}", "https://${UNSET}"} {
+			got, err := read(raw)
+			if got != "" || !errors.Is(err, config.ErrBaseUnresolved) {
+				t.Errorf("%s %q = %q, %v; want no base, unresolved", field, raw, got, err)
+			}
+		}
+		// A PARTIAL reference is resolved too: read raw, `https://${FINE_HOST}`
+		// used to be handed on as the characters of the reference.
+		if got, err := read("https://${FINE_HOST}"); err != nil || got != "https://crewlet.example.com" {
+			t.Errorf("%s over a partial reference = %q, %v; want it resolved", field, got, err)
+		}
+		if got, err := read("${FINE}"); err != nil || got != "https://crewlet.example.com" {
+			t.Errorf("%s over a usable reference = %q, %v", field, got, err)
+		}
+	}
+	if got := config.NoWebhookBase(nil); got != "integrations.public_base_url is unset" {
+		t.Errorf("NoWebhookBase(nil) = %q", got)
 	}
 }
 
@@ -228,8 +310,8 @@ func TestTheWebhookBaseIsTrimmed(t *testing.T) {
 	}
 	for in, want := range cases {
 		in := config.Integrations{PublicBaseURL: in}
-		if got := in.WebhookBase(nil); got != want {
-			t.Errorf("WebhookBase() = %q, want %q", got, want)
+		if got, err := in.WebhookBase(nil); got != want || err != nil {
+			t.Errorf("WebhookBase() = %q, %v; want %q", got, err, want)
 		}
 	}
 }
@@ -252,18 +334,19 @@ func TestTheWebhookBaseReadsAReference(t *testing.T) {
 	in := config.Integrations{PublicBaseURL: "${PUBLIC_URL}"}
 	// Resolved, and trimmed afterwards: the trailing slash may come from the
 	// stored value rather than from the document.
-	if got := in.WebhookBase(held); got != "https://crewlet.example.com" {
-		t.Errorf("WebhookBase() = %q, want the resolved address", got)
+	if got, err := in.WebhookBase(held); got != "https://crewlet.example.com" || err != nil {
+		t.Errorf("WebhookBase() = %q, %v; want the resolved address", got, err)
 	}
 }
 
-// AND AN UNREADABLE ONE IS EMPTY, NEVER THE LITERAL.
+// AND AN UNREADABLE ONE IS NO BASE, NEVER THE LITERAL — and says so.
 //
-// Empty is what every caller already reads as "this deployment has no inbound
-// address", and it makes them refuse: no hook, no manifest, and a message
-// naming the setting. The literal makes them all succeed — at building
-// something nothing can reach. That failure was measured on the Atlassian
-// pass, which sent `${ATLASSIAN_ORG_ID}` to Atlassian as an organization id.
+// No base makes every caller refuse: no hook, no manifest. The literal makes
+// them all succeed — at building something nothing can reach. That failure
+// was measured on the Atlassian pass, which sent `${ATLASSIAN_ORG_ID}` to
+// Atlassian as an organization id. And the error names the variable, because
+// a caller reporting an unresolved base as an unset one sends an operator to
+// a field they can see is filled in.
 func TestAnUnreadableWebhookBaseIsEmptyRatherThanTheReference(t *testing.T) {
 	t.Parallel()
 	none := func(string) (string, bool) { return "", false }
@@ -274,9 +357,13 @@ func TestAnUnreadableWebhookBaseIsEmptyRatherThanTheReference(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			in := config.Integrations{PublicBaseURL: "${PUBLIC_URL}"}
-			if got := in.WebhookBase(resolve); got != "" {
+			got, err := in.WebhookBase(resolve)
+			if got != "" {
 				t.Errorf("WebhookBase() = %q, want \"\": a reference nothing "+
 					"resolves must not reach a third-party app", got)
+			}
+			if !errors.Is(err, config.ErrBaseUnresolved) || !strings.Contains(err.Error(), "PUBLIC_URL") {
+				t.Errorf("WebhookBase() error = %v, want an unresolved base naming PUBLIC_URL", err)
 			}
 		})
 	}
@@ -300,14 +387,14 @@ func TestTheDashboardBaseIsNotTheWebhookBase(t *testing.T) {
 		PublicBaseURL:    "https://hooks.example.com",
 		DashboardBaseURL: "${DASHBOARD_URL}",
 	}
-	if got := both.WebhookBase(held); got != "https://hooks.example.com" {
+	if got, _ := both.WebhookBase(held); got != "https://hooks.example.com" {
 		t.Errorf("WebhookBase() = %q, want the vendor address", got)
 	}
-	if got := both.DashboardBase(held); got != "https://crewlet.example.com" {
+	if got, _ := both.DashboardBase(held); got != "https://crewlet.example.com" {
 		t.Errorf("DashboardBase() = %q, want the resolved dashboard address", got)
 	}
 	vendorOnly := config.Integrations{PublicBaseURL: "https://hooks.example.com"}
-	if got := vendorOnly.DashboardBase(held); got != "" {
+	if got, err := vendorOnly.DashboardBase(held); got != "" || err != nil {
 		t.Errorf("DashboardBase() = %q with no dashboard_base_url, want \"\": the "+
 			"vendor address serves no dashboard behind a public listener", got)
 	}

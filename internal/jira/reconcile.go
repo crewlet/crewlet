@@ -138,6 +138,13 @@ type Options struct {
 	// integration that delivers into the void.
 	WebhookBase string
 
+	// WebhookBaseErr is why WebhookBase is empty when the deployment NAMES a
+	// base this process cannot use (config.Integrations.WebhookBase's error),
+	// nil when it names none: the run's no-ingress report opens with it
+	// (config.NoWebhookBase), so it names the variable to correct rather
+	// than calling a filled-in field unset.
+	WebhookBaseErr error
+
 	// RecreateWebhook deletes and remakes the hook to mint a fresh
 	// secret, for the case where the existing one's secret was lost.
 	// Destructive: it invalidates the secret every other deployment of
@@ -571,8 +578,8 @@ func noIngressReason(opts Options, deployment Deployment) string {
 	if deployment == Cloud || webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "integrations.public_base_url is unset, so this Jira instance has " +
-		"no address to deliver to and no issue or comment reaches this " +
+	return config.NoWebhookBase(opts.WebhookBaseErr) + ", so this Jira instance " +
+		"has no address to deliver to and no issue or comment reaches this " +
 		"deployment"
 }
 

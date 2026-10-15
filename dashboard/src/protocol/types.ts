@@ -3801,6 +3801,15 @@ export interface SetupListing {
      * PUBLIC_BASE_URL" is an instruction.
      */
     reference?: string;
+    /**
+     * Why the setting gives no address when it is set and does not: the
+     * reference resolved to nothing, or to a value that is not a bare origin
+     * (a query, a fragment, userinfo, no scheme). Empty for a usable address.
+     * A value that RESOLVED is `resolved: true` and can still be no address,
+     * so this is what tells the two apart. Names the field and the variable,
+     * never the value.
+     */
+    problem?: string;
   };
 }
 

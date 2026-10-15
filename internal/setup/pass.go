@@ -161,6 +161,15 @@ type PassInput struct {
 	// pass read-only.
 	WebhookBase string
 
+	// WebhookBaseErr is why WebhookBase is empty when the deployment NAMES a
+	// base this process cannot use — a reference that resolved to nothing,
+	// or a value that is not a bare origin (config.BaseError) — and nil when
+	// it names none. Exactly what [config.Integrations.WebhookBase]
+	// answered: a pass that reports its blocked ingress with it tells an
+	// operator which variable to correct, where "public_base_url is unset"
+	// sent them to a field they could see was filled in.
+	WebhookBaseErr error
+
 	// There is deliberately no DryRun and no Seats here.
 	//
 	// Both existed, both were forwarded straight from the HTTP request, and

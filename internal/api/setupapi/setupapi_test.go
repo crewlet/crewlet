@@ -442,6 +442,56 @@ func TestAnUnresolvedPublicBaseNamesItsVariable(t *testing.T) {
 	if base["value"] != "" {
 		t.Errorf("value = %v, want nothing — it resolves to nothing", base["value"])
 	}
+	if problem, _ := base["problem"].(string); !strings.Contains(problem, "PUBLIC_BASE_URL") {
+		t.Errorf("problem = %v, want the unresolved variable named", base["problem"])
+	}
+}
+
+// A BASE THAT RESOLVES TO NO ADDRESS SAYS WHY. A variable holding a query, a
+// fragment, userinfo or no scheme is `resolved: true` and still no address,
+// and a screen reading `resolved` alone announced "apps reach this engine at"
+// and then nothing — the exact silence the field exists to end. `problem`
+// names the field and the variable, never the value, and a writing pass is
+// refused with the same sentence rather than told to set a field that is set.
+//
+// Mutation: drop `problem` from the listing, or the WebhookBaseErr branch from
+// the pass's refusal, and that half names nothing.
+func TestAPublicBaseResolvingToNoAddressSaysWhy(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+  "name": "Acme",
+  "integrations": {"public_base_url": "${PUBLIC_BASE_URL}",
+    "github": {"enabled": true, "webhook_secret": "${GH_SECRET}", "provisioning": {"org": "acme"}}},
+  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
+}`, map[string]string{"X-Summary": "a base with a query"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	for name, value := range map[string]string{
+		"PUBLIC_BASE_URL": "https://engine.example.com?tenant=sk-secret", "GH_SECRET": "s",
+	} {
+		if err := s.vault.Set(t.Context(), name, value, "test", "test", pinned); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	base, _ := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))["public_base_url"].(map[string]any)
+	problem, _ := base["problem"].(string)
+	if base["value"] != "" || !strings.Contains(problem, "PUBLIC_BASE_URL") ||
+		!strings.Contains(problem, "a query") || strings.Contains(problem, "sk-secret") {
+		t.Errorf("base = %v, want no value and a problem naming the variable and the query, not the value", base)
+	}
+
+	s.withPass(t, &recordingPass{})
+	got := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	body := decode(t, got)
+	hint, _ := body["hint"].(string)
+	if got.Code != http.StatusConflict || body["error"] != "no_public_base_url" ||
+		!strings.Contains(hint, "PUBLIC_BASE_URL") || strings.Contains(hint, "sk-secret") {
+		t.Errorf("provision = %d %v, want a 409 naming the variable and not the value", got.Code, body)
+	}
 }
 
 // AND A LITERAL NAMES NO VARIABLE, because there is none to export.
@@ -464,6 +514,9 @@ func TestALiteralPublicBaseNamesNoVariable(t *testing.T) {
 	}
 	if base["reference"] != "" {
 		t.Errorf("reference = %v on a literal", base["reference"])
+	}
+	if base["problem"] != "" {
+		t.Errorf("problem = %v on a usable base", base["problem"])
 	}
 }
 

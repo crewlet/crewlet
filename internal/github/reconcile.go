@@ -85,6 +85,13 @@ type Options struct {
 	// integration that delivers into the void.
 	WebhookBase string
 
+	// WebhookBaseErr is why WebhookBase is empty when the deployment NAMES a
+	// base this process cannot use (config.Integrations.WebhookBase's error),
+	// nil when it names none: the run's no-ingress report opens with it
+	// (config.NoWebhookBase), so it names the variable to correct rather
+	// than calling a filled-in field unset.
+	WebhookBaseErr error
+
 	// RecreateWebhooks deletes and remakes every hook to mint a fresh
 	// secret, for the case where the existing one's secret was lost.
 	// Destructive: it invalidates the secret every other deployment of
@@ -588,8 +595,8 @@ func noIngressReason(opts Options) string {
 	if webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "integrations.public_base_url is unset, so nothing at GitHub has " +
-		"an address to deliver to and no event reaches this deployment"
+	return config.NoWebhookBase(opts.WebhookBaseErr) + ", so nothing at GitHub " +
+		"has an address to deliver to and no event reaches this deployment"
 }
 
 // noRegistrarReason says why a run with no organization credential could

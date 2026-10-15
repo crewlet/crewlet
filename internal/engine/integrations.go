@@ -149,7 +149,11 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 			if company == nil {
 				return ""
 			}
-			return company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+			// A base the company names and this process cannot use is
+			// no address too, and the pass's own report says why
+			// (setup.PassInput.WebhookBaseErr).
+			base, _ := company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+			return base
 		},
 		// AND THE NAME A REGISTRATION IS HELD UNDER, for the one surface
 		// where the address cannot find it again. Read fresh on every
@@ -416,9 +420,9 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	//
 	// ctx is already the guard's: bounded by [setup.PassDeadline], strictly
 	// inside the lease the worker is holding.
+	base, baseErr := company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK)
 	findings, err := c.pass.Run(ctx, setup.PassInput{
-		Sink:        sink,
-		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
+		Sink: sink, WebhookBase: base, WebhookBaseErr: baseErr,
 	})
 	if err != nil {
 		return nil, err

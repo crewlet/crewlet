@@ -56,6 +56,13 @@ type Options struct {
 	// integration that delivers into the void.
 	WebhookBase string
 
+	// WebhookBaseErr is why WebhookBase is empty when the deployment NAMES a
+	// base this process cannot use (config.Integrations.WebhookBase's error),
+	// nil when it names none: the run's no-ingress report opens with it
+	// (config.NoWebhookBase), so it names the variable to correct rather
+	// than calling a filled-in field unset.
+	WebhookBaseErr error
+
 	// Recreate deletes and remakes every hook to mint a fresh token.
 	// Destructive: it invalidates the token every other deployment of
 	// this company holds.
@@ -175,9 +182,10 @@ func converge(ctx context.Context, opts Options, res *Result) error {
 	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
 	if base == "" {
 		res.Notes = append(res.Notes,
-			"no webhook was registered: set integrations.public_base_url or pass "+
-				"-public-url to register one. Without it the instance delivers "+
-				"nothing and the integration looks idle rather than unconfigured")
+			"no webhook was registered: "+config.NoWebhookBase(opts.WebhookBaseErr)+
+				". Give the deployment's public address there, or pass -public-url, "+
+				"to register one. Without it the instance delivers nothing and the "+
+				"integration looks idle rather than unconfigured")
 		return nil
 	}
 	switch res.Deployment {

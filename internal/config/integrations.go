@@ -1,7 +1,6 @@
 package config
 
 import (
-	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -67,9 +66,12 @@ type Integrations struct {
 	//   - Anything that has to build a URL for a third-party app to call back on,
 	//     which is what a self-service app deployment needs.
 	//
-	// It is NOT a secret and should be a literal rather than a ${VAR}: a
-	// reference that resolves to nothing yields a hook pointing at "",
-	// which a third-party app accepts and then delivers nowhere.
+	// It is NOT a secret, and a whole `${VAR}` is a legal way to write it, so
+	// that staging and production answer at their own addresses off one
+	// revision: stored verbatim and resolved where it is read, and the
+	// resolved value held to the rule the written one is
+	// ([Integrations.WebhookBase]), since a hook built on a value nothing
+	// judged is one a third-party app accepts and then delivers nowhere.
 	//
 	// Empty is meaningful and is the default: it means this deployment has
 	// no address a third-party app can reach, which is the honest state of an
@@ -159,98 +161,23 @@ func (i *Integrations) CheckInterval() time.Duration {
 	return time.Duration(i.CheckIntervalSeconds) * time.Second
 }
 
-// WebhookBase is the base every inbound path is built on, without a trailing
-// slash, or empty when this deployment has no inbound address THIS PROCESS
-// CAN READ.
-//
-// Trimmed here rather than at each caller, because five of them would each
-// have to remember: a base ending in "/" yields "…//webhooks/jira", which
-// some third-party apps normalise, some reject, and some accept while signing the
-// unnormalised form.
-//
-// # It takes a resolver, and that is the whole point of the signature
-//
-// `public_base_url` is a Tier B field, so a whole `${VAR}` is a legal way to
-// write it and the document stores it VERBATIM like every other pointer. Read
-// raw, that value is not an address: it is the seven characters `${VAR}`, and
-// every caller here is building something a third-party app will HOLD — a
-// registered webhook, a manifest an operator pastes, an app's baked-in
-// redirect. Slack refuses such a manifest and names nothing; a webhook
-// registered at `${VAR}/webhooks/gitlab` is accepted, reported healthy, and
-// delivers nowhere. The same mistake was measured on the Atlassian pass,
-// which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-//
-// So there is no raw accessor to reach for by accident. A caller that cannot
-// resolve has to pass nil and be handed "", which every reader here already
-// treats as "no inbound address" — the honest answer for a node that cannot
-// read the value, and the one that stops a literal reaching a third-party app.
-//
-// EMPTY RATHER THAN THE REFERENCE when it will not resolve, for the same
-// reason: no manifest beats a manifest built from a value nothing can read.
-func (i *Integrations) WebhookBase(resolve func(string) (string, bool)) string {
-	return resolveBase(i.PublicBaseURL, resolve)
-}
-
-// DashboardBase is the base every link a person follows is built on, without a
-// trailing slash, or empty when this deployment names none THIS PROCESS CAN
-// READ. Resolved and trimmed by [Integrations.WebhookBase]'s rules, and for its
-// reasons: a link built on the seven characters of a reference is a link
-// nobody can follow.
-func (i *Integrations) DashboardBase(resolve func(string) (string, bool)) string {
-	return resolveBase(i.DashboardBaseURL, resolve)
-}
-
-// resolveBase is one base URL field read: a whole ${VAR} resolved, or "" when
-// it will not resolve, and the trailing slash dropped.
-func resolveBase(raw string, resolve func(string) (string, bool)) string {
-	base := strings.TrimSpace(raw)
-	if name, isRef := envref.Whole(base); isRef {
-		if resolve == nil {
-			return ""
-		}
-		got, ok := resolve(name)
-		if !ok {
-			return ""
-		}
-		base = strings.TrimSpace(got)
-	}
-	return strings.TrimRight(base, "/")
-}
-
 func (i *Integrations) validate(path Path) error {
 	var p problems
 
-	// A URL that is not one is refused HERE rather than discovered by a
-	// third-party app. Every webhook path is built on this, so a value missing its
-	// scheme registers a hook the third-party app reports as healthy and delivers
-	// nowhere, which is the failure mode this whole field exists to close.
-	if base := strings.TrimSpace(i.PublicBaseURL); base != "" && !hasHTTPScheme(base) {
-		p.add(at(path, "public_base_url"), ErrUnknownValue,
-			"%q must start with http:// or https://: it is the base every "+
-				"webhook URL is built on, so a value without a scheme yields "+
-				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
-	}
-	if base := strings.TrimSpace(i.DashboardBaseURL); base != "" && !hasHTTPScheme(base) {
-		p.add(at(path, "dashboard_base_url"), ErrUnknownValue,
-			"%q must start with http:// or https://: it is the base every link "+
-				"an agent composes for a person is built on, so a value without "+
-				"a scheme yields a link nobody can follow", i.DashboardBaseURL)
-	}
-	// A QUERY, A FRAGMENT OR USERINFO in either base is refused too: every
-	// consumer appends a rooted path to the base as text, so a query swallows
-	// that path — `https://x.example.com?k=v/webhooks/gitlab` is a request
-	// for `/` — a fragment is never sent at all, and userinfo would be pasted
-	// into every manifest and every link a person is handed. The value is not
-	// repeated, since those are the parts a credential is written into.
-	for _, field := range []struct{ name, value string }{
-		{"public_base_url", i.PublicBaseURL},
-		{"dashboard_base_url", i.DashboardBaseURL},
+	// BOTH DEPLOYMENT BASES ARE HELD TO THE ONE ORIGIN JUDGE ([CheckOrigin]),
+	// on the text as written, and to the same judge again on the value a
+	// reference resolves to, where it is read ([Integrations.WebhookBase]).
+	// A base that is not one is refused HERE rather than discovered by a
+	// third-party app: every webhook path is built on public_base_url, so a
+	// value missing its scheme registers a hook the app reports as healthy
+	// and delivers nowhere, which is the failure mode this field exists to
+	// close. One refusal per field, and none repeats the value.
+	for _, base := range []struct{ name, value, use string }{
+		{"public_base_url", i.PublicBaseURL, publicBaseUse},
+		{"dashboard_base_url", i.DashboardBaseURL, dashboardBaseUse},
 	} {
-		if part := originLeftover(field.value); part != "" {
-			p.add(at(path, field.name), ErrUnknownValue,
-				"carries %s, and every address is built by appending a path to "+
-					"this base, so it would land in the middle of each one: write "+
-					"the bare origin, scheme://host[:port]", part)
+		if err := checkWrittenOrigin(base.value); err != nil {
+			p.add(at(path, base.name), ErrUnknownValue, "%v. %s", err, base.use)
 		}
 	}
 
@@ -453,16 +380,14 @@ func (j *Jira) validate(path Path, discovers bool, declared atlassianhost.Deploy
 				"an issue's watchers from")
 	case url != "" && cloud != "":
 		probs.add(path, ErrConflict,
-			"url (%q) and cloud_id (%q) are two ways to name one instance; "+
-				"give one. The engine reads through the cloud gateway when both "+
-				"are set, so the url would be used for links only", j.URL, j.CloudID)
+			"url and cloud_id are two ways to name one instance; give one. "+
+				"The engine reads through the cloud gateway when both are set, "+
+				"so the url would be used for links only")
 	case url != "" && !hasHTTPScheme(j.URL):
-		probs.add(at(path, "url"), ErrUnknownValue,
-			"%q must start with http:// or https://", j.URL)
+		probs.add(at(path, "url"), ErrUnknownValue, urlScheme)
 	}
 	if site := strings.TrimSpace(j.SiteURL); site != "" && !hasHTTPScheme(j.SiteURL) {
-		probs.add(at(path, "site_url"), ErrUnknownValue,
-			"%q must start with http:// or https://", j.SiteURL)
+		probs.add(at(path, "site_url"), ErrUnknownValue, urlScheme)
 	}
 	if strings.TrimSpace(j.Token) == "" {
 		probs.add(at(path, "token"), ErrMissing,
@@ -587,16 +512,14 @@ func (c *Confluence) validate(path Path, discovers bool, declared atlassianhost.
 				"search")
 	case url != "" && cloud != "":
 		probs.add(path, ErrConflict,
-			"url (%q) and cloud_id (%q) are two ways to name one instance; "+
-				"give one. The engine reads through the cloud gateway when both "+
-				"are set, so the url would be used for links only", c.URL, c.CloudID)
+			"url and cloud_id are two ways to name one instance; give one. "+
+				"The engine reads through the cloud gateway when both are set, "+
+				"so the url would be used for links only")
 	case url != "" && !hasHTTPScheme(c.URL):
-		probs.add(at(path, "url"), ErrUnknownValue,
-			"%q must start with http:// or https://", c.URL)
+		probs.add(at(path, "url"), ErrUnknownValue, urlScheme)
 	}
 	if site := strings.TrimSpace(c.SiteURL); site != "" && !hasHTTPScheme(c.SiteURL) {
-		probs.add(at(path, "site_url"), ErrUnknownValue,
-			"%q must start with http:// or https://", c.SiteURL)
+		probs.add(at(path, "site_url"), ErrUnknownValue, urlScheme)
 	}
 	if strings.TrimSpace(c.Token) == "" {
 		probs.add(at(path, "token"), ErrMissing,
@@ -850,8 +773,8 @@ func (m *Mattermost) validate(path Path) error {
 		// reference resolves later, and rejecting it here would forbid
 		// configuring the URL from the environment.
 		p.add(at(path, "url"), ErrUnknownValue,
-			"%q must start with http:// or https://: it is the address the "+
-				"engine dials for its websockets and REST calls", m.URL)
+			urlScheme+": it is the address the engine dials for its "+
+				"websockets and REST calls")
 	}
 	if strings.TrimSpace(m.Team) == "" {
 		p.add(at(path, "team"), ErrMissing,
@@ -915,33 +838,11 @@ func noSpaces(p *problems, path Path, value string) {
 	}
 }
 
-// originLeftover names the part of a base URL that no address built on it can
-// carry — a query, a fragment or userinfo — or "" when it has none. A value
-// written around a ${VAR} is judged on its own text: a `?` or `#` outside the
-// references, since what a variable holds is known only where it resolves.
-func originLeftover(raw string) string {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return ""
-	}
-	written := s
-	if envref.Has(s) {
-		written, _ = envref.Expand(s, func(string) (string, bool) { return "", true })
-	}
-	switch {
-	case strings.Contains(written, "?"):
-		return "a query"
-	case strings.Contains(written, "#"):
-		return "a fragment"
-	}
-	if envref.Has(s) {
-		return ""
-	}
-	if u, err := url.Parse(s); err == nil && u.User != nil {
-		return "userinfo"
-	}
-	return ""
-}
+// urlScheme is the refusal of an address with no http(s) scheme. It repeats
+// none of the value, which is where a credential sits when one is written into
+// a URL's userinfo, and a validation error is printed, logged and pasted: the
+// field's path already says which value it is.
+const urlScheme = "must start with http:// or https://"
 
 // hasHTTPScheme reports a URL the clients can actually use, treating a
 // value that still carries a ${VAR} as unknown rather than wrong.
@@ -1353,9 +1254,8 @@ func (g *GitHub) validate(path Path) error {
 		// rather than as "your instance address is missing https://".
 		if url := strings.TrimSpace(g.URL); url != "" && !hasHTTPScheme(url) {
 			p.add(at(path, "url"), ErrUnknownValue,
-				"%q must start with http:// or https://: leave it unset for "+
-					"github.com, which is a different API host rather than a "+
-					"path on the web UI", g.URL)
+				urlScheme+": leave it unset for github.com, which is a "+
+					"different API host rather than a path on the web UI")
 		}
 		if strings.TrimSpace(g.WebhookSecret) == "" {
 			p.add(at(path, "webhook_secret"), ErrMissing,
@@ -1403,8 +1303,7 @@ func (g *GitLab) validate(path Path) error {
 		if strings.TrimSpace(g.URL) == "" {
 			p.add(at(path, "url"), ErrMissing, "required when gitlab is enabled")
 		} else if !hasHTTPScheme(g.URL) {
-			p.add(at(path, "url"), ErrUnknownValue,
-				"%q must start with http:// or https://", g.URL)
+			p.add(at(path, "url"), ErrUnknownValue, urlScheme)
 		}
 		secret := strings.TrimSpace(g.SigningSecret)
 		_, isRef := envref.Whole(secret)

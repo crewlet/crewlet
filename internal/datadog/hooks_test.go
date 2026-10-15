@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -283,8 +284,25 @@ func TestNoPublicBaseRegistersNothing(t *testing.T) {
 		t.Error("a pass with no public base registered a webhook")
 	}
 	if res.Webhook == nil || res.Webhook.Blocked == nil ||
-		!strings.Contains(res.Webhook.Blocked.Detail, "public base URL") {
+		!strings.Contains(res.Webhook.Blocked.Detail, "integrations.public_base_url is unset") {
 		t.Errorf("result = %+v, want it to name the missing public base", res.Webhook)
+	}
+
+	// AND A BASE THE COMPANY NAMES AND THIS NODE CANNOT USE IS NOT CALLED
+	// UNSET: the report opens with why, naming the variable to correct.
+	opts := hookOptions(t, reg, "")
+	opts.WebhookBaseErr = &config.BaseError{
+		Field: "integrations.public_base_url", Variables: []string{"CREWLET_PUBLIC_URL"},
+		Unresolved: []string{"CREWLET_PUBLIC_URL"},
+	}
+	res, err = datadog.Reconcile(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if res.Webhook == nil || res.Webhook.Blocked == nil ||
+		!strings.Contains(res.Webhook.Blocked.Detail, "CREWLET_PUBLIC_URL") ||
+		strings.Contains(res.Webhook.Blocked.Detail, "is unset") {
+		t.Errorf("result = %+v, want it to name the variable, not call the field unset", res.Webhook)
 	}
 }
 

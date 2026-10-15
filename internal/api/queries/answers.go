@@ -266,8 +266,10 @@ type Sources struct {
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
 
-	// PublicBase is where third-party apps reach this deployment, RESOLVED,
-	// or nil when this process cannot say.
+	// PublicBase is where third-party apps reach this deployment, RESOLVED —
+	// "" with a nil error when the company names none, and an error when it
+	// names one this process cannot use ([config.Integrations.WebhookBase]) —
+	// or nil when this process cannot say at all.
 	//
 	// Resolved, and that is why it is a seam rather than a read of
 	// [Sources.Company]: `public_base_url` may be a whole `${VAR}`, and what
@@ -278,7 +280,7 @@ type Sources struct {
 	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
 	// above: a node that cannot read the value must not be the reason a
 	// screen calls a healthy registration stale.
-	PublicBase func() string
+	PublicBase func() (string, error)
 	// Retention is this node's answer about the state log's own history:
 	// how far each domain's log may be trimmed, what is stopping it, and
 	// what this node costs to replace.

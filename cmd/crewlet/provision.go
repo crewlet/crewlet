@@ -279,7 +279,10 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// RESOLVED ONCE, for the reason the Slack command states: the value is
 	// read in three places here and three separate reads of the flag is
 	// how one of them disagrees with the others.
-	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	base, err := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	if err != nil {
+		return err
+	}
 
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
@@ -793,8 +796,19 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 	return fromConfig
 }
 
-// webhookBase is the address a third-party app reaches this deployment on: the flag
-// when one was passed, and the company document's own value otherwise.
+// noPublicBase says what to change when a run needs an address and the
+// company names none. A base it names and this process cannot use is not this
+// case: [webhookBase] refuses the run with the variable to correct.
+func noPublicBase() string {
+	return "no public base URL: pass -public-url, or set " +
+		"integrations.public_base_url in the company document. Every app's " +
+		"Events API request URL and OAuth redirect URL are built from it, so an " +
+		"app created without one delivers nowhere and cannot be installed"
+}
+
+// webhookBase is the address a third-party app reaches this deployment on: the
+// flag when one was passed, and the company document's own value otherwise —
+// "" with a nil error when neither names one, which a read-only pass runs on.
 //
 // THE FLAG WINS, and only when it is non-empty. It is the one-off override —
 // a staging tunnel, a run against a second site — while the document is what
@@ -802,52 +816,30 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 // that won even when unset would make an operator who simply forgot it
 // silently re-point a working hook at "".
 //
-// The flag is taken AS TYPED and the document's value is RESOLVED, which is
-// the difference between the two: somebody typing `-public-url` typed an
-// address, while `public_base_url` may be a whole `${VAR}` this run has to
-// read before it can build anything a third-party app will hold. See
-// [config.Integrations.WebhookBase].
-// noPublicBase says what to change when a run needs an address and has none.
-//
-// THREE WAYS TO BE EMPTY, and they are not the same work. The flag was not
-// given AND the company names no public base; or it names one that this
-// process cannot resolve, because [config.Integrations.WebhookBase] turns a
-// ${VAR} it cannot see into "" rather than into the text of the variable. A
-// message naming only the flag sent an operator who had already set the field
-// looking for something they did not need.
-func noPublicBase(in *config.Integrations) string {
-	const why = "every app's Events API request URL and OAuth redirect URL " +
-		"are built from it, so an app created without one delivers nowhere " +
-		"and cannot be installed"
-	raw := ""
-	if in != nil {
-		raw = strings.TrimSpace(in.PublicBaseURL)
-	}
-	if raw == "" {
-		return "no public base URL: pass -public-url, or set " +
-			"integrations.public_base_url in the company document. " + why
-	}
-	if name, ok := provision.SoleVar(raw); ok {
-		return fmt.Sprintf(
-			"integrations.public_base_url points at ${%s} and this process "+
-				"resolved nothing for it — set %s in the environment, in the "+
-				"file named by -env-file, or in the secret store, or pass "+
-				"-public-url to override it for this run. %s", name, name, why)
-	}
-	return fmt.Sprintf(
-		"integrations.public_base_url is %q, which resolved to nothing — "+
-			"correct it in the company document, or pass -public-url to "+
-			"override it for this run. %s", raw, why)
-}
-
-func webhookBase(flagValue string, in *config.Integrations, resolve func(string) (string, bool)) string {
+// BOTH ARE HELD TO THE ONE ORIGIN JUDGE ([config.CheckOrigin]) before either
+// is used, and a run is REFUSED over one that fails it: the flag was taken as
+// typed, so `-public-url 'https://x?k=v'` registered `https://x?k=v/webhooks/…`
+// — a request for `/` — at the vendor, which reported a healthy hook. The
+// document's value is RESOLVED first ([config.Integrations.WebhookBase]): it
+// may be a `${VAR}` this run has to read before it can build anything a
+// third-party app will hold, and one it cannot read, or that resolves to no
+// address, refuses the run naming the variable rather than running read-only
+// as though nothing were configured.
+func webhookBase(flagValue string, in *config.Integrations, resolve func(string) (string, bool)) (string, error) {
 	if v := strings.TrimSpace(flagValue); v != "" {
-		return strings.TrimRight(v, "/")
+		if err := config.CheckOrigin(v); err != nil {
+			return "", fmt.Errorf("-public-url %w", err)
+		}
+		return strings.TrimRight(v, "/"), nil
 	}
 	if in == nil {
-		return ""
+		return "", nil
 	}
-	return in.WebhookBase(resolve)
+	base, err := in.WebhookBase(resolve)
+	if err != nil {
+		return "", fmt.Errorf("%w, or pass -public-url to override it for this run", err)
+	}
+	return base, nil
 }
 
 // accountMode is where this run owns the accounts it creates.

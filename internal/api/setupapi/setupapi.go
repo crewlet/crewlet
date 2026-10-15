@@ -554,8 +554,12 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		tools = append(tools, withLoopFindings(state, s.loopFindings(r.Context(), kind)))
 	}
-	base := company.Integrations.WebhookBase(s.resolve)
+	base, baseErr := company.Integrations.WebhookBase(s.resolve)
 	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
+	problem := ""
+	if baseErr != nil {
+		problem = baseErr.Error()
+	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
 		// THE REVISION THIS ANSWER DESCRIBES, so a caller can send it back
@@ -584,6 +588,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 			// not the value, and this surface is guarded in full anyway.
 			// Empty for a literal, which by definition resolves.
 			"reference": wholeRef(company.Integrations.PublicBaseURL),
+			// WHY IT GIVES NO ADDRESS, when it is set and does not: the
+			// reference resolved to nothing, or to a value that is not a
+			// bare origin (a query, a fragment, userinfo, no scheme). A
+			// value that resolved is `resolved: true` and still no
+			// address, and a banner reading `resolved` alone said "apps
+			// reach this engine at" and then nothing. Names the field and
+			// the variable, never the value.
+			"problem": problem,
 		},
 	})
 }
@@ -882,7 +894,8 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
-	if base := company.Integrations.WebhookBase(s.resolve); base != "" && state.InboundPath != "" {
+	// No usable base is no address, and the listing's `problem` says why.
+	if base, _ := company.Integrations.WebhookBase(s.resolve); base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
@@ -1566,7 +1579,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	// where an address belongs, and Slack refuses the app with nothing
 	// naming the cause. The same mistake was measured on the Atlassian
 	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-	base := company.Integrations.WebhookBase(resolve)
+	base, baseErr := company.Integrations.WebhookBase(resolve)
 	out := []SeatState{}
 	for role := range company.EachRole() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
@@ -1618,6 +1631,8 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 		// so a block with nothing in it and no reason given is an
 		// instruction pointing at what is not there.
 		switch manifest, err := slack.ManifestJSON(role.Name, handle, base); {
+		case base == "" && baseErr != nil:
+			state.ManifestNote = "no manifest yet: " + baseErr.Error()
 		case base == "":
 			state.ManifestNote = "no manifest yet: set integrations.public_base_url " +
 				"to the address this agent's app delivers to, as a value this " +
@@ -2001,7 +2016,9 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// typed, however much of Slack's provisioning a pass does converge. See
 	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
-		s.recordEndpoint(r.Context(), kind, after.Integrations.WebhookBase(s.resolve))
+		// No usable base is no address to record; the listing says why.
+		base, _ := after.Integrations.WebhookBase(s.resolve)
+		s.recordEndpoint(r.Context(), kind, base)
 	}
 	fresh := state
 	if after != nil {

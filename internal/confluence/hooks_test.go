@@ -533,6 +533,23 @@ func TestNoBaseRegistersNothingAndSaysSo(t *testing.T) {
 	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "public_base_url") {
 		t.Fatalf("the operator is not told how to get a hook registered: %v", res.Notes)
 	}
+	// AND A BASE THE COMPANY NAMES AND THIS NODE CANNOT USE IS NOT CALLED
+	// UNSET: the note opens with why, naming the variable to correct.
+	named, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: cloudClient(t, site), Config: &config.Confluence{Token: "t"},
+		Value: func(v string) string { return v },
+		WebhookBaseErr: &config.BaseError{
+			Field: "integrations.public_base_url", Variables: []string{"CREWLET_PUBLIC_URL"},
+			Unresolved: []string{"CREWLET_PUBLIC_URL"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(named.Notes) == 0 || !strings.Contains(named.Notes[0], "CREWLET_PUBLIC_URL") ||
+		strings.Contains(named.Notes[0], "is unset") {
+		t.Fatalf("notes = %v, want the variable named rather than the field called unset", named.Notes)
+	}
 	// And the findings say nothing about ingress: a run that was never
 	// asked to register cannot report a missing hook honestly.
 	if f := res.Findings(); len(f) != 0 {
