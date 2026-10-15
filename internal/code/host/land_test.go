@@ -375,3 +375,91 @@ func TestALandingItsClientAbandonedIsNoWarning(t *testing.T) {
 		t.Errorf("a landing its client abandoned was logged code_push_unchecked at WARN %d times", n)
 	}
 }
+
+// blobScans is how many of the landing's blob scans — the pack's cat-file and
+// a found blob's path walk — the recorded git ran.
+func blobScans(calls []gittest.Call) (scans, paths int) {
+	for _, call := range calls {
+		switch {
+		case len(call.Args) > 1 && call.Args[0] == "cat-file" &&
+			call.Args[1] == "--batch-check=%(objectname) %(objecttype) %(objectsize)":
+			scans++
+		case len(call.Args) > 1 && call.Args[0] == "rev-list" && call.Args[1] == "--objects":
+			paths++
+		}
+	}
+	return scans, paths
+}
+
+// rewriteWithABigBlob amends work's one commit to carry big.bin, 2 KiB: a
+// rewrite of main, past a 1 KiB code.limits.max_blob_bytes.
+func rewriteWithABigBlob(t *testing.T, p *codetest.Person, work string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(work, "big.bin"), []byte(strings.Repeat("x", 2<<10)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p.Git().Run(t, work, "add", "big.bin")
+	p.Git().Run(t, work, "commit", "--quiet", "--amend", "-m", "rewritten with a big blob")
+}
+
+// A PUSH THE LANDING HAS ALREADY REFUSED WHOLE IS NEVER SCANNED FOR BLOBS, and
+// a blob past the limit never overwrites a refusal that came first: a
+// `git push --force` of a rewritten, protected main carrying an oversized
+// blob is refused for its force — what the person has to change — never as
+// blob_too_large at a path "(unreachable in this push)", which is what a scan
+// of a push with nothing left to decide walked to, through a read slot and
+// every object of its pack, for an answer that overwrote the right one.
+func TestARefusedPushIsNeverScannedForBlobs(t *testing.T) {
+	path, calls := gittest.Recording(t)
+	c := newCase(t, codetest.SoloOptions{GitPath: path,
+		Shape: codetest.Shape{Limits: code.Limits{MaxBlobBytes: 1 << 10}}}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	first := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	rewriteWithABigBlob(t, p, work)
+	scans, paths := blobScans(calls())
+
+	res := p.PushArgs(c.Ctx, work, []string{"--force"}, c.URL(0), "main")
+	const detail = "refuses a force-push (protection refs/heads/main: allow_force)"
+	if reason, _ := res.Rejected("refs/heads/main"); !strings.Contains(reason, "(protected_force: "+detail+")") {
+		t.Errorf("a force-push of protected main carrying a blob past the limit printed %q, want protected_force: "+
+			"%s", reason, res)
+	}
+	if s, w := blobScans(calls()); s != scans || w != paths {
+		t.Errorf("a push refused whole before its blobs ran %d blob scans and %d path walks, want none",
+			s-scans, w-paths)
+	}
+	if got := c.Rows().Refs["refs/heads/main"]; got != first {
+		t.Errorf("main is at %s, want %s", got, first)
+	}
+}
+
+// A BLOB PAST THE LIMIT REFUSES WHAT IS STILL UNDECIDED, BY ITS PATH: the
+// pack carries every pushed ref's objects, so a branch the push creates is
+// refused for a blob only a refused neighbour reaches — and the refusal names
+// the path that neighbour reaches it by, never "(unreachable in this push)" —
+// while the neighbour keeps the refusal that came first.
+func TestABlobPastTheLimitKeepsAnEarlierRefusal(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{Limits: code.Limits{MaxBlobBytes: 1 << 10}}},
+		codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	first := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	rewriteWithABigBlob(t, p, work)
+
+	res := p.PushArgs(c.Ctx, work, []string{"--force"}, c.URL(0), "main", first+":refs/heads/topic")
+	const detail = "refuses a force-push (protection refs/heads/main: allow_force)"
+	if reason, _ := res.Rejected("refs/heads/main"); !strings.Contains(reason, "(protected_force: "+detail+")") {
+		t.Errorf("the force-push of protected main printed %q, want protected_force: %s", reason, res)
+	}
+	if reason, _ := res.Rejected("refs/heads/topic"); !strings.Contains(reason, "(blob_too_large: blob ") ||
+		!strings.Contains(reason, "(big.bin) is 2.0 KiB, past code.limits.max_blob_bytes") {
+		t.Errorf("topic, created beside a pack carrying a blob past the limit, printed %q, want blob_too_large "+
+			"naming big.bin: %s", reason, res)
+	}
+	if _, moved := c.Rows().Refs["refs/heads/topic"]; moved {
+		t.Error("refs/heads/topic exists, and its push's pack carried a blob past the limit")
+	}
+}

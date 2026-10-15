@@ -119,7 +119,9 @@ func unchecked(err error) error {
 //     stateless rules, then the protections of what Forced can change
 //     (protectAfterForce) — the rules PARSED HERE, from Synced.Repo, so no
 //     builder can judge a push against rules other than its own synced row's.
-//  3. BLOBS, over the push's own pack (largestBlob).
+//  3. BLOBS, over the push's own pack (largestBlob) — only while anything is
+//     left to decide, and refusing only what is: a refusal that came first
+//     is the one the person has to act on.
 //  4. ATOMIC: a push refused in part is refused whole.
 //  5. NOTHING LEFT: every command refused, so nothing is stored.
 //  6. THE SIZE: a bundle past code.MaxPackBytes is refused before its upload.
@@ -188,18 +190,21 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	protectAfterForce(cmds, rules, l.Judged)
 
-	// 3 BLOBS, over the push's own pack.
+	// 3 BLOBS, over the push's own pack — of a push with anything left to
+	// decide. One refused whole by now (a force-push of a protected branch,
+	// a stale update) is answered as it was refused: a scan would read every
+	// object of its pack, holding a read slot, for an answer that could only
+	// overwrite the refusal the person has to act on. A blob past the limit
+	// refuses only what is still undecided, so a command refused first keeps
+	// its own reason; and it refuses every such command, since the pack is
+	// stored whole or not at all. Its path is looked for from every ref the
+	// push sent, refused or not, because the pack carries all of their
+	// objects and a blob only a refused ref reaches is still in it.
 	packPath, checksum, hasPack, err := l.Scratch.Pack()
 	if err != nil {
 		return landed{}, unchecked(err)
 	}
 	var ref *code.PackRef
-	var news []string
-	for _, c := range cmds {
-		if c.Result == "" && c.New != code.ZeroOID {
-			news = append(news, c.New)
-		}
-	}
 	if hasPack {
 		if ref, err = bundleRef(l.PushID, packPath, checksum); err != nil {
 			return landed{}, unchecked(err)
@@ -207,17 +212,27 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		if s.o.Metrics != nil {
 			s.o.Metrics.ObserveValue(metrics.CodePushBytes, float64(ref.Size), nil)
 		}
+	}
+	if ref != nil && undecided(cmds) {
 		idx := strings.TrimSuffix(packPath, ".pack") + ".idx"
 		oid, size, found, berr := s.largestBlob(ctx, l.Scratch.Dir, idx, ref.PackBytes(), limits.MaxBlobBytes)
 		if berr != nil {
 			return landed{}, unchecked(berr)
 		}
 		if found {
+			var sent []string
+			for _, c := range cmds {
+				if c.New != code.ZeroOID {
+					sent = append(sent, c.New)
+				}
+			}
 			detail := fmt.Sprintf("blob %s (%s) is %s, past code.limits.max_blob_bytes (%s)", short(oid),
-				s.pathOf(ctx, l.Scratch.Dir, news, oid, ref.PackBytes()), humanBytes(size),
+				s.pathOf(ctx, l.Scratch.Dir, sent, oid, ref.PackBytes()), humanBytes(size),
 				humanBytes(limits.MaxBlobBytes))
 			for i := range cmds {
-				refuse(i, code.RefusalBlobTooLarge, detail)
+				if cmds[i].Result == "" {
+					refuse(i, code.RefusalBlobTooLarge, detail)
+				}
 			}
 		}
 	}
@@ -254,7 +269,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// listing answers, before the upload completes. Every ref is proposed in
 	// its recorded form (code.RecordedRef) and the builder is answered with
 	// the ref it named (withRefs).
-	news = news[:0]
+	var news []string
 	for _, c := range cmds {
 		if c.Result == "" && c.New != code.ZeroOID {
 			news = append(news, c.New)

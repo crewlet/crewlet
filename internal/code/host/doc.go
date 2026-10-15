@@ -26,14 +26,16 @@
 // STATUS first — a deleted, purging or archived repository takes no push, so
 // no bundle is ever stored for one; the force and stale checks, the stateless
 // rules and the protections of what Forced changes; the blob scan over the
-// push's own pack; --atomic; nothing left to land; the stored size against
-// code.MaxPackBytes; the bundle uploaded and sealed while the commits it
-// introduces are listed, and the proposal held to every rule its committer
-// will hold it to; the proposal itself, through the estate router; the
-// outcome, `ok` only from the push's applied row; and the adoption of its pack
-// into this node's cache, so the node that took a push does not download it
-// back — unless a round that read its row had already begun that pack's GET,
-// or a link fails (code_pack_adopt_failed; its next sync downloads it).
+// push's own pack, while any command is left to decide, refusing only those,
+// so a refusal that came first is the one the pusher reads; --atomic; nothing
+// left to land; the stored size against code.MaxPackBytes; the bundle
+// uploaded and sealed while the commits it introduces are listed, and the
+// proposal held to every rule its committer will hold it to; the proposal
+// itself, through the estate router; the outcome, `ok` only from the push's
+// applied row; and the adoption of its pack into this node's cache, so the
+// node that took a push does not download it back — unless a round that read
+// its row had already begun that pack's GET, or a link fails
+// (code_pack_adopt_failed; its next sync downloads it).
 //
 // What the landing does NOT check is that the scratch's objects are WHOLE, and
 // that is its BUILDER'S: every command's new id present in the scratch or its
