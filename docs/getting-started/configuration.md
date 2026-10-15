@@ -503,7 +503,11 @@ providers:
                                         #   `openai-compatible`, so a local embedding
                                         #   server needs nothing else. The same rules
                                         #   as an LLM entry's base_url: an http(s) URL
-                                        #   with a host, no query or fragment
+                                        #   with a host, no query or fragment, and
+                                        #   REQUIRED for openai-compatible — refused
+                                        #   when it is empty, a ${VAR} that resolved
+                                        #   to nothing included, which would send the
+                                        #   company's documents to api.openai.com
   # dimensions: 1024                  # OPTIONAL OVERRIDE, 64..4096. Unset takes the
                                         #   named model's OWN width, which is what
                                         #   you want unless you are deliberately
