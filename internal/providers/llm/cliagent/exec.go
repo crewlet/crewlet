@@ -285,9 +285,19 @@ type extracted struct {
 	output     int
 	cacheRead  int
 	cacheWrite int
-	// reported is false when no usage path resolved, so the counts are
-	// estimates. `crewlet llm doctor` prints which of the two a provider
-	// gets, because a budget built on estimates is a different promise.
+	// reported is true only when BOTH prompt counts — input and output —
+	// resolved in the CLI's own report, and then the counts are charged as
+	// read; otherwise they are estimates. `crewlet llm doctor` prints which
+	// of the two a provider gets, because a budget built on estimates is a
+	// different promise.
+	//
+	// BOTH OR NEITHER, on every source — stdout's one document, a stream, a
+	// usage file. One count resolving without the other is a profile whose
+	// path drifted, not a call that cost nothing on the other side: charged
+	// as read it billed a real input against an output of zero (or the
+	// reverse), and the estimate is the better answer. The two cache
+	// figures are not part of the test: a provider that caches nothing
+	// reports neither, and zero is the true answer there.
 	reported bool
 	// failed is the CLI's own is_error flag, for a vendor that reports a
 	// failure inside a successful exit.
@@ -353,13 +363,22 @@ func extractObject(p cliprofile.Profile, stdout string) extracted {
 	text, located := firstString(doc, p.TextPaths)
 	out := extracted{text: text, located: located}
 	out.failed = firstBool(doc, p.ErrorPaths)
-	out.input, out.reported = firstInt(doc, p.Usage.Input)
-	if got, ok := firstInt(doc, p.Usage.Output); ok {
-		out.output, out.reported = got, true
-	}
-	out.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
-	out.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+	out.readUsage(doc, p.Usage)
 	return out
+}
+
+// readUsage takes the counts one decoded report carries — when BOTH prompt
+// counts resolve in it, the rule [extracted.reported] states. A report that
+// resolves one of them leaves the counts as they were and unreported.
+func (e *extracted) readUsage(doc map[string]any, paths cliprofile.UsagePaths) {
+	input, gotInput := firstInt(doc, paths.Input)
+	output, gotOutput := firstInt(doc, paths.Output)
+	if !gotInput || !gotOutput {
+		return
+	}
+	e.input, e.output, e.reported = input, output, true
+	e.cacheRead, _ = firstInt(doc, paths.CacheRead)
+	e.cacheWrite, _ = firstInt(doc, paths.CacheWrite)
 }
 
 // extractStream reads a JSONL event stream.
@@ -367,8 +386,13 @@ func extractObject(p cliprofile.Profile, stdout string) extracted {
 // Text CONCATENATES in stream order — an event stream spells one answer
 // across several events — while usage figures take the LAST value found,
 // because a stream reports a running total and the final one is the total.
+//
+// The two prompt counts may arrive on different events, since one stream is
+// one source; what [extracted.reported] needs is that EACH was reported
+// somewhere in it.
 func extractStream(p cliprofile.Profile, stdout string) extracted {
 	var out extracted
+	var gotInput, gotOutput bool
 	var text strings.Builder
 	for line := range strings.SplitSeq(stdout, "\n") {
 		line = strings.TrimSpace(line)
@@ -398,10 +422,10 @@ func extractStream(p cliprofile.Profile, stdout string) extracted {
 			out.failed = true
 		}
 		if got, ok := firstInt(doc, p.Usage.Input); ok {
-			out.input, out.reported = got, true
+			out.input, gotInput = got, true
 		}
 		if got, ok := firstInt(doc, p.Usage.Output); ok {
-			out.output, out.reported = got, true
+			out.output, gotOutput = got, true
 		}
 		if got, ok := firstInt(doc, p.Usage.CacheRead); ok {
 			out.cacheRead = got
@@ -411,17 +435,19 @@ func extractStream(p cliprofile.Profile, stdout string) extracted {
 		}
 	}
 	out.text = strings.TrimSpace(text.String())
+	out.reported = gotInput && gotOutput
 	return out
 }
 
 // applyUsageFile overlays a vendor's SEPARATE usage report on what stdout
 // said, for a profile whose CLI writes one — see [cliprofile.Profile.UsageFileArgs].
 //
-// BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
-// would pair one source's input count with another's output count, and the
-// sum is what a budget is charged. The two cache figures are not part of that
-// test: a provider that caches nothing reports neither, and zero is the true
-// answer there.
+// BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES — the rule
+// [extracted.reported] holds every source to, through the one reader
+// ([extracted.readUsage]). A partial overlay would pair one source's input
+// count with another's output count, and the sum is what a budget is charged;
+// a report whose counts this profile cannot both read is drift rather than a
+// zero-token call, and is left to whatever stdout said.
 func (e *extracted) applyUsageFile(p cliprofile.Profile, raw string) {
 	if len(p.UsageFileArgs) == 0 || strings.TrimSpace(raw) == "" {
 		return
@@ -430,21 +456,7 @@ func (e *extracted) applyUsageFile(p cliprofile.Profile, raw string) {
 	if !ok {
 		return
 	}
-	input, gotInput := firstInt(doc, p.Usage.Input)
-	output, gotOutput := firstInt(doc, p.Usage.Output)
-	if !gotInput || !gotOutput {
-		// The report exists but this profile cannot read both counts
-		// out of it, which is drift rather than a zero-token call. Left
-		// to the estimate, the same answer a CLI that reports nothing
-		// gets — and better than charging a real output count against a
-		// prompt this build read as zero. The two cache figures are not
-		// in the test: a provider that caches nothing reports neither,
-		// and zero is the true answer there.
-		return
-	}
-	e.input, e.output, e.reported = input, output, true
-	e.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
-	e.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+	e.readUsage(doc, p.Usage)
 }
 
 // textOf reads the assistant's text out of ONE line of a jsonl stream,

@@ -132,6 +132,70 @@ func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 	}
 }
 
+// BOTH PROMPT COUNTS FROM THE REPORT, OR NEITHER — on stdout as in a usage
+// file. A document resolving one of them is a profile whose other path
+// drifted, not a call that cost nothing on that side: read as reported, it
+// charged a real input against an output of zero (or the reverse), and the
+// estimate is the better answer.
+func TestAOneSidedUsageReportIsEstimatedRatherThanChargedAsZero(t *testing.T) {
+	t.Parallel()
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSON,
+		TextPaths: []cliprofile.Path{{"result"}},
+		Usage: cliprofile.UsagePaths{
+			Input:  []cliprofile.Path{{"usage", "input_tokens"}},
+			Output: []cliprofile.Path{{"usage", "output_tokens"}},
+		},
+	}
+	answer := "a reply of some length, long enough that its estimate is not zero"
+	for name, usage := range map[string]string{
+		"only the input":  `{"input_tokens":1200}`,
+		"only the output": `{"output_tokens":300}`,
+	} {
+		stdout := fmt.Sprintf(`{"result":%q,"usage":%s}`, answer, usage)
+		if got := extract(p, stdout); got.reported {
+			t.Errorf("%s: a report missing one prompt count was taken as reported", name)
+		}
+		prov := &Provider{profile: p, model: "m"}
+		comp, err := prov.completion(t.Context(), "a prompt of some length", &rawResult{stdout: stdout}, "")
+		if err != nil {
+			t.Fatalf("%s: completion: %v", name, err)
+		}
+		if comp.InputTokens != EstimateTokens("a prompt of some length") || comp.OutputTokens != EstimateTokens(answer) {
+			t.Errorf("%s: charged in=%d out=%d, want both estimated", name, comp.InputTokens, comp.OutputTokens)
+		}
+	}
+}
+
+// A stream is one source, so its two counts may arrive on different events —
+// and each has to arrive on one of them.
+func TestAStreamReportsUsageOnlyWhenBothCountsArrived(t *testing.T) {
+	t.Parallel()
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSONL,
+		TextPaths: []cliprofile.Path{{"text"}},
+		Usage: cliprofile.UsagePaths{
+			Input:  []cliprofile.Path{{"usage", "input_tokens"}},
+			Output: []cliprofile.Path{{"usage", "output_tokens"}},
+		},
+	}
+	split := strings.Join([]string{
+		`{"text":"hi","usage":{"input_tokens":70}}`,
+		`{"usage":{"output_tokens":9}}`,
+	}, "\n")
+	if got := extract(p, split); !got.reported || got.input != 70 || got.output != 9 {
+		t.Errorf("counts on two events: reported=%v in=%d out=%d, want 70 and 9 reported",
+			got.reported, got.input, got.output)
+	}
+	inputOnly := strings.Join([]string{
+		`{"text":"hi","usage":{"input_tokens":70}}`,
+		`{"usage":{"input_tokens":75}}`,
+	}, "\n")
+	if got := extract(p, inputOnly); got.reported {
+		t.Error("a stream that never reported an output count was taken as reported")
+	}
+}
+
 // Text output is taken verbatim, with no JSON expectations at all.
 func TestTextOutputIsTakenVerbatim(t *testing.T) {
 	t.Parallel()

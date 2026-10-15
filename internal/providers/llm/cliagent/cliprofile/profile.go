@@ -885,19 +885,25 @@ func (p *Profile) Validate(name string) error {
 			add("usage_file_args carries no {usage_file} placeholder — there is " +
 				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
 		}
-		// BOTH PROMPT COUNTS, because [extracted.applyUsageFile] accepts a
-		// report only when both resolve — a partial overlay would pair one
-		// source's input with another's output, and the sum is what a
-		// budget is charged. A profile declaring one of them (or only the
-		// cache paths) therefore estimates on EVERY call while
-		// [Profile.ReadsUsage] and `crewlet llm doctor` report it as using
-		// the vendor's own figures, which is the one thing that report
-		// exists to settle.
+		// BOTH PROMPT COUNTS, because a usage report is read only when both
+		// resolve — a partial overlay would pair one source's input with
+		// another's output, and the sum is what a budget is charged. A
+		// profile declaring one of them (or only the cache paths) therefore
+		// estimates on EVERY call while `crewlet llm doctor` reports it as
+		// using the vendor's own figures, which is the one thing that
+		// report exists to settle.
 		if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
 			add("usage_file_args is set but usage.input and usage.output are not both " +
 				"declared — the report is only read when both counts resolve, so every " +
 				"call would fall back to an estimate while the doctor reports otherwise")
 		}
+	} else if (len(p.Usage.Input) == 0) != (len(p.Usage.Output) == 0) {
+		// The same rule for a report on stdout: the backend charges the
+		// vendor's counts only when BOTH resolve, so one declared without
+		// the other is a profile that estimates on every call.
+		add("usage.input and usage.output must be declared together — the counts are " +
+			"charged only when both resolve, so declaring one estimates every call; " +
+			"declare the other, or neither")
 	}
 	if p.MarkerScope != "" && !p.MarkerScope.Valid() {
 		add("marker_scope %q (want %s or %s)",
@@ -1071,8 +1077,10 @@ func sentinelProblem(sentinel string) string {
 // ReadsUsage reports whether this profile can take token counts from the CLI
 // rather than estimating them.
 //
-// BOTH HALVES, because either alone is a lie. A profile with no usage paths
-// obviously cannot; less obviously, a TEXT profile cannot either — [extract]
+// BOTH HALVES, because either alone is a lie. A profile that does not declare
+// both prompt counts cannot — the backend charges the vendor's figures only
+// when input and output both resolve, and [Profile.Validate] refuses one
+// declared without the other; less obviously, a TEXT profile cannot either — [extract]
 // never decodes a document in that mode, so declared paths are walked by
 // nothing. That combination is not an operator error to refuse: `output: text`
 // is a one-line override, and the JSON paths it inherits from the built-in
@@ -1089,7 +1097,7 @@ func sentinelProblem(sentinel string) string {
 // reported "reported by CLI" for a provider whose every call estimates, which
 // is precisely the question that report exists to settle.
 func (p *Profile) ReadsUsage() bool {
-	if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 {
+	if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
 		return false
 	}
 	if len(p.UsageFileArgs) > 0 {
