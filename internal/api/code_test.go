@@ -115,6 +115,17 @@ func (f fakeGitRoutes) Verification(name string, id uuid.UUID) (host.Verificatio
 	return v, true
 }
 
+// AwaitVerification answers a kept verification that has ended at once, and
+// otherwise waits for ctx — the check never ends while the request waits —
+// answering what is kept then.
+func (f fakeGitRoutes) AwaitVerification(ctx context.Context, name string, id uuid.UUID) (host.Verification, bool) {
+	if v, ok := f.Verification(name, id); ok && v.State != host.VerifyRunning {
+		return v, true
+	}
+	<-ctx.Done()
+	return f.Verification(name, id)
+}
+
 // fakeCodeReads records every query it is asked and answers what answer does
 // — an empty answer at the level asked where it is nil.
 type fakeCodeReads struct {
@@ -506,6 +517,9 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	done := host.Verification{ID: uuid.Must(uuid.NewV7()), Repo: "web", State: host.VerifyDone,
 		Started: time.Now().Add(-time.Minute), Ended: time.Now(),
 		Report: cache.VerifyReport{Repo: "r0", Name: "web", Packs: 2, Refs: 5}}
+	webRun := uuid.Must(uuid.NewV7())
+	quick := host.Verification{ID: uuid.Must(uuid.NewV7()), Repo: "quick", State: host.VerifyDone,
+		Started: time.Now(), Ended: time.Now(), Report: cache.VerifyReport{Repo: "r4", Name: "quick", Packs: 1}}
 	found := []string{"pack p1 (pack-ab) hashes to 01; its row says 02"}
 	stopped := host.Verification{ID: uuid.Must(uuid.NewV7()), Repo: "half", State: host.VerifyFailed,
 		Started: time.Now().Add(-time.Minute), Ended: time.Now(),
@@ -521,7 +535,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	done.Deadline = ends // what an ended verification is never answered with
 	g := fakeGitRoutes{
 		kept: map[uuid.UUID]host.Verification{done.ID: done, stopped.ID: stopped, failed.ID: failed,
-			checking.ID: checking},
+			checking.ID: checking, quick.ID: quick},
 		start: func(_ context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error) {
 			mu.Lock()
 			repairs = append(repairs, repair)
@@ -529,8 +543,11 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 			mu.Unlock()
 			switch name {
 			case "web":
-				return host.Verification{ID: done.ID, Repo: "web", Repair: repair, State: host.VerifyRunning,
+				return host.Verification{ID: webRun, Repo: "web", Repair: repair, State: host.VerifyRunning,
 					Started: done.Started}, nil
+			case "quick":
+				return host.Verification{ID: quick.ID, Repo: "quick", State: host.VerifyRunning,
+					Started: quick.Started}, nil
 			case "gone":
 				return host.Verification{}, code.ErrRepoNotFound
 			case "elsewhere":
@@ -570,8 +587,14 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		t.Errorf("a refused repair reached the host %d times", asked)
 	}
 
-	// BEGUN: 202, the verification running, and where to read it.
+	// BEGUN: 202, the verification still running once the request has
+	// waited host.VerifyHold for it, and where to read it.
+	began := time.Now()
 	rec := post("web/verify")
+	if waited := time.Since(began); waited < host.VerifyHold {
+		t.Errorf("a verify still running was answered after %s, want the request held %s for it", waited,
+			host.VerifyHold)
+	}
 	var begun struct {
 		ID     string           `json:"id"`
 		Repo   string           `json:"repo"`
@@ -579,21 +602,33 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		Report json.RawMessage  `json:"report"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &begun); err != nil || rec.Code != http.StatusAccepted ||
-		begun.ID != done.ID.String() || begun.Repo != "web" || begun.State != host.VerifyRunning ||
-		begun.Report != nil || rec.Header().Get("Location") != "/code/repos/web/verify/"+done.ID.String() {
+		begun.ID != webRun.String() || begun.Repo != "web" || begun.State != host.VerifyRunning ||
+		begun.Report != nil || rec.Header().Get("Location") != "/code/repos/web/verify/"+webRun.String() {
 		t.Errorf("a verify answered %d %v %q (%v), want 202 running at its Location", rec.Code, rec.Header(),
 			rec.Body.String(), err)
+	}
+	// ENDED WHILE THE REQUEST WAITED: 200, the verification done, its report
+	// in the one answer.
+	rec = post("quick/verify")
+	var ended struct {
+		State  host.VerifyState    `json:"state"`
+		Report *cache.VerifyReport `json:"report"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ended); err != nil || rec.Code != http.StatusOK ||
+		ended.State != host.VerifyDone || ended.Report == nil || ended.Report.Packs != 1 {
+		t.Errorf("a verify that ended while it was asked answered %d %q (%v), want 200 done with its report",
+			rec.Code, rec.Body.String(), err)
 	}
 	post("web/verify?repair=true")
 	post("web/verify?repair=false&min_position=CREWLET_CODE_LOG@1:4711")
 	mu.Lock()
-	if !slices.Equal(repairs, []bool{false, true, false}) {
-		t.Errorf("the host was asked repair %v, want false, true, false", repairs)
+	if !slices.Equal(repairs, []bool{false, false, true, false}) {
+		t.Errorf("the host was asked repair %v, want false, false, true, false", repairs)
 	}
 	// THE CALLER'S FLOOR reaches the host as the position it named, and a
 	// verify naming none asks at the log's head.
-	if want := (statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 4711}); len(floors) != 3 ||
-		!floors[0].IsZero() || floors[2] != want {
+	if want := (statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 4711}); len(floors) != 4 ||
+		!floors[0].IsZero() || floors[3] != want {
 		t.Errorf("the host was asked at %v, want no floor and then %v", floors, want)
 	}
 	mu.Unlock()

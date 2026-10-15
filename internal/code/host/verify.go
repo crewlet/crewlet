@@ -51,6 +51,21 @@ import (
 // restart keeps none — a report is a check of a cache this process held.
 const VerifyKept = time.Hour
 
+// VerifyHold is how long the request that begins a verify may wait for the
+// check to end, so a check of a small copy is answered in the one request
+// that asked for it (AwaitVerification) rather than read again after a
+// wait the client has to guess.
+//
+// A QUARTER OF A SECOND. cache.BenchmarkVerify measured a whole check at
+// 9.5 ms over five pushes of 150 KB and 9.4 ms a mebibyte over 100 MB, so
+// a quarter of a second answers at once a copy of up to some 25 MiB — most
+// of a company's repositories — while a check that runs longer is answered
+// running a quarter of a second later than it would have been, far inside
+// every balancer's read timeout. Answered at once instead, each small
+// repository of a sweep cost its client a sleep about ten times the check
+// before its first read, the node's slot idle meanwhile.
+const VerifyHold = 250 * time.Millisecond
+
 // VerifyState is where a verification is: one of [VerifyStates].
 type VerifyState string
 
@@ -99,6 +114,10 @@ type Verification struct {
 	// own (objstore.ReadBudget, objstore.ReadStall), as every sync's are —
 	// and once it has ended.
 	Deadline time.Time
+
+	// ended is closed once the verification has ended: what
+	// AwaitVerification waits on.
+	ended chan struct{}
 }
 
 // VerifyRunningError is a verification refused because one of the same
@@ -265,14 +284,14 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floo
 		return Verification{}, err
 	}
 	v := &Verification{ID: uuid.Must(uuid.NewV7()), Repo: ref.Name, RepoID: ref.ID, Repair: repair,
-		State: VerifyRunning, Started: now}
+		State: VerifyRunning, Started: now, ended: make(chan struct{})}
 	s.verifies.begin(v)
 	started = true
 	fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
 	if !floor.IsZero() {
 		fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: floor}
 	}
-	go s.runVerify(v.ID, checked, cache.VerifyRun{Repair: repair, Fresh: fresh})
+	go s.runVerify(v.ID, v.ended, checked, cache.VerifyRun{Repair: repair, Fresh: fresh})
 	return *v, nil
 }
 
@@ -299,11 +318,17 @@ func (s *Server) resolveVerified(ctx context.Context, name string, floor statelo
 
 // runVerify is one verification's check, on a goroutine of the host's
 // lifetime that StartVerify counted among the work Stop waits for, and the
-// record of how it ended. how carries its repair and its freshness; its
-// Checking is this function's own.
-func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, how cache.VerifyRun) {
+// record of how it ended — ended closed once that is recorded. how carries
+// its repair and its freshness; its Checking is this function's own.
+//
+// WHAT THE CHECK HELD IS LET GO BEFORE ITS END IS RECORDED: a caller that
+// reads the verification done — or is answered it by the request that began
+// it — asks for the next one at once, and finding this one's maintenance slot
+// still held it would be refused busy and told to wait BusyRetryAfter, ten
+// seconds of a sweep's for each repository, for a slot freed microseconds
+// later.
+func (s *Server) runVerify(id uuid.UUID, ended chan struct{}, checked *cache.Verification, how cache.VerifyRun) {
 	defer s.inflight.Done()
-	defer checked.Release()
 	// WHEN THE NODE ENDS WHAT IT IS DOING is said as each check pass begins,
 	// so a caller reading the verification waits by the node's own bound.
 	checking := func(bound time.Duration) {
@@ -316,9 +341,10 @@ func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, how cache.
 			}
 		}
 	}
-	//nolint:contextcheck // the host's lifetime, never a request's: see the file's doc
 	how.Checking = checking
+	//nolint:contextcheck // the host's lifetime, never a request's: see the file's doc
 	report, err := checked.Run(s.life, how)
+	checked.Release()
 	if err != nil && s.life.Err() != nil {
 		err = fmt.Errorf("%w: %w", ErrStopping, err)
 	}
@@ -330,6 +356,7 @@ func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, how cache.
 		}
 	})
 	s.verifies.mu.Unlock()
+	close(ended)
 	if err != nil {
 		s.log.Warn("code_verify_failed", "repo", report.Name, "verify", id, "repair", how.Repair,
 			"problems", len(report.Problems), "error", err)
@@ -337,6 +364,27 @@ func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, how cache.
 	}
 	s.log.Info("code_verify_finished", "repo", report.Name, "verify", id, "repair", how.Repair,
 		"packs", report.Packs, "problems", len(report.Problems), "rebuilt", report.Rebuilt)
+}
+
+// AwaitVerification answers the verification id of the repository named name
+// once it has ended, or as it stands when ctx ends first — the request that
+// began it, held for VerifyHold, so a small check is answered where it was
+// asked. False for one this node does not keep, or one of another
+// repository.
+func (s *Server) AwaitVerification(ctx context.Context, name string, id uuid.UUID) (Verification, bool) {
+	s.verifies.mu.Lock()
+	v, ok := s.verifies.byID[id]
+	if !ok || v.Repo != name {
+		s.verifies.mu.Unlock()
+		return Verification{}, false
+	}
+	ended := v.ended
+	s.verifies.mu.Unlock()
+	select {
+	case <-ended:
+	case <-ctx.Done():
+	}
+	return s.Verification(name, id)
 }
 
 // Verification answers the verification id of the repository named name,

@@ -61,6 +61,7 @@ type GitRoutes interface {
 	ReceivePack() http.Handler
 	StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
 	Verification(name string, id uuid.UUID) (host.Verification, bool)
+	AwaitVerification(ctx context.Context, name string, id uuid.UUID) (host.Verification, bool)
 }
 
 // CodeReads is the code domain's read, wherever its rows are served;
@@ -388,11 +389,13 @@ func verificationPath(v host.Verification) string {
 
 // serveCodeVerify begins a check of THIS node's cache of one repository
 // against its rows — and with `?repair=true` a rebuild of what it finds
-// damaged — and answers `202 Accepted` with the verification, its address in
-// `Location`, the moment it is running: the check reads every byte of the
-// repository, which outlives a balancer's read timeout, so it runs on the
-// node's own lifetime rather than the request's (host.Server.StartVerify) and
-// its caller reads the outcome at [App.serveCodeVerification].
+// damaged. The check reads every byte of the repository, which can outlive a
+// balancer's read timeout, so it runs on the node's own lifetime rather than
+// the request's (host.Server.StartVerify): the request waits for it up to
+// host.VerifyHold and answers `200` with the verification ended — a small
+// copy's check is answered where it was asked — or `202 Accepted` with it
+// running, its address in `Location`, where its caller reads the outcome
+// ([App.serveCodeVerification]).
 //
 // WHAT IS REFUSED IS REFUSED AT ONCE, having read nothing of the repository:
 // not declared or not held here (404 — a node holding no copy has nothing to
@@ -441,7 +444,17 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		w.Header().Set("Location", verificationPath(v))
-		writeJSON(w, http.StatusAccepted, viewOf(v))
+		hold, cancel := context.WithTimeout(r.Context(), host.VerifyHold)
+		now, kept := g.AwaitVerification(hold, name, v.ID)
+		cancel()
+		if kept {
+			v = now
+		}
+		status := http.StatusAccepted
+		if v.State != host.VerifyRunning {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, viewOf(v))
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": stream.CodeNotFound, "detail": notDeclared(name),

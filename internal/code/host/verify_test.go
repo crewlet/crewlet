@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -288,6 +289,81 @@ func TestAVerifyAtItsCallersFloorAppendsNoBarrier(t *testing.T) {
 	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false,
 		statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 1}); !errors.Is(err, code.ErrInvalid) {
 		t.Errorf("a verify at a floor on another stream answered %v, want code.ErrInvalid", err)
+	}
+}
+
+// A VERIFY IS AWAITED WHERE IT WAS ASKED: the request that began it may wait
+// for its end — VerifyHold, so a small copy's check is answered in that one
+// request — and is answered it done, with everything the check held already
+// let go: a caller that asks for the next check at once finds the
+// maintenance slot free rather than being told to wait for it. A check that
+// outlasts the wait is answered as it stands, running; an id the node does
+// not keep, or another repository's, is none.
+//
+// Mutation: record the end before the check lets go of its slot, and the
+// next check can find the lane still held.
+func TestAVerifyIsAwaitedWhereItWasAsked(t *testing.T) {
+	var (
+		holding atomic.Bool
+		release = make(chan struct{})
+	)
+	e := &recording{state: func(ctx context.Context, inner host.Estate, q code.StateQuery) (code.RepoSnapshot, error) {
+		if holding.Load() && q.Fresh.Level == statelog.ReadSession {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return code.RepoSnapshot{}, ctx.Err()
+			}
+		}
+		return inner.RepoState(ctx, q)
+	}}
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
+	node := c.Fleet.Nodes()[0]
+	h := node.Host()
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+
+	slots := node.Pool().Slots(gitproc.ClassMaintenance)
+	for i := range 20 {
+		started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
+		if err != nil {
+			t.Fatalf("verify %d failed to start: %v", i, err)
+		}
+		hold, cancel := context.WithTimeout(c.Ctx, 30*time.Second)
+		ended, ok := h.AwaitVerification(hold, codetest.RepoName, started.ID)
+		cancel()
+		if !ok || ended.State != host.VerifyDone {
+			t.Fatalf("verify %d was awaited as %+v, %v; want it done", i, ended, ok)
+		}
+		if free := node.Pool().Free(gitproc.ClassMaintenance); free != slots {
+			t.Fatalf("verify %d was answered done with %d of the maintenance lane's %d slots free; want the "+
+				"check's let go first", i, free, slots)
+		}
+	}
+
+	holding.Store(true)
+	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, cancel := context.WithTimeout(c.Ctx, 50*time.Millisecond)
+	running, ok := h.AwaitVerification(hold, codetest.RepoName, started.ID)
+	cancel()
+	if !ok || running.State != host.VerifyRunning {
+		t.Errorf("a check outlasting the wait was awaited as %+v, %v; want it running", running, ok)
+	}
+	holding.Store(false)
+	close(release)
+	if _, ok := h.AwaitVerification(c.Ctx, "another", started.ID); ok {
+		t.Error("a verification was awaited under another repository's name")
+	}
+	if _, ok := h.AwaitVerification(c.Ctx, codetest.RepoName, uuid.Must(uuid.NewV7())); ok {
+		t.Error("the node awaited a verification it never made")
+	}
+	if ended := awaitVerify(t, h, codetest.RepoName, started.ID); ended.State != host.VerifyDone {
+		t.Errorf("the held check ended %+v, want done", ended)
 	}
 }
 
