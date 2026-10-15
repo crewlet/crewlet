@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,16 +15,17 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // PROC-RECEIVE, THE ENGINE'S SIDE: what a push's hook is served once it has
-// named its session — git's ref updates read, checked, the pack uploaded, the
-// push proposed to its committer and git told what landed.
+// named its session — git's ref updates read off the hook, handed to the one
+// landing every push takes (land.go), and git told what landed. Everything
+// here is the RELAY's — the protocol, the keepalive, the report — and what a
+// push IS once receive-pack has written its pack is the landing's.
 
-// session is one push's hook session.
+// session is one push's hook session: the relay's own state, and what the
+// receive handler hands the landing.
 type session struct {
 	token string
 	// ctx is the request's work context, cancel ends it — what a receive-pack
@@ -34,8 +33,9 @@ type session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// repo is the repository's linearizable row, read by the push's sync.
-	repo       code.RepoRef
+	// synced is the incarnation the push's sync pinned — its Repo the
+	// linearizable row the push is judged on — and scratch the repository
+	// its receive-pack runs in, leaning on it.
 	synced     cache.Synced
 	scratch    *cache.Scratch
 	pushID     string
@@ -44,10 +44,9 @@ type session struct {
 	// preRefused is what the receive handler refused before receive-pack
 	// ran, by ref.
 	preRefused map[string]answered
-	// rules are the repository's protections as the handler parsed them
-	// from repo, and judged every command it asked them about — with
-	// Forced unknown, so false — as it asked (protectAfterForce).
-	rules  code.Protections
+	// judged is every command the handler asked synced.Repo's protections
+	// about — with Forced unknown, so false — as it asked
+	// (protectAfterForce).
 	judged map[judgedKey]bool
 
 	// indexed is the receive-pack's Cmd.Indexed: closed when the hook first
@@ -121,14 +120,16 @@ func (sess *session) outcome() pushResult {
 // not what git sends.
 var errProtocol = errors.New("host: git handed the hook a command it cannot read")
 
-// serveSession is one push's session, on its hook's connection. Every step's
-// failure ends it with a sentence on the hook's stderr and exit 1 — git then
-// fails every ref of the push — and the push recorded failed.
+// serveSession is one push's session, on its hook's connection: git's version
+// block and commands read, the handler's own refusals folded into them, the
+// push landed (land) and git told what landed. Every step's failure ends it
+// with a sentence on the hook's stderr and exit 1 — git then fails every ref
+// of the push — and the push recorded failed.
 func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) {
 	sess.reachedRelay()
 	ctx := sess.ctx
 	fail := func(words string, err error) {
-		s.log.Warn("code_hook_protocol", "repo", sess.repo.Name, "push_id", sess.pushID, "step", words,
+		s.log.Warn("code_hook_protocol", "repo", sess.synced.Repo.Name, "push_id", sess.pushID, "step", words,
 			"error", err)
 		sess.fail(words)
 		_ = fw.write(frameStderr, []byte("crewlet: "+sentence(words)+"\n"))
@@ -151,36 +152,40 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		fail("git handed the hook a command it cannot read", err)
 		return
 	}
-	v, err := s.decide(ctx, sess, cmds, atomic)
+	for i, c := range cmds {
+		if a, ok := sess.preRefused[c.Ref]; ok {
+			cmds[i].Result, cmds[i].Reason, cmds[i].Detail = code.ResultNG, a.Reason, a.Detail
+		}
+	}
+	ld, err := s.land(ctx, landing{
+		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: atomic, Principal: sess.principal,
+		PushID: sess.pushID, ReceivedAt: sess.receivedAt, Judged: sess.judged, Progress: sess.step,
+	})
 	if err != nil {
-		fail("the engine could not check this push: "+err.Error(), err)
+		cause := err
+		if le, ok := errors.AsType[*landingError](err); ok {
+			cause = le.err
+		}
+		fail(err.Error(), cause)
 		return
 	}
-	if v.applied && v.adopt != nil {
-		if err := s.fault(ctx, codefault.HostBeforeAdopt, 0); err != nil {
-			fail("the engine stopped before it took this push's pack into its cache", err)
-			return
-		}
-		if err := s.o.Cache.Adopt(ctx, sess.repo.ID, sess.scratch, *v.adopt); err != nil {
-			s.log.Warn("code_pack_adopt_failed", "repo", sess.repo.Name, "push_id", sess.pushID, "error", err)
-		}
-	}
 	stop()
-	sess.conclude(v.result)
+	sess.conclude(ld.Result)
 	if err := s.fault(ctx, codefault.HostHookClose, 0); err != nil {
 		// THE CONNECTION DROPS BEFORE THE REPORT: git fails the push with
 		// the hook's death, whatever the record did.
-		s.log.Warn("code_hook_dropped", "repo", sess.repo.Name, "push_id", sess.pushID, "error", err)
+		s.log.Warn("code_hook_dropped", "repo", sess.synced.Repo.Name, "push_id", sess.pushID, "error", err)
 		return
 	}
 	var report bytes.Buffer
-	for _, a := range answersFor(v.commands) {
+	for _, a := range answersFor(ld.Commands) {
 		report.Write(pktString(a.line()))
 	}
 	report.WriteString(flushPkt)
 	_ = fw.write(frameStdout, report.Bytes())
-	if v.result.outcome == types.AuditApplied && !v.result.position.IsZero() {
-		_ = fw.write(frameStderr, []byte(fmt.Sprintf("crewlet: %s at %s\n", sess.repo.Name, v.result.position)))
+	if ld.Result.outcome == types.AuditApplied && !ld.Result.position.IsZero() {
+		_ = fw.write(frameStderr, []byte(fmt.Sprintf("crewlet: %s at %s\n", sess.synced.Repo.Name,
+			ld.Result.position)))
 	}
 	_ = fw.write(frameExit, []byte{0})
 }
@@ -245,396 +250,6 @@ func readHookCommands(br *bufio.Reader) ([]code.Command, error) {
 		}
 		cmds = append(cmds, code.Command{Old: fields[0], New: fields[1], Ref: fields[2]})
 	}
-}
-
-// decision is what the session decided: the commands as git is told them, the
-// record's result, and the pack to adopt once its row applied.
-type decision struct {
-	commands []code.Command
-	result   pushResult
-	applied  bool
-	adopt    *code.PackRef
-}
-
-// decide is the receive pipeline's steps 8.1–11: the push's own checks, its
-// bundle stored, its proposal and its outcome.
-func (s *Server) decide(ctx context.Context, sess *session, cmds []code.Command, atomic bool) (decision, error) {
-	limits := s.limits()
-	refuse := func(i int, r code.Refusal, detail string) {
-		cmds[i].Result, cmds[i].Reason, cmds[i].Detail = code.ResultNG, r, detail
-	}
-	for i, c := range cmds {
-		if a, ok := sess.preRefused[c.Ref]; ok {
-			refuse(i, a.Reason, a.Detail)
-		}
-	}
-
-	// 8.1 FORCE AND STALE: one merge-base a branch update, with bounded
-	// parallelism; then the stateless rules, and the protections of what
-	// Forced can change (protectAfterForce).
-	var todo []int
-	for i, c := range cmds {
-		if c.Result == "" && c.Old != code.ZeroOID && c.New != code.ZeroOID &&
-			strings.HasPrefix(c.Ref, "refs/heads/") && code.StatelessRefusal(c) == "" {
-			todo = append(todo, i)
-		}
-	}
-	forced, stale, err := s.forceChecks(ctx, sess.scratch.Dir, cmds, todo)
-	if err != nil {
-		return decision{}, err
-	}
-	for i := range cmds {
-		c := &cmds[i]
-		if c.Result != "" {
-			continue
-		}
-		if stale[i] {
-			refuse(i, code.RefusalStale, code.UnheldDetail(c.Old))
-			continue
-		}
-		c.Forced = forced[i]
-		if r := code.StatelessRefusal(*c); r != "" {
-			refuse(i, r, "")
-		}
-	}
-	protectAfterForce(cmds, sess.rules, sess.judged)
-
-	// 8.2 BLOBS, over the push's own pack.
-	packPath, checksum, hasPack, err := sess.scratch.Pack()
-	if err != nil {
-		return decision{}, err
-	}
-	var ref *code.PackRef
-	var news []string
-	for _, c := range cmds {
-		if c.Result == "" && c.New != code.ZeroOID {
-			news = append(news, c.New)
-		}
-	}
-	if hasPack {
-		if ref, err = bundleRef(sess.pushID, packPath, checksum); err != nil {
-			return decision{}, err
-		}
-		if s.o.Metrics != nil {
-			s.o.Metrics.ObserveValue(metrics.CodePushBytes, float64(ref.Size), nil)
-		}
-		idx := strings.TrimSuffix(packPath, ".pack") + ".idx"
-		oid, size, found, berr := s.largestBlob(ctx, sess.scratch.Dir, idx, ref.PackBytes(), limits.MaxBlobBytes)
-		if berr != nil {
-			return decision{}, berr
-		}
-		if found {
-			detail := fmt.Sprintf("blob %s (%s) is %s, past code.limits.max_blob_bytes (%s)", short(oid),
-				s.pathOf(ctx, sess.scratch.Dir, news, oid, ref.PackBytes()), humanBytes(size),
-				humanBytes(limits.MaxBlobBytes))
-			for i := range cmds {
-				refuse(i, code.RefusalBlobTooLarge, detail)
-			}
-		}
-	}
-
-	// 7 ATOMIC: an --atomic push refused in part is refused whole, before
-	// anything is uploaded.
-	if atomic {
-		cmds = code.Atomic(cmds)
-	}
-	result := pushResult{commands: len(cmds)}
-	if ref != nil {
-		result.packBytes = ref.Size
-	}
-
-	// 8.4 NOTHING LEFT: every command refused, so nothing is uploaded and
-	// nothing proposed.
-	if !undecided(cmds) {
-		v := settled(cmds, statelog.Position{}, false, false)
-		result.outcome, result.refusal = v.outcome, v.refusal
-		return decision{commands: cmds, result: result}, nil
-	}
-	if ref != nil && ref.Size > code.MaxPackBytes {
-		detail := fmt.Sprintf("the push stores %s, past the %s one push may store; push fewer commits at "+
-			"once, or without thin packs (git push --no-thin)", humanBytes(ref.Size), humanBytes(code.MaxPackBytes))
-		cmds = refuseRest(cmds, code.RefusalPackTooLarge, detail)
-		result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalPackTooLarge)
-		return decision{commands: cmds, result: result}, nil
-	}
-
-	// 8.3 AND 8.5 TOGETHER: the commits every update still standing
-	// introduces, and the bundle stored before anything names it — the
-	// proposal held to every rule its committer will hold it to once the
-	// listing answers, before the upload completes. Every ref is proposed in
-	// its recorded form (code.RecordedRef) and git is answered with the ref it
-	// named (withRefs).
-	news = news[:0]
-	for _, c := range cmds {
-		if c.Result == "" && c.New != code.ZeroOID {
-			news = append(news, c.New)
-		}
-	}
-	proposed, named := recordedCommands(cmds)
-	proposal := func(introduced []string, count int, pack *code.PackRef) code.Proposal {
-		return code.Proposal{
-			PushID: sess.pushID, RepoID: sess.repo.ID, Principal: sess.principal, Node: s.o.NodeID,
-			Atomic: atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
-			ReceivedAt: sess.receivedAt, Seen: sess.synced.Position,
-		}
-	}
-	introduced, count, stored, err := s.introduceAndStore(ctx, sess, news, packPath, ref,
-		func(introduced []string, count int, unstored *code.PackRef) error {
-			return s.checkProposal(proposal(introduced, count, unstored))
-		})
-	var invalid *invalidProposal
-	switch {
-	case errors.As(err, &invalid):
-		// THE RECEIVER'S OWN BUG, found before its committer was asked and
-		// before its bundle was stored: answered as the committer answers
-		// one (decided), its upload stopped.
-		v := s.decided(ctx, sess, proposed, code.ProposeResult{}, invalid.err)
-		result.outcome = v.outcome
-		return decision{commands: withRefs(v.commands, named), result: result}, nil
-	case err != nil:
-		return decision{}, err
-	case stored != nil:
-		var bad *badBundle
-		detail := "object store unavailable: " + sentence(stored.Error())
-		if errors.As(stored, &bad) {
-			detail = "this node stored a pack the code host cannot serve: " + sentence(bad.err.Error())
-		}
-		cmds = refuseRest(cmds, code.RefusalUnavailable, detail)
-		result.outcome = types.AuditFailed
-		return decision{commands: cmds, result: result}, nil
-	}
-	if ref != nil {
-		if err := s.fault(ctx, codefault.HostAfterUpload, 0); err != nil {
-			return decision{}, err
-		}
-	}
-
-	// 10 PROPOSE, to the repository's committer, under the request's
-	// context: cancellation and no deadline of its own — each data node gets
-	// the router's write attempt.
-	sess.step("committing the push")
-	res, perr := s.o.Estate.Propose(ctx, proposal(introduced, count, ref))
-	if err := s.fault(ctx, codefault.HostAfterPropose, 0); err != nil {
-		return decision{}, err
-	}
-	v := s.decided(ctx, sess, proposed, res, perr)
-	result.outcome, result.refusal, result.position = v.outcome, v.refusal, v.position
-	for _, c := range v.commands {
-		if c.Result == code.ResultOK {
-			result.ok++
-		}
-	}
-	d := decision{commands: withRefs(v.commands, named), result: result, applied: v.applied}
-	if v.applied && ref != nil && result.ok > 0 {
-		d.adopt = ref
-	}
-	return d, nil
-}
-
-// judgedKey is one command as the receive handler judged its protection.
-type judgedKey struct{ ref, old, new string }
-
-// protectAfterForce asks the protections again about the commands whose
-// verdict the receive handler's could not settle, refusing them in place, and
-// reports how many it asked: a FORCED update — protected_force turns on
-// Forced, which only the hook's check of the pushed objects knows — and a
-// command the handler did not judge as it stands. Every other command was
-// asked the same rules, about the same ids, by the handler, and refused there
-// if any rule refuses it; asked again, a push walked every rule once more for
-// every command for answers already known — at the costliest rules a
-// repository may carry, 1.8 s for three thousand commands (internal/code's
-// measured section), about 0.6 s of a maximal push's own.
-func protectAfterForce(cmds []code.Command, rules code.Protections, judged map[judgedKey]bool) (asked int) {
-	for i := range cmds {
-		c := &cmds[i]
-		if c.Result != "" || (!c.Forced && judged[judgedKey{c.Ref, c.Old, c.New}]) {
-			continue
-		}
-		asked++
-		if r, rule := code.ProtectionRefusal(*c, rules); r != "" {
-			c.Result, c.Reason, c.Detail = code.ResultNG, r, code.ProtectionDetail(rule, r)
-		}
-	}
-	return asked
-}
-
-// introduceAndStore lists the commits the push's updates still standing
-// introduce (news) and stores its bundle (ref, nil for a push with no pack) AT
-// ONCE: the listing cannot refuse anything — it only fills the proposal's
-// Introduced — so nothing waits for it before the upload, and the two longest
-// steps of a push's own work (a rev-list that reads every ref tip of the
-// repository, and the object store's first byte and transfer) overlap rather
-// than add. Either failing ends the other, whose work is then for nothing: err
-// is the listing's failure, which fails the session; stored the upload's,
-// which refuses the push unavailable. A bundle stored under a listing that
-// then failed is named by no row, and the collector removes it after its
-// grace, as it does a refused push's.
-//
-// validate is the proposal's own check, asked as soon as what it carries is
-// known — once the listing has answered, or before the upload starts when
-// there is nothing to list — over the pack as it stands unstored: a proposal
-// it refuses ends the upload, and err is an *invalidProposal, so no bundle is
-// stored for a push no committer could take.
-func (s *Server) introduceAndStore(ctx context.Context, sess *session, news []string, packPath string,
-	ref *code.PackRef, validate func([]string, int, *code.PackRef) error) (introduced []string, count int,
-	stored, err error) {
-
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	// The pack as it stands before the upload, copied before the upload
-	// starts: the upload writes ref's object into it, which the listing's
-	// goroutine must not read beside it.
-	var unstored *code.PackRef
-	if ref != nil {
-		copied := *ref
-		unstored = &copied
-	}
-	check := func() error {
-		if verr := validate(introduced, count, unstored); verr != nil {
-			cancel(errInvalidProposal)
-			return &invalidProposal{err: verr}
-		}
-		return nil
-	}
-	var listing sync.WaitGroup
-	if len(news) > 0 && ref != nil {
-		packBytes := unstored.PackBytes()
-		listing.Go(func() {
-			if introduced, count, err = s.introduced(ctx, sess.scratch.Dir, news, packBytes); err != nil {
-				cancel(errListingFailed)
-				return
-			}
-			err = check()
-		})
-	} else if err = check(); err != nil {
-		return nil, 0, nil, err
-	}
-	if ref != nil {
-		sess.step("storing the pack")
-		if stored = s.storeBundle(ctx, sess, packPath, ref); stored != nil {
-			cancel(errUploadFailed)
-		}
-	}
-	listing.Wait()
-	switch cause := context.Cause(ctx); {
-	case err != nil && errors.Is(cause, errUploadFailed):
-		// Ended because the upload failed: the upload's failure is the
-		// push's.
-		err = nil
-	case stored != nil && (errors.Is(cause, errListingFailed) || errors.Is(cause, errInvalidProposal)):
-		// Ended because the listing failed, or the proposal it completed
-		// was refused: that is the push's.
-		stored = nil
-	}
-	return introduced, count, stored, err
-}
-
-// The three causes introduceAndStore ends one step's work with.
-var (
-	errListingFailed   = errors.New("host: listing the commits the push introduces failed")
-	errUploadFailed    = errors.New("host: storing the push's bundle failed")
-	errInvalidProposal = errors.New("host: the push's proposal is not one its committer can decide")
-)
-
-// invalidProposal is a proposal the receiver's own check refused
-// (code.Proposal.ValidateUnstored): err wraps code.ErrInvalidProposal.
-type invalidProposal struct{ err error }
-
-func (e *invalidProposal) Error() string { return e.err.Error() }
-func (e *invalidProposal) Unwrap() error { return e.err }
-
-// undecided reports whether any command is still to be decided.
-func undecided(cmds []code.Command) bool {
-	for _, c := range cmds {
-		if c.Result == "" {
-			return true
-		}
-	}
-	return false
-}
-
-// bundleRef is the push's ONE stored object, laid out from its scratch's
-// three files: the pack, its .idx (version 2) and its .rev (version 1),
-// back to back. A missing .rev fails the session: the receive configuration
-// pins it.
-func bundleRef(pushID, packPath, checksum string) (*code.PackRef, error) {
-	base := strings.TrimSuffix(packPath, ".pack")
-	sizes := make([]int64, 3)
-	for i, ext := range []string{".pack", ".idx", ".rev"} {
-		info, err := os.Stat(base + ext)
-		if err != nil {
-			return nil, fmt.Errorf("host: the push's %s: %w", ext, err)
-		}
-		sizes[i] = info.Size()
-	}
-	count, ids, err := idxOIDs(base + ".idx")
-	if err != nil {
-		return nil, err
-	}
-	_ = ids.Close()
-	return &code.PackRef{PackID: pushID, Size: sizes[0] + sizes[1] + sizes[2], IndexBytes: sizes[1],
-		ReverseBytes: sizes[2], GitChecksum: checksum, Objects: count}, nil
-}
-
-// badBundle is a stored bundle its own seal refuses.
-type badBundle struct{ err error }
-
-func (b *badBundle) Error() string { return b.err.Error() }
-
-// storeBundle uploads the push's bundle — the three files back to back,
-// exactly ref.Size bytes, limited at that size — sealing it on the way, and
-// holds the seal to ref (code.CheckBundle), the one rule every installing
-// cache holds it to. On success ref names the stored object. Nothing is read
-// twice: the seal is gathered from the bytes on their way to the store.
-func (s *Server) storeBundle(ctx context.Context, sess *session, packPath string, ref *code.PackRef) error {
-	base := strings.TrimSuffix(packPath, ".pack")
-	var files []io.Reader
-	for _, ext := range []string{".pack", ".idx", ".rev"} {
-		f, err := os.Open(base + ext)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		files = append(files, f)
-	}
-	ctx, cancel := context.WithTimeout(ctx, uploadDeadline(ref.Size))
-	defer cancel()
-	sw := code.NewSealWriter(*ref)
-	in := &faultReader{ctx: ctx, s: s, r: io.MultiReader(files...)}
-	obj, err := s.o.Objects.Put(ctx, io.TeeReader(in, sw), ref.Size,
-		objstore.PutMeta{ContentType: code.BundleContentType})
-	if err != nil {
-		return err
-	}
-	ref.Object, ref.Hash = obj.Key, obj.Hash
-	seal, err := sw.Seal()
-	if err == nil {
-		err = code.CheckBundle(*ref, seal)
-	}
-	if err != nil {
-		s.log.Error("code_pack_rejected", "repo", sess.repo.Name, "push_id", sess.pushID,
-			"object", obj.Key.String(), "error", err)
-		return &badBundle{err: err}
-	}
-	return nil
-}
-
-// faultReader hits HostUpload before each read the object store makes of the
-// bundle, at the offset of the bytes handed over so far.
-type faultReader struct {
-	ctx context.Context
-	s   *Server
-	r   io.Reader
-	at  int64
-}
-
-func (f *faultReader) Read(p []byte) (int, error) {
-	if err := f.s.fault(f.ctx, codefault.HostUpload, f.at); err != nil {
-		return 0, err
-	}
-	n, err := f.r.Read(p)
-	f.at += int64(n)
-	return n, err
 }
 
 // keepalive writes the session's step on the hook's stderr every

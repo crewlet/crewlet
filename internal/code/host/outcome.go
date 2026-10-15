@@ -99,9 +99,9 @@ type verdict struct {
 	applied bool
 }
 
-// decided is the verdict of a proposal's answer (Estate.Propose): every
-// command's answer and the audit's outcome, the pending wait included.
-func (s *Server) decided(ctx context.Context, sess *session, proposed []code.Command,
+// decided is the verdict of a landing's proposal's answer (Estate.Propose):
+// every command's answer and the audit's outcome, the pending wait included.
+func (s *Server) decided(ctx context.Context, l *landing, proposed []code.Command,
 	res code.ProposeResult, err error) verdict {
 
 	var quiet silence
@@ -111,14 +111,14 @@ func (s *Server) decided(ctx context.Context, sess *session, proposed []code.Com
 		// still land — the committer runs it under its own lifetime.
 		return verdict{commands: refuseRest(proposed, code.RefusalUnknown, ""), outcome: types.AuditUnknown}
 	case errors.Is(err, code.ErrInvalidProposal):
-		s.log.Error("code_push_invalid", "repo", sess.repo.Name, "push_id", sess.pushID, "error", err)
+		s.log.Error("code_push_invalid", "repo", l.Synced.Repo.Name, "push_id", l.PushID, "error", err)
 		return verdict{commands: refuseRest(proposed, code.RefusalUnavailable,
 			"the engine refused its own proposal: "+sentence(err.Error())), outcome: types.AuditFailed}
 	case err != nil && errors.As(err, &quiet) && !quiet.Silent():
 		// NOTHING RAN IT: every node the walk asked answered that it
 		// would not, so the push did not land and a re-run lands it.
 		return verdict{commands: refuseRest(proposed, code.RefusalUnavailable,
-			fmt.Sprintf("no data node took push %s: %s", sess.pushID, sentence(err.Error()))),
+			fmt.Sprintf("no data node took push %s: %s", l.PushID, sentence(err.Error()))),
 			outcome: types.AuditRefused, refusal: AuditRefusal(code.RefusalUnavailable)}
 	case err != nil:
 		// A NODE WENT SILENT, or the error does not say: it may have run
@@ -126,13 +126,13 @@ func (s *Server) decided(ctx context.Context, sess *session, proposed []code.Com
 		// it", which a re-run would then report as up to date.
 		return verdict{commands: refuseRest(proposed, code.RefusalUnknown,
 			fmt.Sprintf("no data node answered for push %s; whether it landed is unknown — fetch, then "+
-				"re-run git push", sess.pushID)), outcome: types.AuditUnknown}
+				"re-run git push", l.PushID)), outcome: types.AuditUnknown}
 	case res.Answer.Refused != "":
 		detail := res.Answer.Detail
 		return verdict{commands: refuseRest(res.Answer.Commands, res.Answer.Refused, detail),
 			outcome: types.AuditRefused, refusal: AuditRefusal(res.Answer.Refused)}
 	case res.Outcome == statelog.OutcomePending:
-		return s.awaitPending(ctx, sess, proposed, res.Position)
+		return s.awaitPending(ctx, l, proposed, res.Position)
 	case res.Outcome == statelog.OutcomeUnknown:
 		return verdict{commands: refuseRest(proposed, code.RefusalUnknown,
 			fmt.Sprintf("outcome unknown (op %s); fetch, then re-run git push", res.OpID)),
@@ -180,14 +180,15 @@ func settled(cmds []code.Command, at statelog.Position, row, collapsed bool) ver
 // and the push applied nowhere; any error — a node behind, nobody answering —
 // is read again after a wait that doubles from PendingFirst to PendingMax; and
 // a grace spent is `pending`, never `ok`.
-func (s *Server) awaitPending(ctx context.Context, sess *session, proposed []code.Command,
+func (s *Server) awaitPending(ctx context.Context, l *landing, proposed []code.Command,
 	at statelog.Position) verdict {
 
-	sess.step("waiting for the push to apply")
+	l.Progress("waiting for the push to apply")
 	deadline := s.now().Add(s.o.Timing.PendingGrace)
 	wait := s.o.Timing.PendingFirst
 	for {
-		out, err := s.o.Estate.PushOutcome(ctx, code.OutcomeQuery{RepoID: sess.repo.ID, PushID: sess.pushID, At: at})
+		out, err := s.o.Estate.PushOutcome(ctx, code.OutcomeQuery{RepoID: l.Synced.Repo.ID, PushID: l.PushID,
+			At: at})
 		switch {
 		case err == nil && out.Found:
 			return settled(out.Push.Commands, out.Push.Position, true, false)

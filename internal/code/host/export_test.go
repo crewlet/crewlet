@@ -2,10 +2,14 @@ package host
 
 import (
 	"bufio"
+	"context"
 	"io"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE SEAMS THE TABLE TESTS AND THE SPOOL TESTS READ. Every duration a case
@@ -84,6 +88,48 @@ func ProtectAfterForce(cmds []code.Command, rules []code.Protection, judged []co
 // RebuildReason is rebuildReason: whether a git process's failure in a cache
 // directory is one a rebuild repairs, and under which reason.
 func RebuildReason(err error) (cache.RebuildReason, bool) { return rebuildReason(err) }
+
+// TestLanding is a landing (land.go) as a case forms one — a push the relay
+// never saw, its pack written into its scratch by the case.
+type TestLanding struct {
+	Synced     cache.Synced
+	Scratch    *cache.Scratch
+	Commands   []code.Command
+	Atomic     bool
+	Principal  code.Principal
+	PushID     string
+	ReceivedAt time.Time
+	// Judged are the commands already asked of Synced.Repo's protections,
+	// as they stand; nil is none.
+	Judged []code.Command
+}
+
+// TestLanded is what a landing came to: its commands, the record's outcome
+// as the push's audit records it, and whether its pack was adopted.
+type TestLanded struct {
+	Commands  []code.Command
+	Outcome   types.AuditOutcome
+	Refusal   AuditRefusal
+	Position  statelog.Position
+	OK        int
+	PackBytes int64
+	Adopted   bool
+}
+
+// Land is s's land over l, with nobody listening to its progress.
+func Land(ctx context.Context, s *Server, l TestLanding) (TestLanded, error) {
+	var judged map[judgedKey]bool
+	if l.Judged != nil {
+		judged = map[judgedKey]bool{}
+		for _, c := range l.Judged {
+			judged[judgedKey{c.Ref, c.Old, c.New}] = true
+		}
+	}
+	ld, err := s.land(ctx, landing{Synced: l.Synced, Scratch: l.Scratch, Commands: l.Commands, Atomic: l.Atomic,
+		Principal: l.Principal, PushID: l.PushID, ReceivedAt: l.ReceivedAt, Judged: judged})
+	return TestLanded{Commands: ld.Commands, Outcome: ld.Result.outcome, Refusal: ld.Result.refusal,
+		Position: ld.Result.position, OK: ld.Result.ok, PackBytes: ld.Result.packBytes, Adopted: ld.Adopted}, err
+}
 
 // SetProposalCheck replaces s's own check of a proposal before its bundle is
 // stored (code.Proposal.ValidateUnstored) — how a case stands in the

@@ -20,11 +20,12 @@ import (
 )
 
 // POST /git/{repo}/git-receive-pack — A PUSH, the handler's half of the
-// receive pipeline (steps 0–7 and the answer): its command section read and
+// receive pipeline (steps 0–7, and 9 the answer): its command section read and
 // what can be refused without objects refused, the cache synced through the
 // barrier, the push's scratch made, and receive-pack run there — never in the
 // cache — with the one hook that relays every ref update to the session
-// (session.go), which decides, uploads, proposes and reports.
+// (session.go), which hands them to the one landing every push takes
+// (land.go, step 8) and reports what landed.
 
 // receiveConfig is the RECEIVE CONFIGURATION every push's receive-pack runs
 // with, its advertisement's included, in this order:
@@ -234,10 +235,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sess := newSession(work, cancel)
-	sess.repo, sess.synced, sess.scratch, sess.pushID = synced.Repo, synced, scratch, pushID
+	sess.synced, sess.scratch, sess.pushID = synced, scratch, pushID
 	sess.principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: adm.operatorID, Seat: adm.seat}
-	sess.receivedAt, sess.preRefused = s.now(), pre
-	sess.rules, sess.judged = rules, judged
+	sess.receivedAt, sess.preRefused, sess.judged = s.now(), pre, judged
 	s.relay.open(sess)
 
 	// 7 RECEIVE-PACK, in the scratch. No GIT_PROTOCOL: git never asks
@@ -261,7 +261,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	ended := ctx.Err() != nil
 	claimed := s.relay.close(sess)
 
-	// 13 THE ANSWER AND THE RECORD. A push whose hook claimed its session
+	// 9 THE ANSWER AND THE RECORD. A push whose hook claimed its session
 	// is recorded as the session concluded it — applied, pending, unknown,
 	// refused — WHATEVER THEN BECAME OF THE CONNECTION: once a push reached
 	// its proposal, the record may have landed, and "failed" would say it
@@ -318,21 +318,13 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	s.audit(ctx, adm, rec)
 }
 
-// refusedByStatus refuses a push to a repository whose row refuses every push:
-// deleted or purging, or archived.
+// refusedByStatus refuses a push to a repository whose row refuses every push
+// (statusRefusal): deleted or purging, or archived.
 func (s *Server) refusedByStatus(repo code.RepoRef, sec section,
 	refuseAll func(AuditRefusal, []answered)) bool {
 
-	var (
-		reason code.Refusal
-		words  string
-	)
-	switch {
-	case gone(repo.Status):
-		reason, words = code.RefusalRepoDeleted, s.goneSentence(repo)
-	case repo.Status == code.RepoStatusArchived:
-		reason, words = code.RefusalRepoArchived, code.ArchivedDetail(repo.Name)
-	default:
+	reason, words := s.statusRefusal(repo)
+	if reason == "" {
 		return false
 	}
 	refuseAll(AuditRefusal(reason), refuseWith(sec.Commands, func(parsedCommand) (code.Refusal, string) {

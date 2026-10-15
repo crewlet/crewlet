@@ -1,6 +1,7 @@
 // Package host is SMART HTTP FOR PERSONS: the code host's git surface, the
-// receive pipeline every push takes, the hook relay that hands git's ref
-// updates to the engine, and the wait that keeps an `ok` honest.
+// one landing every push takes from its pack to an applied row, the hook
+// relay that hands git's ref updates to it, and the wait that keeps an `ok`
+// honest.
 //
 // # A push is committed by a record, and git is told so only from its row
 //
@@ -17,6 +18,44 @@
 // from the push's own APPLIED row: a durable record a gate then drops on every
 // node is not a push that landed, so `pending` is waited on — at most
 // statelog.StallGrace — and never reported as `ok`.
+//
+// # One landing, whoever built the push
+//
+// Everything the engine decides about a push once its objects are a pack in a
+// scratch is ONE function, land (land.go), in this order: the repository's
+// STATUS first — a deleted, purging or archived repository takes no push, so
+// no bundle is ever stored for one; the force and stale checks, the stateless
+// rules and the protections of what Forced changes; the blob scan over the
+// push's own pack; --atomic; nothing left to land; the stored size against
+// code.MaxPackBytes; the bundle uploaded and sealed while the commits it
+// introduces are listed, and the proposal held to every rule its committer
+// will hold it to; the proposal itself, through the estate router; the
+// outcome, `ok` only from the push's applied row; and the adoption of its pack
+// into this node's cache, so the node that took a push does not download it
+// back — unless a round that read its row had already begun that pack's GET,
+// or a link fails (code_pack_adopt_failed; its next sync downloads it).
+//
+// What the landing does NOT check is that the scratch's objects are WHOLE, and
+// that is its BUILDER'S: every command's new id present in the scratch or its
+// alternate and connected to what the repository holds, and every object the
+// builder wrote a valid one. For a push git received both are receive-pack's —
+// its connectivity check, and its fsck of every object it took
+// (receive.fsckObjects) — and both run before the hook ever reaches the relay.
+// The landing reads neither: a push with no pack lists nothing, and a pack's
+// listing walks commits, never their trees or blobs. A builder that hands over
+// a scratch missing an object gets a row naming a history no cache can serve.
+//
+// The FORCE CHECK belongs to the landing because Command.Forced is formed
+// there and nowhere else, and protected_force turns on it: a builder that
+// formed its own would be judged by a check it chose. The landing PARSES THE
+// PROTECTIONS ITSELF, from the synced row its scratch leans on, so no builder
+// can judge a push against rules other than its own repository's as the
+// push's sync read them. The relay is its one caller in this release — it
+// reads git's commands off the hook and hands them over with what the receive
+// handler already judged — and a push the engine builds itself from objects
+// it wrote into a scratch is a second caller of the same function, never a
+// second copy of its steps (ADR-0008): TestEveryPushTakesTheOneLanding holds
+// the proposal, the upload and the adoption to it.
 //
 // # Every answer that names a ref is linearizable; an object id has no level
 //
