@@ -1287,10 +1287,11 @@ the calls it counts are always one trace.
 The engine's span attributes are deliberately thin: the seat, the phase, the
 model, the round, the tool and its outcome, an auxiliary call's stage and
 purpose, and token counts — on a call that failed after the vendor billed it,
-such as a refusal, too, so the span is in error and still says what it cost. Everything about
-what a turn *did* — prompts and responses verbatim, tool arguments and results,
-the decision — is already in the [event store](#the-event-store), and a span
-carries what no event does, which is **duration**.
+such as a refusal, too, so the span is in error and still says what it cost.
+Everything about what a turn *did* — prompts and responses verbatim, tool
+arguments and results, the decision — is already in the
+[event store](#the-event-store), and a span carries what no event does, which
+is **duration**.
 
 The engine spans the *round*, not the fallback chain, each member's backend or
 the credential pool beneath it — on a three-member chain over a four-key pool

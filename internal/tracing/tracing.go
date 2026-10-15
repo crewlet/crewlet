@@ -83,7 +83,10 @@
 // They are an operator surface, not a link in the causal chain a trace exists
 // to show — the work they start reaches the trace through the events they
 // publish, which already carry one. The webhook edge IS that first link, so it
-// is spanned.
+// is spanned. So is a person's CALL through the operator catalogue — a
+// `tool.call` of its own, opened by its one dispatch rather than by a route —
+// because a call can make a model call, and the call is what the model call's
+// spans, its spend and its audit record have to share.
 //
 // There is a hazard on that path worth writing down, because the obvious
 // middleware placement walks straight into it: a tracing middleware sits
