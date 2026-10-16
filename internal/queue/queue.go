@@ -596,7 +596,10 @@ type EventQueue interface {
 	// or simply not serving this subject is the ordinary case, and only
 	// the caller knows what a missing answer costs it — an error would
 	// force every caller to unwrap one to find out how many it got. An
-	// error means the ask could not be made at all.
+	// error means the ask could not be made at all — never a request
+	// handed to the broker whose delivery could not be confirmed, which
+	// may have reached a server: a caller reads an error as "nobody
+	// received it", and acts on that by asking again.
 	//
 	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
 	// with ErrUnavailable — never written into a client's reconnect buffer
