@@ -52,6 +52,8 @@ import {
   CheckboxGroup,
   ConfirmField,
   confirmMatches,
+  Inline,
+  Stack,
 } from "@crewlethq/ui";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { DateCell } from "~/app/frame/cells.tsx";
@@ -190,13 +192,13 @@ export function AccessTags({ grants }: { grants?: readonly string[] | null }) {
     );
   }
   return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+    <Inline as="span" gap={1} wrap>
       {line.split(" · ").map((part) => (
         <Tag key={part} size="sm" appearance="outline">
           {part}
         </Tag>
       ))}
-    </span>
+    </Inline>
   );
 }
 
@@ -281,7 +283,11 @@ export function AccessPicker({
       {unknown.map((g) => (
         <Checkbox
           key={g}
-          label={<span className="mono">{g}</span>}
+          label={
+            <Text variant="inherit" mono>
+              {g}
+            </Text>
+          }
           description="Unknown access. It does nothing here."
           checked={value.includes(g)}
           onCheckedChange={(on) => onChange(toggle(g, on))}
@@ -343,7 +349,7 @@ export function ShownOnce({
   children: React.ReactNode;
 }) {
   return (
-    <div className="col gap-2">
+    <Stack gap={2}>
       <FormField label={label}>
         {() => (
           <Copyable
@@ -355,7 +361,7 @@ export function ShownOnce({
         )}
       </FormField>
       <Callout variant="warning">{children}</Callout>
-    </div>
+    </Stack>
   );
 }
 
@@ -718,7 +724,13 @@ function SeatHoldingState({
   return (
     <Callout
       variant="neutral"
-      action={actions.length > 0 ? <span className="row gap-2">{actions}</span> : undefined}
+      action={
+        actions.length > 0 ? (
+          <Inline as="span" gap={2}>
+            {actions}
+          </Inline>
+        ) : undefined
+      }
     >
       <HoldingSentence row={row} you={you} />
     </Callout>
@@ -1184,7 +1196,9 @@ export function ConfirmDialog({
         )
       }
     >
-      <div className="t-body">{children}</div>
+      <Text as="div" variant="body">
+        {children}
+      </Text>
       {typeToConfirm && (
         // A FORM FIELD LIKE EVERY OTHER. The value is typed exactly, so it is
         // shown exactly: the kit's label keeps a literal's case inside its
@@ -1316,7 +1330,10 @@ export function MintTokenDialog({
       {minted ? (
         <ShownOnce label="Token" value={token}>
           Copy it now. You won’t see it again. Works until {fmtDate(expires)}. Send it as{" "}
-          <span className="mono">Authorization: Bearer &lt;token&gt;</span>.
+          <Text variant="inherit" mono>
+            Authorization: Bearer &lt;token&gt;
+          </Text>
+          .
         </ShownOnce>
       ) : (
         <>

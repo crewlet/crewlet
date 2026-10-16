@@ -108,6 +108,7 @@ import {
   Inline,
   Link,
   Text,
+  Stack,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -1101,7 +1102,7 @@ function Holder({ seat }: { seat: HumanSeat }) {
   const { holder, invitation } = seat;
   if (!holder && invitation) {
     return (
-      <span className="row gap-1">
+      <Inline as="span" gap={1}>
         <Tag size="sm" variant="neutral" title={`Open invitation ${invitation.id}`}>
           Invited
         </Tag>
@@ -1110,7 +1111,7 @@ function Holder({ seat }: { seat: HumanSeat }) {
         ) : invitation.email ? (
           <TextCell>{invitation.email}</TextCell>
         ) : null}
-      </span>
+      </Inline>
     );
   }
   // OPEN, IN WORDS: a seat nothing holds is one an administrator can invite
@@ -1133,13 +1134,16 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
   const entries = Object.entries(contact ?? {}).filter(([, value]) => value);
   if (entries.length === 0) return <EmptyValue label="No surface" />;
   return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+    <Inline as="span" gap={1} wrap>
       {entries.map(([key, value]) => (
         <Tag key={key} size="sm" appearance="outline" title={`${key}: ${value}`}>
-          {CONTACT_SURFACES[key] ?? key} <span className="mono">{value}</span>
+          {CONTACT_SURFACES[key] ?? key}{" "}
+          <Text variant="inherit" mono>
+            {value}
+          </Text>
         </Tag>
       ))}
-    </span>
+    </Inline>
   );
 }
 
@@ -1222,43 +1226,45 @@ function Findings({
         detail={check.error?.detail || undefined}
         loading={check.loading && !check.data}
       >
-        <div className="col" style={{ gap: "var(--spacing-2)", padding: "var(--spacing-4)" }}>
-          {findings.length === 0 && <p className="t-body muted">All good.</p>}
-          {findings.map((f, i) => {
-            const words = findingWords(f.kind);
-            const row = f.person ? byId.get(f.person) : undefined;
-            const fix = manages && row ? findingFix(f, row) : null;
-            return (
-              <div
-                key={`${f.kind}:${f.person ?? f.seat ?? i}`}
-                className="row gap-2"
-                style={{ flexWrap: "wrap", alignItems: "center" }}
-              >
-                <Tag size="sm" variant={words?.tone ?? "neutral"}>
-                  {words?.label ?? f.kind}
-                </Tag>
-                <span className="t-body">{findingSentence(f, row)}</span>
-                {fix && row && (
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    onClick={() => setFixing({ gesture: fix.gesture, row })}
-                  >
-                    {fix.label}
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-          {/* SAID RATHER THAN SILENT: "no dangling binding" and "this node
+        <Card.Body padding="md">
+          <Stack gap={2}>
+            {findings.length === 0 && (
+              <Text as="p" variant="body" tone="tertiary">
+                All good.
+              </Text>
+            )}
+            {findings.map((f, i) => {
+              const words = findingWords(f.kind);
+              const row = f.person ? byId.get(f.person) : undefined;
+              const fix = manages && row ? findingFix(f, row) : null;
+              return (
+                <Inline key={`${f.kind}:${f.person ?? f.seat ?? i}`} gap={2} wrap>
+                  <Tag size="sm" variant={words?.tone ?? "neutral"}>
+                    {words?.label ?? f.kind}
+                  </Tag>
+                  <Text variant="body">{findingSentence(f, row)}</Text>
+                  {fix && row && (
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={() => setFixing({ gesture: fix.gesture, row })}
+                    >
+                      {fix.label}
+                    </Button>
+                  )}
+                </Inline>
+              );
+            })}
+            {/* SAID RATHER THAN SILENT: "no dangling binding" and "this node
               could not say" are different answers. */}
-          {unchecked > 0 && (
-            <p className="t-caption muted">
-              {unchecked} binding{unchecked === 1 ? "" : "s"} could not be checked against this
-              node&rsquo;s chart just now.
-            </p>
-          )}
-        </div>
+            {unchecked > 0 && (
+              <Text as="p" variant="caption">
+                {unchecked} binding{unchecked === 1 ? "" : "s"} could not be checked against this
+                node&rsquo;s chart just now.
+              </Text>
+            )}
+          </Stack>
+        </Card.Body>
       </QueryState>
       {fixing?.gesture === "mint" && (
         <MintTokenDialog
@@ -1598,7 +1604,7 @@ export function PersonPeek({ id }: { id: string }) {
           { label: "Access", value: <AccessTags grants={row.grants} /> },
         ]}
       />
-      <div className="col gap-3">
+      <Stack gap={3}>
         {you && (
           <Callout
             variant="neutral"
@@ -1628,7 +1634,7 @@ export function PersonPeek({ id }: { id: string }) {
             close();
           }}
         />
-      </div>
+      </Stack>
     </>
   );
 }
@@ -1705,7 +1711,7 @@ function Principal({
           set apart: six equal buttons wrapped over two rows and put the one
           that cannot be undone in the middle of the second. */}
       {manages && (
-        <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+        <Inline gap={2} wrap>
           <Button size="small" variant="secondary" onClick={() => setGesture("edit")}>
             Edit
           </Button>
@@ -1762,7 +1768,7 @@ function Principal({
               },
             ]}
           />
-        </div>
+        </Inline>
       )}
       {gesture === "edit" && (
         <EditPersonDialog
@@ -1881,8 +1887,10 @@ function Principal({
               : "Their account is deleted and their seat opens up. Can’t be undone."}
         </PersonWrite>
       )}
-      <section className="col gap-2">
-        <div className="t-label">Credentials</div>
+      <Stack as="section" gap={2}>
+        <Text as="div" variant="label">
+          Credentials
+        </Text>
         <QueryState
           error={credentials.code}
           refusal={credentials.refusal}
@@ -1987,10 +1995,12 @@ function Principal({
             ]}
           />
         </QueryState>
-      </section>
+      </Stack>
       {!machine && (
-        <section className="col gap-2">
-          <div className="t-label">Sessions</div>
+        <Stack as="section" gap={2}>
+          <Text as="div" variant="label">
+            Sessions
+          </Text>
           <QueryState
             error={sessions.code}
             refusal={sessions.refusal}
@@ -2040,16 +2050,16 @@ function Principal({
                       // change ended read as one that merely had. ONE LINE, cut
                       // with an ellipsis and whole on its title where the column
                       // is narrower than the sentence.
-                      <span className="row gap-1" style={{ minWidth: 0 }}>
+                      <Inline as="span" gap={1}>
                         <Tag size="sm" variant="neutral">
                           Ended
                         </Tag>
                         {s.ended_reason && (
-                          <span className="t-caption muted truncate" title={s.ended_reason}>
+                          <Text variant="caption" truncate title={s.ended_reason}>
                             {s.ended_reason}
-                          </span>
+                          </Text>
                         )}
-                      </span>
+                      </Inline>
                     ),
                 },
                 {
@@ -2071,7 +2081,7 @@ function Principal({
               ]}
             />
           </QueryState>
-        </section>
+        </Stack>
       )}
     </>
   );

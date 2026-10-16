@@ -156,7 +156,10 @@ export function ServiceAccountDialog({
     >
       {created ? (
         <Text as="p" variant="body">
-          <span className="mono">{login.trim()}</span> created
+          <Text variant="inherit" mono>
+            {login.trim()}
+          </Text>{" "}
+          created
           {seat !== NO_SEAT
             ? `, acting as the seat ${options.find((o) => o.value === seat)?.label ?? seat}`
             : ""}
