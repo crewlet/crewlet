@@ -70,7 +70,7 @@ one JSON object, and it always has the same three parts in the same places:
 ```json
 {
   "error": "no_external_url",
-  "message": "This deployment has no external address, so nothing that has to point back at it can be made. Set the external URL in this node's own configuration file and restart it.",
+  "message": "No external address is set. Set `api.external_url` in this node's config file and restart.",
   "config_path": "api.external_url",
   "hint": "Set the HTTPS address third-party apps reach this deployment on; without it the pass can register no webhook."
 }
@@ -936,7 +936,7 @@ refused create leaves nothing behind and the corrected retry lands.
   "credential": "0192f00e-…",
   "url": "https://crewlet.example.com/dashboard#/reset/<id>.<secret>",
   "expires_at": "2026-06-15T09:12:00Z",
-  "detail": "this link is shown once and cannot be read back; …",
+  "detail": "This link is shown only once. Send it to them yourself (Crewlet doesn't send email). It expires at the time above.",
   "outcome": "applied",
   "op_id": "0192f00c-…",
   "position": "CREWLET_IAM_LOG@0:1842"
@@ -1491,8 +1491,8 @@ manages the document and what to do:
 {
   "error": "config_managed",
   "managed_by": ["gitops"],
-  "detail": "The company document is managed by gitops, and the credential \"founder\" may read it but not change it.",
-  "hint": "Change the company at its source, the system that writes it here with the token gitops: an edit made directly would be overwritten at its next reconcile. A leaked credential can still be rotated: write the new value with /secrets and POST /config/reload. To take the document back, remove api.auth.company_writers from every node's Tier A and restart."
+  "detail": "The company config is managed by gitops. The credential \"founder\" can read it but not change it.",
+  "hint": "Change it in the system that manages it (the token gitops). Edits here get overwritten. To rotate a leaked credential, write it to /secrets and POST /config/reload. To manage it here, remove `api.auth.company_writers` from every node's config file and restart."
 }
 ```
 
@@ -1609,8 +1609,8 @@ may be a unit's lead who holds no grant over the directory:
 ```json
 {
   "error": "seat_held",
-  "message": "This change removes a person's seat, or makes it an agent's, …",
-  "detail": "Configapi: this write removes a human seat that is still held: designer (held by sam.lee); qa-lead (held by open invitation 0192f00d-…).",
+  "message": "This change removes a seat someone holds or is invited to. …",
+  "detail": "This change removes human seats that people still hold: designer (held by sam.lee); qa-lead (held by an open invitation (0192f00d-…)).",
   "held": {
     "designer": {"person": "018f3a9c-…", "kind": "person", "login": "sam.lee",
                  "stage": "active"},
