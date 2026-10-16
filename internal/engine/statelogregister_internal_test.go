@@ -223,6 +223,59 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 	}
 }
 
+// A DOMAIN KEEPS A GENERATION RECORD EXACTLY WHERE IT CLAIMS IDENTITY, and
+// the boot check refuses either mismatch naming the domain.
+//
+// The record a reanchor appends is the first-writer-wins between two
+// operators re-anchoring one log at once, and the audit row of who opened
+// which generation is applied from it. An identity log whose encoder kept none
+// could be opened at one generation by two nodes with nothing reporting it;
+// a log that claims no identity and keeps one writes an audit row nobody
+// reads. Both are reached only when an operator re-anchors, mid-incident.
+//
+// Mutation: drop either arm of the check in checkIdentityEntry and the matching
+// control passes the boot check.
+func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
+	claims := 0
+	for _, entry := range register() {
+		_, keeps := entry.Generation.GenerationSubject(1)
+		if identity := entry.Domain.ClaimsIdentity(); keeps != identity {
+			t.Errorf("%s keeps a generation record = %v while claiming identity = %v",
+				entry.Domain.Name(), keeps, identity)
+		} else if identity {
+			claims++
+		}
+	}
+	if claims < 3 {
+		t.Fatalf("the register holds %d identity-claiming domain(s) keeping a "+
+			"generation record, want the tracker, the pages and the identity "+
+			"estate", claims)
+	}
+
+	// CONTROL, both ways round.
+	for _, c := range []struct {
+		domain string
+		record statelog.GenerationEncoder
+		want   string
+	}{
+		{iamdomain.Domain{}.Name(), search.GenerationRecord{}, "keeps no record"},
+		{search.Domain{}.Name(), tracker.GenerationRecord{}, "keeps a generation record"},
+	} {
+		entries := register()
+		for i := range entries {
+			if entries[i].Domain.Name() == c.domain {
+				entries[i].Generation = c.record
+			}
+		}
+		err := checkRegister(entries)
+		if err == nil || !strings.Contains(err.Error(), c.domain) ||
+			!strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s with %T answered %v, want a refusal naming it and "+
+				"saying %q", c.domain, c.record, err, c.want)
+		}
+	}
+}
+
 // A WAKE FEED THAT DISAGREES WITH ITS DOMAIN'S DECLARATION FAILS THE BOOT CHECK
 // — on every node and before anything is provisioned, where it used to be
 // asked only as a feed started, which a node that publishes nothing never
