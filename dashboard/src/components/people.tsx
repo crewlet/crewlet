@@ -558,7 +558,7 @@ export const SEAT_GESTURE_WORDS: Record<
 export function holderName(holder: NonNullable<HumanSeat["holder"]>): string {
   if (holder.name) return holder.name;
   if (holder.login) return holder.login;
-  if (holder.sealed) return "a person whose name this node cannot open";
+  if (holder.sealed) return "a person whose name this node can’t decrypt";
   return holder.kind === "machine" ? "a service account" : "a person";
 }
 

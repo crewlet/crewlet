@@ -172,7 +172,7 @@ function noteFor(session: SessionAnswer): string {
   }
   return tierATokenOf(session.login)
     ? "Signed in with an API token. Ends within an hour."
-    : "Who this browser is signed in as. A credential that is not a person has no password, second factor or personal tokens to change here.";
+    : "Who this browser is signed in as. A credential that isn’t a person has no password, two-step verification or personal tokens to change here.";
 }
 
 /** A session that is not a person's: what it is and what it holds, and nothing to manage. */
@@ -193,7 +193,7 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
             </>
           ) : (
             <>
-              You’re signed in as <code className="inline">{session.login}</code>, which is not a
+              You’re signed in as <code className="inline">{session.login}</code>, which isn’t a
               person.
             </>
           )}
@@ -278,7 +278,7 @@ function Profile({
 }) {
   const row = profile.data;
   const seat = row?.seat ?? session.seat ?? "";
-  const sealed = <EmptyValue label="Sealed: this node cannot open it" />;
+  const sealed = <EmptyValue label="Locked: this node can’t decrypt it" />;
   return (
     <Card>
       <Card.Header icon={<UserGlyph size="sm" />}>
@@ -787,7 +787,7 @@ function Sessions({
     try {
       await auth.logoutOne(lineage);
     } catch (err) {
-      toast.failed(`Signing that session out did not go through. ${refusalText(err)}`);
+      toast.failed(`Signing that session out didn’t go through. ${refusalText(err)}`);
     } finally {
       setEnding(null);
       onChanged();

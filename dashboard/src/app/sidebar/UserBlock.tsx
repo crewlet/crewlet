@@ -383,7 +383,7 @@ export function AccountActions({
   // sign-out that nothing answered must not look like one that worked.
   const run = (gesture: () => Promise<void>, what: string) => () => {
     gesture().catch((err: unknown) =>
-      toast.failed(`${what} did not go through. ${refusalText(err)}`),
+      toast.failed(`${what} didn’t go through. ${refusalText(err)}`),
     );
   };
   return (

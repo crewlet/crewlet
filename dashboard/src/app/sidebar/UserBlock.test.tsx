@@ -532,7 +532,7 @@ describe("signing out", () => {
     localStorage.setItem(recentsKey("p-1"), "[]");
     const { asked } = actions(signedIn);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
-    expect(await screen.findByText(/Signing out did not go through/)).toBeDefined();
+    expect(await screen.findByText(/Signing out didn’t go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
     // AND THE SOCKET IT HELD IS GIVEN BACK: the person is still signed in here.
     expect(asked).toEqual(["hold", "release"]);
@@ -569,7 +569,7 @@ describe("signing out", () => {
       within(ask).getByText("Signs you out on every device and stops your tokens."),
     ).toBeDefined();
     fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
-    expect(await screen.findByText(/Signing out everywhere did not go through/)).toBeDefined();
+    expect(await screen.findByText(/Signing out everywhere didn’t go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
   });
 

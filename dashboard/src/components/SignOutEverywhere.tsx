@@ -32,7 +32,7 @@ export function SignOutEverywhereDialog({ onClose }: { onClose: () => void }) {
       // A SIGN-OUT THAT LANDED LEAVES THE PAGE, so nothing here settles it.
       await signOutEverywhere(socket);
     } catch (err) {
-      setRefusal(`Signing out everywhere did not go through. ${refusalText(err)}`);
+      setRefusal(`Signing out everywhere didn’t go through. ${refusalText(err)}`);
       setBusy(false);
     }
   }

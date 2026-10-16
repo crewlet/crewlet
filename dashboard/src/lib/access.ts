@@ -156,7 +156,7 @@ export const WITHHELD_WORDS = "Hidden";
 export const WITHHELD_WHY = "Only this seat’s lead and admins can see it.";
 
 /** What a coding run's question is drawn as where the engine withheld it. */
-export const QUESTION_WITHHELD = "Its question is not shown to you";
+export const QUESTION_WITHHELD = "Its question is hidden";
 
 /**
  * Whether a coding run's QUESTION was withheld from this reader: the engine
