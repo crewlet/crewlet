@@ -70,7 +70,7 @@ const SPENT: Answer = {
   status: 410,
   body: {
     error: "reset_spent",
-    message: "This password reset link is no longer valid. Ask an administrator for a new one.",
+    message: "This password reset link is no longer valid. Ask an admin for a new one.",
   },
 };
 
@@ -151,7 +151,7 @@ describe("opening the link", () => {
     await mount();
     expect(
       await screen.findByText(
-        "This password reset link is no longer valid. Ask an administrator for a new one.",
+        "This password reset link is no longer valid. Ask an admin for a new one.",
       ),
     ).toBeDefined();
     expect(screen.queryByLabelText("New password")).toBeNull();
@@ -212,7 +212,7 @@ describe("a first password link", () => {
     engine({ [`GET ${PATH}`]: SPENT });
     await mount();
     await screen.findByText(
-      "This password reset link is no longer valid. Ask an administrator for a new one.",
+      "This password reset link is no longer valid. Ask an admin for a new one.",
     );
     expect(screen.getByText("Already set your password? Sign in.")).toBeDefined();
     expect(screen.queryByText(/for a day/)).toBeNull();
@@ -279,7 +279,7 @@ describe("spending it", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
     expect(
       await screen.findByText(
-        "This password reset link is no longer valid. Ask an administrator for a new one.",
+        "This password reset link is no longer valid. Ask an admin for a new one.",
       ),
     ).toBeDefined();
   });

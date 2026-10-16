@@ -496,7 +496,8 @@ describe("an invitation onto a seat", () => {
       "POST /iam/invitations": [
         json(403, {
           error: "unauthorized",
-          message: "The credential you presented does not carry the grant this request needs.",
+          message:
+            "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
           reason: "directory",
           grants: ["admin"],
         }),
@@ -509,7 +510,7 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const alert = within(dialog).getByRole("alert");
-    expect(alert.textContent).toMatch(/does not carry the grant/);
+    expect(alert.textContent).not.toMatch(/Admin, Tracker or Knowledge/);
     expect(alert.textContent).toMatch(/You need Admin access for this\./);
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
@@ -689,7 +690,8 @@ describe("a person created on a seat", () => {
         json(400, {
           error: "seat_required",
           message: "Name the seat this is for.",
-          detail: "a person holds a human seat for as long as they are here — name one",
+          detail:
+            "A person needs a human seat. Pick an empty one (GET /iam/seats?unheld=true lists them).",
         }),
       ],
     });

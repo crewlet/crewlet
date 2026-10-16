@@ -367,7 +367,7 @@ describe("redeeming it", () => {
       [`GET ${PATH}`]: VIEW,
       [`POST ${PATH}`]: {
         status: 409,
-        body: { error: "bad_params", detail: "that login is already taken — choose another" },
+        body: { error: "bad_params", detail: "That login is already taken. Choose another." },
       },
     });
     await mount();
@@ -376,9 +376,7 @@ describe("redeeming it", () => {
     type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
-    await waitFor(() =>
-      expect(alerts()).toContain("That login is already taken — choose another."),
-    );
+    await waitFor(() => expect(alerts()).toContain("That login is already taken. Choose another."));
     expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe(
       "correct horse battery staple",
     );

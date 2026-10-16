@@ -643,7 +643,8 @@ test("an edit refused part way reads the directory again", async () => {
     "PATCH /iam/people/p-bo": [
       json(403, {
         error: "unauthorized",
-        message: "The credential you presented does not carry the grant this request needs.",
+        message:
+          "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
         id: "p-bo",
         landed: ["identity"],
       }),

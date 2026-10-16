@@ -220,8 +220,8 @@ describe("enrolling", () => {
           status: 400,
           body: {
             error: "invalid_body",
-            detail: "that code does not match the secret",
-            hint: "check the authenticator app has the right account, and that this device's clock is correct",
+            detail: "That code doesn’t match.",
+            hint: "Check that your authenticator app shows the right account and your device’s clock is correct.",
           },
         },
       ],
@@ -231,7 +231,7 @@ describe("enrolling", () => {
 
     await waitFor(() =>
       expect(alerts()).toContain(
-        "That code does not match the secret. Check the authenticator app has the right account, and that this device's clock is correct.",
+        "That code doesn’t match. Check that your authenticator app shows the right account and your device’s clock is correct.",
       ),
     );
     expect((screen.getByLabelText(/^code from the app/i) as HTMLInputElement).value).toBe("");

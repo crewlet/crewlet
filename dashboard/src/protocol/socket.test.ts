@@ -143,7 +143,7 @@ describe("the engine's close codes", () => {
   test("4401 reconnects for a session the browser still holds, and probes nothing", async () => {
     const { store } = started();
     dial(0).open();
-    dial(0).closeWith(4401, "credential no longer accepted");
+    dial(0).closeWith(4401, "Your session ended. Sign in again.");
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(ScriptedWebSocket.dials.length).toBeGreaterThan(1);
@@ -198,7 +198,7 @@ describe("the engine's close codes", () => {
       running.push(socket);
       socket.start();
       dial(0).open();
-      dial(0).closeWith(4401, "credential no longer accepted");
+      dial(0).closeWith(4401, "Your session ended. Sign in again.");
       await vi.advanceTimersByTimeAsync(2_000);
 
       expect(asked).toEqual(["p-1"]);

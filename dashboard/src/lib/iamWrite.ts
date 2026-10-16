@@ -159,13 +159,15 @@ function refusalOf(err: unknown, sent: string): IamAnswer {
       stale: false,
     };
   }
-  const parts = [refusalText(err)];
-  // ONLY A RULE'S REFUSAL names access the caller lacks. A step-up refusal
-  // names the access that ADMITTED them, so said here it told an admin that
-  // Admin access would admit them.
-  if (err.code === "unauthorized" && err.grants.length > 0) {
-    parts.push(youNeedWords(err.grants));
-  }
+  // ONLY A RULE'S REFUSAL names access the caller lacks, and then it is ONE
+  // sentence naming that access, as a refused change says it everywhere
+  // (`WriteButton`'s `RefusalNote`): the engine's own sentence lists every
+  // access in general, and the two side by side said it twice. A step-up
+  // refusal names the access that ADMITTED them, so it never comes here.
+  const parts =
+    err.code === "unauthorized" && err.grants.length > 0
+      ? [`${youNeedWords(err.grants)} Ask an admin.`]
+      : [refusalText(err)];
   return {
     kind: "refused",
     text: parts.join(" ") + changed,

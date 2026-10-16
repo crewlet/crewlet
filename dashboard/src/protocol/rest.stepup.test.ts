@@ -25,7 +25,7 @@ const STEP_UP = {
   status: 403,
   body: {
     error: "step_up_required",
-    message: "This action needs you to have confirmed who you are recently.",
+    message: "Confirm it’s you to do this, then try again.",
     reason: "step_up",
     window: "step_up",
     grants: [],
