@@ -94,20 +94,21 @@ answer says what settles it for that call — the same operation again where the
 call carried one, a read before writing again where it did not.
 
 Where this node's operation ledger cannot vouch for the operation — it was
-minted before the ledger may have lost rows, a seat woken by a backlog trigger
-just after its node adopted a snapshot — the answer says this node cannot
-tell, because the same operation asked here answers the same way until the
-write reaches this node, and tells the caller to look before writing it again;
-a gesture that stopped part of the way through at such a step is not told to
-repeat itself either. A seat's own write under a plain lost acknowledgement is
-told to repeat the call with exactly the same arguments, before any different
-call to the same tool — that is the same operation, and it lands once.
-Reworded, it is a new one. Where the ledger cannot vouch for it, that same
-repeat is still safe — it publishes nothing this node cannot vouch for — but it
-answers the same way until the write reaches this node, so looking says sooner.
-The two writes that state a whole value rather than change one —
-`write_project` and `write_work_catalogue` — say instead that repeating them is
-harmless: each call is a new operation stating the same thing.
+minted before the ledger may have lost rows, as an `op_id` your assistant sends
+back more than thirty days after the write that first answered with it — the
+answer says this node cannot tell, because the same operation asked here
+answers the same way until the write reaches this node, and tells the caller to
+look before writing it again; a gesture that stopped part of the way through at
+such a step is not told to repeat itself either. A seat's own write under a
+plain lost acknowledgement is told to repeat the call with exactly the same
+arguments, before any different call to the same tool — that is the same
+operation, and it lands once. Reworded, it is a new one. Where the ledger
+cannot vouch for it, that same repeat is still safe — it publishes nothing this
+node cannot vouch for — but it answers the same way until the write reaches
+this node, so looking says sooner. The two writes that state a whole value
+rather than change one — `write_project` and `write_work_catalogue` — say
+instead that repeating them is harmless: each call is a new operation stating
+the same thing.
 
 A create or an update that declares its labels first (`labels_create_missing`)
 and cannot tell whether that declaration landed stops there too, and is
