@@ -732,7 +732,11 @@ func TestSentenceCapitalisesProseAndKeepsIdentifiers(t *testing.T) {
 		{"limit must be a number", "Limit must be a number."},
 		{"that login is already taken. Choose another", "That login is already taken. Choose another."},
 		{"isn't valid", "Isn't valid."},
-		{"configapi: a wrapped chain", "Configapi: a wrapped chain."},
+		{"configapi: a wrapped chain", "configapi: a wrapped chain."},
+		{"statelog: node-4 may not be evicted", "statelog: node-4 may not be evicted."},
+		{"api: no keyring", "api: no keyring."},
+		{"note: not a package", "Note: not a package."},
+		{"statelog node-4 is behind", "Statelog node-4 is behind."},
 		{"Already a sentence.", "Already a sentence."},
 		{"Already signed in?", "Already signed in?"},
 		{"  padded text  ", "Padded text."},
@@ -798,5 +802,59 @@ func TestTheEnvelopeWritesDetailAndHintAsSentences(t *testing.T) {
 	}
 	if given["detail"] != "nothing was written" {
 		t.Errorf("the caller's map was written to: %#v", given)
+	}
+}
+
+// THE PACKAGE PREFIXES ARE THE MODULE'S PACKAGES, every one and nothing else.
+//
+// [httpjson.Sentence] leaves a leading "name: " lowercase when the name is a
+// Go package's, which only holds while its table names the packages this
+// module has. So every package clause in the tree is read, and the table and
+// the tree are compared both ways: a package added without the table
+// following would be capitalised as "Newpkg: ...", and a stale entry would
+// keep a prose word lowercase.
+func TestThePackagePrefixesAreTheModulesPackages(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	found := map[string]bool{}
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "testdata", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.PackageClauseOnly)
+		if err != nil {
+			return err
+		}
+		if name := file.Name.Name; name != "main" {
+			found[name] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) == 0 {
+		t.Fatal("the walk read no package clause, so it compared nothing")
+	}
+	table := httpjson.PackagePrefixes()
+	for name := range found {
+		if !slices.Contains(table, name) {
+			t.Errorf("package %s is missing from goPackages (packages.go); add it", name)
+		}
+	}
+	for _, name := range table {
+		if !found[name] {
+			t.Errorf("goPackages names %s, which no package in the tree is; remove it", name)
+		}
 	}
 }

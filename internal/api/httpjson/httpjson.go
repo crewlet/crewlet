@@ -1259,9 +1259,9 @@ var proseKeys = [...]string{keyDetail, keyHint}
 //
 // AN IDENTIFIER KEEPS ITS SPELLING. Only a plain lowercase word is
 // capitalised: text that opens with a field name (`expires_in_days`), a flag
-// (`-dev-principal`), a path, an address or a quoted value opens exactly as
-// it was written, because capitalising it would name something that does not
-// exist. Text that already ends in a full stop, a question mark or an
+// (`-dev-principal`), a path, an address, a quoted value or a Go package
+// prefix ("statelog: ", see [goPackages]) opens exactly as it was written,
+// because capitalising it would name something that does not exist. Text that already ends in a full stop, a question mark or an
 // exclamation mark keeps its ending, so calling this twice changes nothing.
 func Sentence(text string) string {
 	s := strings.TrimSpace(text)
@@ -1279,9 +1279,14 @@ func Sentence(text string) string {
 
 // plainWord reports whether s opens with a word made of letters alone (an
 // apostrophe within it, as in "isn't", and a clause mark after it allowed),
-// which is what separates prose from an identifier at the start of a line.
+// which is what separates prose from an identifier at the start of a line. A
+// package's name followed by a colon is the package prefix of a Go error,
+// and an identifier.
 func plainWord(s string) bool {
 	word, _, _ := strings.Cut(s, " ")
+	if name, prefixed := strings.CutSuffix(word, ":"); prefixed && goPackages[name] {
+		return false
+	}
 	word = strings.TrimRight(word, ",:;")
 	if word == "" {
 		return false

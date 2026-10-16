@@ -101,7 +101,8 @@ one JSON object, and it always has the same three parts in the same places:
   so a count is a number and a list of located problems is a list. The two
   text keys a person reads, `detail` (what happened) and `hint` (what to do),
   are always written as sentences: a capital first letter, unless the text
-  opens with a field name, flag, path or address, and a full stop. The
+  opens with a field name, flag, path, address or Go package prefix
+  (`statelog: …`), and a full stop. The
   WebSocket's error frames write their `detail` the same way.
 - **A `503` says when, or says it will not help.** A `503` that waiting clears
   — a node behind its log, a coordination store it could not reach, a write
