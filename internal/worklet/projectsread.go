@@ -386,7 +386,7 @@ type ProjectQuery struct {
 // prevent. [MapParams] is what lets a tool's argument map through it.
 //
 // WHAT IT DOES NOT FILL is what is not the grammar's: the freshness keys are
-// [ParseFreshness]'s, [ProjectQuery.Units] is the surface's own chart seam,
+// [statelog.ParseFreshness]'s, [ProjectQuery.Units] is the surface's own chart seam,
 // and the LIMIT IS PARSED BUT NOT CLAMPED, because the two surfaces clamp to
 // different ceilings ([MaxProjectsPerAnswer] and [MaxProjectsPerToolAnswer])
 // and each one's reason is its own.

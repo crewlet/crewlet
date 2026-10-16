@@ -1256,115 +1256,18 @@ func (q *Query) parseRowFields(p Params) error {
 // Wants reports whether the caller asked for one row fact.
 func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, field) }
 
-// ParseFreshness reads the four freshness keys — `read_level`,
-// `max_lag_seconds`, `max_lag_seq` and `min_position` — and is the ONE place
-// their rules are stated.
+// parseLevel reads the four freshness keys onto the query, through the
+// framework's one grammar for them ([statelog.ParseFreshness]).
 //
-// # Why one grammar and not one per question
-//
-// Seventeen registered questions take a level and a staleness bound, and
-// exactly ONE of them — the task board, which happens to be the one that goes
-// through [ParseQuery] — used to read either. The rest hardcoded a
-// level and never looked at a bound at all, so a caller asking a project
-// listing for a fresher answer was served the same one and told it came back
-// at the level asked for. One grammar serves the board, the socket, the REST
-// route and a seat's own tools, and a second reading of `read_level` would be
-// the one place a freshness key meant something slightly different.
-//
-// The shape it returns is the framework's own ([statelog.Freshness]) because
-// the knowledge base reads through the same four keys and a second struct
-// with the same four fields is how the two drift.
-//
-// # `min_position` and `session`
-//
-// `min_position` is a log position — `<stream>@<generation>:<sequence>`, the
-// form every write answers with and every wake carries — and the answer is
-// served from no earlier than it, at whatever level. It is what makes
-// `read_level=session` honest here: a session read waits for the caller's
-// own last write, this grammar had no key to carry one, and accepted bare the
-// level would wait for the zero position, serve this node's committed prefix
-// and label the answer `session`. So `session` is accepted ONLY beside a
-// `min_position`, and refused without one naming the key.
-func ParseFreshness(p Params) (statelog.Freshness, error) {
-	var out statelog.Freshness
-	if raw := strings.TrimSpace(p.String("min_position")); raw != "" {
-		at, err := statelog.ParsePosition(raw)
-		if err != nil {
-			return out, fmt.Errorf("min_position: %w", err)
-		}
-		out.MinPosition = at
-	}
-	value := strings.TrimSpace(p.String("read_level"))
-	if value == "" {
-		// ABSENT IS NOT A FIFTH STATE. It resolves to the SURFACE's own
-		// default — a seat tool linearizable, a dashboard poll stale —
-		// which is what makes the default a property of the surface
-		// rather than of the model that happened to omit the key.
-		//
-		// AND A BOUND WITHOUT A LEVEL IS STILL READ, because the surface
-		// that resolves an absent level to `stale` is exactly the one
-		// whose callers bound staleness — a dashboard poll. Refusing it
-		// here would refuse the common case; carrying it and letting a
-		// non-stale resolution ignore it would be the silent drop this
-		// grammar was already fixed for once.
-		return withBounds(out, p)
-	}
-	level := statelog.ReadLevel(value)
-	if !level.Valid() {
-		return out, fmt.Errorf("worklet: %q is not a read level; the four are "+
-			"linearizable, session, stale and consistent_prefix", value)
-	}
-	if level == statelog.ReadSession && out.MinPosition.IsZero() {
-		return out, fmt.Errorf("worklet: read_level=session waits for the " +
-			"caller's own last write and none was named — send the position " +
-			"that write answered with as min_position, or ask for " +
-			"linearizable, or for stale with max_lag_seq to bound how far " +
-			"behind an answer may be")
-	}
-	out.Level = level
-	if level != statelog.ReadStale {
-		for _, key := range []string{"max_lag_seq", "max_lag_seconds"} {
-			if p.Has(key) {
-				return out, fmt.Errorf("worklet: %s bounds how STALE an answer "+
-					"may be and read_level is %s, which is not a staleness "+
-					"bound at all", key, level)
-			}
-		}
-		return out, nil
-	}
-	return withBounds(out, p)
-}
-
-// withBounds reads the two staleness bounds onto an answer that may carry them.
-//
-// THE BOUND IS CARRIED, not just checked. A bound refused where it is
-// inconsistent and dropped where it is not is a bound that never bounded
-// anything — which is what `max_lag_seconds` did before it was fixed, and what
-// `max_lag_seq` did after, in the same function, for longer.
-func withBounds(f statelog.Freshness, p Params) (statelog.Freshness, error) {
-	if p.Has("max_lag_seconds") {
-		secs := p.Int("max_lag_seconds", 0)
-		if secs < 0 {
-			return f, fmt.Errorf("worklet: max_lag_seconds is how many seconds "+
-				"behind an answer may be, and %d is not a duration", secs)
-		}
-		f.MaxLag = time.Duration(secs) * time.Second
-	}
-	if p.Has("max_lag_seq") {
-		records := p.Int("max_lag_seq", 0)
-		if records < 0 {
-			return f, fmt.Errorf("worklet: max_lag_seq is how many records "+
-				"behind an answer may be, and %d is not a count", records)
-		}
-		f.MaxLagSeq = uint64(records)
-	}
-	return f, nil
-}
-
+// THE GRAMMAR IS NOT THE TRACKER'S. Every domain's questions read the same four
+// keys, and the parser lived here once — so a bad `read_level` on a wiki
+// question was refused naming the tracker. What stays here is the tracker's own
+// prefix on a tracker query's refusal, which every other refusal of this
+// grammar carries too.
 func (q *Query) parseLevel(p Params) error {
-	got, err := ParseFreshness(p)
+	got, err := statelog.ParseFreshness(p)
 	if err != nil {
-		return err
+		return fmt.Errorf("worklet: %w", err)
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = got.Level, got.MaxLag, got.MaxLagSeq
 	q.MinPosition = got.MinPosition
