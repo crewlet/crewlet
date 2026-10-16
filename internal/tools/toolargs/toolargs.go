@@ -1,5 +1,17 @@
-// Package toolargs holds a tool call's arguments in the one form every step
-// of the call reads them in, once the call has entered (ADR-0059).
+// Package toolargs reads a tool call's arguments off the transport that
+// carried them, the same way over every one ([Decode]), and holds them in the
+// one form every step of the call reads them in, once the call has entered
+// (ADR-0059).
+//
+// ONE DECODE FOR EVERY TRANSPORT INTO A TOOL: a person's request on the HTTP
+// write surface or the act transport, an operator's assistant over MCP, and a
+// coding CLI's call through its tool session. It is here, in a leaf beneath
+// internal/tools rather than in that package, because the tool session a
+// CLI's calls arrive through sits below internal/tools: the tools import the
+// tool loop, which imports the session, so a decode kept beside the tools
+// could not serve the session, which kept a copy of its own. This package
+// imports no transport, nor anything that imports one, which is what lets
+// every one of them import it.
 //
 // THE CANONICAL FORM IS MADE ONCE, AT THE ENTRY. A closed set's member is
 // handed on as its set spells it (" Draft" is "draft"), and every step after

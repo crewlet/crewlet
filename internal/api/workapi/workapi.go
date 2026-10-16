@@ -172,6 +172,8 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -934,17 +936,21 @@ func positionOf(at statelog.Position) any {
 // AN EMPTY BODY IS NO ARGUMENTS, which is what a DELETE and a restore send.
 // Anything else must be one JSON object: the arguments are the tool's own, by
 // its own names, so there is nothing here to translate and nothing to drop.
+//
+// THROUGH THE ONE DECODE every transport into a tool shares
+// ([toolargs.Decode]), so a number reaches the tool as a json.Number, as
+// it does from a seat: decoded to a float64, an integer past 2^53 — a vendor's
+// 19-digit id, a whole-number custom-field value — was rounded before any tool
+// saw it, and a body with a second JSON value after its object was read as
+// its first.
 func readArgs(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 	raw, err := httpjson.ReadBody(w, r, MaxBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return nil, false
 	}
-	args := map[string]any{}
-	if strings.TrimSpace(string(raw)) == "" {
-		return args, true
-	}
-	if err := json.Unmarshal(raw, &args); err != nil {
+	args, err := toolargs.Decode(raw)
+	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "the body must be one JSON object of " +
 				"the verb's own arguments: " + err.Error()})
@@ -1001,6 +1007,18 @@ func contains(list []string, s string) bool {
 
 // ifMatch folds an `If-Match` header into the argument a tool takes for it,
 // refusing a request that states two different versions.
+//
+// THE BODY'S VERSION IS READ AS THE TOOL READS IT ([argval.Whole], ADR-0059),
+// never by its spelling: every tool that takes a version reads it through that
+// one integer reader, so 3, 3.0, 3e0 and "3" are one version, and a body that
+// states the header's version in any of them states it again rather than
+// stating another. A body that reads as another whole number, or as none at
+// all (a fraction, text that spells no number), states a second version and
+// is refused rather than truncated into agreement: read as a float64 and
+// truncated, `"if_match": 3.5` beside `If-Match: 3` agreed with it and was
+// overwritten, and a negative one converted to whatever the platform made of
+// it. A null is absent, as it is to the tool. The header's version is written
+// back as a json.Number, the form every transport hands a tool ([readArgs]).
 func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
 	field string) bool {
 
@@ -1008,19 +1026,31 @@ func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
 	if header == "" {
 		return true
 	}
-	version, err := strconv.ParseUint(header, 10, 64)
+	// WITHIN THE RANGE THE TOOL READS A VERSION IN (an int, [argval.Whole]):
+	// a larger number is no version any tool can be handed, so it is refused
+	// here as the header's own, rather than handed on for the tool's check to
+	// refuse as a value it cannot read.
+	version, err := strconv.ParseUint(header, 10, strconv.IntSize-1)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "If-Match carries the version you read, " +
 				"as a number — " + strconv.Quote(header) + " is not one"})
 		return false
 	}
-	if held, ok := args[field].(float64); ok && uint64(held) != version {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": fmt.Sprintf("If-Match says %d and the "+
-				"body's %s says %v; send one", version, field, held)})
-		return false
+	if held, ok := args[field]; ok && held != nil {
+		switch n, whole := argval.Whole(held); {
+		case !whole:
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+				map[string]string{"detail": fmt.Sprintf("If-Match says %d and the "+
+					"body's %s is not a whole number; send one", version, field)})
+			return false
+		case n != int(version):
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+				map[string]string{"detail": fmt.Sprintf("If-Match says %d and the "+
+					"body's %s says %d; send one", version, field, n)})
+			return false
+		}
 	}
-	args[field] = float64(version)
+	args[field] = json.Number(strconv.FormatUint(version, 10))
 	return true
 }

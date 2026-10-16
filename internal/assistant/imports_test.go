@@ -90,6 +90,24 @@ var neverReached = []string{
 	"internal/engine",
 }
 
+// reachedAnyway are the packages under a [neverReached] root the assistant
+// may reach, each with why it is no way into the company. The walk goes on
+// through each, so what one of them reaches is held to the same rule and the
+// reason stays true.
+//
+// The tool session the assistant's model calls through decodes a call's
+// arguments as every transport into a tool does, through the one decode that
+// lives beside the tool registry rather than in it, so the assistant reaches
+// the argument leaves below internal/tools and never the registry.
+var reachedAnyway = map[string]string{
+	"internal/tools/argval": "the one reader per declared argument type " +
+		"(ADR-0059): a value in and a value out, with no registry, no tool and " +
+		"no principal",
+	"internal/tools/toolargs": "a call's arguments as values: the one decode " +
+		"every transport into a tool shares and their canonical form " +
+		"(ADR-0059), with no registry, no tool and no principal",
+}
+
 // THE ASSISTANT IMPORTS NO WRITER AND NO SEAT (ADR-0050).
 //
 // Every read and write the assistant makes is the person's own request,
@@ -99,8 +117,9 @@ var neverReached = []string{
 // walks every package under internal/assistant and everything it imports, to
 // any depth, and fails on the first path into one, a package below a banned
 // root included. Mutation: import internal/api/auth (or anything that does)
-// from any assistant package, or internal/store/storetest from one, and this
-// names the path.
+// from any assistant package, internal/store/storetest from one, or
+// internal/worklet from a package [reachedAnyway] names, and this names the
+// path.
 func TestTheAssistantImportsNoWriterAndNoSeat(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -132,6 +151,12 @@ func TestTheAssistantImportsNoWriterAndNoSeat(t *testing.T) {
 		if direct := imports.of(t, allowed); len(direct) > 0 {
 			t.Errorf("%s is imported by the assistant because it reaches nothing in "+
 				"the module, and it now imports %v", allowed, direct)
+		}
+	}
+	for allowed := range reachedAnyway {
+		if underAny(allowed, neverReached) == "" {
+			t.Errorf("%s may be reached as no way into the company, but it is under "+
+				"no root the walk bans, so the exemption exempts nothing", allowed)
 		}
 	}
 	for _, pkg := range packages {
@@ -185,11 +210,13 @@ func (im importer) of(t *testing.T, pkg string) []string {
 }
 
 // reaches is the import path from pkg to the first package within one of
-// targets' trees it reaches, at any depth inside the module, or nil.
+// targets' trees it reaches, at any depth inside the module, or nil. A package
+// [reachedAnyway] names is walked through rather than reported.
 func (im importer) reaches(t *testing.T, pkg string, targets []string, path []string) []string {
 	t.Helper()
 	path = append(slices.Clone(path), pkg)
-	if underAny(pkg, targets) != "" && len(path) > 1 {
+	if _, allowed := reachedAnyway[pkg]; !allowed && underAny(pkg, targets) != "" &&
+		len(path) > 1 {
 		return path
 	}
 	if slices.Contains(path[:len(path)-1], pkg) {
