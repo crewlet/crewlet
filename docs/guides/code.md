@@ -408,5 +408,7 @@ to remove from the history you keep, for tidiness rather than for safety.
 - [Deployment: The code host](deployment.md#the-code-host) — git on the host,
   the cache's volume, the balancer in front of `/git/`
 - [Running a Fleet](fleet.md) — which nodes to give the `git` role
+- [Scaling Out: Git nodes](../concepts/scaling.md#git-nodes) — what git nodes
+  and data nodes each scale, and a git node's memory, cores and disk
 - [Read Consistency](consistency.md) — what level a git answer and a `/code/`
   read are given

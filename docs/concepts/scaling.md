@@ -104,16 +104,64 @@ its own, and git nodes scale **reads**: each keeps its own copy of every
 repository it is asked for, synced from the code log's rows and the object
 store, so a clone or a fetch is answered by the node that received it, and a
 burst of clones of one repository costs that node one sync however many there
-are. Each node holds its cache to its own byte budget (`git.cache_max_bytes`,
-or a share of its volume — [`git`](configuration.md#git)), and every node that
-serves a repository caches it whole, so a node's disk is sized for the
-repositories it serves rather than the company's total.
+are. Nothing ties a person to one git node: every answer that names a ref is
+read at the code log's head, so a push answered `ok` on one node is what every
+other node advertises next
+([A push, end to end](code-host.md#a-push-end-to-end)).
 
 **Pushes** do not scale with git nodes: a push to one repository is decided by
 that repository's one [committer](#how-a-request-reaches-the-estate), a data
 node, whichever git node received it — so a repository's pushes meet in one
-place and are committed a batch at a time, and the repositories spread across
-the data nodes.
+place and are committed a batch at a time, the repositories spread across the
+data nodes, and a data node that leaves hands each of its repositories to that
+repository's runner-up.
+
+```mermaid
+flowchart LR
+    pusher(["A person's git push"]) --> B
+    fetcher(["Another person's git fetch"]) --> C
+    subgraph fleet["Three nodes, each git and data"]
+        A["node-a<br/><i>the repository's committer</i>"]
+        B["node-b<br/><i>received the push</i>"]
+        C["node-c<br/><i>serves from its own cache</i>"]
+    end
+    B -- "1 · stores the push's one bundle" --> S[("object store")]
+    B -- "2 · proposes the push" --> A
+    A -- "3 · one record" --> L[["CREWLET_CODE_LOG"]]
+    L -- "4 · every data node applies it" --> A
+    L --> B
+    L --> C
+    S -- "5 · one GET of the new bundle" --> C
+    C -- "6 · upload-pack" --> fetcher
+```
+
+The figures below were measured on one machine of four vCPUs (a 2.1 GHz Xeon),
+and each paragraph names the git and the object store it was measured with;
+the measured sections of the `internal/code`, `internal/code/host`,
+`internal/code/cache` and `internal/code/codecluster` package docs carry every
+arm.
+
+**What a committer and the code log commit.** Measured on three data nodes of
+one cluster sharing that machine's cores and its one disk — so a record's three
+fsyncs queue on one device, where three machines each sync their own, and its
+copies cross loopback rather than a network — a lone push is a record's round
+trip: 10.5–11.1 ms at the median, 86–89 a second, and about a millisecond more
+when it reaches its committer through another node. Sixty-four pushes at once
+to one repository are 2 050–2 090 a second proposed at the committer itself,
+because group commit puts them in two records, and 1 270–1 390 a second
+proposed through another node's router (a push's median 38–41 ms, its p99
+94–97 ms, sixty-four proposals crossing the wire at once). That second path is
+every push whose git node is not its repository's committer, so in a fleet
+that spreads `/git/` evenly it is the burst figure to size by. Pushes to
+different repositories share no record, so what bounds a company whose pushes
+spread across many repositories is the code log's **record rate** — 201–225
+records a second for sixty-four pushes at once over sixty-four repositories,
+each proposed through one node's router to whichever node commits it — and
+neither group commit nor another data node raises it: one log has one leader.
+Each record is then applied by every data node on the write lane every domain
+shares, whose published floor is about 2 000 rows a second
+([Replication](../guides/replication.md#the-bulk-apply-degradation-priced));
+a small push is about four rows.
 
 Where requests land decides how many caches a repository costs. A fleet whose
 every node serves git, with a balancer spreading `/git/` evenly, warms every
@@ -121,25 +169,125 @@ repository on every node — one cold sync each, one download for every push the
 repository ever took, and each node's disk and background indexing for it. A
 fleet that never wrote `node.roles` is that fleet: every node has every role,
 `git` included, the moment its company sets `code.native`. Routing
-`/git/<name>` by repository keeps each warm on one or two nodes instead; it is
-a cost decision, never a correctness one
-([Deployment](../guides/deployment.md#the-code-host)).
+`/git/<name>` by repository keeps each warm on one or two nodes instead, a
+node's cache a share of the company's repositories rather than all of them,
+and a push's own sync adopting the pack its node received rather than
+downloading the packs other nodes did; it is a cost decision, never a
+correctness one ([Deployment](../guides/deployment.md#the-code-host)).
+
+**What a request on a cold node costs.** A request on a node that holds no copy
+of its repository — one that just joined, or whose budget evicted it — waits for
+a cold sync before its first byte, since git's protocol has nothing to send
+earlier: measured end to end, the git nodes on git 2.47.3 (the release the
+engine image installs) against an S3-shaped fake answering every request
+100 ms after it arrives, the first clone of a repository of two hundred
+pushes begins with a 1.4 s sync and of two thousand with a 13.4–13.8 s one, and
+a balancer's idle timeout sees all of it. A cold sync is network work, not CPU:
+each push's object carries the index its receiving node's git wrote, so the
+node downloads, verifies and renames, and runs no `index-pack`.
 
 The object store sees the same multiplication. A git node reads at most 32
 bundles at once — sixteen for any one repository — and S3 answers each in
 about 100 to 200 ms, so a node syncing repositories it has never served reads
 about 150 to 290 small ones a second (about 75 to 150 for one repository,
-measured against a fake answering that late). Every bundle is named under the
-one `files/` prefix, so about 19 to 37 git nodes cold-syncing at once at their
-full 32 — twice as many syncing one repository each — reach the 5 500 reads a
-second S3 serves one prefix (a fresh fleet, or a repository imported and then
-fetched through every node), past which it answers `SlowDown` until it has
-partitioned the prefix. Each node's client then slows every request it sends
-to the bucket rather than failing it
-([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
+measured on git 2.43 against a fake answering 100 and 200 ms late, the GETs
+alone bounding it). Every bundle is named under the one `files/` prefix, so
+about 19 to 37 git nodes cold-syncing at once at their full 32 — twice as many
+syncing one repository each — reach the 5 500 reads a second S3 serves one
+prefix (a fresh fleet, or a repository imported and then fetched through every
+node), past which it answers `SlowDown` until it has partitioned the prefix.
+Each node's client then slows every request it sends to the bucket rather than
+failing it ([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
 down and nothing they hold is wrong, and routing by repository is again what
 bounds it. What shortens a cold sync is fewer packs: at one a push, a
 repository of 10 000 pushes comes up in about 70 to 130 seconds.
+
+**A git node is sized by its memory before its disk.** Every git process a
+node runs over a whole repository holds memory in proportion to the
+repository's objects, measured on git 2.43 over a source repository's history:
+writing the bitmap of its background index takes about 1 000 bytes an object,
+and a clone beside it about 240 more — about 1 240 an object. At about three
+million objects a gigabyte of a source repository's packs, that is nearly 4 GB
+of memory for each gigabyte of packs on disk; memory follows the objects rather
+than the bytes, so a repository of large binaries, far fewer objects to the
+gigabyte, needs far less. [The cache's Memory paragraph](code-host.md#the-cache-on-a-git-node)
+has every figure, and what the node keeps back for the store, the broker and
+the engine. A repository whose bitmap the node's memory cannot hold is still
+served — without one, so each of its clones walks its history — and raises
+[`code_maintenance_refused`](../reference/alarms.md). A single repository of
+50 to 100 GB of history is past what a git node is sized for.
+
+**And by the bytes and CPU it serves, not by its requests.** Measured on git
+2.47.3 over a tree of 10 000 files in two hundred pushes, a 31.5 MB pack: from a
+node holding the repository's bitmap, a full clone costs 0.91–0.98 s of the
+node's git CPU, and a shallow clone of one commit, blobless, of the directories
+a sparse checkout's cone names 0.37–0.38 s; on a node that has not yet indexed
+the repository a full clone walks and delta-searches the whole history,
+3.7–3.9 s of CPU, against 0.38–0.40 s for the narrow clone, which moves 3.4 MB
+rather than the whole pack. Measured again at ten times the tree — 100 000
+files in two thousand pushes, a 334 MB pack — on a node that has not indexed
+it, the two cold clones cost eight to ten times as much: 35–38 s of CPU for the
+full one and 3.3–3.8 s for the narrow one.
+Identical clones share nothing: thirty-two at once cost the node thirty-two
+clones of CPU. A warm fetch of one new commit is 10–12 ms of it. So size a git
+node's cores by the clones and fetches it serves, and point CI at a blobless
+clone with a cone wherever a tree is large — shallow too, where the job reads
+no history:
+
+```sh
+git clone --depth=1 --filter=blob:none --sparse https://crewlet.example.com/git/web.git
+git -C web sparse-checkout set services/api
+```
+
+A blobless clone needs protocol v2, git's default since 2.28, and is served
+the filters a bitmap answers — `blob:none`, `blob:limit=<n>`, `tree:0`,
+`object:type=<type>` and a `combine:` of them; `sparse:oid` and `tree:<n>` past
+0 are refused ([the filters served](code-host.md#a-push-end-to-end)).
+
+**A git node's disk.** Its cache holds the repositories it serves whole — the
+sum of their `SIZE` in
+[`crewlet code status`](../reference/cli.md#crewlet-code-status), each at most
+`code.limits.repo_max_bytes` — kept under `git.cache_max_bytes` by evicting the
+least recently used, and only once the budget is reached: a repository nobody
+fetched over a weekend is still there on Monday and is brought forward by a
+delta, and one a request is reading is never evicted. Unset, the budget is
+derived from the cache's volume at every boot — half of what a shared volume
+leaves it, seven eighths of a volume of its own ([`git`](configuration.md#git))
+— so give the cache a volume of its own. The object store holds one object a
+push, and nothing compacts a repository's packs yet, so it grows by every
+push's pack.
+
+**What every data node holds for the code host.** Every data node holds the
+whole estate, and the code host's rows with it. A person's push of one commit
+leaves a push row of about 395 bytes, kept 181 days, and its pack's row of
+about 357, kept as long as the repository is; the code log, which keeps only
+the trim's window of records, takes 1 292 bytes for a push in a record of its
+own and about 740 for each of a burst group commit holds together. So:
+
+| Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
+|---|---|---|---|
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 215 MB | about 390 MB | about 27 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 17.9 GB | about 32.6 GB | 1.3 to 2.3 GB |
+
+These rows come on top of what the tracker, the knowledge base and the rest of
+the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)
+counts them on a line of their own for a company that hosts code, and every
+data node's snapshot volume holds about 4.2 times them, as it does the rest of
+its estate. The code log's column is its push records alone; each linearizable
+read a git client makes — an advertisement, a push's sync, a fetch's ls-refs —
+appends a 136-byte barrier beside them, which is why the log's ceiling is
+derived at two thirds of the mutation log's rather than from its pushes alone
+([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)).
+The push records fit the ceiling a first boot derives from 50 GiB free or more
+([the code log's reservation](../guides/replication.md#what-the-code-logs-reservation-costs)),
+and a push's bytes are never on the log — they are the object store's.
+
+**What this release does not scale yet**, stated as the product's shape:
+packs accumulate — nothing compacts a repository, so its cold sync, its
+objects and its pack rows grow with its pushes, the background index keeping
+its lookups fast — and agents do not push: the rates in the table are what the
+code host is built for, where this release's pushes are people's and their
+CI's.
 
 ### How a request reaches the estate
 
@@ -533,3 +681,4 @@ theoretical one:
 - [Seat Ownership](seat-ownership.md) — leases, epoch fencing, admission, the completion ledger, singleton duties
 - [Control Plane](control-plane.md) — how a config revision reaches every node, and the posture a lagging one takes
 - [Deployment](../guides/deployment.md) — processes, database, broker settings, probes
+- [Code Host](code-host.md) — a repository as rows on the code log, its committer, and the cache a git node keeps of it

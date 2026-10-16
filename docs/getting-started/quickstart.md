@@ -651,6 +651,11 @@ each), then wire them in:
   [GitHub](../integrations/github.md) — and enable the
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
   merge requests
+- Or host the repositories in the engine itself — add
+  `code: {native: true, repos: [...]}` to the company file and push to
+  `<the API's address>/git/<name>.git` with your own API token, bound to your
+  seat, as git's password. [Hosting Code](../guides/code.md) walks through it,
+  and it runs beside a GitLab or GitHub connection rather than in place of one
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,

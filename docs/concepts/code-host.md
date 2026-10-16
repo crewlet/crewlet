@@ -35,6 +35,11 @@ A git repository on a node's disk is never the record. It is a
 [cache](#the-cache-on-a-git-node) derived from the rows, disposable and rebuilt
 from them.
 
+How it scales — git nodes adding reads, data nodes committing pushes, and what
+sizes each — is [Scaling Out: Git nodes](scaling.md#git-nodes); turning it on,
+declaring a repository and pushing to it are the steps of the
+[Hosting Code](../guides/code.md) guide.
+
 ### What it does not do yet
 
 This is the product's current shape, not a configuration choice:
@@ -1109,6 +1114,8 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 ## See also
 
 - [Configuration: Code](../getting-started/configuration.md#code) — every field of the `code` block
+- [Hosting Code](../guides/code.md) — the steps: turning it on, a token for each person, clone, fetch and push
+- [Scaling Out: Git nodes](scaling.md#git-nodes) — what git nodes and data nodes each scale, and what sizes them
 - [Object Store](object-store.md) — where a push's bytes live, and the collector and audit that keep them
 - [Replication](../guides/replication.md) — the state-log framework the code log rides
 - [Retention](../guides/retention.md) — the log's trim, and what a purge does and does not reach

@@ -323,15 +323,18 @@
 //     node, is 37–39 ms and 11 ms of CPU.
 //
 // Ten times the tree (CREWLET_BENCH_LARGE, two counts: two thousand pushes,
-// 100 000 files in a thousand directories, a 334 MB pack) is ten times every
-// figure: the sync 13.4–13.8 s, past MidxRoundPacks so it writes the round's
-// index — 0.14 s of it (op=round-index), the GETs the rest; full 52–54 s
-// alone and 103–105 s each for eight, 35–38 s of CPU a clone;
-// blobless+checkout 42–44 s, its lazy fetch 5 000 553 bytes of wants —
-// spooled, past the mebibyte held in memory — and 14–15 s of CPU, 87–107 s
-// each for eight; depth1+blobless+cone 20 s for 33.8 MB and 3.3–3.8 s of
-// CPU, 29 s each for eight; treeless+cone 21 s and 3.8–4.0 s, 32 s each for
-// eight; and op=blob 66–68 ms and 45–46 ms of CPU. Every cold figure but
+// 100 000 files in a thousand directories, a 334 MB pack) is about eight to
+// ten times the sync and the full, depth1+blobless+cone and treeless+cone
+// clones, and less for the other two: the sync 13.4–13.8 s, past
+// MidxRoundPacks so it writes the round's index — 0.14 s of it
+// (op=round-index), the GETs the rest; full 52–54 s alone and 103–105 s each
+// for eight, 35–38 s of CPU a clone; depth1+blobless+cone 20 s for 33.8 MB
+// and 3.3–3.8 s of CPU, 29 s each for eight; treeless+cone 21 s and
+// 3.8–4.0 s, 32 s each for eight; blobless+checkout 42–44 s — five to seven
+// times — its lazy fetch 5 000 553 bytes of wants, spooled past the mebibyte
+// held in memory, and 14–15 s of CPU, under four times, 87–107 s each for
+// eight; and op=blob 66–68 ms and 45–46 ms of CPU, under twice the time and
+// four times the CPU. Every cold figure but
 // op=blob begins with the sync, so a balancer between a person and a node
 // that has not served a repository sees that long before git's first byte.
 //

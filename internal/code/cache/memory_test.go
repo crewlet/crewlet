@@ -821,6 +821,33 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	}
 }
 
+// THE SCALING PAGE SIZES A GIT NODE BY THE SAME FIGURES: docs/concepts/scaling.md
+// tells an operator that a git node is sized by its memory before its disk,
+// in the bytes an object its bitmap and a clone beside it hold, and sends them
+// to the concept page for everything else — so the two figures it does state
+// are the cache's own and gitproc's, held here as the concept page's are
+// above, or a retune would leave one page saying what the other no longer
+// does.
+//
+// Mutation: change BitmapBytesPerObject or gitproc.TransferBytesPerObject,
+// and the scaling page no longer says what the cache charges.
+func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "scaling.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := strings.Join(strings.Fields(string(raw)), " ")
+	want := fmt.Sprintf("writing the bitmap of its background index takes about %s bytes an object, "+
+		"and a clone beside it about %d more — about %s an object",
+		spaced(cache.BitmapBytesPerObject), gitproc.TransferBytesPerObject,
+		spaced(int64(cache.BitmapBytesPerObject+gitproc.TransferBytesPerObject)))
+	if !strings.Contains(page, want) {
+		t.Errorf("%s does not say %q", path, want)
+	}
+}
+
 // spaced is n as the docs write a number: its thousands set apart by a space
 // (1 000, 860 000).
 func spaced(n int64) string {
