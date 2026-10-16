@@ -661,8 +661,9 @@ adopts a snapshot from a node in the new generation, **on its own**:
   it can donate as soon as its gate allows. Until some node in the new
   generation holds an artefact, the others ask again on the doubling interval.
 
-The vectors are exempt: each node re-anchors its own copy, so a peer ahead there
-is a recovery in progress rather than a history this node has lost.
+The vectors and the usage days are exempt, as every log that claims no identity
+is: each data node re-anchors its own copy, so a peer ahead there is a recovery
+in progress rather than a history this node has lost.
 
 **If the node that re-anchored is gone for good** — decommissioned, or its disk
 lost, before any peer adopted from it — nothing can donate the new generation:
@@ -1501,8 +1502,9 @@ still holds every record the rows are missing — and the verb refuses it as
 having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
-identity estate, the vectors — has its own stream and its own generation, and a reanchor moves only
-the one you named: that domain's checkpoint goes to the next generation, where
+identity estate, the vectors, the usage days, the Dashboard Assistant's
+conversations — has its own stream and its own
+generation, and a reanchor moves only the one you named: that domain's checkpoint goes to the next generation, where
 its case puts it, keyed to the live instant. Every other domain keeps its
 checkpoint, its generation and its stream exactly as they were. If more than
 one log was rebuilt, re-anchor each of them.
@@ -1516,8 +1518,9 @@ In order, it: checks the confirmation against the live stream; refuses while
 the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (every log that
 claims identity keeps one, applied as `tracker_log_generations`,
-`pages_log_generations` and `iam_log_generations`;
-the vectors keep none); reads the stream's instant
+`pages_log_generations` and `iam_log_generations`; the vectors and the usage
+days keep none, because they claim no identity a second opening could
+violate); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
 and commits the checkpoint. Every step before the checkpoint can be repeated,
 so a reanchor that failed part-way is finished by running it again: it derives
@@ -1556,11 +1559,12 @@ its position, the creation instant of the stream its rows are keyed to and the
 broker's instant for its checkpoint's record, so a peer still on the lost
 stream, or past a restored log's end, is compared with this node and one that
 came up on the rebuilt stream with no rows is not: it is further along nothing
-a reanchor discards. A refusal names the peer that is further along. `-force` overrides the
-most-caught-up rule for the case where the fleet cannot be asked, and never the
-first. The
-vectors are exempt from both: their coverage legitimately differs node to node,
-so every node re-anchors its own copy.
+a reanchor discards. A refusal names the peer that is further along. `-force`
+overrides the most-caught-up rule for the case where the fleet cannot be asked,
+and never the first. The vectors and the usage days are exempt from both, and
+every data node re-anchors its own copy of each: the vectors' coverage
+legitimately differs node to node, and each data node's usage days are written
+by that node alone.
 
 **And one generation is only ever opened once.** Two nodes that re-anchor the
 same log at the same moment — each before the other's position row says so, or
@@ -1580,20 +1584,13 @@ who ran it: the generation record every data node applies into its audit row nam
 the operator and the credential they used, where it named the node that served
 the request.
 
-**Today that log is Worklet's**, `CREWLET_TRACKER_LOG`. A reanchor is
-three steps only the log's own domain can take (reset its rows' versions,
-publish its generation record, write its audit row), and Doclet,
-the identity estate, the vectors and the usage log have none of
-their own yet, so naming one of their logs is refused before anything moves.
-It used to run Worklet's steps for them, resetting Worklet's rows for a
-log that was not Worklet's. Recover one of those logs by adopting the snapshot of a
-peer hydrated on the live stream, or from a backup.
-
-> **The verb could not have completed before this build.** Its reset named
-> three tracker tables with no `version` column and failed on the first, and
-> past that it handed the framework a store handle that answered "not open"
-> when the cursor was moved. Nothing moved in either case, so no estate was
-> left half re-anchored.
+**Every log can be re-anchored, by its own domain.** What a reanchor writes
+beside the checkpoint is the domain's to say: a log that claims identity
+(Worklet's, Doclet's, the identity estate's and the Dashboard Assistant's)
+appends its own generation record, which is the audit row above and the
+first-writer-wins between two operators, while the vectors and the usage days
+declare that they keep none. A domain that cannot say is refused when the node
+boots, never when an operator first names its log.
 
 ## Proving a restore
 
