@@ -37,8 +37,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
-import { KeyGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Skeleton } from "@crewlethq/ui";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import type { ResetView } from "~/contract/identity.ts";
@@ -60,11 +59,9 @@ export function Reset({ link }: { link: string }) {
   if (!parsed) {
     return (
       <SignInPage title="This password link is incomplete" lede="Copy the whole link.">
-        <div>
-          <Button variant="secondary" onClick={() => nav.to(["login"])}>
-            Go to sign in
-          </Button>
-        </div>
+        <Button variant="secondary" onClick={() => nav.to(["login"])}>
+          Go to sign in
+        </Button>
       </SignInPage>
     );
   }
@@ -139,18 +136,13 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
 function Spent({ sentence }: { sentence: string }) {
   const nav = useNavigator();
   return (
-    <SignInPage title="This password link can’t be used">
-      <EmptyState
-        icon={<KeyGlyph size={32} />}
-        title={sentence}
-        description="Already set your password? Sign in."
-        headingLevel="none"
-        action={
-          <Button variant="secondary" onClick={() => nav.to(["login"])}>
-            Sign in
-          </Button>
-        }
-      />
+    <SignInPage
+      title="This password link can’t be used"
+      lede={`${sentence} Already set your password? Sign in.`}
+    >
+      <Button variant="secondary" onClick={() => nav.to(["login"])}>
+        Sign in
+      </Button>
     </SignInPage>
   );
 }
@@ -158,21 +150,20 @@ function Spent({ sentence }: { sentence: string }) {
 function PasswordIsSet({ login, first }: { login: string; first: boolean }) {
   const nav = useNavigator();
   return (
-    <SignInPage title={first ? "You’re all set" : "Your password is set"}>
-      <EmptyState
-        icon={<KeyGlyph size={32} />}
-        title={first ? `Sign in as ${login}.` : `Sign in as ${login} with your new password.`}
-        description={first ? undefined : "Password changed. Sign in again."}
-        headingLevel="none"
-        action={
-          // WITH THE LOGIN, AND SAYING WHERE THEY CAME FROM: the sign-in was a
-          // blank form under "Use the login or email address your invitation
-          // was for", to somebody who had just been told which login to use.
-          <Button variant="primary" onClick={() => nav.to(["login"], { login, after: "reset" })}>
-            Sign in
-          </Button>
-        }
-      />
+    <SignInPage
+      title={first ? "You’re all set" : "Your password is set"}
+      lede={
+        first
+          ? `Sign in as ${login}.`
+          : `Password changed. Sign in as ${login} with your new password.`
+      }
+    >
+      {/* WITH THE LOGIN, AND SAYING WHERE THEY CAME FROM: the sign-in was a
+          blank form under a sentence about an invitation, to somebody who had
+          just been told which login to use. */}
+      <Button variant="primary" onClick={() => nav.to(["login"], { login, after: "reset" })}>
+        Sign in
+      </Button>
     </SignInPage>
   );
 }

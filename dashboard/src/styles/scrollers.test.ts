@@ -137,8 +137,6 @@ const KEEPS_THE_WHEEL: Record<string, string> = {
  * than a guess at a box inside one.
  */
 const LITERAL_BOUND: Record<string, string> = {
-  "screens.css .signin":
-    "the sign-in, invitation and enrolment page, drawn outside the frame: it is the page's own scroller, exactly the viewport, so its bottom is the fold",
   "components.css .input-suggest-list":
     "an absolutely positioned completion list over the field that opened it, in a dialog: an overlay, never a box in the page's flow",
   "screens.css .work-menu-list":

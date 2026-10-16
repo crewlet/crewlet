@@ -10017,52 +10017,15 @@ a.live-row:focus-visible {
 }
 
 /* ---- Signing in ----------------------------------------------------------
-   The screens a browser is on BEFORE it holds a session the frame can use —
-   `#/login`, `#/invite/…`, `#/enrol` — drawn outside the frame, so this is the
-   one page in the product that is its own scroller. The document does not
-   scroll (`body` is `overflow: hidden`, see base.css), which is right for the
-   frame and would cut a tall form off here; so the page takes the viewport
-   and scrolls itself.
-
-   ONE COLUMN AT A READING WIDTH. A form wider than a sentence spreads four
-   fields across a monitor for nothing, and the card is the whole page. */
-.signin {
-  height: 100dvh;
-  overflow-y: auto;
-  display: flex;
-  justify-content: center;
-  padding: var(--spacing-8) var(--spacing-4);
-  background: var(--color-surface-background);
-}
-
-.signin-column {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-  width: 100%;
-  max-width: 52ch;
-  margin-block-end: auto;
-}
-
-/* BOUNDED ON BOTH AXES, and sized on neither: the mark is 3:2 and meets its
-   box, so a box of any other ratio letterboxes it. */
-.signin-mark {
-  align-self: center;
-  width: auto;
-  height: auto;
-  max-height: var(--size-control-md);
-  max-width: 100%;
-}
-
-.signin-body,
+   The screens a browser is on BEFORE it holds a session the frame can use
+   (`#/login`, `#/invite/…`, `#/enrol`), drawn outside the frame on
+   `@crewlethq/ui`'s `AuthLayout`, which is its own scroller at the viewport's
+   height and holds one column at a reading width. What is here is the forms'
+   own rhythm inside its card. */
 .signin-form {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-}
-
-.signin-body {
-  margin-top: var(--spacing-4);
 }
 
 /* A SUBMIT DOES NOT STRETCH. Every button on these forms states one gesture,

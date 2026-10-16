@@ -33,6 +33,15 @@ interface Sent {
 
 type Answer = { status: number; body: unknown };
 
+/**
+ * A message that OPENS a card's description: the card's own title and
+ * description say a link's outcome, so the sentence is the start of a longer
+ * line rather than a block of its own.
+ */
+function opening(text: string): RegExp {
+  return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+}
+
 function engine(routes: Record<string, Answer>): Sent[] {
   const sent: Sent[] = [];
   vi.stubGlobal(
@@ -151,7 +160,7 @@ describe("opening the link", () => {
     await mount();
     expect(
       await screen.findByText(
-        "This password reset link is no longer valid. Ask an admin for a new one.",
+        opening("This password reset link is no longer valid. Ask an admin for a new one."),
       ),
     ).toBeDefined();
     expect(screen.queryByLabelText("New password")).toBeNull();
@@ -201,8 +210,9 @@ describe("a first password link", () => {
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
-    expect(await screen.findByText("Sign in as jane.doe with your new password.")).toBeDefined();
-    expect(screen.getByText("Password changed. Sign in again.")).toBeDefined();
+    expect(
+      await screen.findByText("Password changed. Sign in as jane.doe with your new password."),
+    ).toBeDefined();
   });
 
   // A LINK THAT NO LONGER OPENS DOES NOT SAY WHICH IT WAS, so the screen names
@@ -212,9 +222,9 @@ describe("a first password link", () => {
     engine({ [`GET ${PATH}`]: SPENT });
     await mount();
     await screen.findByText(
-      "This password reset link is no longer valid. Ask an admin for a new one.",
+      opening("This password reset link is no longer valid. Ask an admin for a new one."),
     );
-    expect(screen.getByText("Already set your password? Sign in.")).toBeDefined();
+    expect(screen.getByText(/Already set your password\? Sign in\.$/)).toBeDefined();
     expect(screen.queryByText(/for a day/)).toBeNull();
   });
 });
@@ -279,7 +289,7 @@ describe("spending it", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
     expect(
       await screen.findByText(
-        "This password reset link is no longer valid. Ask an admin for a new one.",
+        opening("This password reset link is no longer valid. Ask an admin for a new one."),
       ),
     ).toBeDefined();
   });

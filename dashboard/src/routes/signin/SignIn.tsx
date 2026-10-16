@@ -419,7 +419,9 @@ function TokenForm({
   if (open) return form;
   return (
     <Disclosure title="Use an API token instead" size="compact" variant="aside">
-      <Text as="p" variant="body" tone="secondary">
+      {/* THE CAPTION STEP, the field helpers' own, so the aside reads quieter
+          than the form it sits under. */}
+      <Text as="p" variant="caption" tone="secondary">
         For first-time setup, or when password sign-in fails.
       </Text>
       {form}
