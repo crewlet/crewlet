@@ -545,6 +545,78 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 	}
 }
 
+// A BODY'S NUMBERS ARRIVE EXACTLY, as a seat's do.
+//
+// Every other path into the tools reads a call's arguments through
+// json.Number, and this surface decoded its bodies with the default decoder,
+// which turns every number into a float64 first: an integer past 2^53 — a
+// whole-number custom-field value somebody typed — was rounded before the
+// tool saw it, and filed as one they never typed.
+//
+// Mutation: decode readArgs' body with json.Unmarshal and the value is filed
+// rounded.
+func TestABodysNumbersArriveExactly(t *testing.T) {
+	t.Parallel()
+	const past = "9007199254740993" // 2^53 + 1, the first integer a float64 rounds
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		`{"title": "rotate the key", "project": "ENG", "fields": {"points": `+past+`}}`)
+	if got.status != http.StatusOK || len(r.writes.created) != 1 {
+		t.Fatalf("answered %d %v and created %d", got.status, got.body, len(r.writes.created))
+	}
+	if filed := string(r.writes.created[0].Fields["points"]); filed != past {
+		t.Errorf("points was filed as %s, want %s as it was sent", filed, past)
+	}
+	// AND ONE OBJECT: a second value after it is a request nobody can say
+	// which half of to make.
+	if got := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		`{"title": "rotate the key", "project": "ENG"} {"title": "and this"}`); got.status != http.StatusBadRequest {
+		t.Errorf("a body carrying two JSON values answered %d %v", got.status, got.body)
+	}
+}
+
+// A BODY THAT STATES ANOTHER VERSION THAN ITS If-Match IS REFUSED, whatever
+// shape the second version takes.
+//
+// The body's version was read as a float64 and truncated, so `if_match: 3.5`
+// beside `If-Match: 3` agreed with it and was silently overwritten; and once
+// a body's numbers arrive as json.Number, a float64 assertion matches nothing
+// at all, so every disagreement would pass. A body that states the header's
+// own version is the same request said twice, and is taken.
+//
+// Mutation: compare the body's value by its float64, or skip a value that is
+// not one, and a disagreeing row is placed.
+func TestABodyDisagreeingWithItsIfMatchIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"the same version", `{"after": "ENG-2", "if_match": 3}`, http.StatusOK},
+		{"another version", `{"after": "ENG-2", "if_match": 4}`, http.StatusBadRequest},
+		{"a fraction of it", `{"after": "ENG-2", "if_match": 3.5}`, http.StatusBadRequest},
+		{"a negative", `{"after": "ENG-2", "if_match": -3}`, http.StatusBadRequest},
+		{"text", `{"after": "ENG-2", "if_match": "4"}`, http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+				c.body, "If-Match", "3")
+			if got.status != c.want {
+				t.Fatalf("answered %d %v, want %d", got.status, got.body, c.want)
+			}
+			switch {
+			case c.want == http.StatusOK && (len(r.writes.placed) != 1 || r.writes.placed[0].IfMatch != 3):
+				t.Errorf("the tracker was asked to place %+v, want version 3", r.writes.placed)
+			case c.want != http.StatusOK && len(r.writes.placed) != 0:
+				t.Errorf("a request stating two versions placed %+v", r.writes.placed)
+			}
+		})
+	}
+}
+
 // ---- the gestures no tool makes ---------------------------------------- //
 
 // A REMARK ON A WORK ITEM IS REWRITTEN BY ITS AUTHOR.
