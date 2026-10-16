@@ -238,6 +238,36 @@ test("every page of the directory is drawn, walked by its cursor", async () => {
   expect(screen.getByText("Service account")).toBeTruthy();
 });
 
+// THE PERSON'S BADGE IS BESIDE THEIR NAME, AND THE SEAT IS ITS HANDLE. The
+// Seat cell drew the seat's name and badge, which echoed the person's a cell
+// over ("Lee Park  LP Lee Park"); a service account wears a key.
+test("a person's row draws their badge by their name and their seat by its handle", async () => {
+  stubIam();
+  mount();
+  const ana = (await screen.findByText("Ana Diaz")).closest(".grid-row") as HTMLElement;
+  expect(ana.querySelector(".crewlet-avatar")).not.toBeNull();
+  const seat = within(ana).getByRole("link", { name: "@jane" });
+  expect(seat.getAttribute("href")).toBe("#/agents/seats/jane");
+  expect(seat.getAttribute("title")).toBe("Jane Founder");
+  const ci = (await screen.findAllByText("ci:release"))
+    .map((el) => el.closest(".grid-row") as HTMLElement)
+    .find(Boolean)!;
+  expect(ci.querySelector(".crewlet-avatar__icon svg")).not.toBeNull();
+});
+
+// HELD BY A NAME, NOT A STATUS PILL: the holder is plain text, and the stage
+// is a tag only where it is news. Mutation: draw the active stage too.
+test("a human seat's holder is named in plain text, its stage only when not active", async () => {
+  stubIam();
+  mount();
+  const jane = (await screen.findAllByRole("link", { name: /Jane Founder/ }))
+    .map((link) => link.closest(".grid-row") as HTMLElement)
+    .find((row) => row && within(row).queryByText("ana.diaz"))!;
+  const held = within(jane).getByText("ana.diaz");
+  expect(held.closest(".crewlet-tag")).toBeNull();
+  expect(within(jane).queryByText(STAGE_WORDS.active!.label)).toBeNull();
+});
+
 // A SEALED VALUE IS A STATE the operator can end by putting a key back — never
 // a blank name, which reads as somebody who never gave one.
 test("a row this node cannot open is drawn as sealed", async () => {
@@ -284,15 +314,16 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   const vacant = screen.getByText("Open seats").closest(".crewlet-statcard");
   expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("1");
   expect(within(vacant as HTMLElement).getByText("1 invited · 3 total")).toBeTruthy();
-  // AND ITS ROW NAMES THE INVITATION rather than "Nobody holds it".
+  // AND ITS ROW NAMES THE INVITATION rather than "Open".
   const sam = screen
     .getAllByRole("link", { name: /Sam Support/ })
     .map((link) => link.closest(".grid-row") as HTMLElement)
     .find((row) => row && within(row).queryByText("Invited"))!;
   expect(within(sam).getByText("sam@example.com")).toBeTruthy();
-  expect(within(sam).queryByText("Nobody holds it")).toBeNull();
+  expect(within(sam).queryByText("Open")).toBeNull();
   const lee = screen.getByRole("link", { name: /Lee Legal/ }).closest(".grid-row") as HTMLElement;
-  expect(within(lee).getAllByText("Nobody holds it").length).toBeGreaterThan(0);
+  // A SEAT NOTHING HOLDS READS "Open", in words, rather than a dash.
+  expect(within(lee).getAllByText("Open").length).toBeGreaterThan(0);
 });
 
 // A FINDING IS DRAWN IN WORDS, never its code: the kind's label from

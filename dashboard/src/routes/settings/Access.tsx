@@ -105,6 +105,9 @@ import {
   StatGroup,
   Tag,
   useToast,
+  Inline,
+  Link,
+  Text,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -142,11 +145,12 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDate, tsKey } from "~/lib/format.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
-import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
+import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -861,7 +865,7 @@ export function PeopleAndAccess() {
                   // it drew before.
                   floor: "8rem",
                   sortValue: (p) => p.seat ?? "",
-                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
+                  cell: (p) => <SeatHandle seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
@@ -1068,7 +1072,22 @@ function contactsByHandle(
  */
 function PersonName({ row }: { row: DirectoryRow }) {
   if (row.sealed) return <SealedTag />;
-  return <TextCell>{row.name || row.login || row.id}</TextCell>;
+  const name = row.name || row.login || row.id;
+  // THE BADGE IS THE PERSON'S, beside their name: in the Seat column it
+  // repeated the name a cell over ("Lee Park  LP Lee Park"). A service account
+  // wears a key, since the initials of a credential's label mean nothing.
+  return (
+    <Inline gap={2}>
+      <SeatAvatar
+        name={name}
+        size="xs"
+        kind="human"
+        icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
+        decorative
+      />
+      <TextCell>{name}</TextCell>
+    </Inline>
+  );
 }
 
 /**
@@ -1094,15 +1113,18 @@ function Holder({ seat }: { seat: HumanSeat }) {
       </span>
     );
   }
-  if (!holder) return <EmptyValue label="Nobody holds it" />;
+  // OPEN, IN WORDS: a seat nothing holds is one an administrator can invite
+  // somebody onto, which a dash did not say.
+  if (!holder) return <TextCell>Open</TextCell>;
+  // THE HOLDER BY NAME, as plain text. Status colour is reserved for status, so
+  // the stage is a tag of its own, and only where it is news: an active holder
+  // is the ordinary case.
+  const stage = holder.stage ?? "";
   return (
-    <Tag
-      size="sm"
-      variant={STAGE_WORDS[holder.stage ?? ""]?.tone ?? "neutral"}
-      title={STAGE_WORDS[holder.stage ?? ""]?.label ?? holder.stage}
-    >
-      {holder.login ? <span className="mono">{holder.login}</span> : holderName(holder)}
-    </Tag>
+    <Inline gap={1} wrap>
+      <TextCell>{holderName(holder)}</TextCell>
+      {stage !== "active" && <WordTag words={STAGE_WORDS[stage]} fallback={stage} />}
+    </Inline>
   );
 }
 
@@ -1142,6 +1164,28 @@ function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof in
 
 /** A finding's fix, opened from its row: the dialog the person's peek opens for it. */
 type FindingFix = { gesture: "mint" | "reset"; row: DirectoryRow };
+
+/**
+ * The seat a PERSON's row binds, by its own identifier: its `@handle`, linked
+ * to its page, with its name on the tooltip. In the People table the seat's
+ * name and badge echoed the person's a cell over ("Lee Park  LP Lee Park"),
+ * so the badge is the person's, beside their name, and the seat is its handle.
+ */
+function SeatHandle({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!seat) return <EmptyValue label="No seat" />;
+  return (
+    <Link
+      href={href(["agents", "seats", seat])}
+      size="inherit"
+      variant="subtle"
+      title={index.byHandle.get(seat)?.name}
+    >
+      <Text variant="cell" mono>
+        {handleLabel(seat)}
+      </Text>
+    </Link>
+  );
+}
 
 /**
  * What the directory reports wrong, each kind written here in a short
