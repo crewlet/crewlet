@@ -152,6 +152,7 @@ var typedKinds = []typedKind{
 	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
 	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
 	{"tracker.MoveStopped", reflect.TypeFor[*tracker.MoveStopped]()},
+	{"tracker.Refusal", reflect.TypeFor[*tracker.Refusal]()},
 	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
 	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
 	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
@@ -159,6 +160,7 @@ var typedKinds = []typedKind{
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+	{"pages.InvalidError", reflect.TypeFor[*pages.InvalidError]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
