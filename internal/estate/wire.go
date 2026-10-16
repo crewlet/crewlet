@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -246,6 +248,25 @@ type op[A, R any] struct {
 // construction one the server knows — and the wire gate walks this table,
 // so a new operation's types are checked the moment it is declared.
 var registry = map[string]*opSpec{}
+
+// WriteDomains is every domain this router carries a write for, by its
+// state-log name, sorted — read off the operation table, so a domain whose
+// first write operation is declared is in it from that line on.
+//
+// EXPORTED for the gates that must cover every routed domain: a surface
+// that classes a writer's refusal or names a write's object outside a tool
+// (internal/agent/builtin's WriterClass and ObjectArgs) declares each domain
+// once, and a domain routed here and not declared there is a person's
+// content refusal answered as a fault.
+func WriteDomains() []string {
+	seen := map[string]bool{}
+	for _, spec := range registry {
+		if spec.class != opRead && spec.domain != "" {
+			seen[spec.domain] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
 
 // define declares an operation, with the domain whose log its floor is on —
 // empty for one that carries no floor. Package-level, at init: a duplicate
