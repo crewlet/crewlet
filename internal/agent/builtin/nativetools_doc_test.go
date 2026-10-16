@@ -2,6 +2,9 @@ package builtin_test
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,7 +98,12 @@ func operatorOnlyTools(t *testing.T) []string {
 // resuming a seat, steering a running turn and answering a question from the
 // company's knowledge — each a person's decision about the company, served on
 // the operator surface alone. Counted from the catalogue with every seam
-// wired, for the page that lists them all.
+// wired, for the pages that count them all.
+//
+// EVERY SEAM, AND CHECKED: the operator surface the fixture builds must serve
+// every tool [builtin.OperatorTools] declares ([operatorCandidates]), or a
+// seam this fixture leaves unwired is a tool counted as served to nobody at
+// all — and the pages' count goes on matching it, one short.
 func everyOperatorOnlyTool(t *testing.T) []string {
 	t.Helper()
 	full := fullDeps(t)
@@ -116,8 +124,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	}
 	company := &org.Organization{Name: "Acme"}
 	answers := newAnswerRig()
-	var only []string
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+	served := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: full.Pages, Knowledge: full.Knowledge,
 		Org:  func() *org.Organization { return company },
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
@@ -125,7 +132,19 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			Org: func() *org.Organization { return company }, Actor: actor},
 		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
-	}) {
+	})
+	if declared := operatorCandidates(t); len(served) != declared {
+		names := make([]string, 0, len(served))
+		for _, tool := range served {
+			names = append(names, tool.Name())
+		}
+		t.Fatalf("the operator surface this fixture builds serves %d tools %v, "+
+			"and OperatorTools declares %d: a seam is left unwired here, so the "+
+			"count of what no seat is given would be short by what it omits",
+			len(served), names, declared)
+	}
+	var only []string
+	for _, tool := range served {
 		if !slices.Contains(seat, tool.Name()) {
 			only = append(only, tool.Name())
 		}
@@ -138,6 +157,48 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		}
 	}
 	return only
+}
+
+// operatorCandidates is how many tools [builtin.OperatorTools] declares: the
+// entries of its `candidates` list, read off the function's syntax tree.
+//
+// FROM THE SOURCE rather than from a call, because a call answers only for the
+// seams its caller wired — which is the very thing this is checked against.
+func operatorCandidates(t *testing.T) int {
+	t.Helper()
+	rel := "internal/agent/builtin/operator.go"
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset,
+		filepath.Join(sourcetree.Root(t), filepath.FromSlash(rel)), nil,
+		parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+	count := -1
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "OperatorTools" || fn.Recv != nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			assign, ok := n.(*ast.AssignStmt)
+			if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+				return true
+			}
+			if id, ok := assign.Lhs[0].(*ast.Ident); !ok || id.Name != "candidates" {
+				return true
+			}
+			if list, ok := assign.Rhs[0].(*ast.CompositeLit); ok {
+				count = len(list.Elts)
+			}
+			return false
+		})
+	}
+	if count <= 0 {
+		t.Fatalf("%s has no OperatorTools with a `candidates` list to count, so "+
+			"the catalogue's size cannot be read", rel)
+	}
+	return count
 }
 
 // numberWords spells the counts these pages state. Past twenty-nine a page
@@ -176,7 +237,20 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	t.Parallel()
 	tracker, pages := nativeTools(t)
 	total := len(tracker) + len(pages)
+	// WHAT NO SEAT IS GIVEN, two ways, because the pages count both: the
+	// tracker's own operator-only tools, and the whole catalogue's — those
+	// plus the fleet-record gestures (a parked run, a paused seat, a running
+	// turn, a question answered from the knowledge base). A page that counts
+	// what an operator's assistant gets beyond a seat counts the second; the
+	// tracker's set is held to be inside it.
 	operatorOnly := operatorOnlyTools(t)
+	every := everyOperatorOnlyTool(t)
+	for _, name := range operatorOnly {
+		if !slices.Contains(every, name) {
+			t.Errorf("the tracker's operator-only %s is missing from the "+
+				"catalogue's set of what no seat is given", name)
+		}
+	}
 	title := func(word string) string { return strings.ToUpper(word[:1]) + word[1:] }
 
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
@@ -202,13 +276,18 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 			readPage(t, "docs/getting-started/quickstart.md"),
 			"tools a seat holds — " + spelled(t, len(tracker)) + " over the tracker and " +
 				spelled(t, len(pages)) + " over the pages — and " +
-				spelled(t, len(operatorOnly)) + " more that no seat is given"},
+				spelled(t, len(every)) + " more that no seat is given"},
+		// THE GUIDE COUNTS THE TWO HALVES APART: the tracker's beside the
+		// tables, and the person's decisions about the company after them.
 		{"docs/guides/tools-and-mcp.md", guide, "and " + spelled(t, len(operatorOnly)) +
 			" more beside them that no seat is given"},
+		{"docs/guides/tools-and-mcp.md", guide,
+			title(spelled(t, len(every)-len(operatorOnly))) +
+				" more are a person's decisions about the company"},
 		// THE REFERENCE LISTS EVERY ONE, the tracker's and the rest.
 		{"docs/reference/api-endpoints.md",
 			readPage(t, "docs/reference/api-endpoints.md"),
-			"Plus **" + spelled(t, len(everyOperatorOnlyTool(t))) + " no seat is given**"},
+			"Plus **" + spelled(t, len(every)) + " no seat is given**"},
 	} {
 		if !strings.Contains(c.text, c.want) {
 			t.Errorf("%s does not say %q — the registry adds %d tracker and %d "+
