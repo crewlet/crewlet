@@ -749,7 +749,14 @@ evicted node's row — and any trim floor it published — counts toward neither
 the generation the fleet is on nor a reanchor's guards, which is how a fleet
 stranded by a node that re-anchored and then vanished is released ([a node a
 peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself
-stays: a readmission is judged by it.
+stays: a readmission is judged by it. Its **backup** does not: once the
+eviction has taken effect on every log that counts nodes, the trim's next tick
+forgets the node's newest backup point, so under `backup_floor: engine` no log
+is trimmed against a copy on a host the fleet has let go, and
+[`GET /backups`](../reference/api-endpoints.md#get-backups) stops listing it.
+A log that copy alone covered blocks on the `backup_floor` term, and raises
+`backup_age`, until a live node backs up; a node readmitted later records its
+next backup afresh.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
