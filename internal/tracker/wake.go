@@ -165,43 +165,59 @@ func (w Wake) Notify(leads Leads) *Notify {
 	return notify
 }
 
-// filedTo brings a create's wake up to the assignee its own snapshot settled
-// on — the project's default, which [Writer.landsOn] reads inside the create
-// and which the caller that built this wake could not have known.
+// settled brings a create's wake up to everything the writer settled on the
+// task after its caller built that wake: handed is the task as the caller
+// handed it in, and filed is the task the record carries.
 //
-// ONLY WHAT THAT SETTLEMENT MOVED: the routing snapshot's assignee and its
-// watchers (the default assignee follows what they hold), and each delta the
-// move touched, stated as the create's own — from nothing — by [TaskDeltas],
-// so its text is the one every other delta is written in. Nothing else is
-// re-derived, because nothing else was decided here: rebuilding the whole
-// wake would re-state the rest from a second frame, which is the
-// disagreement [TaskDeltas] was exported to end.
+// A CREATE'S CALLER BUILDS ITS WAKE BEFORE THE WRITER SETTLES ANYTHING, and
+// the writer settles a good deal: the tags as the slugs they normalise to and
+// the default type, before the key is minted ([Writer.CreateTask]); a
+// promoted item's parent ([Writer.PromoteItem]); a question's addressee among
+// the watchers ([checkCreateAsk]); and, inside the create's own snapshot, the
+// unit the project files the work into ([filedUnit]), the project's default
+// assignee ([Writer.landsOn]) and the watch they then hold, and the status and
+// priority a create naming none starts at. A wake left at what the caller
+// handed in routes from a task the record does not carry: the default
+// assignee unwoken while the create went to the lead's fallback as triage,
+// and a fallback with no unit lead to offer, so unassigned work filed into a
+// project with no lead of its own reached nobody. Completed one settlement at
+// a time, the card still disagreed with the history row beside it about the
+// rest. So it is ONE COMPLETION, made once every settlement is.
 //
-// Without it the record would carry an assignee its own wake did not name,
-// and the recipient rule would route the create as triage — to the lead's
-// fallback — while the task sat on the default assignee's queue with nobody
-// having woken them.
-func (n *Notify) filedTo(was, now Task) {
+// THE CARD IS THE CREATE'S HISTORY ROW, trimmed for a card: the applier writes
+// that row from [TaskDeltas] over nothing and the task as filed, and the card
+// is stated from the same call, so the two cannot disagree about what a
+// create moved — the disagreement [TaskDeltas] was exported to end. Nothing
+// the caller stated is re-stated otherwise: a create's own card is that same
+// call over the task it handed in, so a field the writer did not move reads
+// exactly as the caller had it. Trimmed from the whole set again, so a field
+// the caller's trim left off is counted once rather than twice.
+//
+// THE SNAPSHOT ONLY WHERE THE WRITER MOVED IT — the assignee, the watchers
+// less the muted, the status and its group, the unit's lead — because the rest
+// is routing state the caller copied and the writer decided nothing about.
+// The unit's lead through the writer's own chart ([Writer.Leads]), since the
+// writer is what settled the unit; a unit the caller named is never filled
+// in, so it keeps the lead the caller's own chart resolved.
+func (n *Notify) settled(handed, filed Task, leads Leads) {
 	if n == nil {
 		return
 	}
-	n.Snapshot.Assignee = now.Assignee
-	n.Snapshot.Watchers = without(now.Watchers, now.Muted)
-	whole := TaskDeltas(Task{}, now, nil)
-	fields := deltaSet(n.Fields)
-	if fields == nil {
-		fields = deltaSet{}
+	if len(TaskDeltas(handed, filed, nil)) > 0 {
+		n.Fields, n.FieldsOmitted = cardFields(TaskDeltas(Task{}, filed, nil))
 	}
-	for field := range TaskDeltas(was, now, nil) {
-		if delta, held := whole[field]; held {
-			fields[field] = delta
-		}
+	if filed.Assignee != handed.Assignee {
+		n.Snapshot.Assignee = filed.Assignee
 	}
-	// TRIMMED FOR THE CARD again, with what it left off added to what
-	// the first trim already had: a field this settlement moved may be one
-	// the card had no room for.
-	shown, omitted := cardFields(fields.done())
-	n.Fields, n.FieldsOmitted = shown, n.FieldsOmitted+omitted
+	if !slices.Equal(filed.Watchers, handed.Watchers) || !slices.Equal(filed.Muted, handed.Muted) {
+		n.Snapshot.Watchers = without(filed.Watchers, filed.Muted)
+	}
+	if filed.Status != handed.Status || filed.StatusGroup != handed.StatusGroup {
+		n.Snapshot.Status, n.Snapshot.StatusGroup = filed.Status, filed.StatusGroup
+	}
+	if filed.RoutingUnit != handed.RoutingUnit && filed.RoutingUnit != "" && leads != nil {
+		n.Snapshot.RoutingUnitLead = leads.UnitLead(filed.RoutingUnit)
+	}
 }
 
 // keyed names, on a create's wake, the key the write minted.
