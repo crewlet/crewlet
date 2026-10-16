@@ -1075,7 +1075,7 @@ func loginFits(kind iam.Kind, login string) error {
 // ITS OWN SENTINEL because it is the caller's to fix and a surface answers it
 // 400 — it is a value somebody typed, and reporting it as a failure of the
 // engine would send them looking for an outage.
-var ErrInvalidLogin = errors.New("iamdomain: that login does not fit its holder's kind")
+var ErrInvalidLogin = errors.New("invalid login")
 
 // ErrInvalid reports a value outside a bound this domain holds a record to: a
 // reason past [MaxReason], a stage that is not one.
@@ -1084,7 +1084,7 @@ var ErrInvalidLogin = errors.New("iamdomain: that login does not fit its holder'
 // supplied and can correct, so a surface answers it 400 naming the field — and
 // before it existed these fell through to a 500, which tells somebody who
 // wrote a long sentence that the engine is broken.
-var ErrInvalid = errors.New("iamdomain: a value is outside the bounds this estate holds it to")
+var ErrInvalid = errors.New("invalid value")
 
 // ErrSeatRequired reports a write that would leave a PERSON without a human
 // seat: a create naming none, an invitation naming none, or an identity
@@ -1095,8 +1095,8 @@ var ErrInvalid = errors.New("iamdomain: a value is outside the bounds this estat
 // field and the remedy (`seat_required`): a person holds a human seat for as
 // long as they are here, which is moved to another seat or freed by removing
 // them, never cleared. ADR-0032 is the decision.
-var ErrSeatRequired = fmt.Errorf("%w: a person holds a human seat for as long "+
-	"as they are here — name one", ErrInvalid)
+var ErrSeatRequired = fmt.Errorf("%w: every person needs a human seat",
+	ErrInvalid)
 
 // ErrNoCompany reports a seat that cannot be checked because this node runs
 // no company yet — so it holds no human seat for anybody to be bound to.
@@ -1107,11 +1107,12 @@ var ErrSeatRequired = fmt.Errorf("%w: a person holds a human seat for as long "+
 // ever. What clears it is a company that declares a human seat, which is the
 // remedy a surface names (409 `no_active_revision`). It is the domain's
 // reading of [session.ErrNoCompany], the seat seam's own answer.
-var ErrNoCompany = errors.New("iamdomain: this node runs no company yet, so it " +
-	"has no human seat to bind anybody to")
+var ErrNoCompany = errors.New("this node has no company yet, so " +
+	"there are no seats")
 
 // ErrNotEnrollable reports an enrolment of a kind the directory does not hold.
-var ErrNotEnrollable = errors.New("iamdomain: the directory enrols people and machines only")
+var ErrNotEnrollable = errors.New("only people and service " +
+	"accounts can be added")
 
 // ErrNotFindable reports an enrolment that would create somebody nothing can
 // look up.
@@ -1122,7 +1123,7 @@ var ErrNotEnrollable = errors.New("iamdomain: the directory enrols people and ma
 // else to find it by). What they share is the consequence — a credential
 // holder nobody can list, revoke or audit — which is why one sentinel covers
 // both.
-var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
+var ErrNotFindable = errors.New("missing an email or login")
 
 // SetIdentity changes an enrolled person's LOGIN, their SEAT binding, or both,
 // in ONE record on the directory.
@@ -2234,7 +2235,7 @@ const MaxTokenLabel = 128
 
 // ErrInvalidToken reports a mint whose request is malformed — a value the
 // caller typed, answered 400 rather than as an authority refusal.
-var ErrInvalidToken = errors.New("iamdomain: that token cannot be minted as asked")
+var ErrInvalidToken = errors.New("invalid token request")
 
 // tokenGrants resolves what a token carries and refuses what it may not.
 //
@@ -2595,8 +2596,8 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 // retry is the SAME request: answered with the first attempt's object, a second
 // DIFFERENT request under a reused key would be told its invitation was issued
 // — or its person created — when what exists is somebody else's.
-var ErrOperationReused = errors.New("iamdomain: that operation key already " +
-	"names something else")
+var ErrOperationReused = errors.New("that Idempotency-Key was already used " +
+	"for a different request")
 
 // issuedBefore answers whether the invitation an operation derives was already
 // issued, read inside the issue's own snapshot: nil where it was not,
@@ -2854,7 +2855,7 @@ func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
 // ErrNoInvitation reports an invitation this estate does not hold: never
 // issued, cancelled already, or collected by the sweep once it was redeemed or
 // aged out.
-var ErrNoInvitation = errors.New("iamdomain: no such invitation")
+var ErrNoInvitation = errors.New("no such invitation")
 
 // InvitationRedeemed refuses the cancellation of an invitation somebody
 // redeemed, naming the person it created — the link is spent, and what undoes

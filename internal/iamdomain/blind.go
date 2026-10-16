@@ -88,7 +88,7 @@ const blindDomain = "crewlet/iam/blind/v1"
 // and "this node could not tell" send a request to opposite places — a sign-in
 // refused, and a sign-in answered 503 while an operator is told the key is
 // missing.
-var ErrNoBlindKey = errors.New("iamdomain: no blind-index key")
+var ErrNoBlindKey = errors.New("no email lookup key")
 
 // Blinder derives the blind index for a value the company matches on.
 //

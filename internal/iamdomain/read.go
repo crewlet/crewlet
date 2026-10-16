@@ -140,7 +140,7 @@ func (r *Reader) AwaitApplied(ctx context.Context, position uint64) error {
 // a bool beside one is two ways to say the same thing that eventually
 // disagree. What it deliberately is NOT is what a sign-in reports: see
 // [Reader.PersonByLogin].
-var ErrNotFound = errors.New("iamdomain: no such person")
+var ErrNotFound = errors.New("no such person")
 
 // Resolve answers everything one bearer is checked against, in ONE snapshot.
 //
@@ -743,9 +743,7 @@ func vouches(ctx context.Context, tx *sql.Tx, end uint64) (bool, error) {
 // A SENTINEL, because the question that turns on it is answered by a row being
 // missing — whether a blind was ever derived ([Reader.HoldsBlinds]) — and on
 // such a snapshot a missing row is the one observation that proves nothing.
-var ErrNotCurrent = errors.New("iamdomain: this node's identity rows do not " +
-	"hold every record the log held when it was asked, so a row missing from " +
-	"them proves nothing")
+var ErrNotCurrent = errors.New("this node's identity data isn't up to date")
 
 // CoversLog proves, from one snapshot's prefix and the log's last sequence read
 // BEFORE that snapshot, that the snapshot's rows hold every record the log held
