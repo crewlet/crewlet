@@ -232,9 +232,8 @@ func (t *Trail) Emit(ctx context.Context, payload events.Payload) {
 	if err := t.pub.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
 		t.logger.WarnContext(ctx, "auth_event_not_published", "type", ev.Type,
 			"error", err.Error(),
-			"detail", "the gesture happened and this node's feed has no row "+
-				"for it; iam_history holds the fleet-wide record of every "+
-				"identity write")
+			"detail", "the change went through, but this node's event feed "+
+				"missed it; iam_history still has it")
 	}
 }
 
