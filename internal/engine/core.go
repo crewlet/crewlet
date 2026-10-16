@@ -759,7 +759,9 @@ func (e *Engine) StateLogStatus(ctx context.Context) []ReplicationStatus {
 }
 
 // WaitCommitted blocks until this node's applier for the log a position names
-// has consumed through it.
+// has consumed through it. It returns at once where this node has nothing to
+// wait on: a zero position, a node that applies no log (one holding no data,
+// whose reads are a data node's), or a log this node does not run.
 //
 // THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
 // than a revision because that is what a write answers with: a bucket write
