@@ -59,10 +59,13 @@ import (
 // whose caller is allowed to choose. So the function is the unit here, and
 // there is no level constant beside it to reach for by mistake.
 //
-// The rules themselves are [worklet.ParseFreshness]'s and not restated here.
-// One grammar serves the board, the socket, the REST route and a seat's own
-// tools, and a second reading of these keys would be the one place a freshness
-// key meant something slightly different.
+// The rules themselves are [statelog.ParseFreshness]'s and not restated here.
+// One grammar serves every domain's questions, the socket, the REST routes and
+// a seat's own tools, and a second reading of these keys would be the one
+// place a freshness key meant something slightly different. The FRAMEWORK'S
+// rather than a domain's, because this function serves every domain: read
+// through the tracker's, a bad `read_level` on a wiki question was refused as
+// "tracker: …", naming a domain the caller never asked about.
 //
 // WHAT THIS ADDS is the SURFACE, which the grammar cannot know: an absent or
 // unpermitted level resolves to this surface's default through
@@ -70,7 +73,7 @@ import (
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
 func freshness(p Params) (statelog.Freshness, error) {
-	got, err := worklet.ParseFreshness(p)
+	got, err := statelog.ParseFreshness(p)
 	if err != nil {
 		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}

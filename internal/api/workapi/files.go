@@ -115,7 +115,7 @@ const downloadHead = 32 << 10
 // getFile answers GET /worklet/files/{project}/{path...}: the file's bytes,
 // streamed, as an attachment.
 func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
-	fresh, err := worklet.ParseFreshness(queries.FromQuery(r.URL.Query()))
+	fresh, err := statelog.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
