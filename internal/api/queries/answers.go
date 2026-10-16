@@ -138,8 +138,10 @@ type Sources struct {
 	// bound. An ERROR is the table's UNKNOWN — this node could not decide
 	// for this principal — and `viewer` refuses rather than answering an
 	// empty list a screen would draw as "you may do nothing". Nil answers
-	// none: a node with no native backend has nothing a person could act
-	// on.
+	// none: it is a surface built with no operator catalogue, which mounts
+	// no act route — never an engine node, whose catalogue serves the seat
+	// controls whatever backends its company runs — so no press could
+	// reach anything.
 	Acts func(ctx context.Context, p iam.Principal) ([]string, error)
 
 	// Assistant answers whether the Dashboard Assistant is available to this
