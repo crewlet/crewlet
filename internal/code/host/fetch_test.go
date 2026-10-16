@@ -626,16 +626,17 @@ func TestARequestPastTheNodesRequestMemoryIsSpooled(t *testing.T) {
 	for len(fetchWants(wants)) <= 3<<10 {
 		wants = append(wants, head)
 	}
-	// NO SPOOL LEFT EITHER: the request is refused by the spool's allowance,
-	// which is how it is seen to have gone there rather than into memory.
-	host.SetSpools(node.Host(), 0, 1<<30, 4)
+	// A SPOOL OF ONE BYTE: the request is refused by the spool's allowance,
+	// which can never hold it, and that is how it is seen to have gone there
+	// rather than into memory.
+	host.SetSpools(node.Host(), host.SpoolSizes{Limit: 1, Share: 1, Request: 1, Places: 64, PlacesPerCredential: 16})
 	resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants(wants))
-	if resp.StatusCode != http.StatusServiceUnavailable ||
-		!strings.Contains(answer, "this node's room for large fetch requests is in use") {
-		t.Errorf("a request of %d bytes past a request memory of 2 KiB, with no spool left, answered %d %q",
+	if resp.StatusCode != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(answer, "larger than this node spools for one request") {
+		t.Errorf("a request of %d bytes past a request memory of 2 KiB, with no spool allowance, answered %d %q",
 			len(fetchWants(wants)), resp.StatusCode, answer)
 	}
-	host.SetSpools(node.Host(), 1<<30, 1<<30, 4)
+	host.SetSpools(node.Host(), roomy)
 	if resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants(wants)); resp.StatusCode != http.StatusOK ||
 		!strings.Contains(answer, "packfile") {
 		t.Errorf("the request, spooled, answered %d %q", resp.StatusCode, short(answer))
@@ -756,126 +757,4 @@ func TestASpoolIsGoneHoweverItsRequestEnds(t *testing.T) {
 		<-done
 		assertNoSpool(t, c)
 	})
-}
-
-// A request that finds the node's spool allowance spent, or its credential
-// holding its share of it — in bytes or in spools — is answered 503 at once,
-// never queued, while another credential still spools; and a request past a
-// credential's whole share by itself, which this node can never take, is
-// answered 413.
-func TestASpentAllowanceAnswers503(t *testing.T) {
-	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
-	node := c.Fleet.Nodes()[0]
-	host.SetRequestMemory(node.Host(), 1<<10)
-	p := codetest.NewPerson(t, c.Fleet, "ceo")
-	work := p.Init()
-	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
-	c.MustPush(p, work, "main")
-	wants := []string{head}
-	for len(fetchWants(wants)) <= 8<<10 {
-		wants = append(wants, head)
-	}
-	body := fetchWants(wants) // about 7 KiB of it spooled, past the kibibyte in memory
-	for len(fetchWants(wants)) <= 80<<10 {
-		wants = append(wants, head)
-	}
-	// large spools a piece of 64 KiB and some, so a request of it held open
-	// before its end holds a piece and its first byte.
-	large := fetchWants(wants)
-
-	t.Run("the node's allowance", func(t *testing.T) {
-		host.SetSpools(node.Host(), 2<<10, 1<<30, 4)
-		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, body)
-		if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" ||
-			!strings.Contains(answer, "this node's room for large fetch requests is in use") {
-			t.Errorf("a request past a spent allowance answered %d %q (Retry-After %q)", resp.StatusCode, answer,
-				resp.Header.Get("Retry-After"))
-		}
-		assertNoSpool(t, c)
-	})
-	t.Run("a credential's spools", func(t *testing.T) {
-		host.SetSpools(node.Host(), 1<<30, 1<<30, 1)
-		finish := spoolHeldOpen(t, c, "ceo", body, 1)
-		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, body)
-		if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(answer, "this credential already holds") {
-			t.Errorf("a second spooled request of one credential answered %d %q", resp.StatusCode, answer)
-		}
-		if other, _ := post(t, c, 0, "dev", "git-upload-pack", v2, body); other.StatusCode != http.StatusOK {
-			t.Errorf("another credential's spooled request answered %d beside the first's", other.StatusCode)
-		}
-		if status := finish(); status != http.StatusOK {
-			t.Errorf("the first request, finished, answered %d", status)
-		}
-		assertNoSpool(t, c)
-	})
-	t.Run("a credential's bytes", func(t *testing.T) {
-		// ROOM FOR ONE OF ITS REQUESTS, NOT TWO: a credential's spools are
-		// held to its share in bytes however few they are, and the share is
-		// what leaves the rest of the allowance to everybody else.
-		host.SetSpools(node.Host(), 1<<30, 100<<10, 4)
-		finish := spoolHeldOpen(t, c, "ceo", large, 1+64<<10)
-		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, large)
-		if resp.StatusCode != http.StatusServiceUnavailable ||
-			!strings.Contains(answer, "this credential's spooled requests already hold") {
-			t.Errorf("a credential's request past its share in bytes answered %d %q", resp.StatusCode, answer)
-		}
-		if other, _ := post(t, c, 0, "dev", "git-upload-pack", v2, large); other.StatusCode != http.StatusOK {
-			t.Errorf("another credential's spooled request answered %d beside the first's", other.StatusCode)
-		}
-		if status := finish(); status != http.StatusOK {
-			t.Errorf("the first request, finished, answered %d", status)
-		}
-		assertNoSpool(t, c)
-	})
-	t.Run("past a credential's whole share", func(t *testing.T) {
-		host.SetSpools(node.Host(), 1<<30, 32<<10, 4)
-		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, large)
-		if resp.StatusCode != http.StatusRequestEntityTooLarge ||
-			!strings.Contains(answer, "larger than this node takes from one credential at once") {
-			t.Errorf("a request past a credential's whole share answered %d %q", resp.StatusCode, answer)
-		}
-		assertNoSpool(t, c)
-	})
-}
-
-// spoolHeldOpen starts a fetch of body as who on node 0 whose last bytes are
-// held back, and waits until its spool is held with taken bytes in it — a
-// spool takes its first byte, then whole pieces as they fill; finish sends the
-// rest and answers the status.
-func spoolHeldOpen(t *testing.T, c *codetest.Case, who, body string, taken int64) (finish func() int) {
-	t.Helper()
-	node := c.Fleet.Nodes()[0]
-	was, before := host.SpoolsInUse(node.Host())
-	r, w := io.Pipe()
-	req, err := http.NewRequestWithContext(c.Ctx, http.MethodPost,
-		node.URL()+"/git/"+codetest.RepoName+"/git-upload-pack", r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
-	req.Header.Set("Git-Protocol", v2)
-	req.SetBasicAuth("crewlet", c.Fleet.Token(t, who))
-	status := make(chan int, 1)
-	go func() {
-		resp, err := node.Client().Do(req)
-		if err != nil {
-			status <- 0
-			return
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		status <- resp.StatusCode
-	}()
-	if _, err := io.WriteString(w, body[:len(body)-4]); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the held request's spool", func() bool {
-		bytes, held := host.SpoolsInUse(node.Host())
-		return held > before && bytes-was >= taken
-	})
-	return func() int {
-		_, _ = io.WriteString(w, body[len(body)-4:])
-		_ = w.Close()
-		return <-status
-	}
 }

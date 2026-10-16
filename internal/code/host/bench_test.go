@@ -1108,12 +1108,12 @@ func roundIndex(b *testing.B, f *codetest.SoloFleet) {
 
 // coldClones is one BenchmarkCloneCold arm: per iteration, the second node
 // emptied with the timer stopped, then one clone of shape from it by each of
-// people at once. People, not one token: a credential holds at most
-// SpoolsPerCredential spooled requests at once — four on a lane of sixteen
-// — and the fifth is answered 503 at once, which failed the arm the first
-// time eight blobless checkouts of the 100 000-file tree ran under one
-// token: the arm is of eight clones, not of the cap (doc.go says what the
-// cap costs).
+// people at once. People, not one token, because the arm is of eight clones
+// by eight people: one token's quarter of the spool (256 MiB on a lane of
+// sixteen) holds all eight lazy fetches of the 100 000-file tree, 40 MB, so
+// under one token they would not queue either, and a token's wider bursts are
+// TestACredentialsEndedSpoolsOutlastingTheWait's (doc.go says what the
+// quarter costs).
 func coldClones(b *testing.B, f *codetest.SoloFleet, people []*codetest.Person, shape int, cone []string,
 	firstByte float64) {
 

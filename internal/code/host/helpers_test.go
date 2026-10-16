@@ -35,10 +35,11 @@ func newCase(t *testing.T, o codetest.SoloOptions, settings code.RepoSettings) *
 // fast is a Timing a case can wait out: the production's shape, at a scale of
 // tens of milliseconds — but for the stall, which ends a real git process
 // that is merely busy (its keepalives are five seconds apart), so a case that
-// means to stall one scales it alone.
+// means to stall one scales it alone, and the spool wait, which a case that
+// means a wait to expire scales alone too.
 var fast = host.Timing{PendingGrace: 500 * time.Millisecond, PendingFirst: 40 * time.Millisecond,
 	PendingMax: 80 * time.Millisecond, Keepalive: 200 * time.Millisecond, Handshake: 5 * time.Second,
-	Stall: host.Production.Stall}
+	Stall: host.Production.Stall, SpoolWait: host.Production.SpoolWait}
 
 // call is one call a recording estate saw.
 type call struct {

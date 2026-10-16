@@ -55,6 +55,9 @@ type Timing struct {
 	// upload-pack, receive-pack — may read and write nothing before the pool
 	// ends it (gitproc.Cmd.Stall).
 	Stall time.Duration
+	// SpoolWait is the longest a fetch request waits its turn for room in
+	// the spool allowance before it is answered 503 (spool.go).
+	SpoolWait time.Duration
 }
 
 // Production is the timing every node runs with.
@@ -75,14 +78,33 @@ type Timing struct {
 //     keepalives are five seconds apart, so twelve of them missed is a process
 //     that stopped — and a case that holds a stand-in git still need not wait
 //     a minute to see it ended.
+//   - SpoolWait is gitproc.TransferStall less a Keepalive: 55 s. A fetch
+//     waiting for room to spool has written its client nothing and reads
+//     nothing more of its request, so its connection is QUIET, and what ends
+//     a quiet connection from outside is a balancer's idle timeout — which
+//     docs/guides/deployment.md has an operator set at a minute or more on
+//     /git/, the silence the node itself allows a git transfer. Answered a
+//     keepalive interval before that minute, the interval git keeps a
+//     transfer alive at for the same balancer, its 503 and the Retry-After
+//     in it reach a client behind a balancer that cuts at exactly a minute,
+//     however late a loaded node's timer fires, rather than the balancer's
+//     own cut, which git reports with no word of why. Waiting less would
+//     refuse checkouts the node could have served a few seconds later; there
+//     is no waiting longer behind such a balancer. A request whose own
+//     context ends sooner stops waiting then.
 var Production = Timing{
 	PendingGrace: statelog.StallGrace,
 	PendingFirst: 250 * time.Millisecond,
 	PendingMax:   2 * time.Second,
-	Keepalive:    5 * time.Second,
+	Keepalive:    keepalive,
 	Handshake:    5 * time.Second,
 	Stall:        gitproc.TransferStall,
+	SpoolWait:    gitproc.TransferStall - keepalive,
 }
+
+// keepalive is Production.Keepalive: git's own uploadpack.keepAlive and
+// receive.keepAlive default.
+const keepalive = 5 * time.Second
 
 // Options are how a Server is built. Every field but Faults, Logger, Metrics
 // and Now is required, and New refuses a missing one by name.
@@ -194,6 +216,7 @@ func New(o Options) (*Server, error) {
 	need(o.Timing.Keepalive <= 0, "Timing.Keepalive")
 	need(o.Timing.Handshake <= 0, "Timing.Handshake")
 	need(o.Timing.Stall <= 0, "Timing.Stall")
+	need(o.Timing.SpoolWait <= 0, "Timing.SpoolWait")
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: %s missing or zero", ErrOptions, strings.Join(missing, ", "))
 	}
@@ -207,7 +230,7 @@ func New(o Options) (*Server, error) {
 	}
 	transfers := o.Git.Slots(gitproc.ClassTransfer)
 	s.heads = newAllowance(RequestMemoryAllowance(transfers))
-	s.spools = newSpools(SpoolAllowance(transfers), SpoolCredentialBytes(transfers), SpoolsPerCredential(transfers))
+	s.spools = newSpools(spoolSizesFor(transfers))
 	s.life, s.end = context.WithCancel(context.Background())
 	return s, nil
 }

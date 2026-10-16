@@ -854,26 +854,77 @@ checkout after `git clone --filter=blob:none` asks for every blob it lacks in
 one request, fifty bytes a blob, so a tree of more than about 210 000 files
 sends more than 10 MiB. The engine holds a request in memory as large as it
 is, up to a mebibyte — a clone's negotiation is a few kilobytes, and costs
-that — and spools the rest to an unnamed file on the cache's volume, removed
-when the request ends however it ends. What every request holds in memory at
-once comes out of a node-wide allowance, a mebibyte for each transfer slot, so
-a burst of fetches waiting for their slots is bounded by the node; a request
-that finds it spent is spooled rather than refused. A request is bounded by
-**its repository**: fifty bytes for every object the repository's packs hold
-and every live ref, beside the mebibyte — the most a request can legitimately
-name — and one past it is refused 413. The spools come out of an allowance of
-their own, 64 MiB for each transfer slot and never the cache's budget, and one
-credential's spooled requests may hold a quarter of it at once, in bytes and
-in requests; a request that finds the allowance or its credential's quarter
-spent is answered 503 at once. git does not retry a lazy fetch, so a blobless
-checkout whose fetch is answered so fails: behind one token, more checkouts
-large enough to spool than a quarter of the node's transfer slots at once —
-four on a four-core node — fail past the quarter rather than wait for it. A
-request larger than a quarter by itself — about 21 million wants on a
-sixteen-core node — is answered 413, since this node will never take it. A
-request's memory and its spool are given back as soon as git has read it and
-started its answer, not when a slow client finishes downloading. A blobless clone needs protocol v2, git's default since 2.28 —
-under v0 a fetch of a blob the client never saw advertised is refused.
+that — and spools a larger one, whole, to an unnamed file on the cache's
+volume, removed when the request ends however it ends. What every request
+holds in memory at once comes out of a node-wide allowance, a mebibyte for
+each transfer slot, so a burst of fetches waiting for their slots is bounded
+by the node; a request that finds it spent is spooled rather than refused. A
+request is bounded by **its repository**: fifty bytes for every object the
+repository's packs hold and every live ref, beside the mebibyte — the most a
+request can legitimately name — and one past it is refused 413. The spools
+come out of an allowance of their own, 64 MiB for each transfer slot and never
+the cache's budget, and a spool takes its room as its client sends — a
+mebibyte at a time, given back to what it holds the moment its body ends — so
+it holds what its client sent, never what its repository's bound would allow.
+While its body arrives a request also **claims** the most it can grow to: at
+most 64 MiB, about 1.3 million objects, or the length its client declared,
+which git does not declare for a request this large. The node keeps the
+requests arriving able to finish, oldest first: a request is given room only
+while every request older than it could still reach its claim once the spools
+whose bodies have ended are given back. So two requests can never each hold
+part of the room waiting for the other's, and nothing counts requests — as
+many may be arriving at once as their bytes leave room for, and a slow client
+(the floor every transfer is held to is half a minute a mebibyte) holds what
+it has sent, and keeps one claim free of the requests behind it. They wait
+for it only once the requests arriving hold all but that much of the room:
+960 MiB of a four-core node's gibibyte. One credential may hold a quarter of
+the room at once — 256 MiB on a four-core node — and the same rule keeps its
+own requests arriving able to finish within its quarter. A request that finds
+no room, or its credential's quarter spent, **waits its turn for it, up to
+55 s**, and is answered 503 only if its turn has not come by then — because
+git does not retry a lazy fetch, and a blobless checkout whose fetch is
+refused fails. The turns are first come, first served within a credential;
+across credentials the node's room goes in arrival order, and a credential at
+its quarter holds back only its own requests, so a CI fleet behind one token
+never makes a person wait behind it, and a request that can start at once
+starts at once, whatever else waits. A request waiting to start holds the
+part of it already in memory in a place of the node's waiting room — four
+places a transfer slot, a mebibyte each: 64 MiB on a four-core node and
+256 MiB on sixteen cores — never in the memory every other request shares,
+and once it starts that part goes into its spool, so a spooled request
+waiting for its sync holds no memory at all. A wait is bounded by the idle
+timeout a balancer gives a quiet git request: a waiting fetch has been sent
+nothing, and the deployment guide's minute less one keepalive interval
+answers its 503 before the balancer would cut it. A request that must wait
+and finds the waiting room full, or its credential's quarter of it — a lane's
+width of one credential's requests waiting — is answered 503 at once. A
+waiter whose client goes is seen to go when the node next reads its
+connection, at its turn: the engine's listener speaks HTTP/1.1, where a client
+that hung up is heard only by reading from it.
+`crewlet.code.host.spool.waits` counts every wait by how it ended.
+
+A spooled request holds its room until git has read it and started its
+answer — through its sync — so what a request behind it waits for is that
+sync: a moment on a node that holds the repository, and on a node that does
+not, a **cold** sync of about 70 to 130 s at 10 000 pushes, longer than the
+wait. Behind one token, as many checkouts large enough to spool run at once
+as their requests fit in the token's quarter of the room, and the rest wait
+for them; on a cold node the ones past the quarter fail. N runners asking for
+B bytes each fail their checkouts there once N × B passes the quarter:
+thirteen lazy fetches of 20 MB fill a four-core node's 256 MiB, and the
+fourteenth and every one after it are answered 503. So one token behind many
+runners costs more than latency: a token for each CI runner moves the limit to
+the node's whole room, fifty-three such fetches on a four-core node, which one
+cold sync can fill too, and routing each repository's requests to the nodes
+that hold it (the [deployment guide](../guides/deployment.md)) is what keeps
+the syncs warm. A request past what the node spools for one request —
+at most 64 MiB, about 1.3 million objects, a quarter of the allowance on a
+node of fewer than four transfer slots — is answered 413 at once, since this
+node will never take it: fetch fewer objects at once, as a sparse checkout
+does. A request's memory and its spool are given back as soon as git has read
+it and started its answer, not when a slow client finishes downloading. A
+blobless clone needs protocol v2, git's default since 2.28 — under v0 a fetch
+of a blob the client never saw advertised is refused.
 
 **The partial-clone filters served.** A cache serves the filters git can
 answer from a repository's bitmap and no others: `blob:none`, `blob:limit=<n>`,
@@ -907,8 +958,9 @@ and their deadlines.
 git shows a refusal at the advertisement as `fatal: remote error: …` and a
 refusal of one ref as `! [remote rejected] <ref> (<code>: <sentence>)`. An HTTP
 error's text — a 503's, a 404's — git prints after `remote:` when it comes
-from the advertisement, and as `RPC failed` when it comes from a request in
-the middle of a transfer. Every 503 carries `Retry-After`, and says the same in
+from the advertisement; when it comes from a request in the middle of a
+transfer git prints only `error: RPC failed; HTTP <status>`, never the text,
+which the node's log line for the request keeps. Every 503 carries `Retry-After`, and says the same in
 words, since git does not read the header.
 
 | What happened | What git prints | What to do |
@@ -961,14 +1013,18 @@ words, since git does not read the header.
 | A partial clone asks for `--filter=sparse:oid=…` | `fatal: remote error: filter 'sparse:oid' not supported` | Clone with `--filter=blob:none` and a sparse checkout: the files are fetched as the checkout needs them ([the filters served](#a-push-end-to-end)). |
 | A partial clone asks for `--filter=tree:<n>` with `<n>` past 0 | `fatal: remote error: tree filter allows max depth 0, but got <n>` | Clone with `--filter=tree:0` or `--filter=blob:none`. |
 | A fetch request past its repository's bound | `this fetch request is larger than any repository <name> holds could need …` (413) | Fetch in parts. |
-| A fetch request past a quarter of the node's room for large requests | `this fetch request is larger than this node takes from one credential at once …` (413) | Fetch through a node with more cores and the memory to back them (its git transfer slots size the room), or fewer objects at once. |
-| The node's room for large requests is in use | `this node's room for large fetch requests is in use …` (503) | Retry, or against another node. |
+| A fetch request past what the node spools for one request (64 MiB, about 1.3 million objects) | `this fetch request is larger than this node spools for one request …` (413) | Fetch fewer objects at once: a sparse checkout asks only for the files it checks out. |
+| A fetch large enough to spool waited 55 s for its turn at the node's room for large requests, or had to wait and found the node's waiting room full, or its credential's quarter of it | `this node's room for large fetch requests is in use: …` (503), saying what held it back — mid-transfer, so git prints `error: RPC failed; HTTP 503` and the node's `code_fetch_spool_unserved` line keeps the sentence | Retry, or against another node. When the sentence says this credential's own requests held it back, the requests are several CI runners behind one token: give each runner a token of its own. |
 | The request's body could not be read (a gzip stream that fails its checksum; for a fetch, a body cut short too) | `the push's body could not be read: …`, or `the push's command list could not be read: …` when it failed before the pack or was not pkt-lines at all, or `the request body could not be read: …` for a fetch (400) | Nothing was stored; send it again, and if it fails the same way the client is sending a broken stream. |
 
 **What to watch.** `crewlet.code.push.duration` by `outcome` (`pending`
 growing is a code log slow to apply here; `unknown`, a committer that stopped
-answering), `crewlet.code.push.bytes` against the push limit, and
-`crewlet.code.fetch.duration` by `command` and `sync` ([metrics
+answering), `crewlet.code.push.bytes` against the push limit,
+`crewlet.code.fetch.duration` by `command` and `sync`, and
+`crewlet.code.host.spool.waits` by `outcome` — `granted` climbing is a token
+behind several CI runners, or a node whose spooling is full, before any
+checkout fails; `expired` and `refused` are checkouts that did, and their
+`code_fetch_spool_unserved` lines say which held them back ([metrics
 reference](../reference/metrics.md)).
 
 ---
@@ -987,6 +1043,7 @@ reference](../reference/metrics.md)).
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_retention_duty_declined` | `WARN` | This node's copy of the code log is out of service, so it does not take the duty. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the token and the person it is bound to, the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
+| `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
 | `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request, or the node would not run git in it for its shape (`reason`: `corrupt`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape in place, damage to its packs by a rebuild — and git run again over the same request. |
 | `code_git_refused` | `ERROR` | The node refused its own call serving a request because the call is wrong — a git configuration key or variable outside what the node allows, a call without a deadline, a malformed command, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or because its git should never have started; answered 500 with no `Retry-After`. A bug in the build the node runs: report the line. |
 | `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut); or the request failed on the node itself before git answered (`reason`: `node` — its disk refusing a write into the repository's copy, or anything else the engine did not name; the `error` says what), answered 503. |

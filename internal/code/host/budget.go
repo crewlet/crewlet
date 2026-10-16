@@ -30,29 +30,33 @@ const (
 	WantBytes = 4 + len("want ") + 40 + 1
 
 	// SpoolPerTransfer is how much spooled request each slot of the transfer
-	// lane is given in the node's SPOOL ALLOWANCE (SpoolAllowance): 64 MiB, a
-	// want list of about 1.3 million objects — a blobless checkout of a tree
-	// that size, past the largest public monorepos' working trees. Per SLOT,
-	// because a spooled request becomes exactly one upload-pack in the
-	// transfer lane, which admits that many at once: the lane is what bounds
-	// how many spooled requests the node can put to use, and a spool past it
-	// would only wait for a slot.
+	// lane is given in the node's SPOOL ALLOWANCE (SpoolAllowance), and the
+	// most ONE request spools (SpoolRequestBytes): 64 MiB, a want list of
+	// about 1.3 million objects — a blobless checkout of a tree that size,
+	// past the largest public monorepos' working trees. Per SLOT, because a
+	// spooled request becomes exactly one upload-pack in the transfer lane,
+	// which admits that many at once: the lane is what bounds how many
+	// spooled requests the node can put to use, so a lane's width of the
+	// largest requests is exactly the allowance.
 	SpoolPerTransfer = 64 << 20
 
-	// SpoolCredentialShare is the share of the spool allowance one
-	// credential's spooled requests may hold at once, IN BYTES and in count:
-	// a quarter of the allowance (SpoolCredentialBytes) and spools for a
-	// quarter of the transfer lane (SpoolsPerCredential). A spool is held
-	// from its request's first byte past the in-memory part until
-	// upload-pack has read it and started answering — at the per-mebibyte
-	// floor (objstore.MiBPace) half a minute a mebibyte of the client's
-	// sending — so without a cap one credential could open a few slow
-	// requests to a large repository and hold the node's whole allowance at
-	// almost no cost to itself. A quarter still lets a CI fleet behind one
-	// token run a quarter of the node's fetches through the spool at once,
-	// leaves three quarters to everybody else, and is also the largest one
-	// request this node will spool: 1 GiB on a transfer lane of 64 slots
-	// (sixteen cores with the 32 GiB that back them), some 21 million wants.
+	// SpoolCredentialShare is the share of the node's spooling one
+	// credential's requests may hold at once: a quarter of the allowance's
+	// bytes (SpoolCredentialBytes) and of the waiting room
+	// (SpoolWaitersPerCredential). A spool's bytes are held from its first
+	// byte until upload-pack has read it and started answering — through its
+	// sync, a cold one included — so without a cap one credential could hold
+	// the node's whole allowance in the requests of a few CI runners or a few
+	// slow clients at almost no cost to itself. A quarter still lets a CI
+	// fleet behind one token spool a quarter of the node's room at once —
+	// the rest WAIT THEIR TURN, never refused for it (spool.go) — and leaves
+	// three quarters to everybody else. WHAT IT COSTS is that wait, which is
+	// the sync of the requests ahead: behind a cold one of a minute or two the
+	// waits past the quarter reach Timing.SpoolWait first and are answered
+	// 503, so N lazy fetches of B bytes behind one token fail on a cold node
+	// once N × B passes the quarter — thirteen of 20 MB on a four-core node's
+	// 256 MiB (TestACredentialsEndedSpoolsOutlastingTheWait); a token per
+	// runner moves that to the node's whole room.
 	SpoolCredentialShare = 4
 
 	// MaxCommandSectionBytes bounds a push's command section — the ref
@@ -97,7 +101,8 @@ const (
 
 	// BusyRetryAfter is gitproc.SlotWait: a node whose slots stayed busy for
 	// a whole read attempt is one a balancer should send the retry elsewhere
-	// from, and so is a node whose spool allowance is spent.
+	// from, and so is a node a fetch waited its whole turn at for room to
+	// spool.
 	BusyRetryAfter = gitproc.SlotWait
 
 	// UnavailableRetryAfter is what a request the code log or the object
@@ -129,7 +134,13 @@ func RequestBound(repo code.RepoRef) int64 {
 // upload-pack has read it, so it bounds what requests WAITING for their sync
 // and their transfer slot hold, however many arrive at once; a request that
 // finds it spent has the rest spooled, never refused for it. Per slot for
-// SpoolPerTransfer's reason: the lane is what puts a request to use.
+// SpoolPerTransfer's reason: the lane is what puts a request to use. ONLY the
+// requests held in memory are charged here: a request that goes to the spool
+// takes its head there with it — written into its spool once it starts, held
+// in a place of the spool's waiting room (SpoolWaiters) until then — because
+// charged here, a queue of large fetches behind one token spent the allowance
+// and sent every other request on the node, an ls-refs of a few hundred bytes
+// among them, to the spool and its queue.
 func RequestMemoryAllowance(transfers int) int64 {
 	return int64(max(transfers, 1)) * RequestMemoryBytes
 }
@@ -142,18 +153,54 @@ func SpoolAllowance(transfers int) int64 {
 	return int64(max(transfers, 1)) * SpoolPerTransfer
 }
 
-// SpoolCredentialBytes is the most one credential's spooled requests may hold
-// at once on a transfer lane of transfers slots: SpoolCredentialShare of the
-// allowance — which is also the largest one request the node spools.
+// SpoolCredentialBytes is the most one credential's spools may hold at once
+// on a transfer lane of transfers slots: SpoolCredentialShare of the
+// allowance.
 func SpoolCredentialBytes(transfers int) int64 {
 	return SpoolAllowance(transfers) / SpoolCredentialShare
 }
 
-// SpoolsPerCredential is how many spooled requests one credential may hold at
-// once on a transfer lane of transfers slots: SpoolCredentialShare of them,
-// and at least one.
-func SpoolsPerCredential(transfers int) int {
-	return max(transfers/SpoolCredentialShare, 1)
+// SpoolRequestBytes is the most ONE request spools on a transfer lane of
+// transfers slots: SpoolPerTransfer, and never past a credential's bytes —
+// 64 MiB, about 1.3 million wants, on every lane of four slots or more, and a
+// quarter of the allowance on a smaller one. A request past it is refused 413
+// at once. It is also what a body whose client declared no length — every
+// spooled request git sends — CLAIMS while it arrives (spool.go): the room
+// the bodies behind the oldest one arriving keep free, so the bodies arriving
+// may hold all but this much of the allowance, and of a credential's bytes,
+// before one waits on another — 960 MiB of a four-core node's gibibyte, and
+// 192 MiB of a credential's 256. Held below the credential's bytes on every
+// lane of four slots or more for that reason: a claim of the credential's
+// whole share leaves it no room for a second body while the first arrives,
+// which is what a lane narrower than four slots gives a credential.
+func SpoolRequestBytes(transfers int) int64 {
+	return min(SpoolPerTransfer, SpoolCredentialBytes(transfers))
+}
+
+// SpoolWaiters is the node's WAITING ROOM on a transfer lane of transfers
+// slots: how many fetch requests may wait at once to start spooling,
+// SpoolCredentialShare places a slot. A place holds what its request read
+// into memory before it was known to need the spool — up to
+// RequestMemoryBytes — so the room is a memory bound, 4 MiB a transfer slot,
+// beside RequestMemoryAllowance and never in it: 64 MiB on a four-core node's
+// sixteen slots and 256 MiB on sixteen cores' sixty-four, out of the 896 MiB
+// a core a git node keeps for serving (cache.ServingMemoryPerCore). Past it a
+// request that must wait is answered 503 at once; one that need not wait
+// never takes a place (spool.go).
+func SpoolWaiters(transfers int) int {
+	return SpoolCredentialShare * max(transfers, 1)
+}
+
+// SpoolWaitersPerCredential is how many of one credential's requests may wait
+// at once to start spooling, on a transfer lane of transfers slots:
+// SpoolCredentialShare of the waiting room, the lane's own width — so a burst
+// behind one token as wide as the node runs transfers at once waits whole
+// beside the requests it has spooling. WHAT IT COSTS: a token with more large
+// fetches waiting to start at once than that — 16 on a four-core node, 64 on
+// sixteen cores — has the excess refused 503 at once, and git does not retry
+// a lazy fetch, so those checkouts fail: a token for each CI runner ends it.
+func SpoolWaitersPerCredential(transfers int) int {
+	return SpoolWaiters(transfers) / SpoolCredentialShare
 }
 
 // HookBudget bounds what a push's hook session does inside one receive-pack —
