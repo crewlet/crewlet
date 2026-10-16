@@ -145,6 +145,27 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 	})
 }
 
+// graphFirst runs the graph-first runs that every copy a round has just read
+// whole with no commit-graph is due for at once (GRAPH FIRST, maintain.go) —
+// ahead of every index, each in a slot of its own — and waits for them,
+// failing t unless they ran on exactly repos, before a case goes on to the
+// ORDINARY runs it is about. The cache's clock does not move.
+func graphFirst(t *testing.T, c *cache.Cache, repos ...string) {
+	t.Helper()
+	var ran []string
+	for range len(repos) + 1 {
+		got := cache.MaintainerPass(c)
+		if len(got) == 0 {
+			break
+		}
+		ran = append(ran, got...)
+	}
+	slices.Sort(ran)
+	if want := slices.Sorted(slices.Values(repos)); !slices.Equal(ran, want) {
+		t.Fatalf("the graph-first passes ran %v, want %v", ran, want)
+	}
+}
+
 // holdSlot holds one slot of class in pool until the case ends: a git process
 // reading a stdin that gives nothing until then.
 func holdSlot(t *testing.T, pool *gitproc.Pool, class gitproc.Class) {
@@ -325,7 +346,8 @@ func inode(t *testing.T, path string) uint64 {
 // still for MidxDebounce it writes a multi-pack-index with its bitmap and a
 // commit-graph, which git serves; then nothing for MidxMinInterval, and
 // nothing while a burst is still landing — the debounce, not the count, is
-// what holds a due repository back.
+// what holds a due repository back. Its commit-graph is written before all
+// of that, at once (graph first), with no index.
 func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -336,6 +358,10 @@ func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 	}
 	c := w.open(t, clk.on)
 	s := w.sync(t, c, repo)
+	graphFirst(t, c, repo)
+	if statOK(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")) {
+		t.Fatal("the maintainer indexed packs a round just added before they had stood still")
+	}
 	if ran := cache.MaintainerPass(c); len(ran) != 0 {
 		t.Fatalf("the maintainer ran %v while the packs a round just added had not stood still", ran)
 	}
@@ -357,8 +383,9 @@ func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 	if doc.Midx.Packs != 9 || !doc.Midx.Bitmap || !doc.Midx.LastRun.Equal(ranAt) || doc.Midx.Bytes != heldBy(t, s.Dir)-doc.DiskBytes {
 		t.Errorf("the persisted midx is %+v, want 9 packs, the bitmap, last run at %v and the maintainer's bytes", doc.Midx, ranAt)
 	}
-	if got := w.logs.lines(t, "code_cache_maintained"); len(got) != 1 || got[0]["packs"] != float64(9) {
-		t.Errorf("code_cache_maintained = %v, want one line of 9 packs", got)
+	if got := w.logs.lines(t, "code_cache_maintained"); len(got) != 2 || got[0]["first"] != true ||
+		got[1]["first"] != false || got[1]["packs"] != float64(9) || got[1]["index"] != "bitmap" {
+		t.Errorf("code_cache_maintained = %v, want the graph-first run's line and the bitmap's over 9 packs", got)
 	}
 
 	clk.Add(time.Minute)
@@ -399,6 +426,7 @@ func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t, clk.on)
 	w.sync(t, c, repo).Release()
+	graphFirst(t, c, repo)
 	first := clk.Now() // the round added the packs no index covers
 	var ranAt []time.Time
 	for clk.Now().Before(first.Add(cache.MidxMaxWait + cache.MidxDebounce)) {
@@ -746,7 +774,9 @@ func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
 // slot is free — so however long the maintainer's runs last, one slot of a
 // lane of two is never theirs. Two repositories due, each run holding a slot
 // for as long as the case lets it: one run starts, and a maintenance-class
-// process started meanwhile is admitted.
+// process started meanwhile is admitted. (Only a graph-first run, a walk of
+// the commits of seconds, may take that slot: graphFirst below, and
+// TestAGraphLessCopyIsGraphedFirst.)
 func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -781,6 +811,7 @@ func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 	sa, sb := w.sync(t, c, a), w.sync(t, c, b)
 	defer sa.Release()
 	defer sb.Release()
+	graphFirst(t, c, a, b)
 	clk.Add(cache.MidxDebounce)
 
 	started, wait := cache.StartMaintainerPass(c)
@@ -902,15 +933,13 @@ func TestAMaintenanceRunIsChargedByItsRepositorysObjects(t *testing.T) {
 	}
 }
 
-// A COMMIT-GRAPH REFUSED A SLOT IS DUE ON ITS OWN: the index's step can
-// succeed and the graph's be refused — another process took the maintenance
-// slot between the two — and a repository whose index is current would then
-// never be due again until MidxPacks more packs land: every walk in it,
-// negotiation and the push's ancestry checks among them, parsing every commit
-// for good. So the graph is recorded apart from the index, the refusal is no
-// failure, and once the interval has passed a run writes the graph alone,
-// leaving the index on disk as it is.
-func TestACommitGraphRefusedASlotIsDueOnItsOwn(t *testing.T) {
+// A COMMIT-GRAPH REFUSED A SLOT IS ASKED FOR AGAIN AT ONCE: a graph-first
+// run whose step finds no slot of the lane free — another process took them
+// between the pass and the run — never started, so it records nothing and
+// pushes nothing back, and the next pass asks again with no interval to wait
+// out. Once it runs, the graph is written alone: no index, and no run the
+// duty cycle counts, so the bitmap after it is not held back by it.
+func TestACommitGraphRefusedASlotIsAskedForAgainAtOnce(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	clk := newClock()
@@ -918,52 +947,274 @@ func TestACommitGraphRefusedASlotIsDueOnItsOwn(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	w.push(t, repo, "refs/heads/main", nil)
 	var take sync.Once
-	var release func()
+	var releases []func()
 	c := w.open(t, clk.on, func(o *cache.Options) {
 		cache.BeforeMaintaining(o, func(_ context.Context, step string) {
 			if step == "commit-graph" {
-				// Held past the run's own context, which ends with the run.
-				//nolint:contextcheck // the slot is the case's, not the run's
-				take.Do(func() { release = holdSlotUntil(t, w.pool, gitproc.ClassMaintenance) })
+				// Every slot of the lane, held past the run's own context,
+				// which ends with the run.
+				//nolint:contextcheck // the slots are the case's, not the run's
+				take.Do(func() {
+					for range w.pool.Slots(gitproc.ClassMaintenance) {
+						releases = append(releases, holdSlotUntil(t, w.pool, gitproc.ClassMaintenance))
+					}
+				})
 			}
 		})
 	})
 	s := w.sync(t, c, repo)
 	defer s.Release()
-	ranAt := clk.Add(cache.MidxDebounce)
 	if ran := cache.MaintainerPass(c); len(ran) != 0 {
-		t.Fatalf("a run whose commit-graph was refused a slot was reported as maintained: %v", ran)
+		t.Fatalf("a graph-first run refused its slot was reported as maintained: %v", ran)
 	}
-	release()
+	for _, release := range releases {
+		release()
+	}
 	midx := filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")
 	graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
-	if !statOK(t, midx) || statOK(t, graph) {
-		t.Fatal("the index's step did not write the index, or the refused graph's step wrote a graph")
+	if statOK(t, graph) || statOK(t, midx) {
+		t.Fatal("a run refused its slot wrote a file")
 	}
-	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != 2 || !doc.Midx.Bitmap || doc.Midx.Graph || !doc.Midx.LastRun.Equal(ranAt) {
-		t.Errorf("the state's midx is %+v, want the index of 2 packs with its bitmap, no graph, the run at %v", doc.Midx, ranAt)
+	if doc := readStateDoc(t, s.Dir); doc.Midx.Graph || !doc.Midx.LastRun.IsZero() {
+		t.Errorf("a run refused its slot recorded %+v, want nothing", doc.Midx)
 	}
 	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 0 {
 		t.Errorf("a step refused a slot was logged as a failure: %v", got)
 	}
-	first := inode(t, midx)
 
-	clk.Add(time.Minute)
-	if ran := cache.MaintainerPass(c); len(ran) != 0 {
-		t.Errorf("the maintainer ran %v inside MidxMinInterval of the run that wrote the index", ran)
-	}
-	clk.Set(ranAt.Add(cache.MidxMinInterval))
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
-		t.Fatalf("the maintainer ran %v for a repository with no commit-graph, want it", ran)
+		t.Fatalf("the next pass ran %v, want the repository's graph at once", ran)
 	}
-	if !statOK(t, graph) {
-		t.Error("the graph's own run left no commit-graph")
+	if !statOK(t, graph) || statOK(t, midx) {
+		t.Error("the graph-first run did not write the graph alone")
 	}
-	if inode(t, midx) != first {
-		t.Error("the graph's own run wrote the index again")
+	if doc := readStateDoc(t, s.Dir); !doc.Midx.Graph || !doc.Midx.LastRun.IsZero() {
+		t.Errorf("the state's midx is %+v after the graph-first run, want its graph and no run the duty "+
+			"cycle counts", doc.Midx)
 	}
-	if doc := readStateDoc(t, s.Dir); !doc.Midx.Graph {
-		t.Errorf("the state's midx is %+v after the graph's run, want its graph", doc.Midx)
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 || !statOK(t, midx) {
+		t.Errorf("the pass once the packs stood still ran %v, want the repository's index, unheld by the "+
+			"graph-first run before it", ran)
+	}
+}
+
+// A GRAPH-LESS COPY IS GRAPHED FIRST. Without a commit-graph every walk git
+// makes over a repository goes by date, and a push of a commit dated before
+// its parent walks every commit in each of them; on a node that just joined,
+// or a copy rebuilt, the maintainer's queue is every other repository's
+// bitmap — hours. So a copy a round has read whole with no graph is due for
+// it at once, with no debounce, and in a slot of its own beside a run that
+// holds the maintainer's: the one kept for a person's verify, lent for the
+// seconds a walk of the commits takes and never for the index and bitmap the
+// copy may be due for as well, which are hours on a large repository. Both
+// ways the copy can reach the pass: before its packs have stood still, and
+// with its ordinary run due too — every graph-less copy after a restart,
+// whose first full round adds no packs. Either way the run writes the graph
+// alone, and a maintenance-class process started once it is written is
+// admitted while the maintainer's own slot is still held.
+//
+// Mutation: drop the graph-first plan (runPlan.first) from plan, or hold it
+// to the maintainer's own slots in startMaintenance, and the copy waits for
+// the long run; admit a graph-first plan carrying an index at the lane's
+// limit, and the due copy's run goes on to its index in the kept slot.
+func TestAGraphLessCopyIsGraphedFirst(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		due  bool
+	}{
+		{name: "before its packs have stood still"},
+		{name: "due for its index as well", due: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			w.processes = 4
+			clk := newClock()
+			long, fresh := w.repo(t, 1), w.repo(t, 2)
+			w.push(t, long, "refs/heads/main", nil)
+			w.push(t, fresh, "refs/heads/main", nil)
+			c, indexing, release := holdEveryIndex(t, w, clk)
+			sl := w.sync(t, c, long)
+			defer sl.Release()
+			graphFirst(t, c, long)
+			clk.Add(cache.MidxDebounce)
+			// THE LONG RUN: long's bitmap, holding the maintainer's one slot
+			// of the two for as long as the case lets it.
+			letGo := startHeld(t, c, indexing, release, long)
+			defer letGo()
+
+			// THE FRESH COPY, read whole with no graph: graphed at once,
+			// beside the long run.
+			sf := w.sync(t, c, fresh)
+			defer sf.Release()
+			if tc.due {
+				clk.Add(cache.MidxDebounce)
+			}
+			graphedAlone(t, w, c, indexing, fresh, sf.Dir)
+		})
+	}
+}
+
+// ANOTHER GRAPH-LESS COPY IS GRAPHED WHILE THE FIRST ONE'S BITMAP RUNS. A
+// graph-first run that finds one of the maintainer's own slots free takes it
+// for its whole plan — the graph, then the index and bitmap it is due for —
+// and the next graph-less copy, finding the maintainer's slots taken, is lent
+// the person's for its graph alone rather than waiting out that bitmap; the
+// slot is the person's again as soon as the graph is written.
+//
+// Mutation: admit a graph-first plan carrying an index at the lane's limit in
+// startMaintenance, and the second copy's run goes on to its index in the
+// kept slot; drop the graph-only fallback on noSlot, and the second copy is
+// not graphed until the first one's bitmap ends.
+func TestAnotherGraphLessCopyIsGraphedWhileTheFirstOnesBitmapRuns(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	w.processes = 4
+	clk := newClock()
+	first, second := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, first, "refs/heads/main", nil)
+	w.push(t, second, "refs/heads/main", nil)
+	c, indexing, release := holdEveryIndex(t, w, clk)
+	s1 := w.sync(t, c, first)
+	defer s1.Release()
+	clk.Add(cache.MidxDebounce)
+	// THE FIRST COPY: graph-less and due, in the maintainer's own slot — its
+	// graph, then its bitmap, held for as long as the case lets it.
+	letGo := startHeld(t, c, indexing, release, first)
+	defer letGo()
+	if !statOK(t, filepath.Join(s1.Dir, "objects", "info", "commit-graph")) {
+		t.Errorf("%s's run reached its index before writing its graph", first)
+	}
+
+	s2 := w.sync(t, c, second)
+	defer s2.Release()
+	clk.Add(cache.MidxDebounce)
+	graphedAlone(t, w, c, indexing, second, s2.Dir)
+}
+
+// holdEveryIndex opens w's cache on clk with a lane of two maintenance slots,
+// every multi-pack-index step of a run holding a maintenance slot — as the
+// git of a long bitmap does — until release is closed, and saying so on
+// indexing first.
+func holdEveryIndex(t *testing.T, w *syncWorld, clk *clock) (c *cache.Cache, indexing chan struct{},
+	release chan struct{}) {
+
+	t.Helper()
+	indexing, release = make(chan struct{}, 2), make(chan struct{})
+	c = w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			if step != "multi-pack-index" {
+				return
+			}
+			//nolint:contextcheck // the slot is the case's, held for the run
+			let := holdSlotUntil(t, w.pool, gitproc.ClassMaintenance)
+			indexing <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			let()
+		})
+	})
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 2 {
+		t.Fatalf("the pool has %d maintenance slots, want 2", got)
+	}
+	return c, indexing, release
+}
+
+// startHeld starts a pass that must start repo's run alone, and waits for
+// that run to hold the maintainer's slot at its index step (holdEveryIndex);
+// it answers what lets every held run go and waits for the pass's, for the
+// case to defer.
+func startHeld(t *testing.T, c *cache.Cache, indexing <-chan struct{}, release chan struct{},
+	repo string) (letGo func()) {
+
+	t.Helper()
+	started, wait := cache.StartMaintainerPass(c)
+	letGo = sync.OnceFunc(func() {
+		close(release)
+		wait()
+	})
+	if len(started) != 1 || started[0] != repo {
+		letGo()
+		t.Fatalf("the pass started %v, want %s's run alone", started, repo)
+	}
+	select {
+	case <-indexing:
+	case <-time.After(hangDetector):
+		letGo()
+		t.Fatalf("%s's run holds no slot at its index after %v", repo, hangDetector)
+	}
+	return letGo
+}
+
+// graphedAlone runs a pass while the maintainer's one slot of two is held at
+// an index step, and fails t unless it ran repo's graph-first run alone — the
+// graph written, no index, the run ended without reaching its index — and a
+// maintenance-class process started after it is admitted: the kept slot is
+// the person's again.
+func graphedAlone(t *testing.T, w *syncWorld, c *cache.Cache, indexing <-chan struct{}, repo, dir string) {
+	t.Helper()
+	ran := make(chan []string, 1)
+	go func() { ran <- cache.MaintainerPass(c) }()
+	select {
+	case got := <-ran:
+		if len(got) != 1 || got[0] != repo {
+			t.Fatalf("with the maintainer's slot held, the pass ran %v, want %s's graph", got, repo)
+		}
+	case <-indexing:
+		t.Fatalf("%s's graph-first run went on to its index in the slot kept for a person", repo)
+	case <-time.After(hangDetector):
+		t.Fatalf("the pass over %s has not ended after %v", repo, hangDetector)
+	}
+	if !statOK(t, filepath.Join(dir, "objects", "info", "commit-graph")) ||
+		statOK(t, filepath.Join(dir, "objects", "pack", "multi-pack-index")) {
+		t.Errorf("%s's graph-first run did not write the graph alone", repo)
+	}
+	_, err := w.pool.Run(t.Context(), gitproc.Cmd{Args: []string{"version"}, Class: gitproc.ClassMaintenance,
+		Deadline: time.Minute})
+	if err != nil {
+		t.Errorf("a maintenance-class process started once %s's graph was written = %v, want it admitted",
+			repo, err)
+	}
+}
+
+// A GRAPH-FIRST RUN COMES BEFORE EVERY BITMAP IN A PASS: two repositories due
+// — one for its bitmap, with more packs uncovered, one read whole with no
+// graph — in a lane whose maintainer runs one at a time: the graph-less copy
+// is started first, and the bitmap at the next pass.
+//
+// Mutation: sort graph-first candidates by packs uncovered alone in
+// maintainerPass, and the bitmap is started first.
+func TestAGraphFirstRunIsStartedAheadOfABitmap(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	w.processes = 2
+	clk := newClock()
+	heavy, fresh := w.repo(t, 1), w.repo(t, 2)
+	for range 4 {
+		w.push(t, heavy, "refs/heads/main", nil)
+	}
+	w.push(t, fresh, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 1 {
+		t.Fatalf("the pool has %d maintenance slots, want 1", got)
+	}
+	sh := w.sync(t, c, heavy)
+	defer sh.Release()
+	graphFirst(t, c, heavy)
+	clk.Add(cache.MidxDebounce)
+	sf := w.sync(t, c, fresh)
+	defer sf.Release()
+	started, wait := cache.StartMaintainerPass(c)
+	wait()
+	if len(started) != 1 || started[0] != fresh {
+		t.Fatalf("the pass started %v, want %s's graph ahead of %s's bitmap", started, fresh, heavy)
+	}
+	if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != heavy {
+		t.Errorf("the next pass ran %v, want %s's bitmap", ran, heavy)
 	}
 }
 
@@ -1047,7 +1298,9 @@ func holdSlotUntil(t *testing.T, pool *gitproc.Pool, class gitproc.Class) func()
 // when it fails — a killed writer's, which git cannot remove — is its own to
 // remove, as is the temporary file git writes a bitmap into, which git does
 // not clean up when it is killed. A failed run is still a run: it waits out
-// MidxMinInterval, and the one after it succeeds.
+// MidxMinInterval, and the one after it succeeds — a graph-first run too,
+// whose graph is then due only by the ordinary rules rather than asked again
+// every pass.
 func TestAFailedMaintenanceLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1074,8 +1327,8 @@ func TestAFailedMaintenanceLeavesNothingBehind(t *testing.T) {
 			t.Errorf("the failed run left %s", path)
 		}
 	}
-	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 1 || got[0]["step"] != "multi-pack-index" {
-		t.Errorf("code_cache_maintenance_failed = %v, want one line at multi-pack-index", got)
+	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 1 || got[0]["step"] != "commit-graph" {
+		t.Errorf("code_cache_maintenance_failed = %v, want one line at commit-graph, the graph-first run's first step", got)
 	}
 	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.Equal(ranAt) || doc.Midx.Packs != 0 {
 		t.Errorf("the failed run recorded %+v, want its end and no index", doc.Midx)
@@ -1133,6 +1386,11 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	c := w.open(t, clk.on, func(o *cache.Options) {
 		cache.MaintainerTicksFrom(o, ticks)
 		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			// The graph-first run, due at once, runs as it would; the
+			// index's run is the one held.
+			if step != "multi-pack-index" {
+				return
+			}
 			once.Do(func() { close(reached) })
 			<-ctx.Done()
 		})

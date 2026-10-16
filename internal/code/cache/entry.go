@@ -233,6 +233,12 @@ type incarnation struct {
 	// total in step.
 	diskBytes, metaBytes int64
 	midx                 midxState
+	// graphFailed: its graph-first run's commit-graph step failed (not a
+	// slot refused, not a run stopped from outside), so its graph is due
+	// only by the ordinary rules from now on (maintain.go, GRAPH FIRST),
+	// rather than asked again every pass. Cleared by a graph written; never
+	// persisted, so a boot asks again at once.
+	graphFailed bool
 	// memoryRefused is the steps the node's memory has refused it — each
 	// one whose charge alone is more than the node can give its background
 	// work — and said so: each logged and counted once an incarnation,

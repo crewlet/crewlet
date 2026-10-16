@@ -58,6 +58,48 @@ import (
 // history imported in one push, and an index over one pack is still a valid
 // one.
 //
+// GRAPH FIRST. An incarnation with NO COMMIT-GRAPH — read whole for the first
+// time (a cold sync, a rebuild, a node that just joined), or its graph swept
+// with a pack — is due for its graph AT ONCE: no debounce and no interval,
+// ahead of every index and bitmap in the pass, admitted on the graph's own
+// charge (GraphBytesPerObject) beside the runs in flight, and — for the graph
+// ALONE — in any slot of the lane, the one kept for a person's verify
+// included. Without a graph every walk git makes over the repository goes by
+// date, and a push of a commit dated before its parent — a person's skewed
+// clock — walks every commit in each of its walks (internal/code/host's scans,
+// receive-pack's connectivity check): 5.0–5.5 µs a commit, 2.3–2.5 s a walk
+// over a gigabyte's history (internal/code/host's BenchmarkPushSmall step=
+// arms). That window was the maintainer's queue, which on a node that just
+// joined is every other repository's bitmap — hours. It is now the graph's own
+// write, one walk of the commits: 3.4 s over a gigabyte of source history
+// (BenchmarkMidx's step=graph, 2.97 million objects). ON A BUSY LANE it is no
+// longer: the maintainer keeps to every slot but one, and a graph alone may
+// take that one, so a graph waits only for other graphs, seconds each, or —
+// where a person's verify holds the last slot beside a run in every other, or
+// on a lane of one slot — for the sooner of those to end. Where the ordinary
+// run is due as well (its packs stood still before the run started — every
+// graph-less copy after a restart, whose first full round adds no packs), the
+// run writes the graph and then the index, but only in a slot of the
+// maintainer's own: a run takes a slot for each of its steps in turn, and lent
+// the kept slot it would hold it through the bitmap after the graph — hours on
+// a large repository, every verify refused and every later graph-less copy
+// waiting behind it. Where no slot of the maintainer's is free, or the index's
+// charge leaves no room beside what is in flight, the run writes the graph
+// alone (runPlan.graphOnly), in any slot, and the index follows in a run of
+// the maintainer's own (startMaintenance). A graph-only run is no run the duty
+// cycle counts (runPlan.duty), so the bitmap a clone counts from is not held
+// back by it. One whose graph step fails waits for the ordinary rules
+// (graphFailed), so a step that keeps failing is not asked again every pass.
+//
+// A FULL ROUND DOES NOT WRITE THE GRAPH ITSELF, as it writes its own index
+// past MidxRoundPacks: the round's index is what the request it was synced
+// for is served from, and pays that request back; the graph serves only a
+// push dated before its parent, and written by the round it would put 3.4 s
+// a gigabyte on every cold request — a clone, a fetch, a push — to spare the
+// rare skewed push a window of the same length, during which that push is
+// slow and never refused (gitproc.HistoryWalk bounds every walk by the
+// history as well as the push).
+//
 // WHAT A DUE RUN WRITES is the PLAN the node's memory allows (plan): the
 // bitmap where the budget holds it; where it does not, the index WITHOUT a
 // bitmap, once no index covers the packs or enough have gathered outside one
@@ -239,20 +281,42 @@ type maintRun struct {
 
 // runPlan is what a run was started to do, fixed when it is started under
 // the entry's mu (plan): the index it writes — with its bitmap, without one,
-// or none — and whether it writes the commit-graph, the packs that index will
-// cover, the bytes its deadline is sized by, the memory it was admitted at
-// (maintFlight), and when it started on the cache's clock.
+// or none — and whether it writes the commit-graph, and FIRST, before the
+// index, the packs that index will cover, the bytes its deadline is sized by,
+// the memory it was admitted at (maintFlight), the graph's own charge, and
+// when it started on the cache's clock.
 type runPlan struct {
-	index     maintStep // stepBitmap, stepPlain or 0
-	graph     bool
-	covered   int
-	disk      int64
-	memory    int64
-	startedAt time.Time
+	index maintStep // stepBitmap, stepPlain or 0
+	graph bool
+	// first: the incarnation has no commit-graph, so the graph is the run's
+	// first step, due at once (GRAPH FIRST above).
+	first       bool
+	covered     int
+	disk        int64
+	memory      int64
+	graphCharge int64
+	startedAt   time.Time
 }
 
 // steps reports whether the plan takes any step at all.
 func (p runPlan) steps() bool { return p.index != 0 || p.graph }
+
+// graphOnly is a graph-first plan without its index: what a run takes when
+// no slot of the maintainer's own is free for the whole plan — the graph
+// alone may take the one kept for a person, the index may not — or when the
+// index's charge leaves it no room beside what is in flight and the graph's
+// own does (startMaintenance).
+func (p runPlan) graphOnly() runPlan {
+	p.index, p.memory = 0, p.graphCharge
+	return p
+}
+
+// duty reports whether the run is one the duty cycle counts — when it ended
+// and how long it took push the repository's next run back. A graph-first
+// run that writes the graph alone is not: it is one walk of the commits,
+// once an incarnation, and counted it would hold the bitmap a clone counts
+// from back by MidxMinInterval.
+func (p runPlan) duty() bool { return !p.first || p.index != 0 }
 
 // maintainer runs a pass at every tick and every kick until ctx ends or the
 // cache stops. Between passes it is parked, holding nothing of the directory;
@@ -335,10 +399,12 @@ func (c *Cache) kickMaintainer() {
 func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 	c.rereadMemory()
 	budget := c.maint.budgetNow()
-	most := maintenanceRuns(c.git.Slots(gitproc.ClassMaintenance))
+	lane := c.git.Slots(gitproc.ClassMaintenance)
+	most := maintenanceRuns(lane)
 	now := c.now()
 	type candidate struct {
 		e         *entry
+		first     bool
 		uncovered int
 	}
 	var (
@@ -350,24 +416,32 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 		e.mu.Lock()
 		if c.holdsWork(e) {
 			inc := e.current
-			p, refused, charges := c.plan(inc, budget, now)
+			p, refused, charges := c.plan(inc, budget, c.due(e, now))
 			walk.note(e.id, inc, refused, charges)
-			if p.steps() && c.maintainable(e, now) {
+			if p.steps() && c.runnable(e) {
 				uncovered := inc.packs
 				if inc.midx.Bitmap {
 					uncovered -= inc.midx.Packs
 				}
-				candidates = append(candidates, candidate{e: e, uncovered: uncovered})
+				candidates = append(candidates, candidate{e: e, first: p.first, uncovered: uncovered})
 			}
 		}
 		e.mu.Unlock()
 	}
 	c.mu.Unlock()
 	c.noteRefusals(walk)
-	if c.maint.count() >= most {
+	if c.maint.count() >= lane {
 		return nil
 	}
+	// GRAPH FIRST: every incarnation with no commit-graph ahead of every
+	// index and bitmap, then most packs left uncovered first.
 	slices.SortFunc(candidates, func(a, b candidate) int {
+		if a.first != b.first {
+			if a.first {
+				return -1
+			}
+			return 1
+		}
 		return cmp.Or(cmp.Compare(b.uncovered, a.uncovered), strings.Compare(a.e.id, b.e.id))
 	})
 	var (
@@ -378,11 +452,15 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 		if ctx.Err() != nil || c.life.Err() != nil {
 			break
 		}
-		m, verdict, mem := c.startMaintenance(ctx, cand.e, most, budget, held)
+		m, verdict, mem := c.startMaintenance(ctx, cand.e, most, lane, budget, held)
 		switch verdict {
 		case admitted:
 			started = append(started, m)
 		case noSlot:
+			// The slots this candidate may take are taken, and every
+			// candidate after it may take no more: a graph-first one any
+			// slot of the lane for its graph alone, the rest the
+			// maintainer's own.
 			return started
 		case heldBack:
 			if !held.on {
@@ -547,18 +625,24 @@ func (f *maintFlight) count() int {
 	return len(f.runs)
 }
 
-// maintainable reports whether e's current incarnation is due for a run now;
-// e.mu is held. See DUE above: never while a round is in flight or another run
-// is, never while a check of the repository is admitted (its listing reads
-// once whether a run is in flight, and a run started under it would leave
-// files the listing reports as damage — holdMaintainer), never on an
-// incarnation this process has not read whole, and
-// never on one leaving the cache (wantsRun). WHAT the run takes, and whether
-// the node's memory holds it, is plan's and admit's to say, not this.
-func (c *Cache) maintainable(e *entry, now time.Time) bool {
-	if !c.wantsRun(e) || e.running != nil || e.maint != nil || e.verifying > 0 {
-		return false
-	}
+// runnable reports whether a run may start on e's current incarnation now; e.mu
+// is held: never while a round is in flight or another run is, never while a
+// check of the repository is admitted (its listing reads once whether a run
+// is in flight, and a run started under it would leave files the listing
+// reports as damage — holdMaintainer), never on an incarnation this process
+// has not read whole, and never on one leaving the cache (wantsRun). WHEN the
+// ordinary run is due is due's to say, and WHAT a run takes, and whether the
+// node's memory holds it, plan's and admit's.
+func (c *Cache) runnable(e *entry) bool {
+	return c.wantsRun(e) && e.running == nil && e.maint == nil && e.verifying == 0
+}
+
+// due reports whether e's current incarnation's ORDINARY run is due now; e.mu
+// is held. See DUE above: its packs have stood still for MidxDebounce, or the
+// oldest of them has waited MidxMaxWait, and its last run ended at least
+// max(MidxMinInterval, MidxDutyCycle × that run's duration) ago. A
+// graph-first run is due whatever this says (plan).
+func (c *Cache) due(e *entry, now time.Time) bool {
 	inc := e.current
 	settled := now.Sub(e.lastAdded) >= MidxDebounce ||
 		(!e.uncoveredSince.IsZero() && now.Sub(e.uncoveredSince) >= MidxMaxWait)
@@ -576,7 +660,7 @@ func (c *Cache) holdsWork(e *entry) bool {
 // wantsRun reports whether e's current incarnation wants a maintenance run
 // for what it HOLDS, whenever one may start: one the maintainer works on
 // (holdsWork) lacking the maintainer's bitmapped index or its commit-graph.
-// maintainable adds WHEN — no round, run or verify in flight, the debounce
+// runnable and due add WHEN — no round, run or verify in flight, the debounce
 // and the interval passed — and plan WHAT, on the node's memory. e.mu is
 // held.
 func (c *Cache) wantsRun(e *entry) bool {
@@ -610,10 +694,20 @@ func (c *Cache) indexDue(inc *incarnation) bool {
 //   - THE GRAPH, after any index the plan writes, or alone where it is
 //     missing, when its charge fits.
 //
+// Those are the ORDINARY run's, taken only when due says it is due. An
+// incarnation with NO COMMIT-GRAPH — read whole and never graphed, or its
+// graph swept with a pack — is planned a graph-first run whatever due says:
+// the graph alone, or the graph and then the index where the ordinary run is
+// due too (GRAPH FIRST above). One whose graph-first run failed (graphFailed)
+// waits for the ordinary rules, so a step that keeps failing is not asked
+// again every pass.
+//
 // A step due whose charge alone is past the budget is refused: never planned,
-// on this node, at this memory. The plan's own charge is the largest of its
-// steps', since they run one after the other.
-func (c *Cache) plan(inc *incarnation, budget int64, now time.Time) (p runPlan, refused maintStep,
+// on this node, at this memory — judged every pass, due or not, since the
+// gauge and the alarm follow the repositories rather than the runs. The plan's
+// own charge is the largest of its steps', since they run one after the
+// other.
+func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refused maintStep,
 	charges map[maintStep]int64) {
 
 	charges = map[maintStep]int64{
@@ -621,66 +715,98 @@ func (c *Cache) plan(inc *incarnation, budget int64, now time.Time) (p runPlan, 
 		stepPlain:  charge(inc.objects, IndexBytesPerObject),
 		stepGraph:  charge(inc.objects, GraphBytesPerObject),
 	}
-	p = runPlan{covered: inc.packs, disk: inc.diskBytes, startedAt: now}
-	take := func(s maintStep) bool {
+	p = runPlan{covered: inc.packs, disk: inc.diskBytes, startedAt: c.now(), graphCharge: charges[stepGraph]}
+	fits := func(s maintStep) bool {
 		if charges[s] > budget {
 			refused |= s
 			return false
 		}
-		p.memory = max(p.memory, charges[s])
 		return true
 	}
-	if c.indexDue(inc) && take(stepBitmap) {
-		p.index = stepBitmap
+	var index maintStep
+	if c.indexDue(inc) && fits(stepBitmap) {
+		index = stepBitmap
 	}
 	if refused&stepBitmap != 0 {
 		outside := inc.packs - inc.midx.Packs
 		plainDue := inc.midx.Packs == 0 ||
 			(inc.midx.Bitmap && outside >= c.roundPacks) ||
 			(!inc.midx.Bitmap && outside >= c.midxPacks)
-		if plainDue && take(stepPlain) {
-			p.index = stepPlain
+		if plainDue && fits(stepPlain) {
+			index = stepPlain
 		}
 	}
-	if (p.index != 0 || !inc.midx.Graph) && take(stepGraph) {
-		p.graph = true
+	graph := (index != 0 || !inc.midx.Graph) && fits(stepGraph)
+	p.first = graph && !inc.midx.Graph && !inc.graphFailed
+	if due {
+		p.index = index
+	}
+	p.graph = graph && (due || p.first)
+	if p.index != 0 {
+		p.memory = charges[p.index]
+	}
+	if p.graph {
+		p.memory = max(p.memory, charges[stepGraph])
 	}
 	return p, refused, charges
 }
 
 // startMaintenance starts one run of e's current incarnation on a goroutine
-// of its own when it is still due, its plan takes a step, and the runs in
-// flight leave it room (maintFlight.admit: at most most of them, held to
-// budget, the pass's reservation held for) — answering the run, or nil and
-// why not, with the plan's charge, which a pass holds a reservation of when
-// the answer is heldBack.
+// of its own when it is still runnable, its plan takes a step, and the runs in
+// flight leave it room (maintFlight.admit: at most most of them — a
+// graph-first run writing the graph alone every slot of the lane, lane — held
+// to budget, the pass's reservation held for) — answering the run, or nil and
+// why not, with the
+// plan's charge, which a pass holds a reservation of when the answer is
+// heldBack.
 //
 // The run pins the incarnation and registers itself on the entry (e.maint)
 // and as the cache's work in its directory (enter), so Stop waits for it and
 // a pin keeps its directory; then it runs holding no lock of the entry, in a
 // context the pass's ctx, the cache's lifetime, a full round's sweep
 // (stopMaintenance) and a retire can each end.
-func (c *Cache) startMaintenance(ctx context.Context, e *entry, most int, budget int64,
+func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, budget int64,
 	held reservation) (*maintRun, verdict, int64) {
 
 	if !c.enter() {
 		return nil, notDue, 0
 	}
 	e.mu.Lock()
-	now := c.now()
-	if !c.maintainable(e, now) {
+	if !c.runnable(e) {
 		e.mu.Unlock()
 		c.leave()
 		return nil, notDue, 0
 	}
 	inc := e.current
-	plan, _, _ := c.plan(inc, budget, now)
+	plan, _, _ := c.plan(inc, budget, c.due(e, c.now()))
 	if !plan.steps() {
 		e.mu.Unlock()
 		c.leave()
 		return nil, notDue, 0
 	}
-	if v := c.maint.admit(plan.memory, most, c.maintMemory, held); v != admitted {
+	// THE SLOT KEPT FOR A PERSON'S VERIFY is lent to a GRAPH ALONE — a walk
+	// of the commits, seconds where a bitmap is hours, so a check waits at
+	// most that long — and never to a run that goes on to an index: a run
+	// takes a slot for each of its steps in turn, so a graph-first run
+	// carrying the index it is due for as well (its packs stood still before
+	// the run started: every graph-less copy after a restart) would hold the
+	// person's slot through its bitmap. So a graph-first plan carrying an
+	// index is admitted at the maintainer's own limit, and where that leaves
+	// it no slot, or the index's charge no room beside what is in flight, the
+	// graph runs alone, at the lane's; the index follows in a run of the
+	// maintainer's own once the graph is written. A graph-first plan with no
+	// index is that graph alone from the start.
+	alone := plan.first && plan.index == 0
+	limit := most
+	if alone {
+		limit = lane
+	}
+	v := c.maint.admit(plan.memory, limit, c.maintMemory, held)
+	if (v == noSlot || v == heldBack) && plan.first && !alone {
+		plan = plan.graphOnly()
+		v = c.maint.admit(plan.memory, lane, c.maintMemory, held)
+	}
+	if v != admitted {
 		e.mu.Unlock()
 		c.leave()
 		return nil, v, plan.memory
@@ -749,12 +875,12 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	began := time.Now()
 	out := c.runMaintenance(ctx, inc, p)
 	took := time.Since(began)
-	first := procGraph
-	if p.index != 0 {
-		first = procIndex
+	firstStep := procIndex
+	if p.index == 0 || p.first {
+		firstStep = procGraph
 	}
 	refused := errors.Is(out.err, gitproc.ErrBusy)
-	if refused && out.step == first {
+	if refused && out.step == firstStep {
 		return
 	}
 	kick = true
@@ -783,8 +909,14 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 			e.uncoveredSince = time.Time{}
 		}
 	}
-	if out.graphed {
-		inc.midx.Graph = true
+	switch {
+	case out.graphed:
+		inc.midx.Graph, inc.graphFailed = true, false
+	case p.first && out.step == procGraph && out.err != nil && !refused && !stopped:
+		// A GRAPH-FIRST RUN THAT FAILED waits for the ordinary rules
+		// (plan), so a step that keeps failing is not asked again every
+		// pass.
+		inc.graphFailed = true
 	}
 	if out.indexed || out.graphed {
 		// A file no rebuild wrote: the incarnation no longer holds exactly
@@ -792,7 +924,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 		// else of it — a bitmap the run wrote damaged among it (rebuild.go).
 		inc.unmoved = false
 	}
-	if !stopped {
+	if !stopped && (p.duty() || out.err != nil) {
 		inc.midx.LastRun, inc.midx.Took = c.now(), took
 	}
 	if merr == nil {
@@ -813,7 +945,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	}
 	m.maintained = true
 	c.log.Debug("code_cache_maintained", "repo", e.id, "packs", p.covered, "index", p.index.String(),
-		"graph", p.graph, "took", took)
+		"graph", p.graph, "first", p.first, "took", took)
 }
 
 // maintOutcome is how a run's steps ended: which it wrote, and the step it
@@ -841,19 +973,23 @@ var (
 )
 
 // runMaintenance runs the plan's steps in inc — the index it writes, with its
-// bitmap or without, and then the commit-graph, each when the plan takes it —
-// each in the MAINTENANCE lane with the serve configuration and a deadline
-// proportional to the repository.
+// bitmap or without, and then the commit-graph, each when the plan takes it,
+// the graph BEFORE the index on a graph-first run — each in the MAINTENANCE
+// lane with the serve configuration and a deadline proportional to the
+// repository.
 func (c *Cache) runMaintenance(ctx context.Context, inc *incarnation, p runPlan) maintOutcome {
 	var out maintOutcome
 	var steps [][]string
+	if p.graph && p.first {
+		steps = append(steps, graphArgs)
+	}
 	switch p.index {
 	case stepBitmap:
 		steps = append(steps, bitmapArgs)
 	case stepPlain:
 		steps = append(steps, plainArgs)
 	}
-	if p.graph {
+	if p.graph && !p.first {
 		steps = append(steps, graphArgs)
 	}
 	for _, args := range steps {

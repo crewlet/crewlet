@@ -71,10 +71,10 @@
 // refusing it:
 //
 //   - EVERY WALK THE ENGINE ASKS FOR GOES BY GENERATION where the cache's
-//     copy has a commit-graph, which the maintainer writes: merge-base
-//     --is-ancestor does by itself, and the listings ask rev-list for
-//     --topo-order (scan.go), without which it reads every commit of the
-//     graph for a skewed tip.
+//     copy has a commit-graph, which the maintainer writes into a copy first
+//     (internal/code/cache's GRAPH FIRST): merge-base --is-ancestor does by
+//     itself, and the listings ask rev-list for --topo-order (scan.go),
+//     without which it reads every commit of the graph for a skewed tip.
 //     Measured over a 200 000-commit history with one skewed commit on its
 //     tip (git 2.47.3; 2.48.0 and 2.43.0 alike): the listing 110–150 ms in
 //     date order with a graph against 5 ms by generation, and every walk

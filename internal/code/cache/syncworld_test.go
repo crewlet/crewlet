@@ -536,6 +536,17 @@ func gauge(t testing.TB, rec *metrics.Recorder, name string) float64 {
 	return 0
 }
 
+// gaugeAt is a gauge's value in rec for one attribute value.
+func gaugeAt(t testing.TB, rec *metrics.Recorder, name, attr, value string) float64 {
+	t.Helper()
+	for _, s := range rec.Read() {
+		if s.Name == name && s.Attrs[attr] == value {
+			return s.Value
+		}
+	}
+	return 0
+}
+
 // counter is a counter's total in rec for one attribute value.
 func counter(rec *metrics.Recorder, name, attr, value string) uint64 {
 	var n uint64

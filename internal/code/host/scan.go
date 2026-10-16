@@ -22,9 +22,9 @@ import (
 // stops only once every commit it still holds is older than what it is
 // looking for, so a commit dated before its parent — a person's skewed
 // clock, a GIT_COMMITTER_DATE — walks the whole history. Where the scratch's
-// alternate has a commit-graph (the maintainer writes one), a walk can stop
-// on generation numbers instead, and three of the four take them:
-// merge-base --is-ancestor does by itself, and the listings
+// alternate has a commit-graph (the maintainer writes one first, before any
+// index), a walk can stop on generation numbers instead, and three of the
+// four take them: merge-base --is-ancestor does by itself, and the listings
 // of what a push introduces and where a blob is are asked for in
 // TOPOLOGICAL ORDER (--topo-order), which is what makes rev-list walk by
 // generation — without it rev-list read every commit of the graph for a

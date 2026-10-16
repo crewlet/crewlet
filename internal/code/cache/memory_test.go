@@ -66,8 +66,8 @@ func TestABitmapTheNodesMemoryCannotHoldIsReplacedByAnIndexWithoutOne(t *testing
 			t.Errorf("a pass over a repository whose index is current ran %v", ran)
 		}
 	}
-	if got := gauge(t, w.rec, metrics.CodeCacheMaintenanceRefused); got != 1 {
-		t.Errorf("%s = %v while the bitmap is refused, want 1", metrics.CodeCacheMaintenanceRefused, got)
+	if got := gaugeAt(t, w.rec, metrics.CodeCacheMaintenanceRefused, "step", "bitmap"); got != 1 {
+		t.Errorf("%s{step=bitmap} = %v while the bitmap is refused, want 1", metrics.CodeCacheMaintenanceRefused, got)
 	}
 	if got := counter(w.rec, metrics.CodeCacheMaintenanceRefusals, "step", "bitmap"); got != 1 {
 		t.Errorf("%s{step=bitmap} = %d after three passes, want the incarnation counted once",
@@ -107,13 +107,80 @@ func TestABitmapTheNodesMemoryCannotHoldIsReplacedByAnIndexWithoutOne(t *testing
 			withBitmap)
 	}
 	cache.MaintainerPass(c)
-	if got := gauge(t, w.rec, metrics.CodeCacheMaintenanceRefused); got != 0 {
-		t.Errorf("%s = %v once the bitmap was written, want 0", metrics.CodeCacheMaintenanceRefused, got)
+	if got := gaugeAt(t, w.rec, metrics.CodeCacheMaintenanceRefused, "step", "bitmap"); got != 0 {
+		t.Errorf("%s{step=bitmap} = %v once the bitmap was written, want 0", metrics.CodeCacheMaintenanceRefused, got)
 	}
 	clk.Add(time.Minute)
 	tracker.Observe(t.Context(), statelog.Evaluate(reading()))
 	if _, firing := tracker.Firing()[statelog.KindCodeMaintenanceRefused]; firing {
 		t.Errorf("%s still fires once nothing is refused", statelog.KindCodeMaintenanceRefused)
+	}
+}
+
+// A GRAPH THE NODE'S MEMORY CANNOT HOLD IS SAID SO AS A BITMAP IS. A copy
+// refused its commit-graph walks its history by date for as long as it is
+// refused — a push of a commit dated before its parent walks every commit —
+// so the refusal is logged and counted once for the incarnation and kept on
+// the refused gauge under its own step while it stands, beside the bitmap's;
+// the alarm stands for it, since no repository is refused its graph and not
+// its bitmap. At a budget of the graph's charge the graph is written first,
+// and the gauge's graph falls back.
+//
+// Mutation: count no refused graph in refusalWalk.note, or set the gauge for
+// bitmaps alone in noteRefusals, and the graph's gauge stays at zero.
+func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	defer w.sync(t, c, repo).Release()
+	graph := cache.GraphCharge(c, repo)
+	cache.SetMaintenanceBudget(c, graph-1)
+	for range 2 {
+		if ran := cache.MaintainerPass(c); len(ran) != 0 {
+			t.Fatalf("on a budget a byte short of the graph's charge the maintainer ran %v", ran)
+		}
+		clk.Add(cache.MidxMinInterval)
+	}
+	for step, want := range map[string]float64{"graph": 1, "bitmap": 1} {
+		if got := gaugeAt(t, w.rec, metrics.CodeCacheMaintenanceRefused, "step", step); got != want {
+			t.Errorf("%s{step=%s} = %v while the graph is refused, want %v", metrics.CodeCacheMaintenanceRefused,
+				step, got, want)
+		}
+	}
+	if got := counter(w.rec, metrics.CodeCacheMaintenanceRefusals, "step", "graph"); got != 1 {
+		t.Errorf("%s{step=graph} = %d after two passes, want the incarnation counted once",
+			metrics.CodeCacheMaintenanceRefusals, got)
+	}
+	var lines []map[string]any
+	for _, l := range w.logs.lines(t, "code_cache_maintenance_refused") {
+		if l["step"] == "graph" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 1 || lines[0]["repo"] != repo || lines[0]["estimate"] != float64(graph) {
+		t.Errorf("the graph's refusal was logged as %v, want once with its charge %d", lines, graph)
+	}
+	var r statelog.Reading
+	c.AlarmReading(&r)
+	if r.CodeMaintenanceRefused != 1 {
+		t.Errorf("the alarm reading counts %d repositories refused, want the one refused its graph and its "+
+			"bitmap", r.CodeMaintenanceRefused)
+	}
+
+	cache.SetMaintenanceBudget(c, graph)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("at a budget of the graph's own charge the maintainer ran %v, want the repository's graph", ran)
+	}
+	if _, _, written := cache.Indexed(c, repo); !written {
+		t.Error("at the graph's charge the run wrote no graph")
+	}
+	cache.MaintainerPass(c)
+	if got := gaugeAt(t, w.rec, metrics.CodeCacheMaintenanceRefused, "step", "graph"); got != 0 {
+		t.Errorf("%s{step=graph} = %v once the graph was written, want 0", metrics.CodeCacheMaintenanceRefused, got)
 	}
 }
 
@@ -359,6 +426,9 @@ func TestTheFirstRepositoryHeldBackIsGivenTheRoomItNeeds(t *testing.T) {
 	release := make(chan struct{})
 	c := w.open(t, clk.on, func(o *cache.Options) {
 		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			if step != "multi-pack-index" {
+				return
+			}
 			select {
 			case <-release:
 			case <-ctx.Done():
@@ -373,6 +443,7 @@ func TestTheFirstRepositoryHeldBackIsGivenTheRoomItNeeds(t *testing.T) {
 	}
 	cache.SetMaintenanceBudget(c, budget)
 	w.sync(t, c, first).Release()
+	graphFirst(t, c, first)
 	clk.Add(cache.MidxDebounce)
 	started, waitFirst := cache.StartMaintainerPass(c)
 	if len(started) != 1 || started[0] != first {
@@ -383,6 +454,7 @@ func TestTheFirstRepositoryHeldBackIsGivenTheRoomItNeeds(t *testing.T) {
 
 	w.sync(t, c, large).Release()
 	w.sync(t, c, small).Release()
+	graphFirst(t, c, large, small)
 	clk.Add(cache.MidxDebounce)
 	started, waitHeld := cache.StartMaintainerPass(c)
 	close(release)
@@ -433,6 +505,7 @@ func TestTheRunsInFlightFitTheBudgetTogether(t *testing.T) {
 	ea, eb := cache.BitmapCharge(c, a), cache.BitmapCharge(c, b)
 	cache.SetMaintenanceMemory(c, 1<<40)
 	cache.SetMaintenanceBudget(c, max(ea, eb)+min(ea, eb)-1)
+	graphFirst(t, c, a, b)
 	clk.Add(cache.MidxDebounce)
 
 	started, wait := cache.StartMaintainerPass(c)

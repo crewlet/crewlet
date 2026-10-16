@@ -67,10 +67,15 @@ import (
 // bitmap it wrote before standing until MidxRoundPacks packs gather outside
 // it (maintain.go says why). Each step refused is logged and counted once an
 // incarnation (code_cache_maintenance_refused,
-// crewlet.code.cache.maintenance.refusals{step}); a refused BITMAP is kept on
-// a gauge while it stays refused (crewlet.code.cache.maintenance.refused) and
-// raises code_maintenance_refused, whose threshold is the budget: a
-// measurement, never a knob.
+// crewlet.code.cache.maintenance.refusals{step}); a refused BITMAP and a
+// refused GRAPH are each kept on a gauge while they stay refused
+// (crewlet.code.cache.maintenance.refused{step}) — a repository refused its
+// graph walks by date for as long, and a push of a commit dated before its
+// parent walks its whole history — and a refused bitmap raises
+// code_maintenance_refused, whose threshold is the budget: a measurement,
+// never a knob. The alarm stands for a refused graph too, since a graph's
+// charge is a fraction of the bitmap's over the same objects: no repository
+// is refused its graph and not its bitmap.
 
 // charge is what a whole-repository process over objects objects is admitted
 // at: its own perObject bytes an object, and room beside it for one transfer
@@ -207,9 +212,9 @@ type refusal struct {
 
 // refusalWalk gathers what one walk of the entries finds refused.
 type refusalWalk struct {
-	bitmaps int
-	largest int64
-	fresh   []refusal
+	bitmaps, graphs int
+	largest         int64
+	fresh           []refusal
 }
 
 // note records inc's steps refused on the walk's budget — refused, with each
@@ -220,6 +225,9 @@ func (w *refusalWalk) note(id string, inc *incarnation, refused maintStep, charg
 		w.bitmaps++
 		w.largest = max(w.largest, charges[stepBitmap])
 	}
+	if refused&stepGraph != 0 {
+		w.graphs++
+	}
 	for _, s := range maintSteps {
 		if refused&s != 0 && inc.memoryRefused&s == 0 {
 			inc.memoryRefused |= s
@@ -229,9 +237,10 @@ func (w *refusalWalk) note(id string, inc *incarnation, refused maintStep, charg
 }
 
 // noteRefusals records what one walk of the entries found: the repositories
-// refused their bitmap and the largest of those charges, for the gauge and
-// the alarm, and every step refused for the first time on its incarnation —
-// each logged, and counted once. Holding no lock of the cache or an entry.
+// refused their bitmap — and their graph — and the largest of the bitmaps'
+// charges, for the gauge and the alarm, and every step refused for the first
+// time on its incarnation — each logged, and counted once. Holding no lock of
+// the cache or an entry.
 func (c *Cache) noteRefusals(w refusalWalk) {
 	slices.SortFunc(w.fresh, func(a, b refusal) int {
 		if n := strings.Compare(a.repo, b.repo); n != 0 {
@@ -248,7 +257,8 @@ func (c *Cache) noteRefusals(w refusalWalk) {
 	if c.metrics == nil {
 		return
 	}
-	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.bitmaps), nil)
+	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.bitmaps), metrics.Attrs{"step": stepBitmap.String()})
+	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.graphs), metrics.Attrs{"step": stepGraph.String()})
 }
 
 // logRefusal logs and counts one step refused an incarnation for the first

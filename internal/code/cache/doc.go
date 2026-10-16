@@ -254,6 +254,16 @@
 // because a multi-pack-index naming a pack the sweep removes fails every
 // read of the repository. A cache without the bitmap is slower, never wrong.
 //
+// A COPY WITH NO COMMIT-GRAPH IS GRAPHED FIRST: read whole for the first time
+// (a cold sync, a rebuild, a node that just joined), it is due for its graph
+// at once — no debounce, ahead of every index and bitmap, on the graph's own
+// charge, and the graph alone in any slot of the lane, the one kept for a
+// person's verify included, while an index it is due for as well waits for a
+// slot of the maintainer's own — because without one every walk git makes
+// over it goes by date, and a push of a commit dated before its parent walks
+// every commit in each of them; the window is the graph's own write rather
+// than the maintainer's queue (maintain.go, GRAPH FIRST).
+//
 // And never a step the node's memory cannot hold. Every git process the cache
 // runs over a whole repository holds memory in proportion to its objects —
 // a bitmap about [BitmapBytesPerObject] an object, some 60 GB for the largest
@@ -273,8 +283,9 @@
 // indexed WITHOUT one, so a repository that outgrew the node's memory still
 // keeps its pushes inside an index (a bitmap written while it could be kept
 // until [MidxRoundPacks] packs gather outside it); each step refused is
-// logged once an incarnation and counted, and a refused bitmap is kept on a
-// gauge while it stays refused and raised as code_maintenance_refused
+// logged once an incarnation and counted, a refused bitmap and a refused
+// graph are each kept on a gauge while they stay refused, and a refused
+// bitmap is raised as code_maintenance_refused
 // ([Cache.AlarmReading]), at the budget's own threshold: a git node's largest
 // repository with a bitmap is bound by its memory before its disk. A check a
 // person asks for whose charge is past the budget is refused
