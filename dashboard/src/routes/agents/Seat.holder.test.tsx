@@ -284,6 +284,10 @@ test("a reader without Admin reads the fact and is offered no gesture", async ()
     ".crewlet-callout",
   ) as HTMLElement;
   expect(within(note).queryByRole("button")).toBeNull();
+  // NOBODY HOLDS IT, so nobody's day or work is drawn: stats about nobody.
+  // The CONTROL is the held seat below, whose assigned work is drawn.
+  expect(screen.queryByText("Their day")).toBeNull();
+  expect(screen.queryByText(/Nothing open is assigned/)).toBeNull();
 });
 
 test("a held seat names its holder and their stage", async () => {

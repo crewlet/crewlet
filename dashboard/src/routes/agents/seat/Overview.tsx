@@ -151,6 +151,8 @@ export interface OverviewProps {
   reading: SeatReading;
   nameOf: NameOf;
   now: number;
+  /** A human seat nobody holds: there is no person to have a day or work. */
+  unheld?: boolean;
 }
 
 export function Overview(props: OverviewProps) {
@@ -557,12 +559,7 @@ function AssignedWork({
         {viewer.loading ? (
           <Skeleton variant="text" rows={3} label="Checking your access" />
         ) : (
-          <GrantRequired
-            size="compact"
-            what="Assigned work"
-            grants={[TRACKER]}
-            reader={viewer.login}
-          />
+          <GrantRequired size="compact" grants={[TRACKER]} reader={viewer.login} />
         )}
       </Card>
     );
@@ -854,7 +851,7 @@ function Setup({
           ) : absent === "none" ? (
             "No provider configured"
           ) : absent === "withheld" ? (
-            <span className="muted">{resolvedWithheld("its model chain")}</span>
+            <span className="muted">{resolvedWithheld()}</span>
           ) : (
             <EmptyValue label="Not reported yet" />
           )}
@@ -888,7 +885,7 @@ function Setup({
           ) : absent === "none" ? (
             "none granted"
           ) : absent === "withheld" ? (
-            <span className="muted">{resolvedWithheld("its tool sources")}</span>
+            <span className="muted">{resolvedWithheld()}</span>
           ) : (
             <EmptyValue label="Not reported yet" />
           )}
@@ -901,7 +898,7 @@ function Setup({
               // reading says so, and what they are missing is the access,
               // not a read in flight, while a lead's read of the seat, which
               // the engine answers without it, is one.
-              needsWords("Seeing its sandbox, placement and workers", [ADMIN])
+              "Some setup is only visible to admins."
             : reading.state === "absent"
               ? "Its setup can’t be read: the configuration names no seat by this handle."
               : "Loading setup…"}
@@ -946,7 +943,6 @@ function MemoryCard({
           ) : (
             <GrantRequired
               size="compact"
-              what="Its memory"
               grants={[ADMIN]}
               reader={viewer.login}
               also={TRAIL_WORDS}
@@ -1046,7 +1042,7 @@ function SchedulesCard({ seat, now }: { seat: Seat; now: number }) {
 // A person
 // ---------------------------------------------------------------------------
 
-function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
+function HumanOverview({ seat, index, work, nameOf, now, unheld = false }: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
   // work in and who set it. The engine answers it to a Tracker holder who is
@@ -1054,7 +1050,9 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   // tell it will be answered ([mayReadRecord]), and WITHHELD by a sentence
   // elsewhere rather than drawn as a person with nothing to do.
   const self = isOwnSeat(viewer, seat.handle);
-  const mayRead = mayReadRecord(viewer, index, seat.handle);
+  // NOBODY HOLDS THE SEAT, so nobody's day is read: the holding callout
+  // above offers to fill it, and the stats would be about nobody.
+  const mayRead = !unheld && mayReadRecord(viewer, index, seat.handle);
   const person = useQuery(
     "work_person",
     { handle: seat.handle },
@@ -1080,7 +1078,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   return (
     <div className="prof-overview">
       <div className="prof-main">
-        {mayRead ? (
+        {unheld ? null : mayRead ? (
           // A SECTION RATHER THAN A CARD: the tiles draw their own surface,
           // and a card around them was a frame inside a frame.
           <section className="prof-day" aria-labelledby="prof-day-title">
@@ -1169,7 +1167,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
             </p>
           </Card>
         )}
-        <AssignedWork seat={seat} work={work} now={now} />
+        {!unheld && <AssignedWork seat={seat} work={work} now={now} />}
         <Reports seat={seat} />
       </div>
       <aside className="prof-side" aria-label={`About ${seat.name}`}>

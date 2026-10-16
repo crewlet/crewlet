@@ -1708,10 +1708,7 @@ function SeatHolder({ seat, minted }: { seat: { handle: string; name: string }; 
   return (
     <EditorSection title="Person">
       {minted ? (
-        <p className="builder-note muted">
-          A person is invited or created on this seat once the organization is saved: the identity
-          directory holds only the seats a saved revision declares.
-        </p>
+        <p className="builder-note muted">Save the org first.</p>
       ) : (
         <SeatHolding
           seat={seat}

@@ -255,7 +255,7 @@ test.each([
     "The service account ci:release",
   ],
   ["invited", INVITED, "An open invitation · jane@example.com"],
-  ["vacant", VACANT, "Nobody — the seat is vacant"],
+  ["vacant", VACANT, "Nobody yet"],
 ])("a %s human seat's peek says what holds it, in one directory read", async (_, jane, line) => {
   const paths = directory(jane);
   const { asked } = await mount(OPERATOR, { handle: "jane" });
@@ -280,9 +280,7 @@ test("an agent's seat and an anonymous reader ask it nothing, and every signed-i
   await mount({ ...OPERATOR, grants: ["tracker"] }, { handle: "jane" });
   await act(async () => {});
   expect(tracker.filter((p) => p === "/iam/seats")).toHaveLength(1);
-  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
-    "Nobody — the seat is vacant",
-  );
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
 });
 
 // THE PEEK FILLS A SEAT TOO — on a phone it is where those gestures are —
@@ -303,9 +301,7 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   directory(VACANT);
   await mount({ ...OPERATOR, grants: ["tracker", "knowledge"] }, { handle: "jane" });
   await act(async () => {});
-  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
-    "Nobody — the seat is vacant",
-  );
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Add person" })).toBeNull();
   cleanup();

@@ -100,4 +100,13 @@ test("a call is read by its arguments' values, the one running first", () => {
       }),
     ),
   ).toBe("sandbox.run make");
+  // A WITHHELD CALL SAYS SO, never reading as one handed nothing.
+  expect(
+    lastCallLine(
+      row({
+        body_withheld: true,
+        running_call: { round: 2, name: "sandbox.run", started_at: "" },
+      } as Partial<LiveCall>),
+    ),
+  ).toBe("sandbox.run (details hidden)");
 });

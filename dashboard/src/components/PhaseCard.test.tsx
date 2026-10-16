@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 afterEach(() => {
   cleanup();
@@ -982,11 +984,61 @@ describe("a phase a round did not finish", () => {
 // is the same phase sent whole, which says nothing of the kind. Mutation:
 // drop the notice and the first assertion fails.
 describe("a phase whose body was withheld", () => {
-  test("says it is not shown to you, and why", () => {
-    render(<PhaseCard record={phase({ bodyWithheld: true })} defaultOpen />);
-    expect(screen.getByText(/^Not shown to you\. What a seat says is its trail/)).toBeDefined();
+  function withStore(node: React.ReactNode, seed?: (store: Store) => void) {
+    const store = new Store();
+    seed?.(store);
+    render(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>{node}</Router>
+      </ClientContext.Provider>,
+    );
+  }
+
+  test("says it is hidden, and who can see it", () => {
+    withStore(<PhaseCard record={phase({ bodyWithheld: true })} defaultOpen />);
+    expect(screen.getByText("Hidden. Only this seat’s lead and admins can see it.")).toBeDefined();
     cleanup();
-    render(<PhaseCard record={phase()} defaultOpen />);
-    expect(screen.queryByText(/Not shown to you/)).toBeNull();
+    withStore(<PhaseCard record={phase()} defaultOpen />);
+    expect(screen.queryByText(/^Hidden\./)).toBeNull();
+  });
+
+  // THE LEAD IS NAMED, with a link, so the reader knows whom to ask. Found by
+  // the phase's agent id, never its role name. Mutation: drop the lookup and
+  // the general sentence is drawn instead.
+  test("names the seat's lead, linked, where the chart has one", () => {
+    withStore(
+      <PhaseCard record={phase({ bodyWithheld: true, agentId: "a-dev" })} defaultOpen />,
+      (store) => {
+        // THE REPORTING LINE IS THE SUBJECT, so its derived block is written
+        // out (`test/org.ts`): Jane leads Dev.
+        const seat = (handle: string, name: string, manager: string) => ({
+          handle,
+          name,
+          kind: "agent",
+          placed_by_ref: false,
+          manager,
+          managers: manager ? [manager] : null,
+          reports: null,
+          auto_reports: null,
+          onboarding_chain: null,
+        });
+        store.applyOrg({
+          roles: [
+            { name: "Jane Founder", handle: "jane" },
+            { name: "Dev", handle: "dev" },
+          ],
+          derived: {
+            seats: [seat("jane", "Jane Founder", ""), seat("dev", "Dev", "jane")],
+            units: [],
+          },
+        } as never);
+        store.applySeats([{ agent_id: "a-dev", role: "Dev", handle: "dev" }] as never);
+      },
+    );
+    const lead = screen.getByRole("link", { name: "Jane Founder" });
+    expect(lead.getAttribute("href")).toContain("jane");
+    expect(lead.closest(".crewlet-callout")?.textContent).toBe(
+      "Only Jane Founder (this seat’s lead) and admins can see what it says.",
+    );
   });
 });

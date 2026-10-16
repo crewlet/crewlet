@@ -364,7 +364,7 @@ function SeatPeekBody({
               ) : absent === "none" ? (
                 <EmptyValue label="No provider configured" />
               ) : absent === "withheld" ? (
-                <span className="muted">{resolvedWithheld("its model chain")}</span>
+                <span className="muted">{resolvedWithheld()}</span>
               ) : (
                 <EmptyValue label="Not reported yet" />
               )}
@@ -539,7 +539,7 @@ function HeldBy({ row }: { row: HumanSeat }) {
       </span>
     );
   }
-  return <span>Nobody — the seat is vacant</span>;
+  return <span>Nobody yet</span>;
 }
 
 /** One capped window: its label, its figure and a meter in the engine's state. */

@@ -120,6 +120,8 @@ import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, TRACKER } from "~/lib/access.ts";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
+import type { HumanSeat } from "~/contract/identity.ts";
+import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -207,6 +209,14 @@ export function SeatScreen({ handle }: { handle: string }) {
   const setup = useSeatSetup(seat?.handle ?? "");
   const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
+  // WHAT HOLDS A HUMAN SEAT, read once for the holding callout and the
+  // Overview: a seat nobody holds has no person to have a day or open work,
+  // so the Overview draws neither. Nothing asked before somebody has said who
+  // this is.
+  const readsSeats = human && !viewer.asking && !viewer.anonymous;
+  const humanSeats = useHumanSeats(readsSeats);
+  const holding = humanSeats.data?.find((s) => s.handle === seat?.handle);
+  const unheld = holding !== undefined && !holding.holder;
 
   // WHAT THE PHONE'S "MORE" HOLDS: every action but the one the bar keeps in
   // view (see the file's doc), each opening what its inline control opens.
@@ -405,7 +415,9 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
-        {human && seat.handle && <Holder seat={{ handle: seat.handle, name: seat.name }} />}
+        {readsSeats && seat.handle && (
+          <Holder seat={{ handle: seat.handle, name: seat.name }} seats={humanSeats} />
+        )}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
         {/* THEIR STRIP, OUR PANEL: the kit's `TabPanel` spreads nothing, so
             it cannot take the `tabIndex={0}` that puts the content in the tab
@@ -427,6 +439,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               reading={setup.reading}
               nameOf={nameOf}
               now={now}
+              unheld={unheld}
             />
           )}
           {tab === "work" &&
@@ -435,12 +448,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : viewer.tracker ? (
               <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
             ) : (
-              <GrantRequired
-                size="compact"
-                what="This seat's work"
-                grants={[TRACKER]}
-                reader={viewer.login}
-              />
+              <GrantRequired size="compact" grants={[TRACKER]} reader={viewer.login} />
             ))}
           {tab === "turns" &&
             !human &&
@@ -451,7 +459,6 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : (
               <GrantRequired
                 size="compact"
-                what="This seat's turns"
                 grants={[ADMIN]}
                 reader={viewer.login}
                 also={TRAIL_WORDS}
@@ -466,7 +473,6 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : (
               <GrantRequired
                 size="compact"
-                what="This seat's memory"
                 grants={[ADMIN]}
                 reader={viewer.login}
                 also={TRAIL_WORDS}
@@ -531,11 +537,14 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
  * doc. Nothing at all, and nothing asked, before somebody has said who this
  * is.
  */
-function Holder({ seat }: { seat: { handle: string; name: string } }) {
+function Holder({
+  seat,
+  seats,
+}: {
+  seat: { handle: string; name: string };
+  seats: RestResult<HumanSeat[]>;
+}) {
   const viewer = useViewer();
-  const reads = !viewer.asking && !viewer.anonymous;
-  const seats = useHumanSeats(reads);
-  if (!reads) return null;
   return (
     <div className="prof-notices">
       <SeatHolding

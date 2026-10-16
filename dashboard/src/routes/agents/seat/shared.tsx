@@ -72,17 +72,12 @@ export function SettingsState({
   if (reading.state === "withheld") {
     return (
       <GrantRequired
-        what="Reading this seat's settings"
         grants={[RUNTIME_GRANT]}
         // THE VIEWER HAS ANSWERED by construction: `withheld` is decided only
         // once it has (`useSeatSetup`), so it names the reader it decided on.
         reader={viewer.login}
         size="compact"
-        also={
-          seat.unit
-            ? `Whoever leads ${seat.unit.name}, or a unit above it, reads them without it.`
-            : undefined
-        }
+        also={seat.unit ? `Leads of ${seat.unit.name} can see these too.` : undefined}
       />
     );
   }

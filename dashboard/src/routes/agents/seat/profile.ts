@@ -129,7 +129,7 @@ export function mayReadTrail(
  * The other way to a seat's trail, said after the access that opens it
  * (`GrantRequired`'s `also`): leading the seat.
  */
-export const TRAIL_WORDS = "Whoever leads this seat reads it too.";
+export const TRAIL_WORDS = "This seat’s lead can see it too.";
 
 /**
  * The live row for a seat: the roster row whose `id` — the seat's handle — is

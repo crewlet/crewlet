@@ -687,6 +687,35 @@ describe("the pane", () => {
     );
   });
 
+  // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for
+  // an answer to a question it never showed. The CONTROL is the case below,
+  // whose question is sent and answered. Mutation: draw the form whatever
+  // was withheld.
+  test("a parked run whose question is hidden offers no answer form", async () => {
+    const run = {
+      kind: "run",
+      at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      run: {
+        turn_id: "turn-8",
+        agent_handle: "cto",
+        status: "paused",
+        body_withheld: true,
+        paused_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        pause_ttl_seconds: 3_600,
+      },
+    };
+    location.hash = "#/inbox?row=run%3Aturn-8";
+    mount({ answers: { decisions: decisionsOf(run) } });
+    await settle();
+    expect(
+      screen.getByRole("heading", { name: "This run is waiting on a question you can’t see." }),
+    ).toBeTruthy();
+    expect(screen.getByText("Its lead or an admin can answer it.")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Your answer to the run" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+  });
+
   test("a parked run's question heads the pane, quoted whole, and is answered by its turn", async () => {
     const run = {
       kind: "run",

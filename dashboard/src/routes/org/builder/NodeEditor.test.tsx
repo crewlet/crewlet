@@ -1025,16 +1025,16 @@ describe("who holds a person's seat", () => {
       viewer: reader(["admin"]),
     });
     const person = await screen.findByRole("region", { name: "Person" });
-    expect(await within(person).findByText("Nobody holds this seat.")).toBeDefined();
+    expect(await within(person).findByText("This seat is open.")).toBeDefined();
     expect(within(person).getByRole("button", { name: "Invite" })).toBeDefined();
-    expect(within(person).getByRole("button", { name: "Create person" })).toBeDefined();
+    expect(within(person).getByRole("button", { name: "Add person" })).toBeDefined();
   });
 
   test("a reader without Admin reads the holding and is offered no gesture", async () => {
     vi.stubGlobal("fetch", seats);
     edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["tracker", "knowledge"]) });
     const person = await screen.findByRole("region", { name: "Person" });
-    expect(await within(person).findByText("Nobody holds this seat.")).toBeDefined();
+    expect(await within(person).findByText("This seat is open.")).toBeDefined();
     expect(within(person).queryByRole("button")).toBeNull();
   });
 
@@ -1059,7 +1059,7 @@ describe("who holds a person's seat", () => {
     });
     edit(added, "new:pat", { viewer: reader(["admin"]) });
     const person = await screen.findByRole("region", { name: "Person" });
-    expect(person.textContent).toContain("once the organization is saved");
+    expect(person.textContent).toContain("Save the org first.");
     expect(within(person).queryByRole("button")).toBeNull();
     expect(seats).not.toHaveBeenCalled();
   });

@@ -59,7 +59,7 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { QUESTION_WITHHELD, WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts";
+import { WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts";
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
@@ -293,7 +293,7 @@ export function AwaitingBanner({
         <strong>
           {run.question ||
             (questionWithheld(run)
-              ? `The run asked a question. ${QUESTION_WITHHELD}.`
+              ? "Waiting on a question you can’t see."
               : "The run asked a question.")}
         </strong>
         <span className="t-caption">
