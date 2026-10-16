@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"testing/synctest"
 	"time"
 
 	sdk "github.com/openai/openai-go/v3"
@@ -93,6 +94,36 @@ func serve(t *testing.T, handle func(w http.ResponseWriter, n int)) (*fakeAPI, s
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 	return api, srv.URL
+}
+
+// inProcessURL is the base URL a provider built over [serveInProcess] is
+// given: nothing resolves it, since nothing dials.
+const inProcessURL = "http://openai.example.invalid/v1"
+
+// serveInProcess is [serve] for a case inside a testing/synctest bubble: the
+// same stand-in, reached through [httpxtest.InProcess] rather than a socket,
+// and the change to a provider's [Config] that points it there. t is the
+// bubble's own, so a stand-in still asleep when the case returns is run to its
+// end on the bubble's clock ([httpxtest.InProcess]).
+//
+// Every case about how LONG something takes runs there. On the wall clock it
+// asserts the runner's load as much as the provider: beside the rest of the
+// suite under the race detector, a stream paced at a quarter of its silence
+// bound went unread for the whole bound and was ended as silent. On the
+// bubble's clock the case decides on exactly the instants it names.
+func serveInProcess(t *testing.T, handle func(w http.ResponseWriter, n int)) (*fakeAPI, func(*Config)) {
+	t.Helper()
+	api := &fakeAPI{handle: handle}
+	client := httpxtest.InProcess(t, api)
+	start := time.Now()
+	return api, func(c *Config) {
+		c.HTTPClient = client
+		// The pool's default clock counts from the PROCESS's start, an
+		// instant outside every bubble: read on a bubble's clock, which
+		// begins years earlier, it is negative and every key reads as
+		// cooling. This one counts from the bubble's own.
+		c.Clock = func() time.Duration { return time.Since(start) }
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body string) {
@@ -1462,47 +1493,60 @@ func writeChunks(w http.ResponseWriter, gap time.Duration, done bool, parts ...s
 
 // A STREAMED CALL IS BOUNDED BY SILENCE, NOT LENGTH: a reasoning round that
 // writes for longer than the entry's timeout, never pausing for as long, runs
-// to the end. A stream that does go silent is ended at about the timeout as a
+// to the end. A stream that does go silent is ended at the timeout as a
 // timeout, so lifting the total bound leaves no dead connection holding a seat.
+// On the bubble's clock ([serveInProcess]), so every gap is exactly a quarter
+// of the bound and the silent stream ends exactly one bound after its last
+// byte.
 func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
 	t.Parallel()
 	const timeout = 200 * time.Millisecond
 	t.Run("long but talking", func(t *testing.T) {
 		t.Parallel()
-		_, url := serve(t, func(w http.ResponseWriter, _ int) {
-			writeChunks(w, timeout/4, true, strings.Split("abcdefghijkl", "")...)
+		synctest.Test(t, func(t *testing.T) {
+			_, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) {
+				writeChunks(w, timeout/4, true, strings.Split("abcdefghijkl", "")...)
+			})
+			p := newProvider(t, inProcessURL, func(c *Config) {
+				wire(c)
+				c.Timeout = timeout
+			})
+			start := time.Now()
+			out, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if err != nil {
+				t.Fatalf("Complete after %v: %v", time.Since(start), err)
+			}
+			if elapsed := time.Since(start); elapsed < 2*timeout || out.Content != "abcdefghijkl" {
+				t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, timeout)
+			}
 		})
-		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-		start := time.Now()
-		out, err := p.Complete(t.Context(), llm.Request{
-			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
-			OnDelta:  func(llm.Delta) {},
-		})
-		if err != nil {
-			t.Fatalf("Complete after %v: %v", time.Since(start), err)
-		}
-		if elapsed := time.Since(start); elapsed < 2*timeout || out.Content != "abcdefghijkl" {
-			t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, timeout)
-		}
 	})
 	t.Run("silent", func(t *testing.T) {
 		t.Parallel()
-		_, url := serve(t, func(w http.ResponseWriter, _ int) {
-			writeChunks(w, 0, false, "a")
-			time.Sleep(5 * timeout)
+		synctest.Test(t, func(t *testing.T) {
+			_, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) {
+				writeChunks(w, 0, false, "a")
+				time.Sleep(5 * timeout)
+			})
+			p := newProvider(t, inProcessURL, func(c *Config) {
+				wire(c)
+				c.Timeout = timeout
+			})
+			start := time.Now()
+			_, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+				t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+			}
+			if elapsed := time.Since(start); elapsed != timeout {
+				t.Fatalf("gave up after %v, want the %v bound", elapsed, timeout)
+			}
 		})
-		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-		start := time.Now()
-		_, err := p.Complete(t.Context(), llm.Request{
-			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
-			OnDelta:  func(llm.Delta) {},
-		})
-		if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
-			t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
-		}
-		if elapsed := time.Since(start); elapsed > 4*timeout {
-			t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
-		}
 	})
 }
 

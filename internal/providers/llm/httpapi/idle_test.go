@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -32,24 +33,30 @@ func (*slowBody) Close() error { return nil }
 
 // A STREAM IS BOUNDED BY ITS SILENCE, NOT ITS LENGTH: a body that keeps
 // arriving runs well past the idle bound in total and is never cut off,
-// because each read that returns data restarts the clock.
+// because each read that returns data restarts the clock. On a
+// testing/synctest bubble's clock, so every gap is exactly a quarter of the
+// bound: on the wall clock the case asserted the runner's load as well, and a
+// reader left unscheduled for the three quarters between two reads read as a
+// stream gone silent.
 func TestALongStreamThatKeepsTalkingIsNeverCutOff(t *testing.T) {
 	t.Parallel()
-	const idle = 80 * time.Millisecond
-	ctx, w := WatchIdle(context.Background(), idle)
-	defer w.Stop()
-	body := w.Body(&slowBody{gap: idle / 4, reads: 16}) // ~4x idle in total
-	start := time.Now()
-	got, err := io.ReadAll(body)
-	if err != nil || len(got) != 16 {
-		t.Fatalf("read %d bytes, err %v", len(got), err)
-	}
-	if elapsed := time.Since(start); elapsed < 2*idle {
-		t.Fatalf("the body took %v, want well past the %v bound to prove it is not a total", elapsed, idle)
-	}
-	if err := ctx.Err(); err != nil {
-		t.Fatalf("a stream that never went silent was cancelled: %v", context.Cause(ctx))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const idle = 80 * time.Millisecond
+		ctx, w := WatchIdle(context.Background(), idle)
+		defer w.Stop()
+		body := w.Body(&slowBody{gap: idle / 4, reads: 16}) // 4x idle in total
+		start := time.Now()
+		got, err := io.ReadAll(body)
+		if err != nil || len(got) != 16 {
+			t.Fatalf("read %d bytes, err %v", len(got), err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*idle {
+			t.Fatalf("the body took %v, want well past the %v bound to prove it is not a total", elapsed, idle)
+		}
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("a stream that never went silent was cancelled: %v", context.Cause(ctx))
+		}
+	})
 }
 
 // SILENCE ENDS THE ATTEMPT, as a TIMEOUT: retryable on the next member of the

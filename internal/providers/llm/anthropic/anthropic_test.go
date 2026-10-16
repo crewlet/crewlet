@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -207,6 +208,36 @@ func serve(t *testing.T, handle func(w http.ResponseWriter, n int)) (*fakeAPI, s
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 	return api, srv.URL
+}
+
+// inProcessURL is the base URL a provider built over [serveInProcess] is
+// given: nothing resolves it, since nothing dials.
+const inProcessURL = "http://anthropic.example.invalid"
+
+// serveInProcess is [serve] for a case inside a testing/synctest bubble: the
+// same stand-in, reached through [httpxtest.InProcess] rather than a socket,
+// and the change to a provider's [Config] that points it there. t is the
+// bubble's own, so a stand-in still asleep when the case returns is run to its
+// end on the bubble's clock ([httpxtest.InProcess]).
+//
+// Every case about how LONG something takes runs there. On the wall clock it
+// asserts the runner's load as much as the provider: beside the rest of the
+// suite under the race detector, a stream paced at a quarter of its silence
+// bound went unread for the whole bound and was ended as silent. On the
+// bubble's clock the case decides on exactly the instants it names.
+func serveInProcess(t *testing.T, handle func(w http.ResponseWriter, n int)) (*fakeAPI, func(*Config)) {
+	t.Helper()
+	api := &fakeAPI{handle: handle}
+	client := httpxtest.InProcess(t, api)
+	start := time.Now()
+	return api, func(c *Config) {
+		c.HTTPClient = client
+		// The pool's default clock counts from the PROCESS's start, an
+		// instant outside every bubble: read on a bubble's clock, which
+		// begins years earlier, it is negative and every key reads as
+		// cooling. This one counts from the bubble's own.
+		c.Clock = func() time.Duration { return time.Since(start) }
+	}
 }
 
 // okMessage is a minimal successful response.
@@ -537,45 +568,59 @@ func TestStatusClassification(t *testing.T) {
 	}
 }
 
+// A CALL THAT TIMES OUT IS A TIMEOUT, and benches no key. On the bubble's
+// clock ([serveInProcess]), so the answer is late by exactly what the stand-in
+// slept, however loaded the runner is.
 func TestATimeoutIsATimeoutNotACredentialFailure(t *testing.T) {
 	t.Parallel()
-	_, url := serve(t, func(w http.ResponseWriter, _ int) {
-		time.Sleep(300 * time.Millisecond)
-		writeJSON(w, 200, okMessage("late"))
-	})
-	p := newProvider(t, url, func(c *Config) { c.Timeout = 20 * time.Millisecond })
-	_, err := p.Complete(context.Background(), userTurn("hi"))
-	if got := llm.KindOf(err); got != llm.KindTimeout {
-		t.Fatalf("classified %s, want timeout (err: %v)", got, err)
-	}
-	for _, s := range p.Pool().Stats() {
-		if s.Cooling != 0 {
-			t.Fatal("a transport timeout benched the credential")
+	synctest.Test(t, func(t *testing.T) {
+		_, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) {
+			time.Sleep(300 * time.Millisecond)
+			writeJSON(w, 200, okMessage("late"))
+		})
+		p := newProvider(t, inProcessURL, func(c *Config) {
+			wire(c)
+			c.Timeout = 20 * time.Millisecond
+		})
+		_, err := p.Complete(context.Background(), userTurn("hi"))
+		if got := llm.KindOf(err); got != llm.KindTimeout {
+			t.Fatalf("classified %s, want timeout (err: %v)", got, err)
 		}
-	}
+		for _, s := range p.Pool().Stats() {
+			if s.Cooling != 0 {
+				t.Fatal("a transport timeout benched the credential")
+			}
+		}
+	})
 }
 
+// THE CALLER'S CANCELLATION IS NOT THE PROVIDER'S FAILURE: it is not worth a
+// retry on another model, and benches no key. On the bubble's clock
+// ([serveInProcess]), so the caller gives up exactly when it says it does,
+// long before the answer.
 func TestCancellationIsNotAProviderFailure(t *testing.T) {
 	t.Parallel()
-	_, url := serve(t, func(w http.ResponseWriter, _ int) {
-		time.Sleep(300 * time.Millisecond)
-		writeJSON(w, 200, okMessage("late"))
-	})
-	p := newProvider(t, url, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
-	_, err := p.Complete(ctx, userTurn("hi"))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want it to answer errors.Is(context.Canceled)", err)
-	}
-	if llm.KindOf(err).Retryable() {
-		t.Fatal("a cancelled call was reported as worth retrying on another model")
-	}
-	for _, s := range p.Pool().Stats() {
-		if s.Cooling != 0 {
-			t.Fatal("a cancelled call benched the credential")
+	synctest.Test(t, func(t *testing.T) {
+		_, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) {
+			time.Sleep(300 * time.Millisecond)
+			writeJSON(w, 200, okMessage("late"))
+		})
+		p := newProvider(t, inProcessURL, wire)
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(20*time.Millisecond, cancel)
+		_, err := p.Complete(ctx, userTurn("hi"))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want it to answer errors.Is(context.Canceled)", err)
 		}
-	}
+		if llm.KindOf(err).Retryable() {
+			t.Fatal("a cancelled call was reported as worth retrying on another model")
+		}
+		for _, s := range p.Pool().Stats() {
+			if s.Cooling != 0 {
+				t.Fatal("a cancelled call benched the credential")
+			}
+		}
+	})
 }
 
 // --- credential rotation ----------------------------------------------
@@ -2523,33 +2568,41 @@ func writeSlowStream(w http.ResponseWriter, gap time.Duration, events ...sseEven
 // A STREAMED ROUND IS BOUNDED BY SILENCE, NOT LENGTH. This one runs several
 // times the entry's timeout in total and is never silent for as long as it,
 // which is what a round thinking at a high effort looks like — the per-attempt
-// deadline used to cover the whole body and cut such a round off half-way.
+// deadline used to cover the whole body and cut such a round off half-way. On
+// the bubble's clock ([serveInProcess]), so every gap is exactly a quarter of
+// the bound.
 func TestALongStreamedRoundIsNotCutOffByTheTimeout(t *testing.T) {
 	t.Parallel()
-	const timeout = 200 * time.Millisecond
-	_, url := serve(t, func(w http.ResponseWriter, _ int) {
-		writeSlowStream(w, timeout/4, streamOf(
-			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 200 * time.Millisecond
+		_, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) {
+			writeSlowStream(w, timeout/4, streamOf(
+				streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+		})
+		p := newProvider(t, inProcessURL, func(c *Config) {
+			wire(c)
+			c.Timeout = timeout
+		})
+		var got []llm.Delta
+		start := time.Now()
+		out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+		if err != nil {
+			t.Fatalf("Complete after %v: %v", time.Since(start), err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*timeout {
+			t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
+		}
+		if out.Content != "abcdef" {
+			t.Fatalf("content = %q, want the whole round", out.Content)
+		}
 	})
-	p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-	var got []llm.Delta
-	start := time.Now()
-	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
-	if err != nil {
-		t.Fatalf("Complete after %v: %v", time.Since(start), err)
-	}
-	if elapsed := time.Since(start); elapsed < 2*timeout {
-		t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
-	}
-	if out.Content != "abcdef" {
-		t.Fatalf("content = %q, want the whole round", out.Content)
-	}
 }
 
-// A STREAM THAT GOES SILENT IS ENDED AFTER THE TIMEOUT, as a TIMEOUT — before
-// its first byte or part-way through — so the chain may try its next model
-// and no key is benched. Lifting the total bound must not leave a dead
-// connection holding a seat for ever.
+// A STREAM THAT GOES SILENT IS ENDED AT THE TIMEOUT, as a TIMEOUT — before its
+// first byte or part-way through — so the chain may try its next model and no
+// key is benched. Lifting the total bound must not leave a dead connection
+// holding a seat for ever. On the bubble's clock ([serveInProcess]), so the
+// call ends exactly one bound after the last byte, which here is the start.
 func TestASilentStreamIsATimeout(t *testing.T) {
 	t.Parallel()
 	const timeout = 100 * time.Millisecond
@@ -2569,25 +2622,30 @@ func TestASilentStreamIsATimeout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, url := serve(t, func(w http.ResponseWriter, _ int) { tc.handle(w) })
-			p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-			var got []llm.Delta
-			start := time.Now()
-			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
-			if out != nil {
-				t.Fatalf("a silent stream answered %q after %v", out.Content, time.Since(start))
-			}
-			if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
-				t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
-			}
-			if elapsed := time.Since(start); elapsed > 5*timeout {
-				t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
-			}
-			for _, s := range p.Pool().Stats() {
-				if s.Cooling != 0 {
-					t.Fatal("a silent stream benched the credential")
+			synctest.Test(t, func(t *testing.T) {
+				_, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) { tc.handle(w) })
+				p := newProvider(t, inProcessURL, func(c *Config) {
+					wire(c)
+					c.Timeout = timeout
+				})
+				var got []llm.Delta
+				start := time.Now()
+				out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+				if out != nil {
+					t.Fatalf("a silent stream answered %q after %v", out.Content, time.Since(start))
 				}
-			}
+				if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+					t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+				}
+				if elapsed := time.Since(start); elapsed != timeout {
+					t.Fatalf("gave up after %v, want the %v bound", elapsed, timeout)
+				}
+				for _, s := range p.Pool().Stats() {
+					if s.Cooling != 0 {
+						t.Fatal("a silent stream benched the credential")
+					}
+				}
+			})
 		})
 	}
 }
@@ -2597,29 +2655,35 @@ func TestASilentStreamIsATimeout(t *testing.T) {
 // that thinks past the timeout used to die half-way and be paid for again on
 // the chain's next member. Streamed with nowhere to send the fragments, it is
 // bounded by its silence like any round — so this one, several times the
-// timeout long and never silent for as long as it, answers.
+// timeout long and never silent for as long as it, answers. On the bubble's
+// clock ([serveInProcess]), so every gap is exactly a quarter of the bound.
 func TestACallNobodyWatchesStillStreams(t *testing.T) {
 	t.Parallel()
-	const timeout = 200 * time.Millisecond
-	api, url := serve(t, func(w http.ResponseWriter, _ int) {
-		writeSlowStream(w, timeout/4, streamOf(
-			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 200 * time.Millisecond
+		api, wire := serveInProcess(t, func(w http.ResponseWriter, _ int) {
+			writeSlowStream(w, timeout/4, streamOf(
+				streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+		})
+		p := newProvider(t, inProcessURL, func(c *Config) {
+			wire(c)
+			c.Timeout = timeout
+		})
+		start := time.Now()
+		out, err := p.Complete(context.Background(), userTurn("hi"))
+		if err != nil {
+			t.Fatalf("Complete after %v: %v", time.Since(start), err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*timeout {
+			t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
+		}
+		if out.Content != "abcdef" {
+			t.Fatalf("content = %q, want the whole round", out.Content)
+		}
+		if seen := api.seen(); len(seen) != 1 || seen[0].body["stream"] != true {
+			t.Fatalf("%d requests, stream = %v; want one request asking for a stream", len(seen), seen[0].body["stream"])
+		}
 	})
-	p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-	start := time.Now()
-	out, err := p.Complete(context.Background(), userTurn("hi"))
-	if err != nil {
-		t.Fatalf("Complete after %v: %v", time.Since(start), err)
-	}
-	if elapsed := time.Since(start); elapsed < 2*timeout {
-		t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
-	}
-	if out.Content != "abcdef" {
-		t.Fatalf("content = %q, want the whole round", out.Content)
-	}
-	if seen := api.seen(); len(seen) != 1 || seen[0].body["stream"] != true {
-		t.Fatalf("%d requests, stream = %v; want one request asking for a stream", len(seen), seen[0].body["stream"])
-	}
 }
 
 // A STREAM THAT ENDS BEFORE message_stop IS A FAILURE, NOT AN ANSWER. A
