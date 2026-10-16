@@ -1510,12 +1510,13 @@ still holds every record the rows are missing — and the verb refuses it as
 having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
-identity estate, the vectors, the usage days, the Dashboard Assistant's
-conversations — has its own stream and its own
-generation, and a reanchor moves only the one you named: that domain's checkpoint goes to the next generation, where
-its case puts it, keyed to the live instant. Every other domain keeps its
-checkpoint, its generation and its stream exactly as they were. If more than
-one log was rebuilt, re-anchor each of them.
+identity estate, the vectors, the usage days and the Dashboard Assistant's
+conversations — has its own stream and its
+own generation, and a reanchor moves only the one you named: that domain's
+checkpoint goes to the next generation, where its case puts it, keyed to the
+live instant. Every other domain keeps its checkpoint, its generation and its
+stream exactly as they were. If more than one log was rebuilt, re-anchor each
+of them.
 
 **It needs no restart.** The domain's apply loop is paused for the length of
 the transition and resumed on the adopted stream when it completes: its reads
@@ -1585,12 +1586,14 @@ first. A reanchor that failed part-way still finishes when it is run again,
 because the record it finds there is its own.
 
 **It moves that log and nothing else.** The new cursor, the generation and the
-reset are all computed from the one recreated stream, so the reanchor moves
+reset are all computed from the one stream you named, so the reanchor moves
 that domain's cursor alone; it used to move every domain's, to a position in
 the tracker's sequence space that none of their own logs has. And it records
-who ran it: the generation record every data node applies into its audit row names
-the operator and the credential they used, where it named the node that served
-the request.
+who ran it: on a log that keeps a generation record, the record every data node
+applies into its audit row names the operator and the credential they used,
+where it named the node that served the request; on the vector changelog and
+the usage log, which keep none, the serving node's `reanchored` line names
+them.
 
 **Every log can be re-anchored, by its own domain.** What a reanchor writes
 beside the checkpoint is the domain's to say: a log that claims identity
