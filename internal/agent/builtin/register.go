@@ -250,11 +250,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		}
 		opts := []tools.Option{}
 		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment
-		// answers by moving the item, commenting on it, or filing the
-		// follow-up — and without this the gate sees only builtins,
-		// concludes the turn reached nobody, and corrects it into another
-		// round. The SURFACE is what stops the opposite error: these reach
-		// Worklet and Doclet, and a founder waiting in a chat thread is on
+		// answers by moving the item, commenting on it, filing the
+		// follow-up, or merging it into the item it duplicates — and without
+		// this the gate sees only builtins, concludes the turn reached
+		// nobody, and corrects it into another round. The SURFACE is what
+		// stops the opposite error: these reach Worklet and
+		// Doclet, and a founder waiting in a chat thread is on
 		// neither of them.
 		// THE FEED'S OWN SOURCE NAME, never a second spelling. The gate
 		// compares a delivery's surface against the NotificationSource an

@@ -645,10 +645,10 @@ func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
 
 // ---- the cases -------------------------------------------------------- //
 
-// THE THREE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers
-// by moving the item, commenting on it, or filing the follow-up — and without
-// this the gate sees only builtins, concludes the turn reached nobody, and
-// corrects it into another round.
+// THE FIVE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers by
+// moving the item, commenting on it, filing the follow-up, or merging it into
+// the item it duplicates — and without this the gate sees only builtins,
+// concludes the turn reached nobody, and corrects it into another round.
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
