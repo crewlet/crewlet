@@ -1144,6 +1144,12 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 	case errors.Is(err, doclet.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %v", name, err))
 	}
+	if class, ok := WriterClass(err); ok {
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
+		// [writeFailure]'s same arm.
+		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s.", name,
+			doclet.Sentence(err)))
+	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not "+
 			"land (%s). The change was NOT made — do not report it as done.",
