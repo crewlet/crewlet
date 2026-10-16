@@ -123,3 +123,27 @@ func TestAScopeIsNormalisedBeforeItIsStored(t *testing.T) {
 		t.Fatalf("Normalised() = %v, want [project/ENG project/OPS]", got)
 	}
 }
+
+// A PATH BUILT FROM A MISSING ID HAS NO HOLE IN IT.
+//
+// Every domain builds its scope paths through [statelog.ScopePath], so a
+// blank or padded segment cannot make one domain's path for an object differ
+// from another's — and a path with an empty level would be one [Ancestors]
+// reads as a different hierarchy, where the deferral probe misses a record
+// deferred on the object's container.
+func TestAScopePathSkipsWhatIsMissing(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		segments []string
+		want     string
+	}{
+		{[]string{"project", "ENG", "task", "7"}, "project/ENG/task/7"},
+		{[]string{"project", "", "task", "7"}, "project/task/7"},
+		{[]string{" project ", "ENG ", " ", "task"}, "project/ENG/task"},
+		{[]string{"", ""}, ""},
+	} {
+		if got := statelog.ScopePath(c.segments...); got != c.want {
+			t.Errorf("ScopePath(%q) = %q, want %q", c.segments, got, c.want)
+		}
+	}
+}

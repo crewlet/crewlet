@@ -100,9 +100,9 @@ type ScopeTerm struct {
 func (t ScopeTerm) Path() string {
 	switch t.Kind {
 	case TermObject:
-		return join(pathDomain, pathContainer, t.container(), pathObject, t.ID)
+		return statelog.ScopePath(pathDomain, pathContainer, t.container(), pathObject, t.ID)
 	case TermTitle:
-		return join(pathDomain, pathContainer, t.container(), pathTitle, t.ID)
+		return statelog.ScopePath(pathDomain, pathContainer, t.container(), pathTitle, t.ID)
 	case TermContainer:
 		// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container
 		// field: reading the field here would resolve every container
@@ -112,7 +112,7 @@ func (t ScopeTerm) Path() string {
 		if key == "" {
 			key = t.container()
 		}
-		return join(pathDomain, pathContainer, key)
+		return statelog.ScopePath(pathDomain, pathContainer, key)
 	case TermDomain:
 		return pathDomain
 	}
@@ -130,18 +130,6 @@ func (t ScopeTerm) container() string {
 		return ContainerlessSpace
 	}
 	return t.Container
-}
-
-// join builds a scope path from its segments, skipping empty ones so a missing
-// id can never produce a path with a hole in it.
-func join(segments ...string) string {
-	kept := make([]string, 0, len(segments))
-	for _, s := range segments {
-		if s = strings.TrimSpace(s); s != "" {
-			kept = append(kept, s)
-		}
-	}
-	return strings.Join(kept, statelog.ScopeSeparator)
 }
 
 // ScopeSet is the COMPLETE set of objects a record's apply may write.

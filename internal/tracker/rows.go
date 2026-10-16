@@ -81,7 +81,7 @@ func ReadScope(q Query) statelog.ScopeSet {
 		// nothing else the tracker files: the families (the catalogue,
 		// the people) sit beside it, and a board that names a field
 		// adds the catalogue below.
-		paths = append(paths, join(pathDomain, pathContainer))
+		paths = append(paths, statelog.ScopePath(pathDomain, pathContainer))
 	default:
 		paths = append(paths, pathDomain)
 	}

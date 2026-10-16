@@ -171,3 +171,36 @@ func TestAGenerationRecordsIDIsOneOperationPerNode(t *testing.T) {
 			got, ok, created.Truncate(time.Millisecond))
 	}
 }
+
+// AN ID IS THE CALL IT WAS MINTED FOR, OR IT IS NOTHING.
+//
+// A surface that names the call in an id's name holds a brought-back id to
+// exactly that name: the same name with a step after it is a step's id — a NEW
+// call's operation — and a name that merely starts or ends the same way is
+// another call's. Each of those passing would answer a second gesture as the
+// first.
+func TestAnOperationIDIsNamedForExactlyOneCall(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	const name = "work-purge-task-1-0123456789abcdef"
+	minted := statelog.NewOpID(at, name)
+	for id, want := range map[string]bool{
+		minted: true,
+		statelog.DeriveOpID(at, name, "identity"): true,
+		statelog.StepOpID(minted, "evict"):        false,
+		statelog.NewOpID(at, name+"0"):            false,
+		statelog.NewOpID(at, "work-purge-task-1"): false,
+		statelog.NewOpID(at, "x"+name[1:]):        false,
+		statelog.NewOpID(at, ""):                  false,
+		minted[:36] + "-" + name:                  false,
+		"0" + minted:                              false,
+	} {
+		if got := statelog.OpNamed(id, name); got != want {
+			t.Errorf("OpNamed(%q, %q) = %v, want %v", id, name, got, want)
+		}
+	}
+	if statelog.OpNamed(statelog.NewOpID(at, ""), "") {
+		t.Error("an unnamed id was read as named for the empty call — a surface " +
+			"that names its calls has no call without a name")
+	}
+}
