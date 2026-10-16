@@ -50,9 +50,30 @@ export const OUTCOME_WORDS: Record<BackupOutcome, string> = {
 
 /** Whose word the trim takes, in one sentence. */
 export const POLICY_WORDS: Record<BackupPolicy, string> = {
-  engine: "The trim counts the newest verified copy any node wrote.",
-  operator: "Counts only copies an operator confirmed off the host.",
+  engine: "Each log's trim counts the newest verified copy of it any node wrote.",
+  operator: "Each log counts only copies of it an operator confirmed off the host.",
 };
+
+/**
+ * The oldest of the points some log's trim reads, and how many there are — or
+ * undefined while no log's trim reads any.
+ *
+ * THE OLDEST, because each log is trimmed against the newest counted backup that
+ * covers it: under `operator` there is one such point per log acknowledged, and
+ * the one that matters is the stalest — the log the backup-age alarm names
+ * first. Picking the freshest hid a log days past its acknowledgement behind
+ * another acknowledged a minute ago.
+ */
+export function oldestRead(
+  points: BackupPointRow[],
+): { point: BackupPointRow; of: number } | undefined {
+  const read = points.filter((p) => p.newest);
+  if (read.length === 0) return undefined;
+  // BY INSTANT, never by the string: the engine writes fractional seconds only
+  // where there are some, and "…:00.5Z" sorts before "…:00Z" as text.
+  const point = read.reduce((a, p) => (Date.parse(p.taken_at) < Date.parse(a.taken_at) ? p : a));
+  return { point, of: read.length };
+}
 
 /** One stream's reach, as a line: `CREWLET_TRACKER_LOG @900 (generation 2)`. */
 export function coverWords(cover: BackupCover): string {
