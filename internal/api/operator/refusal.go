@@ -15,9 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE ONE REFUSAL MAPPING: what a call that did not do what it was asked is
@@ -54,9 +52,13 @@ import (
 // that dropped what it was about left a client holding a key and nothing
 // saying where to look whether it landed. The `about` every transport hands
 // [Fail].
+//
+// THE ARGUMENTS ARE EVERY NATIVE DOMAIN'S OWN ([builtin.ObjectArgs]), declared
+// once beside the domain's refusal classes, rather than a list here: a list
+// here was one more place a domain added later had to be remembered in.
 func About(tool string, args map[string]any) httpjson.Detail {
 	about := httpjson.Detail{"tool": tool}
-	for _, field := range []string{"item", "page", "project", "handle"} {
+	for _, field := range builtin.ObjectArgs() {
 		if named, ok := args[field].(string); ok && strings.TrimSpace(named) != "" {
 			about[field] = named
 		}
@@ -432,23 +434,14 @@ func writeSentence(ctx context.Context, cause, err error) string {
 	return err.Error()
 }
 
-// writeClass is the class a writer's error is refused under.
+// writeClass is the class a writer's error is refused under: the class its
+// domain decided ([builtin.WriterClass] — the one table the tools' own
+// failures are classed by, every native domain's, so a domain added beside the
+// tracker and the knowledge base is never a 500 for a content refusal here
+// while its tools class it), a condition's, or a fault.
 func writeClass(err error) crewletmcp.Refusal {
-	switch {
-	case errors.Is(err, tracker.ErrNoTask), errors.Is(err, tracker.ErrNoComment),
-		errors.Is(err, tracker.ErrNoProject), errors.Is(err, pages.ErrNotFound):
-		return crewletmcp.RefusalNotFound
-	case errors.Is(err, tracker.ErrStaleVersion), errors.Is(err, pages.ErrStaleVersion):
-		return crewletmcp.RefusalStaleVersion
-	case errors.Is(err, pages.ErrTitleTaken), errors.Is(err, statelog.ErrExists):
-		return crewletmcp.RefusalExists
-	case errors.Is(err, pages.ErrConflict), errors.Is(err, statelog.ErrConflict):
-		return crewletmcp.RefusalConflict
-	case errors.Is(err, tracker.ErrForbidden), errors.Is(err, tracker.ErrNotAuthor),
-		errors.Is(err, pages.ErrReserved):
-		return crewletmcp.RefusalForbidden
-	case errors.Is(err, tracker.ErrInvalid), errors.Is(err, pages.ErrInvalid):
-		return crewletmcp.RefusalInvalid
+	if class, ok := builtin.WriterClass(err); ok {
+		return class
 	}
 	if _, ok := builtin.Condition(err); ok {
 		return crewletmcp.RefusalUnavailable
