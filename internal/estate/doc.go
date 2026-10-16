@@ -158,6 +158,15 @@
 // questions. A sentinel or an error type added to the packages whose errors
 // cross — this one's, the tracker's, the knowledge base's, the state log's and
 // the identity estate's with the vocabulary its answers are judged in — is a
-// build failure until it is registered. An operation answered in-process returns its own error,
-// which answers every question without the wire's help.
+// build failure until it is registered. An operation answered in-process
+// returns its own error, which answers every question without the wire's help.
+//
+// AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side
+// rebuilds a type from its exported fields and so cannot rebuild one of those
+// at all: it arrives as its message alone. That is not only a lost errors.As.
+// Each package's Sentence (a refusal's words without the Go prefix, which a
+// tool tells a model) finds them by unwrapping the package's refusal type,
+// and Worklet's and Doclet's were both unexported, so every refusal decided on
+// another data node reached its reader with "worklet:" or "doclet: invalid:"
+// in front of it.
 package estate

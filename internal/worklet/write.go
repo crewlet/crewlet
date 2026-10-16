@@ -90,47 +90,71 @@ var ErrInvalid = errors.New("worklet: invalid")
 // exists, and the useful move is to read it.
 var ErrAlreadyAnswered = errors.New("worklet: that question is already answered")
 
-// refusal is a write this package refuses on what was asked or on who asked
-// it: the writer's own SENTENCE, and the sentinel that classes it beside that
-// sentence's own %w chain.
+// Refusal is a write this package refuses on what was asked or on who asked
+// it: the writer's own SENTENCE ([Refusal.Err]), and the sentinel that classes
+// it ([Refusal.Mark]) beside that sentence's own %w chain.
 //
-// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [refusal.Error] adds
+// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [Refusal.Error] adds
 // it, so the Go error reads exactly as every error here does
-// ("worklet: …") while [Sentence] has the words a PERSON is shown. Both
+// ("worklet: …") while [Sentence] has the words alone. Both
 // classes built here — [ErrInvalid] and [ErrForbidden] — are the two a
-// person's write surface prints as they stand, because only their sentences
-// name what to change or whom to ask; "worklet:" in front of that sentence is
-// a word about where the error came from, for a log, and a person filing a
-// task was shown "create_work_item refused that: worklet: …". The forbidden
+// tool tells a model in those words as they stand, because only their
+// sentences name what to change or whom to ask; "worklet:" in front of that
+// sentence is a word about where the error came from, for a log, and a
+// person filing a task was shown "create_work_item refused that: worklet: …"
+// while a person's surface still printed a tool's sentence. A person's
+// surface that answers a refusal through the one refusal mapping
+// (internal/api/operator's Fail) tells them the words beside it
+// ([invalidSaying], [forbiddenSaying]) or its code's own sentence instead
+// (ADR-0060). The forbidden
 // class used to be built with fmt.Errorf wrapping the sentinel, which also
 // appended the sentinel's own words (": worklet: not this actor's to write")
 // after a sentence that had already said whose it was.
-type refusal struct {
-	mark error
-	// also is a sentinel of the refusal's own beside its class, or nil —
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told: the wire rebuilds an error TYPE from its exported fields,
+// and an unexported one arrived as its message alone — so [Sentence] on the
+// asking node found no refusal and handed its reader the whole "worklet: …".
+// Only this package builds one ([invalid], [forbidden], [forbiddenAs]).
+// [invalidSaying] and [forbiddenSaying] build one with a person's words
+// beside its sentence (ADR-0060).
+type Refusal struct {
+	// Mark is the sentinel that classes the refusal: [ErrInvalid] or
+	// [ErrForbidden].
+	Mark error
+	// Also is a sentinel of the refusal's own beside its class, or nil —
 	// see [forbiddenAs].
-	also error
-	err  error
+	Also error
+	// Err is the sentence, without the package prefix, and its %w chain.
+	Err error
 	// said is the refusal in a person's words, or nil where nobody has
 	// worded it for one yet ([invalidSaying], ADR-0060).
+	//
+	// UNEXPORTED, unlike the fields above, and the wire loses nothing by
+	// it: the words cross beside the refusal, as the [caveat.Said] its
+	// Unwrap yields, which the estate router carries as a value of its own
+	// and rebuilds from a peer's answer through [caveat.SaidFromPeer]
+	// alone. Exported, the field would be rebuilt as plain JSON, which a
+	// phrasing never decodes from, and arrive empty.
 	said *caveat.Said
 }
 
-func (e *refusal) Error() string { return "worklet: " + e.err.Error() }
-func (e *refusal) Unwrap() []error {
-	out := []error{e.mark}
-	if e.also != nil {
-		out = append(out, e.also)
+func (e *Refusal) Error() string { return "worklet: " + e.Err.Error() }
+func (e *Refusal) Unwrap() []error {
+	out := []error{e.Mark}
+	if e.Also != nil {
+		out = append(out, e.Also)
 	}
-	out = append(out, e.err)
+	out = append(out, e.Err)
 	if e.said != nil {
 		out = append(out, e.said)
 	}
 	return out
 }
-func (e *refusal) sentence() string { return e.err.Error() }
+func (e *Refusal) sentence() string { return e.Err.Error() }
 
-// sentenced is a refusal this package wrote, whatever its type: [refusal]
+// sentenced is a refusal this package wrote, whatever its type: [Refusal]
 // itself, and the typed refusals a caller several steps away has to take
 // apart ([TagClash], [TagsFull]). Each holds its sentence without the prefix
 // its Error adds.
@@ -140,30 +164,30 @@ type sentenced interface {
 }
 
 // invalid is fmt.Errorf for a content refusal: the sentence — written WITHOUT
-// the package prefix, which [refusal.Error] adds — and its %w chain, marked
+// the package prefix, which [Refusal.Error] adds — and its %w chain, marked
 // [ErrInvalid].
 func invalid(format string, args ...any) error {
-	return &refusal{mark: ErrInvalid, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrInvalid, Err: fmt.Errorf(format, args...)}
 }
 
 // forbidden is [invalid] for a write that is not this actor's to make, marked
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
-	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrForbidden, Err: fmt.Errorf(format, args...)}
 }
 
 // invalidSaying is [invalid] with the refusal in a person's words beside the
 // model's sentence: the tool answering it lifts the phrasing onto its result,
 // and the act route answers a person with it (ADR-0060).
 func invalidSaying(person caveat.Refusal, format string, args ...any) error {
-	return &refusal{mark: ErrInvalid, err: fmt.Errorf(format, args...),
+	return &Refusal{Mark: ErrInvalid, Err: fmt.Errorf(format, args...),
 		said: &caveat.Said{Words: person}}
 }
 
 // forbiddenSaying is [forbidden] with the refusal in a person's words, as
 // [invalidSaying] is [invalid].
 func forbiddenSaying(person caveat.Refusal, format string, args ...any) error {
-	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...),
+	return &Refusal{Mark: ErrForbidden, Err: fmt.Errorf(format, args...),
 		said: &caveat.Said{Words: person}}
 }
 
@@ -174,7 +198,7 @@ func forbiddenSaying(person caveat.Refusal, format string, args ...any) error {
 // sentinel's own words ("worklet: …") would be read to a person after a
 // sentence that had already said them.
 func forbiddenAs(sentinel error, format string, args ...any) error {
-	return &refusal{mark: ErrForbidden, also: sentinel, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrForbidden, Also: sentinel, Err: fmt.Errorf(format, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
