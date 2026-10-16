@@ -416,14 +416,14 @@ type Reading struct {
 	SearchDegradedFraction, SearchScopedFraction float64
 
 	// HistoryPartialFraction is the fraction of this node's fleet history
-	// reads answered without every live node, and HistoryReadBudget the
-	// budget those reads waited on for the other nodes — internal/eventfan's
-	// FleetReadBudget, which a node that did not answer inside is what makes
-	// an answer partial.
+	// reads answered without every live data node, and HistoryReadBudget the
+	// budget those reads waited on for the other data nodes —
+	// internal/eventfan's FleetReadBudget, which a node that did not answer
+	// inside is what makes an answer partial.
 	//
 	// THE BUDGET TRAVELS WITH THE READING rather than being imported here,
 	// because the scatter that owns it is a layer ABOVE this framework: it
-	// reads every node's own event log, and the framework every replicated
+	// reads every data node's own event log, and the framework every replicated
 	// domain is built on depending on the fleet's history reader for one
 	// constant would put that reader under every domain's build. The node
 	// that counted the reads is the one that knows what they waited on, and
@@ -898,8 +898,9 @@ var table = []rule{
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
-			"the budget. Adding a node divides the buckets again, with no " +
-			"configuration and no rebuild. See docs/guides/search.md.",
+			"the budget. Adding a data node divides the buckets again, with " +
+			"no configuration and no rebuild; a node without `data` takes " +
+			"no range. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchDegraded,
@@ -930,8 +931,8 @@ var table = []rule{
 		// budget, so that budget is the threshold — named in the detail
 		// from the value the reading carries, which is the constant the
 		// scatter waits on ([Reading.HistoryReadBudget]), never restated.
-		// PROCESS-WIDE rather than per log: the reads are of each node's
-		// own event log, which is no state log at all.
+		// PROCESS-WIDE rather than per log: the reads are of each data
+		// node's own event log, which is no state log at all.
 		kind: KindHistoryPartial,
 		fires: func(r Reading) (string, bool) {
 			budget := "the fleet read budget"
@@ -939,17 +940,17 @@ var table = []rule{
 				budget = "the " + spoken(r.HistoryReadBudget) + " fleet read budget"
 			}
 			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
-					"every node, because one did not answer inside %s",
+					"every data node, because one did not answer inside %s",
 					r.HistoryPartialFraction*100, budget),
 				r.HistoryPartialFraction > 0
 		},
-		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows, and every answer names " +
-			"the node in its `coverage`. A node that has left the fleet is gone " +
-			"with its detail, and the aggregates survive it in the usage domain; " +
-			"a live node that keeps missing the budget is slow on its own store " +
-			"or its route, and its own `pool_starved` and `apply_lag` alarms say " +
-			"which.",
+		remedy: "Turn-level history lives only on the data node that published " +
+			"it or keeps it in custody, so a partial answer is missing that node's " +
+			"rows, and every answer names the node in its `coverage`. A node that " +
+			"has left the fleet is gone with its detail, and the aggregates survive " +
+			"it in the usage domain; a live node that keeps missing the budget is " +
+			"slow on its own store or its route, and its own `pool_starved` and " +
+			"`apply_lag` alarms say which.",
 	},
 	{
 		kind: KindRecallBelowFloor,
