@@ -215,7 +215,7 @@ func newRoundTripReserving(t *testing.T, log *js.DomainLog, db store.ReplicatedH
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: db.Reader(), Log: authority})
+	reader, err := pages.NewReader(pages.ReaderOptions{Log: authority})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
