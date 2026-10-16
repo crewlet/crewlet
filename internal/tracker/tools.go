@@ -204,10 +204,11 @@ func Tools() []string {
 // WriteTools are the five that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the task, commenting on it,
-// or filing the follow-up work — and the delivery gate has to know that, or
-// such a turn is corrected and looped for having "done nothing". Reading is not
-// delivering, which is why get and list are not here: a turn that only read is
-// exactly the turn the gate exists to catch.
+// filing the follow-up work, or merging it into the item it duplicates — and
+// the delivery gate has to know that, or such a turn is corrected and looped
+// for having "done nothing". Reading is not delivering, which is why get and
+// list are not here: a turn that only read is exactly the turn the gate exists
+// to catch.
 //
 // A MOVE IS ONE: a lead woken to triage an item filed in the wrong project
 // answers by moving it, and the root's own move wakes the people on it.
