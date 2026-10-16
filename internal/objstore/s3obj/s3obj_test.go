@@ -369,22 +369,32 @@ func TestAPartIsGivenItsShareOfTheLink(t *testing.T) {
 // over the first two parts freely and waits at the third for that report, so
 // a read the upload begins after the report is one it began knowing it had
 // failed; and the refusal of part 1 is itself held back until the body has
-// reached its third part ([s3fake.Server.PartHook]), so it arrives while the
-// upload is reading. An upload that never acts on the refusal is never
-// reported, and the body gives up waiting after a minute, so it fails this
-// case rather than hanging it.
+// reached its third part AND the bucket holds part 2 with its body read
+// ([s3fake.Server.PartHook]), so it arrives while the upload is reading, and
+// the cancellation it causes reaches a part the bucket is watching. Released
+// at the third part alone, the refusal now and then cancelled part 2 while
+// its body was still on its way, which no hold ever saw, and the case waited
+// out its minute (three runs in thirty). An upload that never acts on the
+// refusal is never reported, and the body gives up waiting after a minute,
+// so it fails this case rather than hanging it.
 func TestARefusedPartEndsItsUploadAtOnce(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
 	srv.FailPart(1, http.StatusForbidden, "AccessDenied")
-	reached := make(chan struct{})
+	reached, held := make(chan struct{}), make(chan struct{})
+	var heldOnce sync.Once
 	srv.PartHook = func(number int32) {
-		if number == 1 {
-			select {
-			case <-reached:
-			case <-time.After(time.Minute):
+		switch number {
+		case 1:
+			for _, moment := range []chan struct{}{reached, held} {
+				select {
+				case <-moment:
+				case <-time.After(time.Minute):
+				}
 			}
+		case 2:
+			heldOnce.Do(func() { close(held) })
 		}
 	}
 	body := &gatedBody{body: make([]byte, 8*part), at: 2 * part, gate: srv.HoldPart(2), reached: reached}
