@@ -1015,9 +1015,14 @@ stream:
                                     #   mutation log's ceiling, set or derived
                                     #   (so 2⅔..42⅔ GiB from a volume alone):
                                     #   once seats push, a company's push
-                                    #   records arrive at about two thirds of
-                                    #   the rate of its tracker writes, so a
-                                    #   blocked trim fills either one in the
+                                    #   records and its git clients' read
+                                    #   barriers take about half to seven
+                                    #   tenths of the bytes a day its tracker
+                                    #   writes and its seats' reads do, and
+                                    #   the ratio sits near the top because
+                                    #   later releases add changes, reviews
+                                    #   and checks to this log, so a blocked
+                                    #   trim fills either one in about the
                                     #   same time. A push record names its pack
                                     #   and never carries it — the bytes are the
                                     #   object store's — so how large the

@@ -121,9 +121,10 @@ const MinDomainCeiling int64 = 1 << 30
 // whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
 //
 // The code log holds what the mutation log holds — a trailing window of
-// records, as long as a blocked trim lasts — at two thirds of its rate, the
-// reference company's pushes against its tracker writes, so an unset one takes
-// two thirds of the mutation log's ceiling, set or derived
+// records, as long as a blocked trim lasts — at two thirds of its byte rate,
+// the reference company's pushes and its git clients' reads against its
+// tracker writes and its seats' reads (config.DerivedCodeLogNumerator), so an
+// unset one takes two thirds of the mutation log's ceiling, set or derived
 // (config.Stream.CodeMaxBytes), and a blocked trim fills both in the same
 // time. A push record names its pack bundle and never carries it: the bytes
 // are the object store's, so nothing a repository grows to reaches this
