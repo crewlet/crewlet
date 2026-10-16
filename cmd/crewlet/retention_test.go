@@ -70,6 +70,7 @@ func (n *fakeRetentionNode) lastGate() url.Values {
 func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 	t.Helper()
 	n := &fakeRetentionNode{}
+	logs := identityLogs(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /query/retention", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -129,16 +130,7 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 					return
 				}
 				result := engine.GateResult{Node: r.PathValue("node"), OpID: opID,
-					Domains: []engine.DomainGate{
-						{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
-							OpID: opID + ".evict.tracker", Outcome: statelog.OutcomeApplied,
-							Position: statelog.Position{
-								Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}},
-						{Domain: "pages", Stream: "CREWLET_PAGES_LOG",
-							OpID: opID + ".evict.pages", Outcome: statelog.OutcomeApplied,
-							Position: statelog.Position{
-								Stream: "CREWLET_PAGES_LOG", Seq: 4410}},
-					}}
+					Domains: everyLogApplied(logs, opID, verb, r.PathValue("node"))}
 				if n.gateResult != nil {
 					result.Domains = n.gateResult.Domains
 				}
@@ -151,6 +143,49 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
 	return n
+}
+
+// identityLogs is every log a node's gate gesture writes: each
+// identity-claiming domain of the register, in its order.
+//
+// DERIVED FROM THE REGISTER rather than typed here: the fake answered for two
+// logs while every node writes three, so the command was never shown the
+// identity estate's line, and a domain the register gains would have stayed
+// out of it too.
+func identityLogs(t *testing.T) []statelog.Domain {
+	t.Helper()
+	var out []statelog.Domain
+	for _, domain := range engine.Domains() {
+		if domain.ClaimsIdentity() {
+			out = append(out, domain)
+		}
+	}
+	if len(out) < 6 {
+		t.Fatalf("the register holds %d identity-claiming log(s), fewer than the "+
+			"tracker's, the knowledge base's, the identity estate's, the "+
+			"artifacts log's, the artifact datastore's and the assistant's", len(out))
+	}
+	return out
+}
+
+// everyLogApplied is a gesture applied on every one of logs, each under the
+// operation id the engine derives for it and at a position of its own: the
+// first log's at the fixtures' usual height, and every later one's a multiple
+// of the knowledge base's.
+func everyLogApplied(logs []statelog.Domain, opID, verb, node string) []engine.DomainGate {
+	out := make([]engine.DomainGate, 0, len(logs))
+	for i, domain := range logs {
+		stream := domain.Stream().Name
+		seq := uint64(918280002)
+		if i > 0 {
+			seq = uint64(4410 * i)
+		}
+		out = append(out, engine.DomainGate{Domain: domain.Name(), Stream: stream,
+			OpID:     statelog.StepOpID(opID, verb, domain.Name()+":"+node),
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: stream, Seq: seq}})
+	}
+	return out
 }
 
 // blockedReport is a fleet whose trim is held by the backup term — the state a
