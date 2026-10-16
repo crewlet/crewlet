@@ -781,7 +781,7 @@ func TestTheOrgWideAnswerIsRefusedWithoutItsToken(t *testing.T) {
 	}
 	// NAMING THE FIELD, because a refusal that says only "invalid" leaves
 	// somebody guessing which of the answers they gave was the problem.
-	if body := res.Body.String(); !strings.Contains(body, "token") ||
+	if body := res.Body.String(); !strings.Contains(body, "Token is required") ||
 		!strings.Contains(body, "provisioning.org_webhook") {
 		t.Errorf("the refusal names neither the field nor the answer asking "+
 			"for it:\n%s", body)

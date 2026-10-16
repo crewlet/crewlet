@@ -705,3 +705,85 @@ func TestTheNoExternalURLMessageNamesNoOneSurface(t *testing.T) {
 			"that fixes it", message)
 	}
 }
+
+// THE OUTERMOST TEXT IS A SENTENCE, and an identifier keeps its spelling.
+//
+// Go errors stay lowercase with no full stop because they are wrapped; the
+// text a refusal puts in `detail` or `hint` is wrapped by nothing and read on
+// its own line, so the boundary writes it as a sentence. A field name, a flag,
+// a path or an address at the start keeps its case, because capitalising it
+// would name something that does not exist.
+func TestSentenceCapitalisesProseAndKeepsIdentifiers(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ in, want string }{
+		{"limit must be a number", "Limit must be a number."},
+		{"that login is already taken. Choose another", "That login is already taken. Choose another."},
+		{"isn't valid", "Isn't valid."},
+		{"configapi: a wrapped chain", "Configapi: a wrapped chain."},
+		{"Already a sentence.", "Already a sentence."},
+		{"Already signed in?", "Already signed in?"},
+		{"  padded text  ", "Padded text."},
+		{"expires_in_days can't be negative", "expires_in_days can't be negative."},
+		{"-dev-principal only works on loopback", "-dev-principal only works on loopback."},
+		{"https://evil.example isn't an address for this deployment", "https://evil.example isn't an address for this deployment."},
+		{"grant.add isn't an event the identity log records", "grant.add isn't an event the identity log records."},
+		{"`grants` is the whole set", "`grants` is the whole set."},
+		{`"jane" is already taken`, `"jane" is already taken.`},
+		{"/iam/people serves nothing here", "/iam/people serves nothing here."},
+		{"é accented opening", "É accented opening."},
+		{"ends in a list (a, b)", "Ends in a list (a, b)."},
+		{"", ""},
+		{"   ", ""},
+	} {
+		if got := httpjson.Sentence(c.in); got != c.want {
+			t.Errorf("Sentence(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if again := httpjson.Sentence(httpjson.Sentence(c.in)); again != c.want {
+			t.Errorf("Sentence is not idempotent on %q: twice gives %q", c.in, again)
+		}
+	}
+}
+
+// EVERY REFUSAL WRITES ITS DETAIL AND HINT AS SENTENCES, through every writer.
+//
+// The rule is held at [httpjson.Envelope] so a handler that passes err.Error()
+// as it is still reaches a person as a sentence, and a non-text value under
+// either key, or any other key, is left exactly as the route wrote it.
+func TestTheEnvelopeWritesDetailAndHintAsSentences(t *testing.T) {
+	t.Parallel()
+	body := httpjson.Envelope(httpjson.CodeInvalid, httpjson.Detail{
+		"detail": "limit must be a number",
+		"hint":   "send ?limit=50",
+		"field":  "limit",
+	})
+	if body["detail"] != "Limit must be a number." {
+		t.Errorf("detail = %#v, want the sentence", body["detail"])
+	}
+	if body["hint"] != "Send ?limit=50." {
+		t.Errorf("hint = %#v, want the sentence", body["hint"])
+	}
+	if body["field"] != "limit" {
+		t.Errorf("field = %#v, want it untouched: only prose keys are sentences", body["field"])
+	}
+
+	structured := httpjson.Envelope(httpjson.CodeInvalid, httpjson.Detail{
+		"detail": map[string]any{"path": "a.b"},
+	})
+	if _, ok := structured["detail"].(map[string]any); !ok {
+		t.Errorf("a structured detail was rewritten: %#v", structured["detail"])
+	}
+
+	given := map[string]string{"detail": "nothing was written"}
+	rec := httptest.NewRecorder()
+	httpjson.FailWith(rec, http.StatusConflict, httpjson.CodeInvalid, given)
+	var written map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &written); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if written["detail"] != "Nothing was written." {
+		t.Errorf("FailWith wrote detail %#v, want the sentence", written["detail"])
+	}
+	if given["detail"] != "nothing was written" {
+		t.Errorf("the caller's map was written to: %#v", given)
+	}
+}

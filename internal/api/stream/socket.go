@@ -899,7 +899,7 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		refusal := queryError(req, CodeBadParams)
 		var bad *BadParamsError
 		if errors.As(err, &bad) {
-			refusal.Detail = bad.Detail
+			refusal.Detail = httpjson.Sentence(bad.Detail)
 		}
 		client.Reply(refusal)
 	case errors.Is(err, ErrUnavailable):

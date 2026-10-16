@@ -111,8 +111,8 @@ func absent(t *testing.T, rec *httptest.ResponseRecorder) bool {
 		t.Fatalf("a 404 that is not JSON: %v (%q)", err, rec.Body.String())
 	}
 	return body["error"] == string(httpjson.CodeNoRoute) &&
-		(strings.HasPrefix(body["detail"], "this node serves nothing at ") ||
-			strings.HasPrefix(body["detail"], "this listener serves nothing at "))
+		(strings.HasPrefix(body["detail"], "This node serves nothing at ") ||
+			strings.HasPrefix(body["detail"], "This listener serves nothing at "))
 }
 
 // publishedRoutes are the patterns the public listener serves: the whole

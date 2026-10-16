@@ -1359,8 +1359,8 @@ inequality is the reason:
 ```
 $ crewlet retention readmit node-4 -confirm node-4
 crewlet: the node answered 409: readmission_refused
-  statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again
-  start node-4 if it is not running: it catches up on its own, …
+  Statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again.
+  Start node-4 if it is not running: it catches up on its own, …
   its SEQ in `crewlet retention status`, at the domain's own GEN, says when it has caught up, and `crewlet retention snapshots` whether a peer can donate one; then run this again
 ```
 

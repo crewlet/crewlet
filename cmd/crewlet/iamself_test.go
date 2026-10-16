@@ -215,7 +215,7 @@ func TestARefusedMintStillSignsOut(t *testing.T) {
 	n := newSelfNode(t)
 	n.mintCode = http.StatusForbidden
 	_, _, err := runSelf(t, n, "a long pass phrase\n")
-	if err == nil || !strings.Contains(err.Error(), "not today") {
+	if err == nil || !strings.Contains(err.Error(), "Not today.") {
 		t.Fatalf("a refused mint answered %v, want the node's refusal", err)
 	}
 	if strings.Join(n.steps, ",") != "login,mint,logout" {

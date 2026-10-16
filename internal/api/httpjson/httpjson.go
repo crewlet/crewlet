@@ -26,7 +26,10 @@
 //     the detail rather than rewording the sentence.
 //   - the [Detail] — the machine-readable facts about THIS refusal, as typed
 //     JSON: `{"missing_grant": "secrets.reveal"}`, `{"retry_after_ms": 4000}`,
-//     `{"relation": "leads", "subject": "sarah-chen"}`.
+//     `{"relation": "leads", "subject": "sarah-chen"}`. Its `detail` and
+//     `hint` texts are the two a person reads, and [Envelope] writes each as
+//     a sentence ([Sentence]), so a handler hands over a Go error's text as
+//     it is.
 //
 // `error` and `message` are RESERVED KEYS and always win, so a client that
 // branches on the code can never find it displaced by a route's own field of
@@ -66,7 +69,10 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"encoding/json"
 
@@ -1227,6 +1233,11 @@ func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail)
 func Envelope(code Code, detail Detail) map[string]any {
 	body := make(map[string]any, len(detail)+2)
 	maps.Copy(body, detail)
+	for _, key := range proseKeys {
+		if text, ok := body[key].(string); ok {
+			body[key] = Sentence(text)
+		}
+	}
 	body[keyError] = string(code)
 	if message := code.Message(); message != "" {
 		body[keyMessage] = message
@@ -1238,6 +1249,65 @@ func Envelope(code Code, detail Detail) map[string]any {
 		slog.Debug("http_refusal_without_message", "code", string(code))
 	}
 	return body
+}
+
+// The detail keys whose text a person reads on its own line: `detail` says
+// what happened and `hint` says what to do. The dashboard and the CLI both
+// print each as a sentence of its own.
+const (
+	keyDetail = "detail"
+	keyHint   = "hint"
+)
+
+// proseKeys are the detail keys [Envelope] writes as sentences.
+var proseKeys = [...]string{keyDetail, keyHint}
+
+// Sentence is text as a person reads it on its own: its first letter
+// capitalised and a full stop after it.
+//
+// ONE PLACE, AT THE BOUNDARY. A Go error stays lowercase with no full stop,
+// because errors are wrapped ("apply the config: seat x is held") and a
+// capital or a full stop in the middle of a chain reads wrong in every log.
+// The OUTERMOST text is different: once a refusal puts it in `detail` or
+// `hint`, nothing wraps it again, and a person reads it as a line of its own.
+// [Envelope] calls this on both keys, so a handler passes err.Error() as it is
+// and never formats copy for the screen itself.
+//
+// AN IDENTIFIER KEEPS ITS SPELLING. Only a plain lowercase word is
+// capitalised: text that opens with a field name (`expires_in_days`), a flag
+// (`-dev-principal`), a path, an address or a quoted value opens exactly as
+// it was written, because capitalising it would name something that does not
+// exist. Text that already ends in a full stop, a question mark or an
+// exclamation mark keeps its ending, so calling this twice changes nothing.
+func Sentence(text string) string {
+	s := strings.TrimSpace(text)
+	if s == "" {
+		return s
+	}
+	if first, size := utf8.DecodeRuneInString(s); unicode.IsLower(first) && plainWord(s) {
+		s = string(unicode.ToUpper(first)) + s[size:]
+	}
+	if !strings.ContainsRune(".!?", rune(s[len(s)-1])) {
+		s += "."
+	}
+	return s
+}
+
+// plainWord reports whether s opens with a word made of letters alone (an
+// apostrophe within it, as in "isn't", and a clause mark after it allowed),
+// which is what separates prose from an identifier at the start of a line.
+func plainWord(s string) bool {
+	word, _, _ := strings.Cut(s, " ")
+	word = strings.TrimRight(word, ",:;")
+	if word == "" {
+		return false
+	}
+	for _, r := range word {
+		if !unicode.IsLetter(r) && r != '\'' {
+			return false
+		}
+	}
+	return true
 }
 
 // BodyReadTimeout bounds how long a client may take to deliver its body.

@@ -119,7 +119,7 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"a coordination store that did not answer",
 			fmt.Errorf("dial nats://10.0.0.7:4222: %w", coord.ErrUnavailable),
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"the coordination store did not answer", true},
+			"The coordination store did not answer", true},
 		{"a refusal the domain composed",
 			fmt.Errorf("%w: the comment is longer than a comment may be", tracker.ErrInvalid),
 			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "longer than", false},
@@ -130,7 +130,7 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"an estate nobody served",
 			&estate.ErrUnserved{Detail: "10.0.0.7: out_of_service: applier halted"},
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"no data node could serve it", true},
+			"No data node could serve it", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
