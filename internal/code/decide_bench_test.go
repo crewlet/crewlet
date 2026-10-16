@@ -54,6 +54,7 @@ import (
 // the publisher's sixteen; doc.go's measured section records the figures, and
 // [CommitBudget] is held against the worst.
 func BenchmarkDecideABatch(b *testing.B) {
+	quiet(b)
 	e := openApplyEstate(b)
 	repository := func(id string, rules []Protection) {
 		settings := settingsFor("")

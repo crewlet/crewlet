@@ -91,6 +91,96 @@
 // and a committer that decided nothing answers [ErrNotServing], which the
 // router reads as a node that ran nothing and asks the runner-up.
 //
+// # What a push costs, measured
+//
+// THE COMMIT CHAIN (internal/code/codecluster's BenchmarkCommitChain): a
+// proposal to the committer, the batch it forms, the publisher's snapshot,
+// decide and append, the committer node's applier and the answer read from
+// the push's row — everything a push pays once its receiving node has stored
+// its bundle. On four vCPUs of a 2.1 GHz Xeon, Go 1.27.2, NATS server 2.15.0
+// and the pinned Turso driver (0.8.1), every broker fsyncing each write as
+// stream.sync's default does, three counts of three seconds, the range given:
+//
+//   - ONE MEMBER, proposed to in process: a lone push is 7.7–7.8 ms at the
+//     median (14 ms p99), 121–125 records and pushes a second; eight at once
+//     are two records of four — no linger, so the first is in flight alone
+//     while seven queue — 460–471 pushes a second at 115–118 records;
+//     sixty-four at once are two of thirty-two, 2 670–2 730 pushes a second
+//     at 83–85 records, a push's median 22–23 ms.
+//   - THREE MEMBERS of one cluster on one machine — its four vCPUs and ONE
+//     disk shared, so a record's three fsyncs queue on one device where a
+//     deployment's members each sync their own, and its copies cross
+//     loopback where theirs cross a network: what three machines reach
+//     differs both ways — each record on all three before it is
+//     acknowledged, proposed to the committer in process: a lone push is
+//     10.5–11.1 ms at the median, 86–89 a second; 330–339 pushes a second at
+//     eight and 2 050–2 090 at sixty-four, 64–65 records.
+//   - A FULL QUEUE: 256 pushes at once are five records — the first goes
+//     alone while the rest queue behind it, the others full to
+//     [MaxPushesPerRecord] — 2 720–2 830 pushes a second; and
+//     [CommitterInbox], 1 024 at once, drains in 0.33–0.34 s in seventeen
+//     records, 3 010–3 090 pushes a second, its last push answered within
+//     0.35–0.38 s (p99).
+//   - THE ROUTER HOP, a push proposed through a member that is not its
+//     repository's committer as every push received elsewhere is: about
+//     1 ms at the medians on a lone push (11.7–12.3 ms, 77–82 a second),
+//     306–317 pushes a second at eight, and 1 270–1 390 at sixty-four, its
+//     median 38–41 ms and p99 94–97 ms where sixty-four proposals cross the
+//     wire at once.
+//   - MANY REPOSITORIES, every push to a repository of its own and every
+//     committer reached through member 0's router, the committers spread
+//     over the three members by rendezvous: a record carries one
+//     repository's pushes, so eight pushes at once over sixteen
+//     repositories are eight single-push records, 148–157 a second across
+//     the fleet against 290–294 pushes a second when the same eight go to
+//     one repository; sixty-four at once over sixteen are 146–172 records a
+//     second of two pushes, and over sixty-four 201–225 records — and
+//     pushes — a second, against 1 270–1 390 pushes a second to one: eight
+//     times the records in flight for under half again the rate, a push's
+//     median 250–280 ms, so this machine's record ceiling is near the top of
+//     that range.
+//
+// So the chain is a record's round trip, 8–12 ms, and group commit is what
+// scales it: one repository's burst of sixty-four is over twenty times a
+// lone push's rate, and its full queue over thirty-five. What bounds pushes
+// that do NOT share a repository is the log's RECORD rate: one stream
+// carries every repository's records and a broker fsyncing each write
+// appends each of them alone, about 150 to 225 records a second on three
+// members of this machine whatever the members' write lanes could apply —
+// sixty-four single-push records are some 900 rows a second, under the
+// lane's published floor of about 2 000 (docs/guides/replication.md, the
+// loaded CI runner). One repository committing sixty-four a record, by
+// contrast, applies some 8 000 rows a second on every data node, past that
+// floor, which this machine's applier sustains because such a record is one
+// transaction of 10–12 ms (# Measured): there the lane is what a busier
+// node would meet first. A company whose pushes spread over many
+// repositories at once — a CI fleet tagging each one — meets the record
+// rate long before either, and per-repository group commit gives it
+// nothing: no record carries two repositories' pushes, and a data node more
+// adds no stream, since one log has one leader.
+//
+// THE PUSH'S TWO ROWS (BenchmarkPushHistoryBytes, the same figure every
+// count), measured as the replicated estate's growth after a truncating
+// checkpoint over records whose refs existed before, so a ref's own row is
+// rewritten in place and never counted. They have two lifetimes:
+//
+//   - its code_pushes row, which the push-history horizon keeps for the 181
+//     days of usage.History: 395.3 bytes with its index entries for a
+//     person's push of one commit — one command on a ref named in 40 bytes,
+//     one introduced id (4 000 records) — and 420 004 for the widest a push
+//     can leave ([MaxCommandsPerPush] commands on refs of
+//     [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
+//   - its pack's code_packs row, 357.3 bytes more with its index entries
+//     (752.6 with both), which lives as long as the pack does — until the
+//     repository is purged, since nothing in this release compacts a
+//     repository's packs.
+//
+// So every data node, holding the whole estate, holds 395.3 bytes for each
+// push of the last 181 days and 357.3 for each push ANY repository not yet
+// purged has ever taken: a deployment of 3 000 pushes a day carries about
+// 215 MB of push rows at the horizon and grows by about 390 MB of pack rows
+// a year for as long as its repositories live.
+//
 // # The activation fence
 //
 // A repository code.repos declares is created, settled, deleted and restored

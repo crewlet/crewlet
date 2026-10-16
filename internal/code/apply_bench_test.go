@@ -4,14 +4,26 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
+
+// quiet keeps a benchmark's output to its figures: every estate a benchmark
+// opens logs at info, and an info line in the middle of benchmark output is a
+// line benchstat cannot read (`make bench` runs this package).
+func quiet(b *testing.B) {
+	logging.SetVerbosity(slog.LevelWarn, logging.FormatConsole)
+	b.Cleanup(func() { logging.SetVerbosity(slog.LevelInfo, logging.FormatConsole) })
+}
 
 // widestPushRow is the commands and introduced ids of the widest row a push
 // stores: MaxCommandsPerPush commands at MaxRefNameBytes refs, each refused
@@ -185,6 +197,7 @@ func fullest(b *testing.B, prefix string, i int, command func(p, c int) Command)
 // is checked against only at its boundary; doc.go's measured section records
 // the figures.
 func BenchmarkApplyAPushRecord(b *testing.B) {
+	quiet(b)
 	// A PUSH ID IS THE FLEET'S, not the repository's, so every iteration's
 	// pushes carry their own: a repeated one is a redelivery and applies as
 	// nothing.
@@ -324,6 +337,7 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot
 // split a record; doc.go's measured section records the figures.
 func BenchmarkApplyAPurgePart(b *testing.B) {
+	quiet(b)
 	commands, introduced := widestPushRow(b)
 	width := len(commands) + len(introduced)
 	under := (PurgePartBytes - 1) / width
@@ -372,4 +386,119 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 			}
 		})
 	}
+}
+
+// BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK:
+// the growth of the replicated estate's file over records each landing one
+// push, divided by the pushes. Two rows with two lifetimes, so two arms:
+//
+//   - pack=no is the push's code_pushes row and its index entries alone,
+//     which the push-history horizon keeps usage.History (181 days);
+//   - pack=yes is that and its pack's code_packs row with its index entries,
+//     which live as long as the pack does — until the repository is purged
+//     (until compaction retires it, once there is a compaction) — so the
+//     difference between the two arms is what each push adds for good.
+//
+// What a deployment's push history costs a data node is the first figure
+// times its pushes a day times 181, plus the second's share times every push
+// its repositories' packs still hold; every data node holds both, since every
+// one holds the whole estate.
+//
+//   - push=typical: one command moving a ref named in 40 bytes, one
+//     introduced commit id — a person's push of a commit;
+//   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
+//     MaxIntroduced introduced ids — the widest row a push stores.
+//
+// Every push moves refs that exist before the file is measured, so a ref's
+// row is rewritten in place and never counted: a ref lives as long as it is
+// kept, not as long as the history. The file is measured after a truncating
+// checkpoint, so what is counted is the database and not a sidecar's frames.
+// bytes/row is the growth over the records' pushes; doc.go's measured section
+// records both arms.
+func BenchmarkPushHistoryBytes(b *testing.B) {
+	quiet(b)
+	const typicalRef = "refs/heads/feature/push-history-measured"
+	if len(typicalRef) != 40 {
+		b.Fatalf("the typical ref is %d bytes, not 40", len(typicalRef))
+	}
+	widestRef := func(c int) string {
+		ref := fmt.Sprintf("refs/heads/%08d", c)
+		return ref + strings.Repeat("w", MaxRefNameBytes-len(ref))
+	}
+	for _, shape := range []struct {
+		name string
+		// records is how many pushes are measured: enough that the file
+		// grows by thousands of pages, so a page's granularity is lost in
+		// the figure.
+		records   int
+		ref       func(c int) string
+		cmds, ids int
+	}{
+		{"typical", 4_000, func(int) string { return typicalRef }, 1, 1},
+		{"widest", 100, widestRef, MaxCommandsPerPush, MaxIntroduced},
+	} {
+		for _, pack := range []string{"no", "yes"} {
+			b.Run("push="+shape.name+"/pack="+pack, func(b *testing.B) {
+				var perRow float64
+				for b.Loop() {
+					b.StopTimer()
+					e := openApplyEstate(b)
+					const repo = "repo-history"
+					e.apply(create(b, repo, "history"))
+					// THE REFS EXIST BEFORE THE FILE IS MEASURED: each record
+					// moves them on from what the one before left.
+					cmds := make([]Command, shape.cmds)
+					for c := range cmds {
+						cmds[c] = move(shape.ref(c), ZeroOID, oid(fmt.Sprint("tip-0-", c)))
+					}
+					e.apply(pushOf(b, repo, pushEntry("history-0", cmds...)))
+					before := e.fileBytes(b)
+					b.StartTimer()
+					for r := 1; r <= shape.records; r++ {
+						for c := range cmds {
+							cmds[c] = move(cmds[c].Ref, cmds[c].New, oid(fmt.Sprint("tip-", r, "-", c)))
+						}
+						entry := pushEntry(fmt.Sprint("history-", r), cmds...)
+						entry.Introduced = make([]string, shape.ids)
+						for i := range entry.Introduced {
+							entry.Introduced[i] = oid(fmt.Sprint("introduced-", r, "-", i))
+						}
+						entry.IntroducedCount = shape.ids
+						if pack == "no" {
+							entry.Pack = nil
+						}
+						e.apply(pushOf(b, repo, entry))
+					}
+					b.StopTimer()
+					if got := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, repo); got != int64(shape.records+1) {
+						b.Fatalf("the estate holds %d push rows, want %d", got, shape.records+1)
+					}
+					perRow = float64(e.fileBytes(b)-before) / float64(shape.records)
+					b.StartTimer()
+				}
+				b.ReportMetric(perRow, "bytes/row")
+			})
+		}
+	}
+}
+
+// fileBytes is the size of the estate's file once a truncating checkpoint has
+// folded every committed page into it — the database itself, never a
+// sidecar's frames.
+func (e *estate) fileBytes(b *testing.B) int64 {
+	b.Helper()
+	db := storetest.ReplicatedDB(b, e.db)
+	var busy, frames, folded sql.NullInt64
+	if err := db.SQL().QueryRowContext(b.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`).
+		Scan(&busy, &frames, &folded); err != nil {
+		b.Fatalf("checkpoint the estate: %v", err)
+	}
+	if busy.Int64 != 0 {
+		b.Fatalf("the estate's checkpoint was busy: %d of %d frames folded", folded.Int64, frames.Int64)
+	}
+	info, err := os.Stat(db.Path())
+	if err != nil {
+		b.Fatal(err)
+	}
+	return info.Size()
 }

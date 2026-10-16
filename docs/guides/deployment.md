@@ -1100,8 +1100,10 @@ cache on its own disk. What such a node needs from its host:
   2.47 (Debian trixie). On git 2.48 or newer a clone is sent from every pack
   the cache holds verbatim (multi-pack reuse); an older git reuses only the
   bitmap's preferred pack — 2.43 and older cannot reuse from several, and 2.44
-  to 2.47 send a pack the client refuses when they do — so a clone there costs
-  the node more CPU. The node logs which it chose (`pack_reuse` on
+  to 2.47 send a pack the client refuses when they do. Measured, the
+  difference costs a clone nothing: a warm full clone of a repository of two
+  hundred pushes is about a second of the node's CPU on either, 0.91–0.98 s on
+  2.47 and 1.03–1.04 s on 2.48. The node logs which it chose (`pack_reuse` on
   `code_git_ready`).
 - **A volume for `git.cache_dir`.** The cache holds every repository the node
   serves, whole, and a cold sync writes everything it downloads at the speed

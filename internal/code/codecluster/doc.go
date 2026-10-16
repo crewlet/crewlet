@@ -29,6 +29,29 @@
 // How the engine's watched presence view learns of either is the engine's to
 // test.
 //
+// # The commit chain, measured
+//
+// BenchmarkCommitChain measures one repository's commit chain here, where
+// the router hop is the production one, and beside it on one member of a
+// broker of its own: every push a ref created with no pack, so the figure is
+// the chain and never the object store. On four vCPUs of a 2.1 GHz Xeon with
+// every write fsynced (three counts, internal/code's "What a push costs,
+// measured" has the rest) — the three members sharing the machine's cores
+// and its ONE disk, so a record's three fsyncs queue on one device and its
+// copies cross loopback, where three machines each sync their own and cross
+// a network — a lone push is 10.5–11.1 ms at the median on three members,
+// 86–89 a second, and about 1 ms more through a member that is not the
+// committer; sixty-four at once are 2 050–2 090 pushes a second to the
+// committer and 1 270–1 390 through another member, two records each; a
+// committer's whole queue, 1 024 at once, drains in a third of a second in
+// records of sixty-four; and pushes that share no repository are a record
+// each, so sixty-four at once over sixty-four repositories commit
+// 201–225 records — and pushes — a second across the three members, eight
+// times the records in flight for under half again the rate: one log's
+// record rate, not any one committer, bounds them, and neither group commit,
+// which never puts two repositories in one record, nor a member more, since
+// one log has one leader, raises it.
+//
 // # Why a package of its own
 //
 // Three members, each embedding a NATS server, in one process form a quorum,

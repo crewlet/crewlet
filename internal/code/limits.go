@@ -127,10 +127,20 @@ const (
 	// on the work one lost compare-and-set round re-decides (64 pushes at a
 	// few indexed reads each), and the per-record ceiling the tracker's bulk
 	// writes use. Group commit's gain is in bursts — a CI fan-out of tag
-	// pushes — where it turns 64 appends into one: applied and committed,
-	// such a record holds the write lane 10–12 ms, 0.16–0.18 ms a push
-	// against 3.4–4.8 ms for one push on its own, far inside
-	// statelog.ApplyTxTimeBudget (doc.go's measured section).
+	// pushes — where it turns 64 appends into one. SIXTY-FOUR for what such
+	// a record holds the write lane for: applied and committed, 10–12 ms,
+	// 0.16–0.18 ms a push against 3.4–4.8 ms for one push on its own, far
+	// inside statelog.ApplyTxTimeBudget (doc.go's measured section).
+	// MEASURED end to end on three members (doc.go's "What a push costs,
+	// measured"): a burst past the bound fills its records to sixty-four,
+	// and its rate still rises with its size — 2 050–2 090 pushes a second
+	// at sixty-four at once, 2 720–2 830 at 256 and 3 010–3 090 at 1 024 —
+	// against 86–89 for a lone push. What records WIDER than sixty-four
+	// would buy a burst is NOT measured, since the bound is what forms them;
+	// it is bounded by the write lane, not by the round trips they would
+	// save — every node applies every record on its one lane, and a record's
+	// hold grows with its width, so a wider one trades round trips for a
+	// longer hold every other write of the log waits behind.
 	MaxPushesPerRecord = 64
 
 	// MaxRecordBytes is the largest record this domain appends: an eighth of
@@ -162,9 +172,13 @@ const (
 	// advertisement costs about 100 bytes a ref, so this is about 10 MB on
 	// every v0 fetch and a 10 MB packed-refs rewrite on every cache sync;
 	// past it a repository is a namespace problem, refused (repo_refs)
-	// rather than slowly degraded. A deleted ref never counts against it:
-	// its tombstone is bounded apart, by MaxTombstonesPerRepo, and refuses
-	// nobody.
+	// rather than slowly degraded. At the bound a push is still about two
+	// seconds as a person waits for it — measured over a gigabyte of
+	// history, its request 303 ms against 59–63 at one ref, another node's
+	// delta sync 42 ms, the advertisement 136 ms (internal/code/host's
+	// measured section). A
+	// deleted ref never counts against it: its tombstone is bounded apart, by
+	// MaxTombstonesPerRepo, and refuses nobody.
 	MaxRefsPerRepo = 100_000
 
 	// MaxTombstonesPerRepo is the most TOMBSTONES — refs deleted within
@@ -395,9 +409,12 @@ const (
 	// appends. Past it a push is refused busy AT ONCE and the client runs
 	// git push again, rather than the queue growing without bound in a
 	// process that may die holding it. CommitterInboxBytes bounds the same
-	// queue by what it weighs. NEITHER BOUNDS HOW LONG a push waits — sixteen
-	// healthy batches drain in well under a second, sixteen slow ones in
-	// minutes — so the queue is bounded in TIME too: a push is answered busy
+	// queue by what it weighs. NEITHER BOUNDS HOW LONG a push waits — a full
+	// queue of healthy batches drains in a third of a second (1 024 pushes at
+	// once on three members: 0.33–0.34 s in seventeen records, the last
+	// answered within 0.35–0.38 s; doc.go's "What a push costs, measured"),
+	// sixteen slow ones in minutes — so the queue is bounded in TIME too: a
+	// push is answered busy
 	// rather than decided once too little of its asker's attempt is left for
 	// its own batch, and one asked with no deadline once it has waited a
 	// whole CommitBudget (committer.go).

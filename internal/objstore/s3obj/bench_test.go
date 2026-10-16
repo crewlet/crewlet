@@ -113,29 +113,15 @@ func BenchmarkBackend(b *testing.B) {
 		}
 	}
 	b.Run("bucket=real", func(b *testing.B) {
-		cfg, ok := s3fake.RealBucket(b)
-		if !ok {
-			b.Skip("CREWLET_BENCH_S3_BUCKET names no bucket, so no real bucket is measured; " +
-				"internal/objstore/s3obj's package doc lists the variables that name one")
+		// SKIPPED HERE, ONCE, rather than in every case the suite runs.
+		if _, ok := s3fake.RealBucket(b); !ok {
+			b.Skip(s3fake.NoRealBucket)
 		}
 		objstoretest.Bench(b, func(b *testing.B) objstoretest.BenchBackend {
-			// A PREFIX OF THE CASE'S OWN, so a case starts from an empty
-			// store whatever an earlier one — or a run killed part way —
-			// left, and its listing counts its own objects alone.
-			own := cfg
-			own.Prefix = cfg.Prefix + objstore.KeyAt(time.Now()).String() + "/"
-			backend, err := s3obj.Open(b.Context(), own)
-			if err != nil {
-				b.Fatalf("open bucket %s: %v", own.Bucket, err)
-			}
-			b.Cleanup(func() {
-				ctx, cancel := context.WithTimeout(context.WithoutCancel(b.Context()), clearBudget)
-				defer cancel()
-				if err := objstoretest.Clear(ctx, backend); err != nil {
-					b.Errorf("clear %s in bucket %s: %v", own.Prefix, own.Bucket, err)
-				}
-			})
-			return objstoretest.BenchBackend{Backend: backend}
+			// A PREFIX OF THE CASE'S OWN (s3fake.RealBackend), so a case
+			// starts from an empty store and its listing counts its own
+			// objects alone.
+			return objstoretest.BenchBackend{Backend: s3fake.RealBackend(b)}
 		})
 	})
 }
@@ -151,11 +137,6 @@ const s3PageSize = 1000
 // 80 MB/s, the low end of the 80–90 MB/s one S3 connection carries — the
 // figure S3's own guidance answers with byte-range fetches in parallel.
 const connBytesPerSecond = 80_000_000
-
-// clearBudget bounds clearing a real bucket's case prefix: the largest holds a
-// hundred thousand objects, deleted 64 at a time — about half a minute at a
-// 20 ms round trip — and ten minutes is a hang detector rather than a pace.
-const clearBudget = 10 * time.Minute
 
 // BenchmarkUploadBesideSlowReads measures a 128 MiB upload with downloads
 // paced to a slow client reading large objects on the same node beside it

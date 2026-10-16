@@ -127,8 +127,17 @@ var _ codetest.Cluster = (*cluster)(nil)
 
 // startCluster starts the topology over backend: "nats", the broker's own
 // object store, one bucket every member reaches through its own client as a
-// deployment's do; or "s3", one S3 bucket in process.
-func startCluster(t *testing.T, backend string) *cluster {
+// deployment's do; or "s3", one S3 bucket in process. Its brokers decline the
+// fsync per write, which the suite's claims do not turn on and which would
+// only slow them.
+func startCluster(t testing.TB, backend string) *cluster {
+	t.Helper()
+	return startClusterOf(t, backend, js.Config{})
+}
+
+// startClusterOf is startCluster over brokers of broker's configuration — a
+// benchmark's, which measures the fsync per write production makes.
+func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	t.Helper()
 	c := &cluster{life: t, faults: &codefault.Script{}, placement: &placement{},
 		creds: codetest.NewCredentials([]string{"ceo", "dev"}),
@@ -137,7 +146,8 @@ func startCluster(t *testing.T, backend string) *cluster {
 		base: time.Now().UTC().Add(-time.Hour).Truncate(time.Second)}
 	// QUORUM-DURABLE: a record one member acknowledged is one every member
 	// will see.
-	c.brokers = jetstreamtest.StartCluster(t, members, js.Config{Replicas: members})
+	broker.Replicas = members
+	c.brokers = jetstreamtest.StartCluster(t, members, broker)
 	switch backend {
 	case "nats":
 	case "s3":
@@ -176,7 +186,7 @@ func startCluster(t *testing.T, backend string) *cluster {
 }
 
 // s3Bucket is a fresh in-process S3 bucket, through the production backend.
-func s3Bucket(t *testing.T) objstore.Backend {
+func s3Bucket(t testing.TB) objstore.Backend {
 	t.Helper()
 	srv := s3fake.Start(t, "code")
 	b, err := s3obj.Open(t.Context(), s3obj.Config{

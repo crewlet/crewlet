@@ -30,6 +30,7 @@ import (
 // (rowbytes.go) against the encoding it replaced, which every row of every
 // page on the serving node used to pay.
 func BenchmarkServeASnapshotPage(b *testing.B) {
+	quiet(b)
 	at := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2}
 	cursor := StateCursor{Full: true, Phase: phaseRefs, From: at, Seen: at, Stream: time.Unix(1, 0)}
 	ctx := context.Background()

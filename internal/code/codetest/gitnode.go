@@ -82,6 +82,11 @@ func (c *Credentials) Person(operatorID string) string {
 	return ""
 }
 
+// defaultCacheMaxBytes is a git node's cache budget unless a topology sets
+// one: a gibibyte holds every repository the suite pushes, so no case is
+// evicted by a budget it did not mean to test.
+const defaultCacheMaxBytes = 1 << 30
+
 // GitOptions configure a git node.
 type GitOptions struct {
 	// ID is the node's id.
@@ -114,6 +119,8 @@ type GitOptions struct {
 	// MaxTransfers and MaxProcesses are the pool's transfer and read lanes;
 	// 0 is the pool's default.
 	MaxTransfers, MaxProcesses int
+	// CacheMaxBytes is the cache's budget; 0 is defaultCacheMaxBytes.
+	CacheMaxBytes int64
 	// GitPath is the git the pool runs; "" is the one on PATH.
 	GitPath string
 	// Logger is the host's; nil is the package's own.
@@ -177,6 +184,9 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 		o.Timing.PendingGrace, o.Timing.Keepalive = 2*time.Second, 200*time.Millisecond
 	}
 	o.Limits = withDefaults(o.Limits)
+	if o.CacheMaxBytes == 0 {
+		o.CacheMaxBytes = defaultCacheMaxBytes
+	}
 	g := &GitNode{o: o, life: t}
 	t.Cleanup(g.teardown)
 	g.cur = g.start(t)
@@ -209,7 +219,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	}
 	limits := func() code.Limits { return g.o.Limits }
 	if n.cache, err = cache.Open(ctx, cache.Options{
-		Layout: layout, MaxBytes: 1 << 30, Git: n.pool, Objects: objects, Fetch: g.o.Estate,
+		Layout: layout, MaxBytes: g.o.CacheMaxBytes, Git: n.pool, Objects: objects, Fetch: g.o.Estate,
 		Limits: limits, HookCommand: HookCommand(t), Faults: g.o.Faults, Metrics: n.metrics, Now: time.Now,
 	}); err != nil {
 		t.Fatalf("codetest: open %s's cache: %v", n.id, err)

@@ -20,6 +20,7 @@ import (
 // claim and the settle, every one its own eviction read, session wait and
 // snapshot). doc.go's measured section records both.
 func BenchmarkAnUnchangedActivation(b *testing.B) {
+	code.Quiet(b)
 	const repos = 10_000
 	n := newNode(b)
 	earlier := n.activate(t1)

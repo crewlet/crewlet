@@ -790,6 +790,23 @@ ref of the push reaches it by. Only a push that passes every check is
 uploaded, as **one** object: its pack with the indexes the receiving git
 wrote.
 
+**A clock that is behind.** git walks a repository's commits newest first by
+date wherever it has no generation number to stop on, so a commit dated before
+its parent — a laptop's clock that is behind, a `GIT_COMMITTER_DATE` — is a
+reason to walk the whole history. The engine's own checks of a push walk by
+generation once the node has written the repository's commit-graph, which it
+does first for every copy it reads whole, so they cost a few milliseconds
+whatever the commit's date; git's own connectivity check in receive-pack
+still walks by date, reading the graph. Measured over a gigabyte of source
+history (455 680 commits), such a push is 0.37 s of the node's time with the
+graph against 0.07 s for any other push, and 6.9 s in the seconds after a
+node has read the repository whole and before its graph is written. No walk
+is refused for what it takes — each is given 11 µs for every object the
+repository holds besides what the push itself is given. The person's own git
+pays too: a clone with no commit-graph of its own spends about 4.8 s over the
+same gigabyte checking that such a push is a fast-forward, and
+`git commit-graph write --reachable` in the clone spares it.
+
 **The commands are read as receive-pack reads them.** Every check before
 receive-pack runs is a check of the ref updates the engine read from the
 request, and receive-pack moves the ones *it* read — so the engine reads them
@@ -848,11 +865,14 @@ name — and one past it is refused 413. The spools come out of an allowance of
 their own, 64 MiB for each transfer slot and never the cache's budget, and one
 credential's spooled requests may hold a quarter of it at once, in bytes and
 in requests; a request that finds the allowance or its credential's quarter
-spent is answered 503 at once, and one larger than a quarter by itself — about
-21 million wants on a sixteen-core node — is answered 413, since this node
-will never take it. A request's memory and its spool are given back as soon as
-git has read it and started its answer, not when a slow client finishes
-downloading. A blobless clone needs protocol v2, git's default since 2.28 —
+spent is answered 503 at once. git does not retry a lazy fetch, so a blobless
+checkout whose fetch is answered so fails: behind one token, more checkouts
+large enough to spool than a quarter of the node's transfer slots at once —
+four on a four-core node — fail past the quarter rather than wait for it. A
+request larger than a quarter by itself — about 21 million wants on a
+sixteen-core node — is answered 413, since this node will never take it. A
+request's memory and its spool are given back as soon as git has read it and
+started its answer, not when a slow client finishes downloading. A blobless clone needs protocol v2, git's default since 2.28 —
 under v0 a fetch of a blob the client never saw advertised is refused.
 
 **The partial-clone filters served.** A cache serves the filters git can
