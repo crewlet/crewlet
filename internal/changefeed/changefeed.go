@@ -234,8 +234,8 @@ type Translator interface {
 type Delivery struct {
 	// Body is the payload a parser reads. The whole record travels in it,
 	// so the node that wins a feed message routes without reading anything
-	// — a projection that had not caught up would otherwise route from a
-	// stale head, or block the feed until it had.
+	// — a copy that had not caught up with its log would otherwise route
+	// from a stale head, or block the feed until it had.
 	Body map[string]any
 
 	// ID is the record's own id, used for the claim and as the seed of
