@@ -69,7 +69,7 @@ happened to omit the key. There are four:
 | Surface | Default | May the caller choose? |
 |---|---|---|
 | A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
-| The operator MCP, about tracker content | `linearizable` | No |
+| The operator MCP, about the company's own content — the tracker and the knowledge base | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
