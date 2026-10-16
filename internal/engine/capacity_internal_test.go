@@ -16,12 +16,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -600,6 +598,10 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 // exists to prevent, measured against the wrong line. A log that keeps no
 // reserve is still measured against its whole ceiling, and the target the
 // refusal names is exact: it opens, and a byte less does not.
+//
+// EVERY REGISTERED LOG, each on the side its claim puts it: the identity
+// estate keeps a reserve as the tracker's and the knowledge base's logs do,
+// and a list of two left it unasked.
 func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -613,9 +615,29 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 		}, current, unstatedRoom)
 		return err
 	}
-	for _, domain := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}} {
+	reserved := 0
+	for _, domain := range registeredDomains() {
 		stream := domain.Stream().Name
 		reservation, field, _ := capacityBounds(stream)
+		if !domain.ClaimsIdentity() {
+			// A LOG THAT KEEPS NO RESERVE is measured against its whole
+			// ceiling, which clears what it holds.
+			if reservation.Kept {
+				t.Errorf("%s claims no identity and keeps a gate reserve", stream)
+			}
+			if err := open(stream, target); err != nil {
+				t.Errorf("%s keeps no reserve, and a target above what it holds "+
+					"was refused: %v", stream, err)
+			}
+			continue
+		}
+		reserved++
+		if ordinary := reservation.Ordinary(target); !reservation.Kept ||
+			ordinary > current.Bytes {
+			t.Fatalf("%s holds its ordinary writes to %d of a %d-byte target, so a "+
+				"log holding %d bytes is not the case this asks about", stream,
+				ordinary, uint64(target), current.Bytes)
+		}
 		err := open(stream, target)
 		if err == nil {
 			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
@@ -625,7 +647,8 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 		}
 		least := smallestTargetAbove(current.Bytes, reservation, uint64(field.Floor))
 		for _, want := range []string{
-			"holds 16106127360 bytes", "ordinary writes are held to 16106127360",
+			fmt.Sprintf("holds %d bytes", current.Bytes),
+			fmt.Sprintf("ordinary writes are held to %d", reservation.Ordinary(target)),
 			fmt.Sprintf("at least %d bytes", least),
 		} {
 			if !strings.Contains(err.Error(), want) {
@@ -642,9 +665,10 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 				"least that works", stream)
 		}
 	}
-	if err := open(search.Domain{}.Stream().Name, target); err != nil {
-		t.Errorf("the vector changelog keeps no reserve, and a target above what "+
-			"it holds was refused: %v", err)
+	if reserved < 6 {
+		t.Fatalf("%d registered log(s) keep a gate reserve, want at least the "+
+			"tracker's, the knowledge base's, the identity estate's, the "+
+			"artifacts log's, the artifact datastore's and the assistant's", reserved)
 	}
 }
 

@@ -570,7 +570,9 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 // stream's first sequence with the floor at zero — because the fence the node
 // becomes subject to reads the higher of the two, and a readmission judged
 // against either alone clears a node that fence refuses. And every
-// identity-claiming domain is judged while the compacted one is not.
+// identity-claiming domain is judged — each of them refusing on its own, and
+// each written on the readmission that finally succeeds — while the compacted
+// one is not.
 func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
@@ -579,11 +581,20 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	if gate == nil {
 		t.Fatal("the node runs no node gate")
 	}
-	wiki := s.Domain(doclet.Domain{}.Name())
 	vectors := s.Domain(search.Domain{}.Name())
-	if wiki == nil || vectors == nil {
-		t.Fatal("the pages or the vector domain is not running")
+	if vectors == nil {
+		t.Fatal("the vector domain is not running")
 	}
+	// EVERY IDENTITY-CLAIMING LOG, the tracker's first: the gesture judges
+	// and writes each, and a case naming two of them left the identity
+	// estate's unasked.
+	identity := identityLogs(t, s)
+	if identity[0] != running || len(identity) < 6 {
+		t.Fatalf("the identity-claiming logs are %v, want the tracker's first and "+
+			"at least the knowledge base's, the identity estate's, the artifacts "+
+			"log's, the artifact datastore's and the assistant's after it", logNames(identity))
+	}
+	others := identity[1:]
 
 	const away = "node-away"
 	if res, err := gate.Evict(t.Context(), GateRequest{
@@ -595,18 +606,21 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		t.Fatalf("this node is at %d, too near the start of the log for a floor "+
 			"to pass anybody", at.Seq)
 	}
-	// THE ABSENT NODE'S LAST HEARTBEAT, from before the fleet moved on.
+	// THE ABSENT NODE'S LAST HEARTBEAT, from before the fleet moved on: the
+	// tracker at trackerSeq, every other log it runs at its start.
 	report := func(trackerSeq uint64) {
 		t.Helper()
+		domains := map[string]coord.DomainPosition{
+			running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
+				AppliedThrough: trackerSeq},
+			vectors.domain.Name(): {Generation: vectors.runner.Committed().Generation},
+		}
+		for _, r := range others {
+			domains[r.domain.Name()] = coord.DomainPosition{
+				Generation: r.runner.Committed().Generation}
+		}
 		if err := back.Fleet.PutPositions(t.Context(), coord.NodePositions{
-			NodeID: away, At: time.Now().UTC(),
-			Domains: map[string]coord.DomainPosition{
-				running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
-					AppliedThrough: trackerSeq},
-				wiki.domain.Name(): {Generation: wiki.runner.Committed().Generation},
-				vectors.domain.Name(): {
-					Generation: vectors.runner.Committed().Generation},
-			},
+			NodeID: away, At: time.Now().UTC(), Domains: domains,
 		}); err != nil {
 			t.Fatalf("publish %s's position: %v", away, err)
 		}
@@ -620,11 +634,11 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's floor: %v", r.domain.Name(), err)
 		}
 	}
-	// BOTH LOGS' ENDS, because a refusal writes nothing to EITHER.
-	end := func() [2]uint64 {
+	// EVERY LOG'S END, because a refusal writes nothing to ANY.
+	end := func() []uint64 {
 		t.Helper()
-		var out [2]uint64
-		for i, r := range []*runningLog{running, wiki} {
+		out := make([]uint64, len(identity))
+		for i, r := range identity {
 			_, last, err := r.log.Bounds(t.Context())
 			if err != nil {
 				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
@@ -649,7 +663,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 				"against %d / %d", refusal.Domain, refusal.Seq, refusal.Bound.Floor,
 				refusal.Bound.First, domain, seq, floorWant, firstWant)
 		}
-		if last := end(); last != before {
+		if last := end(); !slices.Equal(last, before) {
 			t.Fatalf("the logs moved from %v to %v on a refused readmission", before, last)
 		}
 	}
@@ -671,32 +685,52 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	}
 	refusedIn(running.domain.Name(), 1, 0, at.Seq)
 
-	// CAUGHT UP ON THE TRACKER, BEHIND ON THE PAGES: a node is a replica
-	// of every log it runs or of none.
+	// CAUGHT UP ON THE TRACKER, BEHIND ON ANOTHER LOG — each in turn: a node
+	// is a replica of every log it runs or of none.
 	report(at.Seq - 1)
-	floor(wiki, 5)
-	refusedIn(wiki.domain.Name(), 0, 5, logFirstOf(t, wiki))
+	for _, r := range others {
+		floor(r, 5)
+		refusedIn(r.domain.Name(), 0, 5, logFirstOf(t, r))
+		floor(r, 0)
+	}
 
-	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
-	floor(wiki, 0)
+	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK — on
+	// every log.
 	res, err := gate.Readmit(t.Context(), readmit)
 	if err != nil {
 		t.Fatalf("a node one record short of every floor was refused: %v", err)
+	}
+	if len(res.Domains) != len(identity) {
+		t.Fatalf("the readmission answered for %d log(s), want every "+
+			"identity-claiming one (%d)", len(res.Domains), len(identity))
 	}
 	for _, d := range res.Domains {
 		if d.Err != nil || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission answered %+v on %s, want applied", d, d.Domain)
 		}
 	}
-	for _, lister := range []evictionLister{worklet.Domain{}, doclet.Domain{}} {
+	for _, r := range identity {
+		lister, ok := r.domain.(evictionLister)
+		if !ok {
+			t.Fatalf("%s claims identity and cannot list its evictions", r.domain.Name())
+		}
 		rows, err := lister.Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
-			t.Fatalf("read the evictions: %v", err)
+			t.Fatalf("read %s's evictions: %v", r.domain.Name(), err)
 		}
 		if len(rows) != 1 || rows[0].NodeID != away || !rows[0].Back {
-			t.Fatalf("evictions = %+v, want %s readmitted on every log", rows, away)
+			t.Fatalf("%s's evictions = %+v, want %s readmitted", r.domain.Name(), rows, away)
 		}
 	}
+}
+
+// logNames is each running log's domain name, for a message.
+func logNames(logs []*runningLog) []string {
+	out := make([]string, 0, len(logs))
+	for _, r := range logs {
+		out = append(out, r.domain.Name())
+	}
+	return out
 }
 
 // logFirstOf is a domain log's own first surviving sequence.
