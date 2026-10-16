@@ -493,17 +493,26 @@ When you finish, the founder should have:
 1. `company.yaml` — Tier B, validated, `${VAR}` for every secret.
 2. `crewlet.yaml` — Tier A: the store's file path (two local files this
    process owns, the node's own and the replicated estate beside it — there
-   is no DSN), the stream slot, `coordination.type`,
-   and the API host/port with at least one auth token. Leave the stream
-   `type: embedded` with a `store_dir` and `coordination.type: local`:
-   that is one node with no broker to operate and no service to point
-   anything at, and it is what every company starts as. Validate it too
-   (`crewlet validate crewlet.yaml`).
-3. `.env` — every `${VAR}` the two files reference, with real values.
-   List them explicitly; a missing one keeps a tool server that reads it
-   from starting, is left out of an executor run (which starts anyway and
-   logs `sandbox_env_unresolved`), and anywhere else can resolve to an empty
-   string that fails later, deep in a turn.
+   is no DSN), the stream slot, `coordination.type`, the API host/port, and
+   the three things a node serving the API refuses to start without:
+   `api.external_url` (where a browser reaches it — `http://localhost:8000`
+   on one machine, the public address behind a proxy), `api.auth.admin`
+   and at least one auth token. Every node also needs the `secrets:`
+   keyring — `active_key_id` and a key whose `material:` is a `${VAR}` —
+   because every record it writes is signed under it; `crewlet secrets
+   keygen -key-id <id>` mints a key and prints the snippet and the export
+   line. Leave the stream `type: embedded` with a `store_dir` and
+   `coordination.type: local`: that is one node with no broker to operate
+   and no service to point anything at, and it is what every company
+   starts as. Step 1 of the
+   [quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/)
+   writes a complete one. Validate it too (`crewlet validate crewlet.yaml`).
+3. `.env` — every `${VAR}` the two files reference, with real values,
+   the keyring's key among them. List them explicitly; a missing one
+   keeps a tool server that reads it from starting, is left out of an
+   executor run (which starts anyway and logs `sandbox_env_unresolved`),
+   and anywhere else can resolve to an empty string that fails later,
+   deep in a turn.
 4. The run command, and what they should expect to see:
 
 ```bash
