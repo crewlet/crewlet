@@ -49,10 +49,11 @@ func WorkTools() []string { return worklet.Tools() }
 // WorkWrites are the five that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the item, commenting on it,
-// or filing the follow-up work — and the delivery gate has to know that, or
-// such a turn is corrected and looped for having "done nothing". Reading is
-// not delivering, which is why get and list are not here: a turn that only
-// read is exactly the turn the gate exists to catch.
+// filing the follow-up work, or merging it into the item it duplicates — and
+// the delivery gate has to know that, or such a turn is corrected and looped
+// for having "done nothing". Reading is not delivering, which is why get and
+// list are not here: a turn that only read is exactly the turn the gate exists
+// to catch.
 func WorkWrites() []string { return worklet.WriteTools() }
 
 // WorkReader is what these tools need from the tracker's read side.
