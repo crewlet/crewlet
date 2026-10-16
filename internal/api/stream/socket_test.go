@@ -661,18 +661,20 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 	}
 }
 
-// TestAWatchNeedsAnOperator pins that a subscription is a WRITE.
+// TestAWatchNeedsAResolvedCaller pins that a subscription is a WRITE.
 //
 // A watch installs a row in this node's routing index on behalf of a caller
 // and leaves it there for the life of the socket, so a client nobody can name
-// that could install one would be writing server state anonymously.
+// that could install one would be writing server state anonymously. Any
+// principal the guard resolved may watch — a person, a token, an operator —
+// and is then decided by the authority table on the seat it names.
 //
 // THE UNAUTHENTICATED ARM IS NOW THE HANDSHAKE'S, which is what this asserts:
 // there is no anonymous socket to send a watch from any more, so the refusal
 // happens before a frame is ever read. The guard inside `watch` stays for the
 // one case that would resurrect it — the socket path being declared exempt —
 // and that case cannot be reached from here.
-func TestAWatchNeedsAnOperator(t *testing.T) {
+func TestAWatchNeedsAResolvedCaller(t *testing.T) {
 	t.Parallel()
 	// ADMIN, so the counterfactual below is about the credential and not
 	// about whose seat "lead" is — which is watch_test.go's.
@@ -689,7 +691,7 @@ func TestAWatchNeedsAnOperator(t *testing.T) {
 		t.Errorf("watchers = %d: an unauthenticated client wrote the index", got)
 	}
 
-	// The counterfactual: an operator's watch takes, and clearing it
+	// The counterfactual: a resolved caller's watch takes, and clearing it
 	// releases the bucket.
 	held, _, err := f.dial(t, fixtureToken)
 	if err != nil {
@@ -698,7 +700,7 @@ func TestAWatchNeedsAnOperator(t *testing.T) {
 	next(t, held)
 	write(t, held, map[string]any{"kind": "watch", "seat": "lead"})
 	waitFor(t, func() bool { return f.svc.Hub().Watchers("lead") == 1 },
-		"an operator's watch never reached the index")
+		"a resolved caller's watch never reached the index")
 	write(t, held, map[string]any{"kind": "watch", "seat": ""})
 	waitFor(t, func() bool { return f.svc.Hub().Watchers("lead") == 0 },
 		"clearing a watch left the client in the index")
