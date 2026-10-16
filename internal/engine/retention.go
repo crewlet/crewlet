@@ -198,8 +198,9 @@ type retention struct {
 	// floor, for `floor_unknown`. See floorwatch.go.
 	floors *floorWatch
 
-	// now is the clock every evaluation and every report reads. Nil reads
-	// the wall clock; a case sets it to put a log's first days behind it.
+	// now is the clock every evaluation, every report and every trim tick
+	// reads. Nil reads the wall clock; a case sets it to put a log's first
+	// days, or an eviction's fence window, behind it.
 	now func() time.Time
 
 	// beating serialises one alarm evaluation against another: the
@@ -394,6 +395,98 @@ func (r *retention) tick(ctx context.Context) {
 			log.WarnContext(ctx, "retention_trim_failed", "domain", running.domain.Name(), "err", err)
 		}
 	}
+	r.forgetEvicted(ctx, shared)
+}
+
+// forgetEvicted removes the backup point of every node the fleet has stopped
+// counting on every log that counts nodes — evicted there, past the fence
+// window — so neither a log's backup term nor `GET /backups` counts a copy the
+// operator has said is on a host that is gone.
+//
+// # Why the point goes, when the node's position row stays
+//
+// The position row is what a READMISSION is judged by, so an eviction keeps it
+// ([coord.PositionRegister.ForgetPositions]). A backup point is judged by
+// nothing: it is a claim that a verified copy of the logs exists in a directory
+// on that node, and eviction is the operator's word that the node is not
+// coming back. Left standing, it was listed on `/backups` for the life of the
+// fleet, and under `backup_floor: engine` the trim went on counting it — the
+// newest copy of a log could be one on a host that had left, so a log was
+// trimmed against a backup nobody could restore from. Forgetting it is the
+// safe direction whatever the operator does next: a log no surviving copy
+// covers blocks and raises `backup_age` until a live node backs up, and a node
+// readmitted later records its next backup afresh.
+//
+// # Every log, past the window, and nothing guessed
+//
+// ON EVERY IDENTITY-CLAIMING LOG this node runs, because that is the set an
+// eviction is written to and the one a node is counted on: one that a single
+// log still counts is not gone. PAST [statelog.EvictionFenceWindow], the
+// instant [statelog.CountedSet] stops counting the node, so a backup stops
+// counting exactly when its node does. A log whose evictions could not be read
+// forgets nobody, on the trim's own conservative rule. The operator's
+// acknowledgements are never a node's and are never forgotten here.
+//
+// THE DUTY'S, and once per tick: the fleet singleton is the one reader of
+// both halves, the points it already read for this tick and the evictions
+// every data node applies identically. A forget that fails is said and asked
+// again on the next tick, which reads the same evictions.
+func (r *retention) forgetEvicted(ctx context.Context, shared fleetInputs) {
+	var logs []logEvictions
+	for _, running := range r.state.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		tombs, read := r.tombstones(ctx, running, running.runner.Committed().Generation)
+		logs = append(logs, logEvictions{tombs: tombs, read: read})
+	}
+	for _, point := range evictedPoints(shared.at, logs, shared.backups) {
+		if err := r.fleet.ForgetBackupPoint(ctx, point.Owner); err != nil {
+			log.WarnContext(ctx, "retention_backup_point_unforgotten",
+				"node", point.Owner, "err", err)
+			continue
+		}
+		log.InfoContext(ctx, "retention_backup_point_forgotten",
+			"node", point.Owner, "taken_at", point.At, "dir", point.Dir)
+	}
+}
+
+// logEvictions is one identity-claiming log's evictions as this node applied
+// them, and whether they could be read at all.
+type logEvictions struct {
+	tombs []statelog.Tombstone
+	read  bool
+}
+
+// evictedPoints is the backup points [retention.forgetEvicted] forgets: every
+// node's whose owner a tombstone older than [statelog.EvictionFenceWindow]
+// uncounts on EVERY log in logs — one entry per log that counts nodes — and
+// none at all when a log's evictions were not read or no log counts nodes. An
+// operator acknowledgement is never a node's, whatever a node is called.
+func evictedPoints(now time.Time, logs []logEvictions, points []coord.BackupPoint) []coord.BackupPoint {
+	if len(logs) == 0 {
+		return nil
+	}
+	uncounted := map[string]int{}
+	for _, l := range logs {
+		if !l.read {
+			return nil
+		}
+		seen := map[string]bool{}
+		for _, tomb := range l.tombs {
+			if now.Sub(tomb.At) > statelog.EvictionFenceWindow && !seen[tomb.NodeID] {
+				seen[tomb.NodeID] = true
+				uncounted[tomb.NodeID]++
+			}
+		}
+	}
+	var out []coord.BackupPoint
+	for _, point := range points {
+		if point.Owner != coord.OperatorBackupOwner && uncounted[point.Owner] == len(logs) {
+			out = append(out, point)
+		}
+	}
+	return out
 }
 
 // evaluate records what one trim tick can measure about this node's own
@@ -493,7 +586,7 @@ type fleetInputs struct {
 // register can disagree about who is counted, so one domain's floor would be
 // published against a fleet the other's was not.
 func (r *retention) read(ctx context.Context) (fleetInputs, error) {
-	in := fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}
+	in := fleetInputs{at: r.clock(), previous: map[string]coord.TrimFloor{}}
 
 	// THE HOLDS ARE READ FIRST, BEFORE WHAT EACH ONE IS HANDED OVER TO, and
 	// the order is the only thing keeping a handover from falling between

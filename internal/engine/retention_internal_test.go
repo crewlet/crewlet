@@ -908,6 +908,149 @@ func TestTheBackupTermReadsTheNewestBackupCoveringItsLog(t *testing.T) {
 	}
 }
 
+// A NODE'S BACKUP IS FORGOTTEN ONLY WHERE NO LOG COUNTS THE NODE ANY MORE: a
+// tombstone past the fence window on EVERY log that counts nodes, every one of
+// them read.
+//
+// One log still counting the node is a node not gone — an eviction that has
+// not reached that log, or a readmission there — and a tombstone inside the
+// window is one [statelog.CountedSet] still counts behind. Two tombstones on
+// one log are one log, or a node evicted twice there and never on the other
+// would read as gone from both. A log whose evictions were not read says
+// nothing about anybody. And the operator's acknowledgements are never a
+// node's, whatever a node is called.
+func TestOnlyANodeNoLogCountsLosesItsBackup(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	past := now.Add(-statelog.EvictionFenceWindow - time.Second)
+	inside := now.Add(-statelog.EvictionFenceWindow / 2)
+	tomb := func(node string, at time.Time) statelog.Tombstone {
+		return statelog.Tombstone{NodeID: node, At: at}
+	}
+	logs := []logEvictions{
+		{read: true, tombs: []statelog.Tombstone{tomb("everywhere", past),
+			tomb("one-log", past), tomb("young", past), tomb("twice", past),
+			tomb("twice", past.Add(-time.Hour)), tomb(coord.OperatorBackupOwner, past)}},
+		{read: true, tombs: []statelog.Tombstone{tomb("everywhere", past),
+			tomb("young", inside), tomb(coord.OperatorBackupOwner, past)}},
+	}
+	var points []coord.BackupPoint
+	for _, owner := range []string{"everywhere", "one-log", "young", "twice",
+		"live", coord.OperatorBackupOwner} {
+		points = append(points, coord.BackupPoint{Owner: owner, At: now})
+	}
+	owners := func(points []coord.BackupPoint) []string {
+		var out []string
+		for _, p := range points {
+			out = append(out, p.Owner)
+		}
+		return out
+	}
+	if got := owners(evictedPoints(now, logs, points)); !slices.Equal(got, []string{"everywhere"}) {
+		t.Errorf("forgotten = %v, want [everywhere] alone — a node one log still "+
+			"counts is not gone, two tombstones on one log are one log, and an "+
+			"acknowledgement is nobody's node", got)
+	}
+	unread := slices.Clone(logs)
+	unread[1] = logEvictions{read: false}
+	if got := evictedPoints(now, unread, points); len(got) != 0 {
+		t.Errorf("with one log's evictions unread, %v were forgotten", owners(got))
+	}
+	if got := evictedPoints(now, nil, points); len(got) != 0 {
+		t.Errorf("with no log counting anybody, %v were forgotten", owners(got))
+	}
+}
+
+// AN EVICTED NODE'S BACKUP IS FORGOTTEN ONCE NO LOG COUNTS IT, on real logs
+// through the gesture the route calls, by the trim's own tick — and nobody
+// else's.
+//
+// Nothing removed it: `GET /backups` listed a decommissioned node's copy for
+// the life of the fleet, and under `backup_floor: engine` a log could be
+// trimmed against the newest copy of it, on a host the operator had let go.
+// Inside the fence window the node is still counted and so is its copy; a
+// node whose evictions this node cannot read is gone from nowhere; and the
+// operator's acknowledgement and a live node's copy are never touched. Driven
+// through the TICK, past the window on the loop's own clock, because a tick
+// that stopped asking would leave every point standing with the selection
+// still right.
+func TestAnEvictedNodesBackupIsForgottenOnceNoLogCountsIt(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	r := quietRetention(t, e)
+	s := e.core.Load().log
+	identity := identityLogs(t, s)
+	const away, stays = "node-away", "node-stays"
+	now := time.Now().UTC()
+	put := func(owner string, at time.Time) {
+		t.Helper()
+		stream := identity[0].spec.Name
+		if err := r.fleet.PutBackupPoint(t.Context(), coord.BackupPoint{
+			Owner: owner, At: at, Verified: true,
+			Streams: map[string]coord.Position{stream: {Stream: stream, Seq: 1}},
+		}); err != nil {
+			t.Fatalf("record %s's backup: %v", owner, err)
+		}
+	}
+	put(away, now)
+	put(stays, now.Add(-time.Minute))
+	put(coord.OperatorBackupOwner, now.Add(-time.Hour))
+	owners := func() []string {
+		t.Helper()
+		points, err := r.fleet.BackupPoints(t.Context())
+		if err != nil {
+			t.Fatalf("read the backup points: %v", err)
+		}
+		var out []string
+		for _, p := range points {
+			out = append(out, p.Owner)
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator})
+	if err != nil || !res.Complete() {
+		t.Fatalf("evict %s: %v (%+v)", away, err, res)
+	}
+	for _, running := range identity {
+		waitApplied(t, running)
+	}
+	all := []string{away, stays, coord.OperatorBackupOwner}
+	slices.Sort(all)
+
+	// INSIDE THE WINDOW the node is still counted on every log, and so is
+	// its copy.
+	r.tick(t.Context())
+	if got := owners(); !slices.Equal(got, all) {
+		t.Fatalf("inside the fence window the register holds %v, want %v", got, all)
+	}
+	// AN UNREAD EVICTION IS NOBODY GONE: a loop with no store cannot read
+	// the logs' evictions.
+	past := time.Now().UTC().Add(statelog.EvictionFenceWindow + time.Minute)
+	points, err := r.fleet.BackupPoints(t.Context())
+	if err != nil {
+		t.Fatalf("read the backup points: %v", err)
+	}
+	(&retention{fleet: r.fleet, state: s, nodeID: s.nodeID}).forgetEvicted(t.Context(),
+		fleetInputs{at: past, readable: true, backups: points})
+	if got := owners(); !slices.Equal(got, all) {
+		t.Fatalf("with its evictions unread the register holds %v, want %v", got, all)
+	}
+	// PAST THE WINDOW the node is counted nowhere, and the tick forgets its
+	// copy.
+	r.now = func() time.Time { return past }
+	r.tick(t.Context())
+	want := []string{stays, coord.OperatorBackupOwner}
+	slices.Sort(want)
+	if got := owners(); !slices.Equal(got, want) {
+		t.Fatalf("past the fence window the register holds %v, want %v — the "+
+			"evicted node's copy stays counted, or another's was taken with it",
+			got, want)
+	}
+}
+
 // THE SEARCH ALARMS' INPUTS ARE ACTUALLY FED.
 //
 // `search_scoped`, `search_degraded` and `search_slow` are each a property of

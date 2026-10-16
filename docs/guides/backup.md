@@ -267,7 +267,10 @@ log's trim reads marked **newest** — and the **backup history**, every backup 
 person asked any node for over the event log's 30 days, failures included and
 each with the host that holds it. The register keeps only each node's newest
 point and each log's newest acknowledgement, so the history is where a failed
-night shows.
+night shows. A node you [evict](retention.md#eviction) loses its point once the
+eviction has taken effect on every log: its copy sits on a host the fleet has
+let go, so no log is trimmed against it and the screen stops listing it. The
+directory itself is untouched — it is yours to keep or delete.
 
 ### One node, or every node?
 

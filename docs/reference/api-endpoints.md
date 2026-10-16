@@ -8352,7 +8352,9 @@ Two records, because they answer two questions:
   one per log acknowledged. `bytes` is the whole
   artefact (every database copy and stream snapshot) and is absent on an
   acknowledgement, which asserts a copy the engine never saw. `covers` is how
-  far the copy reaches in each state-log stream.
+  far the copy reaches in each state-log stream. A node the fleet has
+  [evicted](../guides/retention.md#eviction) from every log has no point: the
+  trim's duty forgets it once the eviction takes effect.
 - **`history`** — every `POST /backup` a person made, newest first, from the
   [runtime audit](#the-runtime-audit-sourceoperator) every node keeps for the
   event log's 30 days: when it finished, the `node` whose disk holds it, who
