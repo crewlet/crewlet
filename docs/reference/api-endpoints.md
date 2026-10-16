@@ -6067,10 +6067,10 @@ roster is everybody's overview.
 
 ## Worklet and Doclet
 
-`GET /worklet`, `GET /doclet/pages` and their neighbours read **this node's own
-projection** of Worklet and Doclet: the same copy a
-seat's tools read, so an operator and an agent looking at one item see one
-item.
+`GET /worklet`, `GET /doclet/pages` and their neighbours read Worklet and
+Doclet **through this node's estate router**, answered from this node's copy
+while it serves and from a data node's otherwise. A seat's tools read through
+the same facade, so an operator and an agent looking at one item see one item.
 
 Three properties are worth stating because each is a decision rather than an
 implementation detail.
@@ -6079,18 +6079,21 @@ implementation detail.
 `tracker.backend: jira` has no `work_items` question at all, and asking gets
 `unknown_query` / `404`. That is deliberate: an operator who wired Jira and
 then found a blank Worklet board would reasonably conclude their integration
-was broken. There is no Worklet record for this node to have a copy of, and an
-empty board would claim otherwise.
+was broken. There is no Worklet record for any node to hold, and an empty
+board would claim otherwise.
 
-**A node that has not caught up refuses.** Every one of these answers
-`unavailable` (`503`, with a `Retry-After`) while this node is behind the log,
-rather than returning an empty list. "This company has no work" is an answer a
-person acts on — they file the duplicate, they conclude the migration failed —
-so a node that has not applied what the fleet holds must not be able to say it.
+**A copy that has not caught up refuses.** Every one of these answers
+`unavailable` (`503`, with a `Retry-After`) where the copy that answers is
+behind what the read needs, rather than returning an empty list; a copy that
+has not applied this node's own writes is passed over for another data node's,
+and a read no data node's copy could take is refused the same way. "This
+company has no work" is an answer a person acts on — they file the duplicate,
+they conclude the migration failed — so a copy that has not applied what the
+fleet holds must not be able to say it.
 
-The hint is **derived, not fixed**: how far behind this node is over how fast
-it is actually draining, so a node grinding through a bulk apply asks for
-longer than one that caught up in milliseconds. **Every** refusal by the state
+The hint is **derived, not fixed**: how far behind the refusing copy is over
+how fast it is actually draining, so a node grinding through a bulk apply asks
+for longer than one that caught up in milliseconds. **Every** refusal by the state
 log is `unavailable` — `503` over REST, the `unavailable` frame on the socket —
 carrying the refusal's code as `refusal` and its own words as `detail`, because
 none of them is a fault: the node understood the question and cannot answer it
