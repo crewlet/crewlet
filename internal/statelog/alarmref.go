@@ -94,8 +94,8 @@ var alarmMeaning = map[Kind]string{
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
 		"because a node did not answer its bucket range.",
 	KindHistoryPartial: "Fleet history reads (turns, traces, the event log) " +
-		"are being answered without every node, because one did not answer " +
-		"inside the fleet read budget.",
+		"are being answered without every data node, because one did not " +
+		"answer inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
 	KindIVFRecallBelowFloor: "The latest measurement of the " +
