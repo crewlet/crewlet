@@ -400,8 +400,8 @@ node means nothing was done.
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
-| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you — it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings a native backend up, and `404 no_route` on a company that runs neither natively |
-| `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to** — the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company with no native backend |
+| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you — it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node has met its first company, and never empty after that — pausing, resuming and steering a seat and answering a parked run are about the fleet's own records, so every company is served them whatever backends it runs |
+| `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to** — the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers `503 no_active_revision` before the first company, as `/operator/mcp` does, and `404 unknown_tool` for a tool the company's catalogue does not serve |
 
 > **Auth.** Every route needs a credential, reads included, and three shapes
 > of one reach every route: a **session cookie** a person gets by signing in
@@ -4813,6 +4813,7 @@ Point any MCP client at it:
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
 `merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`list_project_files`, `read_project_file`, `write_project_file`, `remove_project_file`,
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
 `search_knowledge`, and, wherever the node takes artifact uploads,
@@ -5193,9 +5194,10 @@ neither gets only the verbs about the fleet's own records — `answer_run`,
 it would serve nothing at all. The catalogue is read per request, so a node
 that has not been handed a company yet answers `503 no_active_revision` with a
 15-second `Retry-After`, and serves the tools its first revision brings up with
-no restart. `search_knowledge` is the exception and is
-offered against **any** knowledge backend, Confluence included — a ranked
-search over the company's own wiki is exactly as useful to an assistant there.
+no restart. `search_knowledge` and `answer_knowledge` are the exception and
+are offered against **any** knowledge backend, Confluence included — a ranked
+search over the company's own wiki, or an answer drawn from it, is exactly as
+useful to an assistant there.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
