@@ -193,10 +193,30 @@ func (p Position) String() string {
 // the whole reason the public token carries all three is that it then never
 // needs a migration.
 func ParsePosition(raw string) (Position, error) {
-	refuse := func() (Position, error) {
-		return Position{}, fmt.Errorf("statelog: %q is not a log position — one "+
-			"reads `<stream>@<generation>:<sequence>`, and the answer that "+
-			"produced it carries the value to send back", raw)
+	at, why, cause := parsePosition(raw)
+	switch {
+	case cause != nil:
+		return Position{}, fmt.Errorf("statelog: %s: %w", why, cause)
+	case why != "":
+		return Position{}, fmt.Errorf("statelog: %s", why)
+	}
+	return at, nil
+}
+
+// parsePosition is [ParsePosition] without the package's prefix: why a token
+// is not a position, as a sentence that names no package — the half a
+// caller-facing grammar renders under the name of its own parameter
+// ([ParseFreshness]) — and the error it was concluded from, where there is
+// one. Both are empty for a position.
+//
+// A SENTENCE AND A CAUSE RATHER THAN AN ERROR TYPE OF ITS OWN, because an
+// error type in this package crosses the estate's wire or loses its sentence
+// there, and this one is only ever a step on the way to the two errors above.
+func parsePosition(raw string) (Position, string, error) {
+	refuse := func() (Position, string, error) {
+		return Position{}, fmt.Sprintf("%q is not a log position — one reads "+
+			"`<stream>@<generation>:<sequence>`, and the answer that produced it "+
+			"carries the value to send back", raw), nil
 	}
 	stream, rest, found := strings.Cut(raw, "@")
 	if !found || stream == "" {
@@ -216,9 +236,9 @@ func ParsePosition(raw string) (Position, error) {
 	}
 	at := Position{Stream: stream, Generation: uint32(gen), Seq: seq}
 	if err := at.Valid(); err != nil {
-		return Position{}, fmt.Errorf("statelog: %q is not a usable log position: %w", raw, err)
+		return Position{}, fmt.Sprintf("%q is not a usable log position", raw), err
 	}
-	return at, nil
+	return at, "", nil
 }
 
 // Valid reports whether this position survives the packed form, and is called
