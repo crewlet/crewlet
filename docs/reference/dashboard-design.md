@@ -6998,7 +6998,7 @@ to none reads *No seat*, which is ordinary; a person always holds a
 human seat. **Human seats** is every
 human seat of the running company with whatever holds it (`/iam/seats`) — a
 person or a service account by login and stage, an open invitation as an
-**Invited** tag with its address, or *Nobody holds it* — and where agents
+**Invited** tag with its address, or *Open seat* — and where agents
 reach it: its contact identities, read from the company document, which is
 admin's like this screen. The tile above it counts **Open seats**
 as the seats held by NOTHING — an open invitation holds its seat as surely as

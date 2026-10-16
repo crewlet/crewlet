@@ -314,16 +314,16 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   const vacant = screen.getByText("Open seats").closest(".crewlet-statcard");
   expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("1");
   expect(within(vacant as HTMLElement).getByText("1 invited · 3 total")).toBeTruthy();
-  // AND ITS ROW NAMES THE INVITATION rather than "Open".
+  // AND ITS ROW NAMES THE INVITATION rather than "Open seat".
   const sam = screen
     .getAllByRole("link", { name: /Sam Support/ })
     .map((link) => link.closest(".grid-row") as HTMLElement)
     .find((row) => row && within(row).queryByText("Invited"))!;
   expect(within(sam).getByText("sam@example.com")).toBeTruthy();
-  expect(within(sam).queryByText("Open")).toBeNull();
+  expect(within(sam).queryByText("Open seat")).toBeNull();
   const lee = screen.getByRole("link", { name: /Lee Legal/ }).closest(".grid-row") as HTMLElement;
-  // A SEAT NOTHING HOLDS READS "Open", in words, rather than a dash.
-  expect(within(lee).getAllByText("Open").length).toBeGreaterThan(0);
+  // A SEAT NOTHING HOLDS READS "Open seat", in words, rather than a dash.
+  expect(within(lee).getAllByText("Open seat").length).toBeGreaterThan(0);
 });
 
 // A FINDING IS DRAWN IN WORDS, never its code: the kind's label from

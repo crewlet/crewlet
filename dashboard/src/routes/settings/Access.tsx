@@ -1114,9 +1114,10 @@ function Holder({ seat }: { seat: HumanSeat }) {
       </Inline>
     );
   }
-  // OPEN, IN WORDS: a seat nothing holds is one an administrator can invite
-  // somebody onto, which a dash did not say.
-  if (!holder) return <TextCell>Open</TextCell>;
+  // OPEN SEAT, IN WORDS, as the chart's cards and the stat tile say it: a
+  // seat nothing holds is one an admin can invite somebody onto, which a dash
+  // did not say.
+  if (!holder) return <TextCell>Open seat</TextCell>;
   // THE HOLDER BY NAME, as plain text. Status colour is reserved for status, so
   // the stage is a tag of its own, and only where it is news: an active holder
   // is the ordinary case.
