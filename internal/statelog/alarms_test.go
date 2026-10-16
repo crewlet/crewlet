@@ -720,10 +720,10 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 // list would render a node that has not looked as a node with nothing wrong.
 //
 // AND A KIND ON TWO LOGS STANDS ONCE: the count is how many problems an
-// operator has to look at, and one cause standing on four logs counted as four
-// read as four problems on the health card while the gauge said one. It has
-// stood since its OLDEST log's instance was raised, and a log leaving it moves
-// that to the oldest log still standing.
+// operator has to look at, and one cause standing on several logs counted once
+// per log read as that many problems on the health card while the gauge said
+// one. It has stood since its OLDEST log's instance was raised, and a log
+// leaving it moves that to the oldest log still standing.
 //
 // Mutation: return the table's order rather than the age order, report
 // (nil, true) before an evaluation, count a kind once per log, or date a kind

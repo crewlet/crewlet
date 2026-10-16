@@ -550,7 +550,7 @@
 // operator acknowledgement covers the one log it names. The kind is still ONE
 // ALARM, listing every log it stands on with that log's own measurement
 // ([Alarm.Domains]), because the count, the gauge and the screen read one
-// cause on four logs as one problem; and each log's onset and clearing is
+// cause on several logs as one problem; and each log's onset and clearing is
 // still its own pair of log lines ([Tracker]), since a log joining a kind that
 // is already up, and one leaving it, are things an operator has to be told
 // started and ended.
