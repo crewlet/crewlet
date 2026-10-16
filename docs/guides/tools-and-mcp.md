@@ -70,10 +70,10 @@ did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
-Every write answers with its `outcome` — `applied`, `pending` or `unknown`, the
-[three values every write has](replication.md#a-write-has-three-outcomes) — and
-the `position` it is durable at. A write whose outcome is **unknown** is never
-answered with the id, key, version or revision of something that may not
+Every write answers with its `outcome` — `applied`, `pending` or `unknown`,
+the [three values every write has](replication.md#a-write-has-three-outcomes)
+— and the `position` it is durable at. A write whose outcome is **unknown** is
+never answered with the id, key, version or revision of something that may not
 exist, on any write tool on either surface: the call fails, saying that the
 write may have landed and may not, under which operation, and what to do. That
 includes `create_work_item`, whose unknown answer names the key this attempt
@@ -86,7 +86,11 @@ after. And the `version` an update answers with is always the item's own and
 its newest — the one to send back as `if_match` — never another item's that
 the same call wrote, and never one its own dependency change has already moved
 the item past, when a call changes both; its `position` is likewise the call's
-last write, so waiting for it waits for all of them.
+last write, so waiting for it waits for all of them. A write that **a data
+node never answered**, and no other ran, is unknown too, never a refusal: the
+node that stayed silent may have run it, so it is not "not made", and the
+answer says what settles it for that call — the same operation again where the
+call carried one, a read before writing again where it did not.
 
 Where this node's operation ledger cannot vouch for the operation — it was
 minted before the ledger may have lost rows, a seat woken by a backlog trigger

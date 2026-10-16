@@ -589,17 +589,18 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if refused := t.deps.maySkillPage(ctx, in.Container); refused != nil {
 		return *refused, nil
 	}
+	// A PAGE NOBODY CAN SAY WAS WRITTEN IS NOT ONE TO REPORT: the id and
+	// revision would be a create's that may never have landed. Looking first
+	// is right for every caller — a second write is refused for the title.
+	next := fmt.Sprintf("Read %s/%s with get_page before writing it again: if "+
+		"the first write landed, a second one is refused because the title is "+
+		"taken.", in.Container, in.Title)
 	got, err := t.deps.Writer.Create(ctx, actor, in)
 	if err != nil {
-		return pageWriteFailure(ctx, WritePageTool, err), nil
+		return pageWriteFailure(ctx, WritePageTool, err, next), nil
 	}
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
-		// A PAGE NOBODY CAN SAY WAS WRITTEN IS NOT ONE TO REPORT: the id and
-		// revision below would be a create's that may never have landed.
-		return pageUnknown(WritePageTool, got.Outcome, fmt.Sprintf(
-			"Read %s/%s with get_page before writing it again: if the first "+
-				"write landed, a second one is refused because the title is taken.",
-			in.Container, in.Title)), nil
+		return pageUnknown(WritePageTool, got.Outcome, next), nil
 	}
 	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
@@ -788,14 +789,17 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		save.Watch = &watch
 	}
 
+	// A SAVE STATES A VERSION, so looking says which way it went and a save
+	// against the version it found is the right one either way.
+	const saveNext = "Read the page with get_page: if its version moved past " +
+		"the one you edited, the save landed; if it did not, save again with " +
+		"the version you just read."
 	got, err := t.deps.Writer.SavePage(ctx, actor, detail.Page.ID, save)
 	if err != nil {
-		return pageWriteFailure(ctx, SavePageTool, err), nil
+		return pageWriteFailure(ctx, SavePageTool, err, saveNext), nil
 	}
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
-		return pageUnknown(SavePageTool, got.Outcome, "Read the page with "+
-			"get_page: if its version moved past the one you edited, the save "+
-			"landed; if it did not, save again with the version you just read."), nil
+		return pageUnknown(SavePageTool, got.Outcome, saveNext), nil
 	}
 	at := got.Outcome.Position
 	revision := got.Revision
@@ -814,13 +818,18 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// as stale. See [PageDeps.Await], which exists for exactly this.
 		t.deps.settle(ctx, at)
 		want := strings.TrimSpace(fmt.Sprint(title))
+		// A RENAME STATES A TITLE, so the page's title says which way it
+		// went and renaming to it again is harmless either way.
+		const renameNext = "Read the page with get_page: its title says " +
+			"whether the rename landed, and renaming again to the same title " +
+			"is harmless."
 		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
 		if err != nil {
 			// THE RENAME'S CLASS, because the rename is the half that
 			// failed: the save already landed and nothing about it is
 			// what a caller has to act on — so the cause is the rename's
 			// own, and the sentence says the edit is in.
-			refusal := pageWriteFailure(ctx, SavePageTool, err)
+			refusal := pageWriteFailure(ctx, SavePageTool, err, renameNext)
 			said := "The edit was saved and the rename to %q was not: %s"
 			if tools.UnknownOf(refusal) {
 				// NOT "WAS NOT": a rename nobody answered for
@@ -835,10 +844,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			return failedUnknown(renamed.Outcome.OpID, renamed.Outcome.Unvouched,
 				fmt.Sprintf("The edit was saved; whether the rename to %q "+
 					"landed is not known. %s", clip(want),
-					pageUnknownText(SavePageTool, renamed.Outcome, "Read the "+
-						"page with get_page: its title says whether the rename "+
-						"landed, and renaming again to the same title is "+
-						"harmless."))), nil
+					pageUnknownText(SavePageTool, renamed.Outcome, renameNext))), nil
 		}
 		got.Page = renamed.Page
 		// THE LATER OF THE TWO, never the rename's outright. A rename to
@@ -958,16 +964,16 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// putting words on a page, and the guard that matters — only the author
 	// — lives in the store either way.
 	if edit := strings.TrimSpace(argString(args, "edit")); edit != "" {
+		const editNext = "Editing the comment again with the same body is " +
+			"harmless: it replaces the text with what it already says if the " +
+			"first edit landed."
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
 		if err != nil {
-			return pageWriteFailure(ctx, CommentOnPageTool, err), nil
+			return pageWriteFailure(ctx, CommentOnPageTool, err, editNext), nil
 		}
 		if written.Outcome.Outcome == statelog.OutcomeUnknown {
-			return pageUnknown(CommentOnPageTool, written.Outcome,
-				"Editing the comment again with the same body is harmless: it "+
-					"replaces the text with what it already says if the first "+
-					"edit landed."), nil
+			return pageUnknown(CommentOnPageTool, written.Outcome, editNext), nil
 		}
 		t.deps.settle(ctx, written.Outcome.Position)
 		return jsonResult(map[string]any{
@@ -985,26 +991,27 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
 	}
+	// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is derived
+	// from its turn, so the same call again is the same comment: under a
+	// lost acknowledgement it posts once, and where this node's ledger
+	// cannot vouch for it the repeat publishes nothing and answers the same
+	// way — safe, and no answer sooner than looking. A person's retry of one
+	// request is the same comment too, under the request's own key. An
+	// operator's assistant names no operation for a page write, so its
+	// repeat is a new comment, and a second one if the first landed.
+	// [unknownNext] is the rule every tracker write already answers by.
+	again := pageRepeat(turn, actor.OpKey, CommentOnPageTool)
+	commentNext := func(unvouched bool) string {
+		return unknownNext(unvouched, again,
+			"Read the page's comments with get_page", "that is a second comment")
+	}
 	comment, written, err := t.deps.Writer.Comment(ctx, actor, detail.Page.ID, in)
 	if err != nil {
-		return pageWriteFailure(ctx, CommentOnPageTool, err), nil
+		return pageWriteFailure(ctx, CommentOnPageTool, err, commentNext(false)), nil
 	}
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
-		// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is
-		// derived from its turn, so the same call again is the same
-		// comment: under a lost acknowledgement it posts once, and where
-		// this node's ledger cannot vouch for it the repeat publishes
-		// nothing and answers the same way — safe, and no answer sooner
-		// than looking. A person's retry of one request is the same
-		// comment too, under the request's own key. An operator's
-		// assistant names no operation for a page write, so its repeat is
-		// a new comment, and a second one if the first landed.
-		// [unknownNext] is the rule every tracker write already answers by.
-		again := pageRepeat(turn, actor.OpKey, CommentOnPageTool)
 		return pageUnknown(CommentOnPageTool, written.Outcome,
-			unknownNext(written.Outcome.Unvouched, again,
-				"Read the page's comments with get_page",
-				"that is a second comment")), nil
+			commentNext(written.Outcome.Unvouched)), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
@@ -1076,20 +1083,26 @@ func pageUnknownText(name string, result statelog.Result, next string) string {
 // ([tools.RefusalUnavailable]), or a read or an encode that broke, which is a
 // FAULT ([tools.RefusalInternalError], its error in the log — [faulted]).
 //
-// AND ONE ERROR IS NEITHER: a write the estate's router sent to a data node
-// that never answered ([estate.ErrOutcomeUnknown]) — a page write naming no
-// operation of its own, which the router may not send to a second node, since
-// a second would be a second write. The node may have run it before it went
-// quiet, so it is an UNKNOWN outcome ([UnknownCause]), never "NOT made" and
-// never a fault: it was the latter, which told an operator's assistant that
-// the node had broken and to say the write could not be made.
-func pageWriteFailure(ctx context.Context, name string, err error) tools.Result {
+// AND ONE ERROR IS NEITHER: a write the estate's router sent and never heard
+// back about ([estate.ErrOutcomeUnknown]). The node it went to may have run it
+// before it went quiet, so it is an UNKNOWN outcome ([UnknownCause]), never
+// "NOT made" and never a fault: it was the latter, which told an operator's
+// assistant that the node had broken and to say the write could not be made.
+//
+// `next` IS WHAT THIS CALLER DOES ABOUT IT — the sentence the tool's own
+// unknown answer gives for the same call — because TWO CLASSES REACH IT and
+// they retry differently ([estate.ErrOutcomeUnknown]): a write carrying no key
+// of its caller's, reported at the first data node that did not answer, whose
+// repeat is a second write; and a KEYED one — a turn's call, a person's
+// request — asked of every other data node first and reported only when none
+// ran it, whose same call IS the safe retry. One fixed "read the page before
+// writing it again: writing it again makes it twice" was false for the second.
+func pageWriteFailure(ctx context.Context, name string, err error, next string) tools.Result {
 	switch {
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		return tools.Result{Output: fmt.Sprintf("%s: %s. It may be on the page "+
 			"and it may not — do not report it as done, and do not report it as "+
-			"failed. Read the page with get_page before writing it again: if this "+
-			"write landed, writing it again makes it twice.", name, Unanswered),
+			"failed. %s", name, Unanswered, next),
 			Failed: true, Cause: UnknownCause("", err)}
 	case errors.Is(err, doclet.ErrInvalid):
 		// THE WRITER'S SENTENCE ALONE, for the reason writeFailure gives:

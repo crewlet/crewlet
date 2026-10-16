@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -2991,12 +2992,21 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 			"tags_archive), then make this call again.", write.tool, full.Slug,
 			full.Project, worklet.MaxTagsPerProject, full.Project, full.Slug,
 			full.Project))
-	case errors.Is(err, worklet.ErrStepUnresolved):
+	case errors.Is(err, worklet.ErrStepUnresolved), errors.Is(err, estate.ErrOutcomeUnknown):
+		// A DECLARATION NO DATA NODE ANSWERED is this case too: it was sent
+		// under the call's operation and may have landed, so the remainder
+		// below ("did not land … Nothing was written") is false about it,
+		// and the same operation again is what settles it.
 		unvouched := errors.Is(err, worklet.ErrStepUnvouched)
 		why := "the write's acknowledgement was lost"
-		if unvouched {
+		switch {
+		case unvouched:
 			why = "this node's operation ledger may have lost the record of " +
 				"this operation, so this node cannot tell"
+		case errors.Is(err, estate.ErrOutcomeUnknown):
+			// FIXED WORDS, as [Unanswered] is: the router's error names
+			// every node it asked.
+			why = "a data node it was sent to did not answer"
 		}
 		if actor.Operation != "" {
 			opID = actor.Operation
@@ -3806,6 +3816,23 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// and is what empties the lists this refusal is about.
 		return out(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
 			"%v.", name, err))
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		// SENT, AND NO DATA NODE ANSWERED. The router asked every one under
+		// this call's operation and each that stayed silent may have run
+		// it — so the remainder below ("the change was NOT made") is the
+		// one sentence nobody can say, and a caller told it writes again.
+		// The same OPERATION again is what settles it, since the ledger
+		// answers a repeat with what landed; what that is depends on the
+		// caller ([sameCall]), and a caller with none looks before writing
+		// again. In FIXED WORDS ([Unanswered]): the router's error names
+		// every node it asked, which neither a model nor a person can act
+		// on. AHEAD OF the condition below, which would read one whose
+		// caller's context ended as "it ran out of time … NOT made".
+		return tools.Result{Output: fmt.Sprintf("%s: %s. It may have landed and "+
+			"it may not — do not report it as done, and do not report it as "+
+			"failed. %s", name, Unanswered, unknownNext(false, sameCall(actor, name),
+			"Read what it writes with get_work_item or list_work_items",
+			"that is a second write")), Failed: true, Cause: writeCause(actor, err)}
 	case errors.Is(err, worklet.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
 		// HERE. It is an ErrStepUnresolved, so this arm goes first: the
