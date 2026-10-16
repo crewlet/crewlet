@@ -1313,10 +1313,10 @@ type commented struct {
 	Written doclet.Written
 }
 
-// A COMMENT HAS TWO KEYS, and the turn's wins: a remark made from a turn
-// derives its id from the turn's unit of work ([doclet.NewComment.TurnKey]) so
-// a re-run posts once, and one made by a person from the caller's own
-// operation key — the order the pages store reads them in.
+// A COMMENT IS REPEATABLE UNDER ITS CALLER'S KEY ([doclet.Actor.OpKey]), as
+// every page write is: a seat's turn hands its call's own, a person's request
+// its Idempotency-Key, and the store derives the comment's id from it, so a
+// re-run or a retry posts once.
 var opCommentPage = define("pages.comment", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a commentArgs) (commented, error) {
 		if b.PageWriter == nil {
@@ -1325,7 +1325,7 @@ var opCommentPage = define("pages.comment", opOnceWrite, pagesDomain, false,
 		c, w, err := b.PageWriter.Comment(ctx, a.Actor, a.PageID, a.Comment)
 		return commented{Comment: c, Written: w}, err
 	}).repeatableWhen(func(a commentArgs) bool {
-	return strings.TrimSpace(a.Comment.TurnKey) != "" || keyed(a.Actor)
+	return keyed(a.Actor)
 })
 
 type editCommentArgs struct {

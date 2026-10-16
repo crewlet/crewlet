@@ -9,31 +9,29 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A TURN'S COMMENT RE-POSTED AFTER THIS NODE'S LEDGER LOST ITS ROW IS NOT
+// A KEYED COMMENT RE-POSTED AFTER THIS NODE'S LEDGER LOST ITS ROW IS NOT
 // POSTED A SECOND TIME, through the real store, the real publisher and the
 // real ledger.
 //
-// A re-run turn derives the SAME operation for the same comment — that is what
-// its turn key is for — and the row that would say the first run's copy landed
-// is gone: here because this node's retention sweep removed it, which the
-// sweep records exactly as staged below (the ledger empty, its cutoff as the
-// watermark — [roundTrip.markLedgerLost]). Decided again on rows that already
-// hold the comment, it is a second record every node applies: a second history
-// entry and a second wake for one remark. What stops it is the instant the
-// operation id carries, which is the one the turn's work BEGAN at and so the
-// same on every re-run — never the re-run's own clock, which is after the loss
-// by construction.
-func TestATurnsCommentRepostedAfterItsLedgerRowWasSweptIsNotPostedTwice(t *testing.T) {
+// A re-run turn, or a retried request, derives the SAME operation for the
+// same comment from its caller's key — that is what the key is for — and the
+// row that would say the first copy landed is gone: here because this node's
+// retention sweep removed it, which the sweep records exactly as staged below
+// (the ledger empty, its cutoff as the watermark — [roundTrip.markLedgerLost]).
+// Decided again on rows that already hold the comment, it is a second record
+// every node applies: a second history entry and a second wake for one remark.
+// What stops it is the instant the operation id carries, which is the one the
+// key was MINTED at and so the same on every repeat — never the repeat's own
+// clock, which is after the loss by construction.
+func TestAKeyedCommentRepostedAfterItsLedgerRowWasSweptIsNotPostedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
 
-	in := doclet.NewComment{
-		Body:      "does this still hold?",
-		TurnKey:   "wk-1",
-		TurnSince: time.Now().Add(-time.Hour),
-	}
-	if _, _, err := r.store.Comment(t.Context(), agent("bob"), page.Page.ID, in); err != nil {
+	actor := agent("bob")
+	actor.OpKey = statelog.NewOpID(time.Now().Add(-time.Hour), "")
+	in := doclet.NewComment{Body: "does this still hold?"}
+	if _, _, err := r.store.Comment(t.Context(), actor, page.Page.ID, in); err != nil {
 		t.Fatalf("the first run's comment: %v", err)
 	}
 	r.drain()
@@ -54,7 +52,7 @@ func TestATurnsCommentRepostedAfterItsLedgerRowWasSweptIsNotPostedTwice(t *testi
 	// leaked into the id would read as minted after it, which is the defect.
 	time.Sleep(10 * time.Millisecond)
 
-	_, written, err := r.store.Comment(t.Context(), agent("bob"), page.Page.ID, in)
+	_, written, err := r.store.Comment(t.Context(), actor, page.Page.ID, in)
 	if err != nil {
 		t.Fatalf("the re-run's comment: %v", err)
 	}

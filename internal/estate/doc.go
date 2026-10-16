@@ -42,14 +42,14 @@
 // lost-acknowledgement case that id exists for; and so is one a node answered
 // UNVOUCHED, whose ledger cannot say whether it landed while another node's
 // may. A PAGE write is the same operation on a repeat only where the CALLER
-// brought a key (its actor's operation key, [doclet.Actor.OpKey], or for a
-// remark made from a turn the turn's own, [doclet.NewComment.TurnKey]), from
-// which the store derives the operation id, bound to what the write says. With
-// none the store mints an id per call, so a repeat is a second write (a second
-// comment) or a refusal of its own first copy (a create whose title is now
-// taken): an unanswered unkeyed page write is NEVER repeated, and is reported
-// as [ErrOutcomeUnknown] — the honest answer, and the one a tool turns into
-// "read the page before writing again".
+// brought a key (its actor's operation key, [doclet.Actor.OpKey], which a
+// seat's turn derives for each call and a person's request derives from its
+// Idempotency-Key), from which the store derives the operation id, bound to
+// what the write says. With none the store mints an id per call, so a repeat
+// is a second write (a second comment) or a refusal of its own first copy (a
+// create whose title is now taken): an unanswered unkeyed page write is NEVER
+// repeated, and is reported as [ErrOutcomeUnknown] — the honest answer, and
+// the one a tool turns into "read the page before writing again".
 //
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, it could not reach the caller's
