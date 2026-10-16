@@ -125,12 +125,40 @@ const (
 	// CodeLogMaxBytes is TWO THIRDS of the mutation log's ceiling, set or
 	// derived.
 	//
-	// THE RATIO IS THE RECORD RATE, the rule DerivedPagesLogDivisor states
-	// for the knowledge base: at the reference company once seats push,
-	// the code log grows about 4.5–6 MB a day (about 3 000 pushes at
-	// 1.5–2 KiB a record) against the tracker's about 9 MB, so at two
-	// thirds of the tracker's ceiling a blocked trim fills both in the same
-	// time.
+	// THE RATIO IS THE BYTE RATE, the rule DerivedPagesLogDivisor states
+	// for the knowledge base: both logs hold a trailing window, so at the
+	// ratio of what each takes a day a blocked trim fills both in the same
+	// time. What each takes is its records and the barriers its
+	// linearizable reads append (136 bytes each, code.BarrierRecordBytes),
+	// at the reference company once its seats push:
+	//
+	//   - the mutation log about 11.1 MB a day: 9.4 MB of records, the rate
+	//     its own declared ceiling is sized at (16 GiB in five years,
+	//     tracker.TrackerLogMaxBytes), and 1.7 MB of barriers, its seats'
+	//     12 500 reads and the object collector's 25;
+	//   - the code log 5.8–7.7 MB a day: 3 000 pushes at 1 292 bytes,
+	//     MEASURED for a push alone in its record (internal/code's
+	//     BenchmarkPushLogBytes; 742.7 a push in a burst group commit holds
+	//     together), 3.9 MB; and the barriers of its git clients, 1.9–3.8 MB
+	//     — a push asks the log twice (its advertisement and its receive's
+	//     sync) and the fetch before it once (its ls-refs, whose sync brings
+	//     every want), so a seat's push three times, 9 000 a day, beside
+	//     thirty people fetching every three minutes of a working day (4 800)
+	//     and, where one runs, a CI polling ten repositories a minute
+	//     (14 400).
+	//
+	// So the code log takes 0.52–0.69 of the mutation log's day — 0.35 on
+	// its push records alone (0.41 of the tracker's records), which is what
+	// the 1.5–2 KiB a record this ratio was first set from overstated — and
+	// TWO THIRDS is taken at the top of that range rather than its middle,
+	// because the changes, reviews and checks that later releases put on
+	// this same log come on top and a log keeps the ceiling it was created
+	// with: an operator who wants more room later pays for it with `crewlet
+	// retention set-capacity`. A JUDGEMENT on an ESTIMATE of git traffic no
+	// deployment has reported yet: the reading that would say otherwise is
+	// the code log's crewlet.statelog.barrier.applied, and a company that
+	// knows its git clients read far less sets stream.code_log_max_bytes
+	// before its first boot.
 	DerivedCodeLogNumerator   = 2
 	DerivedCodeLogDenominator = 3
 
@@ -412,11 +440,12 @@ func (s Stream) UsageMaxBytes() (int64, bool) {
 //
 // DERIVED FROM THE MUTATION LOG'S CEILING, set or derived, on the rule
 // [Stream.PagesMaxBytes] states: both logs hold a trailing window of records
-// as long as a blocked trim lasts, so in the ratio their records arrive at a
-// blocked trim fills both in the same time — two thirds here
-// ([DerivedCodeLogNumerator]), from the reference company's push volume
-// against its tracker writes. An operator who sized the mutation log for their
-// company therefore sizes this log with it.
+// as long as a blocked trim lasts, so in the ratio of the bytes each takes a
+// day a blocked trim fills both in the same time — two thirds here
+// ([DerivedCodeLogNumerator]), the reference company's pushes and its git
+// clients' reads against its tracker writes and its seats' reads. An operator
+// who sized the mutation log for their company therefore sizes this log with
+// it.
 //
 // Held inside the bounds Tier A accepts for the field, so a node never derives
 // a ceiling its own validation would refuse to be told.

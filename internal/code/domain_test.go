@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE CODE DOMAIN DECLARES WHAT THE FRAMEWORK ASKS OF IT, and every answer is
@@ -58,6 +60,23 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 		d.OpsTable() != "code_ops" {
 		t.Errorf("the machinery tables are %q, %q and %q", d.DeferredTable(),
 			d.ScopeIndex(), d.OpsTable())
+	}
+}
+
+// THE CEILING THE DOMAIN DECLARES IS TIER A'S RULE BESIDE THE TRACKER'S: what
+// an unset stream.code_log_max_bytes derives next to a mutation log at the
+// tracker's own declared ceiling (config.Stream.CodeMaxBytes). One rule sizes
+// the log the suites provision and the log a node creates, so the two can never
+// disagree about how fast the code log grows beside the tracker's — the
+// knowledge base's declared ceiling is a quarter of the tracker's for the same
+// reason.
+func TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers(t *testing.T) {
+	t.Parallel()
+	want, derived := config.Stream{TrackerLogMaxBytes: tracker.TrackerLogMaxBytes}.CodeMaxBytes(0)
+	if !derived || code.CodeLogMaxBytes != want {
+		t.Errorf("the code domain declares %d bytes, and beside the tracker's declared %d "+
+			"an unset stream.code_log_max_bytes derives %d (derived %v)",
+			code.CodeLogMaxBytes, tracker.TrackerLogMaxBytes, want, derived)
 	}
 }
 

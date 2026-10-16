@@ -51,19 +51,27 @@ func LimitsOf(c config.Code) Limits {
 // by 38 %, which sized the git census that much smaller.
 const BarrierRecordBytes = 136
 
-// GitReadsShare is how much of the code log's byte ceiling its git clients'
-// barriers are sized to hold over the trim's min_age: one part in TEN. The rest
-// is what [CodeLogMaxBytes] was sized for — pushes, settings, purges — and a
-// tenth is room a company's git traffic grows into without crowding them. A
-// JUDGEMENT: smaller fires census_drift on a busy but healthy git host, larger
-// lets barriers crowd the records the ceiling was sized for before anybody is
-// told; the census is a share of the ceiling the log's stream HOLDS, so a
-// company that outgrows the tenth resizes the log (`crewlet retention
-// set-capacity`) and the census moves with it.
+// GitReadsShare is how much of the code log's byte ceiling the census lets its
+// git clients' barriers hold over the trim's min_age: one part in TEN.
+//
+// AN ALLOWANCE, NOT THE SPLIT THE CEILING WAS SIZED BY. The ceiling's own
+// ratio (config's DerivedCodeLogNumerator, which [CodeLogMaxBytes] below is
+// spelled from) already counts the reference company's git barriers beside its
+// pushes: 1.9–3.8 MB a day, 13–27 MB over the default seven days — under a
+// fortieth of the tenth of a derived 10⅔ GiB ceiling, and under a quarter of
+// the tenth of even the 1 GiB floor. So the tenth is not what git was expected
+// to take: it is room that git traffic well past that estimate grows into, and
+// census_drift, at twice the census, says when even that is outgrown and every
+// sizing decision under the log is stale. A JUDGEMENT: smaller fires
+// census_drift on a busy but healthy git host, larger lets barriers crowd the
+// pushes, settings and purges the log is there for before anybody is told; the
+// census is a share of the ceiling the log's stream HOLDS, so a company that
+// outgrows the tenth resizes the log (`crewlet retention set-capacity`) and the
+// census moves with it.
 const GitReadsShare = 10
 
-// GitReadsPerDay is the linearizable git reads a day the code log was sized
-// for: the census term of its git clients (statelog.Census.Clients) — the
+// GitReadsPerDay is the linearizable git reads a day the code log's census
+// allows: the census term of its git clients (statelog.Census.Clients) — the
 // barriers that fill 1/GitReadsShare of ceiling over the trim's min_age.
 //
 // EVERY linearizable read of the code log in this release is a person's or
@@ -110,12 +118,20 @@ const (
 	// creates the stream at the ceiling its own Tier A sizes
 	// (stream.code_log_max_bytes), as every domain's.
 	//
-	// SIXTEEN GIBIBYTES, the tracker's: at the reference company once seats
-	// push the code log grows at the mutation log's order — about 3 000
-	// pushes a day at about 2 KiB a record, 6 MB a day before checks,
-	// against the tracker's 9 MB — so a blocked trim fills both on the same
-	// order of time.
-	CodeLogMaxBytes = 16 << 30
+	// TWO THIRDS OF THE TRACKER'S sixteen gibibytes, 10⅔ GiB: the ceiling
+	// an unset stream.code_log_max_bytes derives beside a mutation log of
+	// the tracker's declared size (TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers),
+	// so the log the suites provision and the log a node creates are sized
+	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
+	// what this log takes a day at the reference company once seats push:
+	// 3 000 pushes at the MEASURED 1 292 bytes a push alone in its record
+	// (BenchmarkPushLogBytes), 3.9 MB, and its git clients' barriers at
+	// BarrierRecordBytes, 1.9–3.8 MB, against the tracker's 9.4 MB of
+	// records and 1.7 MB of barriers. It was the tracker's whole sixteen,
+	// on an estimate of 2 KiB a push and no barriers, which put the two
+	// logs on "the same order" rather than at the ratio a blocked trim
+	// fills both in the same time.
+	CodeLogMaxBytes = (16 << 30) * config.DerivedCodeLogNumerator / config.DerivedCodeLogDenominator
 
 	// CodeLogDuplicates is the window the broker collapses a repeated
 	// operation id in: the tracker's and the knowledge base's two minutes.

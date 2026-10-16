@@ -1628,9 +1628,12 @@ type Stream struct {
 	//
 	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
 	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. The ratio is
-	// the record rate: once seats push, a company's push records arrive at
-	// about two thirds of the rate of its tracker's, so a blocked trim
-	// reaches either ceiling in the same time.
+	// the byte rate: once seats push, a company's push records and the
+	// barriers its git clients' reads append take about half to seven
+	// tenths of what its tracker writes and its seats' reads take a day,
+	// and the ratio is taken near the top of that range
+	// ([DerivedCodeLogNumerator] has the arithmetic and the reason), so a
+	// blocked trim reaches either ceiling in about the same time.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here unchanged: the value is the one the

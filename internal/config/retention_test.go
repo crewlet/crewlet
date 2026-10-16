@@ -244,9 +244,10 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 }
 
 // THE CODE LOG IS DERIVED FROM THE MUTATION LOG'S CEILING — set or derived —
-// at two thirds of it, the rate its push records arrive at beside the
-// tracker's, on the knowledge base's rule: both logs hold a trailing window of
-// records, so a blocked trim fills both in the same time. Each expectation is
+// at two thirds of it, the bytes its push records and its git clients' barriers
+// take a day beside the tracker's (DerivedCodeLogNumerator), on the knowledge
+// base's rule: both logs hold a trailing window of records, so a blocked trim
+// fills both in the same time. Each expectation is
 // the mutation log's own ceiling for the row, times two over three, held
 // inside the code log's own bounds.
 func TestCodeLogCeilingIsTwoThirdsOfTheTrackers(t *testing.T) {
