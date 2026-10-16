@@ -244,9 +244,9 @@ config all work before any external credential is in play.
 
 It is not a hollow one: Worklet and Doclet are on by
 default, so that first turn can already file work and write pages, and
-the founder can watch it happen on the Worklet and Doclet screens. The
-integrations that come later are about where their PEOPLE are, not about
-what the company can do.
+the founder can watch it happen in the dashboard's Worklet and Doclet
+workspaces. The integrations that come later are about where their PEOPLE
+are, not about what the company can do.
 
 **First pass** — no `integrations`, no `mcp_servers`, one LLM provider,
 the org chart with a `project` and `space` per unit, and one schedule on
