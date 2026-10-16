@@ -68,12 +68,13 @@ number, and a node that has just restarted measures on its first tick.
 It is deliberately absent — and the alarm silent — in three places, and absent
 is not zero:
 
-- **A compacted log**, which is the vector log. Its size follows how many
-  subjects it holds rather than how long it has been written, and a full
-  re-embedding — the one excursion this system is designed for — republishes
-  every vector in a day while replacing what the log held rather than adding
-  to it. Holding its ceiling against a week of that day would page for a log
-  that is not growing.
+- **A compacted log** — the vector log and the usage log, each keeping one
+  message per subject. Its size follows how many subjects it holds rather
+  than how long it has been written, and a full re-embedding — the one
+  excursion this system is designed for — republishes every vector in a day
+  while replacing what the log held rather than adding to it. Holding the
+  vector log's ceiling against a week of that day would page for a log that
+  is not growing.
 - **A log in its first two days** — a fresh deployment, or one re-anchored
   under a running fleet. Its first day is the one a company imports into, and
   a day extrapolated from an import is an alarm for a log that settles an
@@ -204,9 +205,10 @@ when both of these hold:
   log and an empty one stay silent however long the block has lasted.
 
 Its detail names the log, the blocking term and up to how many records it is
-keeping — exactly that many on a strict log, at most that many on the vectors'
-compacted one, whose superseded records are already gone; the term's row in
-`crewlet retention status` says what it has and what it wants.
+keeping — exactly that many on a strict log, at most that many on a
+compacted one (the vector log or the usage log), whose superseded records are
+already gone; the term's row in `crewlet retention status` says what it has
+and what it wants.
 
 ### `min_age` is a floor on trimming, and therefore a *lower bound* on retention
 
