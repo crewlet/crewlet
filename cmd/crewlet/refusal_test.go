@@ -83,14 +83,14 @@ func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 			t.Parallel()
 			err := refusal(http.StatusForbidden, refused)
 			if err == nil || !strings.Contains(err.Error(), "admin") ||
-				!strings.Contains(err.Error(), "accepted the token") {
+				!strings.Contains(err.Error(), "this token doesn't have") {
 				t.Errorf("a token lacking a grant reads %v, want the grant it "+
 					"needs and that the token itself was accepted", err)
 			}
 			err = refusal(http.StatusUnauthorized,
 				[]byte(`{"error":"invalid_token"}`))
-			if err == nil || !strings.Contains(err.Error(), "did not accept") ||
-				strings.Contains(err.Error(), "accepted the token") {
+			if err == nil || !strings.Contains(err.Error(), "didn't accept") ||
+				strings.Contains(err.Error(), "this token doesn't have") {
 				t.Errorf("a token the node did not accept reads %v", err)
 			}
 		})
@@ -130,7 +130,7 @@ func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 403 was not reported as an error")
 	}
-	if strings.Contains(err.Error(), "did not accept") {
+	if strings.Contains(err.Error(), "didn't accept") {
 		t.Errorf("a 403 carrying the node's own code was reported as a bad token:\n%s", err)
 	}
 	for _, want := range []string{"seat_unavailable", "not in the org chart"} {
@@ -140,7 +140,7 @@ func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
 	}
 	// The credential sentence is still the 401's.
 	if err := nodeError(http.StatusUnauthorized, []byte(`{"error":"invalid_token"}`), true); err == nil ||
-		!strings.Contains(err.Error(), "did not accept") {
+		!strings.Contains(err.Error(), "didn't accept") {
 		t.Errorf("a 401 = %v, want the token refusal", err)
 	}
 }

@@ -613,7 +613,7 @@ generation as a machine token is, so a link issued before the generation
 moves is `410 reset_spent` by the time its person opens it.
 
 Then read `crewlet iam people`: a restore under a different keyring shows every
-person as *sealed under a key this node's keyring does not hold* rather than as
+person as *can't be read: this node's keyring is missing its key* rather than as
 somebody with no name, and putting that key back on the ring ends it. Somebody
 removed **before** the artefact was taken stays removed: its rows hold their
 tombstone and none of their values — though its stream snapshot still holds

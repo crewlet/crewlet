@@ -525,7 +525,7 @@ invitation 0192f4c8-…
 http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
 
 expires 2026-06-21 12:00
-This link is shown once and cannot be read back: what the estate keeps is a hash of the secret after the id. Send it to them yourself — this engine never sends mail.
+This link is shown once. Send it to them yourself; Crewlet doesn't send email.
 ```
 
 ## 5. Watch the first turn

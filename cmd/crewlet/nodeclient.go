@@ -80,10 +80,10 @@ func nodeClientFor(environ config.Source, args []string, name string, stderr io.
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", defaultBootstrapPath,
-		"Tier A config: where this node binds its API")
+		"node config file: where this node serves its API")
 	addr := fs.String("url", "",
-		"the running node's base URL; empty takes it from the config's api block. "+
-			"The credential is "+apiTokenEnv+", and never a flag")
+		"the running node's base URL (default: from the config's api block). "+
+			"The token comes from "+apiTokenEnv+", never a flag")
 	if extra != nil {
 		extra(fs)
 	}

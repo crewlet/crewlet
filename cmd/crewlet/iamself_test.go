@@ -236,7 +236,7 @@ func TestAPasswordAloneWhereAFactorIsRequiredMintsNothing(t *testing.T) {
 	n := newSelfNode(t)
 	n.restricted = true
 	_, _, err := runSelf(t, n, "a long pass phrase\n")
-	if err == nil || !strings.Contains(err.Error(), "authenticator app") {
+	if err == nil || !strings.Contains(err.Error(), "two-step verification") {
 		t.Fatalf("a restricted sign-in answered %v, want the enrolment named", err)
 	}
 	if strings.Join(n.steps, ",") != "login,logout" {

@@ -47,127 +47,107 @@ import (
 // Every command prints which, because a caller that read all three as success
 // would tell somebody a revocation landed when nothing can say it did.
 
-const iamUsage = `crewlet iam — the company's people, credentials and sessions
+const iamUsage = `crewlet iam: manage the company's people, credentials and sessions
 
 Usage:
   crewlet iam people [-q TERM] [-stage S] [-limit N] [-after ID]
-                                                       The directory
-  crewlet iam show ID                                  One person, in full
-  crewlet iam seats [-unheld]                          The human seats, who holds each,
-                                                       and any open invitation for one
+                                                       List people
+  crewlet iam show ID                                  Show one person
+  crewlet iam seats [-unheld]                          List human seats, who holds each,
+                                                       and any open invitation
   crewlet iam invite EMAIL -seat SEAT [-grants G,...]
-                                                       Invite somebody onto a vacant human
-                                                       seat; the link is shown ONCE
+                                                       Invite someone to a vacant human
+                                                       seat. The link is shown once
   crewlet iam invitations [-all] [-limit N] [-after ID]
-                                                       The open invitations; -all
-                                                       adds the expired and redeemed
-  crewlet iam cancel-invite ID                         Withdraw an invitation: its link
-                                                       opens nothing, its address and
-                                                       its seat are free
-  crewlet iam reset-password ID|LOGIN                  Issue a one-time password reset
-                                                       link, shown ONCE, good for a day
+                                                       List open invitations. -all adds
+                                                       expired and redeemed ones
+  crewlet iam cancel-invite ID                         Cancel an invitation. Its link
+                                                       stops working and the seat is
+                                                       free again
+  crewlet iam reset-password ID|LOGIN                  Issue a password reset link. It's
+                                                       shown once and works for a day
   crewlet iam create -email E -seat SEAT [-login L] [-name N] [-grants G,...]
                                                        Create a person on a vacant human
-                                                       seat; their first password link
-                                                       is shown ONCE
+                                                       seat. Their password link is
+                                                       shown once
   crewlet iam create -kind machine -login L -grants G,... [-seat SEAT] [-name N]
                                                        Create a service account
   crewlet iam bind ID SEAT                             Move a person to another vacant
                                                        human seat, or bind a service
                                                        account to one
-  crewlet iam unbind ID                                Take a SERVICE ACCOUNT's seat
-                                                       back; a person always holds one
-  crewlet iam grant ID -grants G,...                   Change what somebody carries
-  crewlet iam suspend ID                               Stop them acting and end their
-                                                       sessions, tokens and reset link;
-                                                       keep the row
-  crewlet iam activate ID                              Let them act again
-  crewlet iam remove ID                                Tombstone them and erase what is theirs
+  crewlet iam unbind ID                                Unbind a service account from its
+                                                       seat. People always keep one
+  crewlet iam grant ID -grants G,...                   Change someone's permissions
+  crewlet iam suspend ID                               Suspend someone. Ends their
+                                                       sessions, tokens and reset link,
+                                                       and keeps their account
+  crewlet iam activate ID                              Reactivate a suspended account
+  crewlet iam remove ID                                Remove someone and erase their data
   crewlet iam revoke ID                                End every session and token they hold
   crewlet iam sessions ID                              Their sessions, newest first
-  crewlet iam credentials [-person ID]                 What somebody proves themselves with
+  crewlet iam credentials [-person ID]                 List someone's credentials
   crewlet iam token -login L [-label L] [-days N] [-grants G,...]
-                                                       Mint YOUR OWN machine token, shown ONCE
+                                                       Create your personal access token, shown once
   crewlet iam token -person ID [-label L] [-days N] [-grants G,...]
-                                                       Mint a service account's, shown ONCE
+                                                       Create a service account's access token, shown once
   crewlet iam revoke-credential CREDENTIAL_ID [-person ID]
-                                                       Withdraw one credential
-  crewlet iam reset-mfa ID                             Clear the second factor and end sessions
-  crewlet iam invalidate-all                           Invalidate EVERY session and machine token
-  crewlet iam check                                    What is wrong with this company's access
+                                                       Revoke one credential
+  crewlet iam reset-mfa ID                             Reset two-step verification and end sessions
+  crewlet iam invalidate-all                           End every session and access token, for everyone
+  crewlet iam check                                    Find problems with the company's access
   crewlet iam audit [-person ID] [-event OP] [-since POSITION] [-at TIME]
-                    [-before POSITION]                 The identity estate's own trail
+                    [-before POSITION]                 Show the identity audit trail
 
 Flags:
-  -config PATH   Tier A config naming the node to reach (default %q)
+  -config PATH   The node config file naming the node to reach (default %q)
   -api URL       The running node's API; default is its own api.host:port
   -json          Print the raw answer rather than a table
-  -reason TEXT   Recorded on the change, and read by whoever audits it
+  -reason TEXT   Saved with the change for the audit trail
   -idempotency-key OP
-                 Retry a write whose outcome was unknown, as the SAME operation
-  -grants G,...  On invite, create, grant and token: what they carry — admin,
-                 tracker and knowledge, comma-separated, or none for nothing
-                 past the overview everybody reads. admin also stores every
-                 app, so taking admin away later leaves them. Left out on
-                 invite and on a person's create it is EVERY APP (tracker,
-                 knowledge) and not admin; on a service account's create it
-                 is required, since nobody is behind it to have meant a
-                 default; on token it is everything the owner holds
-  -seat SEAT     On invite and create: the human seat they will hold — one
-                 nobody holds and no open invitation is for, which "iam seats
-                 -unheld" lists. Required on invite and on a person's create;
-                 optional on a service account's
-  -unheld        On seats: only the seats nobody holds and no open invitation
-                 is for
+                 Retry a write whose outcome was unknown, as the same operation
+  -grants G,...  On invite, create, grant and token: admin, tracker or
+                 knowledge, comma-separated, or none (overview only). admin
+                 includes every app. Defaults: tracker and knowledge for
+                 people, the owner's permissions for a token. Required for a
+                 service account
+  -seat SEAT     On invite and create: the vacant human seat they'll hold
+                 ("iam seats -unheld" lists them). Required for people,
+                 optional for service accounts
+  -unheld        On seats: only vacant seats (nobody holds them and no
+                 invitation is open)
 
-Every write prints its outcome: "applied" means this node has the change,
-"pending" that it is durable and this node has not applied it yet. A write
-nothing could establish fails naming its op id; run the same command again
-with -idempotency-key <op id> — a fresh attempt would be a second operation,
-and for create and invite one the first attempt's person or invitation refuses,
-since it holds the address and the seat. Where the node says it cannot vouch
-for the operation, run it through another node with -api: asked again, that
-node answers the same way until the change reaches it.
+Every write prints its outcome: "applied" (this node has it) or "pending"
+(saved, not here yet). If the outcome is unknown, run the same command again
+with -idempotency-key <op id> from the error. Don't start fresh, or it runs
+twice. If the node can't confirm it, retry through another node with -api.
 
-A person holds a human seat for as long as they are here: they are invited or
-created onto one nobody holds, "iam bind" moves them to another, and "iam
-remove" frees it. "iam unbind" is for service accounts, which may hold one or
-none.
+A person always holds one human seat. They're invited or created onto a
+vacant one, "iam bind" moves them, and "iam remove" frees it. "iam unbind" is
+only for service accounts, which can hold one seat or none.
 
-A person made by "iam create" arrives with a FIRST PASSWORD LINK, printed once,
-good for a week: it sets their first password once, through the screen a reset
-link opens, and signs nobody in — they sign in afterwards, enrolling a second
-factor there where the deployment requires one. A create retried with
--idempotency-key <op id> hands back the SAME link, since it is derived from the
-operation; one that no longer opens is replaced with "iam reset-password". A
-grant added to them before they use it ends it, as it ends a reset link.
+"iam create" prints a password link, shown once and good for a week. The
+person uses it to set their first password. Retry with -idempotency-key
+<op id> to see the same link, or use "iam reset-password" if it stopped
+working.
 
-Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
-included: a map of who can reach a company is worth as much as the grants.
+Set CREWLET_API_TOKEN to authenticate. Every iam command needs it, reads
+included.
 
-A reset link from "iam reset-password" sets the person a new password once, ends
-every session and token they hold, and signs nobody in: they sign in afterwards,
-where a second factor they hold still applies. Whatever ends their sessions ends
-an outstanding link too — suspend, revoke, reset-mfa and invalidate-all — so
-issue the link after any of those it is needed beside. A person changes their OWN
-password signed in, through POST /auth/password, which asks for the current one
-— and a code from anybody holding a second factor, as a step-up does — and
-needs a person present, which neither a Tier A token nor a machine token is,
-so this command has no flow for it.
+A link from "iam reset-password" lets the person set a new password once. It
+signs them out everywhere, ends their tokens, and doesn't sign them in. Their
+authenticator app still applies. Suspend, revoke, reset-mfa and invalidate-all
+all cancel an outstanding link, so issue it after those. People change their own
+password in the dashboard (Account), not with this command.
 
-A token minted by "iam token" acts as the person or service account it names,
-carrying at most what they hold now, for at most a year (90 days unless -days
-says otherwise). It is itself a CREWLET_API_TOKEN for every other command — but
-it cannot mint another token, and it cannot change how its owner signs in.
+A token from "iam token" acts as its person or service account, with at most
+their current permissions. It lasts 90 days unless -days says otherwise (a year
+at most). You can use it as CREWLET_API_TOKEN for other commands, but it can't
+create another token or change how its owner signs in.
 
-A person's token is theirs alone to mint: whoever mints one sees its value, and
-it acts as them. So "iam token -login" signs you in for the one request — the
-password from the terminal without echo, or the first line piped in, and a
-second-factor code the same way when your account holds one, or the line after
-it; never a flag, because a recovery code on a command line stays good in the
-shell's history — mints, and signs out, reading no CREWLET_API_TOKEN. An administrator mints with -person for SERVICE ACCOUNTS
-only; every write the token makes is recorded as its owner's, through
-pat:<credential id>.
+Only you can create your personal access token. "iam token -login" signs you
+in, creates the token, and signs out. It asks for your password and code (or
+reads them from piped lines), never from flags. Admins use -person for service
+accounts only. Changes made with a token are recorded as its owner's.
 `
 
 // runIAM dispatches `crewlet iam`.
@@ -191,45 +171,45 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	fs := flag.NewFlagSet("iam "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
-		"Tier A config: the node this command reaches")
+		"node config file: the node this command reaches")
 	apiURL := fs.String("api", "",
 		"the running node's API; default is the api.host:port in -config")
 	asJSON := fs.Bool("json", false, "print the raw answer")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
-		"admin, tracker and knowledge, comma-separated, or `none`; admin "+
-			"stores every app beside it. Left out: every app on invite and a "+
-			"person's create, the owner's on token, required on a service "+
-			"account's create")
-	stage := fs.String("stage", "", "narrow the directory to one enrolment stage")
-	term := fs.String("q", "", "narrow the directory on a login or a seat")
+		"admin, tracker or knowledge, comma-separated, or `none`. admin "+
+			"includes every app. If left out: every app on invite and a "+
+			"person's create, the owner's permissions on token. Required on a "+
+			"service account's create")
+	stage := fs.String("stage", "", "only people at this stage")
+	term := fs.String("q", "", "search by login or seat")
 	limit := fs.Int("limit", 0, "how many rows at most")
 	login := fs.String("login", "",
-		"the login to create somebody under, or to sign in as to mint your own token")
-	email := fs.String("email", "", "the address to create somebody under")
+		"the login for a new account, or to sign in with when creating your own token")
+	email := fs.String("email", "", "the email address of the person to create")
 	kind := fs.String("kind", "", "person or machine (create only)")
 	name := fs.String("name", "", "the person's own name")
 	person := fs.String("person", "",
-		"whose credentials or sessions, and whom a minted token is for")
-	label := fs.String("label", "", "what to call a minted token")
-	days := fs.Int("days", 0, "how long a minted token lasts")
-	event := fs.String("event", "", "narrow the trail to one operation")
+		"the person whose credentials or sessions to list, or the service account a token is for")
+	label := fs.String("label", "", "a name for the new token")
+	days := fs.Int("days", 0, "how many days the new token lasts")
+	event := fs.String("event", "", "only entries for this kind of change")
 	since := fs.Uint64("since", 0, "the oldest log POSITION to include")
 	// THE TWO CURSORS A LISTING'S LAST LINE NAMES, which it named while
 	// neither was a flag here: following "more: crewlet iam people -after
 	// <id>" answered "flag provided but not defined".
-	after := fs.String("after", "", "a listing's next page starts after this id")
-	before := fs.Uint64("before", 0, "the trail's next page ends before this POSITION")
+	after := fs.String("after", "", "start the next page after this id")
+	before := fs.Uint64("before", 0, "end the next page before this POSITION")
 	at := fs.String("at", "", "an RFC 3339 instant, resolved to a position once")
 	key := fs.String("idempotency-key", "",
 		"retry a write whose outcome was unknown: the op id its answer named")
 	seat := fs.String("seat", "",
-		"the human seat an invitation or a create binds (required on invite "+
+		"the vacant human seat to put them on (required on invite "+
 			"and for a person's create)")
 	all := fs.Bool("all", false,
 		"list the expired and redeemed invitations too (invitations only)")
 	unheld := fs.Bool("unheld", false,
-		"only the seats nobody holds and no open invitation is for (seats only)")
+		"only vacant seats (seats only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -261,22 +241,20 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	// read as accepted would say a seat was taken that nothing sent. Somebody
 	// who already exists is moved with `bind`.
 	if strings.TrimSpace(*seat) != "" && sub != "invite" && sub != "create" {
-		return fmt.Errorf("-seat is invite's and create's: it names the seat "+
-			"somebody new takes — move somebody who already exists with "+
-			"`crewlet iam bind ID SEAT`, not with `iam %s -seat`", sub)
+		return fmt.Errorf("-seat only works with invite and create. To move "+
+			"someone, use `crewlet iam bind ID SEAT` instead of `iam %s -seat`", sub)
 	}
 	// -all IS invitations', refused elsewhere for -seat's reason: `iam
 	// people -all` read as accepted would say every stage was listed.
 	if *all && sub != "invitations" {
-		return fmt.Errorf("-all is invitations': it adds the expired and "+
-			"redeemed ones — `iam %s` takes no -all", sub)
+		return fmt.Errorf("-all only works with invitations. `iam %s` doesn't "+
+			"take it", sub)
 	}
 	// -unheld IS seats', for the same reason: `iam people -unheld` read as
 	// accepted would say nobody listed holds a seat.
 	if *unheld && sub != "seats" {
-		return fmt.Errorf("-unheld is seats': it leaves out every seat "+
-			"somebody holds or an open invitation is for — `iam %s` takes "+
-			"no -unheld", sub)
+		return fmt.Errorf("-unheld only works with seats. `iam %s` doesn't "+
+			"take it", sub)
 	}
 	// WHAT SOMEBODY IS GIVEN, read before a config file is read or a
 	// request is sent: a name this build does not know is refused naming
@@ -287,9 +265,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		return err
 	}
 	if granted.given && !iamGranting[sub] {
-		return fmt.Errorf("-grants is invite's, create's, grant's and "+
-			"token's: it names what somebody carries — `iam %s` takes no "+
-			"-grants", sub)
+		return fmt.Errorf("-grants only works with invite, create, grant and "+
+			"token. `iam %s` doesn't take it", sub)
 	}
 	// WHAT A NEW PERSON OR SERVICE ACCOUNT HAS TO BE GIVEN, told here
 	// rather than by the node, before a config file is read or a request
@@ -315,13 +292,12 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		owner := strings.TrimSpace(orSubject(*person, subject))
 		switch self := strings.TrimSpace(*login); {
 		case self != "" && owner != "":
-			return errors.New("name one owner: -login signs in to mint your " +
-				"own token, -person names the service account an " +
-				"administrator mints one for")
+			return errors.New("use -login or -person, not both. -login " +
+				"creates your own token, -person creates one for a service " +
+				"account")
 		case self == "" && owner == "":
-			return errors.New("name the owner: -login <your login> to mint " +
-				"your own token, or -person <service account id> to mint one " +
-				"for a pipeline")
+			return errors.New("say who the token is for: -login <your login>, " +
+				"or -person <service account id>")
 		}
 	}
 	boot, err := config.LoadBootstrap(*bootstrapPath, config.EnvOnly())
@@ -432,8 +408,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	case "grant":
 		body := granted.body()
 		if len(body) == 0 {
-			return errors.New("name what to change: -grants admin, tracker " +
-				"and knowledge, comma-separated, or none")
+			return errors.New("say what to give with -grants: admin, tracker " +
+				"or knowledge, comma-separated, or none")
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -546,40 +522,30 @@ func iamNewcomer(sub, kind, email, login, seat string, granted bool) error {
 	switch sub {
 	case "invite":
 		if seatless {
-			return errors.New("name the seat the invitation is for: -seat " +
-				"<handle>, a human seat nobody holds and no open invitation " +
-				"is for (`crewlet iam seats -unheld` lists them) — a person " +
-				"always holds a seat, so nobody is invited onto none")
+			return errors.New("name the seat with -seat <handle>. It must be a " +
+				"vacant human seat (`crewlet iam seats -unheld` lists them)")
 		}
 	case "create":
 		switch iam.Kind(strings.TrimSpace(kind)) {
 		case iam.KindMachine:
 			if strings.TrimSpace(login) == "" {
-				return errors.New("name the login to create the service " +
-					"account under: -login ci:release (or token:<id> for a " +
-					"Tier A token) — it has no address to be found by, so " +
-					"its login is how it is found and the name its changes " +
-					"are recorded under")
+				return errors.New("name the login with -login, e.g. ci:release " +
+					"(or token:<id> for an API token)")
 			}
 			if !granted {
-				return errors.New("name what the service account carries: " +
-					"-grants admin, tracker and knowledge, comma-separated, " +
-					"or none for nothing past the overview — a service " +
-					"account has no default, since nobody is behind it to " +
-					"have meant one")
+				return errors.New("name what the service account gets with " +
+					"-grants: admin, tracker, knowledge (comma-separated), " +
+					"or none")
 			}
 		case "", iam.KindPerson:
 			if strings.TrimSpace(email) == "" {
-				return errors.New("name the address to create them under: " +
-					"-email jane@example.com — a person is found by it, and " +
-					"their login is proposed from it unless -login names one")
+				return errors.New("name the email with -email jane@example.com. " +
+					"Their login is suggested from it unless you pass -login")
 			}
 			if seatless {
-				return errors.New("name the seat to create them on: -seat " +
-					"<handle>, a human seat nobody holds and no open " +
-					"invitation is for (`crewlet iam seats -unheld` lists " +
-					"them) — a person always holds one; a service account " +
-					"(-kind machine) may be created without one")
+				return errors.New("name a vacant human seat with -seat <handle> " +
+					"(`crewlet iam seats -unheld` lists them). Only service " +
+					"accounts can skip it")
 			}
 		}
 	}
@@ -610,19 +576,14 @@ var iamKeyed = map[string]bool{
 func iamUnkeyed(sub string) error {
 	switch sub {
 	case "token":
-		return errors.New("a mint takes no -idempotency-key: its retry would " +
-			"answer the first attempt's record beside a value that verifies " +
-			"against nothing, so a mint whose outcome was unknown is minted " +
-			"again, and the one that may have landed is a token nobody holds, " +
-			"which expires")
+		return errors.New("token doesn't take -idempotency-key. Just run it " +
+			"again")
 	case "reset-password":
-		return errors.New("a reset link takes no -idempotency-key: its retry " +
-			"could not hand back the secret the first attempt was never shown, " +
-			"so a link whose issue was unknown is issued again — which revokes " +
-			"the one that may have landed")
+		return errors.New("reset-password doesn't take -idempotency-key. Run " +
+			"it again, and the new link replaces the old one")
 	}
-	return fmt.Errorf("-idempotency-key retries a write whose outcome was "+
-		"unknown, and `iam %s` writes nothing", sub)
+	return fmt.Errorf("-idempotency-key is for retrying writes, and `iam %s` "+
+		"doesn't write anything", sub)
 }
 
 // subjectTable maps a subcommand to what its positional arguments are.
@@ -742,17 +703,17 @@ func iamGrants(flagged string) (iamGrantList, error) {
 		case g == "":
 			continue
 		case g == "none":
-			return iamGrantList{}, errors.New("-grants none means nothing " +
-				"past the overview, so it stands alone: name the permissions " +
-				"to give, or none, not both")
+			return iamGrantList{}, errors.New("-grants none can't be " +
+				"combined with other permissions. Pass none on its own, or " +
+				"list the permissions")
 		case !g.Valid():
-			return iamGrantList{}, fmt.Errorf("-grants: %q is not a permission "+
-				"— name %s, comma-separated, or none", g, iamGrantWords())
+			return iamGrantList{}, fmt.Errorf("-grants: %q isn't a permission. "+
+				"Use %s, comma-separated, or none", g, iamGrantWords())
 		}
 		named = append(named, g)
 	}
 	if len(named) == 0 {
-		return iamGrantList{}, fmt.Errorf("-grants named nothing — name %s, "+
+		return iamGrantList{}, fmt.Errorf("-grants is empty. Use %s, "+
 			"comma-separated, or none", iamGrantWords())
 	}
 	expanded := iam.Expand(named)
@@ -935,11 +896,11 @@ func (c *iamClient) personID(ctx context.Context, subject string) (string, error
 	case 1:
 		return held[0], nil
 	case 0:
-		return "", fmt.Errorf("nobody in the directory holds the login %q — "+
-			"name the person by their id, which `crewlet iam people` lists", subject)
+		return "", fmt.Errorf("nobody has the login %q. Use their id instead "+
+			"(`crewlet iam people` lists them)", subject)
 	}
-	return "", fmt.Errorf("%d people hold the login %q, which the directory "+
-		"refuses to happen — name the one you mean by their id (%s)", len(held),
+	return "", fmt.Errorf("%d people have the login %q. Use the id of the one "+
+		"you mean (%s)", len(held),
 		subject, strings.Join(held, ", "))
 }
 
@@ -1005,10 +966,10 @@ func iamRefusal(status int, contentType string, answer map[string]any, raw []byt
 			foreignAnswer(contentType, raw))
 	}
 	if outcome, _ := answer["outcome"].(string); outcome == string(statelog.OutcomeUnknown) {
-		said = "the node could not establish whether this landed: " + said
+		said = "the node couldn't confirm whether this change was saved: " + said
 	}
 	if landed := joinAny(answer["landed"]); landed != "" {
-		said += "\nthese changes DID land before it: " + landed
+		said += "\nthese changes were saved before it: " + landed
 	}
 	if hint := str(answer["hint"]); hint != "" {
 		said += "\n" + hint
@@ -1023,18 +984,16 @@ func iamRefusal(status int, contentType string, answer map[string]any, raw []byt
 			// for the operation, so it published nothing and answers the
 			// same way until the change reaches it — the retry this used
 			// to prescribe, here again, was a loop.
-			said += "\nthis node cannot tell whether it landed and answers the " +
-				"same way until it can: read whether it did, or retry it as the " +
-				"same operation through another node with -api <that node> " +
-				"-idempotency-key " + op + " — never a fresh key"
+			said += "\nthis node can't confirm it yet. Check whether it saved, " +
+				"or retry on another node with -api <that node> " +
+				"-idempotency-key " + op + ". Don't use a new key"
 		default:
 			// THE SAME OPERATION, whichever 503 this is: an outcome
 			// nobody could establish is answered from whatever of it
 			// landed, and a refusal that wrote nothing runs under the
 			// same key as it would have under a fresh one.
-			said += "\nretry it as the same operation with -idempotency-key " +
-				op + " — whatever of it landed is answered from what landed, " +
-				"where a fresh key would be a second operation"
+			said += "\nretry with -idempotency-key " + op + ". A new key " +
+				"would make it a second change"
 		}
 	}
 	return errors.New(said)
@@ -1055,18 +1014,17 @@ func iamRefusal(status int, contentType string, answer map[string]any, raw []byt
 func iamRemedy(code string, answer map[string]any) string {
 	var out string
 	if inv := str(answer["invitation"]); inv != "" {
-		out += "\nheld by open invitation " + inv + " — `crewlet iam " +
-			"cancel-invite " + inv + "` withdraws it"
+		out += "\nan open invitation holds it (" + inv + "). Cancel it " +
+			"with `crewlet iam cancel-invite " + inv + "`"
 	}
 	if code == string(httpjson.CodeSeatRequired) {
 		if id := str(answer["id"]); id != "" {
-			out += "\na person always holds a seat: `crewlet iam bind " + id +
-				" SEAT` moves them to another human seat and `crewlet iam " +
-				"remove " + id + "` frees it — `iam unbind` is for service " +
-				"accounts"
+			out += "\npeople always hold a seat. Move them with `crewlet iam " +
+				"bind " + id + " SEAT`, or remove them with `crewlet iam " +
+				"remove " + id + "`"
 		} else {
-			out += "\nname it with -seat <handle>: `crewlet iam seats " +
-				"-unheld` lists the human seats nobody holds"
+			out += "\nname the seat with -seat <handle>. `crewlet iam seats " +
+				"-unheld` lists the vacant ones"
 		}
 	}
 	return out
@@ -1172,7 +1130,7 @@ func shellWord(value string) string {
 // under the wrong keyring look like a company of anonymous people.
 func personName(row map[string]any) string {
 	if truthy(row["sealed"]) {
-		return "(sealed under a key this node's keyring does not hold)"
+		return "(can't be read: this node's keyring is missing its key)"
 	}
 	return str(row["name"])
 }
@@ -1194,7 +1152,7 @@ func (p *iamPrinter) one(answer map[string]any, err error) error {
 		{"email", dash(str(answer["email"]))},
 		{"seat", dash(str(answer["seat"]))},
 		{"grants", dash(joinAny(answer["grants"]))},
-		{"revocation epoch", str(answer["revocation_epoch"])},
+		{"sign-out count", str(answer["revocation_epoch"])},
 		{"version", str(answer["version"])},
 	} {
 		fmt.Fprintf(tw, "%s\t%s\n", field.label, field.value)
@@ -1255,12 +1213,12 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 	// runs no company yet is not a directory with no dangling binding, it
 	// is one nobody could check.
 	if unchecked, _ := answer["bindings_unchecked"].(float64); unchecked > 0 {
-		fmt.Fprintf(p.w, "%d seat binding(s) could not be checked: this "+
-			"node's company could not say whether their seats exist — ask "+
-			"a node that has applied the company\n", int(unchecked))
+		fmt.Fprintf(p.w, "%d seat binding(s) couldn't be checked. This "+
+			"node hasn't loaded the company yet, so try another node.\n",
+			int(unchecked))
 	}
 	if len(rows) == 0 {
-		fmt.Fprintf(p.w, "nothing to report, as of %s\n",
+		fmt.Fprintf(p.w, "no problems found, as of %s\n",
 			str(answer["position"]))
 		return nil
 	}
@@ -1327,9 +1285,8 @@ func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	fmt.Fprintf(p.w, "invitation %s\n%s\n\n", str(answer["id"]),
 		str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
-	fmt.Fprintln(p.w, "This link is shown once and cannot be read back: what "+
-		"the estate keeps is a hash of the secret after the id. Send it to "+
-		"them yourself — this engine never sends mail.")
+	fmt.Fprintln(p.w, "This link is shown once. Send it to them "+
+		"yourself; Crewlet doesn't send email.")
 	return nil
 }
 
@@ -1350,7 +1307,7 @@ func (p *iamPrinter) invitations(asked url.Values, answer map[string]any,
 		row, _ := raw.(map[string]any)
 		email := str(row["email"])
 		if truthy(row["sealed"]) {
-			email = "(sealed under a key this node's keyring does not hold)"
+			email = "(can't be read: this node's keyring is missing its key)"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			str(row["id"]), str(row["state"]), dash(email),
@@ -1404,27 +1361,23 @@ func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
 		unheld := asked.Get("unheld") == "true"
 		switch {
 		case unheld && counting != nil:
-			fmt.Fprintf(p.w, "no human seat is vacant, and the node could not "+
-				"list every seat to say whether the company declares any: "+
-				"%v — `crewlet iam seats` lists them\n", counting)
+			fmt.Fprintf(p.w, "no vacant human seats found, but the node "+
+				"couldn't list every seat (%v). Run `crewlet iam seats` to "+
+				"check\n", counting)
 			return nil
 		case unheld && declared > 0:
 			seats := "seat is"
 			if declared != 1 {
 				seats = "seats are"
 			}
-			fmt.Fprintf(p.w, "no human seat is vacant: the company's %d human "+
-				"%s each held or an open invitation is for it — free one "+
-				"(`crewlet iam remove ID` removes a person, `crewlet iam "+
-				"unbind ID` unbinds a service account, `crewlet iam "+
-				"cancel-invite ID` withdraws an invitation) or add a `kind: "+
-				"human` seat to the company\n", declared, seats)
+			fmt.Fprintf(p.w, "no vacant human seats: the company's %d human "+
+				"%s taken. Free one, or add a `kind: human` seat\n",
+				declared, seats)
 			return nil
 		}
-		fmt.Fprintln(p.w, "the company declares no human seat, so nobody can "+
-			"be invited or created: a person always holds one — add a "+
-			"`kind: human` seat (Agents › Edit org, or `crewlet config "+
-			"import FILE`) for each person first")
+		fmt.Fprintln(p.w, "the company has no human seats. Add a `kind: "+
+			"human` seat for each person first (Agents › Edit org, or "+
+			"`crewlet config import FILE`)")
 		return nil
 	}
 	tw := tabwriter.NewWriter(p.w, 0, 0, 2, ' ', 0)
@@ -1487,7 +1440,7 @@ func seatInvitation(invitation map[string]any) string {
 	id := str(invitation["id"])
 	switch {
 	case truthy(invitation["sealed"]):
-		return id + " (address sealed under a key this node's keyring does not hold)"
+		return id + " (address can't be read: this node's keyring is missing its key)"
 	case str(invitation["email"]) != "":
 		return id + " (" + str(invitation["email"]) + ")"
 	}
@@ -1505,10 +1458,9 @@ func (p *iamPrinter) reset(answer map[string]any, err error) error {
 	fmt.Fprintf(p.w, "password reset for %s\n%s\n\n", str(answer["id"]),
 		str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
-	fmt.Fprintln(p.w, "This link is shown once and cannot be read back. It "+
-		"sets a new password once and ends every session and token the person "+
-		"holds; issuing another revokes it. Send it to them yourself — this "+
-		"engine never sends mail.")
+	fmt.Fprintln(p.w, "This link is shown once. It sets a new password "+
+		"and signs them out everywhere. Send it to them yourself (Crewlet "+
+		"doesn't send email).")
 	return nil
 }
 
@@ -1521,12 +1473,11 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 		return p.dump(answer)
 	}
 	fmt.Fprintf(p.w, "%s\n\n", str(answer["token"]))
-	fmt.Fprintf(p.w, "credential %s for %s, expires %s\n", str(answer["id"]),
+	fmt.Fprintf(p.w, "token %s for %s, expires %s\n", str(answer["id"]),
 		str(answer["person"]), stamp(answer["expires_at"]))
 	fmt.Fprintf(p.w, "carries %s\n", dash(joinAny(answer["grants"])))
-	fmt.Fprintln(p.w, "This value is shown once. What the estate holds is a "+
-		"hash of it, so nothing can read it back. Present it as "+
-		apiTokenEnv+", or as an `Authorization: Bearer` header.")
+	fmt.Fprintln(p.w, "This token is shown once. Use it as "+
+		apiTokenEnv+" or in an `Authorization: Bearer` header.")
 	return nil
 }
 
@@ -1596,15 +1547,14 @@ func (p *iamPrinter) created(answer map[string]any, err error) error {
 	p.outcome(answer)
 	switch link := str(answer["url"]); {
 	case link != "":
-		fmt.Fprintf(p.w, "\nfirst password link for %s\n%s\n\n", id, link)
+		fmt.Fprintf(p.w, "\npassword link for %s\n%s\n\n", id, link)
 		fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
-		fmt.Fprintf(p.w, "This link is shown once and cannot be read back. It "+
-			"sets their first password once and signs nobody in: they sign in "+
-			"afterwards. Send it to them yourself — this engine never sends "+
-			"mail. Run again with -idempotency-key %s, this command hands back "+
-			"this same link.\n", dash(str(answer["op_id"])))
+		fmt.Fprintf(p.w, "This link is shown once. Send it to them yourself "+
+			"(Crewlet doesn't send email). Run this again with "+
+			"-idempotency-key %s to show the same link.\n",
+			dash(str(answer["op_id"])))
 	case iam.Kind(str(answer["kind"])) == iam.KindMachine:
-		fmt.Fprintf(p.w, "mint its token with `crewlet iam token -person %s`\n", id)
+		fmt.Fprintf(p.w, "create its access token with `crewlet iam token -person %s`\n", id)
 	default:
 		if detail := str(answer["detail"]); detail != "" {
 			fmt.Fprintln(p.w, detail)

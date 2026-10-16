@@ -29,13 +29,10 @@ import (
 // managedRefusal is what a host-side write of a managed document is told:
 // who manages it, why the write is refused, and the two ways forward.
 func managedRefusal(boot *config.Bootstrap, gesture string) error {
-	return fmt.Errorf("the company document is managed: api.auth.company_writers "+
-		"names %s as its only writers, and %s presents no credential, so it would "+
-		"write a revision the managing system replaces at its next reconcile.\n"+
-		"Change the company where it is managed. To write it as one of those "+
-		"writers, run `crewlet config import -api <node>` with %s set to that "+
-		"token; to take the document back, remove api.auth.company_writers from "+
-		"every node's Tier A and restart",
+	return fmt.Errorf("the company config is managed by another system "+
+		"(`api.auth.company_writers`: %s), so %s can't change it here.\n"+
+		"Change it there, or run `crewlet config import -api <node>` with %s "+
+		"set to one of those tokens",
 		strings.Join(boot.API.Auth.CompanyWriters, ", "), gesture, apiTokenEnv)
 }
 
