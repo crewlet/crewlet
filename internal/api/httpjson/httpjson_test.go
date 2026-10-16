@@ -363,9 +363,10 @@ func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
 		case !strings.HasSuffix(message, "."):
 			t.Errorf("%q says %q, which is a fragment: it ends up mid-sentence "+
 				"on a screen", code, message)
-		case strings.Contains(message, "_"):
-			t.Errorf("%q says %q — a snake_case token in the copy means a code "+
-				"or a field name leaked into the half a person reads", code, message)
+		case strings.Contains(outsideCode(message), "_"):
+			t.Errorf("%q says %q: a snake_case token outside backticks means "+
+				"a code or a field name leaked into the half a person reads", code,
+				message)
 		case message[0] < 'A' || message[0] > 'Z':
 			t.Errorf("%q says %q, which does not begin as a sentence", code, message)
 		}
@@ -374,6 +375,18 @@ func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
 		t.Error("a code outside the vocabulary answered a message, so Valid and " +
 			"Message are reading two different tables")
 	}
+}
+
+// outsideCode is message with every backticked span taken out: a setting a
+// sentence names on purpose, as `api.external_url`, is marked as code, and
+// only an unmarked token is one that leaked.
+func outsideCode(message string) string {
+	parts := strings.Split(message, "`")
+	var prose strings.Builder
+	for i := 0; i < len(parts); i += 2 {
+		prose.WriteString(parts[i])
+	}
+	return prose.String()
 }
 
 // A DRIBBLING CLIENT IS CUT OFF, which a size cap cannot do.
@@ -700,7 +713,7 @@ func TestTheNoExternalURLMessageNamesNoOneSurface(t *testing.T) {
 				"code is answered by more than that one surface", message, surface)
 		}
 	}
-	if !strings.Contains(message, "external url") {
+	if !strings.Contains(message, "`api.external_url`") {
 		t.Errorf("the no_external_url message %q does not name the setting "+
 			"that fixes it", message)
 	}
