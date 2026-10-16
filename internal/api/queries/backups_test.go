@@ -38,9 +38,18 @@ func reach(seq uint64) map[string]coord.Position {
 	}
 }
 
+// acknowledged is the operator's acknowledgement of one log, as the register
+// files it: one stream, at the generation [reach] gives it, at one instant.
+func acknowledged(stream string, seq uint64, at time.Time) coord.BackupPoint {
+	return coord.BackupPoint{Owner: coord.OperatorBackupOwner, At: at, Verified: true,
+		Streams: map[string]coord.Position{stream: {
+			Stream: stream, Generation: max(reach(0)[stream].Generation, 1), Seq: seq,
+		}}}
+}
+
 // fourOwners is node-a's verified copy, node-b's NEWER verified one, node-c's
-// newest of all and never verified, and an operator acknowledgement older than
-// every copy.
+// newest of all and never verified, and the operator's acknowledgements of
+// both logs, each older than every copy.
 func fourOwners() register {
 	return register{points: []coord.BackupPoint{
 		{Owner: "node-a", At: backupNow.Add(-26 * time.Hour), Dir: "/var/backups/a",
@@ -49,8 +58,8 @@ func fourOwners() register {
 			Verified: true, Bytes: 8192, Streams: reach(900)},
 		{Owner: "node-c", At: backupNow.Add(-time.Hour), Dir: "/var/backups/c",
 			Verified: false, Bytes: 16384, Streams: reach(950)},
-		{Owner: coord.OperatorBackupOwner, At: backupNow.Add(-30 * time.Hour),
-			Verified: true, Streams: reach(600)},
+		acknowledged("CREWLET_PAGES_LOG", 600, backupNow.Add(-28*time.Hour)),
+		acknowledged("CREWLET_TRACKER_LOG", 600, backupNow.Add(-30*time.Hour)),
 	}}
 }
 
@@ -115,22 +124,25 @@ func askBackups(t *testing.T, s queries.Sources) queries.BackupsAnswer {
 	return got
 }
 
-// THE ROW MARKED NEWEST IS THE POINT THE TRIM READS, under either policy.
+// THE ROWS MARKED NEWEST ARE THE POINTS THE TRIM READS, under either policy.
 //
 // Under `engine` that is the newest VERIFIED copy — node-c's is newer and was
 // never opened, which is exactly the file the trim must not delete the log
 // against. Under `operator` the nodes' own copies count for nothing, however
-// fresh, and the acknowledgement is the only point there is.
+// fresh, and each log's acknowledgement is the point that log's trim reads —
+// both of them, since each names its own log.
 func TestTheNewestBackupIsThePointThePolicyCounts(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		floor   config.BackupFloor
 		policy  config.BackupFloor
-		newest  string
+		newest  []string
 		counted []string
 	}{
-		{"", config.BackupFloorEngine, "node-b", []string{"node-a", "node-b", "operator"}},
-		{config.BackupFloorOperator, config.BackupFloorOperator, "operator", []string{"operator"}},
+		{"", config.BackupFloorEngine, []string{"node-b"},
+			[]string{"node-a", "node-b", "operator", "operator"}},
+		{config.BackupFloorOperator, config.BackupFloorOperator,
+			[]string{"operator", "operator"}, []string{"operator", "operator"}},
 	} {
 		got := askBackups(t, backupSources(t, fourOwners(), c.floor))
 		if got.Policy != c.policy {
@@ -145,8 +157,8 @@ func TestTheNewestBackupIsThePointThePolicyCounts(t *testing.T) {
 				counted = append(counted, p.Owner)
 			}
 		}
-		if !slices.Equal(newest, []string{c.newest}) {
-			t.Errorf("policy %s marked %v newest, want exactly %s", c.policy, newest, c.newest)
+		if !slices.Equal(newest, c.newest) {
+			t.Errorf("policy %s marked %v newest, want exactly %v", c.policy, newest, c.newest)
 		}
 		slices.Sort(counted)
 		if !slices.Equal(counted, c.counted) {
@@ -164,7 +176,7 @@ func TestEachPointCarriesWhatItsTakerAnnounced(t *testing.T) {
 	for _, p := range got.Points {
 		owners = append(owners, p.Owner)
 	}
-	if want := []string{"node-c", "node-b", "node-a", "operator"}; !slices.Equal(owners, want) {
+	if want := []string{"node-c", "node-b", "node-a", "operator", "operator"}; !slices.Equal(owners, want) {
 		t.Fatalf("points in order %v, want newest first %v", owners, want)
 	}
 	b := got.Points[1]
@@ -178,8 +190,74 @@ func TestEachPointCarriesWhatItsTakerAnnounced(t *testing.T) {
 	}; !slices.Equal(b.Covers, want) {
 		t.Errorf("node-b covers %+v, want %+v", b.Covers, want)
 	}
-	if op := got.Points[3]; op.Kind != queries.BackupOwnerOperator || op.Bytes != 0 {
-		t.Errorf("the acknowledgement reads %+v, want the operator kind and no size", op)
+	if op := got.Points[3]; op.Kind != queries.BackupOwnerOperator || op.Bytes != 0 ||
+		!slices.Equal(op.Covers, []queries.BackupCover{
+			{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 600},
+		}) {
+		t.Errorf("the acknowledgement reads %+v, want the operator kind, no size "+
+			"and the one log it names", op)
+	}
+}
+
+// EACH LOG'S TRIM MARKS ITS OWN POINT, and a point that covers one log does not
+// stand in for another's.
+//
+// The screen marked the newest counted point, whatever it covered, as the one
+// "the trim reads". Under `operator` every acknowledgement names one log, so
+// that marked the acknowledgement given last and showed every other log's
+// acknowledgement as merely counted — the screen's version of the trim that
+// blocked every log but the last one acknowledged. Under `engine` a node's
+// newest copy can leave a log out, and an older copy of another node's that
+// covers it is what that log's trim reads.
+func TestEachLogsTrimMarksItsOwnPoint(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		floor  config.BackupFloor
+		points []coord.BackupPoint
+		newest []string
+	}{
+		"three logs acknowledged in turn": {
+			floor: config.BackupFloorOperator,
+			points: []coord.BackupPoint{
+				acknowledged("CREWLET_TRACKER_LOG", 900, backupNow.Add(-3*time.Hour)),
+				acknowledged("CREWLET_PAGES_LOG", 400, backupNow.Add(-2*time.Hour)),
+				acknowledged("CREWLET_TRACKER_VECTORS", 700, backupNow.Add(-time.Hour)),
+			},
+			newest: []string{"CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG", "CREWLET_TRACKER_VECTORS"},
+		},
+		"a node's newer copy that leaves a log out": {
+			floor: config.BackupFloorEngine,
+			points: []coord.BackupPoint{
+				{Owner: "node-a", At: backupNow.Add(-time.Hour), Verified: true,
+					Streams: map[string]coord.Position{
+						"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Generation: 2, Seq: 900},
+					}},
+				{Owner: "node-b", At: backupNow.Add(-5 * time.Hour), Verified: true,
+					Streams: map[string]coord.Position{
+						"CREWLET_PAGES_LOG": {Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 300},
+					}},
+			},
+			newest: []string{"CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := askBackups(t, backupSources(t, register{points: c.points}, c.floor))
+			var newest []string
+			for _, p := range got.Points {
+				if !p.Newest {
+					continue
+				}
+				for _, cover := range p.Covers {
+					newest = append(newest, cover.Stream)
+				}
+			}
+			slices.Sort(newest)
+			if !slices.Equal(newest, c.newest) {
+				t.Errorf("the rows marked newest cover %v, want one for each of %v",
+					newest, c.newest)
+			}
+		})
 	}
 }
 

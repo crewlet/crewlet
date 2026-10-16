@@ -410,9 +410,10 @@ type Sources struct {
 		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
 	}
 
-	// Backups is the fleet's backup register — each owner's newest
-	// announced point, which is what the trim's backup term reads. With
-	// [Sources.Events] it answers `backups`; nil leaves that unregistered.
+	// Backups is the fleet's backup register — each node's newest announced
+	// point and the operator's newest acknowledgement of each log, which is
+	// what each log's backup term reads. With [Sources.Events] it answers
+	// `backups`; nil leaves that unregistered.
 	Backups interface {
 		BackupPoints(ctx context.Context) ([]coord.BackupPoint, error)
 	}

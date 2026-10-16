@@ -17,6 +17,8 @@ func heldDomain(name string, in statelog.TrimInputs, since time.Time) statelog.D
 	in.Now = reportAt
 	d.Decision = statelog.Trim(in.Terms())
 	d.BlockedSince = since
+	// The backup the trim counts, which is none where the inputs have none.
+	d.BackupAt = in.BackupAt
 	return d
 }
 
@@ -55,13 +57,17 @@ func kinds(alarms []statelog.Alarm) []statelog.Kind {
 //
 // Every log's trim waits for the backup the policy asks for, and the backup
 // alarm already says the trim does not advance until there is one. Raised as
-// a `trim_blocked` per log beside it, the one cause read as five alarms on the
-// health count while the gauge and the log line said two.
+// a `trim_blocked` per log beside it, the one cause read as several alarms on
+// the health count while the gauge and the log line said two. Each log's
+// entry under the backup alarm is its OWN backup's measurement, since the
+// policy ages every log's backup on its own, and carries the term holding its
+// trim and the instant it stopped.
 func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) {
 	t.Parallel()
 	since := heldPastWindowBy(46 * time.Hour)
+	logs := []string{"tracker", "vectors", "pages", "usage"}
 	var domains []statelog.DomainInputs
-	for _, name := range []string{"tracker", "vectors", "pages", "usage"} {
+	for _, name := range logs {
 		domains = append(domains, heldDomain(name, noBackup(), since))
 	}
 	rep := statelog.NewReport(statelog.ReportInputs{
@@ -69,18 +75,18 @@ func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) 
 		At:               reportAt,
 		RegisterReadable: true,
 		ReplayWindow:     replayWindow,
-		Reading:          statelog.Reading{BackupMaxAge: 24 * time.Hour},
+		BackupMaxAge:     24 * time.Hour,
 		Domains:          domains,
 	})
 	if got := kinds(rep.Alarms); len(got) != 1 || got[0] != statelog.KindBackupAge {
 		t.Fatalf("the alarms are %v, want backup_age alone", got)
 	}
 	backup := rep.Alarms[0]
-	if len(backup.Domains) != 4 {
-		t.Fatalf("backup_age names %d logs, want the 4 whose trim it holds: %+v",
-			len(backup.Domains), backup.Domains)
+	if len(backup.Domains) != len(logs) {
+		t.Fatalf("backup_age names %d logs, want the %d whose trim it holds: %+v",
+			len(backup.Domains), len(logs), backup.Domains)
 	}
-	for i, want := range []string{"tracker", "vectors", "pages", "usage"} {
+	for i, want := range logs {
 		d := backup.Domains[i]
 		if d.Domain != want {
 			t.Errorf("log %d is %q, want %q in the report's own order", i, d.Domain, want)
@@ -91,13 +97,68 @@ func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) 
 		if !d.Since.Equal(since) {
 			t.Errorf("%s has been held since %v, want %v", d.Domain, d.Since, since)
 		}
+		if !strings.HasPrefix(d.Detail, "no verified backup of this log") {
+			t.Errorf("%s reads %q, which is not its own backup's measurement", d.Domain, d.Detail)
+		}
+		// AND WHAT ITS HOLD HAS COST, which its unraised trim_blocked
+		// would have said.
 		if !strings.Contains(d.Detail, "has not advanced for 214h 15m") {
 			t.Errorf("%s reads %q, which does not say how long it has been held", d.Domain, d.Detail)
 		}
 	}
-	if !strings.HasPrefix(backup.Detail, "no verified backup has been recorded") {
+	if !strings.HasPrefix(backup.Detail, "no verified backup of this log has been recorded") {
 		t.Errorf("the backup alarm's own measurement became %q; the logs it holds "+
 			"are listed beside it, never in place of it", backup.Detail)
+	}
+}
+
+// ONLY THE LOG WHOSE OWN BACKUP IS MISSING HAS ITS HOLD FOLDED.
+//
+// The backup is aged per log, so `backup_age` firing on one log says nothing
+// about another log the backup term holds while its own backup is inside the
+// policy (a copy taken on an earlier generation of that log). Folded into an
+// alarm that does not name it, that hold would be named nowhere.
+//
+// AND ONLY A HOLD THAT RAISES ITS OWN `trim_blocked` IS FOLDED: a log whose
+// backup is missing and whose hold is younger than the replay window and a
+// tick is listed under `backup_age` for its backup, with no term and no
+// instant — a young hold is an alarm nowhere, by whichever term.
+func TestABackupHoldIsFoldedOnlyUnderItsOwnLogsBackupAlarm(t *testing.T) {
+	t.Parallel()
+	uncovered := heldDomain("tracker", noBackup(), heldPastWindowBy(2*time.Hour))
+	earlier := heldDomain("pages", noBackup(), heldPastWindowBy(time.Hour))
+	earlier.BackupAt = reportAt.Add(-time.Hour)
+	young := heldDomain("usage", noBackup(), reportAt.Add(-time.Hour))
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		ReplayWindow:     replayWindow,
+		BackupMaxAge:     24 * time.Hour,
+		Domains:          []statelog.DomainInputs{uncovered, earlier, young},
+	})
+	got := kinds(rep.Alarms)
+	if len(got) != 2 || got[0] != statelog.KindBackupAge || got[1] != statelog.KindTrimBlocked {
+		t.Fatalf("the alarms are %v, want backup_age then trim_blocked", got)
+	}
+	backup := rep.Alarms[0].Domains
+	if len(backup) != 2 || backup[0].Domain != "tracker" || backup[1].Domain != "usage" {
+		t.Fatalf("backup_age names %+v, want tracker and usage, the two logs no "+
+			"backup covers", backup)
+	}
+	if backup[0].Term != statelog.TermBackupFloor || backup[0].Since.IsZero() {
+		t.Errorf("tracker under backup_age = %+v, want the backup term and the "+
+			"instant its trim stopped, since its own trim_blocked is folded there", backup[0])
+	}
+	if backup[1].Term != "" || !backup[1].Since.IsZero() ||
+		strings.Contains(backup[1].Detail, "has not advanced") {
+		t.Errorf("usage under backup_age = %+v, want no term and no instant: its "+
+			"hold is younger than the replay window, so it raised no trim_blocked "+
+			"to fold", backup[1])
+	}
+	if d := rep.Alarms[1].Domains; len(d) != 1 || d[0].Domain != "pages" ||
+		d[0].Term != statelog.TermBackupFloor {
+		t.Errorf("trim_blocked names %+v, want pages held by the backup term", d)
 	}
 }
 
@@ -153,8 +214,9 @@ func heldByANodeBehind() statelog.TrimInputs {
 //
 // An alarm standing on several logs carries ONE detail, and it is the one a
 // person reads first: the log nearest its ceiling, the ceiling that holds the
-// fewest days, the trim held longest, the record held longest, the floor
-// unreadable longest and the read rate furthest past its census. Each row
+// fewest days, the trim held longest, the backup missing or else oldest, the
+// record held longest, the floor unreadable longest and the read rate furthest
+// past its census. Each row
 // fires its kind on two logs, `weak` and `strong`, and the alarm must lead
 // with `strong`'s measurement with the logs in either order — the first order
 // is what a comparison that never prefers anything fails, the second what an
@@ -184,6 +246,13 @@ func TestEveryPerLogKindLeadsWithItsMostPressingLog(t *testing.T) {
 		statelog.KindTrimBlocked: func(weak, strong *statelog.DomainInputs) {
 			*weak = heldDomain(weak.Domain, heldByANodeBehind(), heldPastWindowBy(10*time.Minute))
 			*strong = heldDomain(strong.Domain, heldByANodeBehind(), heldPastWindowBy(3*time.Hour))
+		},
+		statelog.KindBackupAge: func(weak, strong *statelog.DomainInputs) {
+			// TWO COPIES PAST THE POLICY: the older leads. A log no copy
+			// covers at all leads either, which
+			// TestTheBackupAlarmAgesEachLogsOwnBackup holds.
+			weak.BackupAt = reportAt.Add(-30 * time.Hour)
+			strong.BackupAt = reportAt.Add(-50 * time.Hour)
 		},
 		statelog.KindDeferredOld: func(weak, strong *statelog.DomainInputs) {
 			weak.DeferredJudgesCopy, strong.DeferredJudgesCopy = true, true
@@ -217,6 +286,7 @@ func TestEveryPerLogKindLeadsWithItsMostPressingLog(t *testing.T) {
 					At:               reportAt,
 					RegisterReadable: true,
 					ReplayWindow:     replayWindow,
+					BackupMaxAge:     24 * time.Hour,
 					Domains:          order,
 				})
 				var raised []statelog.Alarm
