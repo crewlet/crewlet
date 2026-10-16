@@ -276,20 +276,33 @@ func nowUTC() time.Time { return time.Now().UTC() }
 // ErrInvalid reports a value this knowledge base refuses.
 var ErrInvalid = fmt.Errorf("pages: invalid")
 
-// invalidError is a refusal naming the field and what to do, marked
+// InvalidError is a refusal naming the field and what to do, marked
 // [ErrInvalid]. The field and the sentence are held apart so [Sentence] can
 // say them to a PERSON — a write surface prints this class as it stands — while
 // the Go error keeps the form every log and model has read.
-type invalidError struct{ field, why string }
-
-func (e *invalidError) Error() string {
-	return fmt.Sprintf("%v: %s: %s", ErrInvalid, e.field, e.why)
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told: the wire rebuilds an error TYPE from its exported fields, and
+// an unexported one arrived as its message alone — so [Sentence] on the asking
+// node found no refusal and handed a person the whole "pages: invalid: …".
+// Only this package builds one.
+type InvalidError struct {
+	// Field is the argument refused, as the caller named it.
+	Field string
+	// Why is what is wrong with it and what to do, without the package
+	// prefix.
+	Why string
 }
-func (e *invalidError) Unwrap() error { return ErrInvalid }
+
+func (e *InvalidError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrInvalid, e.Field, e.Why)
+}
+func (e *InvalidError) Unwrap() error { return ErrInvalid }
 
 // invalid builds a refusal naming the field and what to do.
 func invalid(field, why string, args ...any) error {
-	return &invalidError{field: field, why: fmt.Sprintf(why, args...)}
+	return &InvalidError{Field: field, Why: fmt.Sprintf(why, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
@@ -298,9 +311,9 @@ func invalid(field, why string, args ...any) error {
 // nothing about what to change. Any other error, or a refusal a caller
 // wrapped in context of its own, is its whole message.
 func Sentence(err error) string {
-	var r *invalidError
+	var r *InvalidError
 	if errors.As(err, &r) && r.Error() == err.Error() {
-		return "`" + r.field + "`: " + r.why
+		return "`" + r.Field + "`: " + r.Why
 	}
 	return err.Error()
 }
