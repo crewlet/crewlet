@@ -166,11 +166,8 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		// with — first in [FindingKinds], so first in the report.
 		findings = append(findings, Finding{
 			Kind: KindNoAdminHolder,
-			Detail: "no active person holding an enrolled credential holds " +
-				string(iam.GrantAdmin) + ", so nobody can invite, grant or " +
-				"revoke except through a Tier A token; a service account " +
-				"holding admin does not count, because no administrative " +
-				"identity record is written through a token",
+			Detail: "No active person holds " + string(iam.GrantAdmin) +
+				". Only an API token can invite people or change access.",
 		})
 	}
 	// STABLE, so within a kind the directory's order holds and two nodes
@@ -200,15 +197,12 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow,
 	if row.Stage == iam.StageActive && !held.live {
 		// THE REMEDY IS THE KIND'S: a service account has no password, so
 		// the reset link a person's finding names is refused for it.
-		detail := "this person is active and holds no live way in, so they " +
-			"cannot sign in — a first password link that lapsed unspent or " +
-			"was revoked, or every credential revoked; issue them a password " +
-			"reset link (POST /iam/people/" + row.ID + "/password-reset), or " +
-			"remove them"
+		detail := "This person can't sign in. Send them a password reset link " +
+			"(POST /iam/people/" + row.ID + "/password-reset), or remove them."
 		if row.Kind == iam.KindMachine {
-			detail = "this service account is active and holds no live token, " +
-				"so it cannot authenticate; mint it one (POST " +
-				"/iam/credentials?person=" + row.ID + "), or remove it"
+			detail = "This service account has no working access token. " +
+				"Create one (POST /iam/credentials?person=" + row.ID + "), or " +
+				"remove it."
 		}
 		out = append(out, Finding{
 			Kind: KindNoCredential, Person: row.ID, Login: row.Login,
@@ -238,10 +232,9 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow,
 		out = append(out, Finding{
 			Kind: KindAdminClamped, Person: row.ID, Login: row.Login,
 			Grant: iam.GrantAdmin,
-			Detail: "this node's api.auth.admin is refuse, so the row holds " +
-				"admin and this node does not honour it — they keep every " +
-				"app here; sign in through a node that serves admin to " +
-				"administer the company",
+			Detail: "Their admin access doesn't work on this node " +
+				"(`api.auth.admin: refuse`). Sign in on a node that serves " +
+				"admin to use it.",
 		})
 	}
 	return out, bindingChecked

@@ -88,15 +88,14 @@ func (s *Service) GetPeople(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.Stage != "" && !q.Stage.Valid() {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": strconv.Quote(string(q.Stage)) +
-				" is not an enrolment stage"})
+			map[string]string{"detail": unknownStage(q.Stage)})
 		return
 	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-				map[string]string{"detail": "limit is not a number"})
+				map[string]string{"detail": "limit must be a number."})
 			return
 		}
 		q.Limit = limit
@@ -213,7 +212,8 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	if !kind.Valid() {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": strconv.Quote(in.Kind) +
-				" is not a principal kind"})
+				" isn't a valid kind. Use " + string(iam.KindPerson) + " or " +
+				string(iam.KindMachine) + "."})
 		return
 	}
 	// TRIMMED, as an invitation's seat is: the domain looks the handle up
@@ -223,14 +223,13 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	if kind == iam.KindPerson && seat == "" {
 		// BEFORE THE KEY IS READ, so a refusal the caller fixes by typing a
 		// seat mints nothing and publishes nothing.
-		refuseSeatless(w, "a person is created onto the human seat they "+
-			"will hold — name a vacant one (GET /iam/seats?unheld=true lists "+
-			"them)")
+		refuseSeatless(w, "A person needs a human seat. Pick an empty one "+
+			"(GET /iam/seats?unheld=true lists them).")
 		return
 	}
 	// WHAT THEY MAY DO, STATED, before the key is read for the seat's own
 	// reason: a refusal the caller fixes by typing a field mints nothing.
-	if !requireGrants(w, in.Grants, "a create") {
+	if !requireGrants(w, in.Grants, "a new person") {
 		return
 	}
 	// THE ADDRESS AND THE LOGIN ARE TRIMMED as the seat is, and as an
@@ -247,15 +246,14 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		// domain's to refuse, naming the address.
 		if login = iam.LoginFromAddress(email); login == "" {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"field": "login", "detail": "no login " +
-					"can be proposed from that address — send one: lowercase " +
-					"words joined by dots, as jane.doe"})
+				map[string]string{"field": "login", "detail": "Couldn't make " +
+					"a login from that address. Send one, like jane.doe."})
 			return
 		}
 	}
 	var expires time.Time
 	if kind == iam.KindPerson {
-		if !s.linksPoint(w, "a first password") {
+		if !s.linksPoint(w, "a password") {
 			return
 		}
 		expires = s.now().Add(credential.EnrolmentLinkLifetime)
@@ -343,17 +341,25 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		answer["credential"] = link.Credential
 		answer["url"] = s.resetURL(link.Credential, link.Secret)
 		answer["expires_at"] = link.ExpiresAt
-		answer["detail"] = "this link is shown once and cannot be read back; " +
-			"send it to the person yourself — this engine sends no mail. It " +
-			"sets their first password once, signs nobody in, and expires at " +
-			"the instant above; a retry under the same " + opkey.Header +
-			" hands back this same link"
+		answer["detail"] = "This link is shown only once. Send it to them " +
+			"yourself (Crewlet doesn't send email). It expires at the time above."
 	case created.LinkClosed:
-		answer["detail"] = "the first password link no longer opens — spent, " +
-			"revoked or aged out — so it is not handed back; issue a password " +
-			"reset link (POST /iam/people/" + person + "/password-reset)"
+		answer["detail"] = "The password link no longer works. Send a password " +
+			"reset link instead (POST /iam/people/" + person + "/password-reset)."
 	}
 	s.answer(w, r, opID, created.Result, nil, http.StatusCreated, answer)
+}
+
+// unknownStage is the refusal of a stage this build does not know, naming the
+// ones it does, read off [iam.Stages] so a stage added there is named here.
+func unknownStage(stage iam.Stage) string {
+	names := make([]string, len(iam.Stages))
+	for i, s := range iam.Stages {
+		names[i] = string(s)
+	}
+	last := len(names) - 1
+	return strconv.Quote(string(stage)) + " isn't a valid status. Use " +
+		strings.Join(names[:last], ", ") + " or " + names[last] + "."
 }
 
 // refuseSeatless answers a person's gesture that names no seat — `400
@@ -449,17 +455,15 @@ func (b *patchBody) trim() {
 func (b patchBody) refusal() string {
 	switch {
 	case b.Login != nil && *b.Login == "":
-		return "a login is never cleared, only changed: every principal " +
-			"holds one — it is the name the directory lists them under, and " +
-			"the name a service account's changes are recorded under"
+		return "A login can be changed but not cleared. Send a new one."
 	case b.Stage != nil && !b.Stage.Valid():
-		return strconv.Quote(string(*b.Stage)) + " is not an enrolment stage"
+		return unknownStage(*b.Stage)
 	case len(b.Reason) > iamdomain.MaxReason:
-		return "the reason is " + strconv.Itoa(len(b.Reason)) + " bytes and " +
-			"the cap is " + strconv.Itoa(iamdomain.MaxReason)
+		return "The reason is too long (" + strconv.Itoa(len(b.Reason)) +
+			" bytes). Keep it under " + strconv.Itoa(iamdomain.MaxReason) + "."
 	case b.Grants != nil && (len(b.AddGrants) > 0 || len(b.RemoveGrants) > 0):
-		return "`grants` is the whole set and `add_grants` and " +
-			"`remove_grants` a change to what they hold: send one or the other"
+		return "Send either `grants` (the full set) or `add_grants` and " +
+			"`remove_grants`, not both."
 	}
 	// A NAME NOBODY KNOWS IS NEVER ADDED, and `add_grants` adds whatever it
 	// names, so one there is refused naming the set — before anything is
@@ -470,14 +474,13 @@ func (b patchBody) refusal() string {
 	// since a name the row already carries is kept rather than added.
 	for _, g := range b.AddGrants {
 		if !g.Valid() {
-			return strconv.Quote(string(g)) + " is not a permission this " +
-				"build knows, so it cannot be added — the permissions are " +
-				grantSet()
+			return unknownGrant(g)
 		}
 	}
 	for _, g := range b.AddGrants {
 		if slices.Contains(b.RemoveGrants, g) {
-			return string(g) + " is both added and removed"
+			return string(g) + " is in both add_grants and remove_grants. " +
+				"Pick one."
 		}
 	}
 	return ""
@@ -592,8 +595,8 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		}
 		out["landed"] = slices.Clone(moved)
 		if refusal != nil {
-			out["hint"] = "the changes in `landed` were made and the rest " +
-				"were not; deal with the refusal and send the rest again"
+			out["hint"] = "Only the changes in `landed` were saved. Fix the " +
+				"error, then send the rest again."
 		}
 		return out
 	}
@@ -725,7 +728,7 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opID := op.key
-	const reason = "the second factor was reset"
+	const reason = "two-step verification was reset"
 	cleared, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: id,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
@@ -766,10 +769,10 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		s.answerWrite(w, r, opID, sequence(opID, cleared, revoked), err,
 			map[string]any{
 				"id": id,
-				"detail": "the second factor was cleared and nothing says the " +
-					"sessions were ended; retry with the same " +
+				"detail": "Two-step verification was reset, but their " +
+					"sessions may still be open. Retry with the same " +
 					opkey.Header + ", or end them with DELETE " +
-					"/iam/people/" + id + "/sessions",
+					"/iam/people/" + id + "/sessions.",
 			})
 		return
 	}

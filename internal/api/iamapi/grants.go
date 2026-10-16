@@ -38,10 +38,9 @@ import (
 func requireGrants(w http.ResponseWriter, grants *[]iam.Grant, what string) bool {
 	if grants == nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"field": "grants", "detail": what + " states " +
-				"what it confers in `grants`: any of " + grantSet() +
-				", or [] for the overview alone — an omitted list is refused " +
-				"rather than read as either"})
+			map[string]string{"field": "grants", "detail": "Send `grants` " +
+				"with " + what + ": any of " + grantSet() + ", or [] for " +
+				"overview only."})
 		return false
 	}
 	return refuseUnknown(w, "grants", *grants, nil)
@@ -62,12 +61,17 @@ func refuseUnknown(w http.ResponseWriter, field string, added,
 			continue
 		}
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"field": field, "detail": strconv.Quote(string(g)) +
-				" is not a permission this build knows, so it cannot be " +
-				"added — the permissions are " + grantSet()})
+			map[string]string{"field": field, "detail": unknownGrant(g)})
 		return false
 	}
 	return true
+}
+
+// unknownGrant is the refusal of a permission this build does not know,
+// naming the set it does.
+func unknownGrant(g iam.Grant) string {
+	return strconv.Quote(string(g)) + " isn't a permission. Use one of " +
+		grantSet() + "."
 }
 
 // grantSet is every permission this build knows, as a sentence names them —

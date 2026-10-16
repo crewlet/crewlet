@@ -195,7 +195,7 @@ func TestACancellationAnswersWhatItsRecordDecided(t *testing.T) {
 				}
 				detail, _ := got.body["detail"].(string)
 				if got.body["error"] != "stale" ||
-					!strings.Contains(detail, "already been redeemed") ||
+					!strings.Contains(detail, "already used") ||
 					strings.Contains(detail, "iamdomain") ||
 					strings.Contains(detail, bob.String()) {
 					t.Errorf("a redeemed invitation is refused %v, want `stale` "+

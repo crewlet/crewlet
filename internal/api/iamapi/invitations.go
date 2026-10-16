@@ -94,7 +94,7 @@ func (s *Service) GetInvitations(w http.ResponseWriter, r *http.Request) {
 		limit, err := strconv.Atoi(raw)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-				map[string]string{"detail": "limit is not a number"})
+				map[string]string{"detail": "limit must be a number."})
 			return
 		}
 		q.Limit = limit
@@ -176,16 +176,14 @@ func (s *Service) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, iamdomain.ErrNoInvitation):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-			map[string]string{"detail": "this estate holds no invitation " +
-				"with that id: never issued, cancelled already, or collected " +
-				"once it was redeemed or aged out"})
+			map[string]string{"detail": "There's no invitation with that id. " +
+				"It may have been cancelled, used or expired."})
 		return
 	case errors.As(err, &redeemed):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeStale,
-			httpjson.Detail{"detail": "this invitation has already been " +
-				"redeemed: the person it invited has joined, so there is no " +
-				"link left to cancel — remove them instead if they should " +
-				"not have access", "person": redeemed.Person, "id": id})
+			httpjson.Detail{"detail": "This invitation was already used. " +
+				"Remove the person instead if they shouldn't have access.",
+				"person": redeemed.Person, "id": id})
 		return
 	}
 	if err == nil && ownLanding(cancelled) {

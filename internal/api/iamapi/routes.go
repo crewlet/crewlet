@@ -320,9 +320,8 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (key, seed s
 	// own tag reaches here unchanged, and the grammar held it too.
 	seed, _, _ = strings.Cut(key, ".")
 	if id, err := uuid.Parse(seed); err != nil || id.Version() != 7 {
-		opkey.Refuse(w, fmt.Errorf("the %s on a create is the seed of the id it "+
-			"creates, so it begins with a uuid7 — send back the op_id the first "+
-			"attempt answered with, or omit it for a new create", opkey.Header))
+		opkey.Refuse(w, fmt.Errorf("the %s on a create must start with a uuid7. "+
+			"Resend the first attempt's op_id, or leave it out", opkey.Header))
 		return "", "", false
 	}
 	return key, seed, true
@@ -510,10 +509,8 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// surface's own, since the domain's is written for a log.
 		refuse(http.StatusBadRequest, httpjson.CodeSeatRequired, httpjson.Detail{
 			"field": "seat",
-			"detail": "a person holds a human seat for as long as they are " +
-				"here, so they are created and invited onto one and moved to " +
-				"another, never to none — to free a seat, move its holder to " +
-				"another human seat or remove them",
+			"detail": "Every person needs a human seat. To free this one, " +
+				"move them to another seat or remove them.",
 		})
 		return
 	case errors.Is(err, iamdomain.ErrNoCompany):
@@ -602,9 +599,8 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		httpjson.Write(w, success, body)
 	case statelog.OutcomePending:
 		if _, said := body["detail"]; !said {
-			body["detail"] = "this change is durable at the position above " +
-				"and every node will apply it; this one has not yet. Read at " +
-				"that position to see it."
+			body["detail"] = "Saved. This node will show it in a moment. " +
+				"Read at the position above to see it now."
 		}
 		httpjson.Write(w, http.StatusAccepted, body)
 	default:
@@ -644,9 +640,9 @@ func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjs
 	if taken.Invitation != "" {
 		return httpjson.Detail{"field": string(taken.Field),
 			"invitation": taken.Invitation,
-			"detail": what + " is held by an open invitation — cancel it " +
-				"(DELETE /iam/invitations/" + taken.Invitation + ") first, or " +
-				"let it be redeemed or lapse"}
+			"detail": what + " belongs to an open invitation. Cancel it " +
+				"first (DELETE /iam/invitations/" + taken.Invitation + "), or " +
+				"wait for it to expire."}
 	}
 	holder := "somebody else"
 	if row, err := s.directory.Person(r.Context(), taken.Person); err == nil &&
@@ -654,7 +650,7 @@ func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjs
 		holder = row.Login
 	}
 	return httpjson.Detail{"field": string(taken.Field), "held_by": taken.Person,
-		"detail": fmt.Sprintf("%s is already held by %s — choose another",
+		"detail": fmt.Sprintf("%s is already taken by %s. Choose another.",
 			what, holder)}
 }
 

@@ -130,7 +130,7 @@ func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, _ := iam.From(r.Context())
 	reason := reasonOr(r.URL.Query().Get("reason"),
-		"every session in the company was invalidated")
+		"everyone in the company was signed out")
 	op, ok := s.opIDFor(w, r, "sessions-invalidate", nil)
 	if !ok {
 		return
@@ -141,7 +141,7 @@ func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
 		log.WarnContext(r.Context(), "iam_generation_bumped",
 			"by", iam.ActorFor(principal).Name,
 			"position", bumped.Position.String(),
-			"detail", "every session in this company is now invalid")
+			"detail", "Everyone in this company is now signed out.")
 	}
 	s.answerWrite(w, r, opID, bumped, err, nil)
 }
