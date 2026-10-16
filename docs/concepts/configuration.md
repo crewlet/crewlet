@@ -402,7 +402,7 @@ in a fixed order, and names each stage it got through.
    The revision's sandbox catalogue (`providers.sandbox`) is built straight after, and one that cannot be built refuses the apply there — reporting `secrets, company` and nothing else, since nothing below has touched the node yet. On **every** node, whether or not it runs a sandbox yet: the alternative publishes a company whose sandbox-enabled seats plan around a box nobody can mint.
 3. **`native`** — bring up the native tracker's and knowledge base's **halves** on a node running neither, for its first company on them: their read and write sides, the lexical index, and — on a node that publishes — the embedding duty and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 6), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
 4. **`sandbox_runtime`** — bring up the [code sandbox](code-sandbox.md)'s coordinator and completion poll on a node running neither, for the first revision whose `providers.sandbox` reaches a cell, and prepare the seats this node **already** holds: each was taken before there was anything to prepare, so each now attaches its completion topic and recovers the runs recorded on it, as a seat taken afterwards does on its way in. A seat whose preparation fails is handed back (a voluntary `unprepared` release), so its next acquisition, here or on a peer, runs the whole of it. **Before** `tools` for the reason `native` is: `run_sandbox` and an agent-mode executor are offered only where the runtime exists. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met a sandbox company at boot. Like the native halves it is a fact about the process rather than a revision, so a later refusal of the same apply does not take it down.
-5. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
+5. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change. (The one part of a published epoch that does change is its shared MCP servers' tools: a server that comes up after its start failed, or comes back from a crash with a different tool list, is refiled into the current epoch's registry without an apply. See [A server that dies, or will not start](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start).)
 6. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage builds it, and a build that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy). What feeds the dispatcher is not this stage's: each seat's reflection subject is attached by the node that acquires the seat, beside its mailbox.
 7. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. The swap carries the backend of any cell the revision dropped as *retired*, for the runs still on it, and a revision with no `providers.sandbox` keeps the last manager for the runs in flight (see [Code Sandbox](code-sandbox.md#engine-provider--providerssandbox)). It cannot fail — the catalogue was built at `company` — and it runs after every stage that can refuse a node already serving a company, so a refused apply never leaves this node launching through a catalogue its current epoch does not have. **Conditional:** only where this node runs a sandbox runtime, from its boot or from a `sandbox_runtime` start.
 8. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new org chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
@@ -513,7 +513,12 @@ comparing every field: a change to `url` or `headers` restarts **only that
 server**, and every other child keeps running and keeps contributing the tools
 it is already serving. The comparison is over *resolved* values, so a rotated
 credential reads as a changed spec — see
-[Rotation](control-plane.md#rotation).
+[Rotation](control-plane.md#rotation). A server the reconcile finds **down**
+(its process died, or its start failed, and the engine is bringing it back) is
+not restarted and not waited for: it is asked to try again at once, and its
+tools are filed into the new epoch where they would be if it were up, refusing
+until it is back — see
+[A server that dies, or will not start](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start).
 
 A server the revision **removed** is stopped rather than merely dropped from
 the catalogue, and that is a separate step because the reconcile above is
@@ -558,11 +563,14 @@ Unlike the shared servers, which are reconciled *before* the swap and so hold
 the apply until each has started, a seat's children are reconciled after it
 and the apply does not wait for them. A turn that starts in between runs on
 the seat's refiled registry, which still lists the children as the apply found
-them, and a call to one being restarted comes back as a tool error the model
-can read; the seat refiles its registry again once its reconcile is done, so
-its next turn sees the restarted children. A child that would not start is
-retried on its own as well, while the seat is held, and no reconcile starts a
-child for a seat this node can no longer prove it holds. See
+them, and a call to one being restarted is refused, classed `unavailable`, as
+a server no longer running on this node; the seat refiles its registry again
+once its reconcile is done, so its next turn sees the restarted children. A
+child that would not start is retried on its own as well, while the seat is
+held, and one that dies after starting is restarted; an apply asks a child it
+finds down to try again at once rather than reconciling it. No reconcile, retry
+or restart starts a child for a seat this node can no longer prove it holds.
+See
 [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 ### What follows a published company

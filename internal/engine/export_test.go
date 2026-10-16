@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -27,20 +28,45 @@ func WithUsageFlushEvery(opts Options, every time.Duration) Options {
 	return opts
 }
 
+// The helper tool server's environment, named once for both halves of the
+// suite: mcpserver_test.go runs the server (its TestMain re-executes the test
+// binary as one) and says what each variable does, and a case inside the
+// package launches the same server, which it could not if the names were
+// declared outside it.
+const (
+	ToolServerModeEnv          = "CREWLET_ENGINE_TEST_MCP"
+	ToolServerToolEnv          = "CREWLET_ENGINE_TEST_TOOL"
+	ToolServerEchoEnv          = "CREWLET_ENGINE_TEST_ECHO"
+	ToolServerRequireEnv       = "CREWLET_ENGINE_TEST_REQUIRE"
+	ToolServerHoldEnv          = "CREWLET_ENGINE_TEST_HOLD"
+	ToolServerReadyEnv         = "CREWLET_ENGINE_TEST_READY"
+	ToolServerLaunchesEnv      = "CREWLET_ENGINE_TEST_LAUNCHES"
+	ToolServerFailLaunchesEnv  = "CREWLET_ENGINE_TEST_FAIL_LAUNCHES"
+	ToolServerCrashLaunchesEnv = "CREWLET_ENGINE_TEST_CRASH_LAUNCHES"
+	ToolServerCrashCode        = 3
+	ToolServerLaunchToken      = "{launch}"
+)
+
+// WithMCPRetryBase is opts with the MCP restart schedule's first wait at base
+// rather than [mcp.RestartBase], the rest of it scaled to match, for a test
+// outside the package that must watch a retry or a restart bring a server up —
+// a shared server's or a seat's per-role child's — without waiting fifteen
+// seconds for it.
+func WithMCPRetryBase(opts Options, base time.Duration) Options {
+	opts.mcpRetryBase = base
+	return opts
+}
+
+// MCPStatus is this node's MCP servers as its heartbeat would publish them
+// now, for a test outside the package that reads what an operator is told.
+func MCPStatus(e *Engine) []coord.MCPServerStatus { return e.mcpStatus() }
+
 // WithSweepEvery is opts with this node's seat host sweeping placement every
 // every rather than every [seat.SweepInterval], for a test outside the package
 // that must tell a claim the sweep's tick made from one something else asked
 // for.
 func WithSweepEvery(opts Options, every time.Duration) Options {
 	opts.sweepEvery = every
-	return opts
-}
-
-// WithSeatRetryBase is opts with a seat's per-role child that would not start
-// retried first after base rather than after [seatServerRetryBase], for a test
-// outside the package that must watch a retry bring the child up.
-func WithSeatRetryBase(opts Options, base time.Duration) Options {
-	opts.seatRetryBase = base
 	return opts
 }
 

@@ -57,7 +57,7 @@ func TestBridgeHandsOutToolsAlreadyStamped(t *testing.T) {
 	// afterwards. So the bridge does not hand out a bare tool for a registry
 	// to file: it hands out the pair, and a registry that takes a
 	// Registration cannot lose the answer.
-	b := NewBridge(discardLogger())
+	b := NewBridge(discardLogger(), Supervision{})
 	change, err := b.Add(t.Context(), helperSpec(t, InstanceName("github", "Engineer"), "serve", nil))
 	if err != nil {
 		t.Fatalf("Add: %v", err)

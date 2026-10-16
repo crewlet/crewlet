@@ -246,7 +246,7 @@ node means nothing was done.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Takes `admin`** (see [below](#get-credential-pool)) |
 | `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
-| `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -2867,6 +2867,13 @@ these four pushes follow every one of them, as the last step of
 Each is a WHOLE payload that replaces its predecessor: the hub drops the
 oldest queued envelope without telling the client, so a delta it dropped would
 be unrecoverable.
+
+**The `tools` push is also re-sent alone** when the catalogue moves between
+publishes: the one part of a published company that does is its shared MCP
+servers' tools, refiled when a server
+[comes back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start)
+from a crash listing different tools, or comes up on a retry of a start that
+failed. The other three have not moved, so they are not sent.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
@@ -6190,9 +6197,12 @@ what the configuration declares for it and what each live node did with it.
 launch commands and the first line of each failure, which is what the
 configuration it reports on carries.
 
-**Off the heartbeats, not a fan-out.** Each node re-publishes what its MCP
-starts concluded on its presence lease, one row per server with its instances
-counted (a per-seat template has one instance per seat that node holds), so
+**Off the heartbeats, not a fan-out.** Each node re-publishes its MCP servers
+as they are at each beat on its presence lease — a child that died after it
+started counts as failed until the engine has
+[brought it back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start),
+and a shared server whose start failed counts as started once a retry brings it
+up — one row per server with its instances counted (a per-seat template has one instance per seat that node holds), so
 one read of the lease table is every node's answer at once. A node whose last
 heartbeat carried no status (its status hook overran the beat) is
 `reported: false` and its cells are UNKNOWN — never a row of zeros, which would
@@ -6209,15 +6219,17 @@ so no screen re-derives it:
 
 | `state` | Means |
 |---|---|
-| `running` | Every instance any node launched started and listed its tools |
-| `partial` | Some started and some did not — a node's environment or one seat's credentials rather than the server |
-| `failing` | Instances were launched and none started — the server, its command or address, or credentials every seat shares |
+| `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
+| `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
+| `failing` | Instances were launched and none is serving — the server, its command or address, or credentials every seat shares, or every instance went down and is being restarted |
 | `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
 | `unreported` | No live node's latest heartbeat carried the report |
 
 `error` is one failed instance's reason, cut to 240 bytes on the heartbeat,
 and `error_seat` the seat it was launched for; the whole text is the node's
-`mcp_server_failed` log line.
+`mcp_server_failed` log line for a start that failed, and its `server_exited`
+or `server_restart_failed` line for an instance that went down after it
+started.
 
 `unlisted_annotations` are the entry's `tool_annotations` keys that no
 instance started on a reporting node lists a tool for — by the server's own

@@ -31,6 +31,12 @@ import (
 // that needs a class treats it as the server's own failure rather than
 // guessing one.
 //
+// What IS classed is a call the engine refuses ABOUT a server: one that is not
+// running — down and being restarted, or stopped — or whose session ended
+// under the call. That sentence is the engine's, from a state it observed
+// rather than prose it would have to read, so it carries [RefusalUnavailable]
+// like any other first-party refusal (supervise.go).
+//
 // # Why it is an ERROR, carried in the cause
 //
 // Because the class is a fact about WHY the call failed, and [Result.Cause]
@@ -159,8 +165,9 @@ func (r Refusal) Error() string { return "refused: " + string(r) }
 
 // ErrOutcomeUnknown is the cause of a failed write whose outcome NOBODY CAN
 // VOUCH FOR: the append's acknowledgement was lost, or the node answered
-// before it applied, so the write may have landed. [UnknownOf] is exactly
-// [errors.Is] against it.
+// before it applied, so the write may have landed — or an MCP server's
+// session ended with the call in flight, so whatever the tool does may have
+// been done (supervise.go). [UnknownOf] is exactly [errors.Is] against it.
 //
 // DEFINED HERE, beneath every tool, because the tools that make writes sit
 // above this package and the readers of a result — the audit, the loop's

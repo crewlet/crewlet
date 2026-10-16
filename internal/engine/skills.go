@@ -107,8 +107,9 @@ func (e *Engine) refreshSkillVariables(c *Company) {
 //
 // AGAINST THE EPOCH THAT IS CURRENT, never one still being built, which is why
 // it takes no epoch. It has two inputs and runs wherever either one changes:
-// after an epoch is installed ([Engine.installEpoch]), and after the skill
-// sync changed the registry (its OnChange hook), each reading the other as it
+// after an epoch is installed ([Engine.installEpoch]) or its shared MCP tools
+// are refiled ([Engine.sharedCatalogueChanged]), and after the skill sync
+// changed the registry (its OnChange hook), each reading the other as it
 // stands at that moment, so the last change to either is always audited
 // against the last value of the other. It ran inside [Engine.equip] before,
 // against the epoch an apply was building, while the sync audited against
