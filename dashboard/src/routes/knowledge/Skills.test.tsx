@@ -170,7 +170,7 @@ test("a seat's learned skills are locked to a reader who may not read its trail"
     viewer: { login: "erin", owner: "erin", handle: "", grants: ["knowledge"], acts: [] },
   });
   await settle();
-  expect(screen.getByText(/needs Admin access/)).toBeTruthy();
-  expect(screen.getByText(/Whoever leads this seat reads it too\./)).toBeTruthy();
+  expect(screen.getByText("You need Admin access")).toBeTruthy();
+  expect(screen.getByText(/This seat’s lead can see it too\./)).toBeTruthy();
   expect(asked.some((a) => a.kind === "agent_memory")).toBe(false);
 });

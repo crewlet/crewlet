@@ -54,18 +54,15 @@ export type QueryErrorCode =
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.
-  invalid_token: "Your sign-in has ended. Sign in again, then make the change.",
-  identity_unavailable:
-    "This node cannot confirm who you are just now. Try again in a moment; your sign-in is fine.",
-  seat_unavailable:
-    "The seat you act as is no longer in the org chart, so nothing can be made in its name.",
-  second_factor_enrolment_required:
-    "This deployment requires a second factor. Enrol one before you make changes.",
+  invalid_token: "Signed out. Sign in again.",
+  identity_unavailable: "Couldn’t confirm who you are. Try again.",
+  seat_unavailable: "Your seat was removed. Ask an admin to move you.",
+  second_factor_enrolment_required: "Set up two-step verification first.",
   csrf_origin:
     "The engine refused a change sent from another site. Make it from this page's own address.",
   // The authority table's, through the one refusal mapping.
-  unauthorized: "You do not hold what this change needs.",
-  step_up_required: "This change needs you to confirm who you are first.",
+  unauthorized: "You don’t have access to this.",
+  step_up_required: "Confirm it’s you first.",
   // The transport's own.
   unknown_tool:
     "This engine does not support that change. It may be running a different version. Reload the page.",

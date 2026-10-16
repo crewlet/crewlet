@@ -298,9 +298,7 @@ test("a refusal on authority carries the grants the engine named, and draws them
   const refusal = () => document.querySelector(".write-refusal");
   await waitFor(() => expect(refusal()).not.toBeNull());
   expect(seen).toMatchObject({ grants: ["tracker"] });
-  expect(refusal()?.textContent).toContain(
-    "This needs Tracker access. An admin can give it to you.",
-  );
+  expect(refusal()?.textContent).toContain("You need Tracker access for this. Ask an admin.");
 });
 
 // AND A REFUSAL THAT IS NOT ON AUTHORITY NAMES NONE, rather than a grant

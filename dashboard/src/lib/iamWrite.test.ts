@@ -83,7 +83,7 @@ test("a refusal is the engine's words, the grants that admit, and what had lande
   expect(got.kind).toBe("refused");
   const text = got.kind === "refused" ? got.text : "";
   expect(text).toMatch(/does not carry the grant/);
-  expect(text).toMatch(/Admin access would admit you/);
+  expect(text).toMatch(/You need Admin access for this\./);
   expect(text).toMatch(/What did change: the login and seat\./);
 });
 
@@ -100,6 +100,6 @@ test("a step-up refusal is about confirming, never a grant", async () => {
   });
   const got = await iamWrite({ method: "POST", path: "/iam/credentials" });
   const text = got.kind === "refused" ? got.text : "";
-  expect(text).toMatch(/confirmed who you are/);
-  expect(text).not.toMatch(/would admit you/);
+  expect(text).toBe("You didn’t confirm, so nothing changed.");
+  expect(text).not.toMatch(/You need .* access/);
 });

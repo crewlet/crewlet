@@ -99,12 +99,11 @@ export type WriteAccess =
  * ([noAccessReason]).
  */
 export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held" | "no_access">, string>> = {
-  refused:
-    "The engine is not serving you the company, so nothing in it can be changed here — your Account says who you are signed in as.",
+  refused: "Can’t make changes right now.",
   offline: "Offline. Reconnect to make changes.",
   loading: "Checking who you are before anything can be changed.",
   anonymous: "Sign in to make changes.",
-  not_served: "This engine does not make this change for you.",
+  not_served: "This can’t be changed from here.",
 };
 
 /**
@@ -203,7 +202,7 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
 // ---------------------------------------------------------------------------
 
 /** The sentence Message is held with on the reader's own seat. */
-export const OWN_SEAT_MESSAGE = "This is your own seat — a message here would ask yourself.";
+export const OWN_SEAT_MESSAGE = "This is your own seat.";
 
 /**
  * Whether this browser may MESSAGE the seat `handle` — file an ask of it — and

@@ -336,7 +336,7 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
     } else {
       const closed = closedBy(path, held.grants);
       if (closed !== null) {
-        return <GrantRequired what={closed.what} grants={closed.needs} reader={held.login} />;
+        return <GrantRequired grants={closed.needs} reader={held.login} />;
       }
     }
   }

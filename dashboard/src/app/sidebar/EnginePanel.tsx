@@ -153,8 +153,8 @@ export function engineReading(input: {
     return {
       state: "refused",
       tone: "danger",
-      title: "Access refused",
-      lead: `The engine knows who you are and will not serve you (${accessRefused})`,
+      title: "Blocked",
+      lead: accessRefused ? `Signed in, but blocked: ${accessRefused}` : "Signed in, but blocked",
       health: null,
       lostAt: null,
     };

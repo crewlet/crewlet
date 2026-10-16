@@ -100,7 +100,7 @@ describe("why a backup was not taken", () => {
   // access the backup is taken under, and the sentence names it.
   test("a refused credential says what would admit it", () => {
     expect(backupRefusal(new RestError(401, { error: "unauthorized" })).message).toMatch(
-      /needs a credential the engine accepts\. Sign in\./,
+      /Sign in to see this\./,
     );
     expect(
       backupRefusal(new RestError(403, { error: "unauthorized", grants: ["admin"] })).message,

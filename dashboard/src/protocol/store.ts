@@ -607,7 +607,10 @@ export class Store {
    * the unguarded `/health`, not the company.
    */
   setAccessRefused(reason: string | null): void {
-    const next = reason === null ? null : reason || "refused";
+    // A REFUSAL WITH NO REASON IS STILL A REFUSAL, held as "" rather than a
+    // placeholder word: the screen leaves an empty reason out, where a word
+    // made up here was drawn as if the engine had said it.
+    const next = reason === null ? null : reason.trim();
     if (this.state.accessRefused === next) return;
     this.state.accessRefused = next;
     if (next !== null) {

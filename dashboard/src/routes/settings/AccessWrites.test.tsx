@@ -826,7 +826,7 @@ test("a suspension retried after an unknown answer sends the suspension again", 
   const before = eng.reads("/iam/people");
   fireEvent.click(within(dialog).getByRole("button", { name: "Suspend" }));
   await settle();
-  expect(within(dialog).getByText(/could not confirm whether this landed/)).toBeTruthy();
+  expect(within(dialog).getByText(/Try again\. It won’t happen twice\./)).toBeTruthy();
   expect(eng.reads("/iam/people")).toBeGreaterThan(before);
   expect(screen.getByRole("button", { name: "Reactivate" })).toBeTruthy();
   expect(screen.getByRole("dialog", { name: "Suspend Bo Lang?" })).toBe(dialog);
@@ -1214,7 +1214,9 @@ test("a login outside its kind's grammar is refused under the field and not post
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "deploybot" } });
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();
-  expect(within(create).getByText(/Use lowercase words joined by a colon/)).toBeTruthy();
+  expect(
+    within(create).getByText("Use lowercase words with colons, like ci:release."),
+  ).toBeTruthy();
   fireEvent.click(within(create).getByRole("button", { name: "Cancel" }));
 
   location.hash = "#/settings/people?peek=person:p-bo";
@@ -1224,7 +1226,7 @@ test("a login outside its kind's grammar is refused under the field and not post
   fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "ci:bo" } });
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(within(edit).getByText(/Use lowercase words joined by dots/)).toBeTruthy();
+  expect(within(edit).getByText("Use lowercase words with dots, like jane.doe.")).toBeTruthy();
   expect(eng.writes()).toEqual([]);
 });
 

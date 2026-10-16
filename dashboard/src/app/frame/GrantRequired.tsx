@@ -28,11 +28,12 @@
  * refusal read the viewer's empty login and told a person signed in that
  * nobody was, on every cold load of a section closed to them.
  *
- * THE BUTTON SAYS WHAT IT DOES, and the access is said once, above it. It
- * once repeated what the section needed — "Sign in as somebody holding …" —
- * which a button cannot wrap, so on a phone it ran past both edges of the
- * screen; the words are the product's own everywhere else (the palette, the
- * org builder).
+ * THE COMMON NEXT STEP COMES FIRST. Most readers refused a section should go
+ * back to their work, so the primary action is Go to Home and Switch account
+ * is the secondary one. The title names only the access ("You need Knowledge
+ * access"): the page's own name is already in the header, and "Knowledge
+ * needs Knowledge access" said it twice. A panel (`compact`) draws the line
+ * alone, with no button, so a small card stays small.
  *
  * A VIEWER NOBODY HAS ANSWERED FOR YET IS NOT REFUSED. `loading` covers a
  * viewer read that failed as well as one in flight, and treating either as
@@ -49,19 +50,18 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
+import { Button, ButtonLink, EmptyState, InlineCode } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import { accessNames, type Grant } from "~/lib/access.ts";
 
 export function GrantRequired({
-  what,
   grants,
   reader,
   size,
   also,
 }: {
-  what: string;
   grants: readonly Grant[];
   /**
    * The login the reader is signed in as, or "" for nobody — from the reading
@@ -73,29 +73,40 @@ export function GrantRequired({
   /** One more sentence after the remedy: another way to the same answer. */
   also?: ReactNode;
 }) {
+  // A LINK, since Home is a page: ⌘-click opens it in a tab.
+  const actions = reader ? (
+    <span className="row gap-2">
+      <ButtonLink variant="primary" href={href([])}>
+        Go to Home
+      </ButtonLink>
+      <Button variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+        Switch account
+      </Button>
+    </span>
+  ) : (
+    <Button variant="primary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+      Sign in
+    </Button>
+  );
   return (
     <EmptyState
       {...(size ? { size } : {})}
       icon={<KeyGlyph />}
-      title={`${what} needs ${accessNames(grants)} access`}
+      title={`You need ${accessNames(grants)} access`}
       description={
         reader ? (
           <>
-            You are signed in as <InlineCode>{reader}</InlineCode>. An admin can give it to you.
+            Signed in as <InlineCode>{reader}</InlineCode>. Ask an admin for access.
             {also ? <> {also}</> : null}
           </>
         ) : (
           <>
-            Nobody is signed in in this browser.
+            You’re not signed in.
             {also ? <> {also}</> : null}
           </>
         )
       }
-      action={
-        <Button variant="primary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
-          {reader ? "Sign in as somebody else" : "Sign in"}
-        </Button>
-      }
+      {...(size === "compact" ? {} : { action: actions })}
     />
   );
 }

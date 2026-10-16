@@ -325,7 +325,8 @@ describe("a seat's holding", () => {
       await settle();
       await settle();
       expect(eng.reads("/iam/seats")).toBeGreaterThan(before);
-      if (refused) expect(screen.getByText(/This node refused the read/)).toBeTruthy();
+      if (refused)
+        expect(screen.getByText("Couldn’t load this on this node. Try another node.")).toBeTruthy();
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       expect(
         screen.getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),
@@ -441,7 +442,7 @@ describe("an invitation onto a seat", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
-    expect(within(dialog).getByText(/could not confirm whether this landed/)).toBeTruthy();
+    expect(within(dialog).getByText(/Try again\. It won’t happen twice\./)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
     await settle();
     expect(eng.writes().map((w) => w.key)).toEqual([
@@ -471,7 +472,7 @@ describe("an invitation onto a seat", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
-    expect(within(dialog).getByText(/Changed, it is a new one/)).toBeTruthy();
+    expect(within(dialog).getByText(/Try again\. It won’t happen twice\./)).toBeTruthy();
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "jane@example.com" },
     });
@@ -509,7 +510,7 @@ describe("an invitation onto a seat", () => {
     await settle();
     const alert = within(dialog).getByRole("alert");
     expect(alert.textContent).toMatch(/does not carry the grant/);
-    expect(alert.textContent).toMatch(/Admin access would admit you/);
+    expect(alert.textContent).toMatch(/You need Admin access for this\./);
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const [first, second] = eng.writes();
@@ -581,7 +582,7 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "ci:dee" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
-    expect(within(dialog).getByText(/Use lowercase words joined by dots/)).toBeTruthy();
+    expect(within(dialog).getByText("Use lowercase words with dots, like jane.doe.")).toBeTruthy();
     expect(eng.writes()).toEqual([]);
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "dee.ray" } });
     fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "Dee Ray" } });
@@ -621,7 +622,7 @@ describe("a person created on a seat", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
-    expect(within(dialog).getByText(/could not confirm whether this landed/)).toBeTruthy();
+    expect(within(dialog).getByText(/Try again\. It won’t happen twice\./)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
     await settle();
     expect(eng.writes().map((w) => w.key)).toEqual([

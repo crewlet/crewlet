@@ -508,13 +508,14 @@ describe("a section, for a reader holding none of its grants", () => {
       const closed = closedBy(section.path, [])!;
       expect(closed, section.key).not.toBeNull();
       expect(
-        await screen.findByText(`${closed.what} needs ${accessNames(closed.needs)} access`),
+        await screen.findByText(`You need ${accessNames(closed.needs)} access`),
         section.key,
       ).toBeDefined();
-      // THE WAY OUT IS A SIGN-IN AS SOMEBODY ELSE, never a token — and the
-      // reader is named, from the reading the refusal was decided on.
-      expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
-      expect(content().textContent, section.key).toMatch(/You are signed in as reader/);
+      // THE COMMON WAY OUT IS HOME, and switching account the other, never a
+      // token; the reader is named, from the reading the refusal was decided on.
+      expect(screen.getByRole("link", { name: "Go to Home" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Switch account" })).toBeDefined();
+      expect(content().textContent, section.key).toMatch(/Signed in as reader/);
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
       expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
@@ -570,7 +571,7 @@ describe("a section, for a reader holding none of its grants", () => {
       for (let i = 0; i < 8; i++) await Promise.resolve();
       await new Promise((r) => setTimeout(r, 0));
       expect(
-        screen.queryByText(`${section.label} needs ${accessNames(section.grants!)} access`),
+        screen.queryByText(`You need ${accessNames(section.grants!)} access`),
         section.key,
       ).toBeNull();
       expect(
@@ -666,7 +667,7 @@ describe("a section, for a reader holding none of its grants", () => {
     cleanup();
     location.hash = buildHash(["settings", "tools"]);
     mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["tracker"] }));
-    expect(await screen.findByText("Tools & MCP needs Admin access")).toBeDefined();
+    expect(await screen.findByText("You need Admin access")).toBeDefined();
   });
 });
 

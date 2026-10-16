@@ -123,7 +123,7 @@ function alerts(): string[] {
 
 async function refuseAndConfirm(password: string) {
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  const dialog = await screen.findByRole("dialog", { name: "Confirm it is you" });
+  const dialog = await screen.findByRole("dialog", { name: "Confirm it’s you" });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: password } });
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   return dialog;
@@ -169,25 +169,31 @@ describe("a gesture that needs a fresher proof", () => {
 
   // A PERSON WHO HOLDS AN AUTHENTICATOR IS ASKED FOR ITS CODE, not offered it:
   // the field read "Code (optional)" and a password-only Confirm was refused
-  // for the code. Confirm waits for one. The CONTROL is a person who holds
-  // none, for whom it stays optional. Mutation: leave the field optional
-  // whatever the person holds.
+  // for the code. Confirm waits for one. A person holding recovery codes alone
+  // is offered the field, optional; one holding no second factor is not shown
+  // it at all. Mutation: leave the field optional whatever the person holds,
+  // or draw it for somebody who can never fill it.
   test.each([
-    ["holds an authenticator", [{ method: "totp", revoked: false }], true],
-    ["holds none (the control)", [{ method: "password", revoked: false }], false],
-  ])("a person who %s is asked for the code accordingly", async (_, credentials, required) => {
-    engine({
-      "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
-      "/iam/credentials": [{ status: 200, body: { credentials } }],
-    });
-    mount();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByRole("dialog", { name: "Confirm it is you" });
-    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
-    const confirm = screen.getByRole("button", { name: "Confirm" });
-    await waitFor(() => expect(confirm).toHaveProperty("disabled", required));
-    expect(screen.queryByText(/optional/i) === null).toBe(required);
-  });
+    ["holds an authenticator", [{ method: "totp", revoked: false }], true, true],
+    ["holds recovery codes alone", [{ method: "recovery", revoked: false }], false, true],
+    ["holds none (the control)", [{ method: "password", revoked: false }], false, false],
+  ])(
+    "a person who %s is asked for the code accordingly",
+    async (_, credentials, required, field) => {
+      engine({
+        "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
+        "/iam/credentials": [{ status: 200, body: { credentials } }],
+      });
+      mount();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByRole("dialog", { name: "Confirm it’s you" });
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
+      const confirm = screen.getByRole("button", { name: "Confirm" });
+      await waitFor(() => expect(confirm).toHaveProperty("disabled", required));
+      await waitFor(() => expect(screen.queryByLabelText(/^Code/) !== null).toBe(field));
+      expect(screen.queryByText(/optional/i) !== null).toBe(field && !required);
+    },
+  );
 
   // ONE WINDOW, so the dialog names none: every sensitive gesture is held to
   // the same `step_up`, and a second sentence for a second window would be a
@@ -196,8 +202,8 @@ describe("a gesture that needs a fresher proof", () => {
     engine({ "/secrets/GITHUB_TOKEN": [refusedFor("step_up")] });
     mount();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByRole("dialog", { name: "Confirm it is you" });
-    expect(screen.getByText(/confirmed who you are recently/)).toBeDefined();
+    await screen.findByRole("dialog", { name: "Confirm it’s you" });
+    expect(screen.getByText("Enter your password to continue.")).toBeDefined();
   });
 
   // A WRONG PASSWORD OR CODE IS A CONFIRMATION REFUSED, not a sign-in: the
@@ -211,15 +217,15 @@ describe("a gesture that needs a fresher proof", () => {
       "holds an authenticator",
       [{ method: "totp", revoked: false }],
       "000000",
-      /password and a code from your authenticator app/,
-      "That password or code was not accepted. Check both and confirm again.",
+      /password and a code from your app/,
+      "Wrong password or code. Try again.",
     ],
     [
       "holds none (the control)",
       [{ method: "password", revoked: false }],
       "",
-      /Enter your password to carry on/,
-      "That password was not accepted. Check it and confirm again.",
+      /Enter your password to continue/,
+      "Wrong password. Try again.",
     ],
   ])(
     "a person who %s is asked for, and refused, in a confirmation's words",
@@ -239,7 +245,7 @@ describe("a gesture that needs a fresher proof", () => {
       });
       mount();
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      await screen.findByRole("dialog", { name: "Confirm it is you" });
+      await screen.findByRole("dialog", { name: "Confirm it’s you" });
       await waitFor(() => expect(screen.getByText(asks)).toBeDefined());
       fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
       if (code) fireEvent.change(screen.getByLabelText(/^Code/), { target: { value: code } });
@@ -265,10 +271,8 @@ describe("a gesture that needs a fresher proof", () => {
     mount();
     await refuseAndConfirm("wrong horse battery staple");
 
-    await waitFor(() =>
-      expect(alerts()).toContain("That password was not accepted. Check it and confirm again."),
-    );
-    expect(screen.getByRole("dialog", { name: "Confirm it is you" })).toBeDefined();
+    await waitFor(() => expect(alerts()).toContain("Wrong password. Try again."));
+    expect(screen.getByRole("dialog", { name: "Confirm it’s you" })).toBeDefined();
     // NOTHING WAS SENT AGAIN, and the need to sign in was not raised: a
     // mistyped password is not a lost session.
     expect(sent.filter((s) => s.path === "/secrets/GITHUB_TOKEN")).toHaveLength(1);
@@ -297,7 +301,7 @@ describe("a gesture that needs a fresher proof", () => {
     engine({ "/secrets/GITHUB_TOKEN": [refusedFor("step_up")] });
     mount();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByRole("dialog", { name: "Confirm it is you" });
+    await screen.findByRole("dialog", { name: "Confirm it’s you" });
     act(() => cleanup());
     await waitFor(() => expect((outcome as RestError).code).toBe("step_up_required"));
   });

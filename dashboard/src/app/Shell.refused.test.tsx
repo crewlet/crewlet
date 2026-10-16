@@ -136,19 +136,18 @@ async function mount(
   return { store, dial };
 }
 
-/** The panel drawn in place of the screen, once it names the reader. */
+/** The panel drawn in place of the screen. */
 async function panelTitled(title: string): Promise<HTMLElement> {
-  const panel = (await screen.findByText(title)).closest(".crewlet-empty-state") as HTMLElement;
-  await waitFor(() => expect(within(panel).getByText("jane.doe")).toBeDefined());
-  return panel;
+  return (await screen.findByText(title)).closest(".crewlet-empty-state") as HTMLElement;
 }
 
-test("every screen is one panel naming who you are, and it signs out", async () => {
+test("every screen is one panel giving the engine's reason, and it signs out", async () => {
   grants = ["tracker"];
   await mount();
-  const panel = await panelTitled("The engine will not serve this screen to you");
-  expect(within(panel).getByText(/your access: Tracker/)).toBeDefined();
-  expect(within(panel).getByText(/your seat is no longer in the chart/)).toBeDefined();
+  const panel = await panelTitled("You can’t use Crewlet right now");
+  expect(
+    within(panel).getByText("Your seat is no longer in the chart. Your Account still works."),
+  ).toBeDefined();
   // NOTHING SAYS IT IS RECONNECTING, and nothing the screen would have asked
   // is drawn: the socket was refused and stopped.
   expect(screen.queryByText(/Reconnecting|Not connected/)).toBeNull();
@@ -162,11 +161,9 @@ test("every screen is one panel naming who you are, and it signs out", async () 
 
 test("the panel's Account is the one screen it does not replace", async () => {
   await mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Account" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Open Account" }));
   await waitFor(() => expect(location.hash).toBe("#/account"));
-  await waitFor(() =>
-    expect(screen.queryByText("The engine will not serve this screen to you")).toBeNull(),
-  );
+  await waitFor(() => expect(screen.queryByText("You can’t use Crewlet right now")).toBeNull());
 });
 
 test("the user block offers both sign-outs though the viewer never answers", async () => {
@@ -199,8 +196,8 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   expect(row(/^Home/).querySelector(".side-locked")).toBeNull();
   expect(row(/^Agents/).querySelector(".side-locked")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
-  expect(screen.queryByText("The engine will not serve this screen to you")).toBeNull();
-  expect(screen.queryByText(/Access refused|no access/i)).toBeNull();
+  expect(screen.queryByText("You can’t use Crewlet right now")).toBeNull();
+  expect(screen.queryByText(/Blocked|no access/i)).toBeNull();
 });
 
 // A LOCK GOES WHERE THE CLOSED THING IS. Settings' first group, You — the
@@ -250,28 +247,29 @@ test("Settings' column is locked where Admin is, and nowhere else", async () => 
 test("a section the session's access does not open is locked though the viewer never answers", async () => {
   location.hash = "#/settings/nodes";
   await mount(null);
-  expect(await screen.findByText("Nodes needs Admin access")).toBeDefined();
+  expect(await screen.findByText("You need Admin access")).toBeDefined();
   expect(screen.queryByText("Checking your access to Nodes")).toBeNull();
   const main = screen.getByRole("main");
-  expect(main.textContent).toMatch(/You are signed in as jane\.doe/);
-  expect(main.textContent).toMatch(/An admin can give it to you/);
-  expect(main.textContent).not.toMatch(/Nobody is signed in/);
-  expect(within(main).getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
+  expect(main.textContent).toMatch(/Signed in as jane\.doe/);
+  expect(main.textContent).toMatch(/Ask an admin for access/);
+  expect(main.textContent).not.toMatch(/You’re not signed in/);
+  expect(within(main).getByRole("button", { name: "Switch account" })).toBeDefined();
 });
 
 // A REFUSAL ASKS WHO THIS IS AGAIN: the session the frame read before the
-// refusal may hold what it no longer does, and the panel names the access read
-// now. Mutation: drop the re-read and the panel draws the stale access.
-test("a refusal asks who this is again, and the panel names the access read then", async () => {
+// refusal may hold what it no longer does. Mutation: drop the re-read and the
+// count stays where it was.
+test("a refusal asks who this is again", async () => {
   grants = ["tracker", "knowledge"];
   const { store, dial } = await mount(null);
   await waitFor(() => expect(dial).toHaveBeenCalled());
   const before = sent.filter((s) => s.path === "/auth/session").length;
   grants = ["knowledge"];
   act(() => store.setAccessRefused("your seat is no longer in the chart"));
-  const panel = await panelTitled("The engine will not serve this screen to you");
-  await waitFor(() => expect(within(panel).getByText(/your access: Knowledge/)).toBeDefined());
-  expect(sent.filter((s) => s.path === "/auth/session").length).toBeGreaterThan(before);
+  await panelTitled("You can’t use Crewlet right now");
+  await waitFor(() =>
+    expect(sent.filter((s) => s.path === "/auth/session").length).toBeGreaterThan(before),
+  );
 });
 
 // NO NEW TASK IS OFFERED IN A FRAME THE ENGINE REFUSED, nor where Work is
@@ -281,7 +279,7 @@ test("a refusal asks who this is again, and the panel names the access read then
 test("a refused session is offered no New task, and is told why", async () => {
   location.hash = "#/work/tasks";
   const { store } = await mount();
-  await panelTitled("The engine will not serve this screen to you");
+  await panelTitled("You can’t use Crewlet right now");
   expect(screen.queryAllByRole("button", { name: /^New task/ })).toEqual([]);
   // AND THE REFUSAL IS THE ONE EVERY SURFACE READS, never "offline".
   expect(store.state.accessRefused).not.toBeNull();
@@ -291,7 +289,7 @@ test("a refused session is offered no New task, and is told why", async () => {
 test("a session holding no Tracker finds Work locked, and no New task in it", async () => {
   location.hash = "#/work/tasks";
   await mount(null);
-  expect(await screen.findByText("Work needs Tracker access")).toBeDefined();
+  expect(await screen.findByText("You need Tracker access")).toBeDefined();
   expect(screen.queryAllByRole("button", { name: /^New task$/ })).toEqual([]);
 });
 
@@ -312,7 +310,19 @@ test("a refusal keeps nothing the socket sent", async () => {
   act(() => store.applyOrg({ name: "Nimbus" } as never));
   expect(await screen.findByText("Nimbus")).toBeDefined();
   act(() => store.setAccessRefused("your seat is no longer in the chart"));
-  await panelTitled("The engine will not serve this screen to you");
+  await panelTitled("You can’t use Crewlet right now");
   expect(screen.queryByText("Nimbus")).toBeNull();
   expect(store.state.org).toBeNull();
+});
+
+// A REFUSAL WITH NO REASON SAYS NOTHING EMPTY: it read "The engine says: ."
+// Mutation: draw the reason sentence whatever it holds, and the panel carries
+// a stray full stop.
+test("a refusal the engine gave no reason for leaves the reason out", async () => {
+  const { store, dial } = await mount(null);
+  await waitFor(() => expect(dial).toHaveBeenCalled());
+  act(() => store.setAccessRefused(""));
+  const panel = await panelTitled("You can’t use Crewlet right now");
+  expect(within(panel).getByText("Your Account still works.")).toBeDefined();
+  expect(panel.textContent).not.toMatch(/: \.|^\./);
 });

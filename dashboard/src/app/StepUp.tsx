@@ -35,6 +35,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Callout, FormField, Input, Modal, Text } from "@crewlethq/ui";
 import { ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
+import { STILL_WORKING } from "~/lib/waiting.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { auth, currentSessionNeed, rest, RestError, setStepUpConfirmer } from "~/protocol/index.ts";
 
@@ -49,13 +50,19 @@ import { auth, currentSessionNeed, rest, RestError, setStepUpConfirmer } from "~
  * optional. Unknown — the read failed, or a session that may only enrol a
  * factor is refused it — stays optional, and the engine's refusal says what it
  * wants.
+ *
+ * `factor` is whether they hold ANY second factor, the app or recovery codes
+ * alone: holding neither, the Code field is not drawn at all, since most
+ * people hold no factor and a field they can never fill is one too many.
  */
-function useHoldsAuthenticator(): boolean | null {
+function useSecondFactor(): { app: boolean; factor: boolean } | null {
   const read = useRest("/iam/credentials", async (signal) => {
     const answer = (await rest.get("/iam/credentials", signal)) as {
       credentials?: { method?: string; revoked?: boolean }[] | null;
     } | null;
-    return (answer?.credentials ?? []).some((c) => c.method === "totp" && !c.revoked);
+    const live = (answer?.credentials ?? []).filter((c) => !c.revoked);
+    const app = live.some((c) => c.method === "totp");
+    return { app, factor: app || live.some((c) => c.method === "recovery") };
   });
   return read.data;
 }
@@ -99,7 +106,10 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const needsCode = useHoldsAuthenticator() === true;
+  const held = useSecondFactor();
+  const needsCode = held?.app === true;
+  // UNKNOWN STAYS DRAWN, optional: the engine's refusal says what it wants.
+  const showCode = held === null || held.factor;
   const ready = password !== "" && (!needsCode || code.trim() !== "");
 
   async function confirm() {
@@ -127,8 +137,8 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
       setRefusal(
         err instanceof RestError && err.code === "sign_in_refused"
           ? withCode || needsCode
-            ? "That password or code was not accepted. Check both and confirm again."
-            : "That password was not accepted. Check it and confirm again."
+            ? "Wrong password or code. Try again."
+            : "Wrong password. Try again."
           : refusalText(err),
       );
     } finally {
@@ -139,11 +149,11 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
   return (
     <Modal
       open
-      title="Confirm it is you"
+      title="Confirm it’s you"
       icon={<ShieldUserGlyph size="md" />}
       onClose={() => onDone(false)}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={STILL_WORKING}
       size="sm"
       stackBody
       onSubmit={() => void confirm()}
@@ -159,9 +169,7 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
       }
     >
       <Text as="p" variant="body">
-        This change needs you to have confirmed who you are recently. Enter your password
-        {needsCode ? " and a code from your authenticator app" : ""} to carry on: what you were
-        doing is kept, and sent again once you have.
+        Enter your password{needsCode ? " and a code from your app" : ""} to continue.
       </Text>
       <FormField label="Password">
         {(field) => (
@@ -177,27 +185,25 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
           />
         )}
       </FormField>
-      <FormField
-        label="Code"
-        optional={!needsCode}
-        helper={
-          needsCode
-            ? "The current code from your authenticator app, or one of your recovery codes."
-            : "If you sign in with an authenticator app: its current code, or one of your recovery codes."
-        }
-      >
-        {(field) => (
-          <Input
-            id={field.id}
-            aria-describedby={field.describedBy}
-            autoComplete="one-time-code"
-            spellCheck={false}
-            width="full"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-          />
-        )}
-      </FormField>
+      {showCode && (
+        <FormField
+          label="Code"
+          optional={!needsCode}
+          helper="The current code from your app, or a recovery code."
+        >
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              autoComplete="one-time-code"
+              spellCheck={false}
+              width="full"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          )}
+        </FormField>
+      )}
       {refusal && (
         <Callout variant="danger" role="alert">
           {refusal}
