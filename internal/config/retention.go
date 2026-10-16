@@ -132,10 +132,12 @@ const (
 	// linearizable reads append (136 bytes each, code.BarrierRecordBytes),
 	// at the reference company once its seats push:
 	//
-	//   - the mutation log about 11.1 MB a day: 9.4 MB of records, the rate
-	//     its own declared ceiling is sized at (16 GiB in five years,
-	//     tracker.TrackerLogMaxBytes), and 1.7 MB of barriers, its seats'
-	//     12 500 reads and the object collector's 25;
+	//   - the mutation log about 11.4 MB a day: 9.7 MB of records,
+	//     MEASURED for the reference company's tasks, comments, edits and
+	//     turns (internal/tracker's "What a day costs the log, measured",
+	//     within a tenth of the 16 GiB in five years its declared ceiling is
+	//     sized at, tracker.TrackerLogMaxBytes), and 1.7 MB of barriers, its
+	//     seats' 12 500 reads and the object collector's 25;
 	//   - the code log 5.8–7.7 MB a day: 3 000 pushes at 1 292 bytes,
 	//     MEASURED for a push alone in its record (internal/code's
 	//     BenchmarkPushLogBytes; 742.7 a push in a burst group commit holds
@@ -147,10 +149,10 @@ const (
 	//     and, where one runs, a CI polling ten repositories a minute
 	//     (14 400).
 	//
-	// So the code log takes 0.52–0.69 of the mutation log's day — 0.35 on
-	// its push records alone (0.41 of the tracker's records), which is what
+	// So the code log takes 0.51–0.68 of the mutation log's day — 0.34 on
+	// its push records alone (0.40 of the tracker's records), which is what
 	// the 1.5–2 KiB a record this ratio was first set from overstated — and
-	// TWO THIRDS is taken at the top of that range rather than its middle,
+	// TWO THIRDS is taken near the top of that range rather than its middle,
 	// because the changes, reviews and checks that later releases put on
 	// this same log come on top and a log keeps the ceiling it was created
 	// with: an operator who wants more room later pays for it with `crewlet

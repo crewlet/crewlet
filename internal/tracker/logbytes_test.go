@@ -41,6 +41,24 @@ const (
 	referenceKeysADay  = 3*referenceTasksADay + referenceCommentsADay + referenceEditsADay
 )
 
+// THE CODE LOG'S DAY, which config sizes the code log's ceiling against this
+// log's by (DerivedCodeLogNumerator's reason, and code's CodeLogMaxBytes): at
+// the ratio of the two days a blocked trim fills both logs in the same time,
+// so that ratio is a figure derived from this log's published day. A push is
+// internal/code's figure for one alone in its record (BenchmarkPushLogBytes,
+// its package doc's "What a push costs, measured"), and the barriers are its
+// git clients' linearizable reads: a seat's push asks the log three times (its
+// advertisement, its receive's sync and the fetch before it), thirty people
+// fetch every three minutes of an eight-hour day, and a CI polls ten
+// repositories a minute where one runs.
+const (
+	referencePushesADay  = 3_000
+	codePushRecordBytes  = 1_292
+	referencePushReads   = 3 * referencePushesADay
+	referencePeopleReads = 30 * 8 * 60 / 3
+	referenceCIReads     = 10 * 60 * 24
+)
+
 // The reference company's chart, as a seat's tools hold it. Its work is filed
 // into ENG, which the chart gives to the Engineering unit — a unit with no
 // `id`, as the shipped example's are, so its key is its name — and the unit's
@@ -441,28 +459,42 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 // the mutation log, or a figure derived from the day those costs make, states
 // it from the published figures — so a figure restated for a change in what a
 // record carries fails here until every page says it, rather than one page
-// moving and another keeping the old day.
+// moving and four keeping the old day.
 //
-// The pages are this package's doc ("What a day costs the log, measured") and
-// TrackerLogMaxBytes's reason.
-// Each figure is computed here from the published costs, the corpus's rates,
-// code.BarrierRecordBytes and config.DefaultMinAge, and rounded as the pages
-// round it; the few the pages put in words are held to the range the words
-// are true over.
+// The pages are the storage forecast in docs/guides/retention.md, this
+// package's doc ("What a day costs the log, measured") and TrackerLogMaxBytes's
+// reason, and the reasons that size the code log's share of the broker against
+// this day (config's DerivedCodeLogNumerator and its prose in
+// docs/guides/replication.md, code's CodeLogMaxBytes and GitReadsShare). Each
+// figure is computed here from the published costs, the corpus's rates, the
+// published barriers, the code log's day, code.BarrierRecordBytes and
+// config.DefaultMinAge, and rounded as the pages round it; the few the pages
+// put in words are held to the range the words are true over.
 //
 // Mutation: change any published figure, a corpus's rate or text,
-// MaxTurnSummary, code.BarrierRecordBytes or config.DefaultMinAge, and a page
-// no longer says what this package measures.
+// MaxTurnSummary, the code log's day, code.BarrierRecordBytes or
+// config.DefaultMinAge, and a page no longer says what this package measures.
 func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	t.Parallel()
 	whole, half := referenceCorpus.cost, halfTextCorpus.cost
 	records, halfRecords := whole.day(), half.day()
 	barriers := float64(referenceBarriersADay * code.BarrierRecordBytes)
+	seatBarriersAYear := float64(referenceSeatReads*code.BarrierRecordBytes) * 365
 	day := records + barriers
 	window := config.DefaultMinAge.Hours() / 24
 	ceiling := float64(tracker.TrackerLogMaxBytes)
 	years := func(capacity, rate float64) float64 { return capacity / rate / 365 }
 	keyBytes := referenceKeyGrowth * referenceKeysADay
+
+	// THE CODE LOG'S DAY BESIDE THIS ONE, at its least (no CI) and its most.
+	pushes := float64(referencePushesADay * codePushRecordBytes)
+	gitLeast := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
+	gitMost := gitLeast + float64(referenceCIReads*code.BarrierRecordBytes)
+	codeLeast, codeMost := (pushes+gitLeast)/day, (pushes+gitMost)/day
+	share := float64(config.DerivedCodeLogNumerator) / config.DerivedCodeLogDenominator
+	// A TENTH OF THE CODE LOG'S CEILING is what its census lets git's barriers
+	// hold over min_age ([code.GitReadsShare]).
+	tenth := func(ceiling float64) float64 { return ceiling / code.GitReadsShare }
 
 	// THE BARRIER THE DAY IS PRICED AT IS THE ONE THIS LOG MEASURES: the pages
 	// print one figure for both, saying a mutation-log barrier costs
@@ -482,10 +514,19 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	}{
 		{"a little over four years of the whole day", years(ceiling, day), 4, 4.5},
 		{"nearly five years of the records", years(ceiling, records), 4.5, 5},
+		{"a log created at 4 GiB fills in about a year", years(4<<30, day), 0.9, 1.2},
 		{"at a three-year-old company the ceiling is about a year away", years(ceiling, day) - 3, 0.9, 1.3},
 		{"half of the records are the turns", referenceTurnsADay * whole.turn / records, 0.45, 0.55},
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
+		{"the code log takes about half of this log's day at its least", codeLeast, 0.45, 0.55},
+		{"and seven tenths at its most", codeMost, 0.65, 0.75},
+		{"two thirds is taken near the top of that range, never past it",
+			(share - codeLeast) / (codeMost - codeLeast), 0.75, 1},
+		{"git's barriers over min_age are under a fortieth of the tenth of the derived ceiling",
+			window * gitMost / tenth(code.CodeLogMaxBytes), 0, 1.0 / 40},
+		{"and a quarter of the tenth of the 1 GiB floor",
+			window * gitMost / tenth(float64(config.CodeLogMaxBytesFloor)), 0.225, 0.275},
 	} {
 		if w.value < w.low || w.value > w.top {
 			t.Errorf("the docs say %s, and the published day makes it %.2f: reword it where "+
@@ -494,12 +535,50 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	}
 
 	mb := func(bytes float64, places int) string { return fmt.Sprintf("%.*f", places, bytes/1e6) }
+	count := func(rate float64) string { return spaced(int64(math.Round(rate))) }
 	kib := func(n int) string { return fmt.Sprintf("%d KiB", n>>10) }
 	tasks, comments := referenceTasksADay*whole.create, referenceCommentsADay*whole.comment
 	edits, turns := referenceEditsADay*whole.edit, referenceTurnsADay*whole.turn
 	collector := referenceBarriersADay - referenceSeatReads
+	// THE BARRIERS' YEAR to the nearest ten megabytes, as the guide rounds a
+	// figure it calls "about".
+	barrierYear := math.Round(seatBarriersAYear/1e7) * 10
 
 	for file, wants := range map[string][]string{
+		"docs/guides/retention.md": {
+			fmt.Sprintf("holds **about %s MB**", mb(window*day, 0)),
+			fmt.Sprintf("seven days, `min_age`'s default, of the %s MB a day the reference company "+
+				"writes to it", mb(day, 1)),
+			fmt.Sprintf("The day is %s MB of records and %s MB of read barriers", mb(records, 1),
+				mb(barriers, 1)),
+			fmt.Sprintf("| %s tasks filed, at a %s description | %s bytes, in two records | %s MB |",
+				count(referenceTasksADay), kib(referenceCorpus.description),
+				spaced(int64(whole.create)), mb(tasks, 2)),
+			fmt.Sprintf("| %s comments, at %s | %s bytes | %s MB |", count(referenceCommentsADay),
+				kib(referenceCorpus.remark), spaced(int64(whole.comment)), mb(comments, 2)),
+			fmt.Sprintf("| %s edits, each a status change | %s bytes | %s MB |",
+				count(referenceEditsADay), spaced(int64(whole.edit)), mb(edits, 2)),
+			fmt.Sprintf("| %s turns charged to a task, a summary at its %d-byte cap | %s bytes | %s MB |",
+				count(referenceTurnsADay), tracker.MaxTurnSummary, spaced(int64(whole.turn)),
+				mb(turns, 2)),
+			fmt.Sprintf("| %s read barriers: the seats' %s and the object collector's %d | %d bytes | %s MB |",
+				spaced(referenceBarriersADay), spaced(referenceSeatReads), collector,
+				code.BarrierRecordBytes, mb(barriers, 2)),
+			fmt.Sprintf("with half of it — a %s description, a %d-byte comment — the records come to %s MB",
+				kib(halfTextCorpus.description), halfTextCorpus.remark, mb(halfRecords, 1)),
+			fmt.Sprintf("about %.0f kB of the day, under a tenth of one percent", keyBytes/1e3),
+			fmt.Sprintf("The read barriers add about **%.0f MB a year** to the log's throughput — %s a "+
+				"day at %d bytes, %.0f %% of what the log takes", barrierYear,
+				spaced(referenceSeatReads), code.BarrierRecordBytes, 100*barriers/day),
+			fmt.Sprintf("at %d bytes a barrier — the code log's `code.BarrierRecordBytes`, which a "+
+				"mutation-log barrier costs too from the log's second generation to its tenth (%d "+
+				"bytes at its first)", publishedBarrierBytes, publishedFirstBarrierBytes),
+			fmt.Sprintf("On a fleet that trims they are about %s MB of the %s.", mb(window*barriers, 0),
+				mb(window*day, 0)),
+			fmt.Sprintf("the log keeps the whole day, about %.1f GB a year, so a log created at 16 GiB "+
+				"fills in a little over four years — nearly five on its records alone — and one "+
+				"created at 4 GiB in about a year", day*365/1e9),
+		},
 		"internal/tracker/subject.go": {
 			fmt.Sprintf("a task filed: %s bytes, in two records", spaced(int64(whole.create))),
 			fmt.Sprintf("at a %s description", kib(referenceCorpus.description)),
@@ -529,6 +608,42 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("Its seats' linearizable reads add %s MB a day of barriers, so a completely "+
 				"blocked trim reaches it in a little over four years", mb(barriers, 1)),
 			"at a three-year-old company whose trim never ran the ceiling is about a year away",
+		},
+		"internal/config/retention.go": {
+			fmt.Sprintf("the mutation log about %s MB a day: %s MB of records", mb(day, 1),
+				mb(records, 1)),
+			fmt.Sprintf("and %s MB of barriers, its seats' %s reads and the object collector's %d",
+				mb(barriers, 1), spaced(referenceSeatReads), collector),
+			fmt.Sprintf("the code log %s–%s MB a day: %s pushes at %s bytes",
+				mb(pushes+gitLeast, 1), mb(pushes+gitMost, 1), spaced(referencePushesADay),
+				spaced(codePushRecordBytes)),
+			fmt.Sprintf("%s MB; and the barriers of its git clients, %s–%s MB", mb(pushes, 1),
+				mb(gitLeast, 1), mb(gitMost, 1)),
+			fmt.Sprintf("so a seat's push three times, %s a day, beside thirty people fetching every "+
+				"three minutes of a working day (%s) and, where one runs, a CI polling ten "+
+				"repositories a minute (%s)", spaced(referencePushReads),
+				spaced(referencePeopleReads), spaced(referenceCIReads)),
+			fmt.Sprintf("So the code log takes %.2f–%.2f of the mutation log's day — %.2f on its push "+
+				"records alone (%.2f of the tracker's records)", codeLeast, codeMost, pushes/day,
+				pushes/records),
+		},
+		"internal/code/limits.go": {
+			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
+				mb(records, 1), mb(barriers, 1)),
+			fmt.Sprintf("%s pushes at the MEASURED %s bytes a push alone in its record "+
+				"(BenchmarkPushLogBytes), %s MB, and its git clients' barriers at "+
+				"BarrierRecordBytes, %s–%s MB", spaced(referencePushesADay),
+				spaced(codePushRecordBytes), mb(pushes, 1), mb(gitLeast, 1), mb(gitMost, 1)),
+			fmt.Sprintf("git barriers beside its pushes: %s–%s MB a day, %.0f–%.0f MB over the default "+
+				"seven days — under a fortieth of the tenth of a derived 10⅔ GiB ceiling, and a "+
+				"quarter of the tenth of even the 1 GiB floor", mb(gitLeast, 1), mb(gitMost, 1),
+				window*gitLeast/1e6, window*gitMost/1e6),
+		},
+		"docs/guides/replication.md": {
+			fmt.Sprintf("a company's push records (%s bytes a push, measured) and the barriers its git "+
+				"clients' reads append (%d bytes a read) take about half to seven tenths of what its "+
+				"tracker writes and its seats' reads take a day, and the ratio is taken near the top "+
+				"of that range", spaced(codePushRecordBytes), code.BarrierRecordBytes),
 		},
 	} {
 		page := prose(t, file)
