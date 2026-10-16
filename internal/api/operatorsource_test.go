@@ -62,7 +62,7 @@ func TestTheOperatorSurfaceReadsItsSourcePerRequest(t *testing.T) {
 	rec, body := post()
 	if rec.Code != http.StatusServiceUnavailable ||
 		body["error"] != string(httpjson.CodeNoActiveRevision) ||
-		body["detail"] != httpjson.NativeHalvesNotUp {
+		body["detail"] != httpjson.Sentence(httpjson.NativeHalvesNotUp) {
 		t.Errorf("before the company, %s answered %d %v, want 503 %s in the "+
 			"halves' words", operator.MCPPath, rec.Code, body, httpjson.CodeNoActiveRevision)
 	}

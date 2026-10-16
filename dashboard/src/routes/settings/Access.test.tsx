@@ -238,13 +238,43 @@ test("every page of the directory is drawn, walked by its cursor", async () => {
   expect(screen.getByText("Service account")).toBeTruthy();
 });
 
+// THE PERSON'S BADGE IS BESIDE THEIR NAME, AND THE SEAT IS ITS HANDLE. The
+// Seat cell drew the seat's name and badge, which echoed the person's a cell
+// over ("Lee Park  LP Lee Park"); a service account wears a key.
+test("a person's row draws their badge by their name and their seat by its handle", async () => {
+  stubIam();
+  mount();
+  const ana = (await screen.findByText("Ana Diaz")).closest(".grid-row") as HTMLElement;
+  expect(ana.querySelector(".crewlet-avatar")).not.toBeNull();
+  const seat = within(ana).getByRole("link", { name: "@jane" });
+  expect(seat.getAttribute("href")).toBe("#/agents/seats/jane");
+  expect(seat.getAttribute("title")).toBe("Jane Founder");
+  const ci = (await screen.findAllByText("ci:release"))
+    .map((el) => el.closest(".grid-row") as HTMLElement)
+    .find(Boolean)!;
+  expect(ci.querySelector(".crewlet-avatar__icon svg")).not.toBeNull();
+});
+
+// HELD BY A NAME, NOT A STATUS PILL: the holder is plain text, and the stage
+// is a tag only where it is news. Mutation: draw the active stage too.
+test("a human seat's holder is named in plain text, its stage only when not active", async () => {
+  stubIam();
+  mount();
+  const jane = (await screen.findAllByRole("link", { name: /Jane Founder/ }))
+    .map((link) => link.closest(".grid-row") as HTMLElement)
+    .find((row) => row && within(row).queryByText("ana.diaz"))!;
+  const held = within(jane).getByText("ana.diaz");
+  expect(held.closest(".crewlet-tag")).toBeNull();
+  expect(within(jane).queryByText(STAGE_WORDS.active!.label)).toBeNull();
+});
+
 // A SEALED VALUE IS A STATE the operator can end by putting a key back — never
 // a blank name, which reads as somebody who never gave one.
 test("a row this node cannot open is drawn as sealed", async () => {
   stubIam();
   mount();
   // THE PERSON'S ROW, and the sealed invitation's address beside it.
-  expect((await screen.findAllByText("sealed")).length).toBe(2);
+  expect((await screen.findAllByText("Locked")).length).toBe(2);
 });
 
 // FROM BOTH ENDS: the seat with whoever holds it, and each of this node's
@@ -266,49 +296,55 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
       .getByTitle(/crewlet iam create/)
       .getAttribute("title"),
   ).toContain("crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none");
-  expect(within(spare).getByText("Bound to no seat")).toBeTruthy();
+  expect(within(spare).getByText("No seat")).toBeTruthy();
   const tokensTile = screen
-    .getByText("API tokens on this node", {
+    .getByText("API tokens", {
       selector: ".crewlet-statcard *",
     })
     .closest(".crewlet-statcard") as HTMLElement;
-  expect(within(tokensTile).getByText("1 bound to a seat")).toBeTruthy();
-  // The directory's own finding, in the engine's words.
-  expect(screen.getByText("The seat removed-seat is not in the org chart.")).toBeTruthy();
+  expect(within(tokensTile).getByText("1 with a seat")).toBeTruthy();
+  // The directory's finding, written here about the person it names.
+  expect(
+    screen.getByText("gone.person is on a seat that was removed. Move them to another seat."),
+  ).toBeTruthy();
   // AN INVITED SEAT IS NOT VACANT: the open invitation holds it as surely as
   // a person would, so the tile counts the one seat nothing holds and says
   // the invited one beside it. Mutation: count every seat with no holder and
   // the figure reads 2.
-  const vacant = screen.getByText("Human seats nobody holds").closest(".crewlet-statcard");
+  const vacant = screen.getByText("Open seats").closest(".crewlet-statcard");
   expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("1");
-  expect(within(vacant as HTMLElement).getByText("1 invited · of 3 human seats")).toBeTruthy();
-  // AND ITS ROW NAMES THE INVITATION rather than "Nobody holds it".
+  expect(within(vacant as HTMLElement).getByText("1 invited · 3 total")).toBeTruthy();
+  // AND ITS ROW NAMES THE INVITATION rather than "Open seat".
   const sam = screen
     .getAllByRole("link", { name: /Sam Support/ })
     .map((link) => link.closest(".grid-row") as HTMLElement)
     .find((row) => row && within(row).queryByText("Invited"))!;
   expect(within(sam).getByText("sam@example.com")).toBeTruthy();
-  expect(within(sam).queryByText("Nobody holds it")).toBeNull();
+  expect(within(sam).queryByText("Open seat")).toBeNull();
   const lee = screen.getByRole("link", { name: /Lee Legal/ }).closest(".grid-row") as HTMLElement;
-  expect(within(lee).getAllByText("Nobody holds it").length).toBeGreaterThan(0);
+  // A SEAT NOTHING HOLDS READS "Open seat", in words, rather than a dash.
+  expect(within(lee).getAllByText("Open seat").length).toBeGreaterThan(0);
 });
 
 // A FINDING IS DRAWN IN WORDS, never its code: the kind's label from
-// `FINDING_WORDS` beside the engine's own detail, so the screen never prints a
-// code an administrator would have to look up. A service account bound to
+// `FINDING_WORDS` beside a sentence written here about the person it names,
+// so the screen never prints a code, or the engine's API path, an
+// administrator would have to look up. A service account bound to
 // none reads as the ordinary state it is. Mutation: draw the finding's kind
 // raw and its code appears.
-test("a finding is drawn in words beside the engine's detail, never as its code", async () => {
+test("a finding is drawn in words, never as its code or the engine's detail", async () => {
   stubIam(() => null);
   mount();
-  const finding = (await screen.findByText("The seat removed-seat is not in the org chart."))
-    .parentElement as HTMLElement;
-  expect(within(finding).getByText("Seat gone")).toBeTruthy();
+  const finding = (
+    await screen.findByText("gone.person is on a seat that was removed. Move them to another seat.")
+  ).parentElement as HTMLElement;
+  expect(within(finding).getByText("Seat removed")).toBeTruthy();
   expect(screen.queryByText("binding_dangling")).toBeNull();
+  expect(screen.queryByText(/is not in the org chart/)).toBeNull();
   const ci = (await screen.findAllByText("ci:release"))
     .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
     .find((row) => row && within(row).queryByText("Service account"))!;
-  expect(within(ci).getByText("Bound to no seat")).toBeTruthy();
+  expect(within(ci).getByText("No seat")).toBeTruthy();
 });
 
 // THE BOUND SEAT'S KIND IS THE CHART'S: a token bound to an AGENT seat is the
@@ -354,10 +390,7 @@ test("a managed document names its writers beside the tokens", async () => {
   );
   mount();
   const line = (await screen.findByText(/can change the company document/)).closest("span");
-  expect(line?.textContent).toMatch(
-    /^Only gitops, ci can change the company document \(api\.auth\.company_writers\)\./,
-  );
-  expect(line?.textContent).toMatch(/Every other credential, sessions and machine tokens included/);
+  expect(line?.textContent).toBe("Only gitops, ci can change the company document.");
   cleanup();
 
   stubIam();
@@ -514,7 +547,7 @@ test("the reader's own row leads with their Account; somebody else's does not", 
   expect(await within(rail).findByText("This is you")).toBeTruthy();
   expect(
     within(rail)
-      .getByRole("link", { name: /Your Account/ })
+      .getByRole("link", { name: /Open Account/ })
       .getAttribute("href"),
   ).toBe("#/account");
   cleanup();
@@ -542,18 +575,20 @@ test("a link to a person the directory does not hold says so, and closes", async
   stubIam();
   mount();
   const rail = await peek();
-  expect(await within(rail).findByText("Nobody in the directory has this id")).toBeTruthy();
-  expect(within(rail).getByText(/p-gone is not a person or service account here/)).toBeTruthy();
+  expect(await within(rail).findByText("Not found")).toBeTruthy();
+  expect(within(rail).getByText("They may have been removed.")).toBeTruthy();
+  // NO RAW ID in what the reader is told.
+  expect(within(rail).queryByText(/p-gone/)).toBeNull();
   fireEvent.click(within(rail).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(location.hash).not.toContain("peek="));
-  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+  expect(screen.queryByText("Not found")).toBeNull();
   cleanup();
 
   location.hash = "#/settings/people?peek=person:p-ana";
   stubIam();
   mount();
   await within(await peek()).findByText("Authenticator app");
-  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+  expect(screen.queryByText("Not found")).toBeNull();
 });
 
 // AN ENDED SESSION SAYS WHY, AND NOT WHEN IT WOULD HAVE ENDED. One a counter
@@ -643,10 +678,14 @@ test("a reset link says it sets a password, never that it carries access", async
   );
   mount();
   const link = (await screen.findByText("Password reset link")).closest(".grid-row") as HTMLElement;
-  expect(within(link).getByText("Sets a password once")).toBeTruthy();
-  expect(within(link).queryByText("Its holder's access")).toBeNull();
+  expect(within(link).getByText("One-time")).toBeTruthy();
+  expect(within(link).queryByText("Same as owner")).toBeNull();
+  // AN UNUSED LINK IS NOT "IN USE": nobody has opened it yet.
+  expect(within(link).getByText("Not used yet")).toBeTruthy();
+  expect(within(link).queryByText("In use")).toBeNull();
   const password = screen.getByText("Password").closest(".grid-row") as HTMLElement;
-  expect(within(password).getByText("Its holder's access")).toBeTruthy();
+  expect(within(password).getByText("Same as owner")).toBeTruthy();
+  expect(within(password).getByText("In use")).toBeTruthy();
 });
 
 // AN ENDED CREDENTIAL DRAWS NO DEADLINE IT WILL NEVER REACH. A used reset
@@ -713,7 +752,7 @@ test("an invitation names its sender by the chart and says its address was erase
   mount();
   // TWICE: the invitation's own row, and the seat it holds on the Human seats card.
   await screen.findAllByText("sam@example.com");
-  fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show used and expired" }));
   const erased = await screen.findByText("Erased with the person it invited");
   const row = erased.closest(".grid-row") as HTMLElement;
   expect(within(row).getByText("Jane Founder")).toBeTruthy();
@@ -728,9 +767,9 @@ test("the open invitations are listed, and the toggle asks for every state", asy
   mount();
   // TWICE: the invitation's own row, and the seat it holds on the Human seats card.
   expect((await screen.findAllByText("sam@example.com")).length).toBe(2);
-  expect(screen.getAllByText("sealed").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Locked").length).toBeGreaterThan(0);
   expect(screen.queryByText("old@example.com")).toBeNull();
-  fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show used and expired" }));
   const row = (await screen.findByText("old@example.com")).closest(".grid-row") as HTMLElement;
   expect(within(row).getByText(INVITATION_WORDS.redeemed!.label)).toBeTruthy();
   expect(

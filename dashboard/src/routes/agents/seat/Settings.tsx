@@ -25,7 +25,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { ButtonLink, Callout, Card, EmptyState } from "@crewlethq/ui";
+import { ButtonLink, Callout, Card, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CpuGlyph, KeyGlyph, PencilGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
@@ -117,7 +117,7 @@ export function Settings({
   const identity: Property[] = [
     {
       label: "Handle",
-      value: <code className="inline">{handleLabel(seat.handle)}</code>,
+      value: <InlineCode>{handleLabel(seat.handle)}</InlineCode>,
     },
     { label: "Kind", value: human ? "person" : "agent" },
     { label: "Email", value: <ConfigValue value={role?.email} /> },

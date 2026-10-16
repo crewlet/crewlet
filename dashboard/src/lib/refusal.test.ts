@@ -31,11 +31,11 @@ test("a refusal that names what to change says it, with its hint, as sentences",
     error: "invalid_body",
     message:
       "The request body is not one this endpoint accepts — its shape, or a value in it — and nothing was changed.",
-    detail: "that code does not match the secret",
-    hint: "check the authenticator app has the right account",
+    detail: "That code doesn’t match.",
+    hint: "Check that your authenticator app shows the right account and your device’s clock is correct.",
   });
   expect(refusalText(err)).toBe(
-    "That code does not match the secret. Check the authenticator app has the right account.",
+    "That code doesn’t match. Check that your authenticator app shows the right account and your device’s clock is correct.",
   );
 });
 

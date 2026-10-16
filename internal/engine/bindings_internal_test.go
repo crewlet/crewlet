@@ -94,7 +94,7 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 		},
 		"a person on a seat the running company does not hold": {
 			chart: companyChart(), row: bound("p1", "gone-lead"),
-			dangling: true, says: []string{"not a seat of the company",
+			dangling: true, says: []string{"isn't in the org chart anymore",
 				"move them to another human seat", "remove them"},
 			never: "unbind",
 		},
@@ -105,7 +105,7 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 		},
 		"a service account on a seat the running company does not hold": {
 			chart: companyChart(), row: boundService("m1", "gone-lead"),
-			dangling: true, says: []string{"not a seat of the company",
+			dangling: true, says: []string{"isn't in the org chart anymore",
 				"unbind them", "another human seat"},
 		},
 		// A KIND THIS BUILD DOES NOT NAME is told only what holds for
@@ -114,7 +114,7 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 			chart: companyChart(),
 			row: iamdomain.SeatBinding{Person: "x1", Login: "x1.someone",
 				Kind: "robot", Stage: iam.StageActive, Seat: "gone-lead"},
-			dangling: true, says: []string{"not a seat of the company",
+			dangling: true, says: []string{"isn't in the org chart anymore",
 				"another human seat", "remove them"},
 			never: "unbind",
 		},
@@ -147,12 +147,15 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 				t.Errorf("detail %q does not name the seat %q", detail,
 					tc.row.Seat)
 			}
+			// CASE-BLIND, because the remedy opens its own sentence and
+			// what is asserted is what it says, not where it starts.
+			lower := strings.ToLower(detail)
 			for _, want := range tc.says {
-				if !strings.Contains(detail, want) {
+				if !strings.Contains(lower, strings.ToLower(want)) {
 					t.Errorf("detail %q does not say %q", detail, want)
 				}
 			}
-			if tc.never != "" && strings.Contains(detail, tc.never) {
+			if tc.never != "" && strings.Contains(lower, strings.ToLower(tc.never)) {
 				t.Errorf("detail %q tells an administrator to %s a %s, which "+
 					"the directory refuses — a person always holds a seat",
 					detail, tc.never, tc.row.Kind)

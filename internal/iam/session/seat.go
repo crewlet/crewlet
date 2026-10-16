@@ -229,9 +229,9 @@ func ResolveSeat(ctx context.Context, chart Chart, person PersonRow) Binding {
 	detail := fmt.Sprintf("seat %q", person.Seat)
 	if !found {
 		return Binding{Row: SeatRowGone, Detail: detail +
-			" is not a seat of the company this node runs"}
+			" isn't in the org chart anymore"}
 	}
 	return Binding{Row: SeatRowGone, Seat: seat, Detail: detail + fmt.Sprintf(
-		" is a %q seat, and a principal may only act as a %q one", seat.Kind,
+		" is a %q seat now, and only a %q seat can be held", seat.Kind,
 		SeatKindHuman)}
 }

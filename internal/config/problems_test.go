@@ -503,8 +503,8 @@ func TestAParserProblemCarriesItsLineAndNoSegmentsWhenUnplaced(t *testing.T) {
 	if len(problems) != 1 {
 		t.Fatalf("problems = %+v, want one", problems)
 	}
-	if want := `backstroy: unknown field: "backstroy" is not a setting: check the spelling, ` +
-		`or the block it belongs under (line 3)`; problems[0].Message != want {
+	if want := `backstroy: unknown field: "backstroy" isn't a setting. Check the spelling ` +
+		`and the block it's under (line 3)`; problems[0].Message != want {
 		t.Errorf("message = %q, want %q", problems[0].Message, want)
 	}
 

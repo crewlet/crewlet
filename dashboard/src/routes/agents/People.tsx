@@ -97,9 +97,7 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   // same number.
   const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
   if (!viewer.loading && !viewer.tracker) {
-    return (
-      <GrantRequired what="Workload" grants={[TRACKER]} reader={viewer.login} size="compact" />
-    );
+    return <GrantRequired grants={[TRACKER]} reader={viewer.login} size="compact" />;
   }
   return (
     <QueryState

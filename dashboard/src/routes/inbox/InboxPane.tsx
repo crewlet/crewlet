@@ -88,7 +88,7 @@ import { Badge } from "./InboxColumn.tsx";
 import { NoticeActions } from "./NoticeActions.tsx";
 import { TaskLink } from "./TaskLink.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
-import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+import { questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
@@ -489,11 +489,12 @@ function RunPane({
   const [text, setText] = useState("");
   const [answered, setAnswered] = useState<string | null>(null);
   const question = run.question ?? "";
+  // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
+  // asked for an answer to a question it never showed.
+  const hidden = questionWithheld(run);
   const heading =
     firstSentence(question) ||
-    (questionWithheld(run)
-      ? `The run paused on a question. ${QUESTION_WITHHELD}.`
-      : "The run paused on a question");
+    (hidden ? "This run is waiting on a question you can’t see." : "The run paused on a question");
   const hold = holdLine(run, now);
   const blocked = text.trim() ? undefined : "Write the answer first.";
   const send = async () => {
@@ -524,6 +525,10 @@ function RunPane({
         <ReadingPaneOutcome>
           Answered <strong>{`“${answered}”`}</strong>
         </ReadingPaneOutcome>
+      ) : hidden ? (
+        <Text as="p" variant="body">
+          Its lead or an admin can answer it.
+        </Text>
       ) : (
         <Stack gap={2}>
           <Field

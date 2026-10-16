@@ -290,7 +290,7 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 		"secret": invitationSecret, "login": "dana.sre", "name": "Dana",
 		"password": "a-perfectly-fine-passphrase"})
 	if rec.Code != http.StatusConflict ||
-		!strings.Contains(rec.Body.String(), "seat this invitation binds") {
+		!strings.Contains(rec.Body.String(), "already has this invitation's seat") {
 		t.Errorf("answered %d %s, want 409 saying the seat is taken", rec.Code,
 			rec.Body)
 	}

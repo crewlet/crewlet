@@ -40,7 +40,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Callout } from "@crewlethq/ui";
+import { Callout, InlineCode } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -329,8 +329,8 @@ export function Inbox() {
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="info" className="inbox-callout">
-          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so these
-          are the updates kept under that login. <UnboundRemedy login={viewer.login} />
+          You are <InlineCode>{viewer.login}</InlineCode> and not bound to a seat, so these are the
+          updates kept under that login. <UnboundRemedy />
         </Callout>
       ) : null}
 

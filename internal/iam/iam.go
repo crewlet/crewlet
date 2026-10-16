@@ -82,6 +82,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -421,6 +422,27 @@ func LoginFromAddress(address string) string {
 		return ""
 	}
 	return login
+}
+
+// LoginFor proposes a person's login from their name, and from their address
+// when the name can't make one. A name of two or more plain words ("Maya
+// Chen") proposes them joined by dots ("maya.chen"), which is how a person
+// writes their own; a one-word name, no name, or a name with letters outside
+// a to z leaves the proposal to [LoginFromAddress], since folding "José" to
+// "jos" would be a login nobody recognises.
+func LoginFor(name, address string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, r := range lower {
+		if unicode.IsLetter(r) && (r < 'a' || r > 'z') {
+			return LoginFromAddress(address)
+		}
+	}
+	if segments := loginSegments(lower); len(segments) >= 2 {
+		if login := strings.Join(segments, "."); ValidLogin(login) {
+			return login
+		}
+	}
+	return LoginFromAddress(address)
 }
 
 // loginSegments splits text into the segments a login is made of: lowercase

@@ -376,7 +376,7 @@ describe("who set it", () => {
         groups={[{ properties: [{ label: "Status", value: "todo", setBy: CREATE }] }]}
       />,
     );
-    const link = container.querySelector("a.setby-turn")!;
+    const link = container.querySelector("a.crewlet-set-by__turn")!;
     expect(link.textContent).toContain("turn");
     expect(link.querySelector("svg")).toBeTruthy();
   });

@@ -70,7 +70,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Tag } from "@crewlethq/ui";
+import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Link, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   ChevronDownGlyph,
@@ -105,7 +105,8 @@ import {
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { staleness } from "~/lib/seats.ts";
+import { indexOrg, seatPath, staleness } from "~/lib/seats.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -500,6 +501,28 @@ function RoundBlock({
   );
 }
 
+/**
+ * Why a phase's body is hidden, naming who can read it: the seat's lead, by
+ * name and with a link, so the reader knows whom to ask. The seat is found by
+ * its agent id, never its role name, which two seats may share; where the
+ * chart names no lead for it, the general sentence stands.
+ */
+function WithheldNote({ agentId }: { agentId: string }) {
+  const agents = useAgents();
+  const org = useOrg();
+  const lead = useMemo(() => {
+    const handle = agentId ? agents.find((a) => a.agent_id === agentId)?.handle : undefined;
+    return handle ? (indexOrg(org).byHandle.get(handle)?.manager ?? null) : null;
+  }, [agentId, agents, org]);
+  if (!lead) return <Callout variant="neutral">{`${WITHHELD_WORDS}. ${WITHHELD_WHY}`}</Callout>;
+  return (
+    <Callout variant="neutral">
+      Only <Link href={href(seatPath(lead))}>{lead.name}</Link> (this seat’s lead) and admins can
+      see what it says.
+    </Callout>
+  );
+}
+
 export function PhaseCard({
   record,
   defaultOpen,
@@ -764,9 +787,7 @@ export function PhaseCard({
               nothing and answered nothing: the engine sent this reader the
               phase's status alone (`bodyWithheld`), and every section below
               that is body is absent for that reason, not empty. */}
-          {record.bodyWithheld && (
-            <Callout variant="neutral">{`${WITHHELD_WORDS}. ${WITHHELD_WHY}`}</Callout>
-          )}
+          {record.bodyWithheld && <WithheldNote agentId={record.agentId} />}
 
           {(record.systemPrompt || record.userPrompt) && (
             // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading

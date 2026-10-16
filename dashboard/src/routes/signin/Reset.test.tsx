@@ -33,6 +33,15 @@ interface Sent {
 
 type Answer = { status: number; body: unknown };
 
+/**
+ * A message that OPENS a card's description: the card's own title and
+ * description say a link's outcome, so the sentence is the start of a longer
+ * line rather than a block of its own.
+ */
+function opening(text: string): RegExp {
+  return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+}
+
 function engine(routes: Record<string, Answer>): Sent[] {
   const sent: Sent[] = [];
   vi.stubGlobal(
@@ -70,7 +79,7 @@ const SPENT: Answer = {
   status: 410,
   body: {
     error: "reset_spent",
-    message: "This password reset link is no longer valid. Ask an administrator for a new one.",
+    message: "This password reset link is no longer valid. Ask an admin for a new one.",
   },
 };
 
@@ -114,11 +123,14 @@ afterEach(() => {
 });
 
 describe("opening the link", () => {
-  test("says whose password it sets, asking with the secret beside the id", async () => {
+  test("files the password under its login, asking with the secret beside the id", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
     await mount();
     await screen.findByLabelText("New password");
-    expect(screen.getByText("jane.doe")).toBeDefined();
+    // FOR A PASSWORD MANAGER: the login rides beside the new password.
+    expect(
+      (document.querySelector('input[name="username"]') as HTMLInputElement | null)?.value,
+    ).toBe("jane.doe");
     const view = sent.find((s) => s.url.includes("/auth/reset/"));
     expect(view?.method).toBe("GET");
     expect(view?.headers["X-Crewlet-Reset-Secret"]).toBe(SECRET);
@@ -139,7 +151,7 @@ describe("opening the link", () => {
   test("a link cut short says so, and asks the engine nothing", async () => {
     const sent = engine({});
     await mount(ID);
-    expect(screen.getByText("Part of the link is missing.")).toBeDefined();
+    expect(screen.getByText("Copy the whole link.")).toBeDefined();
     expect(sent.filter((s) => s.url.includes("/auth/reset/"))).toEqual([]);
   });
 
@@ -148,7 +160,7 @@ describe("opening the link", () => {
     await mount();
     expect(
       await screen.findByText(
-        "This password reset link is no longer valid. Ask an administrator for a new one.",
+        opening("This password reset link is no longer valid. Ask an admin for a new one."),
       ),
     ).toBeDefined();
     expect(screen.queryByLabelText("New password")).toBeNull();
@@ -176,13 +188,14 @@ describe("a first password link", () => {
     await mount();
     await screen.findByLabelText("New password");
     expect(screen.getByText("Choose your password")).toBeDefined();
-    expect(screen.getByText(/sets the first password for/)).toBeDefined();
-    expect(screen.queryByText(/ends every session/)).toBeNull();
+    expect(screen.getByText(/You’ll sign in as/)).toBeDefined();
+    expect(screen.queryByText(/signs you out everywhere/)).toBeNull();
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
-    expect(await screen.findByText("Sign in as jane.doe with your password.")).toBeDefined();
-    expect(screen.queryByText(/Every session you held has ended/)).toBeNull();
+    expect(await screen.findByText("Sign in as jane.doe.")).toBeDefined();
+    expect(screen.getByText("You’re all set")).toBeDefined();
+    expect(screen.queryByText(/Password changed/)).toBeNull();
   });
 
   test("a reset keeps its own words: a new password, and every session ended", async () => {
@@ -193,12 +206,13 @@ describe("a first password link", () => {
     await mount();
     await screen.findByLabelText("New password");
     expect(screen.getByText("Choose a new password")).toBeDefined();
-    expect(screen.getByText(/Setting it ends every session you hold/)).toBeDefined();
+    expect(screen.getByText("This signs you out everywhere.")).toBeDefined();
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
-    expect(await screen.findByText("Sign in as jane.doe with your new password.")).toBeDefined();
-    expect(screen.getByText(/Every session you held has ended/)).toBeDefined();
+    expect(
+      await screen.findByText("Password changed. Sign in as jane.doe with your new password."),
+    ).toBeDefined();
   });
 
   // A LINK THAT NO LONGER OPENS DOES NOT SAY WHICH IT WAS, so the screen names
@@ -208,9 +222,9 @@ describe("a first password link", () => {
     engine({ [`GET ${PATH}`]: SPENT });
     await mount();
     await screen.findByText(
-      "This password reset link is no longer valid. Ask an administrator for a new one.",
+      opening("This password reset link is no longer valid. Ask an admin for a new one."),
     );
-    expect(screen.getByText(/works once, and for a limited time/)).toBeDefined();
+    expect(screen.getByText(/Already set your password\? Sign in\.$/)).toBeDefined();
     expect(screen.queryByText(/for a day/)).toBeNull();
   });
 });
@@ -222,7 +236,7 @@ describe("spending it", () => {
     await screen.findByLabelText("New password");
     type("New password", "too-short");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
-    expect(await screen.findByText(/is 9 characters, and the minimum is 12/)).toBeDefined();
+    expect(await screen.findByText("Use at least 12 characters (this has 9).")).toBeDefined();
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
@@ -235,7 +249,7 @@ describe("spending it", () => {
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery stable");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
-    expect(await screen.findByText("The two passwords are not the same.")).toBeDefined();
+    expect(await screen.findByText("The passwords don’t match.")).toBeDefined();
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
@@ -261,7 +275,7 @@ describe("spending it", () => {
     expect(spend?.url).not.toContain(SECRET);
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(location.hash).toBe("#/login?login=jane.doe&after=reset"));
-    expect(await screen.findByText(/Your password is set\. Sign in with it/)).toBeDefined();
+    expect(await screen.findByText("Your password is set. Sign in below.")).toBeDefined();
     expect(screen.getByLabelText("Login or email address")).toHaveProperty("value", "jane.doe");
     expect(screen.queryByText(/your invitation was for/)).toBeNull();
   });
@@ -275,7 +289,7 @@ describe("spending it", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
     expect(
       await screen.findByText(
-        "This password reset link is no longer valid. Ask an administrator for a new one.",
+        opening("This password reset link is no longer valid. Ask an admin for a new one."),
       ),
     ).toBeDefined();
   });

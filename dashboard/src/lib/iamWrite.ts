@@ -49,7 +49,7 @@
 import { useCallback, useState } from "react";
 import { isAbort, newActOpID, rest, RestError, type QueryValue } from "~/protocol/index.ts";
 import { refusalText } from "./refusal.ts";
-import { accessNames } from "./access.ts";
+import { youNeedWords } from "./access.ts";
 
 /** What one `/iam` write came to. */
 export type IamAnswer =
@@ -134,21 +134,40 @@ function refusalOf(err: unknown, sent: string): IamAnswer {
   const unknown = err.unanswered || (err.status === 503 && err.body.outcome === "unknown");
   if (unknown) {
     const key = sent ? (typeof err.body.op_id === "string" ? err.body.op_id : sent) : "";
+    // KEYED, A RETRY IS THE SAME OPERATION, which the engine applies once:
+    // that promise is the whole of what the reader needs.
+    if (key) {
+      return {
+        kind: "unknown",
+        key,
+        text: `${changed.trim()} Try again. It won’t happen twice.`.trim(),
+      };
+    }
     const said = err.unanswered
       ? "No answer came back, so nothing here knows whether this landed."
       : "The engine could not confirm whether this landed.";
-    const next = key
-      ? "Try again as it is: it sends the same operation, which lands once. Changed, it is a new one."
-      : asked(err.detail) || "Try again: this makes a new one.";
+    const next = asked(err.detail) || "Try again: this makes a new one.";
     return { kind: "unknown", key, text: `${said}${changed} ${next}` };
   }
-  const parts = [refusalText(err)];
-  // ONLY A RULE'S REFUSAL names access the caller lacks. A step-up refusal
-  // names the access that ADMITTED them, so said here it told an admin that
-  // Admin access would admit them.
-  if (err.code === "unauthorized" && err.grants.length > 0) {
-    parts.push(`${accessNames(err.grants)} access would admit you.`);
+  // A CONFIRMATION THE PERSON CANCELLED is no refusal of theirs: the engine's
+  // sentence told them to confirm, which they had just declined, so the
+  // dialog says what happened and keeps its button ready to try again.
+  if (err.code === "step_up_required") {
+    return {
+      kind: "refused",
+      text: `You didn’t confirm, so nothing changed.${changed}`,
+      stale: false,
+    };
   }
+  // ONLY A RULE'S REFUSAL names access the caller lacks, and then it is ONE
+  // sentence naming that access, as a refused change says it everywhere
+  // (`WriteButton`'s `RefusalNote`): the engine's own sentence lists every
+  // access in general, and the two side by side said it twice. A step-up
+  // refusal names the access that ADMITTED them, so it never comes here.
+  const parts =
+    err.code === "unauthorized" && err.grants.length > 0
+      ? [`${youNeedWords(err.grants)} Ask an admin.`]
+      : [refusalText(err)];
   return {
     kind: "refused",
     text: parts.join(" ") + changed,

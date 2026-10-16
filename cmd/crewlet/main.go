@@ -245,10 +245,8 @@ Usage:
                               or resume it: its holder, its lead, or an admin
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
-  crewlet iam <cmd>           The company's people, credentials and sessions:
-                              the human seats, invite or create a person onto
-                              one, grant, move, suspend, revoke, reset a
-                              password, audit
+  crewlet iam <cmd>           People, seats, invitations, permissions,
+                              sessions and tokens
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
                               doctor also checks anthropic entries against their model
   crewlet search eval         Measure the semantic search against the exact scan,
@@ -276,13 +274,11 @@ Config:
 
 Environment:
   %s
-            The credential a command that talks to a RUNNING node sends
-            (budgets, backup, retention, work, seats, secrets, config,
-            iam):
-            one of the node's api.auth.tokens values, or a machine token
-            minted by "crewlet iam token". It is never a flag — a flag is in
-            the shell history and in ps — and never read out of the config
-            file, whose token list is what the node ACCEPTS.
+            The token for commands that talk to a running node (budgets,
+            backup, retention, work, seats, secrets, config, iam): one of
+            the node's api.auth.tokens values, or an access token from
+            "crewlet iam token". It's never a flag (flags end up in shell
+            history) and never read from the config file.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 
@@ -947,10 +943,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// production by being copied into an image. See auth.NewDevPrincipal
 	// for the two refusals behind it.
 	devPrincipal := fs.String("dev-principal", "",
-		"DEVELOPMENT ONLY: resolve every unauthenticated request to this "+
-			"login, carrying every app, and admin where api.auth.admin is "+
-			"serve. Refused unless api.host binds loopback AND this is a "+
-			"development build")
+		"Development only: treat every request without a token as this "+
+			"login, with every app (and admin when api.auth.admin is "+
+			"serve). Only works on a development build bound to loopback")
 	// ASSIGNED, NOT DECLARED: this function's error is NAMED, so that a
 	// deferred recorder can put a boot failure in the log file before the
 	// file closes (see below), and a `:=` here would shadow it — harmless
@@ -1086,9 +1081,8 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// week and forgets what they are looking at.
 		log.Warn("api_dev_principal_enabled",
 			"login", *devPrincipal, "bind", boot.API.Host,
-			"hint", "every request with no credential is authenticated as "+
-				"this principal; this is refused on anything but a loopback "+
-				"bind of a development build")
+			"hint", "every request without a token acts as this login. "+
+				"This only works on a development build bound to loopback")
 	}
 	// THE MODE IS A FLAG AND NEVER A CONFIG FIELD, deliberately. Every
 	// node of the fleet restarts into it and out of it again, three times
@@ -2320,9 +2314,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		log.WarnContext(ctx, "api_insecure_posture_accepted",
 			"external_url", boot.API.ExternalBase(),
 			"totp", boot.API.Auth.SecondFactor(),
-			"hint", "api.auth.accept_insecure is true: a posture that "+
-				"would otherwise be refused off loopback is in force. Remove it "+
-				"once this deployment is reached over TLS with a second factor")
+			"hint", "`api.auth.accept_insecure` is on. Remove it once you "+
+				"use https and two-step verification")
 	}
 	// THE COMPANY-DERIVED SURFACES, re-sent whenever a published company
 	// changes them.

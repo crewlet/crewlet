@@ -112,7 +112,7 @@ func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 		for _, f := range danglingFindings(t, base) {
 			detail, _ := f["detail"].(string)
 			if f["person"] == bot && f["seat"] == "founder" &&
-				strings.Contains(detail, "unbind") {
+				strings.Contains(detail, "Unbind them") {
 				return
 			}
 		}
@@ -188,35 +188,35 @@ func TestTheBootSaysWhereTheFirstPersonIsInvited(t *testing.T) {
 		not  []string
 	}{
 		{"no company", nobody, func() ([]session.Seat, bool) { return nil, false }, free,
-			true, []string{"runs no company", "kind: human", "crewlet config import",
+			true, []string{"has no company yet", "kind: human", "crewlet config import",
 				"-seat <handle>"}, []string{"founder"}},
 		{"no human seat", nobody, func() ([]session.Seat, bool) { return nil, true }, free,
-			true, []string{"declares no human seat", "kind: human", "-seat <handle>"},
-			[]string{"runs no company"}},
+			true, []string{"has no human seats", "kind: human", "-seat <handle>"},
+			[]string{"has no company yet"}},
 		{"human seats", nobody, both, free,
-			true, []string{"vacant human seats (founder, ops-lead)", "Agents › Org chart",
+			true, []string{"vacant human seat (founder, ops-lead)", "Agents › Org chart",
 				"crewlet iam invite <address> -seat <handle>"},
-			[]string{"declares no human seat", "runs no company"}},
+			[]string{"has no human seats", "has no company yet"}},
 		// A SERVICE ACCOUNT ON A SEAT is not a vacancy: an invitation onto
 		// it is refused.
 		{"a seat a service account holds", nobody, both,
 			claimed(iamdomain.SeatClaims{Bindings: []iamdomain.SeatBinding{machine}}),
-			true, []string{"vacant human seats (founder)"}, []string{"ops-lead"}},
+			true, []string{"vacant human seat (founder)"}, []string{"ops-lead"}},
 		// THE FOUNDER INVITED, THE NODE RESTARTED before the link was
 		// redeemed: the invitation is the step already taken, and its seat
 		// is not offered again.
 		{"a seat an open invitation holds", nobody, both,
 			claimed(iamdomain.SeatClaims{Invitations: []iamdomain.SeatInvitation{invitation}}),
 			true, []string{"invitation is open for founder (invitation inv-7)",
-				"crewlet iam cancel-invite ID", "the vacant human seats are ops-lead"},
-			[]string{"(founder, ops-lead)", "onto one of its vacant"}},
+				"crewlet iam cancel-invite ID", "Vacant human seats: ops-lead"},
+			[]string{"(founder, ops-lead)", "Invite the first person to a vacant"}},
 		{"every seat held", nobody, func() ([]session.Seat, bool) {
 			return []session.Seat{ops}, true
 		}, claimed(iamdomain.SeatClaims{Bindings: []iamdomain.SeatBinding{machine}}),
-			true, []string{"none of its human seats is vacant",
+			true, []string{"every human seat is taken",
 				"ops-lead (service account token:ops, id m-ops)", "crewlet iam unbind ID",
 				"kind: human"},
-			[]string{"onto one of its vacant"}},
+			[]string{"Invite the first person to a vacant"}},
 		// A SEAT LISTING THAT CANNOT BE READ names no seat it cannot vouch
 		// is free, and points at the command that asks again.
 		{"the seats cannot be read", nobody, both,

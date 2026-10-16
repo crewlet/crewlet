@@ -59,7 +59,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Button, Callout, Card, CodeBlock, Tag, cx } from "@crewlethq/ui";
+import { Button, Callout, Card, CodeBlock, Tag, cx, InlineCode } from "@crewlethq/ui";
 import { ClockGlyph, CircleAlertGlyph, SquareTerminalGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
@@ -643,8 +643,8 @@ function RunDetail({
       <Facts
         rows={[
           ["Coding agent", span.sub],
-          ["Box", record?.sandboxId ? <code className="inline">{record.sandboxId}</code> : ""],
-          ["Job", span.launchId ? <code className="inline">{span.launchId}</code> : ""],
+          ["Box", record?.sandboxId ? <InlineCode>{record.sandboxId}</InlineCode> : ""],
+          ["Job", span.launchId ? <InlineCode>{span.launchId}</InlineCode> : ""],
           ["Delivered", record ? deliveredLine(record) : ""],
           ["Tokens", record && record.totalTokens > 0 ? fmtCount(record.totalTokens) : ""],
         ]}

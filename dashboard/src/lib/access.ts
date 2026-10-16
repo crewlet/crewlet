@@ -105,16 +105,15 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
   admin: {
     label: "Admin",
     description:
-      "Runs the company and the engine: configuration, integrations, models, secrets, people, the deployment and the audit trail. Includes every app — and it is host access, so treat it like a shell on every engine host.",
+      "Runs the company: settings, secrets and people. Includes every app, and host access to the engine.",
   },
   tracker: {
     label: "Tracker",
-    description:
-      "Use the work tracker: read and write tasks and projects, the inbox and My work. Agents send work to people through it.",
+    description: "Tasks, projects, the inbox and My work.",
   },
   knowledge: {
     label: "Knowledge",
-    description: "Use the knowledge base: read, search and write pages.",
+    description: "Read, search and write pages.",
   },
 };
 
@@ -151,14 +150,13 @@ export function accessLine(grants: readonly string[]): string {
  * (`body_withheld`). Said, never drawn as an empty value, because "the prompt
  * was empty" and "you may not read the prompt" are opposite facts.
  */
-export const WITHHELD_WORDS = "Not shown to you";
+export const WITHHELD_WORDS = "Hidden";
 
 /** Why, in one sentence: whose a seat's trail is to read. */
-export const WITHHELD_WHY =
-  "What a seat says is its trail, which its lead and an admin read; everybody sees what it is doing.";
+export const WITHHELD_WHY = "Only this seat’s lead and admins can see it.";
 
 /** What a coding run's question is drawn as where the engine withheld it. */
-export const QUESTION_WITHHELD = "Its question is not shown to you";
+export const QUESTION_WITHHELD = "Its question is hidden";
 
 /**
  * Whether a coding run's QUESTION was withheld from this reader: the engine
@@ -168,6 +166,16 @@ export const QUESTION_WITHHELD = "Its question is not shown to you";
  */
 export function questionWithheld(run: { question?: string; body_withheld?: boolean }): boolean {
   return !run.question && run.body_withheld === true;
+}
+
+/**
+ * A refused change's one sentence, to the reader: "You need Tracker access for
+ * this." ONE SENTENCE where the refusal and its remedy were two that said the
+ * same thing ("You do not hold what this change needs. This needs Tracker
+ * access.").
+ */
+export function youNeedWords(needs: readonly string[]): string {
+  return `You need ${accessNames(needs)} access for this.`;
 }
 
 /** The permissions a lock names, as words: "Tracker", or "Tracker or Knowledge". */
@@ -186,6 +194,6 @@ export function accessNames(needs: readonly string[]): string {
  * sign in rather than to ask an admin.
  */
 export function needsWords(what: string, needs: readonly string[]): string {
-  if (needs.length === 0) return `${what} needs a credential the engine accepts. Sign in.`;
+  if (needs.length === 0) return "Sign in to see this.";
   return `${what} needs ${accessNames(needs)} access. An admin can give it to you.`;
 }

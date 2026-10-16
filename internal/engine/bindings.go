@@ -124,16 +124,12 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 // they are here (ADR-0032), and the directory refuses the unbind, so the
 // sentence that used to serve both kinds sent an administrator to a gesture
 // the engine answers `seat_required`. A SERVICE ACCOUNT's seat is optional,
-// so unbinding it is the one-record repair and a move the other. A kind this
-// build does not name gets only the remedy that holds for both — a move or a
-// removal — rather than a guess at which it is.
+// so unbinding it is the one-record repair and a move the other. A person,
+// and a kind this build does not name, get the remedy that holds for both (a
+// move or a removal) rather than a guess at which it is.
 func danglingRemedy(kind iam.Kind) string {
-	switch kind {
-	case iam.KindPerson:
-		return "; move them to another human seat, or remove them — a " +
-			"person always holds a seat"
-	case iam.KindMachine:
-		return "; unbind them, or bind them to another human seat"
+	if kind == iam.KindMachine {
+		return ". Unbind them, or move them to another human seat"
 	}
-	return "; bind them to another human seat, or remove them"
+	return ". Move them to another human seat, or remove them"
 }

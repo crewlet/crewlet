@@ -100,17 +100,20 @@
 
 import { useState } from "react";
 import {
+  AccountRow,
   Button,
   DensitySwitcher,
   IconButton,
+  Link,
   Popover,
   Select,
   ThemeSwitcher,
   ThemeToggle,
+  Text,
   useToast,
 } from "@crewlethq/ui";
 import { isThemeId } from "@crewlethq/tokens";
-import { ChevronRightGlyph, Settings2Glyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph, Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";
 import { href, useRoute } from "~/app/router.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -163,15 +166,15 @@ export function whoLine(
     }
     if (failed) {
       return {
-        name: "Could not tell who you are",
-        detail: "The engine did not answer",
+        name: "Can’t check who you are",
+        detail: "Try reloading",
         grants: "",
       };
     }
     return { name: "Checking who you are", detail: "Asking the engine", grants: "" };
   }
   if (viewer.anonymous) {
-    return { name: "Not signed in", detail: "Sign in to read and act", grants: "" };
+    return { name: "Not signed in", detail: "Sign in to continue", grants: "" };
   }
   const grants = grantsLine(viewer.grants);
   const name = readerName(session, viewer.login);
@@ -195,7 +198,7 @@ export function whoLine(
 function said(name: string, login: string, seat: string | null): { name: string; detail: string } {
   const parts: string[] = [];
   if (login && login !== name) parts.push(login);
-  if (seat === null) parts.push("Not bound to a seat");
+  if (seat === null) parts.push("No seat");
   else if (seat && seat !== name) parts.push(seat);
   return { name, detail: parts.join(" · ") };
 }
@@ -229,91 +232,85 @@ export function UserBlock({
   // THE ACCOUNT'S ROW IS THIS BLOCK, so it is current where the Account is.
   const here = workspaceOf(route.path) === ACCOUNT.key;
 
-  const identity = (
-    <>
-      {/* RINGED IN THE ACCENT ONCE THE ENGINE HAS SAID WHO THIS IS: this one
-          badge IS the reader, which is the single use `ring="brand"` exists
-          for (`docs/reference/dashboard-design.md`). A badge standing in for
-          nobody, or for an answer still out, is not the reader and is not
-          ringed. */}
-      <SeatAvatar
-        name={resolved ? who.name || "?" : "?"}
-        size="sm"
-        kind="human"
-        ring={resolved ? "brand" : undefined}
-        decorative
-      />
-      <span className="user-block-text">
-        <span className="user-block-name truncate">{who.name}</span>
-        {who.detail ? <span className="user-block-detail truncate">{who.detail}</span> : null}
-      </span>
-    </>
-  );
+  // A PRINCIPAL THAT IS NOT A PERSON (an API token's session, a service
+  // account) wears a KEY for a face: the initials of `token:reader` drew "TO",
+  // as if it were somebody.
+  const machine =
+    session !== null ? session.kind === "machine" : answered && viewer.unbound === true;
 
   return (
-    <div className="user-block">
-      {resolved || account?.kind === "unknown" ? (
-        // THE READER'S OWN ACCOUNT, for anybody resolved — and for a browser
-        // whose session read failed, which may hold one — see the file's doc:
-        // it was the seat's page, and nobody found their second factor.
-        <a
-          className="user-block-who"
-          href={href(ACCOUNT.path)}
-          title={ACCOUNT.hint}
-          aria-current={here ? "page" : undefined}
-        >
-          {identity}
-          <span className="sr-only">, your account</span>
-          <ChevronRightGlyph size="xs" className="user-block-go" aria-hidden="true" />
-        </a>
-      ) : (
-        <span className="user-block-who">{identity}</span>
-      )}
-      <ThemeToggle size="sm" value={prefs.theme} onChange={prefs.setTheme} />
-      {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger sits at
-          the sidebar's inner edge, a couple of hundred pixels from the left of
-          the window, so an end-aligned panel would have to be slid back
-          across the window edge to fit at all.
-
-          And the kit cannot draw it end-aligned from here: @crewlethq/ui
-          0.5.0's Popover (and Menu) asks whether the anchor left the layer
-          using the END-ALIGNED PANEL'S left edge with the ANCHOR'S width, so
-          any panel wider than the anchor's right edge plus its width reads as
-          an anchor carried off screen and closes on the frame it opened. That
-          is a kit defect, raised against uilet; the test beside this block
-          lays the sidebar out at its real coordinates so a return to `end`
-          goes red while the kit still has it. */}
+    <>
       {everywhere && <SignOutEverywhereDialog onClose={() => setEverywhere(false)} />}
-      <Popover
-        label="Account and preferences"
-        side="top"
-        align="start"
-        trigger={(open, toggle) => (
-          <IconButton
-            label="Account and preferences"
-            icon={<Settings2Glyph size="sm" />}
+      <AccountRow
+        avatar={
+          // RINGED IN THE ACCENT ONCE THE ENGINE HAS SAID WHO THIS IS: this
+          // one badge IS the reader, which is the single use `ring="brand"`
+          // exists for (`docs/reference/dashboard-design.md`). A badge
+          // standing in for nobody, or for an answer still out, is not the
+          // reader and is not ringed.
+          <SeatAvatar
+            name={resolved ? who.name || "?" : "?"}
             size="sm"
-            variant="ghost"
-            aria-expanded={open}
-            onClick={toggle}
+            kind="human"
+            ring={resolved ? "brand" : undefined}
+            icon={resolved && machine ? <KeyGlyph size="sm" /> : undefined}
+            decorative
           />
-        )}
-      >
-        {(close) => (
+        }
+        name={who.name}
+        detail={who.detail || undefined}
+        // THE READER'S OWN ACCOUNT, for anybody resolved, and for a browser
+        // whose session read failed, which may hold one (see the file's doc).
+        href={resolved || account?.kind === "unknown" ? href(ACCOUNT.path) : undefined}
+        current={here}
+        title={ACCOUNT.hint}
+        actions={
           <>
-            {account && (
-              <AccountActions
-                account={account}
-                grants={who.grants}
-                onLeave={close}
-                onSignOutEverywhere={() => setEverywhere(true)}
-              />
-            )}
-            <Preferences />
+            <ThemeToggle size="sm" value={prefs.theme} onChange={prefs.setTheme} />
+            {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger sits at the sidebar's
+                inner edge, a couple of hundred pixels from the left of the window, so an
+                end-aligned panel would have to be slid back across the window edge to fit at all.
+
+                And the kit cannot draw it end-aligned from here: @crewlethq/ui 0.5.0's Popover (and
+                Menu) asks whether the anchor left the layer using the END-ALIGNED PANEL'S left edge
+                with the ANCHOR'S width, so any panel wider than the anchor's right edge plus its
+                width reads as an anchor carried off screen and closes on the frame it opened. That
+                is a kit defect, raised against uilet; the test beside this block lays the sidebar
+                out at its real coordinates so a return to `end` goes red while the kit still has
+                it. */}
+            <Popover
+              label="Account and preferences"
+              side="top"
+              align="start"
+              trigger={(open, toggle) => (
+                <IconButton
+                  label="Account and preferences"
+                  icon={<Settings2Glyph size="sm" />}
+                  size="sm"
+                  variant="ghost"
+                  aria-expanded={open}
+                  onClick={toggle}
+                />
+              )}
+            >
+              {(close) => (
+                <>
+                  {account && (
+                    <AccountActions
+                      account={account}
+                      grants={who.grants}
+                      onLeave={close}
+                      onSignOutEverywhere={() => setEverywhere(true)}
+                    />
+                  )}
+                  <Preferences />
+                </>
+              )}
+            </Popover>
           </>
-        )}
-      </Popover>
-    </div>
+        }
+      />
+    </>
   );
 }
 
@@ -383,25 +380,27 @@ export function AccountActions({
   // sign-out that nothing answered must not look like one that worked.
   const run = (gesture: () => Promise<void>, what: string) => () => {
     gesture().catch((err: unknown) =>
-      toast.failed(`${what} did not go through. ${refusalText(err)}`),
+      toast.failed(`${what} didn’t go through. ${refusalText(err)}`),
     );
   };
   return (
     <div className="preferences-account">
       {account.kind === "session" ? (
         <>
-          <span className="t-label">Signed in as</span>
-          <span className="mono truncate">{account.login}</span>
-          {grants && <span className="t-caption">{grants}</span>}
+          <Text variant="label">Signed in as</Text>
+          <Text variant="cell" mono truncate>
+            {account.login}
+          </Text>
+          {grants && <Text variant="caption">{grants}</Text>}
         </>
       ) : (
-        <span className="t-caption">The engine did not say who this browser is signed in as.</span>
+        <Text variant="caption">We couldn’t check who’s signed in.</Text>
       )}
       {/* A LINK, not a button: it is a page, so ⌘-click opens it in a tab. */}
       {MENU_ROWS.map((ws) => (
-        <a
+        <Link
           key={ws.key}
-          className="t-link"
+          size="caption"
           href={href(ws.path)}
           title={ws.hint}
           onPointerEnter={() => preload(ws.path)}
@@ -409,7 +408,7 @@ export function AccountActions({
           onClick={onLeave}
         >
           {ws.label}
-        </a>
+        </Link>
       ))}
       <Button size="small" variant="secondary" onClick={run(() => signOut(socket), "Signing out")}>
         Sign out
@@ -418,7 +417,7 @@ export function AccountActions({
         <Button
           size="small"
           variant="ghost"
-          title="Ends every session you hold, on every device, and every personal access token"
+          title="Sign out on every device and stop your tokens"
           onClick={() => {
             onLeave?.();
             onSignOutEverywhere();
@@ -446,9 +445,9 @@ export function Preferences() {
           so a row of glyphs and a row of letters draw the same cells, and the
           theme's field is that width too: three controls, one column. */}
       <div className="preferences-row">
-        <span className="t-label" aria-hidden="true">
+        <Text variant="label" aria-hidden="true">
           Mode
-        </span>
+        </Text>
         <div className="preferences-switch">
           <ThemeSwitcher
             label="Mode"
@@ -460,9 +459,9 @@ export function Preferences() {
         </div>
       </div>
       <div className="preferences-row">
-        <span className="t-label" aria-hidden="true">
+        <Text variant="label" aria-hidden="true">
           Density
-        </span>
+        </Text>
         <div className="preferences-switch">
           <DensitySwitcher
             label="Density"
@@ -474,9 +473,9 @@ export function Preferences() {
         </div>
       </div>
       <div className="preferences-row">
-        <span className="t-label" aria-hidden="true">
+        <Text variant="label" aria-hidden="true">
           Theme
-        </span>
+        </Text>
         <div className="preferences-switch">
           <Select
             ariaLabel="Theme"

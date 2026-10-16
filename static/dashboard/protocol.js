@@ -430,7 +430,7 @@ var Store = class {
 	* the unguarded `/health`, not the company.
 	*/
 	setAccessRefused(reason) {
-		const next = reason === null ? null : reason || "refused";
+		const next = reason === null ? null : reason.trim();
 		if (this.state.accessRefused === next) return;
 		this.state.accessRefused = next;
 		if (next !== null) {
@@ -2632,13 +2632,13 @@ var ACTIONS = {
 * `if_match` and record ids.
 */
 var ACT_ERRORS = {
-	invalid_token: "Your sign-in has ended. Sign in again, then make the change.",
-	identity_unavailable: "This node cannot confirm who you are just now. Try again in a moment; your sign-in is fine.",
-	seat_unavailable: "The seat you act as is no longer in the org chart, so nothing can be made in its name.",
-	second_factor_enrolment_required: "This deployment requires a second factor. Enrol one before you make changes.",
+	invalid_token: "Signed out. Sign in again.",
+	identity_unavailable: "Couldn’t confirm who you are. Try again.",
+	seat_unavailable: "Your seat was removed. Ask an admin to move you.",
+	second_factor_enrolment_required: "Set up two-step verification first.",
 	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
-	unauthorized: "You do not hold what this change needs.",
-	step_up_required: "This change needs you to confirm who you are first.",
+	unauthorized: "You don’t have access to this.",
+	step_up_required: "Confirm it’s you first.",
 	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
 	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
 	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",

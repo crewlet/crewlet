@@ -74,7 +74,8 @@ test("an unknown on an unkeyed route carries no key and the engine's own remedy"
 test("a refusal is the engine's words, the grants that admit, and what had landed", async () => {
   answer(403, {
     error: "unauthorized",
-    message: "The credential you presented does not carry the grant this request needs.",
+    message:
+      "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
     reason: "conferral",
     grants: ["admin"],
     landed: ["identity"],
@@ -82,8 +83,9 @@ test("a refusal is the engine's words, the grants that admit, and what had lande
   const got = await iamWrite({ method: "PATCH", path: "/iam/people/p", key: "k" });
   expect(got.kind).toBe("refused");
   const text = got.kind === "refused" ? got.text : "";
-  expect(text).toMatch(/does not carry the grant/);
-  expect(text).toMatch(/Admin access would admit you/);
+  // ONE SENTENCE, never the engine's general list beside the specific need.
+  expect(text).not.toMatch(/Admin, Tracker or Knowledge/);
+  expect(text).toMatch(/You need Admin access for this\./);
   expect(text).toMatch(/What did change: the login and seat\./);
 });
 
@@ -93,13 +95,13 @@ test("a refusal is the engine's words, the grants that admit, and what had lande
 test("a step-up refusal is about confirming, never a grant", async () => {
   answer(403, {
     error: "step_up_required",
-    message: "This action needs you to have confirmed who you are recently.",
+    message: "Confirm it’s you to do this, then try again.",
     reason: "step_up",
     window: "step_up",
     grants: ["admin"],
   });
   const got = await iamWrite({ method: "POST", path: "/iam/credentials" });
   const text = got.kind === "refused" ? got.text : "";
-  expect(text).toMatch(/confirmed who you are/);
-  expect(text).not.toMatch(/would admit you/);
+  expect(text).toBe("You didn’t confirm, so nothing changed.");
+  expect(text).not.toMatch(/You need .* access/);
 });

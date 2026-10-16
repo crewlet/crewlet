@@ -155,7 +155,7 @@ func (g *Guard) overreached(r *http.Request, entry config.APIToken, status int) 
 	log.WarnContext(r.Context(), "api_auth_token_overreach",
 		"token", entry.ID, "route", r.URL.Path, "status", status,
 		"remote", g.Client(r),
-		"detail", "a Tier A token reached for a route its grants do not cover")
+		"detail", "An API token tried a route its grants don't cover.")
 }
 
 // refusalStatus reports whether a status is a refusal of AUTHORITY, which is

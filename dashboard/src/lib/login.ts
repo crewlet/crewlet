@@ -28,15 +28,15 @@ export function loginProblem(kind: LoginKind, login: string): string | null {
   if (login === "") return null;
   if (!GRAMMAR[kind].test(login)) {
     return kind === "person"
-      ? "Use lowercase words joined by dots, such as jane.doe — no capitals or spaces."
-      : "Use lowercase words joined by a colon, such as ci:release — no capitals or spaces.";
+      ? "Use lowercase words with dots, like jane.doe."
+      : "Use lowercase words with colons, like ci:release.";
   }
   const credential = kind === "machine" && CREDENTIAL_CLASSES.find((c) => login.startsWith(c));
   if (credential) {
-    return `A login cannot begin with ${credential}, which names a credential rather than an account.`;
+    return `A login can’t start with ${credential}.`;
   }
   if (login.length > MAX_LOGIN) {
-    return `At most ${MAX_LOGIN} characters; this is ${login.length}.`;
+    return `Use ${MAX_LOGIN} characters or fewer (this has ${login.length}).`;
   }
   return null;
 }

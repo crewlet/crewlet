@@ -26,7 +26,10 @@
 //     the detail rather than rewording the sentence.
 //   - the [Detail] — the machine-readable facts about THIS refusal, as typed
 //     JSON: `{"missing_grant": "secrets.reveal"}`, `{"retry_after_ms": 4000}`,
-//     `{"relation": "leads", "subject": "sarah-chen"}`.
+//     `{"relation": "leads", "subject": "sarah-chen"}`. Its `detail` and
+//     `hint` texts are the two a person reads, and [Envelope] writes each as
+//     a sentence ([Sentence]), so a handler hands over a Go error's text as
+//     it is.
 //
 // `error` and `message` are RESERVED KEYS and always win, so a client that
 // branches on the code can never find it displaced by a route's own field of
@@ -66,7 +69,10 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"encoding/json"
 
@@ -835,22 +841,19 @@ var codes = map[Code]string{
 	CodeBodyTooLarge: "The request body is larger than this endpoint accepts. " +
 		"Send a smaller document, or split the change across more than one request.",
 	CodeUnreadableBody: "The request body did not arrive in full. Send it again.",
-	CodeInvalidBody: "The request body is not one this endpoint accepts — its " +
-		"shape, or a value in it — and nothing was changed.",
-	CodeInvalidQuery: "One of the query parameters is not a value this endpoint accepts.",
+	CodeInvalidBody:    "The request body isn't valid, so nothing changed.",
+	CodeInvalidQuery:   "One of the query parameters is not a value this endpoint accepts.",
 	CodeNonCanonicalPath: "The request path has a dot segment or an empty " +
 		"segment in it. Send the path it resolves to instead.",
 	CodeInternalError: "Something went wrong inside the engine. The reason is " +
 		"in this node's log.",
 	CodeDraining: "This node is shutting down and is not taking new work. " +
 		"Try another node, or this one once it has restarted.",
-	CodeNoRoute: "Nothing on this node serves that path. Check the address — " +
-		"or whether this node runs the surface it belongs to.",
+	CodeNoRoute: "Nothing here at that path. Check the address, or whether " +
+		"this node runs it.",
 	CodeMethodNotAllowed: "That path does not take this method. The Allow " +
 		"header names the ones it does.",
-	CodeInvalidToken: "This request needs a credential, and none this engine " +
-		"accepts was presented. Sign in, or send an API token this deployment " +
-		"issued.",
+	CodeInvalidToken: "Sign in, or send a valid token.",
 
 	CodeUnknownQuery: "This node does not serve that query.",
 	// ABOUT THE ACCESS, NOT A TOKEN. It said "that query needs an operator
@@ -860,29 +863,25 @@ var codes = map[Code]string{
 	// THE THREE PERMISSIONS there are (ADR-0033), because a person reading it
 	// on a screen has to know what to ask an admin for, and the refusal's
 	// `grants` beside it says which one.
-	CodeUnauthorized: "The credential you presented does not carry the access " +
-		"(Admin, Tracker or Knowledge) this request needs. Ask an admin of " +
-		"this deployment for it, or use a credential that carries it.",
+	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker " +
+		"or Knowledge). Ask an admin for it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
 	CodeBadParams: "That query was asked with a parameter this endpoint does not accept.",
-	CodeUnavailable: "This node cannot answer that right now — ask it again " +
-		"when it says to, or, where it gives no time, ask another node or an " +
-		"operator.",
-	CodeCSRFOrigin: "That request came from a page this deployment does not " +
-		"serve, so it was refused without being carried out.",
-	CodeIdentityUnavailable: "This node cannot tell who you are at the moment — " +
-		"the identity estate could not be read. Your credential is probably " +
-		"fine; try again shortly.",
+	CodeUnavailable: "Can't answer right now. Try again in a moment, or ask " +
+		"another node.",
+	CodeCSRFOrigin: "This request came from another site, so it was blocked. " +
+		"Nothing changed.",
+	CodeIdentityUnavailable: "Can't check who you are right now. Try again " +
+		"in a moment.",
 
 	CodePassInFlight: "A setup pass for this integration is already running. " +
 		"Wait for it to finish rather than starting a second one.",
 	CodeNotProvisionable: "This integration is not set up from here. Connect " +
 		"it at the third-party app itself, or with the crewlet command line.",
-	CodeNoExternalURL: "This deployment has no external address, so nothing " +
-		"that has to point back at it can be made. Set the external URL in " +
-		"this node's own configuration file and restart it.",
+	CodeNoExternalURL: "No external address is set. Set `api.external_url` " +
+		"in this node's config file and restart.",
 	CodeRequirementsOutstanding: "This integration is still missing values it " +
 		"needs. Fill them in before running a pass.",
 	CodeRunNotFound: "That setup run is not held here. A run is remembered by " +
@@ -895,27 +894,21 @@ var codes = map[Code]string{
 	// oracle the single code exists to close, written out in the body.
 	CodeSignInRefused: "Those sign-in details were not accepted. Check them " +
 		"and try again.",
-	CodeThrottled: "There have been too many failed attempts. Wait for the " +
-		"time this answer names, then try again.",
+	CodeThrottled: "Too many failed attempts. Wait a moment, then try again.",
 	CodeSecondFactorRequired: "Enter the code from your authenticator app, or " +
 		"one of your recovery codes.",
-	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
-		"recently. Confirm it, then try again.",
-	CodeTokenRefused: "A personal access token cannot do this, whatever its " +
-		"owner may do: it needs a person present, and a token proves nobody " +
-		"is. Sign in as yourself and do it there.",
-	CodeSecondFactorEnrolmentRequired: "This company requires a second factor " +
-		"and you have not set one up yet. Add an authenticator app to your " +
-		"account, and everything else opens once you have.",
+	CodeStepUpRequired: "Confirm it's you to do this, then try again.",
+	CodeTokenRefused:   "Access tokens can't do this. Sign in and try again.",
+	CodeSecondFactorEnrolmentRequired: "This company requires two-step " +
+		"verification. Set up an authenticator app to continue.",
 	CodeSessionRevoked: "This session has ended. Sign in again.",
-	CodeSeatUnavailable: "The seat you are bound to is no longer in this " +
-		"company's org chart, so there is nothing for you to act as. An " +
-		"administrator can bind you to another one.",
+	CodeSeatUnavailable: "Your seat is no longer in the org chart. Ask an " +
+		"admin to move you to another seat.",
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
 	CodeResetSpent: "This password reset link is no longer valid. Ask an " +
-		"administrator for a new one.",
+		"admin for a new one.",
 
 	CodeForbidden: "That change is not yours to make here, and nothing was " +
 		"written. The detail says whose it is.",
@@ -939,8 +932,8 @@ var codes = map[Code]string{
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",
-	CodeUnknownTool: "This engine does not make that change. It may be running " +
-		"a different version from the client — reload.",
+	CodeUnknownTool: "This engine does not support that change. It may be " +
+		"running a different version. Reload the page.",
 	CodeReadOnlyTool: "That is a read, and this route only makes changes. Ask " +
 		"the question through its own route.",
 	CodeUnsupportedMediaType: "Send the change as JSON, declared " +
@@ -1045,16 +1038,16 @@ var codes = map[Code]string{
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +
 		"needed.",
 	CodeNoSuchSeat: "The company has no seat by that name.",
-	CodeLiteralInConfig: "The configuration holds this credential written out " +
-		"rather than as a reference, so it was not overwritten. Move it into " +
-		"the secret store first — the detail says which field.",
+	CodeLiteralInConfig: "This credential is written inline in the " +
+		"configuration, so it wasn't overwritten. Move it to a secret first. " +
+		"The detail names the field.",
 	CodeInvalidInput: "One of the values was not accepted, and nothing was " +
 		"saved. The detail names the value and what it may be.",
 	CodeSurfaceBusy: "Something else is writing to this integration right now. " +
 		"Try again in a moment; nothing was changed.",
 
-	CodeNoActiveRevision: "No company configuration is active on this node yet. " +
-		"Import one first — the detail says how.",
+	CodeNoActiveRevision: "No company is active on this node yet. Import one " +
+		"first. The detail says how.",
 	CodeRevisionAdvanced: "Somebody else's change to the configuration was " +
 		"activated first, so this one was not. Read the configuration again and " +
 		"make the change on top of it.",
@@ -1081,10 +1074,9 @@ var codes = map[Code]string{
 	CodeNotCreatable: "A seat or a unit has a place in the company that this " +
 		"address cannot name, so it is not added here. Add it through the " +
 		"whole configuration, or the unit it belongs in.",
-	CodeSeatHeld: "This change removes a person's seat, or makes it an agent's, " +
-		"while somebody is still bound to it or an open invitation holds it, " +
-		"so nothing was changed. Move them to another seat, remove them, or " +
-		"cancel the invitation first — the detail says which.",
+	CodeSeatHeld: "This change removes a seat someone holds or is invited " +
+		"to. Move or remove them, or cancel the invitation, first. The " +
+		"detail says who.",
 	CodeConflictingPreconditions: "A create (If-None-Match: *) and an edit " +
 		"(If-Match) were both asked for. Send one of them.",
 	CodeValidationError: "The configuration this change would produce is not " +
@@ -1093,9 +1085,8 @@ var codes = map[Code]string{
 		"so nothing was stored. The detail says why.",
 	CodeSummaryRequired: "This change needs a one-line summary for the " +
 		"configuration's history. Send it in the X-Summary header.",
-	CodeConfigManaged: "Another system manages this company's configuration " +
-		"and alone may change it, so nothing was changed here. Change it at " +
-		"its source — the detail names the credential it writes with.",
+	CodeConfigManaged: "Managed by another system. Change it there. The " +
+		"detail names its token.",
 
 	CodeInvalidName: "That is not a name a credential can be stored under. The " +
 		"detail says what a name may be.",
@@ -1104,9 +1095,8 @@ var codes = map[Code]string{
 	CodeRekeyIncomplete: "The rekey stopped part of the way through. The detail " +
 		"names what moved, and running it again is safe once the missing key " +
 		"is back.",
-	CodeReservedName: "That name belongs to the engine's own identity " +
-		"estate, not to the company's credentials, so nothing here can read " +
-		"or change it. The detail names the command that does.",
+	CodeReservedName: "That name is reserved for the engine. The detail " +
+		"names the command that can change it.",
 }
 
 // Codes is every code in the vocabulary, sorted.
@@ -1227,6 +1217,11 @@ func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail)
 func Envelope(code Code, detail Detail) map[string]any {
 	body := make(map[string]any, len(detail)+2)
 	maps.Copy(body, detail)
+	for _, key := range proseKeys {
+		if text, ok := body[key].(string); ok {
+			body[key] = Sentence(text)
+		}
+	}
 	body[keyError] = string(code)
 	if message := code.Message(); message != "" {
 		body[keyMessage] = message
@@ -1238,6 +1233,70 @@ func Envelope(code Code, detail Detail) map[string]any {
 		slog.Debug("http_refusal_without_message", "code", string(code))
 	}
 	return body
+}
+
+// The detail keys whose text a person reads on its own line: `detail` says
+// what happened and `hint` says what to do. The dashboard and the CLI both
+// print each as a sentence of its own.
+const (
+	keyDetail = "detail"
+	keyHint   = "hint"
+)
+
+// proseKeys are the detail keys [Envelope] writes as sentences.
+var proseKeys = [...]string{keyDetail, keyHint}
+
+// Sentence is text as a person reads it on its own: its first letter
+// capitalised and a full stop after it.
+//
+// ONE PLACE, AT THE BOUNDARY. A Go error stays lowercase with no full stop,
+// because errors are wrapped ("apply the config: seat x is held") and a
+// capital or a full stop in the middle of a chain reads wrong in every log.
+// The OUTERMOST text is different: once a refusal puts it in `detail` or
+// `hint`, nothing wraps it again, and a person reads it as a line of its own.
+// [Envelope] calls this on both keys, so a handler passes err.Error() as it is
+// and never formats copy for the screen itself.
+//
+// AN IDENTIFIER KEEPS ITS SPELLING. Only a plain lowercase word is
+// capitalised: text that opens with a field name (`expires_in_days`), a flag
+// (`-dev-principal`), a path, an address, a quoted value or a Go package
+// prefix ("statelog: ", see [goPackages]) opens exactly as it was written,
+// because capitalising it would name something that does not exist. Text that already ends in a full stop, a question mark or an
+// exclamation mark keeps its ending, so calling this twice changes nothing.
+func Sentence(text string) string {
+	s := strings.TrimSpace(text)
+	if s == "" {
+		return s
+	}
+	if first, size := utf8.DecodeRuneInString(s); unicode.IsLower(first) && plainWord(s) {
+		s = string(unicode.ToUpper(first)) + s[size:]
+	}
+	if !strings.ContainsRune(".!?", rune(s[len(s)-1])) {
+		s += "."
+	}
+	return s
+}
+
+// plainWord reports whether s opens with a word made of letters alone (an
+// apostrophe within it, as in "isn't", and a clause mark after it allowed),
+// which is what separates prose from an identifier at the start of a line. A
+// package's name followed by a colon is the package prefix of a Go error,
+// and an identifier.
+func plainWord(s string) bool {
+	word, _, _ := strings.Cut(s, " ")
+	if name, prefixed := strings.CutSuffix(word, ":"); prefixed && goPackages[name] {
+		return false
+	}
+	word = strings.TrimRight(word, ",:;")
+	if word == "" {
+		return false
+	}
+	for _, r := range word {
+		if !unicode.IsLetter(r) && r != '\'' {
+			return false
+		}
+	}
+	return true
 }
 
 // BodyReadTimeout bounds how long a client may take to deliver its body.

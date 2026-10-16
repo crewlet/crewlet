@@ -255,7 +255,7 @@ test.each([
     "The service account ci:release",
   ],
   ["invited", INVITED, "An open invitation · jane@example.com"],
-  ["vacant", VACANT, "Nobody — the seat is vacant"],
+  ["vacant", VACANT, "Nobody yet"],
 ])("a %s human seat's peek says what holds it, in one directory read", async (_, jane, line) => {
   const paths = directory(jane);
   const { asked } = await mount(OPERATOR, { handle: "jane" });
@@ -280,9 +280,7 @@ test("an agent's seat and an anonymous reader ask it nothing, and every signed-i
   await mount({ ...OPERATOR, grants: ["tracker"] }, { handle: "jane" });
   await act(async () => {});
   expect(tracker.filter((p) => p === "/iam/seats")).toHaveLength(1);
-  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
-    "Nobody — the seat is vacant",
-  );
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
 });
 
 // THE PEEK FILLS A SEAT TOO — on a phone it is where those gestures are —
@@ -295,19 +293,17 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   await mount(OPERATOR, { handle: "jane" });
   await act(async () => {});
   const foot = screen.getByRole("button", { name: "Invite" }).closest("footer") as HTMLElement;
-  expect(within(foot).getByRole("button", { name: "Create person" })).toBeTruthy();
-  fireEvent.click(within(foot).getByRole("button", { name: "Create person" }));
-  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  expect(within(foot).getByRole("button", { name: "Add person" })).toBeTruthy();
+  fireEvent.click(within(foot).getByRole("button", { name: "Add person" }));
+  expect(screen.getByRole("dialog", { name: "Add someone as Jane Founder" })).toBeTruthy();
   cleanup();
 
   directory(VACANT);
   await mount({ ...OPERATOR, grants: ["tracker", "knowledge"] }, { handle: "jane" });
   await act(async () => {});
-  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
-    "Nobody — the seat is vacant",
-  );
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Create person" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Add person" })).toBeNull();
   cleanup();
 
   directory(INVITED);
@@ -320,7 +316,7 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   directory(HELD);
   await mount(OPERATOR, { handle: "jane" });
   await act(async () => {});
-  for (const name of ["Invite", "Create person", "Cancel invitation"]) {
+  for (const name of ["Invite", "Add person", "Cancel invitation"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();
   }
 });

@@ -179,7 +179,7 @@ vacant):
 
 | The card says | What it means | What an administrator can do from the card's menu, its peek and its page |
 |---|---|---|
-| **Vacant** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite to this seat…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Create person** (**Create a person on this seat…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
 | **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
 | **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People & access |
 
@@ -195,7 +195,7 @@ seat](identity-and-access.md#a-person-arrives-on-their-seat-invited-or-created).
 
 **A person's seat is moved, never cleared.** To put somebody on another seat,
 bind them to it — `crewlet iam bind <person-id> <seat>`, or the seat field of
-**Edit login, seat and access** in Settings › People & access, which offers the
+**Edit** in Settings › People & access, which offers the
 vacant human seats and their own and no "No seat". The move is one record: the
 old seat is free the moment the new one is taken. A suspended or retired person
 **keeps** their seat. To free a seat for somebody else, move its holder or
@@ -620,7 +620,7 @@ Three things to keep in mind:
   invite anybody — the **Create the company** form under **Agents › Edit
   org** adds it when **Add a seat for yourself** is ticked, as it is by
   default — then sign in with the deployment's API token, open **Agents ›
-  Org chart**, and press **Invite** or **Create person** on it (see
+  Org chart**, and press **Invite** or **Add person** on it (see
   [Putting a person in the seat](#putting-a-person-in-the-seat)). A company
   with no human seat can admit nobody, and `crewlet validate` warns about it
   at `roles`; that is right only for a company its agents run alone.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -34,7 +35,8 @@ import (
 // access — create an item, holding the knowledge base and not the tracker —
 // and the three texts compared byte for byte. The HTTP surface is the one that refuses at
 // its ROUTE, before any tool runs, which is exactly why it is the one that
-// could drift.
+// could drift. Its `detail` is the same text written as a sentence, which the
+// API boundary ([httpjson.Sentence]) does to every detail it answers.
 //
 // The control is the router's own plain wording, which is what this surface
 // would say without the refusal seam: it is a different sentence, so the
@@ -108,7 +110,8 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 		t.Fatalf("the route answered %d", fromHTTP.status)
 	}
 
-	if fromSeat.Output != fromMCP.String() || fromMCP.String() != fromHTTP.detail() {
+	if fromSeat.Output != fromMCP.String() ||
+		httpjson.Sentence(fromMCP.String()) != fromHTTP.detail() {
 		t.Errorf("one refusal reads three ways:\nseat: %s\nmcp:  %s\nhttp: %s",
 			fromSeat.Output, fromMCP.String(), fromHTTP.detail())
 	}
@@ -124,7 +127,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/work/items", nil))
-	if strings.TrimSpace(rec.Body.String()) == fromHTTP.detail() {
+	if httpjson.Sentence(rec.Body.String()) == fromHTTP.detail() {
 		t.Fatal("the control read the same as the tools, so this test cannot " +
 			"tell a surface that wrote its own sentence from one that did not")
 	}

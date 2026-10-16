@@ -82,6 +82,7 @@ import {
   Meter,
   StatusDot,
   Tag,
+  InlineCode,
 } from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -364,7 +365,7 @@ function SeatPeekBody({
               ) : absent === "none" ? (
                 <EmptyValue label="No provider configured" />
               ) : absent === "withheld" ? (
-                <span className="muted">{resolvedWithheld("its model chain")}</span>
+                <span className="muted">{resolvedWithheld()}</span>
               ) : (
                 <EmptyValue label="Not reported yet" />
               )}
@@ -525,7 +526,7 @@ function HeldBy({ row }: { row: HumanSeat }) {
     return (
       <span>
         {holder.kind === "machine" && "The service account "}
-        <code className="inline">{holder.login || holder.person}</code>
+        <InlineCode>{holder.login || holder.person}</InlineCode>
         {stage}
       </span>
     );
@@ -539,7 +540,7 @@ function HeldBy({ row }: { row: HumanSeat }) {
       </span>
     );
   }
-  return <span>Nobody — the seat is vacant</span>;
+  return <span>Nobody yet</span>;
 }
 
 /** One capped window: its label, its figure and a meter in the engine's state. */

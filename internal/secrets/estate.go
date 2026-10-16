@@ -42,8 +42,7 @@ import (
 // exist, and the answer is that no operator gesture reaches it — a lost
 // blind-index key is restored with the coordination store it lived in.
 var ErrReservedName = errors.New(
-	"secrets: that name is the engine's own key material, which no operator " +
-		"surface reads, writes or resolves")
+	"that name is reserved for the engine's own keys")
 
 // estateOwners are the subsystems that keep key material in the store, each
 // under its own first path segment. There is one: the identity estate (`iam/`).

@@ -363,9 +363,10 @@ describe("signing in with a password", () => {
 
     const alert = await refusal();
     expect(alert).toContain("Try again in 16 seconds.");
-    expect((screen.getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    // THE WAIT IS COUNTED DOWN ON THE BUTTON, where the person is looking.
+    expect(
+      (screen.getByRole("button", { name: "Try again in 16s" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("a session that may only enrol goes on to the enrolment, carrying next", async () => {
@@ -419,7 +420,7 @@ describe("signing in with the deployment's token", () => {
     const { dial } = await mount();
     fireEvent.click(screen.getByRole("button", { name: /use an api token instead/i }));
     type("API token", "the-break-glass-token-value-long-enough");
-    fireEvent.click(screen.getByRole("button", { name: "Sign in with the token" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with token" }));
 
     await answered();
     await answered();
@@ -452,18 +453,21 @@ describe("signing in with the deployment's token", () => {
     });
     await mount();
     await answered();
-    screen.getByText(/nobody has joined this deployment yet/i);
+    screen.getByText(/nobody has joined yet\. sign in with an api token\./i);
     expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
     // A PERSON COMES FROM A SEAT: the way in is the org chart, never a
     // People & access button that no longer invites anybody.
-    screen.getByText(
-      /open Agents › Org chart, choose\s+your human seat and invite or create yourself/i,
-    );
+    screen.getByText(/then invite yourself from Agents › Org chart/i);
     expect(screen.queryByText(/People & access/)).toBeNull();
-    screen.getByText(/if you have a link already, open it instead/i);
-    // OPEN, not behind the disclosure a claimed deployment keeps it under.
+    // OPEN AND FIRST, not behind the disclosure a claimed deployment keeps it
+    // under, and its button is the primary action.
     expect(screen.queryByText("Use an API token instead")).toBeNull();
     expect(screen.getByLabelText("API token")).toBeDefined();
+    const token = screen.getByRole("button", { name: "Sign in with token" });
+    // THE PASSWORD FORM IS STILL SERVED, folded behind its own disclosure.
+    const instead = screen.getByRole("button", { name: /sign in with a password instead/i });
+    expect(token.compareDocumentPosition(instead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(instead);
     expect(screen.getByLabelText(/^password$/i)).toBeDefined();
   });
 
@@ -471,9 +475,10 @@ describe("signing in with the deployment's token", () => {
     engine({ "GET /health": CLAIMED, "GET /auth/session": NOBODY });
     await mount();
     await answered();
-    expect(screen.queryByText(/invite or create yourself/i)).toBeNull();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
     expect(screen.getByLabelText(/^password$/i)).toBeDefined();
     screen.getByText("Use an API token instead");
+    screen.getByText("Forgot your password? Ask an admin for a reset link.");
   });
 
   // "UNKNOWN" IS NOT "UNCLAIMED": a node that cannot read its identity estate
@@ -485,8 +490,8 @@ describe("signing in with the deployment's token", () => {
     });
     await mount();
     await answered();
-    expect(screen.queryByText(/invite or create yourself/i)).toBeNull();
-    screen.getByText(/use the login or email address/i);
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    screen.getByText("Sign in with your login or email.");
   });
 });
 

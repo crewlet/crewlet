@@ -584,15 +584,9 @@ func (c *Company) peoplelessWarnings() []Warning {
 			return nil
 		}
 	}
-	return []Warning{advisory(field("roles"), "this company declares no "+
-		"`kind: human` seat, so nobody can be invited into it or created in "+
-		"it: every person holds a human seat for as long as they are here, "+
-		"and an invitation or a create names the one they will hold. That is "+
-		"right for a company its agents run alone, administered through the "+
-		"deployment's Tier A tokens. Otherwise add a `kind: human` seat for "+
-		"each person who is to sign in, then invite or create them on it — "+
-		"from the seat in the dashboard's Agents › Org chart, or with "+
-		"`crewlet iam invite <address> -seat <handle>`")}
+	return []Warning{advisory(field("roles"), "this company has no "+
+		"`kind: human` seats, so nobody can be invited. That's fine if agents "+
+		"run it alone. Otherwise add a human seat for each person")}
 }
 
 // unreachableWarnings is every human seat that declares no contact identity:
@@ -613,9 +607,8 @@ func (c *Company) unreachableWarnings() []Warning {
 		}
 		handle := role.IdentityKey()
 		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
-			"no contact identity, so nothing addressed to it on a chat surface "+
-			"reaches anybody. Give it one for the surface this company runs, or "+
-			"leave it for a person who works only through the dashboard", handle))
+			"no chat contact, so chat messages to it reach nobody. Add one, or "+
+			"leave it if they only use the dashboard", handle))
 		w.Seat = handle
 		out = append(out, w)
 	}
@@ -888,16 +881,13 @@ func (a *APIAuth) writerWarnings(path Path) []Warning {
 			continue
 		}
 		out = append(out, advisory(idx(writers, i), fmt.Sprintf(
-			"%q names no token in api.auth.tokens, so it lets nobody write: "+
-				"add the token, or correct the id to the one the managing "+
-				"system presents", id)))
+			"%q isn't in `api.auth.tokens`, so it can't write anything. Add "+
+				"the token, or fix the id", id)))
 	}
 	if named == 0 {
 		out = append(out, advisory(writers,
-			"no writer names a configured token, so nothing may change the "+
-				"company document through the API: every PUT, PATCH, entity "+
-				"write, revert and /setup connect is refused. That freezes the "+
-				"document; if a system was meant to manage it, list its token id"))
+			"none of these writers is in `api.auth.tokens`, so nobody can "+
+				"change the company config through the API"))
 	}
 	return out
 }

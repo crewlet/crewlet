@@ -669,9 +669,10 @@ const ALLOWED: Allowed[] = [
     why: "uilet's Card.Title writes it. styles/screens.css makes it ellipse rather than clip, which the package cannot do for itself: the title is a flex container and text-overflow only reaches a block one. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
+
   {
-    name: "crewlet-card__body",
-    why: "uilet's Card writes it round a padded card's own content (and Card.Body writes it explicitly). styles/screens.css takes `.prof-facts`' own padding off inside one, because that padding is for the FLUSH card a seat's Setup draws the list in and, inside a body that already insets it, doubled the left edge of the Account's Profile. Another rule about OUR composition of the package's component.",
+    name: "crewlet-inline-code",
+    why: "uilet's InlineCode writes it. styles/screens.css draws a model key that is a link (`.prof-chain-model`) in the link ink and underlines it under the pointer, which the chip cannot know it is inside. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

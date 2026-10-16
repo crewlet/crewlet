@@ -314,10 +314,9 @@ type Signer struct {
 // New builds a signer, or refuses the deployment.
 func New(opts Options) (*Signer, error) {
 	if !opts.Material.Usable() {
-		return nil, fmt.Errorf("%w: `secrets.keys` names no key this node "+
-			"holds, so every ingress node would sign cookies under a key of "+
-			"its own and reject every other node's — a browser would be "+
-			"signed in on whichever node its request happened to reach: %w",
+		return nil, fmt.Errorf("%w: `secrets.keys` has no usable key for "+
+			"session cookies. Add one and set "+
+			"`secrets.active_key_id` to it: %w",
 			ErrNoKeyring, errNoActiveKey(opts.Material))
 	}
 	s := &Signer{keys: map[string][]byte{}, now: opts.Now}

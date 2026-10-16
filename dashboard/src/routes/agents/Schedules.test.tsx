@@ -286,10 +286,12 @@ test("both grids name a role's scope by its seat", async () => {
 // it wakes.
 test("the schedule's eyebrow names its scope, never its address", async () => {
   const { container } = await mountScreen(["role", "pm", "standup"]);
-  const eyebrow = container.querySelector(".object-eyebrow")?.textContent ?? "";
+  const eyebrow = container.querySelector(".crewlet-object-header__eyebrow")?.textContent ?? "";
   expect(eyebrow).toContain("Seat · PM");
   expect(eyebrow).not.toContain("role:");
-  expect(container.querySelector(".object-eyebrow .mono")).toBeNull();
+  expect(
+    container.querySelector(".crewlet-object-header__eyebrow .crewlet-object-header__id--mono"),
+  ).toBeNull();
 });
 
 // THE HEADER'S CRON IS THE GRID'S DRAWING, WHOLE. Inline after the chip and

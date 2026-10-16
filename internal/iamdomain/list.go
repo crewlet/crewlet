@@ -976,9 +976,9 @@ func ClaimsBySeat(c SeatClaims) (map[string]SeatClaim, error) {
 		b := &c.Bindings[i]
 		claim := out[b.Seat]
 		if claim.Holder != nil {
-			return nil, fmt.Errorf("%w: this node holds two rows bound to seat "+
-				"%s (%s and %s), which only a record it retained or a restore "+
-				"leaves behind — another node can answer", statelog.ErrUnavailable,
+			return nil, fmt.Errorf("%w: this node has two people on seat %s "+
+				"(%s and %s). Try again on another node",
+				statelog.ErrUnavailable,
 				b.Seat, claim.Holder.Person, b.Person)
 		}
 		claim.Holder = b

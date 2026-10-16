@@ -92,8 +92,8 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 		// THE CONFIGURATION FIRST, and it needs no read: a login no
 		// entry declares is nobody's, bound row or not.
 		if declared == nil || !declared(id) {
-			return "", fmt.Errorf("%w: %s — no api.auth.tokens entry on this "+
-				"node has the id %q", iam.ErrNoHolder, login, id)
+			return "", fmt.Errorf("%w: %s (no `api.auth.tokens` entry on this "+
+				"node has the id %q)", iam.ErrNoHolder, login, id)
 		}
 		// THE TOKEN'S OWN TABLE, which already refuses a row it cannot
 		// vouch for in the direction that widens.
@@ -119,13 +119,13 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 	// about, and it may be the enrolment that took this login.
 	switch {
 	case vouch.Lag > statelog.StallGrace:
-		return "", fmt.Errorf("engine: this node's identity applier is %s "+
-			"behind — past the %s stall grace — so it cannot say whose record "+
-			"%s is", vouch.Lag, statelog.StallGrace, login)
+		return "", fmt.Errorf("engine: this node is %s behind on identity "+
+			"changes (over the %s limit), so it can't look up %s",
+			vouch.Lag, statelog.StallGrace, login)
 	case vouch.Deferred:
-		return "", fmt.Errorf("engine: this node holds an identity record it "+
-			"cannot decode that may be about %s, so it cannot say whose "+
-			"record that is", login)
+		return "", fmt.Errorf("engine: this node has an identity change it "+
+			"can't read that may be about %s, so it can't look them up",
+			login)
 	case seen.ID == "":
 		// NOBODY holds the login, so nothing is kept under it either.
 		return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
@@ -167,6 +167,6 @@ func recordThrough(ctx context.Context, chart session.Chart, login string,
 		return "", fmt.Errorf("engine: %s is bound to %s and this node cannot "+
 			"say where that seat is now: %s", login, row.Seat, binding.Detail)
 	}
-	return "", fmt.Errorf("%w: %s — %s; rebind them in the identity directory, "+
-		"or name the seat", iam.ErrHolderUnseated, login, binding.Detail)
+	return "", fmt.Errorf("%w: %s (%s). Move them to another seat, or name "+
+		"the seat instead", iam.ErrHolderUnseated, login, binding.Detail)
 }

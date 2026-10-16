@@ -140,7 +140,7 @@ func (r *Reader) AwaitApplied(ctx context.Context, position uint64) error {
 // a bool beside one is two ways to say the same thing that eventually
 // disagree. What it deliberately is NOT is what a sign-in reports: see
 // [Reader.PersonByLogin].
-var ErrNotFound = errors.New("iamdomain: no such person")
+var ErrNotFound = errors.New("no such person")
 
 // Resolve answers everything one bearer is checked against, in ONE snapshot.
 //
@@ -604,9 +604,9 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	for rows.Next() {
 		found++
 		if found > 1 {
-			return fmt.Errorf("%w: this node holds two rows for one %s, "+
-				"which only a record it retained leaves behind — another "+
-				"node can answer", statelog.ErrUnavailable, column)
+			return fmt.Errorf("%w: this node has two people with the same "+
+				"%s. Try again on another node",
+				statelog.ErrUnavailable, column)
 		}
 		if err = rows.Scan(&id, &stage, &login, &seat, &document); err != nil {
 			return fmt.Errorf("iamdomain: resolve a person: %w", err)
@@ -706,8 +706,8 @@ func provedAbsent(ctx context.Context, tx *sql.Tx, end uint64, what string) erro
 			"hold: %w", err)
 	}
 	if behind := CoversLog(prefix, end); behind != nil {
-		return fmt.Errorf("%w: %w — so a row missing from them may be %s "+
-			"this node has not applied yet", statelog.ErrUnavailable, behind,
+		return fmt.Errorf("%w: %w, so %s may just not have "+
+			"reached this node yet", statelog.ErrUnavailable, behind,
 			what)
 	}
 	retained, err := deferredFor(ctx, tx, "")
@@ -715,7 +715,7 @@ func provedAbsent(ctx context.Context, tx *sql.Tx, end uint64, what string) erro
 		return err
 	}
 	if retained {
-		return fmt.Errorf("%w: %w — this node holds a record it could not "+
+		return fmt.Errorf("%w: %w. This node has a change it couldn't "+
 			"apply, which may be %s", statelog.ErrUnavailable, ErrNotCurrent,
 			what)
 	}
@@ -743,9 +743,7 @@ func vouches(ctx context.Context, tx *sql.Tx, end uint64) (bool, error) {
 // A SENTINEL, because the question that turns on it is answered by a row being
 // missing — whether a blind was ever derived ([Reader.HoldsBlinds]) — and on
 // such a snapshot a missing row is the one observation that proves nothing.
-var ErrNotCurrent = errors.New("iamdomain: this node's identity rows do not " +
-	"hold every record the log held when it was asked, so a row missing from " +
-	"them proves nothing")
+var ErrNotCurrent = errors.New("this node's identity data isn't up to date")
 
 // CoversLog proves, from one snapshot's prefix and the log's last sequence read
 // BEFORE that snapshot, that the snapshot's rows hold every record the log held
@@ -765,13 +763,12 @@ func CoversLog(prefix statelog.Prefix, end uint64) error {
 		return nil
 	}
 	if prefix.Retains && prefix.Retained.Position.Seq <= end {
-		return fmt.Errorf("%w: it holds a record at %s it could not apply "+
-			"(record version %d) — a newer build's, or one signed under a "+
-			"keyring key this node does not hold — and every record the log "+
-			"held when it was asked is not applied here until it can",
+		return fmt.Errorf("%w: it can't apply the change at %s (record "+
+			"version %d). It's from a newer build, or signed with a key this "+
+			"node doesn't have",
 			ErrNotCurrent, prefix.Retained.Position, prefix.Retained.Version)
 	}
-	return fmt.Errorf("%w: it has applied %d of the %d records the log held",
+	return fmt.Errorf("%w: it has applied %d of %d changes",
 		ErrNotCurrent, prefix.Applied().Seq, end)
 }
 

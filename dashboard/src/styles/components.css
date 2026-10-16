@@ -271,30 +271,6 @@
 .dot.accent {
   background: var(--color-brand-accent);
 }
-/* A badge that names its seat itself (`ui/SeatAvatar.tsx`): the wrapper is
-   the image a reader hears, so it takes the badge's box and nothing more —
-   no line box of its own around it, and never squeezed by a row it sits in. */
-.seat-avatar {
-  display: inline-flex;
-  flex: none;
-}
-
-/* A QR code (`ui/QrCode.tsx`): a square a phone's camera holds comfortably
-   in frame from a hand's length off a laptop screen. 208px puts a
-   second-factor URI — measured, a version 7 to 10 symbol for a login and a
-   host of ordinary length, 45 to 57 modules plus the eight of the quiet
-   zone — at more than three CSS pixels a module, and it still fits a
-   phone-width dialog beside its padding. NEVER RECOLOURED BY FORCED
-   COLOURS: its two inks are what a scanner reads, and a palette swapped for
-   the system's would draw a code that no longer scans. */
-.qr-code {
-  display: block;
-  flex: none;
-  width: 208px;
-  height: 208px;
-  border-radius: var(--radius-sm);
-  forced-color-adjust: none;
-}
 
 /* A link that IS a row takes the page's text colour, not the link colour.
    Otherwise every seat name in every list renders in the accent — which is
@@ -605,24 +581,6 @@ a.seat-chip:hover {
   min-width: 0;
 }
 
-/* ---- Inline code -------------------------------------------------------- */
-
-code.inline {
-  font-size: 0.92em;
-  background: var(--color-surface-inset);
-  border-radius: var(--radius-xs);
-  padding: 1px 4px;
-  color: var(--color-text-secondary);
-  /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
-     public base URLs. Without this the chip is pushed whole onto its own
-     line and the sentence around it is torn into fragments. */
-  overflow-wrap: anywhere;
-}
-/* A SHORT SPAN IS NOT BROKEN at its spaces — see `UnbrokenCode` in
-   lib/markdown.ts, which decides what short is. */
-code.inline.is-whole {
-  white-space: nowrap;
-}
 /* A REFUSAL'S PROBLEMS, one per line.
  *
  * A validation refusal is several of them joined with newlines, and HTML
@@ -641,8 +599,8 @@ code.inline.is-whole {
    problems are drawn with: `tone="inherit"` is the chip inside a message that
    carries that message's ink, and `variant="reference"` is the `${VAR}` face
    that says a name of a sealed entry rather than a path in the document. The
-   two recipes that used to follow this one, `.field-error code.inline` and
-   `.field-error code.inline.is-reference`, only ever reached a chip inside a
+   two recipes that used to follow this one, a local inline-code chip inside a
+   field error and its reference variant, only ever reached a chip inside a
    FIELD's error: the same chip inside the setup dialog's danger banner kept
    its own quiet grey, which is the half nobody noticed. */
 

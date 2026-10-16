@@ -120,8 +120,8 @@ func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-				map[string]string{"detail": "unheld is true or false, not " +
-					strconv.Quote(raw)})
+				map[string]string{"detail": "unheld must be true or false, " +
+					"not " + strconv.Quote(raw) + "."})
 			return
 		}
 		unheld = parsed
@@ -197,7 +197,5 @@ func (s *Service) holding(r *http.Request, p iam.Principal, admin bool,
 // noCompanyHint is what a node running no company says about a seat — the
 // listing's, and every gesture's that names one ([iamdomain.ErrNoCompany]):
 // what clears it is a company declaring a human seat, which no wait supplies.
-const noCompanyHint = "this node runs no company yet, so it has no human " +
-	"seat to list or to put anybody on: import or create one that declares a " +
-	"human seat, then invite or create the person onto it — or ask a node " +
-	"that has applied it"
+const noCompanyHint = "This node has no company yet. Import one with a human " +
+	"seat, then add the person to it."

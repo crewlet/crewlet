@@ -129,7 +129,7 @@ func (idx *bufferIndex) find(line int, match func(placed) bool) (position, bool)
 // So the detail is read with `.` matching a newline — read up to the first
 // one, the failure matched nothing and was reported with no path and no line.
 var (
-	unknownFieldRE    = regexp.MustCompile(`^line (\d+): field (\S+) not found in type \S+$`)
+	unknownFieldRE    = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
 	positionedLineRE  = regexp.MustCompile(`(?s)^line (\d+): (.*)$`)
 	cannotUnmarshalRE = regexp.MustCompile(`^cannot unmarshal (!!\w+)`)
 	syntaxLineRE      = regexp.MustCompile(`^yaml: line (\d+):`)
@@ -146,8 +146,13 @@ func (idx *bufferIndex) typeFault(line string) *Fault {
 		lineNo, _ := strconv.Atoi(m[1])
 		name := strings.Trim(m[2], `"`)
 		pos, _ := idx.find(lineNo, func(c placed) bool { return c.key && c.node.Value == name })
+		// A REMOVED KEY GETS ITS OWN MESSAGE, naming what replaced it,
+		// rather than a spelling check no spelling passes.
+		if replacement, removed := removedKeys[removedKey(m[3], m[2])]; removed {
+			return &Fault{Kind: ErrUnknownField, pos: pos, Detail: replacement}
+		}
 		return &Fault{Kind: ErrUnknownField, pos: pos, Detail: fmt.Sprintf(
-			"%q is not a setting: check the spelling, or the block it belongs under", name)}
+			"%q isn't a setting. Check the spelling and the block it's under", name)}
 	}
 	if m := positionedLineRE.FindStringSubmatch(line); m != nil {
 		lineNo, _ := strconv.Atoi(m[1])

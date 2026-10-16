@@ -7,7 +7,16 @@
 
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  CodeBlock,
+  Disclosure,
+  Skeleton,
+  Tag,
+  CopyButton,
+  InlineCode,
+} from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   FileTextGlyph,
@@ -18,11 +27,6 @@ import {
   UserGlyph,
   HashGlyph,
 } from "@crewlethq/icons/glyphs";
-// OURS, AND THERE IS NO PEER. `Copyable` renders the value it copies and is
-// named by it; this is a bare ACTION over text derived at press time — a
-// payload that is not on the screen as a string — with its own copied /
-// refused feedback. See the report.
-import { CopyButton } from "~/ui/primitives.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -80,11 +84,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
   return [
     {
       label: "Type",
-      value: (
-        <code className="inline" title={event.type}>
-          {event.type}
-        </code>
-      ),
+      value: <InlineCode title={event.type}>{event.type}</InlineCode>,
       token: true,
     },
     { label: "Category", value: humanize(event.category) || "system" },
@@ -106,9 +106,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
     {
       label: "Trace",
       value: event.trace_id ? (
-        <code className="inline" title={event.trace_id}>
-          {event.trace_id}
-        </code>
+        <InlineCode title={event.trace_id}>{event.trace_id}</InlineCode>
       ) : (
         <span className="muted">not traced</span>
       ),
@@ -132,7 +130,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
 function envelopeProperties(event: EventRecord): Property[] {
   return [
     { label: "Source", value: event.source },
-    { label: "Topic", value: event.topic ? <code className="inline">{event.topic}</code> : "" },
+    { label: "Topic", value: event.topic ? <InlineCode>{event.topic}</InlineCode> : "" },
     {
       label: "Span",
       value: event.span_id ? (
@@ -280,6 +278,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   data.payload ? (
                     <CopyButton
                       text={() => JSON.stringify(data.payload, null, 2)}
+                      variant="secondary"
                       title="this event's payload, as JSON"
                     />
                   ) : undefined
@@ -319,7 +318,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                       properties: Object.entries(data.tags).map(([k, v]) => ({
                         label: k,
                         identifierLabel: true,
-                        value: <code className="inline">{v}</code>,
+                        value: <InlineCode>{v}</InlineCode>,
                       })),
                     },
                   ]}
@@ -415,7 +414,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                             properties: Object.entries(data.tags).map(([k, v]) => ({
                               label: k,
                               identifierLabel: true,
-                              value: <code className="inline">{v}</code>,
+                              value: <InlineCode>{v}</InlineCode>,
                             })),
                           },
                         ]
@@ -434,6 +433,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                   actions={
                     <CopyButton
                       text={() => JSON.stringify(payload, null, 2)}
+                      variant="secondary"
                       title="this event's payload, as JSON"
                     />
                   }

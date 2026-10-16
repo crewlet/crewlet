@@ -9,7 +9,15 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Callout, EmptyState, Section as UiSection, Tag, cx } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  Section as UiSection,
+  Tag,
+  cx,
+  InlineCode,
+} from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
@@ -353,8 +361,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       {/* ABOUT ACCESS, NOT A TOKEN: what a signed-in reader refused here
           lacks is access — Admin or an app's — and an answer that names it
           is drawn by `RefusedOnAuthority` below instead. */}
-      This needs access you don’t hold. An admin can give it to you, or sign in as somebody who
-      holds it.
+      You don’t have access to this.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
@@ -402,6 +409,16 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  * of the rule, and it is the one that goes stale the day the rule moves.
  */
 function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
+  // NO ACCESS WOULD ADMIT THIS READER: the rule asks a relation the org chart
+  // does not hold (leading this person, or the record being their own), so
+  // signing in again changes nothing and no button offers it.
+  if (refusal.grants.length === 0) {
+    return (
+      <Callout variant="warning" icon={<KeyGlyph size="md" />}>
+        Only this person and their lead can see this.
+      </Callout>
+    );
+  }
   return (
     <Callout
       variant="warning"
@@ -412,16 +429,9 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
         </Button>
       }
     >
-      {refusal.grants.length > 0 ? (
-        needsWords("This answer", refusal.grants)
-      ) : (
-        <>
-          You may not read this, and no access would change that: the rule that decided asks a
-          relation the org chart does not hold — leading this person, or the record being your own.
-        </>
-      )}{" "}
+      {needsWords("This answer", refusal.grants)}{" "}
       <span className="t-caption">
-        Refused as <code className="inline">{refusal.reason}</code>.
+        Refused as <InlineCode>{refusal.reason}</InlineCode>.
       </span>
     </Callout>
   );
@@ -434,27 +444,13 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
  *
  * `unavailable` covers both, and the generic banner promises "this screen asks
  * again on its own", which for these would be a promise of a loop: the same
- * read is refused until an operator acts or another node is asked. So the
- * banner names the refusal and its own words and says the screen is NOT
- * asking again — nothing re-asks it on a timer — so it says what does: a
- * reload once somebody has acted. FROM THE ANSWER, NEVER WRITTEN HERE, for the
- * reason `RefusedOnAuthority` gives.
+ * read is refused until an admin acts or another node is asked. So the
+ * banner says the one thing the reader can do: ask another node.
  */
-function RefusedByTheLog({ refusal }: { refusal: LogRefusal }) {
+function RefusedByTheLog() {
   return (
     <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-      This node refused the read, and asking it again will not change that
-      {refusal.detail ? <>: {refusal.detail}</> : null}. Another node can answer it, or an operator
-      has to act on this one; the screen does not keep asking it, so reload it once they have.
-      <strong> This is not an empty company.</strong>
-      {refusal.code ? (
-        <>
-          {" "}
-          <span className="t-caption">
-            Refused as <code className="inline">{refusal.code}</code>.
-          </span>
-        </>
-      ) : null}
+      Couldn’t load this on this node. Try another node.
     </Callout>
   );
 }
@@ -508,7 +504,7 @@ export function QueryState({
     return <RefusedOnAuthority refusal={refusal} />;
   }
   if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
-    return <RefusedByTheLog refusal={refusal} />;
+    return <RefusedByTheLog />;
   }
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;

@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -110,9 +111,7 @@ func CheckSharedToken(token string) error {
 // exist, about a route they are not configuring.
 func CheckOperatorToken(token string) error {
 	if strings.ContainsFunc(token, unicode.IsSpace) {
-		return fmt.Errorf("an api.auth token cannot contain whitespace: it is " +
-			"sent verbatim in an Authorization header, and a space there is a " +
-			"value no client sends back the same way")
+		return errors.New("an `api.auth.tokens` token can't contain spaces")
 	}
 	// THE FLOOR IS NAMED AND THE LENGTH GIVEN IS NOT, for the reason
 	// CheckSharedToken states: this message reaches a config refusal, a
@@ -120,10 +119,8 @@ func CheckOperatorToken(token string) error {
 	// guess at exactly the credential this rule calls too short.
 	if len([]rune(token)) < MinSharedTokenChars {
 		return fmt.Errorf(
-			"an api.auth token must be at least %d characters: it is a "+
-				"credential for the config document, the secret store and the "+
-				"fleet, so anything short enough to guess is a way to take this "+
-				"deployment over. Generate one with `crewlet secrets keygen`",
+			"an `api.auth.tokens` token must be at least %d characters. "+
+				"Generate one with `crewlet secrets keygen`",
 			MinSharedTokenChars)
 	}
 	return nil

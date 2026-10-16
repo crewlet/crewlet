@@ -456,10 +456,10 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		t.Errorf("error = %v, want readmission_refused", body["error"])
 	}
 	detail, _ := body["detail"].(string)
-	if detail != refusal.Error() {
+	if detail != httpjson.Sentence(refusal.Error()) {
 		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Error())
 	}
-	if hint, _ := body["hint"].(string); hint != refusal.Remedy().Detail {
+	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(refusal.Remedy().Detail) {
 		t.Errorf("hint = %q, want the refusal's remedy", hint)
 	}
 	// WHAT TO DO, AS A VALUE A SURFACE SWITCHES ON: waiting for the node to
@@ -515,7 +515,7 @@ func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
 	if code != http.StatusConflict || body["error"] != "eviction_refused" {
 		t.Fatalf("a refused eviction answered %d %v, want 409 eviction_refused", code, body)
 	}
-	if hint, _ := body["hint"].(string); hint != refusal.Remedy().Detail {
+	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(refusal.Remedy().Detail) {
 		t.Errorf("hint = %q, want the refusal's remedy %q", hint, refusal.Remedy().Detail)
 	}
 	// FORCE IS OFFERED AS AN ACTION, which is what lets a surface with no
@@ -652,7 +652,7 @@ func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
 	if code != http.StatusServiceUnavailable || body["error"] != "eviction_unjudged" {
 		t.Fatalf("an unjudged eviction answered %d %v, want 503 eviction_unjudged", code, body)
 	}
-	if hint, _ := body["hint"].(string); hint != unjudged.Remedy().Detail {
+	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(unjudged.Remedy().Detail) {
 		t.Errorf("hint = %q, want the remedy %q", hint, unjudged.Remedy().Detail)
 	}
 	got := actionsOf(body)

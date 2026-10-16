@@ -525,7 +525,9 @@ type Envelope struct {
 	// [Envelope.unavailable] on the second, so the two halves of an
 	// `unavailable` frame cannot be built apart. Omitted on every other
 	// frame — a query failure's own text can carry a database path, and
-	// none of the rest has a reader.
+	// none of the rest has a reader. Both setters write it through
+	// [httpjson.Sentence], as the REST envelope writes its own, so the two
+	// transports carry the same sentence.
 	Detail string `json:"detail,omitempty"`
 
 	// *Unavailable is an `unavailable` query error frame's refusal code
@@ -545,7 +547,7 @@ type Envelope struct {
 // a refusal code with none of the words that explain it.
 func (e *Envelope) unavailable(u Unavailable) {
 	e.Unavailable = &u
-	e.Detail = u.Detail
+	e.Detail = httpjson.Sentence(u.Detail)
 }
 
 // Refused is the reason and the grants an `unauthorized` frame carries.

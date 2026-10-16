@@ -340,10 +340,8 @@ func (w *Writer) announce(ctx context.Context, result statelog.Result, err error
 // What the caller does next is what every unknown's caller does for a
 // credential: the landed copy is one nobody holds, it expires, and a fresh
 // operation mints another.
-var ErrCollapsed = fmt.Errorf("iamdomain: this operation landed as a copy "+
-	"this call cannot prove is its own, so the answer its decide computed may "+
-	"describe no published record — start it again under a fresh operation "+
-	"id: %w", statelog.ErrUnavailable)
+var ErrCollapsed = fmt.Errorf("this change can't be confirmed. Send it again "+
+	"with a new key: %w", statelog.ErrUnavailable)
 
 // errNothingToPublish is what a decide returns when its snapshot shows the
 // write has nothing left to do — a conditional revocation whose epoch has
@@ -392,7 +390,7 @@ func (w *Writer) Can(g iam.Grant) bool { return iam.Principal{Grants: w.Grants}.
 // DISTINCT FROM A CONFLICT AND FROM AN OUTAGE, which is the three-valued rule
 // applied to authority: "you may not", "somebody else won" and "this node
 // could not tell" are three answers a surface renders as 403, 409 and 503.
-var ErrRefused = errors.New("iamdomain: this party may not author that record")
+var ErrRefused = errors.New("not allowed")
 
 // mayAdminister refuses a record only an administrator may publish, and every
 // administrative record written through a machine token.
@@ -431,15 +429,14 @@ var ErrRefused = errors.New("iamdomain: this party may not author that record")
 // whether or not this build can parse what follows.
 func (w *Writer) mayAdminister(op OpKind) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return fmt.Errorf("%w: %w: %s was asked through the machine token %s, "+
-			"and an administrative identity record needs a person present — "+
-			"sign in and make it yourself", ErrRefused, ErrTokenRefused, op,
+		return fmt.Errorf("%w: %w. Sign in and do it yourself (%s, token %s)",
+			ErrRefused, ErrTokenRefused, op,
 			w.OperatorID)
 	}
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s requires %s, and this party holds %v", ErrRefused,
+	return fmt.Errorf("%w: %s needs %s, and you have %v", ErrRefused,
 		op, iam.GrantAdmin, w.Grants)
 }
 
@@ -448,8 +445,7 @@ func (w *Writer) mayAdminister(op OpKind) error {
 // [ErrRefused], so a surface that only knows "may not" still refuses; one that
 // tells the two apart answers that a person must be present rather than that
 // a permission is missing.
-var ErrTokenRefused = errors.New("iamdomain: an administrative identity record " +
-	"is not written through a machine token")
+var ErrTokenRefused = errors.New("access tokens can't change people or access")
 
 // publish runs one decide through the framework's own write authority.
 //
@@ -597,9 +593,8 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 	}
 	if len(reason) > MaxReason {
 		return MutationRecord{}, fmt.Errorf("%w: the reason on this %s is %d "+
-			"bytes and the cap is %d — it is rendered into an authentication "+
-			"trail beside the op that caused it, so it says WHICH cause fired "+
-			"rather than narrating", ErrInvalid, op, len(reason), MaxReason)
+			"bytes, and the limit is %d. Keep it to a short label",
+			ErrInvalid, op, len(reason), MaxReason)
 	}
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{

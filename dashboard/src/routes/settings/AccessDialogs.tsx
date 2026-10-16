@@ -17,12 +17,26 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, Callout, FormField, InlineCode, Input, Modal, Select, Text } from "@crewlethq/ui";
-import { PencilGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  FormField,
+  InlineCode,
+  Input,
+  Modal,
+  Select,
+  Skeleton,
+  Text,
+} from "@crewlethq/ui";
+import { PencilGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
+import { QueryState } from "~/components/common.tsx";
 import {
   AccessPicker,
   AppReachNote,
   IamOutcome,
+  InviteDialog,
   MintTokenDialog,
   NO_SEAT,
   pressLabel,
@@ -125,7 +139,7 @@ export function ServiceAccountDialog({
               Done
             </Button>
             <Button variant="primary" onClick={() => setMinting(true)}>
-              Mint its token
+              Create token
             </Button>
           </>
         ) : (
@@ -142,18 +156,20 @@ export function ServiceAccountDialog({
     >
       {created ? (
         <Text as="p" variant="body">
-          <span className="mono">{login.trim()}</span> exists
+          <Text variant="inherit" mono>
+            {login.trim()}
+          </Text>{" "}
+          created
           {seat !== NO_SEAT
             ? `, acting as the seat ${options.find((o) => o.value === seat)?.label ?? seat}`
             : ""}
-          . A service account signs in with a token, never a password: mint one now, or later from
-          its row.
+          . It signs in with a token.
         </Text>
       ) : (
         <>
           <FormField
             label="Login"
-            helper="Lowercase words joined by colons, such as ci:release — at most 64 characters. The colon is what tells a machine from a person (jane.doe) and a seat (jane)."
+            helper="Lowercase words with colons, like ci:release."
             error={tried ? (loginWrong ?? undefined) : undefined}
           >
             {(field) => (
@@ -181,11 +197,7 @@ export function ServiceAccountDialog({
               />
             )}
           </FormField>
-          <FormField
-            label="Seat"
-            optional
-            helper="A human seat nothing holds, for an account that should act as that seat — a deploy pipeline acting as its owner's seat, say. With no seat it acts as itself, under its own login."
-          >
+          <FormField label="Seat" optional helper="Optional. Pick an open seat for it to act as.">
             {(field) => (
               <Select
                 id={field.id}
@@ -206,6 +218,105 @@ export function ServiceAccountDialog({
         </>
       )}
       <IamOutcome answer={write.answer} />
+    </Modal>
+  );
+}
+
+/**
+ * Invite a person from People & access: pick an open seat, then the seat's own
+ * invitation ([InviteDialog]).
+ *
+ * A PERSON STILL COMES FROM A SEAT (ADR-0032): the picker offers only the
+ * seats nothing holds (`?unheld=true`), which are exactly the ones an
+ * invitation can name, so the second step is the dialog the chart, the seat's
+ * peek and its page open. Inviting from the chart was the only way in, a text
+ * link to another page for the most common task on this one.
+ */
+export function InvitePersonDialog({
+  held,
+  onClose,
+  onDone,
+}: {
+  /** The viewer's own grants. */
+  held: readonly string[];
+  onClose: () => void;
+  /** After every answer, so the lists are read again. */
+  onDone: () => void;
+}) {
+  const seats = useUnheldSeats();
+  const [seat, setSeat] = useState(NO_SEAT);
+  const [chosen, setChosen] = useState<{ handle: string; name: string } | null>(null);
+  const open = useMemo(() => seats.data ?? [], [seats.data]);
+  const options = useMemo(() => seatOptions(open), [open]);
+
+  if (chosen) {
+    return <InviteDialog seat={chosen} held={held} onClose={onClose} onDone={onDone} />;
+  }
+
+  const pick = () => {
+    const row = open.find((s) => s.handle === seat);
+    if (row) setChosen({ handle: row.handle, name: row.name });
+  };
+
+  return (
+    <Modal
+      open
+      size="md"
+      title="Invite person"
+      icon={<SendGlyph />}
+      onClose={onClose}
+      stackBody
+      onSubmit={pick}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" disabled={seat === NO_SEAT}>
+            Continue
+          </Button>
+        </>
+      }
+    >
+      {seats.loading && !seats.data ? (
+        <Skeleton variant="text" rows={2} label="Loading the open seats" />
+      ) : !seats.data ? (
+        <QueryState
+          error={seats.code}
+          refusal={seats.refusal}
+          detail={seats.error?.detail || undefined}
+          loading={false}
+        />
+      ) : open.length === 0 ? (
+        <Callout
+          variant="neutral"
+          action={
+            <ButtonLink
+              size="small"
+              variant="secondary"
+              href={href(["agents", "edit"], { add: "human" })}
+            >
+              Add a human seat
+            </ButtonLink>
+          }
+        >
+          No open seats. Add a human seat in Edit org.
+        </Callout>
+      ) : (
+        <FormField label="Seat" helper="Pick an open seat. They join as this seat.">
+          {(field) => (
+            <Select
+              id={field.id}
+              ariaLabel="Seat"
+              searchable
+              value={seat}
+              placeholder="Choose a seat"
+              options={options}
+              onChange={(next) => setSeat(String(next))}
+            />
+          )}
+        </FormField>
+      )}
     </Modal>
   );
 }
@@ -234,9 +345,9 @@ export function OnYourself({
       {what}
       {alone && (
         <>
-          {" "}
-          Nobody else active holds Admin, so afterwards nobody could administer people except
-          through this node&rsquo;s API token (<InlineCode>api.auth.tokens</InlineCode>).
+          {what && " "}
+          You’re the only admin; after this, only an API token (
+          <InlineCode>api.auth.tokens</InlineCode>) can manage people.
         </>
       )}
     </Callout>
@@ -382,10 +493,8 @@ export function EditPersonDialog({
         label="Login"
         helper={
           machine
-            ? "Words joined by colons, such as ci:release."
-            : you
-              ? "Words joined by dots, such as jane.doe — how you sign in, beside your address."
-              : "Words joined by dots, such as jane.doe — how they sign in, beside their address."
+            ? "Lowercase words with colons, like ci:release."
+            : "Lowercase words with dots, like jane.doe."
         }
         error={tried ? (loginWrong ?? undefined) : undefined}
       >
@@ -404,9 +513,7 @@ export function EditPersonDialog({
       <FormField
         label="Seat"
         helper={
-          machine
-            ? "A human seat nothing else holds; bound to it, the account acts as that seat. No seat unbinds it."
-            : `A human seat nothing else holds; ${you ? "you act" : "they act"} as it. A person always holds one — removing ${you ? "you" : "them"} is what frees it.`
+          machine ? "Pick an open seat for it to act as. No seat unbinds it." : "Pick an open seat."
         }
       >
         {(field) => (
@@ -427,10 +534,7 @@ export function EditPersonDialog({
           where nobody else active holds it, anybody but a Tier A token. It was
           the one gesture on your own row that said neither. */}
       {you && removed.includes(ADMIN) && (
-        <OnYourself
-          alone={alone}
-          what="Without Admin you stop administering this company once this saves."
-        />
+        <OnYourself alone={alone} what="You’ll lose admin access when you save." />
       )}
       <IamOutcome answer={write.answer} />
     </Modal>

@@ -255,7 +255,7 @@ type Holders interface {
 
 // ErrNoHolder is a login nobody holds — no person, no machine, or only the
 // reservation an unfinished enrolment leaves — so no record is kept under it.
-var ErrNoHolder = errors.New("iam: nobody holds that login")
+var ErrNoHolder = errors.New("nobody has that login")
 
 // ErrHolderUnseated is a login whose holder the identity directory binds to a
 // seat the chart no longer holds: their record was kept under that seat, and
@@ -264,8 +264,8 @@ var ErrNoHolder = errors.New("iam: nobody holds that login")
 // NOT [ErrNoHolder], and not the login's own record: somebody holds it, and
 // their record is not under the login — answering the login would write a
 // second record nobody reads, which is the defect [OwnerOf] exists to close.
-var ErrHolderUnseated = errors.New("iam: that login's holder is bound to a " +
-	"seat the chart no longer holds")
+var ErrHolderUnseated = errors.New("that login's seat is no longer " +
+	"in the org chart")
 
 // errNoHolders is what [OwnerOf] answers for a login it was given no way to
 // look up. UNKNOWN, like every error but the two sentinels: a surface wired

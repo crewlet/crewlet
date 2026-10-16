@@ -1448,7 +1448,7 @@ func TestASeatOnANodeRunningNoCompanyIsNoActiveRevision(t *testing.T) {
 					got.header.Get("Retry-After"))
 			}
 			if hint, _ := got.body["hint"].(string); !strings.Contains(hint,
-				"declares a human seat") {
+				"Import one with a human seat") {
 				t.Errorf("the hint %q does not say what brings a seat", hint)
 			}
 			if _, handed := got.body["url"]; handed {
@@ -1669,7 +1669,8 @@ func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 	// calls dangling, in the rule's own words, and asks about nobody the
 	// directory does not bind — the service account acting as itself.
 	var asked []string
-	const why = `seat "founder" is a "agent" seat; bind them to another human seat, or remove them`
+	const why = `seat "founder" is a "agent" seat now, and only a "human" seat ` +
+		`can be held. Move them to another human seat, or remove them`
 	with := newRig(t, func(o *iamapi.Options) {
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			asked = append(asked, row.ID)
@@ -2138,7 +2139,7 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
 		}
 		if detail, _ := got.body["detail"].(string); strings.Contains(name, "login") &&
-			!strings.Contains(detail, "never cleared") {
+			!strings.Contains(detail, "not cleared") {
 			t.Errorf("%s answered %q, want it told a login is never cleared",
 				name, detail)
 		}
@@ -2423,18 +2424,18 @@ func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 	}{
 		{"a seat", &iamdomain.ErrTaken{Field: iamdomain.UniqueSeat,
 			Value: "platform-lead", Person: bob.String()},
-			"the seat platform-lead is already held by bob.sre", "invitation"},
+			"The seat platform-lead is already taken by bob.sre", "invitation"},
 		{"an address", &iamdomain.ErrTaken{Field: iamdomain.UniqueEmail,
 			Value: "0123456789abcdef", Person: bob.String()},
-			"that address is already held by bob.sre", "invitation"},
+			"That address is already taken by bob.sre", "invitation"},
 		{"an address an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueEmail, Value: "0123456789abcdef",
-			Invitation: "inv-1"}, "that address is held by an open invitation — " +
-			"cancel it (DELETE /iam/invitations/inv-1)", "seat"},
+			Invitation: "inv-1"}, "That address belongs to an open invitation. " +
+			"Cancel it first (DELETE /iam/invitations/inv-1)", "seat"},
 		{"a seat an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueSeat, Value: "platform-lead",
-			Invitation: "inv-1"}, "the seat platform-lead is held by an open " +
-			"invitation — cancel it (DELETE /iam/invitations/inv-1)",
+			Invitation: "inv-1"}, "The seat platform-lead belongs to an open " +
+			"invitation. Cancel it first (DELETE /iam/invitations/inv-1)",
 			"that address"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

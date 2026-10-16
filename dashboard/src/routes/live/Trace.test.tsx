@@ -73,7 +73,7 @@ async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
 // own lock and the trace is asked for a reader the engine refuses.
 test("a reader without Admin is shown the lock, and the trace is never asked", async () => {
   const { asked } = await mount({}, { login: "erin", owner: "erin", grants: ["tracker"] });
-  expect(await screen.findByText("A trace needs Admin access")).toBeDefined();
+  expect(await screen.findByText("You need Admin access")).toBeDefined();
   expect(asked).not.toContain("trace");
 });
 

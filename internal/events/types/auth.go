@@ -264,12 +264,9 @@ func (e IAMSessionStarted) Actor() string { return e.Login }
 // Summary names the method and the second factor, which are the two things an
 // auditor scanning a feed of sign-ins is looking for.
 func (e IAMSessionStarted) Summary() string {
-	how := string(e.Method)
-	if how == "" {
-		how = "an unnamed method"
-	}
+	how := signInWord(e.Method)
 	if e.SecondFactor != "" {
-		how += " + " + string(e.SecondFactor)
+		how += " and " + factorWord(e.SecondFactor)
 	}
 	return lead(orSomebody(e.Login, e.Person), "signed in ("+how+")")
 }
@@ -397,7 +394,7 @@ func (e IAMLoginFailures) Summary() string {
 			orSomebody(top.Source, "an unidentified client"), top.Failures)
 	}
 	if e.Overflow > 0 {
-		line += fmt.Sprintf("; %d from sources past the per-minute cap", e.Overflow)
+		line += fmt.Sprintf("; %d more from other addresses", e.Overflow)
 	}
 	return line
 }
@@ -443,9 +440,9 @@ func (e IAMStepUpCompleted) Actor() string { return e.Login }
 func (e IAMStepUpCompleted) Summary() string {
 	how := "password"
 	if e.SecondFactor != "" {
-		how += " + " + string(e.SecondFactor)
+		how += " and " + factorWord(e.SecondFactor)
 	}
-	return lead(orSomebody(e.Login, e.Person), "confirmed their identity ("+how+")")
+	return lead(orSomebody(e.Login, e.Person), "confirmed it's them ("+how+")")
 }
 
 // IAMCredentialMinted is a credential added to somebody: a machine token, an
@@ -482,7 +479,7 @@ func (e IAMCredentialMinted) Actor() string { return e.By }
 
 // Summary names the kind and the owner.
 func (e IAMCredentialMinted) Summary() string {
-	return fmt.Sprintf("%s credential minted for %s", credentialWord(e.Kind),
+	return fmt.Sprintf("%s created for %s", credentialWord(e.Kind),
 		orSomebody(e.Owner, ""))
 }
 
@@ -509,7 +506,7 @@ func (e IAMCredentialRevoked) Actor() string { return e.By }
 
 // Summary names the kind and the owner.
 func (e IAMCredentialRevoked) Summary() string {
-	return fmt.Sprintf("%s credential revoked for %s", credentialWord(e.Kind),
+	return fmt.Sprintf("%s revoked for %s", credentialWord(e.Kind),
 		orSomebody(e.Owner, ""))
 }
 
@@ -560,7 +557,7 @@ func (e IAMGrantsChanged) Summary() string {
 	if change == "" {
 		change = "no net change"
 	}
-	return fmt.Sprintf("Grants of %s changed: %s", orSomebody(e.Person, ""), change)
+	return fmt.Sprintf("Access for %s changed: %s", orSomebody(e.Person, ""), change)
 }
 
 // IAMRecoveryCodeUsed is a recovery code spent to sign in or to confirm an
@@ -608,9 +605,8 @@ func (IAMSecondFactorThrottled) EventType() string { return "iam_second_factor_t
 // Summary says what it means, because the row's reader has to act on the
 // password rather than on the code.
 func (e IAMSecondFactorThrottled) Summary() string {
-	return fmt.Sprintf("Second factor of %s reached the throttle's ceiling, the "+
-		"last wrong code from %s: somebody holding the password is guessing "+
-		"at the code", orSomebody(e.Login, e.Person),
+	return fmt.Sprintf("Too many wrong two-step codes for %s, the last from "+
+		"%s. Someone may know their password.", orSomebody(e.Login, e.Person),
 		orSomebody(e.Remote, "an unknown address"))
 }
 
@@ -633,7 +629,7 @@ func (e IAMMFAReset) Actor() string { return e.By }
 
 // Summary names whose.
 func (e IAMMFAReset) Summary() string {
-	return "Second factor of " + orSomebody(e.Person, "") + " reset"
+	return "Two-step verification reset for " + orSomebody(e.Person, "")
 }
 
 // IAMInvitationCancelled is an administrator withdrawing an invitation nobody
@@ -682,7 +678,7 @@ func (e IAMPasswordChanged) Actor() string { return e.Login }
 // Summary says what it ended, which is the half a reader of the feed acts on.
 func (e IAMPasswordChanged) Summary() string {
 	return lead(orSomebody(e.Login, e.Person),
-		"changed their password, ending every other session and token they held")
+		"changed their password and was signed out everywhere else")
 }
 
 // IAMPasswordResetIssued is an administrator issuing somebody a one-time link
@@ -758,7 +754,7 @@ func (e IAMPasswordReset) Summary() string {
 		return lead(orSomebody(e.Login, e.Person), "set their first password")
 	}
 	return lead(orSomebody(e.Login, e.Person),
-		"set a new password from a reset link, ending every session and token they held")
+		"set a new password with a reset link and was signed out everywhere")
 }
 
 // IAMSessionGenerationBumped is the fleet-wide session generation moving, which
@@ -781,7 +777,7 @@ func (e IAMSessionGenerationBumped) Actor() string { return e.By }
 
 // Summary states the consequence rather than the number.
 func (e IAMSessionGenerationBumped) Summary() string {
-	return fmt.Sprintf("Every session in the company was ended (generation %d)",
+	return fmt.Sprintf("Everyone in the company was signed out (generation %d)",
 		e.Generation)
 }
 
@@ -884,12 +880,51 @@ func shortLineage(lineage string) string {
 	return lineage[:8]
 }
 
-// credentialWord is a kind as the first word of a sentence.
+// credentialWord is a kind as the first words of a sentence, in the words a
+// person reads rather than the wire value. A kind this build does not name
+// reads as itself.
 func credentialWord(kind CredentialKind) string {
-	if kind == "" {
-		return "A"
+	switch kind {
+	case "":
+		return "A credential"
+	case CredentialToken:
+		return "Access token"
+	case CredentialTOTP:
+		return "Authenticator app"
+	case CredentialRecovery:
+		return "Recovery codes"
+	case CredentialPassword:
+		return "Password"
+	case CredentialReset:
+		return "Password reset link"
 	}
 	return upperFirst(string(kind))
+}
+
+// signInWord is a sign-in method as a person reads it. A method this build
+// does not name reads as itself.
+func signInWord(method SignInMethod) string {
+	switch method {
+	case "":
+		return "an unnamed method"
+	case SignInInvite:
+		return "invitation"
+	case SignInToken:
+		return "API token"
+	}
+	return string(method)
+}
+
+// factorWord is a second factor as a person reads it. A factor this build
+// does not name reads as itself.
+func factorWord(factor SecondFactor) string {
+	switch factor {
+	case FactorTOTP:
+		return "authenticator app"
+	case FactorRecovery:
+		return "recovery code"
+	}
+	return string(factor)
 }
 
 // heldKeys renders the key ids a node holds, sorted, or says it holds none.

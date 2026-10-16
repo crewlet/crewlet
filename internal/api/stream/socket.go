@@ -675,7 +675,7 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {
 		return CloseUnauthenticated,
-			"watching a seat needs a credential this node can resolve"
+			"Sign in to watch a seat."
 	}
 	name := strings.TrimSpace(req.Seat)
 	if name == "" {
@@ -899,7 +899,7 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		refusal := queryError(req, CodeBadParams)
 		var bad *BadParamsError
 		if errors.As(err, &bad) {
-			refusal.Detail = bad.Detail
+			refusal.Detail = httpjson.Sentence(bad.Detail)
 		}
 		client.Reply(refusal)
 	case errors.Is(err, ErrUnavailable):

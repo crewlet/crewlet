@@ -220,8 +220,9 @@ export function WorkingNow() {
         max={WORKING_FACES}
         decorative
         // THE SEAT'S OWN BADGE, the initials its crumb and its profile draw
-        // (`seatBadge`): handed the role as written, "Agent SWE" was `AS`
-        // here beside `SW` everywhere else the seat is drawn.
+        // (`seatBadge`, whose initials the kit takes past an agent's leading
+        // "agent" word): "Agent SWE" was `AS` here beside `SW` everywhere else
+        // the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
           // NO STATUS ON A MEMBER: each overlaps the one before it, and

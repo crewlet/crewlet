@@ -5,7 +5,7 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, EmptyValue, Tag, InlineCode } from "@crewlethq/ui";
 import { CalendarGlyph } from "@crewlethq/icons/glyphs";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -59,7 +59,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
             header: "When",
             cell: (row) => (
               <span className="row gap-1">
-                <code className="inline nowrap">{row.cron}</code>
+                <InlineCode whole>{row.cron}</InlineCode>
                 {describeCron(row.cron) && (
                   <span className="muted truncate">{describeCron(row.cron)}</span>
                 )}

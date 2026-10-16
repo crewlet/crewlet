@@ -14,7 +14,7 @@
  * names each missing node once, with the first reason it was given.
  */
 
-import { Callout } from "@crewlethq/ui";
+import { Callout, InlineCode } from "@crewlethq/ui";
 import type { Coverage } from "~/contract/coverage.ts";
 
 /** One node an answer was assembled without, and why. */
@@ -94,7 +94,7 @@ export function CoverageNote({
           <ul className="coverage-nodes">
             {nodes.map((n) => (
               <li key={n.id}>
-                <code className="inline">{n.id}</code>
+                <InlineCode>{n.id}</InlineCode>
                 {n.error ? `: ${n.error}` : ""}
               </li>
             ))}

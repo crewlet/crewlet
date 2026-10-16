@@ -104,7 +104,7 @@ describe("the words", () => {
   // sign in, not to ask an admin for access.
   test("a refusal naming no access asks for a credential, not an admin", () => {
     const said = needsWords("Reading one pass", []);
-    expect(said).toBe("Reading one pass needs a credential the engine accepts. Sign in.");
+    expect(said).toBe("Sign in to see this.");
     expect(said).not.toMatch(/admin|operator|token/);
   });
 });

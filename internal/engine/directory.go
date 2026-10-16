@@ -176,16 +176,16 @@ func (e *Engine) readStandingLocked(ctx context.Context) notify.Standing {
 			// consulted no directory was built before this node had one
 			// to read, which is the same absence of a reading.
 			log.WarnContext(ctx, "party_directory_unreadable", "error", err,
-				"detail", "this node has never read its identity directory, so "+
-					"no human seat's contact identities route until it does; it "+
-					"retries every "+DirectoryRefresh.String())
+				"detail", "this node hasn't read the people directory yet, so "+
+					"chat messages aren't matched to seats. Retrying every "+
+					DirectoryRefresh.String())
 			return notify.Unread()
 		}
 		log.WarnContext(ctx, "party_directory_unreadable", "error", err,
 			"withheld_seats", len(live.Withheld()),
-			"detail", "this node could not read its identity directory, so its "+
-				"contact routing keeps the standing it last read; it retries "+
-				"every "+DirectoryRefresh.String())
+			"detail", "this node couldn't read the identity directory, so chat "+
+				"routing uses the copy it last read; it retries every "+
+				DirectoryRefresh.String())
 		return live.Standing()
 	}
 	e.notify.directoryFailed, e.notify.readAt = false, position

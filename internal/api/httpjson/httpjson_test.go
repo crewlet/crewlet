@@ -363,9 +363,10 @@ func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
 		case !strings.HasSuffix(message, "."):
 			t.Errorf("%q says %q, which is a fragment: it ends up mid-sentence "+
 				"on a screen", code, message)
-		case strings.Contains(message, "_"):
-			t.Errorf("%q says %q — a snake_case token in the copy means a code "+
-				"or a field name leaked into the half a person reads", code, message)
+		case strings.Contains(outsideCode(message), "_"):
+			t.Errorf("%q says %q: a snake_case token outside backticks means "+
+				"a code or a field name leaked into the half a person reads", code,
+				message)
 		case message[0] < 'A' || message[0] > 'Z':
 			t.Errorf("%q says %q, which does not begin as a sentence", code, message)
 		}
@@ -374,6 +375,18 @@ func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
 		t.Error("a code outside the vocabulary answered a message, so Valid and " +
 			"Message are reading two different tables")
 	}
+}
+
+// outsideCode is message with every backticked span taken out: a setting a
+// sentence names on purpose, as `api.external_url`, is marked as code, and
+// only an unmarked token is one that leaked.
+func outsideCode(message string) string {
+	parts := strings.Split(message, "`")
+	var prose strings.Builder
+	for i := 0; i < len(parts); i += 2 {
+		prose.WriteString(parts[i])
+	}
+	return prose.String()
 }
 
 // A DRIBBLING CLIENT IS CUT OFF, which a size cap cannot do.
@@ -700,8 +713,148 @@ func TestTheNoExternalURLMessageNamesNoOneSurface(t *testing.T) {
 				"code is answered by more than that one surface", message, surface)
 		}
 	}
-	if !strings.Contains(message, "external url") {
+	if !strings.Contains(message, "`api.external_url`") {
 		t.Errorf("the no_external_url message %q does not name the setting "+
 			"that fixes it", message)
+	}
+}
+
+// THE OUTERMOST TEXT IS A SENTENCE, and an identifier keeps its spelling.
+//
+// Go errors stay lowercase with no full stop because they are wrapped; the
+// text a refusal puts in `detail` or `hint` is wrapped by nothing and read on
+// its own line, so the boundary writes it as a sentence. A field name, a flag,
+// a path or an address at the start keeps its case, because capitalising it
+// would name something that does not exist.
+func TestSentenceCapitalisesProseAndKeepsIdentifiers(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ in, want string }{
+		{"limit must be a number", "Limit must be a number."},
+		{"that login is already taken. Choose another", "That login is already taken. Choose another."},
+		{"isn't valid", "Isn't valid."},
+		{"configapi: a wrapped chain", "configapi: a wrapped chain."},
+		{"statelog: node-4 may not be evicted", "statelog: node-4 may not be evicted."},
+		{"api: no keyring", "api: no keyring."},
+		{"note: not a package", "Note: not a package."},
+		{"statelog node-4 is behind", "Statelog node-4 is behind."},
+		{"Already a sentence.", "Already a sentence."},
+		{"Already signed in?", "Already signed in?"},
+		{"  padded text  ", "Padded text."},
+		{"expires_in_days can't be negative", "expires_in_days can't be negative."},
+		{"-dev-principal only works on loopback", "-dev-principal only works on loopback."},
+		{"https://evil.example isn't an address for this deployment", "https://evil.example isn't an address for this deployment."},
+		{"grant.add isn't an event the identity log records", "grant.add isn't an event the identity log records."},
+		{"`grants` is the whole set", "`grants` is the whole set."},
+		{`"jane" is already taken`, `"jane" is already taken.`},
+		{"/iam/people serves nothing here", "/iam/people serves nothing here."},
+		{"é accented opening", "É accented opening."},
+		{"ends in a list (a, b)", "Ends in a list (a, b)."},
+		{"", ""},
+		{"   ", ""},
+	} {
+		if got := httpjson.Sentence(c.in); got != c.want {
+			t.Errorf("Sentence(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if again := httpjson.Sentence(httpjson.Sentence(c.in)); again != c.want {
+			t.Errorf("Sentence is not idempotent on %q: twice gives %q", c.in, again)
+		}
+	}
+}
+
+// EVERY REFUSAL WRITES ITS DETAIL AND HINT AS SENTENCES, through every writer.
+//
+// The rule is held at [httpjson.Envelope] so a handler that passes err.Error()
+// as it is still reaches a person as a sentence, and a non-text value under
+// either key, or any other key, is left exactly as the route wrote it.
+func TestTheEnvelopeWritesDetailAndHintAsSentences(t *testing.T) {
+	t.Parallel()
+	body := httpjson.Envelope(httpjson.CodeInvalid, httpjson.Detail{
+		"detail": "limit must be a number",
+		"hint":   "send ?limit=50",
+		"field":  "limit",
+	})
+	if body["detail"] != "Limit must be a number." {
+		t.Errorf("detail = %#v, want the sentence", body["detail"])
+	}
+	if body["hint"] != "Send ?limit=50." {
+		t.Errorf("hint = %#v, want the sentence", body["hint"])
+	}
+	if body["field"] != "limit" {
+		t.Errorf("field = %#v, want it untouched: only prose keys are sentences", body["field"])
+	}
+
+	structured := httpjson.Envelope(httpjson.CodeInvalid, httpjson.Detail{
+		"detail": map[string]any{"path": "a.b"},
+	})
+	if _, ok := structured["detail"].(map[string]any); !ok {
+		t.Errorf("a structured detail was rewritten: %#v", structured["detail"])
+	}
+
+	given := map[string]string{"detail": "nothing was written"}
+	rec := httptest.NewRecorder()
+	httpjson.FailWith(rec, http.StatusConflict, httpjson.CodeInvalid, given)
+	var written map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &written); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if written["detail"] != "Nothing was written." {
+		t.Errorf("FailWith wrote detail %#v, want the sentence", written["detail"])
+	}
+	if given["detail"] != "nothing was written" {
+		t.Errorf("the caller's map was written to: %#v", given)
+	}
+}
+
+// THE PACKAGE PREFIXES ARE THE MODULE'S PACKAGES, every one and nothing else.
+//
+// [httpjson.Sentence] leaves a leading "name: " lowercase when the name is a
+// Go package's, which only holds while its table names the packages this
+// module has. So every package clause in the tree is read, and the table and
+// the tree are compared both ways: a package added without the table
+// following would be capitalised as "Newpkg: ...", and a stale entry would
+// keep a prose word lowercase.
+func TestThePackagePrefixesAreTheModulesPackages(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	found := map[string]bool{}
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "testdata", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.PackageClauseOnly)
+		if err != nil {
+			return err
+		}
+		if name := file.Name.Name; name != "main" {
+			found[name] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) == 0 {
+		t.Fatal("the walk read no package clause, so it compared nothing")
+	}
+	table := httpjson.PackagePrefixes()
+	for name := range found {
+		if !slices.Contains(table, name) {
+			t.Errorf("package %s is missing from goPackages (packages.go); add it", name)
+		}
+	}
+	for _, name := range table {
+		if !found[name] {
+			t.Errorf("goPackages names %s, which no package in the tree is; remove it", name)
+		}
 	}
 }

@@ -361,7 +361,7 @@ func (s *Service) rewriteVerifier(ctx context.Context, person string,
 			return out, nil
 		},
 		OpID:   statelog.NewOpID(s.now(), "rehash"),
-		Reason: "re-hashed the password at the current cost",
+		Reason: "updated the stored password hash",
 	})
 	if errors.Is(err, errVerifierMoved) {
 		log.DebugContext(ctx, "api_password_rehash_skipped", "person", person,
@@ -595,10 +595,9 @@ func (s *Service) checkSecondFactor(ctx context.Context, held iamdomain.Sighting
 		case err != nil:
 			log.ErrorContext(ctx, "api_totp_seed_unopenable",
 				"person", held.ID, "credential", c.ID, "error", err,
-				"hint", "the seed on this credential is not one sealed for it "+
-					"under a key this node's keyring holds; put the key back "+
-					"on the ring, or reset the person's second factor so they "+
-					"enrol again")
+				"hint", "This authenticator app's secret uses a key this "+
+					"node doesn't hold. Add the key back, or reset their "+
+					"two-step verification.")
 		default:
 			// THE LAST ACCEPTED STEP is what makes a code single-use,
 			// and it is read from the credential rather than kept in
@@ -880,7 +879,7 @@ type signIn struct {
 	provedAt *time.Time
 
 	// because is what the replaced session's close records as its reason,
-	// and empty for a step-up's own ("replaced by a step-up").
+	// and empty for a step-up's own ("replaced after confirming it's them").
 	because string
 }
 
@@ -1008,7 +1007,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// after the close landed, is a person asked to sign in again.
 		because := how.because
 		if because == "" {
-			because = "replaced by a step-up"
+			because = "replaced after confirming it's them"
 		}
 		//
 		// A STEP OF THE GESTURE THE NEW LINEAGE NAMES, so it carries the

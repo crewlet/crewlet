@@ -75,8 +75,8 @@ type ManagedError struct {
 }
 
 func (e *ManagedError) Error() string {
-	return fmt.Sprintf("configapi: the company document is managed by %s; "+
-		"%s may read it and may not change it",
+	return fmt.Sprintf("configapi: the company config is managed by %s, so "+
+		"%s can read it but not change it",
 		strings.Join(e.Writers, ", "), e.party())
 }
 
@@ -98,12 +98,11 @@ func (e *ManagedError) party() string {
 // THE WRITERS ARE TOKEN IDS, not systems: the hint names them as the
 // credential the managing system writes with, never as the system itself.
 func (e *ManagedError) Hint() string {
-	return "change the company at its source, the system that writes it " +
-		"here with " + tokensPhrase(e.Writers) + ": an edit made directly " +
-		"would be overwritten at its next reconcile. A leaked credential can " +
-		"still be rotated: write the new value with /secrets and POST " +
-		"/config/reload. To take the document back, remove " +
-		"api.auth.company_writers from every node's Tier A and restart"
+	return "Change it in the system that manages it (" +
+		tokensPhrase(e.Writers) + "). Edits here get overwritten. To rotate " +
+		"a leaked credential, write it to /secrets and POST /config/reload. " +
+		"To manage it here, remove `api.auth.company_writers` from every " +
+		"node's config file and restart."
 }
 
 // tokensPhrase names token ids as tokens: "the token gitops", "one of the
@@ -161,9 +160,9 @@ func (s *Service) refusedManaged(w http.ResponseWriter, r *http.Request) bool {
 // config import` — reads the same refusal wherever its write was refused.
 func RefuseManaged(w http.ResponseWriter, managed *ManagedError) {
 	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeConfigManaged, httpjson.Detail{
-		"detail": "the company document is managed by " +
-			strings.Join(managed.Writers, ", ") + ", and " + managed.party() +
-			" may read it but not change it",
+		"detail": "The company config is managed by " +
+			strings.Join(managed.Writers, ", ") + ". " +
+			httpjson.Sentence(managed.party()+" can read it but not change it"),
 		"managed_by": managed.Writers,
 		"hint":       managed.Hint(),
 	})

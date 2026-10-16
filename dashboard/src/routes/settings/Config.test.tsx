@@ -590,7 +590,9 @@ test("a revision's peek says each property once, its ids in the mono face", asyn
   // A PROPERTY'S LABEL is a fact's or a rail row's — the eyebrow above the
   // title names the kind of object, which is not one of its properties.
   const said = (label: string) =>
-    [...document.querySelectorAll(".fact-label, dt")].filter((el) => el.textContent === label);
+    [...document.querySelectorAll(".crewlet-fact-line__label, dt")].filter(
+      (el) => el.textContent === label,
+    );
   for (const label of ["Created", "Source", "Activated", "Revision", "Parent"]) {
     expect(said(label), label).toHaveLength(1);
   }

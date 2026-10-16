@@ -409,7 +409,7 @@ export function OrgChart() {
           builder saved, the projection the chart draws is the previous one. */}
       <PreviousRevisionNote />
       {directory.code && !directory.data && index.seats.some((seat) => seat.kind === "human") && (
-        <DirectoryUnanswered directory={directory} manages={manages} />
+        <DirectoryUnanswered directory={directory} />
       )}
       {phone ? (
         <OrgOutline
@@ -490,20 +490,10 @@ export function OrgChart() {
  * ONLY WHERE THE CHART HAS A HUMAN SEAT: a company of agents loses nothing by
  * the read failing, and a banner over it would be about nothing on screen.
  */
-function DirectoryUnanswered({
-  directory,
-  manages,
-}: {
-  directory: RestResult<HumanSeat[]>;
-  manages: boolean;
-}) {
+function DirectoryUnanswered({ directory }: { directory: RestResult<HumanSeat[]> }) {
   return (
     <section className="col gap-2" aria-label="The identity directory">
-      <Callout variant="warning" title="The identity directory did not answer">
-        So the chart cannot say who holds each human seat
-        {manages ? ", and no vacant seat offers Invite or Create," : ""} until it does — its human
-        cards say only that each is a person.
-      </Callout>
+      <Callout variant="warning">Couldn’t load who holds each seat.</Callout>
       <QueryState
         error={directory.code}
         refusal={directory.refusal}
@@ -518,9 +508,9 @@ function DirectoryUnanswered({
 function gestureLabel(gesture: SeatGesture, name: string): string {
   switch (gesture) {
     case "invite":
-      return `Invite a person to ${name}`;
+      return `Invite someone as ${name}`;
     case "create":
-      return `Create a person on ${name}`;
+      return `Add someone as ${name}`;
     case "cancel":
       return `Cancel the invitation to ${name}`;
   }

@@ -1207,9 +1207,7 @@ test("without the document the setup card says whose read it is, not that nothin
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
-  expect(setup.textContent).toContain(
-    "Seeing its sandbox, placement and workers needs Admin access. An admin can give it to you.",
-  );
+  expect(setup.textContent).toContain("Some setup is only visible to admins.");
   expect(setup.textContent).not.toContain("not offered");
 });
 
@@ -2317,11 +2315,14 @@ test("a reader the document is not asked for is told the grant, never that none 
     acts: [],
   };
   mount("#/agents/seats/jane?tab=settings", { answers: { viewer: reader } });
-  const identity = (await screen.findByText(/Reading this seat's settings needs/)).closest(
+  const identity = (await screen.findByText("You need Admin access")).closest(
     ".crewlet-card",
   ) as HTMLElement;
   expect(identity.textContent).toContain("Admin");
   expect(identity.textContent).toContain("jane.doe");
+  // A PANEL'S LOCK IS THE LINE ALONE: no button, so a small card stays small.
+  expect(within(identity).queryByRole("button")).toBeNull();
+  expect(within(identity).queryByRole("link", { name: "Go to Home" })).toBeNull();
   // ABOVE EVERY UNIT, so no lead reads it either.
   expect(identity.textContent).not.toContain("leads");
   expect(document.body.textContent).not.toContain("No company configuration is active");
@@ -2329,8 +2330,8 @@ test("a reader the document is not asked for is told the grant, never that none 
   cleanup();
 
   mount("#/agents/seats/swe?tab=settings", { answers: { viewer: { ...reader, handle: "" } } });
-  await screen.findAllByText(/Reading this seat's settings needs/);
-  expect(document.body.textContent).toContain("Whoever leads Core, or a unit above it");
+  await screen.findAllByText("You need Admin access");
+  expect(document.body.textContent).toContain("Leads of Core can see these too.");
   expect(document.body.textContent).not.toContain("No company configuration is active");
   cleanup();
 
@@ -2338,7 +2339,7 @@ test("a reader the document is not asked for is told the grant, never that none 
     answers: { viewer: OPERATOR, config: () => null },
   });
   expect(await screen.findByText("No company configuration is active")).toBeTruthy();
-  expect(screen.queryByText(/Reading this seat's settings needs/)).toBeNull();
+  expect(screen.queryByText("You need Admin access")).toBeNull();
 });
 
 test("a person's settings carry their contacts and no model, budget or credential card", async () => {

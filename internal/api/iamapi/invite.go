@@ -75,18 +75,16 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	address := strings.TrimSpace(in.Email)
 	if address == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "an invitation needs the address it " +
-				"is for: it is what the directory holds the invitation against " +
-				"every person and every open invitation by"})
+			map[string]string{"detail": "An invitation needs an email " +
+				"address."})
 		return
 	}
 	// TRIMMED, and asked BEFORE THE KEY IS READ, so a refusal the caller
 	// fixes by typing a seat mints nothing and publishes nothing.
 	seat := strings.TrimSpace(in.Seat)
 	if seat == "" {
-		refuseSeatless(w, "an invitation names the human seat its invitee "+
-			"will hold — name a vacant one (GET /iam/seats?unheld=true lists "+
-			"them)")
+		refuseSeatless(w, "An invitation needs a human seat. Pick an empty "+
+			"one (GET /iam/seats?unheld=true lists them).")
 		return
 	}
 	// WHAT THEY WILL BE ABLE TO DO, STATED, before the key is read for the seat's
@@ -139,9 +137,8 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	s.answer(w, r, opID, invited, nil, http.StatusCreated, map[string]any{
 		"id": id, "url": s.inviteURL(id, issued.Secret),
 		"expires_at": issued.ExpiresAt, "seat": seat,
-		"detail": "this link is shown once and cannot be read back; what the " +
-			"estate holds is the invitation's id and a verifier of the secret " +
-			"the link carries beside it, which is what redeeming it presents",
+		"detail": "This link is shown only once. Send it to the person " +
+			"yourself (Crewlet doesn't send email).",
 	})
 }
 
@@ -163,9 +160,8 @@ func (s *Service) linksPoint(w http.ResponseWriter, what string) bool {
 	httpjson.FailWith(w, http.StatusInternalServerError,
 		httpjson.CodeNoExternalURL, map[string]string{
 			"config_path": "api.external_url",
-			"detail": "this deployment has no api.external_url, so there " +
-				"is no address " + what + " link could point at. Set it " +
-				"in this node's own configuration file and restart it.",
+			"detail": "No `api.external_url` is set, so " + what + " link " +
+				"can't be made. Set it in this node's config file and restart.",
 		})
 	return false
 }

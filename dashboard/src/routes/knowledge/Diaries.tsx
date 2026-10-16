@@ -29,7 +29,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Callout, Card, EmptyState, EmptyValue } from "@crewlethq/ui";
+import { Callout, Card, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
 import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -245,8 +245,8 @@ export function Diary({ handle }: { handle: string }) {
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
-          No agent is called <code className="inline">{handleLabel(handle)}</code>. Showing memory
-          left under that handle.
+          No agent is called <InlineCode>{handleLabel(handle)}</InlineCode>. Showing memory left
+          under that handle.
         </Callout>
       )}
       <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>

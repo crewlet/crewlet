@@ -49,7 +49,7 @@ import type { AvatarStatus } from "@crewlethq/ui";
 import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useLeadScope } from "./leadScope.ts";
-import { ADMIN, holds, needsWords } from "./access.ts";
+import { ADMIN, accessNames, holds } from "./access.ts";
 import { useQuery } from "./useQuery.ts";
 import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
@@ -753,12 +753,13 @@ export function resolvedAbsence(viewer: {
 }
 
 /**
- * The sentence a reader without Admin reads where a resolved value would be —
- * `what` is the value, "its model chain" — naming the access that would show
- * it rather than an empty value nobody could tell from a seat that has none.
+ * What a reader without Admin reads where a resolved value would be, in a
+ * fact cell: the access that would show it ("Admin only"), rather than an
+ * empty value nobody could tell from a seat that has none. A cell takes a
+ * short value; the card says once, below its facts, why they are hidden.
  */
-export function resolvedWithheld(what: string): string {
-  return needsWords(`Reading ${what}`, [RUNTIME_GRANT]);
+export function resolvedWithheld(): string {
+  return `${accessNames([RUNTIME_GRANT])} only`;
 }
 
 /**

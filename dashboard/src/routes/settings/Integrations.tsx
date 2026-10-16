@@ -2110,7 +2110,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 // filing prefixes — which edge a delivery came in on — and
                 // the provider's event name is what an operator is matching
                 // against their own console.
-                cell: (e) => <code className="inline nowrap">{deliveryEvent(e.type)}</code>,
+                cell: (e) => <InlineCode whole>{deliveryEvent(e.type)}</InlineCode>,
               },
               {
                 key: "summary",

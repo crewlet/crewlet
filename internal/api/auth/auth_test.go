@@ -538,29 +538,33 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 		t.Fatalf("the complete posture does not validate, so every case below "+
 			"may be failing on something else: %v", err)
 	}
+	// EACH REFUSAL IS ASSERTED BY WHERE IT IS AND WHAT KIND OF MISTAKE IT IS
+	// ([config.Problems]), the half a client branches on, rather than by its
+	// wording, which is copy and changes on its own schedule.
 	for _, tc := range []struct {
 		name string
 		make func(*config.Bootstrap)
-		want string
+		path string
+		kind string
 	}{
 		{"no credential at all", func(b *config.Bootstrap) {
 			b.API.Auth.Tokens = nil
-		}, "at least one token is required"},
+		}, "api.auth.tokens", "missing"},
 		{"no word on whether this node serves admin", func(b *config.Bootstrap) {
 			b.API.Auth.Admin = ""
-		}, "required once this node serves the API"},
+		}, "api.auth.admin", "missing"},
 		{"no address a browser reaches this on", func(b *config.Bootstrap) {
 			b.API.ExternalURL = ""
-		}, "required once this node serves the API"},
+		}, "api.external_url", "missing"},
 		{"no keyring to sign a session with", func(b *config.Bootstrap) {
 			b.Secrets = config.Secrets{}
-		}, "every session cookie"},
+		}, "secrets.keys", "missing"},
 		{"a credential short enough to guess", func(b *config.Bootstrap) {
 			b.API.Auth.Tokens[0].Token = "short"
-		}, "at least"},
+		}, "api.auth.tokens[0].token", "unknown_value"},
 		{"a credential whose blast radius nobody stated", func(b *config.Bootstrap) {
 			b.API.Auth.Tokens[0].Grants = nil
-		}, "stated where it is pinned"},
+		}, "api.auth.tokens[0].grants", "missing"},
 	} {
 		b := complete()
 		tc.make(&b)
@@ -569,8 +573,11 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 			t.Errorf("%s: validated", tc.name)
 			continue
 		}
-		if !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: error does not say why: %v", tc.name, err)
+		problems := config.Problems(err)
+		if len(problems) != 1 || problems[0].Path != tc.path ||
+			problems[0].Kind != tc.kind || problems[0].Message == "" {
+			t.Errorf("%s: refused with %+v, want one %s problem at %s saying why",
+				tc.name, problems, tc.kind, tc.path)
 		}
 	}
 }

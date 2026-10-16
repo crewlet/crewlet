@@ -534,75 +534,7 @@
   padding: var(--spacing-3);
 }
 
-/* WHO THIS BROWSER IS, and the reader's own preferences beside the name. */
-.user-block {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: var(--spacing-1) 0;
-}
-
-.user-block-who {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  padding: var(--spacing-1) var(--spacing-1);
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-a.user-block-who:hover {
-  background: var(--color-surface-hover);
-}
-
-/* WHERE THE READER IS, the sidebar's own mark: the user block is the
-   Account's row (the Account has none of its own), so on `#/account` it is
-   raised with the hairline the kit's current row wears — no hue, an outline
-   rather than a shadow so forced-colours mode keeps it — and "where am I"
-   reads one way down the whole rail. After `:hover`, so a current block shows
-   the lift rather than the hover overlay. */
-a.user-block-who[aria-current="page"] {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
-}
-
-a.user-block-who:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-/* THE RAIL'S PRESSABLE MARK, AT REST: the chevron a rail row that opens
-   something wears, in quiet ink, at the block's end. A name says nothing
-   about being a way to the reader's password and second factor, and the block
-   drew no mark at all until it was hovered. */
-.user-block-go {
-  flex: none;
-  margin-left: auto;
-  color: var(--color-text-tertiary);
-}
-
-.user-block-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: var(--font-line-height-snug);
-}
-
-.user-block-name {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-}
-
-.user-block-detail {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-}
-
+/* The reader's own preferences, in the account row's popover (`app/sidebar/UserBlock.tsx`). */
 /* AS WIDE AS ITS ROWS, the label column and the one control column: they are
    the widest thing the popover holds, so they set its width (over the kit's
    own floor), and the block FILLS that width rather than declaring one, so
@@ -1156,156 +1088,10 @@ a.user-block-who:focus-visible {
   min-height: 24px;
 }
 
-/* ---- The object header -------------------------------------------------- */
-
-.object-head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-4) 0 var(--spacing-3);
-}
-
-.object-head.peek {
-  padding: var(--spacing-3) 0 var(--spacing-2);
-}
-
-.object-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
-}
-
-.object-id {
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-/* THE RECIPE IS `.clamp`'s, worn in the markup — see ObjectHeader.tsx for why
-   a heading needs one at all. Written out here it would be the second copy of
-   a five-declaration rule that does nothing if any one of them is missing,
-   which is what `styles/text.test.ts` exists to refuse. */
-.object-title {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  margin: 0;
-  min-width: 0;
-}
-
-.object-head.peek .object-title {
-  font-size: var(--font-size-lg);
-}
-
-/* THE OBJECT'S STATE, BESIDE ITS NAME — and it keeps its width. These are
-   pills carrying a word each: "13 problems" squeezed to "13 pro…" is a mark
-   that says something else, and "middle not shown" cut anywhere is a mark
-   that says nothing. The HEADING is what gives way in this row, which is what
-   `.object-title` wears `.clamp` for. */
-.object-status {
-  flex: 0 0 auto;
-}
-
-/* THE TRACK FLOOR IS 7.5rem, which is what fits a turn's seven facts on one
-   line at 1280: the fact line there is 984px, and seven 8rem tracks with
-   their six gaps needed 992 — so "Wall clock" took a row of its own on the
-   laptop width this product is designed at. 120px still holds every fact's
-   label and a two-line value. */
-.fact-line {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(7.5rem, 100%), 1fr));
-  column-gap: var(--spacing-4);
-  row-gap: var(--spacing-3);
-  padding-top: var(--spacing-1);
-}
-
-/* TWO BANDS: the label, and the value with its footnotes under it. The
-   labels sit on one line across the row and every value's first line on the
-   next; a note stays under its own value (`.fact-body`) rather than on a band
-   of notes a neighbour's two-line value could push away from it. */
-.fact {
-  display: grid;
-  grid-template-rows: subgrid;
-  grid-row: span 2;
-  row-gap: 0;
-  min-width: 0;
-}
-
-.fact-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.fact-label {
-  font-size: var(--font-size-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-text-tertiary);
-}
-
-.fact-value {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-primary);
-}
-
-/* A LINKED FACT WRAPS WITH ITS CLAMP. `.t-link` never wraps (it is written for
-   a link in a row), and inside the two-line clamp that made a linked value one
-   line cut at the track's edge with no ellipsis: "Unit: Leadership › Execut".
-   The clamp is the fact's, so the link inside it wraps like any other text. */
-.fact-value .t-link {
-  white-space: normal;
-}
-
-/* A SET OF CHIPS (`Fact.set`) takes the same two tracks, so a node's three
-   roles sit on one line; it wraps between chips where two are too narrow.
-
-   ONE TOKEN, ONE LINE (`Fact.token`): two tracks, never wrapped, and cut with
-   an ellipsis only where two tracks are still too narrow — its title carries
-   the whole of it. The link inside keeps the line too, which is the opposite
-   of the rule above and the point: an id is not prose. */
-.fact.is-token,
-.fact.is-set {
-  grid-column: span 2;
-}
-.fact-token {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fact-token .t-link {
-  white-space: nowrap;
-}
-
-/* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH, and the grid above is what makes
-   that structural rather than capped. `.fact` was a column flex box, so it was
-   as wide as its widest child — and a note is prose where the value above it
-   is a word. Measured on a page header: `v1` under a 146px "set by Agent CEO ·
-   2m ago" and `2m ago` under a 153px "any change, not only a save", beside
-   three note-less facts at 66 to 75px. The gaps between the five labels then
-   ran 85, 162, 90, 169, which reads as five columns placed at random rather
-   than as one row of facts.
-
-   The cap that used to answer it was `max-width: 16ch`, and it could only ever
-   narrow the problem: sixteen characters at `--font-size-2xs` is still wider than
-   most values, so a footnote went on setting its column and the pitch went on
-   being irregular. The column is a grid track now and the note wraps inside
-   whatever it is, so there is nothing left to cap.
-
-   `balance` stays, because it is what makes the wrap look deliberate rather
-   than broken — a hard cut left "2m ago" and "a save" alone on a second line,
-   and an orphan reads as a fault. It is ignored where it is not implemented,
-   which costs nothing now that the track does the bounding. */
-.fact-note,
-.fact-setby {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  text-wrap: balance;
-}
+/* ---- The object header --------------------------------------------------
+   `@crewlethq/ui`'s ObjectHeader and FactLine draw it, and their stylesheet
+   holds the rules: the eyebrow, the two-line title, the fact line's 7.5rem
+   track floor and its two bands. */
 
 /* ---- The detail rail ---------------------------------------------------- */
 
@@ -1863,8 +1649,8 @@ a.cell-seat:hover {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-/* A LINKED VALUE WRAPS WITH ITS CELL, as a linked fact does (`.fact-value
-   .t-link` above): `.t-link` never wraps, being written for a link in a row,
+/* A LINKED VALUE WRAPS WITH ITS CELL, as a linked fact in a header does:
+   `.t-link` never wraps, being written for a link in a row,
    so a turn id linked from a run's properties ran past the card's edge at
    phone width instead of breaking where `overflow-wrap` lets it. */
 .props > dd .t-link {
@@ -1920,27 +1706,6 @@ a.cell-seat:hover {
   margin-top: 2px;
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
-}
-
-/* THE `turn ↗` LINK IS ONE TOKEN, in the fact line and in the rail alike —
-   both render [SetByLine], so this is one rule rather than two that drift.
-
-   THE ARROW WAS ON A LINE OF ITS OWN, at every width, and no `white-space`
-   could have stopped it: `.t-link` already carries `nowrap`, and what breaks
-   here is not a wrap. `base.css` gives every `svg` `display: block` — right,
-   because the product's glyphs are overwhelmingly flex items and that is what
-   removes the inline baseline gap — and a BLOCK box inside an inline box
-   splits the inline box around it (CSS 2.1 § 9.2.1.1), so the anchor was cut
-   in two and the glyph took the second half. An inline-flex anchor has a
-   formatting context of its own, so the word and the arrow are one atomic
-   box that cannot be split or wrapped between. `align-items: center` is the
-   product's own convention for a glyph beside a word (`.work-type`,
-   `.work-prio`, uilet's own buttons), and the gap is in `em` so it tracks the
-   line's type step rather than the spacing scale, which is about layout. */
-.setby-turn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25em;
 }
 
 /* ---- The log's time axis --------------------------------------------------

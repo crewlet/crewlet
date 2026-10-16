@@ -23,16 +23,16 @@ const resetRoute = "#/reset/"
 
 // errNoPassword refuses a reset link for a machine, which signs in with no
 // password at all.
-var errNoPassword = errors.New("iamapi: a machine has no password to reset — " +
-	"it authenticates with a token; mint it a new one instead")
+var errNoPassword = errors.New("service accounts don't have passwords. " +
+	"Create a new access token instead")
 
 // errNotResettable refuses a reset link for somebody whose stage a reset does
 // not reach ([iamdomain.ResetStages]).
 type errNotResettable struct{ stage iam.Stage }
 
 func (e errNotResettable) Error() string {
-	return fmt.Sprintf("iamapi: this person is %s, and a reset link would hand "+
-		"back an account somebody stopped — reactivate them first", e.stage)
+	return fmt.Sprintf("this person is %s. Reactivate them before sending a "+
+		"reset link", e.stage)
 }
 
 // PostPasswordReset is `POST /iam/people/{id}/password-reset`: a ONE-TIME LINK
@@ -185,17 +185,13 @@ func (s *Service) PostPasswordReset(w http.ResponseWriter, r *http.Request) {
 	s.answer(w, r, opID, issued, nil, http.StatusCreated, map[string]any{
 		"id": person, "credential": id, "url": s.resetURL(id, secret),
 		"expires_at": expires,
-		"detail": "this link is shown once and cannot be read back; it sets " +
-			"a new password once, ends every session the person holds, and " +
-			"expires at the instant above",
+		"detail": "This link is shown only once. It sets a new password, " +
+			"signs them out everywhere, and expires at the time above.",
 	})
 }
 
 // resetUnknown is what an unknown issue's 503 says to do: issue again.
-const resetUnknown = "no link was issued: this node cannot establish whether " +
-	"the issue landed, and if it did, its link was never shown — one nobody " +
-	"holds, which expires, and which issuing again revokes. Issue again; this " +
-	"route reads no key, so a retry is a new link."
+const resetUnknown = "Couldn't confirm the link was created. Issue a new one."
 
 // resetURL is the link a person follows, built as an invitation's is
 // ([Service.inviteURL]): the dashboard's reset screen, with `<id>.<secret>` in

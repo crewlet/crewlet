@@ -95,16 +95,12 @@ func buildCommon(raw string) map[string]bool {
 func CheckStrength(password string, min int) error {
 	floor := max(min, iam.MinPasswordChars)
 	if n := utf8.RuneCountInString(password); n < floor {
-		return fmt.Errorf("%w: it is %d characters and the minimum is %d. "+
-			"There are no other rules — no required digit, no required symbol "+
-			"— because length is the only one that makes a password harder to "+
-			"guess without making it harder to remember", ErrWeak, n, floor)
+		return fmt.Errorf("%w: it has %d characters, and it needs at least "+
+			"%d. Length is the only rule", ErrWeak, n, floor)
 	}
 	if common[fold(password)] {
-		return fmt.Errorf("%w: it is one of the patterns people reach for when "+
-			"a length rule is the only thing in the way — a word with digits "+
-			"after it, a run along the keyboard, a repeated block. Substituting "+
-			"digits for letters does not change that, and it is checked for",
+		return fmt.Errorf("%w: it's too easy to guess. Avoid a word with "+
+			"digits after it, keyboard runs and repeated blocks",
 			ErrWeak)
 	}
 	return nil

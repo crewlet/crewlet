@@ -1150,46 +1150,6 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
   });
 
-  // A FACT LINE IS A ROW OF FACTS, so it has to have a pitch. This one is a
-  // flex row of column boxes, which means each fact is as wide as its widest
-  // CHILD — and a note is prose where the value above it is a word.
-  test("a footnote cannot set its fact's column or its row", () => {
-    const css = sheet("frame.css");
-    const line = block(css, ".fact-line");
-    // A GRID WITH A REGULAR TRACK, not a flex row that sizes to content.
-    // Measured before: `v1` under a 146px "set by Agent CEO · 2m ago" beside
-    // three note-less facts at 66 to 75px, so the gaps between five labels ran
-    // 85, 162, 90, 169 — five columns placed at random rather than one row.
-    expect(line).toMatch(/display:\s*grid/);
-    expect(line).toMatch(/grid-template-columns:\s*repeat\(/);
-    // AND A TURN'S SEVEN FACTS FIT ONE LINE AT 1280, where the fact line is
-    // 984px wide (measured): at an 8rem floor "Wall clock" took a row alone.
-    const floor = Number(/minmax\((?:min\()?([\d.]+)rem/.exec(line)?.[1]) * 16;
-    const gap = /column-gap:\s*var\(--spacing-4\)/.test(line) ? 16 : NaN;
-    expect(7 * floor + 6 * gap).toBeLessThanOrEqual(984);
-
-    // AND EVERY FACT SITS ON THE SAME TWO BANDS. Subgrid is what keeps the
-    // labels on one line and the values on the next across the whole row: as
-    // independent boxes, one three-line note pushed its own value up and left
-    // the rest of the row hanging. TWO, not four: with a band per footnote a
-    // neighbour's value wrapping to a second line pushed every note in the
-    // row away from the value it qualifies — "37%", a blank line, then "of
-    // 46.0k input read from cache" — so a note is its value's, in one cell.
-    const fact = block(css, ".fact");
-    expect(fact).toMatch(/grid-template-rows:\s*subgrid/);
-    expect(fact).toMatch(/grid-row:\s*span 2/);
-    expect(block(css, ".fact-body")).toMatch(/flex-direction:\s*column/);
-
-    // AND THE CAP THAT USED TO STAND IN FOR ALL OF IT IS GONE. `max-width:
-    // 16ch` could only narrow the problem — sixteen characters at `--font-size-2xs`
-    // is still wider than most values — and left with the track doing the
-    // bounding it would cut a note the column had room for.
-    expect(
-      rules(css, ".fact-note").join(" "),
-      "the track bounds a note now; a cap on top of it only cuts one early",
-    ).not.toMatch(/max-width:/);
-  });
-
   test("the page bar wraps by what it holds, a phone's included, and folds there into More", () => {
     const css = sheet("frame.css");
     // THE BREAK'S OWN BODY, braces balanced — not everything after it. Sliced
@@ -1425,14 +1385,6 @@ test("a grid row with more than one content-sized track declares a gap", () => {
     offenders,
     "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
   ).toEqual([]);
-});
-
-// A LINK INSIDE A CLAMPED FACT WRAPS. `.t-link` is `nowrap`, and inside the
-// fact's two-line clamp a linked unit chain was one line cut at the track's
-// edge with no ellipsis.
-test("a linked fact wraps with its clamp", () => {
-  const css = sheet("frame.css");
-  expect(block(css, ".fact-value .t-link")).toMatch(/white-space:\s*normal/);
 });
 
 // A HISTOGRAM BAR IS A BAR TOO, AND IT IS DATA. The activity log's time axis
@@ -1860,9 +1812,9 @@ test("the engine's row takes its control marks from the kit alone, and the user 
     expect(sheet(name), name).not.toMatch(/\.crewlet-app-shell__rail-row/);
   }
 
-  const css = sheet("frame.css");
-  expect(block(css, ".user-block-go")).toMatch(/color:\s*var\(--color-text-tertiary\)/);
-  const current = block(css, 'a.user-block-who[aria-current="page"]');
-  expect(current).toMatch(/background:\s*var\(--color-surface-elevated\)/);
-  expect(current).toMatch(/outline:\s*1px solid var\(--color-border-default\)/);
+  // THE USER BLOCK IS THE KIT'S AccountRow, whose chevron and current-row
+  // lift are asserted in uilet; no sheet of ours draws a second copy.
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(/\.user-block/);
+  }
 });

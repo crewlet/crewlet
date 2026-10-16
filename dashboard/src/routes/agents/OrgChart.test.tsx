@@ -243,7 +243,7 @@ test.each([
     { invitation: { id: "inv-3", email: "jane@example.com", expires_at: "2031-05-08T09:00:00Z" } },
     "Invited · jane@example.com",
   ],
-  ["vacant", {}, "Vacant"],
+  ["vacant", {}, "Open seat"],
 ])("a %s human seat's card says what holds it", async (_, holding, line) => {
   jane = holding;
   await mount({ ...OPERATOR, grants: ["admin"] });
@@ -264,7 +264,7 @@ test("every signed-in reader reads who holds a human seat, and only an admin act
   await mount({ ...OPERATOR, grants: ["tracker"] });
   await act(async () => {});
   expect(fetched).toContain("/iam/seats");
-  expect(caption("Jane Founder")).toBe("Vacant");
+  expect(caption("Jane Founder")).toBe("Open seat");
   expect(controls("Jane Founder")).toEqual([]);
   cleanup();
   fetched = [];
@@ -287,8 +287,7 @@ test("a directory that did not answer an administrator is said over the chart", 
   );
   await mount(OPERATOR);
   await act(async () => {});
-  expect(screen.getByText("The identity directory did not answer")).toBeTruthy();
-  expect(screen.getByText(/no vacant seat offers Invite or Create/)).toBeTruthy();
+  expect(screen.getByText("Couldn’t load who holds each seat.")).toBeTruthy();
   expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy();
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(controls("Jane Founder")).toEqual([]);
@@ -297,14 +296,14 @@ test("a directory that did not answer an administrator is said over the chart", 
   seatsRefused = null;
   await mount(OPERATOR);
   await act(async () => {});
-  expect(caption("Jane Founder")).toBe("Vacant");
-  expect(screen.queryByText("The identity directory did not answer")).toBeNull();
+  expect(caption("Jane Founder")).toBe("Open seat");
+  expect(screen.queryByText("Couldn’t load who holds each seat.")).toBeNull();
 });
 
 // THE NODE'S MENU FILLS A VACANT SEAT, for Admin alone, through the
 // tree's own pattern: a pointer strip beside the node and the same items
 // under the ContextMenu key on the node itself, since a tree's items hold
-// nothing focusable. The CONTROLS: a reader without Admin reads "Vacant" with no menu,
+// nothing focusable. The CONTROLS: a reader without Admin reads "Open seat" with no menu,
 // and an agent's node has none. Mutation: give every human card the menu, or
 // drop the grant check, and a line here goes red.
 test("a vacant human card offers Invite and Create in its menu to an administrator alone", async () => {
@@ -313,8 +312,8 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
   // THE POINTER'S STRIP, out of the tab order, says which seat each control
   // is about; an agent's card draws none.
   expect(controls("Jane Founder")).toEqual([
-    "Invite a person to Jane Founder",
-    "Create a person on Jane Founder",
+    "Invite someone as Jane Founder",
+    "Add someone as Jane Founder",
     "Actions for Jane Founder",
   ]);
   expect(controls("SWE")).toEqual([]);
@@ -331,15 +330,15 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
     within(menu)
       .getAllByRole("menuitem")
       .map((i) => i.textContent),
-  ).toEqual(["Invite to this seat…", "Create a person on this seat…"]);
-  fireEvent.click(within(menu).getByRole("menuitem", { name: "Create a person on this seat…" }));
-  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  ).toEqual(["Invite someone…", "Add a person…"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Add a person…" }));
+  expect(screen.getByRole("dialog", { name: "Add someone as Jane Founder" })).toBeTruthy();
   cleanup();
 
   await mount({ ...OPERATOR, grants: ["tracker"] });
   await act(async () => {});
   const read = card("Jane Founder");
-  expect(caption("Jane Founder")).toBe("Vacant");
+  expect(caption("Jane Founder")).toBe("Open seat");
   read.focus();
   fireEvent.keyDown(read, { key: "ContextMenu" });
   expect(screen.queryByRole("menu")).toBeNull();
@@ -353,10 +352,10 @@ test("the strip's Invite opens the invitation for that card's seat", async () =>
   await mount(OPERATOR);
   await act(async () => {});
   const invite = [...chartCard(card("Jane Founder")).querySelectorAll("button")].find(
-    (b) => b.getAttribute("aria-label") === "Invite a person to Jane Founder",
+    (b) => b.getAttribute("aria-label") === "Invite someone as Jane Founder",
   )!;
   fireEvent.click(invite);
-  expect(screen.getByRole("dialog", { name: "Invite a person to Jane Founder" })).toBeTruthy();
+  expect(screen.getByRole("dialog", { name: "Invite someone as Jane Founder" })).toBeTruthy();
   expect(location.hash).not.toContain("peek=");
 });
 

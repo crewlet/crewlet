@@ -81,7 +81,7 @@ export function degradationOf({
     return {
       variant: "danger",
       icon: <KeyGlyph size="md" />,
-      message: "Nobody is signed in on this browser, or the session here has ended.",
+      message: "You’re signed out.",
       action: { label: "Sign in", onClick: onSignIn },
     };
   }

@@ -165,8 +165,8 @@ func TestAnUnknownMintSaysToMintAgain(t *testing.T) {
 		t.Error("a token value was handed out on a mint nobody can confirm")
 	}
 	detail, _ := got.body["detail"].(string)
-	if !strings.Contains(detail, "Mint again") || strings.Contains(detail, opkey.Header) {
-		t.Errorf("an unknown mint says %q, want it to say mint again and name "+
+	if !strings.Contains(detail, "Create another one") || strings.Contains(detail, opkey.Header) {
+		t.Errorf("an unknown mint says %q, want it to say create another and name "+
 			"no key this route would ignore", detail)
 	}
 }

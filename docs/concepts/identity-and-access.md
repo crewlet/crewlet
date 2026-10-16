@@ -600,7 +600,7 @@ nobody until one is added (**Agents › Edit org › Add human seat**), and
 
 Then, on the dashboard: sign in with the token (the sign-in page opens its
 token form while `/health` says nobody has joined), open **Agents › Org
-chart**, and open your seat — it is drawn **Vacant**, and its card's menu, its
+chart**, and open your seat — it is drawn **Open seat**, and its card's menu, its
 peek and its page each offer the same two gestures:
 
 - **Invite** — your address and your access: tick **Admin**, which ticks and
@@ -608,7 +608,7 @@ peek and its page each offer the same two gestures:
   it, choose a login (one is proposed from the address) and a password, and
   redeem it exactly as [the next section](#a-person-arrives-on-their-seat-invited-or-created)
   describes, which signs you in.
-- **Create person** — your address, optionally your name and login, and your
+- **Add person** — your address, optionally your name and login, and your
   access — tick **Admin** here too. You are created active on the seat at
   once, and handed a **first
   password link**, shown once, that sets your password and signs nobody in:
@@ -689,7 +689,7 @@ afterwards moved, never cleared.
 | When the person exists | when the link is redeemed — until then the invitation holds the address and the seat | the moment the create lands, `active` |
 | Shown once, to whoever did it | the invitation link | the first password link |
 | Good for | one week | one week |
-| On the dashboard | **Invite** on the seat | **Create person** on the seat |
+| On the dashboard | **Invite** on the seat | **Add person** on the seat |
 | From a shell | `crewlet iam invite EMAIL -seat SEAT` | `crewlet iam create -email EMAIL -seat SEAT` |
 | Over HTTP | `POST /iam/invitations` | `POST /iam/people` |
 
@@ -709,13 +709,13 @@ seat_required`, refused before anything is minted.
 
 **On the dashboard both live on the seat.** In **Agents › Org chart**, a human
 seat's card says who holds it, by name, to everybody — the org chart is
-[everybody's overview](#everybodys-overview) — or that it is **Vacant**; an
+[everybody's overview](#everybodys-overview) — or that it is **Open seat**; an
 administrator also sees the holder's login and an open invitation (**Invited
 ·** an address), which `GET /iam/seats` sends nobody else. For an
-administrator the card's menu offers **Invite to this seat…** and
-**Create a person on this seat…** on a vacant seat and **Cancel invitation**
+administrator the card's menu offers **Invite someone…** and
+**Add a person…** on a vacant seat and **Cancel invitation**
 on an invited one, and the seat's peek and its page offer the same as
-**Invite**, **Create person** and **Cancel invitation**. A seat a service
+**Invite**, **Add person** and **Cancel invitation**. A seat a service
 account or a token holds offers none of them. The dialog's seat is the one it
 was opened from — neither offers a choice — and its link is shown once.
 **Settings › People & access** lists, changes, suspends and removes people,
@@ -857,7 +857,7 @@ Settings › People & access.
 ### A person created directly gets their first password link
 
 An administrator's create — `POST /iam/people`, `crewlet iam create -email …
--seat …`, or **Create person** on the seat — **is** the enrolment: the person
+-seat …`, or **Add person** on the seat — **is** the enrolment: the person
 is `active` on their seat from the moment it lands, under the login the
 administrator typed or the one proposed from their address, and the answer
 names which; it lands nothing but `active`, and a different stage is a stage
@@ -1201,7 +1201,7 @@ reactivation would revive — so an administrator issues a fresh one. **Issue
 the link after any of those, never before**: somebody who lost both their phone
 and their password needs their second factor reset *and* a link, and a link
 sent first is ended by the reset and opens nothing but `410 reset_spent`. The
-dashboard's **Suspend**, **Reset second factor** and **End all sessions**
+dashboard's **Suspend**, **Reset two-step verification** and **Sign out everywhere**
 dialogs say so, and the link's own says to issue it after them.
 
 **It is good for one day.** It travels out of band — by chat or mail, where a
@@ -1822,7 +1822,7 @@ re-ask, since a refused handshake reaches a page with no status — sends the
 reader to `#/login` with the screen they were on as `next`; a `403
 second_factor_enrolment_required` sends them to `#/enrol`; a `403` of any other
 kind is not a sign-in's to fix and is shown where it happened. A `403
-step_up_required` opens **one** "Confirm it is you" dialog however many
+step_up_required` opens **one** "Confirm it’s you" dialog however many
 requests it refused, posts the password (and the code where a second factor is
 held) to `POST /auth/step-up`, and replays each refused request once — see
 [Some gestures ask how recently you proved who you
@@ -1847,7 +1847,7 @@ asking about the caller and nobody else:
 
 | Section | What it does, and what it ends |
 |---|---|
-| **Profile** | Their login, name, address and seat, and **Your access** — Admin, the apps, or the overview only — read-only: an administrator changes them |
+| **Profile** | Their login, name, address and seat, and **Access** — Admin, the apps, or the overview only — read-only: an administrator changes them |
 | **Two-step verification** | First under Security, because it is what a person comes to check: sets up or replaces the authenticator app, and issues new [recovery codes](#a-code-is-spent-when-it-is-used) — only beside an app |
 | **Change password…** | A dialog: [the current password, a code where a second factor is held, and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
 | **Where you are signed in** | Their live sessions, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them — and every personal token — with **Sign out everywhere**, which asks first |
@@ -1872,9 +1872,9 @@ Its list's **Access** column reads each row's permissions in words — "Admin",
 **The access picker** is the same in every dialog that sets permissions.
 **Admin** is one switch: ticking it ticks every app and locks them, marked
 "Included with Admin", and it stores every app beside `admin`, so unticking
-Admin later leaves the apps ticked. **Invite** and **Create person** open with
+Admin later leaves the apps ticked. **Invite** and **Add person** open with
 every app ticked and Admin not; a **new service account** opens with nothing
-ticked; and **Mint token** for a service account opens with the account's own
+ticked; and **Create token** for a service account opens with the account's own
 permissions that the minter holds too — the account exists to act with them —
 while a person's own **New token** opens with nothing ticked. A note under
 the picker says what an unticked app costs: with **Tracker** unticked a person
@@ -1885,12 +1885,12 @@ route's:
 | Gesture | What it does, and what it ends |
 |---|---|
 | **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address and the seat |
-| **New service account** · **Mint token** | A machine with a coloned login and the permissions ticked for it — nothing by default, `admin` among what it may hold — on a human seat nobody holds if it is to act as one, or none; then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its permissions, shown once |
-| **Edit login, seat and access** | One edit carrying only what changed. A person's seat is chosen among the vacant human seats and their own, with no "No seat" — it is moved, never cleared; a service account's may be none. Lowering what somebody holds reaches every token they minted, which carries only what its owner still holds. Taking Admin from yourself, suspending yourself or removing yourself while you are the only active person holding it says so first: afterwards nobody but the deployment's own token (`api.auth.tokens`) could administer people |
+| **New service account** · **Create token** | A machine with a coloned login and the permissions ticked for it — nothing by default, `admin` among what it may hold — on a human seat nobody holds if it is to act as one, or none; then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its permissions, shown once |
+| **Edit** | One edit carrying only what changed. A person's seat is chosen among the vacant human seats and their own, with no "No seat" — it is moved, never cleared; a service account's may be none. Lowering what somebody holds reaches every token they minted, which carries only what its owner still holds. Taking Admin from yourself, suspending yourself or removing yourself while you are the only active person holding it says so first: afterwards nobody but the deployment's own token (`api.auth.tokens`) could administer people |
 | **Suspend** · **Reactivate** | A suspended person may not act, every session, token and password reset link they hold ends, and their seat — which they keep — is withheld from contact routing; reactivating restores the routing and lets them sign in again, and brings back none of what the suspension ended |
-| **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold. Every gesture that ends their sessions ends it too, so it is issued after them |
-| **Reset second factor** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
-| **End all sessions** | Moves their revocation epoch: every session — and every personal token and password reset link — they hold ends |
+| **Get reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold. Every gesture that ends their sessions ends it too, so it is issued after them |
+| **Reset two-step verification** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
+| **Sign out everywhere** | Moves their revocation epoch: every session — and every personal token and password reset link — they hold ends |
 | **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
 | **Remove** | Typed back by login. Deletes the person, frees their seat, which stands vacant in the org chart, and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting or creating them on a seat again |
 

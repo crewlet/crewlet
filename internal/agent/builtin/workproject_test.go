@@ -58,7 +58,7 @@ func TestWriteProjectCarriesTheLeadAnswer(t *testing.T) {
 		wrote   bool
 		refusal string
 	}{
-		"not the lead": {chartRefuses, false, "refused"},
+		"not the lead": {chartRefuses, false, "didn't run: not allowed"},
 		"the lead":     {chartLeads, true, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -555,7 +555,7 @@ func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 		t.Errorf("the write landed with authority %+v, decided without the "+
 			"one relation it turns on", trk.tagAuthority[0])
 	}
-	for _, want := range []string{"could not decide", "no company yet"} {
+	for _, want := range []string{"can't check access right now", "no company yet"} {
 		if !strings.Contains(got.Output, want) {
 			t.Errorf("the refusal does not say %q:\n%s", want, got.Output)
 		}

@@ -238,13 +238,7 @@ function LearnedSkills() {
         />
       </Card.Header>
       {locked ? (
-        <GrantRequired
-          what={`What ${who?.name ?? seat} learned`}
-          grants={[ADMIN]}
-          reader={viewer.login}
-          size="compact"
-          also={TRAIL_WORDS}
-        />
+        <GrantRequired grants={[ADMIN]} reader={viewer.login} size="compact" also={TRAIL_WORDS} />
       ) : (
         <QueryState
           error={memory.error}

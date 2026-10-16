@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
@@ -596,7 +597,7 @@ func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 		switch {
 		case tc.want == "" && present:
 			t.Errorf("%v: the frame carried a detail it has no business carrying: %v", tc.err, got)
-		case tc.want != "" && detail != tc.want:
+		case tc.want != "" && detail != httpjson.Sentence(tc.want):
 			t.Errorf("%v: detail = %v, want the refusal's own sentence %q", tc.err, detail, tc.want)
 		}
 		if tc.want == sentence && got["error"] != stream.CodeBadParams {

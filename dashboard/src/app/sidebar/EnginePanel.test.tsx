@@ -65,7 +65,7 @@ describe("which state the row says", () => {
   // signing in reaches the same person with the same access.
   test("a refusal of somebody the engine knows names its reason, over a lost engine", () => {
     const r = read({ accessRefused: "seat_unavailable", connected: false, lostAt: 1 });
-    expect(r).toMatchObject({ state: "refused", tone: "danger", title: "Access refused" });
+    expect(r).toMatchObject({ state: "refused", tone: "danger", title: "Blocked" });
     expect(r.lead).toContain("seat_unavailable");
   });
 

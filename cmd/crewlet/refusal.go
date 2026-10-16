@@ -42,13 +42,11 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 	switch status {
 	case http.StatusUnauthorized:
 		if !sentToken {
-			return "no token was sent: export " + apiTokenEnv + " with one of " +
-				"the values in the node's api.auth.tokens, or a machine token " +
-				"minted by `crewlet iam token`", true
+			return "no token was sent. Set " + apiTokenEnv + " to an API " +
+				"token or an access token", true
 		}
-		return "the node did not accept the token in " + apiTokenEnv + ": it " +
-			"must be one of the values in that node's api.auth.tokens, or a " +
-			"live machine token minted by `crewlet iam token`", true
+		return "the node didn't accept the token in " + apiTokenEnv + ". " +
+			"Check it hasn't expired or been revoked", true
 	case http.StatusForbidden:
 		var body map[string]json.RawMessage
 		if json.Unmarshal(raw, &body) != nil {
@@ -63,13 +61,12 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 			return "", false
 		}
 		if len(grants) > 0 {
-			return "the node accepted the token, and it does not carry " +
-				strings.Join(grants, " or ") + ", which this needs", true
+			return "this token doesn't have " + strings.Join(grants, " or ") +
+				". Ask an admin for it", true
 		}
 		// NO GRANT WOULD: what is missing is a relation — the seat is not
 		// the caller's and they do not lead it — and the reason names it.
-		return "the node accepted the token, and no grant admits this " +
-			"request (" + reason + ")", true
+		return "this token isn't allowed to do this (" + reason + ")", true
 	}
 	return "", false
 }

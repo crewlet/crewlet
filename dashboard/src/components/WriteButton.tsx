@@ -27,7 +27,7 @@ import { Button, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { needsWords } from "~/lib/access.ts";
+import { youNeedWords } from "~/lib/access.ts";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -127,11 +127,14 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
   if (!refusal) return null;
   return (
     <span className="write-refusal" role="alert">
-      <span>{marked(refusal.sentence, "inherit")}</span>
+      {/* ONE SENTENCE where access would admit: the refusal and its remedy
+          said the same thing twice. */}
+      <span>
+        {refusal.grants.length > 0
+          ? `${youNeedWords(refusal.grants)} Ask an admin.`
+          : marked(refusal.sentence, "inherit")}
+      </span>
       {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
-      {refusal.grants.length > 0 && (
-        <span className="t-caption">{needsWords("This", refusal.grants)}</span>
-      )}
       {refusal.retryable && (
         <Button size="small" variant="ghost" loading={busy} onClick={() => void write.retry()}>
           Try again

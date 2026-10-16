@@ -11,19 +11,19 @@ import { loginKind, loginProblem, type LoginKind } from "./login.ts";
 
 test.each<[LoginKind, string, RegExp | null]>([
   // What a person types for their own name, which the engine refuses.
-  ["person", "Frank", /joined by dots/],
-  ["person", "erin", /joined by dots/],
-  ["person", "Erin NG", /joined by dots/],
-  ["person", "ci:erin", /joined by dots/],
+  ["person", "Frank", /with dots, like jane\.doe/],
+  ["person", "erin", /with dots, like jane\.doe/],
+  ["person", "Erin NG", /with dots, like jane\.doe/],
+  ["person", "ci:erin", /with dots, like jane\.doe/],
   // The controls: a person's login and a machine's, as the engine takes them.
   ["person", "erin.ng", null],
   ["person", "dana-sre.ops", null],
   ["machine", "ci:release", null],
-  ["machine", "deploybot", /joined by a colon/],
-  ["machine", "jane.doe", /joined by a colon/],
-  ["machine", "pat:release", /names a credential/],
+  ["machine", "deploybot", /with colons, like ci:release/],
+  ["machine", "jane.doe", /with colons, like ci:release/],
+  ["machine", "pat:release", /can’t start with pat:/],
   ["person", `${"a".repeat(30)}.${"b".repeat(33)}`, null],
-  ["person", `${"a".repeat(30)}.${"b".repeat(34)}`, /At most 64 characters/],
+  ["person", `${"a".repeat(30)}.${"b".repeat(34)}`, /Use 64 characters or fewer \(this has 65\)/],
   // Empty is the form's to say: the field is required.
   ["person", "", null],
 ])("a %s login %j", (kind, login, want) => {

@@ -110,3 +110,25 @@ func TestAProposedLoginFitsThePersonGrammarOrIsNothing(t *testing.T) {
 		})
 	}
 }
+
+// A name of plain words proposes the login a person would write; anything
+// else falls back to the address, as LoginFromAddress proposes it.
+func TestLoginFor(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ name, address, want string }{
+		"two words":            {"Maya Chen", "maya@acme.example", "maya.chen"},
+		"three words":          {"Mary Jane Watson", "mj@example.com", "mary.jane.watson"},
+		"a hyphenated surname": {"Ana Lopez-Diaz", "ana@example.com", "ana.lopez-diaz"},
+		"one word":             {"Maya", "maya@acme.example", "maya.acme"},
+		"no name":              {"", "jane.doe@example.com", "jane.doe"},
+		"letters past a to z":  {"José García", "jose@example.com", "jose.example"},
+		"padding":              {"  Maya   Chen ", "maya@acme.example", "maya.chen"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := LoginFor(tc.name, tc.address); got != tc.want {
+				t.Errorf("LoginFor(%q, %q) = %q, want %q", tc.name, tc.address, got, tc.want)
+			}
+		})
+	}
+}

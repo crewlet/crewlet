@@ -95,7 +95,15 @@ import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
-import { Callout, EmptyState, Select, Skeleton, Tag, type SelectOption } from "@crewlethq/ui";
+import {
+  Callout,
+  EmptyState,
+  Select,
+  Skeleton,
+  Tag,
+  type SelectOption,
+  InlineCode,
+} from "@crewlethq/ui";
 import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -428,9 +436,9 @@ export function MyWork({ section }: { section: MeSection }) {
           instead of it. */}
       {ownDay && viewer.unbound && (
         <Callout variant="info">
-          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so this is
-          the day kept under that login: what you follow, what names you, and your own priorities.{" "}
-          <UnboundRemedy login={viewer.login} />
+          You are <InlineCode>{viewer.login}</InlineCode> and not bound to a seat, so this is the
+          day kept under that login: what you follow, what names you, and your own priorities.{" "}
+          <UnboundRemedy />
         </Callout>
       )}
       {!whose &&

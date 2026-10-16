@@ -171,7 +171,7 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 		// THE CREDENTIAL IS VALID AND NOT A WRITER, so the remedy is which
 		// token this command sent, and the refusal says where it came from.
 		return fmt.Errorf("%s refused the import: %s\n  %s\n  (this command "+
-			"authenticated with %s, the one credential it reads)",
+			"signs in with %s)",
 			c.base, body.Detail, body.Hint, apiTokenEnv)
 	}
 	msg := body.Error

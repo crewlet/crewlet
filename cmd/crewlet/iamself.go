@@ -83,11 +83,10 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 			// NOT `crewlet iam revoke`, nor POST /auth/logout/all: both
 			// move the owner's revocation epoch, which withdraws the
 			// token this command just minted along with the session.
-			fmt.Fprintf(warn, "the session this command opened could not be "+
-				"ended (%v): it lapses on its own after %s unused, or end it "+
-				"by name with POST /auth/logout/<lineage> (`crewlet iam "+
-				"sessions <your id>` lists it) — not with `crewlet iam "+
-				"revoke`, which would withdraw the new token too\n",
+			fmt.Fprintf(warn, "couldn't sign out the session this command "+
+				"opened (%v). It ends on its own after %s unused, or now "+
+				"with POST /auth/logout/<lineage>. Don't use `crewlet iam "+
+				"revoke` for it: that revokes the new token too.\n",
 				endErr, session.Idle)
 		}
 	}()
@@ -111,10 +110,8 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 
 // errEnrolFirst is a sign-in that succeeded into a session that may only enrol
 // a second factor: the deployment requires one and this person holds none.
-var errEnrolFirst = errors.New("this deployment requires a second factor and " +
-	"you have not enrolled one, so a password alone signs you in to nothing " +
-	"but the enrolment: sign in to the dashboard, add an authenticator app, " +
-	"then run this again with a code from it")
+var errEnrolFirst = errors.New("this company requires two-step verification. " +
+	"Set it up in the dashboard, then run this again")
 
 // signIn posts the credentials and answers the session cookie that came back,
 // and whether that session may only enrol a second factor.
@@ -140,7 +137,7 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, iamMaxAnswer))
 	if err != nil {
-		return nil, false, fmt.Errorf("read the sign-in's answer: %w", err)
+		return nil, false, fmt.Errorf("read the sign-in response: %w", err)
 	}
 	var answer map[string]any
 	_ = json.Unmarshal(raw, &answer)
@@ -153,9 +150,8 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 		// ONE SENTENCE FOR EVERY MISTAKE, because the node gives one
 		// answer for every mistake: telling a caller which part was wrong
 		// is telling a stranger who works here.
-		return nil, false, errors.New("the node refused the sign-in: check the " +
-			"login, the password and any second-factor code — it answers " +
-			"the same way whichever was wrong")
+		return nil, false, errors.New("sign-in failed. Check your login, " +
+			"password and code (the node doesn't say which was wrong)")
 	default:
 		return nil, false, selfRefusal(resp.StatusCode, answer, raw)
 	}
@@ -169,8 +165,8 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 			return &http.Cookie{Name: c.Name, Value: c.Value}, restricted, nil
 		}
 	}
-	return nil, false, errors.New("the node answered the sign-in without a " +
-		"session cookie, so there is nothing to mint with")
+	return nil, false, errors.New("the node signed you in but sent no " +
+		"session cookie, so no token can be created")
 }
 
 // signOut ends the session this command opened.
@@ -279,16 +275,15 @@ func mintOwnToken(ctx context.Context, boot *config.Bootstrap, apiURL,
 	}
 	// ASKED FOR, ONCE: the first factor checked out and the person holds a
 	// second, so the code is the one thing missing.
-	code, err := readSecret(stdin, in, stderr, "Second-factor code: ")
+	code, err := readSecret(stdin, in, stderr, "Authenticator or recovery code: ")
 	if err != nil {
-		return nil, fmt.Errorf("this person holds a second factor, and none "+
-			"was given: type it when asked, or pipe it as the line after the "+
-			"password (%w)", err)
+		return nil, fmt.Errorf("this account uses two-step verification. Type "+
+			"the code when asked, or pipe it after the password (%w)", err)
 	}
 	if m.code = strings.TrimSpace(code); m.code == "" {
-		return nil, errors.New("this person holds a second factor, and none " +
-			"was given: type the current six digits or a recovery code when " +
-			"asked, or pipe it as the line after the password")
+		return nil, errors.New("this account uses two-step verification. " +
+			"Type the code or a recovery code when asked, or pipe it after " +
+			"the password")
 	}
 	return m.mint(ctx, stderr)
 }

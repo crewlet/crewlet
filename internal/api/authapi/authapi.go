@@ -326,12 +326,10 @@ func unresolved(w http.ResponseWriter, r *http.Request, event string,
 			httpjson.Detail{"detail": collapsedDetail, "op_id": result.OpID})
 		return
 	}
-	detail := "this node cannot establish whether that change landed; " +
-		"nothing was built on it — try again"
+	detail := "Couldn't confirm that change was saved. Try again."
 	if result.Unvouched {
-		detail = "this node's operation ledger cannot vouch for that " +
-			"change, so this node answers it the same way every time; nothing " +
-			"was built on it — try again on another node"
+		detail = "This node can't confirm that change. Try again on another " +
+			"node."
 	}
 	httpjson.UnknownOutcome(w, auth.RetryIdentity(nil), result.OpID, result.Unvouched,
 		httpjson.Detail{"detail": detail})
@@ -360,7 +358,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
 		opID = refused.OpID
 	}
 	log.WarnContext(r.Context(), event, "op_id", opID, "error", err)
-	detail := "this node could not make that change, and nothing was built on it"
+	detail := "This node couldn't make that change. Try again in a moment."
 	if errors.Is(err, iamdomain.ErrCollapsed) {
 		// THE ONE REFUSAL HERE THAT IS NOT "COULD NOT": the operation
 		// landed, as a copy whose answer this call cannot give — a session
@@ -377,9 +375,8 @@ func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
 // "cannot establish whether it landed" would send a client to find out what it
 // could have been told, and what is true is that nothing this call formed
 // describes it.
-const collapsedDetail = "that change landed as a copy this request cannot " +
-	"prove is its own, so nothing was built on it — try again, which starts " +
-	"it afresh"
+const collapsedDetail = "That change was saved, but this request can't use " +
+	"it. Try again to start fresh."
 
 // removed reports a write refused because the person it names was removed
 // from the directory ([statelog.ReasonDeleted]) — between the read this

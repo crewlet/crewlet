@@ -564,7 +564,7 @@ test("a multi-sentence trigger prints whole, under the title's lead", async () =
   mount(woken({ id: "e-9", type: "chat_message", summary: MANY }), "context");
   await screen.findByText("Woken by");
   // The header took the lead, and only the lead.
-  expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
+  expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(ONE_SENTENCE);
   // And the panel carries the whole thing, that lead included.
   expect(briefProse()).toEqual([MANY]);
 });
@@ -575,7 +575,7 @@ test("a one-sentence trigger the title says whole is not printed twice", async (
   // event. What goes is the prose, which is the half the header already is.
   expect(await screen.findByText("Woken by")).toBeTruthy();
   expect(screen.getByRole("link", { name: "the trigger →" })).toBeTruthy();
-  expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
+  expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(ONE_SENTENCE);
   expect(briefProse()).toEqual([]);
 });
 
@@ -583,7 +583,7 @@ test("…and with nothing else to carry, the panel goes with it", async () => {
   mount(woken({ type: "chat_message", summary: ONE_SENTENCE }), "context");
   // The title is what says this screen rendered its answer at all.
   await waitFor(() =>
-    expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE),
+    expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(ONE_SENTENCE),
   );
   expect(screen.queryByText("Woken by")).toBeNull();
 });
@@ -634,7 +634,7 @@ test("a turn that ran once carries no attempt badge", async () => {
   // …and the fact rather than the Phases CARD, which is a second element
   // with the same word in it.
   const fact = (await screen.findAllByText("Phase")).find((el) =>
-    el.classList.contains("fact-label"),
+    el.classList.contains("crewlet-fact-line__label"),
   );
   expect(fact?.parentElement?.textContent).toContain("Execute");
   expect(screen.queryByText(/attempt \d+\/\d+/)).toBeNull();
@@ -751,7 +751,9 @@ test("a turn with only its opening record is headed by its seat and its wake", a
   });
   mount({ events: [opening] });
   await waitFor(() =>
-    expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
+    expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(
+      "Ana asked for the numbers",
+    ),
   );
   // THE SEAT IS THE TRAIL'S on the page (see crumbs.test.tsx) and a fact on
   // the rail, which has no trail: read off the record, never "the engine".
@@ -772,7 +774,7 @@ test("a turn with only its opening record is headed by its seat and its wake", a
     </ClientContext.Provider>,
   );
   await waitFor(() => {
-    const head = document.querySelector(".object-head")?.textContent ?? "";
+    const head = document.querySelector(".crewlet-object-header")?.textContent ?? "";
     expect(head, "the rail named no seat for a turn whose record names one").toContain("CEO");
     expect(head).not.toContain("the engine");
   });
@@ -813,7 +815,9 @@ test("the dispatch's opening record heads the turn over a resumed segment's", as
     ],
   });
   await waitFor(() =>
-    expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
+    expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(
+      "Ana asked for the numbers",
+    ),
   );
 });
 

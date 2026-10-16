@@ -1658,7 +1658,7 @@ test("a task a bound person filed names them in the reporter and set-by lines", 
 test("the peek states each property once", async () => {
   const { container } = mount(<ItemPeek itemKey="ENG-42" />);
   await settle();
-  expect(container.querySelector(".fact-line")).toBeNull();
+  expect(container.querySelector(".crewlet-fact-line")).toBeNull();
   expect(screen.getAllByText("Status")).toHaveLength(1);
   expect(screen.getByText("ENG-42")).toBeTruthy();
 });
@@ -1673,12 +1673,12 @@ test("moving the rail to another task mounts a new body", async () => {
     </PeekNeighbours>,
   );
   // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
-  await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy(), {
+  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).toBeTruthy(), {
     timeout: 5000,
   });
-  const before = container.querySelector(".object-head");
+  const before = container.querySelector(".crewlet-object-header");
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
-  await waitFor(() => expect(container.querySelector(".object-head")).not.toBe(before), {
+  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).not.toBe(before), {
     timeout: 5000,
   });
 });

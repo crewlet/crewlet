@@ -124,9 +124,8 @@ func nodeAPIToken(environ config.Source, surface string) (string, error) {
 		return token, nil
 	}
 	return "", fmt.Errorf(
-		"nothing can authenticate to this node's %s surface: export %s with "+
-			"one of the values in api.auth.tokens, or a machine token minted "+
-			"by `crewlet iam token`", surface, apiTokenEnv)
+		"no token to reach this node's %s API. Set %s to an API token or an "+
+			"access token", surface, apiTokenEnv)
 }
 
 // announceUnclaimed says, once at boot, what an operator does next with a
@@ -181,23 +180,21 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 	if err != nil || enrolled {
 		return "", false
 	}
-	const nobody = "nobody is in this company's identity directory yet"
+	const nobody = "nobody has been added to this company yet"
 	const invite = "`crewlet iam invite <address> -seat <handle> -grants " +
-		"admin` with " + apiTokenEnv + " set to one of api.auth.tokens, " +
-		"then send them the link it prints"
+		"admin` (with " + apiTokenEnv + " set to an `api.auth.tokens` " +
+		"value), then send them the link it prints"
 	human, running := seats()
 	switch {
 	case !running:
-		return nobody + ", and this node runs no company: a person is always " +
-			"invited onto a human seat of one, so create it first — `crewlet " +
-			"config import FILE`, or Agents › Edit org in the dashboard signed " +
-			"in with one of api.auth.tokens — declaring a `kind: human` seat " +
-			"for its first person, then invite them onto it with " + invite, true
+		return nobody + ", and this node has no company yet. Import one " +
+			"with a `kind: human` seat for the first person (`crewlet config " +
+			"import FILE`, or Agents › Edit org). Then invite them with " +
+			invite, true
 	case len(human) == 0:
-		return nobody + ", and the company declares no human seat: a person " +
-			"is always invited onto one, so declare a `kind: human` seat for " +
-			"its first person — Agents › Edit org, or `crewlet config import " +
-			"FILE` — then invite them onto it with " + invite, true
+		return nobody + ", and the company has no human seats. Add a " +
+			"`kind: human` seat for the first person, then invite them " +
+			"with " + invite, true
 	}
 	var bySeat map[string]iamdomain.SeatClaim
 	read, err := claims(ctx, now)
@@ -205,9 +202,9 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 		bySeat, err = iamdomain.ClaimsBySeat(read)
 	}
 	if err != nil {
-		return nobody + ": invite its first person onto a vacant human seat — " +
-			"`crewlet iam seats -unheld` lists them — from Agents › Org chart " +
-			"› the seat › Invite, or " + invite, true
+		return nobody + ". Invite the first person to a vacant human seat " +
+			"(`crewlet iam seats -unheld`) from Agents › Org chart, or with " +
+			invite, true
 	}
 	var vacant, invited, bound []string
 	for _, seat := range human {
@@ -236,23 +233,21 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 	switch {
 	case len(invited) > 0:
 		detail = nobody + ", and an invitation is open for " +
-			strings.Join(invited, ", ") + ": its link is where the first " +
-			"person chooses a login and password, and redeeming it puts them " +
-			"on the seat — a lost link is withdrawn with `crewlet iam " +
-			"cancel-invite ID` and issued again with " + invite
+			strings.Join(invited, ", ") + ". If its link is lost, cancel it " +
+			"with `crewlet iam cancel-invite ID` and send a new one with " +
+			invite
 		if len(vacant) > 0 {
-			detail += "; the vacant human seats are " + strings.Join(vacant, ", ")
+			detail += ". Vacant human seats: " + strings.Join(vacant, ", ")
 		}
 	case len(vacant) > 0:
-		detail = nobody + ": invite its first person onto one of its vacant " +
-			"human seats (" + strings.Join(vacant, ", ") + ") — Agents › Org " +
-			"chart › the seat › Invite, or " + invite
+		detail = nobody + ". Invite the first person to a vacant human " +
+			"seat (" + strings.Join(vacant, ", ") + ") from Agents › Org " +
+			"chart › the seat › Invite, or with " + invite
 	default:
-		detail = nobody + ", and none of its human seats is vacant: " +
-			strings.Join(bound, ", ") + " each hold one — free one with " +
-			"`crewlet iam unbind ID`, or declare another `kind: human` seat " +
-			"(Agents › Edit org, or `crewlet config import FILE`), then " +
-			"invite its first person onto it with " + invite
+		detail = nobody + ", and every human seat is taken (" +
+			strings.Join(bound, ", ") + "). Free one with `crewlet iam " +
+			"unbind ID`, or add a `kind: human` seat, then invite the first " +
+			"person with " + invite
 	}
 	return detail, true
 }

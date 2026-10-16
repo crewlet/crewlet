@@ -350,7 +350,7 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 	sock, _ := socket["detail"].(string)
 
 	for name, detail := range map[string]string{"REST": rest, "socket": sock} {
-		if !strings.Contains(detail, "days is 91") || !strings.Contains(detail, "at most 90") {
+		if !strings.Contains(detail, "Days is 91") || !strings.Contains(detail, "at most 90") {
 			t.Errorf("%s detail = %q, want the refusal naming days, 91 and the bound", name, detail)
 		}
 		// NO CLASS NAME, the engine's or the finer one: `tokens:` twice over
@@ -461,7 +461,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 		}
 		if rec.Code != http.StatusServiceUnavailable ||
 			body["error"] != string(httpjson.CodeNoActiveRevision) ||
-			body["detail"] != httpjson.NativeHalvesNotUp {
+			body["detail"] != httpjson.Sentence(httpjson.NativeHalvesNotUp) {
 			t.Errorf("REST = %d %v, want 503 %s with the halves' sentence",
 				rec.Code, body, httpjson.CodeNoActiveRevision)
 		}
@@ -472,7 +472,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 		socket := overSocket(t, a, "board", nil)
 		if socket["error"] != "unavailable" ||
 			socket["refusal"] != string(httpjson.CodeNoActiveRevision) ||
-			socket["detail"] != httpjson.NativeHalvesNotUp {
+			socket["detail"] != httpjson.Sentence(httpjson.NativeHalvesNotUp) {
 			t.Errorf("socket answer = %v, want unavailable naming %s in the "+
 				"halves' words", socket, httpjson.CodeNoActiveRevision)
 		}
@@ -547,14 +547,14 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 				t.Fatalf("REST body: %v", err)
 			}
 			if body["error"] != "unavailable" || body["refusal"] != string(tc.refused.Code) ||
-				body["detail"] != tc.refused.Detail {
+				body["detail"] != httpjson.Sentence(tc.refused.Detail) {
 				t.Errorf("REST body = %v, want unavailable carrying %s and its words",
 					body, tc.refused.Code)
 			}
 
 			socket := overSocket(t, a, "refused", nil)
 			if socket["error"] != "unavailable" || socket["refusal"] != string(tc.refused.Code) ||
-				socket["detail"] != tc.refused.Detail {
+				socket["detail"] != httpjson.Sentence(tc.refused.Detail) {
 				t.Errorf("socket answer = %v, want unavailable carrying %s and its words",
 					socket, tc.refused.Code)
 			}

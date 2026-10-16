@@ -149,7 +149,7 @@ func TestAnIamNewcomerIsToldWhatItLacksBeforeAnythingIsSent(t *testing.T) {
 			[]string{"-email"}},
 		{"a person with no seat",
 			[]string{"create", "-email", "jane@example.com"},
-			[]string{"-seat", "crewlet iam seats -unheld", "-kind machine"}},
+			[]string{"-seat", "crewlet iam seats -unheld", "service accounts"}},
 		{"a person named as one, with no seat",
 			[]string{"create", "-kind", "person", "-email", "jane@example.com",
 				"-login", "jane.doe"},
@@ -159,7 +159,7 @@ func TestAnIamNewcomerIsToldWhatItLacksBeforeAnythingIsSent(t *testing.T) {
 			[]string{"-login"}},
 		{"a service account naming nothing it carries",
 			[]string{"create", "-kind", "machine", "-login", "ci:release"},
-			[]string{"-grants", "no default"}},
+			[]string{"-grants", "or none"}},
 		{"an invitation onto a seat", []string{"invite", "jane@example.com",
 			"-seat", "founder"}, nil},
 		{"a person with no login", []string{"create", "-email",
@@ -473,7 +473,7 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 		want []string
 	}{
 		{[]string{"create", "-kind", "machine", "-login", "ci:release"},
-			[]string{"-grants", "no default"}},
+			[]string{"-grants", "or none"}},
 		{[]string{"create", "-kind", "machine", "-login", "ci:release",
 			"-grants", "trackr"},
 			[]string{`"trackr"`, "admin, tracker, knowledge", "none"}},
@@ -481,9 +481,9 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 			"-grants", "billing"},
 			[]string{`"billing"`, "admin, tracker, knowledge"}},
 		{[]string{"grant", "p-1", "-grants", "none,admin"},
-			[]string{"none", "stands alone"}},
+			[]string{"none", "on its own"}},
 		{[]string{"suspend", "p-1", "-grants", "admin"},
-			[]string{"-grants is invite's", "iam suspend"}},
+			[]string{"-grants only works with", "iam suspend"}},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Parallel()
@@ -532,7 +532,7 @@ func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if !strings.Contains(out.String(), "2 seat binding(s) could not be checked") {
+	if !strings.Contains(out.String(), "2 seat binding(s) couldn't be checked") {
 		t.Errorf("the unchecked bindings went unsaid:\n%s", out.String())
 	}
 
@@ -543,7 +543,7 @@ func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if strings.Contains(out.String(), "could not be checked") {
+	if strings.Contains(out.String(), "couldn't be checked") {
 		t.Errorf("a fully checked directory carried the caveat:\n%s", out.String())
 	}
 }
@@ -679,8 +679,8 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		t.Fatal("an unknown write was reported as a success")
 	}
 	for _, want := range []string{"-idempotency-key " + op,
-		"these changes DID land before it: seat",
-		"could not establish whether this landed"} {
+		"these changes were saved before it: seat",
+		"couldn't confirm whether this change was saved"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
@@ -751,7 +751,7 @@ func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown mint was reported as a success")
 	}
-	for _, want := range []string{"could not establish whether this landed",
+	for _, want := range []string{"couldn't confirm whether this change was saved",
 		"mint again", "op " + op} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
@@ -790,7 +790,7 @@ func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 		t.Fatal("an unvouched write was reported as a success")
 	}
 	for _, want := range []string{"another node with -api",
-		"-idempotency-key " + op, "never a fresh key"} {
+		"-idempotency-key " + op, "Don't use a new key"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
@@ -907,7 +907,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 			bodies[1])
 	}
 	for _, want := range []string{"p-1", "login lead, on seat platform-lead",
-		"applied at p (op " + personOp + ")", "first password link for p-1",
+		"applied at p (op " + personOp + ")", "password link for p-1",
 		"https://crewlet.example.com/dashboard#/reset/c-1.f1rst",
 		"shown once", "-idempotency-key " + personOp} {
 		if !strings.Contains(printed, want) {
@@ -989,7 +989,7 @@ func TestACreateSaysWhatBecameOfItsLink(t *testing.T) {
 			"position": "CREWLET_IAM_LOG@0:9", "op_id": statelog.NewOpID(time.Now(), ""),
 			"url":        "https://crewlet.example.com/dashboard#/reset/c-1.s",
 			"expires_at": "2026-06-21T12:00:00Z"},
-			[]string{"pending at CREWLET_IAM_LOG@0:9", "first password link",
+			[]string{"pending at CREWLET_IAM_LOG@0:9", "password link for",
 				"#/reset/c-1.s"}, []string{"applied"}},
 		{"closed", map[string]any{"id": "p-1", "kind": "person",
 			"login": "jane.doe", "seat": "founder", "outcome": "applied",
@@ -1101,7 +1101,7 @@ func TestARefusalAboutASeatNamesTheCommandThatClearsIt(t *testing.T) {
 				"detail": "a person holds a human seat for as long as they are here"},
 			[]string{"seat_required: a person holds a human seat",
 				"crewlet iam bind p-1 SEAT", "crewlet iam remove p-1",
-				"for service accounts"}, []string{"seats -unheld"}},
+				"people always hold a seat"}, []string{"seats -unheld"}},
 		{"a newcomer with no seat", []string{"invite", "jane@example.com",
 			"-seat", "founder"},
 			http.StatusBadRequest, map[string]any{"error": "seat_required",
@@ -1227,16 +1227,15 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 		t.Errorf("an empty iam seats -unheld asked %s", got)
 	}
 	for _, want := range []string{
-		"no human seat is vacant: the company's 4 human seats are each held",
-		"`crewlet iam remove ID`", "`crewlet iam unbind ID`",
-		"`crewlet iam cancel-invite ID`", "add a `kind: human` seat",
+		"no vacant human seats: the company's 4 human seats are taken",
+		"Free one", "add a `kind: human` seat",
 	} {
 		if !strings.Contains(vacant, want) {
 			t.Errorf("an empty -unheld listing printed %q, want it to say %q",
 				vacant, want)
 		}
 	}
-	if strings.Contains(vacant, "iam bind") || strings.Contains(vacant, "declares no human seat") {
+	if strings.Contains(vacant, "iam bind") || strings.Contains(vacant, "has no human seats") {
 		t.Errorf("an every-seat-taken listing printed %q", vacant)
 	}
 
@@ -1255,9 +1254,9 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("iam seats -unheld with the count refused: %v", err)
 	}
-	if !strings.Contains(unsure, "could not list every seat") ||
-		strings.Contains(unsure, "declares no human seat") ||
-		strings.Contains(unsure, "each held") {
+	if !strings.Contains(unsure, "couldn't list every seat") ||
+		strings.Contains(unsure, "has no human seats") ||
+		strings.Contains(unsure, "are taken") {
 		t.Errorf("an uncounted empty -unheld listing printed %q", unsure)
 	}
 	fullFails = false
@@ -1269,15 +1268,15 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iam %v: %v", args, err)
 		}
-		if !strings.Contains(none, "the company declares no human seat") ||
-			strings.Contains(none, "is vacant") {
+		if !strings.Contains(none, "the company has no human seats") ||
+			strings.Contains(none, "no vacant") {
 			t.Errorf("iam %v over no human seat printed %q", args, none)
 		}
 	}
 
 	before = len(queries)
 	if _, err := cli("people", "-unheld"); err == nil ||
-		!strings.Contains(err.Error(), "-unheld is seats'") {
+		!strings.Contains(err.Error(), "-unheld only works with seats") {
 		t.Errorf("iam people -unheld answered %v, want a refusal", err)
 	}
 	if len(queries) != before {
@@ -1323,7 +1322,7 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 	}
 	// A vacant row dashes its unit, holder, stage, invitation and expiry; a
 	// held one names its holder, so it dashes one fewer.
-	if got := strings.Count(rows["v"], "—"); got != 5 {
+	if got := strings.Count(rows["v"], "–"); got != 5 {
 		t.Fatalf("the vacant control row is %q, with %d dashes, want 5", rows["v"], got)
 	}
 	for handle, want := range map[string]string{
@@ -1332,7 +1331,7 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 		"c": "(held)",
 		"d": "CI (service account)",
 	} {
-		if !strings.Contains(rows[handle], want) || strings.Count(rows[handle], "—") != 4 {
+		if !strings.Contains(rows[handle], want) || strings.Count(rows[handle], "–") != 4 {
 			t.Errorf("the row for held seat %s is %q, want its holder said as %q "+
 				"rather than a dash", handle, rows[handle], want)
 		}

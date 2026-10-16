@@ -70,9 +70,9 @@ one JSON object, and it always has the same three parts in the same places:
 ```json
 {
   "error": "no_external_url",
-  "message": "This deployment has no external address, so nothing that has to point back at it can be made. Set the external URL in this node's own configuration file and restart it.",
+  "message": "No external address is set. Set `api.external_url` in this node's config file and restart.",
   "config_path": "api.external_url",
-  "hint": "set the HTTPS address third-party apps reach this deployment on; without it the pass can register no webhook"
+  "hint": "Set the HTTPS address third-party apps reach this deployment on; without it the pass can register no webhook."
 }
 ```
 
@@ -98,7 +98,12 @@ one JSON object, and it always has the same three parts in the same places:
   one: `config_path` and `hint` above, `fields` on an integration that is
   missing values, `current_revision_id` on a lost update, `problems` on a
   refused configuration document. Values keep their own types,
-  so a count is a number and a list of located problems is a list.
+  so a count is a number and a list of located problems is a list. The two
+  text keys a person reads, `detail` (what happened) and `hint` (what to do),
+  are always written as sentences: a capital first letter, unless the text
+  opens with a field name, flag, path, address or Go package prefix
+  (`statelog: …`), and a full stop. The
+  WebSocket's error frames write their `detail` the same way.
 - **A `503` says when, or says it will not help.** A `503` that waiting clears
   — a node behind its log, a coordination store it could not reach, a write
   whose outcome it cannot establish, an integration another pass is holding
@@ -182,8 +187,8 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 {
   "error": "draining",
   "message": "This node is shutting down and is not taking new work. Try another node, or this one once it has restarted.",
-  "detail": "this node is draining for a shutdown: the turns already running finish, and nothing new is started here",
-  "hint": "retry against another node, or once this one has restarted; /ready answers 503 for as long as the drain lasts"
+  "detail": "This node is draining for a shutdown: the turns already running finish, and nothing new is started here.",
+  "hint": "Retry against another node, or once this one has restarted; /ready answers 503 for as long as the drain lasts."
 }
 ```
 
@@ -932,7 +937,7 @@ refused create leaves nothing behind and the corrected retry lands.
   "credential": "0192f00e-…",
   "url": "https://crewlet.example.com/dashboard#/reset/<id>.<secret>",
   "expires_at": "2026-06-15T09:12:00Z",
-  "detail": "this link is shown once and cannot be read back; …",
+  "detail": "This link is shown only once. Send it to them yourself (Crewlet doesn't send email). It expires at the time above.",
   "outcome": "applied",
   "op_id": "0192f00c-…",
   "position": "CREWLET_IAM_LOG@0:1842"
@@ -1323,7 +1328,7 @@ each reader sees is masked per row. The example above is an administrator's.
   vacant.
 - Neither, for a **vacant** seat — the one a person can be invited into or
   created on (`POST /iam/invitations`, `POST /iam/people`), which is what the
-  seat's **Invite** and **Create person** in **Agents › Org chart** do.
+  seat's **Invite** and **Add person** in **Agents › Org chart** do.
 
 `?unheld=true` keeps only the vacant seats: one with a holder **or** an open
 invitation is left out, because each holds it against a create, an invitation
@@ -1348,7 +1353,7 @@ behind: it cannot say which of them holds the seat, and another node can.
   "findings": [
     {"kind": "binding_dangling", "person": "018f3a9c-…", "login": "jane.doe",
      "seat": "platform-lead",
-     "detail": "seat \"platform-lead\" is not a seat of the company this node runs; move them to another human seat, or remove them — a person always holds a seat"}
+     "detail": "seat \"platform-lead\" isn't in the org chart anymore. Move them to another human seat, or remove them"}
   ],
   "position": "CREWLET_IAM_LOG@0:1840",
   "people_with_admin": 2,
@@ -1487,8 +1492,8 @@ manages the document and what to do:
 {
   "error": "config_managed",
   "managed_by": ["gitops"],
-  "detail": "the company document is managed by gitops, and the credential \"founder\" may read it but not change it",
-  "hint": "change the company at its source, the system that writes it here with the token gitops: an edit made directly would be overwritten at its next reconcile. A leaked credential can still be rotated: write the new value with /secrets and POST /config/reload. To take the document back, remove api.auth.company_writers from every node's Tier A and restart"
+  "detail": "The company config is managed by gitops. The credential \"founder\" can read it but not change it.",
+  "hint": "Change it in the system that manages it (the token gitops). Edits here get overwritten. To rotate a leaked credential, write it to /secrets and POST /config/reload. To manage it here, remove `api.auth.company_writers` from every node's config file and restart."
 }
 ```
 
@@ -1605,15 +1610,15 @@ may be a unit's lead who holds no grant over the directory:
 ```json
 {
   "error": "seat_held",
-  "message": "This change removes a person's seat, or makes it an agent's, …",
-  "detail": "configapi: this write removes a human seat that is still held: designer (held by sam.lee); qa-lead (held by open invitation 0192f00d-…)",
+  "message": "This change removes a seat someone holds or is invited to. …",
+  "detail": "This change removes human seats that people still hold: designer (held by sam.lee); qa-lead (held by an open invitation (0192f00d-…)).",
   "held": {
     "designer": {"person": "018f3a9c-…", "kind": "person", "login": "sam.lee",
                  "stage": "active"},
     "qa-lead": {"invitation": "0192f00d-…",
                 "expires_at": "2026-06-15T09:12:00Z"}
   },
-  "hint": "move each person to another human seat (PATCH /iam/people/{person} with seat) or remove them, unbind a service account (PATCH /iam/people/{person} with no seat), cancel an open invitation (DELETE /iam/invitations/{id}) — an administrator — then send the write again"
+  "hint": "Move each person to another human seat (PATCH /iam/people/{person} with seat) or remove them, unbind a service account (PATCH /iam/people/{person} with no seat), cancel an open invitation (DELETE /iam/invitations/{id}) — an administrator — then send the write again."
 }
 ```
 
@@ -1731,7 +1736,7 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 {
   "error": "validation_error",
   "detail": "workers.researcher.model: value not in the allowed set: \"nowhere\" is not a configured provider: providers.llm has zulu. ...",
-  "hint": "the WHOLE document a write produces is validated, ...",
+  "hint": "The WHOLE document a write produces is validated, ...",
   "problems": [
     {
       "path": "workers.researcher.model", "segments": ["workers", "researcher", "model"],

@@ -442,9 +442,9 @@ afterwards.
 **Invite yourself onto your seat.** Every person holds exactly one human seat
 for as long as they exist, so you join the company on the one `company.yaml`
 declares for you — the human seat with the handle `founder`. Open **Agents ›
-Org chart**: your seat's card (under the name you gave it) reads **Vacant**,
+Org chart**: your seat's card (under the name you gave it) reads **Open seat**,
 because nobody holds it yet. Click the card to open the seat beside the
-chart: its foot offers **Invite** and **Create person** (the same two are on
+chart: its foot offers **Invite** and **Add person** (the same two are on
 the card itself, as icons that appear when you point at it or in its menu
 from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
@@ -460,7 +460,7 @@ engine sends no mail; for anybody else you invite, getting it to them is
 yours. Until the link is redeemed, the open invitation holds the seat: the
 card reads **Invited ·** your address, and nobody else can be put on it.
 
-(**Create person** is the other way onto a vacant seat:
+(**Add person** is the other way onto a vacant seat:
 it creates the person active at once and shows a one-time **password link**
 that sets their first password. For yourself the invitation is the shorter
 road, since redeeming it signs you in.)
@@ -525,7 +525,7 @@ invitation 0192f4c8-…
 http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
 
 expires 2026-06-21 12:00
-This link is shown once and cannot be read back: what the estate keeps is a hash of the secret after the id. Send it to them yourself — this engine never sends mail.
+This link is shown once. Send it to them yourself; Crewlet doesn't send email.
 ```
 
 ## 5. Watch the first turn

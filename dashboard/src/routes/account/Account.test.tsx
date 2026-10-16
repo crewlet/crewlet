@@ -25,8 +25,6 @@
  * the session it shows.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -38,7 +36,6 @@ import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { withDerived } from "~/test/org.ts";
-import { SRC } from "~/test/source.ts";
 import { href } from "~/app/router.tsx";
 import {
   currentSessionNeed,
@@ -242,7 +239,9 @@ describe("a person's own page", () => {
     mount();
     expect(await screen.findByText("ada@example.com")).toBeDefined();
     expect(screen.getByText("Ada Lovelace")).toBeDefined();
-    expect(screen.getByText(/An administrator changes these/)).toBeDefined();
+    expect(screen.getByText("Only an admin can change these.")).toBeDefined();
+    // A PERSON'S OWN ACCOUNT IS ALWAYS A PERSON'S: no Kind row says so.
+    expect(screen.queryByText("Kind")).toBeNull();
     // THE CALLER'S OWN: a credential read naming a person would be a read the
     // authority table decides about somebody else.
     const credentialReads = engineIs.reads("/iam/credentials");
@@ -335,9 +334,7 @@ describe("a person's own page", () => {
     });
     mount();
     await screen.findByText("This browser");
-    expect(screen.getAllByText(/every personal\s+access token you minted/).length).toBeGreaterThan(
-      0,
-    );
+    expect(screen.getAllByText(/stops your tokens/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
     // ASKED FIRST: nothing is sent until the person confirms.
     const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
@@ -380,15 +377,13 @@ describe("changing the password", () => {
     mount();
     const sessionReads = () => engineIs.reads("/auth/session").length;
     await screen.findByText("This browser");
-    await screen.findByRole("button", { name: "Set up an authenticator…" });
+    await screen.findByRole("button", { name: "Set up…" });
     await openPasswordDialog();
     expect(screen.queryByLabelText("Code")).toBeNull();
     const before = sessionReads();
     await fill("the old long passphrase", "a brand new long passphrase");
-    expect(
-      await screen.findByText(/Every other session and every personal access token/),
-    ).toBeDefined();
-    expect(screen.getByText(/this browser stays signed in/)).toBeDefined();
+    expect(await screen.findByText("Password changed. Signed out everywhere else.")).toBeDefined();
+    expect(screen.getByText("Password changed. Signed out everywhere else.")).toBeDefined();
     expect(engineIs.writes()).toHaveLength(1);
     expect(engineIs.writes()[0]!.body).toEqual({
       current_password: "the old long passphrase",
@@ -407,7 +402,7 @@ describe("changing the password", () => {
       "a brand new long passphrase",
       "a brand new long passfrase",
     );
-    expect(await screen.findByText("The two passwords are not the same.")).toBeDefined();
+    expect(await screen.findByText("The passwords don’t match.")).toBeDefined();
     expect(engineIs.writes()).toEqual([]);
   });
 
@@ -449,7 +444,7 @@ describe("changing the password", () => {
     });
     mount();
     await screen.findByText("This browser");
-    await screen.findByRole("button", { name: "Replace authenticator…" });
+    await screen.findByRole("button", { name: "Replace app…" });
     await openPasswordDialog();
     await screen.findByLabelText("Code");
     const before = engineIs.reads("/auth/session").length;
@@ -459,10 +454,8 @@ describe("changing the password", () => {
       "a brand new long passphrase",
       "123456",
     );
-    expect((await screen.findAllByText("Your password is changed")).length).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText(/this one included: sign in with the new password/).length,
-    ).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Password changed")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Sign in again.").length).toBeGreaterThan(0);
     await waitFor(() => expect(location.hash.startsWith("#/login")).toBe(true));
     expect(engineIs.reads("/auth/session").length).toBe(before);
     expect(currentSessionNeed()).toBeNull();
@@ -499,13 +492,9 @@ describe("changing the password while holding a second factor", () => {
     mount();
     await openPasswordDialog();
     expect(await screen.findByLabelText("Code")).toBeDefined();
-    expect(
-      screen.getByText(
-        "The current code from your authenticator app, or one of your recovery codes.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("The current code from your app, or a recovery code.")).toBeDefined();
     await fill(" 123456 ");
-    expect(await screen.findByText(/this browser stays signed in/)).toBeDefined();
+    expect(await screen.findByText("Password changed. Signed out everywhere else.")).toBeDefined();
     expect(engineIs.writes()).toHaveLength(1);
     expect(engineIs.writes()[0]!.body).toEqual({
       current_password: "the old long passphrase",
@@ -519,11 +508,7 @@ describe("changing the password while holding a second factor", () => {
     const engineIs = engine();
     mount();
     await fill("");
-    expect(
-      await screen.findByText(
-        /Type a code from your authenticator app, or one of your recovery codes/,
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText("Enter a code from your app or a recovery code.")).toBeDefined();
     expect(engineIs.writes()).toEqual([]);
   });
 
@@ -543,9 +528,7 @@ describe("changing the password while holding a second factor", () => {
     });
     mount();
     await fill("000000");
-    expect(
-      await screen.findByText("That password or code was not accepted. Check both and try again."),
-    ).toBeDefined();
+    expect(await screen.findByText("Wrong password or code. Try again.")).toBeDefined();
     expect(screen.getByLabelText("Code")).toHaveProperty("value", "");
     expect(currentSessionNeed()).toBeNull();
   });
@@ -562,7 +545,7 @@ describe("changing the password while holding a second factor", () => {
       },
     });
     mount();
-    await screen.findByRole("button", { name: "Set up an authenticator…" });
+    await screen.findByRole("button", { name: "Set up…" });
     await openPasswordDialog();
     expect(screen.queryByLabelText("Code")).toBeNull();
     type("Current password", "the old long passphrase");
@@ -570,7 +553,7 @@ describe("changing the password while holding a second factor", () => {
     type("Confirm new password", "a brand new long passphrase");
     fireEvent.click(screen.getByRole("button", { name: "Change password" }));
     expect(await screen.findByLabelText("Code")).toBeDefined();
-    expect(screen.getByText(/needs a code from your authenticator app/)).toBeDefined();
+    expect(screen.getByText("Enter a code from your app or a recovery code too.")).toBeDefined();
     expect(engineIs.writes()[0]!.body).not.toHaveProperty("code");
     expect(currentSessionNeed()).toBeNull();
   });
@@ -583,13 +566,13 @@ describe("the second factor", () => {
   test("recovery codes are offered only beside an authenticator", async () => {
     engine({ credentials: [APP, CODES] });
     mount();
-    expect(await screen.findByRole("button", { name: "Replace authenticator…" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "New recovery codes…" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "Replace app…" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Create new codes…" })).toBeDefined();
     cleanup();
     engine({ credentials: [] });
     mount();
-    expect(await screen.findByRole("button", { name: "Set up an authenticator…" })).toBeDefined();
-    expect(screen.queryByRole("button", { name: "New recovery codes…" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Set up…" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Create new codes…" })).toBeNull();
   });
 });
 
@@ -600,8 +583,8 @@ describe("a first authenticator", () => {
   // which keeps it and says so. Mutation: skip the set and the first case reads
   // the replacement's sentence.
   test.each([
-    ["holding no recovery codes", [], "Set up an authenticator…", true],
-    ["replacing an app beside a set (the control)", [APP, CODES], "Replace authenticator…", false],
+    ["holding no recovery codes", [], "Set up…", true],
+    ["replacing an app beside a set (the control)", [APP, CODES], "Replace app…", false],
   ])("%s", async (_, credentials, press, issued) => {
     let legs = 0;
     const engineIs = engine({
@@ -619,19 +602,19 @@ describe("a first authenticator", () => {
     const dialog = await screen.findByRole("dialog", { name: "Two-step verification" });
     // THE SIX-DIGIT FIELD BY ITS OWN LABEL: the setup also draws the seed as a
     // QR code, an image whose name says "code" too.
-    fireEvent.change(await within(dialog).findByLabelText(/six-digit code/i), {
+    fireEvent.change(await within(dialog).findByLabelText(/^code from the app/i), {
       target: { value: "123456" },
     });
     fireEvent.submit(
       within(dialog)
-        .getByLabelText(/six-digit code/i)
+        .getByLabelText(/^code from the app/i)
         .closest("form")!,
     );
     if (issued) {
       expect(await within(dialog).findByText("aaaa-bbbb")).toBeDefined();
-      expect(within(dialog).queryByText(/recovery codes are unchanged/)).toBeNull();
+      expect(within(dialog).queryByText(/Codes from your old app stop working/)).toBeNull();
     } else {
-      expect(await within(dialog).findByText(/recovery codes are unchanged/)).toBeDefined();
+      expect(await within(dialog).findByText(/Codes from your old app stop working/)).toBeDefined();
     }
     expect(engineIs.writes().some((w) => w.path === "/auth/totp/recovery")).toBe(issued);
   });
@@ -655,31 +638,47 @@ describe("personal access tokens", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New token" }));
     const dialog = await screen.findByRole("dialog", { name: "New personal access token" });
     fireEvent.change(within(dialog).getByLabelText(/^Label/), { target: { value: "laptop" } });
-    // NOTHING STARTS TICKED: a token carries what its holder chose, one grant
-    // at a time, rather than everything they hold.
-    for (const box of within(dialog).getAllByRole("checkbox")) {
-      expect(box).toHaveProperty("checked", false);
-    }
-    // AND A TOKEN CARRYING NO ACCESS SAYS WHAT IT REACHES — the overview every
-    // signed-in principal reads — rather than reading as one that does
-    // nothing, and that its owner's own inbox and queue are the tracker's,
-    // which it does not reach. The CONTROL is the same dialog with an app
-    // ticked, which says nothing. Mutation: drop the sentence and the first
-    // expectation goes red.
+    // THE PERSON'S OWN ACCESS STARTS TICKED, the token they almost always
+    // want: with nothing ticked, one pressed through could not read their own
+    // inbox. They untick what the token does not need.
+    expect(within(dialog).getByRole("checkbox", { name: "Tracker" })).toHaveProperty(
+      "checked",
+      true,
+    );
+    expect(within(dialog).queryByText(/Nothing ticked/)).toBeNull();
+    // AND A TOKEN CARRYING NO ACCESS SAYS WHAT IT REACHES rather than reading
+    // as one that does nothing. Mutation: drop the sentence and this goes red.
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
     expect(
-      within(dialog).getByText(/With nothing ticked, the token reads the overview/),
+      within(dialog).getByText("Nothing ticked: overview only. No tasks or pages."),
     ).toBeDefined();
-    expect(within(dialog).getByText(/your own inbox and queue included/)).toBeDefined();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
-    expect(within(dialog).queryByText(/With nothing ticked/)).toBeNull();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "Mint" }));
-    expect(await within(dialog).findByText(/This token acts as you/)).toBeDefined();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
+    expect(await within(dialog).findByText(/Copy it now\. You won’t see it again\./)).toBeDefined();
     const mint = engineIs.writes().find((w) => w.path === "/iam/credentials")!;
     expect(mint.method).toBe("POST");
     // THE OWNER IS THE CALLER: a person's token is theirs alone to mint.
     expect(mint.query.has("person")).toBe(false);
     expect(mint.body).toEqual({ label: "laptop", grants: [] });
+  });
+
+  // ADMIN IS NEVER TICKED FOR A PERSON'S OWN TOKEN: a bearer secret carrying
+  // Admin is host access for whatever script holds it, so it is ticked on
+  // purpose or not at all. The apps an admin holds start ticked as anybody's
+  // do. Mutation: drop the Admin exception and Admin starts ticked.
+  test("an admin's own token starts with their apps and never Admin", async () => {
+    const grants = ["admin", "tracker", "knowledge"];
+    engine({ session: { ...PERSON, grants }, row: { ...ROW, grants } });
+    mount();
+    await screen.findByText("ada@example.com");
+    fireEvent.click(await screen.findByRole("button", { name: "New token" }));
+    const dialog = await screen.findByRole("dialog", { name: "New personal access token" });
+    expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
+      "checked",
+      false,
+    );
+    for (const name of ["Tracker", "Knowledge"]) {
+      expect(within(dialog).getByRole("checkbox", { name })).toHaveProperty("checked", true);
+    }
   });
 
   // THE ENGINE'S CEILING, said under the field: past it the dialog posted and
@@ -694,7 +693,10 @@ describe("personal access tokens", () => {
       target: { value: "400" },
     });
     expect(within(dialog).getByText("At most 365 days.")).toBeDefined();
-    expect(within(dialog).getByRole("button", { name: "Mint" })).toHaveProperty("disabled", true);
+    expect(within(dialog).getByRole("button", { name: "Create token" })).toHaveProperty(
+      "disabled",
+      true,
+    );
     expect(engineIs.writes()).toEqual([]);
   });
 
@@ -715,6 +717,8 @@ describe("personal access tokens", () => {
       ],
     });
     mount();
+    // ONLY WORKING TOKENS BY DEFAULT: the ended ones wait behind the box.
+    fireEvent.click(await screen.findByLabelText("Show revoked and expired"));
     expect(await screen.findByText("Revoked")).toBeDefined();
     expect(screen.getAllByText("Revoked")).toHaveLength(1);
     expect(screen.getAllByText("Expired")).toHaveLength(1);
@@ -744,7 +748,7 @@ describe("what a person comes for is where they look", () => {
   test("two-step verification comes first, and the password's form opens in a dialog", async () => {
     engine({ credentials: [PASSWORD] });
     mount();
-    await screen.findByRole("button", { name: "Set up an authenticator…" });
+    await screen.findByRole("button", { name: "Set up…" });
     const twoStep = screen.getByRole("region", { name: "Two-step verification" });
     const password = screen.getByRole("region", { name: "Password" });
     expect(
@@ -769,7 +773,9 @@ describe("what a person comes for is where they look", () => {
     expect(within(header).queryAllByRole("button")).toEqual([]);
     const everywhere = screen.getByRole("button", { name: "Sign out everywhere" });
     expect(title.closest(".crewlet-card")!.contains(everywhere)).toBe(true);
-    expect(everywhere.parentElement!.textContent).toMatch(/ends every session you hold/);
+    expect(everywhere.parentElement!.textContent).toMatch(
+      /Signs you out on every device and stops your tokens/,
+    );
   });
 
   // A BUTTON IS ITS OWN NAME on a phone's card, where a labelled column drew
@@ -851,7 +857,7 @@ describe("the profile", () => {
     engine();
     mount();
     await screen.findByText("ada@example.com");
-    expect(tagWords(screen.getByText("Your access").nextElementSibling as HTMLElement)).toEqual([
+    expect(tagWords(screen.getByText("Access").nextElementSibling as HTMLElement)).toEqual([
       "Tracker",
     ]);
     cleanup();
@@ -859,7 +865,7 @@ describe("the profile", () => {
     engine({ session: { ...PERSON, grants: ["tracker"] }, row: { ...ROW, grants: [] } });
     mount();
     await screen.findByText("ada@example.com");
-    expect(tagWords(screen.getByText("Your access").nextElementSibling as HTMLElement)).toEqual([
+    expect(tagWords(screen.getByText("Access").nextElementSibling as HTMLElement)).toEqual([
       "Overview only",
     ]);
     cleanup();
@@ -867,9 +873,14 @@ describe("the profile", () => {
     engine({ row: { ...ROW, grants: ["admin", "tracker", "knowledge"] } });
     mount();
     await screen.findByText("ada@example.com");
-    expect(tagWords(screen.getByText("Your access").nextElementSibling as HTMLElement)).toEqual([
+    expect(tagWords(screen.getByText("Access").nextElementSibling as HTMLElement)).toEqual([
       "Admin",
     ]);
+    // AN ADMIN IS SENT TO THEIR OWN ROW, where these are changed.
+    expect(screen.queryByText("Only an admin can change these.")).toBeNull();
+    expect(screen.getByRole("link", { name: "People & access" }).getAttribute("href")).toContain(
+      "p-1",
+    );
   });
 
   // A CREDENTIAL THAT IS NOT A PERSON SAYS ITS OWN ACCESS too, from the
@@ -877,22 +888,20 @@ describe("the profile", () => {
   test("a Tier A token's session says its access", async () => {
     engine({ session: TIER_A });
     mount();
-    const label = await screen.findByText("Its access");
+    const label = await screen.findByText("Access");
     expect(tagWords(label.parentElement as HTMLElement)).toEqual(["Admin"]);
   });
 
   // AT THE CARD'S OWN INSET: in a flush card the first fact touched the
-  // header's rule, and in a padded one the list's own padding doubled the
-  // left edge — so the list sits in the card's body, and the sheet takes the
-  // list's padding off there. Mutation: `padding="none"` on the card, or the
-  // rule dropped from screens.css.
+  // header's rule, so the list sits in the card's body. It is the kit's
+  // DescriptionList, which carries no padding of its own to double the edge.
+  // Mutation: `padding="none"` on the card, or a local list in its place.
   test("the facts sit in the card's body, at its inset", async () => {
     engine();
     mount();
     const seat = await seatFact();
     expect(seat.closest(".crewlet-card__body")).not.toBeNull();
-    const css = readFileSync(join(SRC, "styles", "screens.css"), "utf8");
-    expect(css).toMatch(/\.crewlet-card__body \.prof-facts \{\s*padding: 0;\s*\}/);
+    expect(seat.closest("dl.crewlet-description-list")).not.toBeNull();
   });
 });
 
@@ -909,7 +918,7 @@ describe("while the engine has not said who this is", () => {
     );
     mount();
     expect(screen.getByText("Reading who you are signed in as")).toBeDefined();
-    expect(screen.queryByText(/Who (you are|this browser is) signed in as/)).toBeNull();
+    expect(screen.queryByText(/Your profile, security|Signed in with an API token/)).toBeNull();
   });
 });
 
@@ -921,12 +930,14 @@ describe("the page's note", () => {
   test("a person's note promises their own credentials, and a token's does not", async () => {
     engine();
     mount();
-    expect(await screen.findByText(/your password, your second factor/)).toBeDefined();
+    expect(await screen.findByText("Your profile, security, sessions and tokens.")).toBeDefined();
     cleanup();
     engine({ session: TIER_A });
     mount();
-    expect(await screen.findByText(/A deployment.s API token is its own credential/)).toBeDefined();
-    expect(screen.queryByText(/your password, your second factor/)).toBeNull();
+    expect(
+      await screen.findByText("Signed in with an API token. Ends within an hour."),
+    ).toBeDefined();
+    expect(screen.queryByText(/Your profile, security/)).toBeNull();
   });
 });
 
@@ -935,7 +946,8 @@ describe("a credential that is not a person's", () => {
   test("a Tier A token's session is told what it is, and asks the directory nothing", async () => {
     const engineIs = engine({ session: TIER_A });
     mount();
-    expect(await screen.findByText(/this deployment.s API token/)).toBeDefined();
+    expect(await screen.findByText(/You’re signed in with the API token/)).toBeDefined();
+    expect(screen.getByText("API token")).toBeDefined();
     expect(screen.getByText("ops")).toBeDefined();
     expect(screen.queryByLabelText("Current password")).toBeNull();
     expect(screen.queryByRole("button", { name: "New token" })).toBeNull();

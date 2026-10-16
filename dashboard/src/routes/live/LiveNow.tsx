@@ -441,12 +441,7 @@ export function LiveNow() {
               // locked rather than empty: the engine pushes the feed to an
               // admin's socket alone, so "nothing has happened" would be a
               // claim about the company.
-              <GrantRequired
-                size="compact"
-                what="The activity feed"
-                grants={[ADMIN]}
-                reader={viewer.login}
-              />
+              <GrantRequired size="compact" grants={[ADMIN]} reader={viewer.login} />
             ) : (
               <>
                 {/* BOTH READS THIS CARD MAKES OF THE FLEET: the count, and a seat's
@@ -514,12 +509,7 @@ export function LiveNow() {
             {viewer.loading ? (
               <Skeleton variant="text" rows={4} label="Checking your access" />
             ) : (
-              <GrantRequired
-                size="compact"
-                what="Recent phases"
-                grants={[ADMIN]}
-                reader={viewer.login}
-              />
+              <GrantRequired size="compact" grants={[ADMIN]} reader={viewer.login} />
             )}
           </Card>
         )}

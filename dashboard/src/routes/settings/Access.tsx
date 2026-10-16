@@ -47,10 +47,11 @@
  * somebody. Every write is announced ([directoryMoved]), so the list and the
  * peek beside it, two trees, each read again what it moved.
  *
- * NOT INVITING OR CREATING A PERSON. Every person holds exactly one human seat
- * for as long as they exist, so a person comes from a vacant human seat: its
- * card on the org chart, its peek and its page offer Invite and Create
- * (`components/people.tsx`), and this screen points there. A person's seat is
+ * A PERSON COMES FROM A SEAT. Every person holds exactly one human seat for as
+ * long as they exist, so a person comes from a vacant human seat: its card on
+ * the org chart, its peek and its page offer Invite and Add person
+ * (`components/people.tsx`), and this screen's Invite person picks an open
+ * seat first and then opens that same invitation. A person's seat is
  * changed here, among the vacant ones, and never cleared — removing them is
  * what frees it; only a service account is unbound.
  *
@@ -97,14 +98,20 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
+  Menu,
   Modal,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
   useToast,
+  Inline,
+  Link,
+  Text,
+  Stack,
 } from "@crewlethq/ui";
 import {
+  EllipsisGlyph,
   KeyGlyph,
   SendGlyph,
   PlusGlyph,
@@ -129,7 +136,6 @@ import {
   ShownOnce,
   useDirectoryMoved,
   useHumanSeats,
-  useSeatEntry,
 } from "~/components/people.tsx";
 import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -140,20 +146,26 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { href } from "~/app/router.tsx";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, tsKey } from "~/lib/format.ts";
+import { fmtDate, tsKey } from "~/lib/format.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
-import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
+import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { auth, rest } from "~/protocol/index.ts";
+import { rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
-import { EditPersonDialog, OnYourself, ServiceAccountDialog } from "./AccessDialogs.tsx";
+import {
+  EditPersonDialog,
+  InvitePersonDialog,
+  OnYourself,
+  ServiceAccountDialog,
+} from "./AccessDialogs.tsx";
 
 // ---------------------------------------------------------------------------
 // The wire, as internal/api/iamapi writes it
@@ -315,23 +327,23 @@ export const STAGE_WORDS: Record<string, Words> = {
   invited: {
     label: "Invited",
     tone: "neutral",
-    hint: "Created, and has proved nothing yet. May not act.",
+    hint: "Hasn’t set a password yet.",
   },
   enrolling: {
     label: "Enrolling",
     tone: "neutral",
-    hint: "Part-way through proving who they are. May not act yet.",
+    hint: "Setting up sign-in.",
   },
-  active: { label: "Active", tone: "success", hint: "Enrolled, and the only stage that may act." },
+  active: { label: "Active", tone: "success", hint: "Can sign in." },
   suspended: {
     label: "Suspended",
     tone: "warning",
-    hint: "Enrolled and may not act; the record is kept, and reinstating does not re-enrol.",
+    hint: "Can’t sign in.",
   },
   retired: {
     label: "Retired",
     tone: "neutral",
-    hint: "Has left. Kept so every audit row they wrote still resolves to a name.",
+    hint: "Has left.",
   },
 };
 
@@ -346,11 +358,11 @@ const KIND_WORDS: Record<string, string> = {
 /** What a Tier A token's login names in the directory. */
 export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
-    label: "No row",
+    label: "None",
     tone: "neutral",
-    hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. To have it act as a human seat nothing else holds, create its row bound to one: crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none — the row carries nothing itself, since the token's permissions are its Tier A entry's.",
+    hint: "Not bound to a seat. Bind it with crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none.",
   },
-  held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
+  held: { label: "Yes", tone: "success", hint: "A seat entry holds this login." },
 };
 
 /**
@@ -361,10 +373,10 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
  */
 export const FINDING_WORDS: Record<(typeof FINDING_KINDS)[number], { label: string; tone: Tone }> =
   {
-    no_admin_holder: { label: "Nobody can administer", tone: "danger" },
-    person_without_credential: { label: "Active, no credential", tone: "warning" },
-    binding_dangling: { label: "Seat gone", tone: "warning" },
-    admin_clamped_by_node: { label: "Admin withheld here", tone: "neutral" },
+    no_admin_holder: { label: "No admin", tone: "danger" },
+    person_without_credential: { label: "Can’t sign in", tone: "warning" },
+    binding_dangling: { label: "Seat removed", tone: "warning" },
+    admin_clamped_by_node: { label: "Admin off on this node", tone: "neutral" },
   };
 
 /** A finding's words, or none for a kind this build does not know. */
@@ -379,19 +391,15 @@ const METHOD_WORDS: Record<string, string> = {
   password: "Password",
   totp: "Authenticator app",
   recovery: "Recovery codes",
-  token: "Machine token",
+  token: "Token",
   reset: "Password reset link",
 };
 
 /** What an invitation's state is called. */
 export const INVITATION_WORDS: Record<string, Words> = {
-  open: { label: "Open", tone: "success", hint: "Not redeemed, and still good." },
-  expired: {
-    label: "Expired",
-    tone: "neutral",
-    hint: "Past its deadline; the link answers that it is no longer valid.",
-  },
-  redeemed: { label: "Redeemed", tone: "neutral", hint: "Spent: it created the person it names." },
+  open: { label: "Open", tone: "success", hint: "Not used yet." },
+  expired: { label: "Expired", tone: "neutral", hint: "Link expired." },
+  redeemed: { label: "Used", tone: "neutral", hint: "Used to join." },
 };
 
 /**
@@ -445,18 +453,9 @@ function FirstPerson({
   seats: RestResult<HumanSeat[]>;
 }) {
   if (waiting.length > 0) {
-    const only = waiting.length === 1 ? waiting[0]! : null;
-    const which = only
-      ? only.email && !only.sealed
-        ? `The invitation to ${only.email} is`
-        : "An invitation is"
-      : `${waiting.length} invitations are`;
     return (
       <Callout variant="neutral" title="Nobody has joined yet">
-        {which} waiting to be redeemed: {only ? "its" : "an invitation's"} link is where its person
-        chooses a login and password, and until somebody opens one nobody can sign in with a
-        password. A link is shown once, when it is issued — a lost one is cancelled below or on its
-        seat, and issued again from the seat. The API token you are using stays the way back in.
+        Lost the invitation link? Cancel it and invite again.
       </Callout>
     );
   }
@@ -471,10 +470,7 @@ function FirstPerson({
           </ButtonLink>
         }
       >
-        This node runs no company yet, so it has no human seat for anybody to hold. Create one in
-        the org chart — or import one with <InlineCode>crewlet config import</InlineCode> — that
-        declares a human seat for you, then invite or create yourself on it. The API token you are
-        using stays the way back in.
+        No company yet. Create one in Edit org.
       </Callout>
     );
   }
@@ -493,9 +489,7 @@ function FirstPerson({
           </ButtonLink>
         }
       >
-        This company has no person in it, and no human seat for one: every person holds a human
-        seat, so add one for yourself in the org chart first, then invite or create yourself on it.
-        The API token you are using stays the way back in.
+        No people in the chart yet. Add one in Edit org.
       </Callout>
     );
   }
@@ -515,9 +509,7 @@ function FirstPerson({
   }
   return (
     <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-      This company has no person in it, so nobody can sign in with a password yet. Open the org
-      chart, choose your human seat and invite or create yourself on it: the link it shows is where
-      you choose your password. The API token you are using stays the way back in.
+      Invite yourself from your seat in the org chart.
     </Callout>
   );
 }
@@ -613,6 +605,8 @@ export function PeopleAndAccess() {
   const viewer = useViewer();
   const health = useEngineHealth();
   const manages = canManagePeople(viewer.grants);
+  const nav = useNavigator();
+  const [inviting, setInviting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [allInvitations, setAllInvitations] = useState(false);
 
@@ -680,6 +674,18 @@ export function PeopleAndAccess() {
   return (
     <>
       <PageActions>
+        {/* INVITING IS THE PAGE'S MAIN TASK, so it leads, here: it picks an
+            open seat and opens that seat's invitation, since a person still
+            comes from a seat (see the file's doc). */}
+        {manages && (
+          <Button
+            variant="primary"
+            leadingIcon={<SendGlyph size="sm" />}
+            onClick={() => setInviting(true)}
+          >
+            Invite person
+          </Button>
+        )}
         {manages && (
           <Button
             variant="secondary"
@@ -689,27 +695,37 @@ export function PeopleAndAccess() {
             New service account
           </Button>
         )}
-        {/* A PERSON COMES FROM A SEAT: inviting and creating are the vacant
-            seat's, on the chart, its peek and its page — see the file's doc. */}
-        {manages && (
-          <a className="t-link" href={href(["agents"])}>
-            Invite or create from the org chart →
-          </a>
-        )}
-        <a className="t-link" href={href(["settings", "audit"], { kind: "identity" })}>
-          Identity trail →
-        </a>
-        {/* THE CHART IS WHERE A SEAT AND ITS CONTACTS ARE WRITTEN, so the
-            action here leaves for it rather than editing a copy. */}
-        <a className="t-link" href={href(["agents", "edit"])}>
-          Edit org →
-        </a>
+        {/* WHERE THIS PAGE LEADS, folded: the trail of identity changes, and
+            the chart, where a seat and its contacts are written. */}
+        <span className="page-action-folds">
+          <Menu
+            label="More on People & access"
+            icon={<EllipsisGlyph size="sm" />}
+            triggerVariant="ghost"
+            align="end"
+            items={[
+              {
+                key: "trail",
+                label: "Identity trail",
+                onSelect: () => nav.to(["settings", "audit"], { kind: "identity" }),
+              },
+              { key: "edit", label: "Edit org", onSelect: () => nav.to(["agents", "edit"]) },
+            ]}
+          />
+        </span>
       </PageActions>
       <PageNote>
         {manages
-          ? "Invite or create people from their human seat in the org chart; change, suspend or remove them here. A link or token is shown once."
+          ? "Invite people from their seat in the org chart."
           : needsWords("Changing any of this", [ADMIN])}
       </PageNote>
+      {inviting && (
+        <InvitePersonDialog
+          held={viewer.grants}
+          onClose={() => setInviting(false)}
+          onDone={directoryMoved}
+        />
+      )}
       {creating && (
         <ServiceAccountDialog
           held={viewer.grants}
@@ -764,11 +780,11 @@ export function PeopleAndAccess() {
               />
               <StatCard
                 icon={<TriangleAlertGlyph size="xs" />}
-                label="Human seats nobody holds"
+                label="Open seats"
                 value={seats.data ? vacant : EMPTY_VALUE}
                 sub={
                   seats.data
-                    ? `${invited > 0 ? `${invited} invited · ` : ""}of ${seatRows.length} human seat${seatRows.length === 1 ? "" : "s"}`
+                    ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
                     : listsNoCompany(seats)
                       ? "no company yet"
                       : "not read"
@@ -776,14 +792,14 @@ export function PeopleAndAccess() {
               />
               <StatCard
                 icon={<KeyGlyph size="xs" />}
-                label="API tokens on this node"
+                label="API tokens"
                 value={tokens.data ? tokenRows.length : EMPTY_VALUE}
-                sub={tokens.data ? `${boundTokens} bound to a seat` : "not read"}
+                sub={tokens.data ? `${boundTokens} with a seat` : "not read"}
               />
             </StatGroup>
           </Card>
 
-          <Findings check={check} />
+          <Findings check={check} people={people} manages={manages} held={viewer.grants} />
 
           <Card padding="none">
             <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
@@ -798,8 +814,8 @@ export function PeopleAndAccess() {
               rowHref={(p) => peekHref(personRef(p.id))}
               onRowActivate={peekRow((p: DirectoryRow) => openPeek(personRef(p.id)))}
               empty={{
-                title: "Nobody is in the directory yet",
-                hint: "Invite or create the first person on their human seat in the org chart (or crewlet iam invite EMAIL -seat SEAT), signed in with this node's API token.",
+                title: "Nobody’s here yet",
+                hint: "Invite people from their seat in the org chart.",
               }}
               columns={[
                 {
@@ -850,7 +866,7 @@ export function PeopleAndAccess() {
                   // it drew before.
                   floor: "8rem",
                   sortValue: (p) => p.seat ?? "",
-                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
+                  cell: (p) => <SeatHandle seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
@@ -975,7 +991,7 @@ export function PeopleAndAccess() {
                   },
                   {
                     key: "login",
-                    header: "Acts under",
+                    header: "Signs in as",
                     shrink: true,
                     drop: 1,
                     sortValue: (t) => t.login,
@@ -983,7 +999,7 @@ export function PeopleAndAccess() {
                   },
                   {
                     key: "row",
-                    header: "Directory",
+                    header: "Seat entry",
                     shrink: true,
                     sortValue: (t) => t.row,
                     cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
@@ -1030,9 +1046,7 @@ function CompanyWriters({ writers }: { writers: readonly string[] }) {
             <InlineCode>{id}</InlineCode>
           </span>
         ))}{" "}
-        can change the company document (<InlineCode>api.auth.company_writers</InlineCode>). Every
-        other credential, sessions and machine tokens included, can read it and rotate a credential
-        it names.
+        can change the company document.
       </span>
     </Callout>
   );
@@ -1059,7 +1073,22 @@ function contactsByHandle(
  */
 function PersonName({ row }: { row: DirectoryRow }) {
   if (row.sealed) return <SealedTag />;
-  return <TextCell>{row.name || row.login || row.id}</TextCell>;
+  const name = row.name || row.login || row.id;
+  // THE BADGE IS THE PERSON'S, beside their name: in the Seat column it
+  // repeated the name a cell over ("Lee Park  LP Lee Park"). A service account
+  // wears a key, since the initials of a credential's label mean nothing.
+  return (
+    <Inline gap={2}>
+      <SeatAvatar
+        name={name}
+        size="xs"
+        kind="human"
+        icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
+        decorative
+      />
+      <TextCell>{name}</TextCell>
+    </Inline>
+  );
 }
 
 /**
@@ -1073,7 +1102,7 @@ function Holder({ seat }: { seat: HumanSeat }) {
   const { holder, invitation } = seat;
   if (!holder && invitation) {
     return (
-      <span className="row gap-1">
+      <Inline as="span" gap={1}>
         <Tag size="sm" variant="neutral" title={`Open invitation ${invitation.id}`}>
           Invited
         </Tag>
@@ -1082,18 +1111,22 @@ function Holder({ seat }: { seat: HumanSeat }) {
         ) : invitation.email ? (
           <TextCell>{invitation.email}</TextCell>
         ) : null}
-      </span>
+      </Inline>
     );
   }
-  if (!holder) return <EmptyValue label="Nobody holds it" />;
+  // OPEN SEAT, IN WORDS, as the chart's cards and the stat tile say it: a
+  // seat nothing holds is one an admin can invite somebody onto, which a dash
+  // did not say.
+  if (!holder) return <TextCell>Open seat</TextCell>;
+  // THE HOLDER BY NAME, as plain text. Status colour is reserved for status, so
+  // the stage is a tag of its own, and only where it is news: an active holder
+  // is the ordinary case.
+  const stage = holder.stage ?? "";
   return (
-    <Tag
-      size="sm"
-      variant={STAGE_WORDS[holder.stage ?? ""]?.tone ?? "neutral"}
-      title={STAGE_WORDS[holder.stage ?? ""]?.label ?? holder.stage}
-    >
-      {holder.login ? <span className="mono">{holder.login}</span> : holderName(holder)}
-    </Tag>
+    <Inline gap={1} wrap>
+      <TextCell>{holderName(holder)}</TextCell>
+      {stage !== "active" && <WordTag words={STAGE_WORDS[stage]} fallback={stage} />}
+    </Inline>
   );
 }
 
@@ -1102,13 +1135,16 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
   const entries = Object.entries(contact ?? {}).filter(([, value]) => value);
   if (entries.length === 0) return <EmptyValue label="No surface" />;
   return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+    <Inline as="span" gap={1} wrap>
       {entries.map(([key, value]) => (
         <Tag key={key} size="sm" appearance="outline" title={`${key}: ${value}`}>
-          {CONTACT_SURFACES[key] ?? key} <span className="mono">{value}</span>
+          {CONTACT_SURFACES[key] ?? key}{" "}
+          <Text variant="inherit" mono>
+            {value}
+          </Text>
         </Tag>
       ))}
-    </span>
+    </Inline>
   );
 }
 
@@ -1126,23 +1162,64 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
  * which is ordinary: a person always holds a human seat (ADR-0032).
  */
 function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
-  if (!seat) return <EmptyValue label="Bound to no seat" />;
+  if (!seat) return <EmptyValue label="No seat" />;
   const held = index.byHandle.get(seat);
   return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;
 }
 
+/** A finding's fix, opened from its row: the dialog the person's peek opens for it. */
+type FindingFix = { gesture: "mint" | "reset"; row: DirectoryRow };
+
 /**
- * What the directory reports wrong. Each finding by its kind and, beside it,
- * the engine's own detail — so a kind this build has no word for still reads
- * as the sentence the engine wrote.
+ * The seat a PERSON's row binds, by its own identifier: its `@handle`, linked
+ * to its page, with its name on the tooltip. In the People table the seat's
+ * name and badge echoed the person's a cell over ("Lee Park  LP Lee Park"),
+ * so the badge is the person's, beside their name, and the seat is its handle.
  */
-function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
+function SeatHandle({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!seat) return <EmptyValue label="No seat" />;
+  return (
+    <Link
+      href={href(["agents", "seats", seat])}
+      size="inherit"
+      variant="subtle"
+      title={index.byHandle.get(seat)?.name}
+    >
+      <Text variant="cell" mono>
+        {handleLabel(seat)}
+      </Text>
+    </Link>
+  );
+}
+
+/**
+ * What the directory reports wrong, each kind written here in a short
+ * sentence about the person it names, with the fix beside it where there is
+ * one to make: a token for a service account that has none, a reset link for
+ * a person who cannot sign in. The engine's own detail named an API path; it
+ * is kept only for a kind this build has no words for.
+ */
+function Findings({
+  check,
+  people,
+  manages,
+  held,
+}: {
+  check: RestResult<DirectoryCheck | null>;
+  /** The directory, to name each finding's person and open its fix. */
+  people: readonly DirectoryRow[];
+  manages: boolean;
+  held: readonly string[];
+}) {
+  const reader = useFrameSession().answer?.person;
+  const [fixing, setFixing] = useState<FindingFix | null>(null);
   const findings = check.data?.findings ?? [];
   const unchecked = check.data?.bindings_unchecked ?? 0;
+  const byId = new Map(people.map((p) => [p.id, p]));
   return (
     <Card padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
-        What the directory reports
+        Needs attention
       </Card.Header>
       <QueryState
         error={check.code}
@@ -1150,31 +1227,102 @@ function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
         detail={check.error?.detail || undefined}
         loading={check.loading && !check.data}
       >
-        <div className="col" style={{ gap: "var(--spacing-2)", padding: "var(--spacing-4)" }}>
-          {findings.length === 0 && <p className="t-body muted">Nothing to report.</p>}
-          {findings.map((f, i) => {
-            const words = findingWords(f.kind);
-            return (
-              <div key={`${f.kind}:${f.person ?? f.seat ?? i}`} className="row gap-2">
-                <Tag size="sm" variant={words?.tone ?? "neutral"}>
-                  {words?.label ?? f.kind}
-                </Tag>
-                <span className="t-body">{sentence(f.detail)}</span>
-              </div>
-            );
-          })}
-          {/* SAID RATHER THAN SILENT: "no dangling binding" and "this node
+        <Card.Body padding="md">
+          <Stack gap={2}>
+            {findings.length === 0 && (
+              <Text as="p" variant="body" tone="tertiary">
+                All good.
+              </Text>
+            )}
+            {findings.map((f, i) => {
+              const words = findingWords(f.kind);
+              const row = f.person ? byId.get(f.person) : undefined;
+              const fix = manages && row ? findingFix(f, row) : null;
+              return (
+                <Inline key={`${f.kind}:${f.person ?? f.seat ?? i}`} gap={2} wrap>
+                  <Tag size="sm" variant={words?.tone ?? "neutral"}>
+                    {words?.label ?? f.kind}
+                  </Tag>
+                  <Text variant="body">{findingSentence(f, row)}</Text>
+                  {fix && row && (
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={() => setFixing({ gesture: fix.gesture, row })}
+                    >
+                      {fix.label}
+                    </Button>
+                  )}
+                </Inline>
+              );
+            })}
+            {/* SAID RATHER THAN SILENT: "no dangling binding" and "this node
               could not say" are different answers. */}
-          {unchecked > 0 && (
-            <p className="t-caption muted">
-              {unchecked} binding{unchecked === 1 ? "" : "s"} could not be checked against this
-              node&rsquo;s chart just now.
-            </p>
-          )}
-        </div>
+            {unchecked > 0 && (
+              <Text as="p" variant="caption">
+                {unchecked} binding{unchecked === 1 ? "" : "s"} could not be checked against this
+                node&rsquo;s chart just now.
+              </Text>
+            )}
+          </Stack>
+        </Card.Body>
       </QueryState>
+      {fixing?.gesture === "mint" && (
+        <MintTokenDialog
+          owner={fixing.row}
+          held={held}
+          onClose={() => setFixing(null)}
+          onDone={directoryMoved}
+        />
+      )}
+      {fixing?.gesture === "reset" && (
+        <ResetLink
+          row={fixing.row}
+          who={principalName(fixing.row)}
+          you={fixing.row.id === reader}
+          onClose={() => setFixing(null)}
+          onDone={directoryMoved}
+        />
+      )}
     </Card>
   );
+}
+
+/** What a panel or a sentence calls a principal: a sealed name is never drawn. */
+function principalName(row: DirectoryRow): string {
+  return row.sealed ? row.login || row.id : row.name || row.login || row.id;
+}
+
+/**
+ * A finding as a person reads it, about the principal it names. A kind this
+ * build has no words for keeps the engine's own sentence.
+ */
+function findingSentence(f: DirectoryFinding, row: DirectoryRow | undefined): string {
+  const name = row ? principalName(row) : f.login || "Someone";
+  switch (f.kind) {
+    case "no_admin_holder":
+      return "Nobody active can manage people. Give someone Admin.";
+    case "person_without_credential":
+      return row?.kind === "machine"
+        ? `${name} has no token, so it can’t sign in.`
+        : `${name} has no password, so they can’t sign in.`;
+    case "binding_dangling":
+      return `${name} is on a seat that was removed. Move them to another seat.`;
+    case "admin_clamped_by_node":
+      return `${name} has Admin, but this node turns it off.`;
+  }
+  return sentence(f.detail);
+}
+
+/** The one-click repair a finding offers, where it has one. */
+function findingFix(
+  f: DirectoryFinding,
+  row: DirectoryRow,
+): { gesture: FindingFix["gesture"]; label: string } | null {
+  if (f.kind !== "person_without_credential") return null;
+  return row.kind === "machine"
+    ? { gesture: "mint", label: "Create token" }
+    : { gesture: "reset", label: "Get reset link" };
 }
 
 /**
@@ -1206,9 +1354,7 @@ function Invitations({
       <Card.Header
         icon={<SendGlyph size="sm" />}
         count={rows.length}
-        actions={
-          <Checkbox label="Show expired and redeemed" checked={all} onCheckedChange={onAll} />
-        }
+        actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
       >
         Invitations
       </Card.Header>
@@ -1223,7 +1369,7 @@ function Invitations({
           rowKey={(i) => i.id}
           defaultSort="expires"
           empty={{
-            title: all ? "No invitations are held" : "No invitation is waiting to be redeemed",
+            title: all ? "No invitations" : "No open invitations",
           }}
           columns={[
             {
@@ -1332,12 +1478,8 @@ function Inviter({ author, index }: { author?: string; index: ReturnType<typeof 
 /** A name or an address this node's keyring cannot open. */
 function SealedTag() {
   return (
-    <Tag
-      size="sm"
-      variant="warning"
-      title="This node's keyring cannot open this value: a key was dropped before crewlet secrets rekey moved it off, or the estate was restored under another keyring."
-    >
-      sealed
+    <Tag size="sm" variant="warning" title="This node can’t decrypt it.">
+      Locked
     </Tag>
   );
 }
@@ -1433,8 +1575,8 @@ export function PersonPeek({ id }: { id: string }) {
       <EmptyState
         size="compact"
         icon={<UsersGlyph size="xl" />}
-        title="Nobody in the directory has this id"
-        description={`${id} is not a person or service account here: they were removed, or the link was mistyped.`}
+        title="Not found"
+        description="They may have been removed."
       />
     );
   }
@@ -1448,7 +1590,7 @@ export function PersonPeek({ id }: { id: string }) {
       />
     );
   }
-  const who = row.sealed ? row.id : row.name || row.login || row.id;
+  const who = row.sealed ? row.id : principalName(row);
   return (
     <>
       <ObjectHeader
@@ -1463,22 +1605,18 @@ export function PersonPeek({ id }: { id: string }) {
           { label: "Access", value: <AccessTags grants={row.grants} /> },
         ]}
       />
-      <div className="col gap-3">
+      <Stack gap={3}>
         {you && (
           <Callout
             variant="neutral"
             title="This is you"
             action={
               <ButtonLink size="small" variant="secondary" href={href(["account"])}>
-                Your Account
+                Open Account
               </ButtonLink>
             }
           >
-            Your password, two-step verification, sessions and personal access tokens are yours to
-            manage on your Account.
-            {canManagePeople(viewer.grants)
-              ? " What follows is what an administrator does to anybody's row, and each gesture says what it would do to you."
-              : ""}
+            Manage your sign-in on your Account.
           </Callout>
         )}
         <Principal
@@ -1497,7 +1635,7 @@ export function PersonPeek({ id }: { id: string }) {
             close();
           }}
         />
-      </div>
+      </Stack>
     </>
   );
 }
@@ -1547,11 +1685,6 @@ function Principal({
     READ,
   );
   const [gesture, setGesture] = useState<PersonGesture | null>(null);
-  // THE SEAT AS THE CHART NAMES IT, which a suspension withholds and a
-  // removal frees — said by name, since it is the seat the reader will next
-  // look for on the chart.
-  const seatEntry = useSeatEntry();
-  const seatName = row.seat ? seatEntry(row.seat).name : "";
   const machine = row.kind === "machine";
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
   const holdsFactor = live.some((c) => c.method === "totp" || c.method === "recovery");
@@ -1575,10 +1708,13 @@ function Principal({
 
   return (
     <>
+      {/* EDIT AND SUSPEND IN VIEW, the rest under More with Remove last and
+          set apart: six equal buttons wrapped over two rows and put the one
+          that cannot be undone in the middle of the second. */}
       {manages && (
-        <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+        <Inline gap={2} wrap>
           <Button size="small" variant="secondary" onClick={() => setGesture("edit")}>
-            Edit login, seat and access
+            Edit
           </Button>
           {(row.stage === "active" || suspended) && (
             <Button
@@ -1589,33 +1725,51 @@ function Principal({
               {suspended ? "Reactivate" : "Suspend"}
             </Button>
           )}
-          {machine ? (
-            <Button size="small" variant="secondary" onClick={() => setGesture("mint")}>
-              Mint token
-            </Button>
-          ) : (
-            <>
-              {/* NOT FOR A STOPPED PERSON: a link would hand back an account
-                  somebody stopped, and the engine refuses it naming the stage. */}
-              {!suspended && row.stage !== "retired" && (
-                <Button size="small" variant="secondary" onClick={() => setGesture("reset")}>
-                  Issue password reset link
-                </Button>
-              )}
-              {holdsFactor && (
-                <Button size="small" variant="secondary" onClick={() => setGesture("mfa")}>
-                  Reset second factor
-                </Button>
-              )}
-              <Button size="small" variant="secondary" onClick={() => setGesture("sessions")}>
-                End all sessions
-              </Button>
-            </>
-          )}
-          <Button size="small" variant="danger" onClick={() => setGesture("remove")}>
-            Remove
-          </Button>
-        </div>
+          <Menu
+            label={`More for ${who}`}
+            trigger="More"
+            triggerVariant="secondary"
+            items={[
+              ...(machine
+                ? [{ key: "mint", label: "Create token", onSelect: () => setGesture("mint") }]
+                : [
+                    // NOT FOR A STOPPED PERSON: a link would hand back an
+                    // account somebody stopped, and the engine refuses it
+                    // naming the stage.
+                    ...(!suspended && row.stage !== "retired"
+                      ? [
+                          {
+                            key: "reset",
+                            label: "Get reset link",
+                            onSelect: () => setGesture("reset"),
+                          },
+                        ]
+                      : []),
+                    ...(holdsFactor
+                      ? [
+                          {
+                            key: "mfa",
+                            label: "Reset two-step verification",
+                            onSelect: () => setGesture("mfa"),
+                          },
+                        ]
+                      : []),
+                    {
+                      key: "sessions",
+                      label: "Sign out everywhere",
+                      onSelect: () => setGesture("sessions"),
+                    },
+                  ]),
+              { kind: "separator" as const, key: "before-remove" },
+              {
+                key: "remove",
+                label: "Remove",
+                danger: true,
+                onSelect: () => setGesture("remove"),
+              },
+            ]}
+          />
+        </Inline>
       )}
       {gesture === "edit" && (
         <EditPersonDialog
@@ -1647,9 +1801,9 @@ function Principal({
           onDone={changed}
         >
           {gesture.revoke.method === "token"
-            ? `Anything presenting it is refused from now on${gesture.revoke.label ? ` — "${gesture.revoke.label}"` : ""}.`
+            ? "Anything using it stops working."
             : gesture.revoke.method === "reset"
-              ? `The link stops working; issue another if ${you ? "you" : "they"} still need one.`
+              ? `The link stops working. Get another if ${you ? "you" : "they"} still need one.`
               : you
                 ? "You can no longer prove who you are with it."
                 : `${who} can no longer prove who they are with it.`}
@@ -1677,35 +1831,33 @@ function Principal({
               bring back either. A SUSPENDED PERSON KEEPS THEIR SEAT: it is
               withheld, never freed, so nobody else is put on it meanwhile. */}
           {gesture === "reactivate"
-            ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions, tokens and password reset link the suspension ended stay ended, so issue a new link if they need one.`
+            ? `${who} can sign in again.`
             : you
-              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? `, and your seat ${seatName} is withheld — it stays yours, and nobody else can hold it meanwhile` : ""}. Your record is kept, and an admin can reactivate you.`
-              : `${who} may not act while suspended: every session, token and password reset link they hold ends and their sign-ins are refused${row.seat ? `, and their seat ${seatName} is withheld — it stays theirs, and nobody else can hold it meanwhile` : ""}. Their record is kept, and reactivating lets them sign in again.`}
+              ? "You can’t sign in until another admin reactivates you."
+              : "They can’t sign in until reactivated."}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
         <PersonWrite
-          title={you ? "Reset your second factor?" : `Reset ${who}'s second factor?`}
-          confirm="Reset second factor"
+          title={
+            you ? "Reset your two-step verification?" : `Reset ${who}’s two-step verification?`
+          }
+          confirm="Reset two-step verification"
           danger
           request={{ method: "POST", path: `/iam/people/${id}/mfa/reset` }}
           onClose={close}
           onDone={changed}
         >
           {you && <OnYourself />}
-          {/* A RESET LINK ENDS WITH THE SESSIONS, so one already sent is dead
-              by the time it is opened: said here, where the order that works
-              — the factor first, then the link — is still a choice. */}
           {you
-            ? "Your authenticator app and recovery codes stop working, and every session, token and password reset link you hold ends. "
-            : "Their authenticator app and recovery codes stop working, and every session, token and password reset link they hold ends — if they need a new password too, issue the link after this. "}
-          <AfterFactorReset you={you} />
+            ? "Your app and recovery codes stop working."
+            : "Their app and recovery codes stop working."}
         </PersonWrite>
       )}
       {gesture === "sessions" && (
         <PersonWrite
-          title={you ? "End every session you hold?" : `End every session ${who} holds?`}
-          confirm="End all sessions"
+          title={you ? "Sign out everywhere?" : `Sign ${who} out everywhere?`}
+          confirm="Sign out everywhere"
           danger
           request={{ method: "DELETE", path: `/iam/people/${id}/sessions` }}
           onClose={close}
@@ -1713,8 +1865,8 @@ function Principal({
         >
           {you && <OnYourself />}
           {you
-            ? "You are signed out everywhere, and every personal access token you minted and any password reset link issued for you stop working too."
-            : "They are signed out everywhere, and every personal access token they minted and any password reset link issued for them stop working too — if they need a new password, issue the link after this."}
+            ? "Your sessions, tokens and reset link stop working."
+            : "Their sessions, tokens and reset link stop working."}
         </PersonWrite>
       )}
       {gesture === "remove" && (
@@ -1728,18 +1880,18 @@ function Principal({
           onDone={changed}
           onLanded={onRemoved}
         >
-          {you && <OnYourself alone={alone} />}
-          {/* A SERVICE ACCOUNT IS NOT INVITED BACK: nobody redeems a link for
-              one, so its way back is the create it came from. */}
+          {you && <OnYourself alone={alone} what="" />}
           {you
-            ? `Your row, credentials and sessions are deleted, ${row.seat ? `your seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of yours is erased. This cannot be undone: to come back, you must be invited onto a seat again. The trail keeps what you did.`
+            ? "Can’t be undone."
             : machine
-              ? `Its row and every token it holds are deleted, ${row.seat ? `the seat ${seatName} it is bound to is freed, ` : ""}and its sealed values are erased. This cannot be undone: to bring it back, create the service account again. The trail keeps what it did.`
-              : `Their row, credentials and sessions are deleted, ${row.seat ? `their seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of theirs is erased. This cannot be undone: to bring them back, invite them onto a seat again. The trail keeps what they did.`}
+              ? "Deletes the service account and its tokens. Can’t be undone."
+              : "Their account is deleted and their seat opens up. Can’t be undone."}
         </PersonWrite>
       )}
-      <section className="col gap-2">
-        <div className="t-label">Credentials</div>
+      <Stack as="section" gap={2}>
+        <Text as="div" variant="label">
+          Credentials
+        </Text>
         <QueryState
           error={credentials.code}
           refusal={credentials.refusal}
@@ -1783,8 +1935,9 @@ function Principal({
                       {endedWord(c, now)}
                     </Tag>
                   ) : (
+                    // A RESET LINK NOBODY OPENED is not "in use": it is waiting.
                     <Tag size="sm" variant="success">
-                      In use
+                      {c.method === "reset" ? "Not used yet" : "In use"}
                     </Tag>
                   ),
               },
@@ -1816,9 +1969,7 @@ function Principal({
                   c.method === "token" ? (
                     <AccessTags grants={c.grants} />
                   ) : (
-                    <EmptyValue
-                      label={c.method === "reset" ? "Sets a password once" : "Its holder's access"}
-                    />
+                    <EmptyValue label={c.method === "reset" ? "One-time" : "Same as owner"} />
                   ),
               },
               ...(manages
@@ -1845,10 +1996,12 @@ function Principal({
             ]}
           />
         </QueryState>
-      </section>
+      </Stack>
       {!machine && (
-        <section className="col gap-2">
-          <div className="t-label">Sessions</div>
+        <Stack as="section" gap={2}>
+          <Text as="div" variant="label">
+            Sessions
+          </Text>
           <QueryState
             error={sessions.code}
             refusal={sessions.refusal}
@@ -1887,25 +2040,27 @@ function Principal({
                       <Tag
                         size="sm"
                         variant="success"
-                        title={s.enrolment_only ? "May only enrol a second factor" : undefined}
+                        title={
+                          s.enrolment_only ? "Can only set up two-step verification" : undefined
+                        }
                       >
-                        {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
+                        {s.enrolment_only ? "Setting up" : "Signed in"}
                       </Tag>
                     ) : (
                       // WHY, SAID: it rode in a tooltip, so a session a password
                       // change ended read as one that merely had. ONE LINE, cut
                       // with an ellipsis and whole on its title where the column
                       // is narrower than the sentence.
-                      <span className="row gap-1" style={{ minWidth: 0 }}>
+                      <Inline as="span" gap={1}>
                         <Tag size="sm" variant="neutral">
                           Ended
                         </Tag>
                         {s.ended_reason && (
-                          <span className="t-caption muted truncate" title={s.ended_reason}>
+                          <Text variant="caption" truncate title={s.ended_reason}>
                             {s.ended_reason}
-                          </span>
+                          </Text>
                         )}
-                      </span>
+                      </Inline>
                     ),
                 },
                 {
@@ -1927,32 +2082,10 @@ function Principal({
               ]}
             />
           </QueryState>
-        </section>
+        </Stack>
       )}
     </>
   );
-}
-
-/**
- * What a reset second factor leaves its person to do, as this deployment
- * decides it (`api.auth.totp`): enrol a new one before anything else opens, or
- * nothing — a deployment where a factor is optional signs them in on their
- * password alone, and promising an enrolment there was a promise nothing
- * keeps. Said only once the setting is read.
- */
-function AfterFactorReset({ you }: { you: boolean }) {
-  const config = useRest("/auth/config", (signal) => auth.config(signal));
-  switch (config.data?.second_factor) {
-    case "required":
-      return you
-        ? "You enrol a new factor at your next sign-in, before anything else opens."
-        : "They enrol a new factor at their next sign-in, before anything else opens.";
-    case "optional":
-      return you
-        ? "You sign in with your password alone until you set up a new one."
-        : "They sign in with their password alone until they set up a new one.";
-  }
-  return null;
 }
 
 /** One confirmed write about a principal: the dialog, the request, the answer. */
@@ -2037,7 +2170,7 @@ function ResetLink({
       <Modal
         open
         size="sm"
-        title={you ? "Your password reset link" : `Password reset link for ${who}`}
+        title={you ? "Your reset link" : `Reset link for ${who}`}
         onClose={onClose}
         stackBody
         footer={
@@ -2047,9 +2180,7 @@ function ResetLink({
         }
       >
         <ShownOnce label="Reset link" value={url}>
-          {you
-            ? `This link sets a new password for you once, and expires ${fmtDateTime(expires)}. It is shown only now. Setting the password ends every session and token you hold, this browser's included; you sign in afterwards, with your second factor if you hold one.`
-            : `This link sets a new password for ${who} once, and expires ${fmtDateTime(expires)}. It is shown only now — send it to them yourself. Setting the password ends every session and token they hold; they sign in afterwards, with their second factor if they hold one.`}
+          Copy it now. You won’t see it again. Works until {fmtDate(expires)}.
         </ShownOnce>
         <IamOutcome answer={write.answer} />
       </Modal>
@@ -2057,12 +2188,8 @@ function ResetLink({
   }
   return (
     <ConfirmDialog
-      title={
-        you
-          ? "Issue a password reset link for yourself?"
-          : `Issue a password reset link for ${who}?`
-      }
-      confirm="Issue link"
+      title={you ? "Get a reset link for yourself?" : `Get a reset link for ${who}?`}
+      confirm="Get link"
       write={write}
       onClose={onClose}
       onConfirm={async () => {
@@ -2077,8 +2204,8 @@ function ResetLink({
       }}
     >
       {you
-        ? "The link lets you choose a new password once, within a day, and revokes any link issued for you before. To change a password you know, Account › Security needs no link."
-        : `The link lets ${who} choose a new password once, within a day. It revokes any link issued for them before, and resetting their second factor, ending their sessions or suspending them ends it too — so issue it after those.`}
+        ? "Works once, within a day. To change a known password, use Account › Security."
+        : "Works once, for a day."}
     </ConfirmDialog>
   );
 }

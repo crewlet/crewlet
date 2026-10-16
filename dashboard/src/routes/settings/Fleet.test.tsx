@@ -153,9 +153,7 @@ describe("the fleet, refused before any reading", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(
-      await screen.findByText(/This needs access you don’t hold\. An admin can give it to you/),
-    ).toBeDefined();
+    expect(await screen.findByText("You don’t have access to this.")).toBeDefined();
     expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent).toBe("");
     expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
     expect(screen.queryByText("No nodes are reporting")).toBeNull();

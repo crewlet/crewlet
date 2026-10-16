@@ -575,8 +575,9 @@ function ProjectHead({
           own above the work. The numbers in the fact line say how much; the
           bar splits it into done, under way and still to do, which is the fact
           a reader actually wants — "mostly finished", "all in flight" and
-          "barely started" are three different projects. It is a SIBLING rather than a sixth fact because a bar inside `.fact-value` is
-          a bar in a truncated inline box, which is no bar at all. What the bar
+          "barely started" are three different projects. It is a SIBLING rather
+          than a sixth fact because a bar inside a fact's value is a bar in a
+          truncated inline box, which is no bar at all. What the bar
           MEANS is argued in `census.tsx`, where the directory's column reads it
           too.
 

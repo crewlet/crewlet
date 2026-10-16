@@ -55,7 +55,7 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 	if q.Op != "" && !q.Op.Valid() {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": strconv.Quote(string(q.Op)) +
-				" is not an operation this estate records"})
+				" isn't an event the identity log records."})
 		return
 	}
 	for _, field := range []struct {
@@ -69,8 +69,8 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 		value, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-				map[string]string{"detail": field.name + " is a log POSITION " +
-					"rather than a time; pass at= to resolve an instant to one"})
+				map[string]string{"detail": field.name + " takes a log " +
+					"position, not a time. Use at= to start from a time."})
 			return
 		}
 		*field.into = value
@@ -79,7 +79,8 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 		at, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-				map[string]string{"detail": "at is an RFC 3339 instant"})
+				map[string]string{"detail": "at must be an RFC 3339 time, " +
+					"like 2026-10-15T09:00:00Z."})
 			return
 		}
 		resolved, err := s.directory.PositionAt(r.Context(), at)
@@ -93,7 +94,7 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 		limit, err := strconv.Atoi(raw)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-				map[string]string{"detail": "limit is not a number"})
+				map[string]string{"detail": "limit must be a number."})
 			return
 		}
 		q.Limit = limit

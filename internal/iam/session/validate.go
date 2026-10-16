@@ -420,17 +420,17 @@ func (s *Signer) validate(ctx context.Context, directory Directory,
 func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,
-			Detail: "this node could not read the identity estate"}
+			Detail: "this node couldn't read its identity data"}
 	}
 	if identity.Lag > statelog.StallGrace {
 		return Validation{Row: RowStalled, Bearer: b,
-			Detail: fmt.Sprintf("the iam applier is %s behind, past the %s "+
-				"stall grace", identity.Lag, statelog.StallGrace)}
+			Detail: fmt.Sprintf("this node is %s behind on identity changes, "+
+				"over the %s limit", identity.Lag, statelog.StallGrace)}
 	}
 	if identity.Deferred {
 		return Validation{Row: RowStalled, Bearer: b,
-			Detail: "this node holds a record it cannot decode whose scope " +
-				"covers this person's bucket"}
+			Detail: "this node has an identity change it can't read that may " +
+				"affect this person"}
 	}
 
 	// THE FLEET-WIDE GENERATION, which one write moves to end every

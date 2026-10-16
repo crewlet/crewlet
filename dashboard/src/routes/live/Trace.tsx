@@ -150,7 +150,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
   // FAILED mounts the screen, and the engine's own answer says what it finds.
   if (viewer.asking) return <Skeleton variant="text" rows={6} label="Checking your access" />;
   if (!viewer.loading && !viewer.admin) {
-    return <GrantRequired what="A trace" grants={[ADMIN]} reader={viewer.login} />;
+    return <GrantRequired grants={[ADMIN]} reader={viewer.login} />;
   }
   return <Trace traceId={traceId} />;
 }

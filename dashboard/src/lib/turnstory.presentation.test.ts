@@ -58,7 +58,7 @@ describe("a heading over a turn", () => {
 
   test("leaves a summary with no sentence boundary at all", () => {
     // Cutting mid-clause reads as a broken string; the two-line clamp on
-    // `.object-title` is what bounds this one.
+    // uilet ObjectHeader's two-line title is what bounds this one.
     expect(lead("replied to the founder in the thread")).toBe(
       "replied to the founder in the thread",
     );

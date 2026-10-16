@@ -51,8 +51,8 @@ func (s *Service) GetCredentials(w http.ResponseWriter, r *http.Request) {
 	person := s.subjectOf(r)
 	if person == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": "name a person with ?person=, or " +
-				"sign in so this route can answer about you"})
+			map[string]string{"detail": "Name a person with ?person=, or " +
+				"sign in to see your own."})
 		return
 	}
 	held, err := s.directory.Credentials(r.Context(), person)
@@ -153,9 +153,8 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		// answers — `unauthorized`'s sentence is about access the
 		// credential lacks, which contradicted this detail.
 		detail := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
-		detail["detail"] = "a machine token cannot mint another: one minted " +
-			"from a token is one whoever holds a pipeline's environment can " +
-			"renew for ever. Sign in, or use a Tier A token"
+		detail["detail"] = "An access token can't create another token. Sign " +
+			"in, or use an API token."
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused, detail)
 		return
 	}
@@ -166,10 +165,8 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	if _, tierA := auth.TierA(r.Context()); tierA &&
 		strings.TrimSpace(r.URL.Query().Get("person")) == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": "a Tier A token is the deployment's " +
-				"credential and owns no machine tokens: name the service " +
-				"account the token is for with ?person= (a person mints their " +
-				"own, signed in)"})
+			map[string]string{"detail": "API tokens can't own access tokens. " +
+				"Name the service account with ?person=."})
 		return
 	}
 	in, ok := readBody[mintBody](w, r)
@@ -185,27 +182,24 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	owner := s.subjectOf(r)
 	if owner == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": "name the owner with ?person=, or " +
-				"sign in so this route can mint for you"})
+			map[string]string{"detail": "Name the owner with ?person=, or " +
+				"sign in to create one for yourself."})
 		return
 	}
 	lifetime := credential.DefaultTokenLifetime
 	switch {
 	case in.ExpiresInDays < 0:
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "expires_in_days is a number of days " +
-				"from now, and a token that expired before it was minted is " +
-				"not one anybody can use"})
+			map[string]string{"detail": "expires_in_days can't be negative."})
 		return
 	case in.ExpiresInDays > 0:
 		lifetime = time.Duration(in.ExpiresInDays) * 24 * time.Hour
 	}
 	if lifetime > credential.MaxTokenLifetime {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "a token may last at most " +
+			map[string]string{"detail": "A token can last at most " +
 				strconv.Itoa(int(credential.MaxTokenLifetime/(24*time.Hour))) +
-				" days: a bearer secret nothing re-proves outlives whoever " +
-				"minted it, so one that never expired cannot be asked for"})
+				" days."})
 		return
 	}
 	// NOBODY BY THAT ID is a 404 rather than whatever the decide would
@@ -314,17 +308,14 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		map[string]any{
 			"id": id, "person": owner, "token": token.Value(),
 			"grants": minted.Grants, "expires_at": minted.ExpiresAt,
-			"detail": "this value is shown once and cannot be read back; " +
-				"what the estate holds is a hash of it",
+			"detail": "This token is shown only once. Copy it now.",
 		})
 }
 
 // mintUnknown is what an unknown mint's 503 says to do: mint again. The
 // operation it names finds the attempt in the trail, and is no retry.
-const mintUnknown = "no token was issued: this node cannot establish whether " +
-	"the mint landed, and if it did, its value was never shown — a token " +
-	"nobody holds, which expires. Mint again for one you hold; this route " +
-	"reads no key, so a retry is a new mint."
+const mintUnknown = "Couldn't confirm the token was created. Create another " +
+	"one."
 
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
 //
@@ -456,8 +447,8 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		// it is the one that announced it, where it saw its own outcome.
 		s.answerWrite(w, r, opID, revoked, nil, map[string]any{
 			"id": id,
-			"detail": "this revocation had already landed under this " +
-				"operation; read the person's credentials to see what it left",
+			"detail": "This was already revoked. Check the person's " +
+				"credentials to see what's left.",
 		})
 		return
 	}
@@ -468,8 +459,8 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		// be told their credential never existed.
 		s.answerWrite(w, r, opID, revoked, nil, map[string]any{
 			"id": id,
-			"detail": "no live credential with that id is held by this " +
-				"person; nothing changed",
+			"detail": "This person has no active credential with that id. " +
+				"Nothing changed.",
 		})
 		return
 	}

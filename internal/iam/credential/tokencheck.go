@@ -129,11 +129,11 @@ func CheckToken(presented Token, row TokenRow, now time.Time,
 
 	switch {
 	case row.Lag > stall:
-		return TokenCheck{TokenUnknown, fmt.Sprintf("the identity applier is "+
-			"%s behind, past the %s stall grace", row.Lag, stall)}
+		return TokenCheck{TokenUnknown, fmt.Sprintf("this node is %s behind "+
+			"on identity changes, over the %s limit", row.Lag, stall)}
 	case row.Deferred:
-		return TokenCheck{TokenUnknown, "this node holds a record it cannot " +
-			"decode whose scope covers this token's owner"}
+		return TokenCheck{TokenUnknown, "this node has an identity change it " +
+			"can't read that may affect this token's owner"}
 	}
 	if !row.Found {
 		if row.Applied >= presented.Position {

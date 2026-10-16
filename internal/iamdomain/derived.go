@@ -54,11 +54,9 @@ func CreatedPersonID(key string) (string, error) {
 func operationKey(key string) (uuid.UUID, error) {
 	id, err := uuid.Parse(key)
 	if err != nil || id.Version() != 7 || id.Variant() != uuid.RFC4122 {
-		return uuid.UUID{}, fmt.Errorf("%w: the operation key %q is not a "+
-			"uuid7. A create's key is the seed of the id it creates, and every "+
-			"id this estate creates is a uuid7 whose instant is its creation — "+
-			"send the key the first attempt was published under, which the "+
-			"answer carried as its op_id", ErrInvalid, key)
+		return uuid.UUID{}, fmt.Errorf("%w: the Idempotency-Key %q isn't a "+
+			"UUIDv7. To retry, send the op_id the first answer gave you",
+			ErrInvalid, key)
 	}
 	return id, nil
 }

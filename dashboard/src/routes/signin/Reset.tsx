@@ -37,8 +37,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
-import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Skeleton } from "@crewlethq/ui";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import type { ResetView } from "~/contract/identity.ts";
@@ -55,16 +54,14 @@ type Read =
   | { state: "set"; login: string; first: boolean };
 
 export function Reset({ link }: { link: string }) {
+  const nav = useNavigator();
   const parsed = parseLink(link);
   if (!parsed) {
     return (
-      <SignInPage title="This password link is incomplete">
-        <EmptyState
-          icon={<CompassGlyph size={32} />}
-          title="Part of the link is missing."
-          description="A password link ends in two parts joined by a dot. Copy the whole link from the message it came in, or ask an administrator for a new one."
-          headingLevel="none"
-        />
+      <SignInPage title="This password link is incomplete" lede="Copy the whole link.">
+        <Button variant="secondary" onClick={() => nav.to(["login"])}>
+          Go to sign in
+        </Button>
       </SignInPage>
     );
   }
@@ -117,7 +114,7 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
               </Button>
             }
           >
-            {read.sentence} Nothing about the link has been decided — it has not been used.
+            {read.sentence} Not used. Try again.
           </Callout>
         </SignInPage>
       );
@@ -139,18 +136,13 @@ function ResetLink({ id, secret }: { id: string; secret: string }) {
 function Spent({ sentence }: { sentence: string }) {
   const nav = useNavigator();
   return (
-    <SignInPage title="This password link can no longer be used">
-      <EmptyState
-        icon={<KeyGlyph size={32} />}
-        title={sentence}
-        description="A password link works once, and for a limited time. If you already set a password with it, sign in with that password; otherwise ask an administrator for a new link."
-        headingLevel="none"
-        action={
-          <Button variant="secondary" onClick={() => nav.to(["login"])}>
-            Sign in
-          </Button>
-        }
-      />
+    <SignInPage
+      title="This password link can’t be used"
+      lede={`${sentence} Already set your password? Sign in.`}
+    >
+      <Button variant="secondary" onClick={() => nav.to(["login"])}>
+        Sign in
+      </Button>
     </SignInPage>
   );
 }
@@ -158,25 +150,20 @@ function Spent({ sentence }: { sentence: string }) {
 function PasswordIsSet({ login, first }: { login: string; first: boolean }) {
   const nav = useNavigator();
   return (
-    <SignInPage title="Your password is set">
-      <EmptyState
-        icon={<KeyGlyph size={32} />}
-        title={`Sign in as ${login} with your ${first ? "" : "new "}password.`}
-        description={
-          first
-            ? "This link is spent: from now on your login and this password are how you sign in."
-            : "Every session you held has ended, on every device. A second factor you hold is still asked for."
-        }
-        headingLevel="none"
-        action={
-          // WITH THE LOGIN, AND SAYING WHERE THEY CAME FROM: the sign-in was a
-          // blank form under "Use the login or email address your invitation
-          // was for", to somebody who had just been told which login to use.
-          <Button variant="primary" onClick={() => nav.to(["login"], { login, after: "reset" })}>
-            Sign in
-          </Button>
-        }
-      />
+    <SignInPage
+      title={first ? "You’re all set" : "Your password is set"}
+      lede={
+        first
+          ? `Sign in as ${login}.`
+          : `Password changed. Sign in as ${login} with your new password.`
+      }
+    >
+      {/* WITH THE LOGIN, AND SAYING WHERE THEY CAME FROM: the sign-in was a
+          blank form under a sentence about an invitation, to somebody who had
+          just been told which login to use. */}
+      <Button variant="primary" onClick={() => nav.to(["login"], { login, after: "reset" })}>
+        Sign in
+      </Button>
     </SignInPage>
   );
 }
@@ -227,14 +214,10 @@ function Choose({
       lede={
         view.first ? (
           <>
-            This link sets the first password for <strong>{view.login}</strong>, once. You sign in
-            with it afterwards.
+            You’ll sign in as <strong>{view.login}</strong>.
           </>
         ) : (
-          <>
-            This link sets the password for <strong>{view.login}</strong>, once. Setting it ends
-            every session you hold, and you sign in with it afterwards.
-          </>
+          "This signs you out everywhere."
         )
       }
     >
@@ -269,7 +252,7 @@ function Choose({
           </Callout>
         )}
         <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? "Setting the password" : "Set password"}
+          {busy ? "Setting password" : "Set password"}
         </Button>
       </form>
     </SignInPage>

@@ -1,5 +1,6 @@
 /**
- * What a camera reads off a QR code this dashboard drew. Imported by tests only.
+ * What a camera reads off a QR code a screen drew (`@crewlethq/ui`'s `QrCode`).
+ * Imported by tests only.
  *
  * A REAL DECODE, NOT A SECOND CALL TO THE ENCODER. Comparing the drawing with
  * `encode()` of the expected value proves only that the component and the test
@@ -48,7 +49,7 @@ function ink(fill: string | null): Rgb {
 }
 
 /**
- * The run rectangles `ui/QrCode.tsx` writes, `M<x> <y>h<n>v1h-<n>z` each. A path
+ * The run rectangles `@crewlethq/ui`'s `QrCode` writes, `M<x> <y>h<n>v1h-<n>z` each. A path
  * holding anything else is refused rather than read in part: a scanner that
  * skipped what it did not understand would read less and still pass.
  */

@@ -33,7 +33,7 @@ func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 		want string
 	}{
 		{"a machine token", authz.Decision{Reason: authz.ReasonTokenRefused},
-			httpjson.CodeTokenRefused, "personal access token cannot do this"},
+			httpjson.CodeTokenRefused, httpjson.CodeTokenRefused.Message()},
 		{"a missing permission (the control)", authz.Decision{Reason: authz.ReasonNoGrant,
 			Grants: []iam.Grant{iam.GrantAdmin}},
 			httpjson.CodeUnauthorized, httpjson.CodeUnauthorized.Message()},

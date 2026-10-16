@@ -27,9 +27,9 @@ export function newPasswordProblems(
   return {
     password:
       floor !== null && length < floor
-        ? `This is ${length} characters, and the minimum is ${floor}.`
+        ? `Use at least ${floor} characters (this has ${length}).`
         : null,
-    confirm: confirm !== password ? "The two passwords are not the same." : null,
+    confirm: confirm !== password ? "The passwords don’t match." : null,
   };
 }
 
@@ -62,7 +62,7 @@ export function NewPasswordFields({
   const rule =
     floor === null
       ? "There are no rules beyond a minimum length; a long phrase is the strongest password there is."
-      : `At least ${floor} characters. There are no other rules; a long phrase is the strongest password there is.`;
+      : `At least ${floor} characters. A long phrase works best.`;
   return (
     <>
       <FormField

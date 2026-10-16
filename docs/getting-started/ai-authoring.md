@@ -262,7 +262,7 @@ line it is on. The rules above run once it parses:
 ```json
 { "path": "roles[0].backstroy", "segments": ["roles", 0, "backstroy"],
   "kind": "unknown_field", "line": 6,
-  "message": "roles[0].backstroy: unknown field: \"backstroy\" is not a setting: check the spelling, or the block it belongs under (line 6)" }
+  "message": "roles[0].backstroy: unknown field: \"backstroy\" isn't a setting. Check the spelling and the block it's under (line 6)" }
 ```
 
 Each problem carries:
