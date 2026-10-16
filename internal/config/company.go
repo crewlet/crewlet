@@ -257,10 +257,10 @@ func (c *Company) ValidateRunnable() error {
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
 // segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
 // whose code work hands a cli-agent entry to another CLI's coding agent
-// ([Company.validateSandboxCodingAgents]), and the four WHOLE-DOCUMENT rules
+// ([Company.validateSandboxCodingAgents]), and the three WHOLE-DOCUMENT rules
 // in [Company.validateFileRules] — an `mcp_env` key naming no server, two
-// seats declaring one email, a reference that is shaped like neither a handle
-// nor a key, and a unit key or a seat handle the org chart reserves.
+// seats declaring one email, and a reference that is shaped like neither a
+// handle nor a key.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
