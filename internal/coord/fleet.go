@@ -1309,12 +1309,11 @@ type Secrets interface {
 //
 // # No retention
 //
-// The bucket has no age, for the reason the budget counter has none: a status
-// is standing state rather than a short-horizon question. One that expired
-// would make a converged integration read as one nobody has ever looked at,
-// on a timer nobody chose, and the loop would then re-provision against a
-// third-party app it had already agreed with. There are at most as many keys
-// here as there are surfaces, so nothing grows.
+// The bucket has no age, because a status is standing state rather than a
+// short-horizon question. One that expired would make a converged integration
+// read as one nobody has ever looked at, on a timer nobody chose, and the loop
+// would then re-provision against a third-party app it had already agreed with.
+// There are at most as many keys here as there are surfaces, so nothing grows.
 type Integrations interface {
 	// IntegrationStatuses returns every recorded status, keyed by the
 	// surface it describes.
@@ -1491,13 +1490,14 @@ type Mailboxes interface {
 //
 // A KV backend removes a key by appending a delete or purge MARKER, and a
 // bucket the broker ages takes the marker with everything else when it ages
-// out. The families above that no clock may reap — the runs, the channels,
-// the mailboxes, the secrets, the budgets, the integration statuses, the
-// positions register — keep every marker for the life of the deployment, and
-// each one is a leader read on every listing that meets it (internal/coord/kv
-// walk.go says why a marker is read again rather than trusted). So the
-// markers are swept, as a DECISION under the maintenance duty, for the reason
-// the channels are: a bucket's age cannot express which records may go.
+// out. The families here that no clock may reap — the activation pointer, the
+// runs, the channels, the mailboxes, the secrets, the integration statuses, the
+// object store's backend record, the positions register — keep every marker for
+// the life of the deployment, and each one is a leader read on every listing
+// that meets it (internal/coord/kv walk.go says why a marker is read again
+// rather than trusted). So the markers are swept, as a DECISION under the
+// maintenance duty, for the reason the channels are: a bucket's age cannot
+// express which records may go.
 //
 // # It changes no answer
 //
