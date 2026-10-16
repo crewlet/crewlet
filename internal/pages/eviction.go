@@ -60,6 +60,9 @@ func (s *Store) ReadmitNode(ctx context.Context, actor Actor, opID, nodeID strin
 // decision runs ([statelog.Snap.Held]); what this write adds is whether the
 // record its operation landed is still in force, judged from the node's own
 // row in the same snapshot ([statelog.GateStanding]).
+//
+// ITS REFUSALS COME BACK IN THE FRAMEWORK'S OWN WORDS: [refusal] translates
+// only on a subject a person edits, and a node's gate is not one.
 func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 
