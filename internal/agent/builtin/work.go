@@ -4055,7 +4055,7 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}
-	if !answeredFor(op, call) {
+	if !statelog.OpNamed(op, call) {
 		return actor, fmt.Sprintf("%s refused that `op_id`, and nothing was "+
 			"written: it was answered for another call — another tool, or "+
 			"this one with other arguments — and an op_id finishes only the "+
@@ -4105,15 +4105,6 @@ func callName(tool string, args map[string]any) string {
 // (comment_on_work_item: 36 + 1 + 20 + 1 + 16) — well inside
 // [statelog.MaxCallerOpIDBytes].
 const callDigestLen = 16
-
-// answeredFor reports whether op was minted for call: a uuid and exactly that
-// name ([statelog.NewOpID]'s grammar), with no step after it — a step's id
-// handed back would be a NEW call's operation deriving new objects.
-func answeredFor(op, call string) bool {
-	uuidLen := len(uuid.Nil.String())
-	return len(op) == uuidLen+1+len(call) && op[uuidLen] == '.' &&
-		op[uuidLen+1:] == call
-}
 
 // withOperation puts the call's operation on its answer, where it has one:
 // the `op_id` a caller brings back to make this call again as the same
