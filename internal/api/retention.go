@@ -90,6 +90,11 @@ type NodeGate interface {
 // number space belongs to the stream it came from: `?stream=` names which. A
 // call naming neither is refused rather than guessed at, because guessing here
 // moves the floor the trim deletes against.
+//
+// ONE LOG PER ACKNOWLEDGEMENT, and the register files it under that log
+// ([coord.BackupPointKey]), so acknowledging another log leaves this one
+// standing: under `backup_floor: operator` the procedure is one of these per
+// log, and each log's trim reads its own.
 func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
