@@ -224,8 +224,11 @@ func TestASpooledFetchWaitsItsTurn(t *testing.T) {
 		eventually(t, "the other credential's body arriving", func() bool {
 			return host.SpoolsArriving(node.Host()) == 1
 		})
+		// Built before the clock starts, so what is timed is the node's
+		// answer and never the case's own request.
+		past := repeatedWants(head, 80<<10)
 		start := time.Now()
-		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, repeatedWants(head, 80<<10))
+		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, past)
 		if resp.StatusCode != http.StatusRequestEntityTooLarge ||
 			!strings.Contains(answer, "larger than this node spools for one request") ||
 			!strings.Contains(answer, "a sparse checkout asks only for the files it checks out") {
@@ -940,11 +943,23 @@ func rearm(t *testing.T, hold, started string) {
 }
 
 // repeatedWants is a v2 fetch of head, asked for again until the request is
-// past size bytes.
+// past size bytes: the fewest wants, at least one, that take it past size.
+//
+// The count is ARITHMETIC — the request's fixed frame and one fixed-length
+// line a want — never found by building the request again for every want
+// added: that was quadratic, and the 80 KiB request took 5.6 s to build under
+// the race detector on an idle machine, which the case that holds a refusal to
+// being answered at once timed as the node's answer.
 func repeatedWants(head string, size int) string {
-	wants := []string{head}
-	for len(fetchWants(wants)) <= size {
-		wants = append(wants, head)
+	frame := len(fetchWants(nil))
+	line := len(pkt("want " + head + "\n"))
+	n := 1
+	if size >= frame {
+		n = (size-frame)/line + 1
+	}
+	wants := make([]string, n)
+	for i := range wants {
+		wants[i] = head
 	}
 	return fetchWants(wants)
 }
