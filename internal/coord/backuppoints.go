@@ -147,8 +147,13 @@ type BackupRegister interface {
 	BackupPoints(ctx context.Context) ([]BackupPoint, error)
 
 	// ForgetBackupPoint removes every row an owner holds, for an owner
-	// that has gone — the operator's acknowledgement of every log, under
-	// [OperatorBackupOwner].
+	// that has gone — under [OperatorBackupOwner], the operator's
+	// acknowledgement of every log.
+	//
+	// The trim's duty calls it for a node the fleet has evicted from
+	// every log that counts nodes: a copy in a directory on a host the
+	// operator has let go is not one a log can be trimmed against, and
+	// nothing else would ever remove its row.
 	ForgetBackupPoint(ctx context.Context, owner string) error
 }
 
