@@ -66,8 +66,9 @@ A body sent back to a write still wrapped in the fence it was read in is
 stored without it.
 
 The writes on each side count as a **delivery** for the turn's own
-did-this-reach-anybody gate, and each waits for its own write to reach this
-node's projection before answering — so a turn that files an item and then
+did-this-reach-anybody gate, and each raises the floor the turn's next read
+carries, so whichever copy answers that read — this node's or another data
+node's — has applied the write first: a turn that files an item and then
 lists the project sees what it just filed.
 
 Every write answers with its `outcome` — `applied`, `pending` or `unknown`,

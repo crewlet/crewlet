@@ -40,10 +40,10 @@ type Translator struct {
 	// procedure written for a phase of a turn.
 	//
 	// READ PER CHANGE, never captured, for the reason [Searcher] gives:
-	// `knowledge.skills_container` is Tier B, and a feed is per-NODE — it
-	// follows a coordination family and is deliberately not rebuilt by an
-	// apply, so a captured key would outlive every configuration that
-	// moved it.
+	// `knowledge.skills_container` is Tier B, and a feed is per-NODE — a
+	// durable consumer over the pages log, which an apply does not rebuild
+	// — so a captured key would outlive every configuration that moved
+	// it.
 	skills func() string
 }
 
