@@ -17,16 +17,21 @@
 // ran on node A was two unrelated half-traces on two screens.
 //
 // Replicating the detail would put every prompt and every response of every
-// phase on every node's disk — the one table in the deployment whose size is a
-// function of how much the company talks — to answer a question that is asked
-// a few times a minute. So the question travels instead: a read is scattered
-// to every live node on [topics.ObserveRead] over the queue's EPHEMERAL verbs
-// ([queue.EventQueue.Ask] and Serve — no stream, no consumer, no record, since
-// a read of the event log that wrote an event would grow the log every time
-// somebody looked at it), every node answers from its own store, and the asker
-// merges. Aggregates — spend, turn counts, page reads — are the other
-// mechanism and live in the replicated `usage` domain (ADR-0020); this package
-// is only the detail, and only the detail a node still holds.
+// phase on every data node's disk — the one table in the deployment whose size
+// is a function of how much the company talks — to answer a question that is
+// asked a few times a minute. So the question travels instead: a read is
+// scattered to every live DATA node on [topics.ObserveRead] over the queue's
+// EPHEMERAL verbs ([queue.EventQueue.Ask] and Serve — no stream, no consumer,
+// no record, since a read of the event log that wrote an event would grow the
+// log every time somebody looked at it), every one answers from its own store,
+// and the asker merges. A node without `data` holds no store to answer from and
+// serves no API to ask for — so it neither asks nor is asked, and builds no
+// [Fleet] (internal/engine's armHistory): the roster a Fleet is handed is the
+// data nodes, every asker is one of them, and what a node without `data`
+// published is answered for by the data node that keeps it. Aggregates —
+// spend, turn counts, page reads — are the other mechanism and live in the
+// replicated `usage` domain (ADR-0020); this package is only the detail, and
+// only the detail a node still holds.
 //
 // # A gone node's detail is gone
 //
