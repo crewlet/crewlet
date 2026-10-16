@@ -50,9 +50,9 @@ import (
 // trace back — and one `.step` per append of a multi-append gesture
 // ([StepOpID]). A surface that answers ids to callers may put in the name what
 // it needs to recognise the call an id was minted for, and hold a brought-back
-// id to it — the operator's tracker tools carry the call's tool and a digest
-// of its arguments there, and refuse the id with any other call. Three
-// constructors mint every id the engine publishes under:
+// id to it ([OpNamed]) — the operator's tracker tools carry the call's tool
+// and a digest of its arguments there, and refuse the id with any other call.
+// Three constructors mint every id the engine publishes under:
 //
 //   - [NewOpID] for an operation minted NOW, by the call that publishes it;
 //   - [DeriveOpID] for an id a retry must REPRODUCE — a turn's writes, which
@@ -161,6 +161,26 @@ func named(id uuid.UUID, name string) string {
 		return id.String()
 	}
 	return id.String() + opStepSeparator + name
+}
+
+// OpNamed reports whether opID was minted under exactly name: a uuid, the
+// separator and that name, with no step after it ([NewOpID]'s grammar).
+//
+// THE ONE TEST A SURFACE HOLDS A BROUGHT-BACK ID TO, for a surface that puts
+// in an id's name what it needs to recognise the call the id was minted for —
+// the operator's tracker tools. Written once, because each copy was one more
+// place an id with a step after it could pass: a step's id handed back would
+// be a NEW call's operation, deriving new objects under the old call's
+// identity.
+//
+// It is not a credential and decides nothing about the instant: a caller can
+// mint any id that carries one ([CheckCallerOpID] is that rule). What it
+// catches is an id carried to another call by accident, which is the one way
+// an `op_id` can make a second gesture answer as the first.
+func OpNamed(opID, name string) bool {
+	return name != "" && len(opID) == opIDLength+len(opStepSeparator)+len(name) &&
+		opID[opIDLength:opIDLength+len(opStepSeparator)] == opStepSeparator &&
+		opID[opIDLength+len(opStepSeparator):] == name
 }
 
 // StepOpID is the operation id of one append of a multi-append gesture, the

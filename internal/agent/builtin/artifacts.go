@@ -529,7 +529,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return "", "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}
-	if !answeredFor(op, call) {
+	if !statelog.OpNamed(op, call) {
 		return "", "", fmt.Sprintf("%s refused that `op_id`, and nothing was written: "+
 			"it was answered for another call, another tool or this one with other "+
 			"arguments. To finish that call, send its arguments unchanged with it; to "+
