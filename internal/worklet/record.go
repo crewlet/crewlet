@@ -27,7 +27,9 @@ import (
 //
 //  1. A named scalar present in the patch carries its COMPLETE new value,
 //     never an excerpt and never a diff. The 600-byte excerpts live in the
-//     notification, where a wake prompt is what they are for.
+//     notification, where a card is what they are for; a woken seat reads
+//     the complete value from the payload instead (wakeBody), so a comment
+//     is never handed to the seat it addresses cut at a card's length.
 //  2. A collection the write TOUCHES is carried whole; one it does not touch
 //     is absent. That is what makes a record able to rebuild the row — a
 //     32-entry delta map could not represent a write touching 128 field
