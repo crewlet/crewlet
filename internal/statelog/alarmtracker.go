@@ -227,9 +227,9 @@ func compareInstances(a, b instance) int {
 // table's order breaks a tie only between alarms raised by one evaluation.
 //
 // ONE ENTRY PER KIND, however many logs it stands on: the count is how many
-// problems an operator has to look at, and one cause standing on four logs is
-// one of them, as the gauge beside it says. A per-log kind has stood since its
-// longest-standing log's instance was raised.
+// problems an operator has to look at, and one cause standing on several logs
+// is one of them, as the gauge beside it says. A per-log kind has stood since
+// its longest-standing log's instance was raised.
 //
 // FALSE IS NOT "NONE FIRING": a node whose alarm table has not been evaluated
 // yet (mid-boot, or running no state log at all) cannot say, and an empty
