@@ -224,9 +224,13 @@ func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 // name is held in this container" is the whole of what happened, while the
 // framework's wording for it — the object already exists — names an object
 // nobody asked about.
+//
+// ONLY ON A SUBJECT A PERSON EDITS — see [refusal], which reads the subject's
+// kind: a node's eviction gate goes through here too, and on its subject the
+// translation named a page after a node id.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
-	return result, refusal(err, req.Subject.ID)
+	return result, refusal(err, req.Subject)
 }
 
 // onPage publishes one write about one page, stating the page's CONTAINER in
@@ -331,6 +335,13 @@ func inContainer(head Page, container string) error {
 
 // refusal is that translation, as a function over values.
 //
+// IT TRANSLATES ONLY ON A SUBJECT A PERSON EDITS — a page, a title, a
+// container. The log's own subjects (a node's eviction gate, a reanchor's
+// generation, a barrier) are arbitrated by the same framework, and their
+// refusals stay in its words: translated, two operators contending over one
+// node's gate were told "the page kept changing under this write: <node id>",
+// about an edit nobody was making.
+//
 // Separate from the append because the append needs a broker, a store and a
 // log, and the two refusals that reach a person are reachable through none of
 // them on demand: an exhausted compare-and-set is sixteen lost races, which no
@@ -338,18 +349,24 @@ func inContainer(head Page, container string) error {
 // re-reads — and the branch a seat is told to act on had no producer at all
 // until this function existed, so [ErrConflict] was a sentinel the tool
 // surface matched on and nothing ever returned.
-func refusal(err error, subject string) error {
-	switch {
-	case err == nil:
+func refusal(err error, subject statelog.Subject) error {
+	if err == nil {
 		return nil
+	}
+	switch ObjectKind(subject.Kind) {
+	case KindPage, KindTitle, KindContainer:
+	default:
+		return err
+	}
+	switch {
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Errorf("%w: %s", ErrTitleTaken, subject)
+		return fmt.Errorf("%w: %s", ErrTitleTaken, subject.ID)
 	case errors.Is(err, statelog.ErrConflict):
 		// The retry bound lives in the framework, which is where the
 		// rounds are counted; what does not live there is that a page is
 		// a thing a PERSON is editing, so the answer a seat needs is
 		// "read it again", not "the append failed".
-		return fmt.Errorf("%w: %s: %w", ErrConflict, subject, err)
+		return fmt.Errorf("%w: %s: %w", ErrConflict, subject.ID, err)
 	}
 	return err
 }
