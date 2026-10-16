@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -67,6 +68,9 @@ type recordingWork struct {
 	actors  []builtin.Actor
 	opIDs   []string
 	taskIDs []string
+	// fields is every create's custom-field values, as the tool encoded
+	// them for the writer.
+	fields  []map[string]json.RawMessage
 	outcome statelog.Outcome
 }
 
@@ -93,6 +97,7 @@ func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker
 	w.w.actors = append(w.w.actors, w.actor)
 	w.w.opIDs = append(w.w.opIDs, opID)
 	w.w.taskIDs = append(w.w.taskIDs, task.ID)
+	w.w.fields = append(w.w.fields, task.Fields)
 	outcome := w.w.outcome
 	if outcome == "" {
 		outcome = statelog.OutcomeApplied
@@ -117,6 +122,13 @@ func (r *recordingWork) writes() ([]builtin.Actor, []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]builtin.Actor(nil), r.actors...), append([]string(nil), r.opIDs...)
+}
+
+// fieldsFiled is every create's custom-field values, in order.
+func (r *recordingWork) fieldsFiled() []map[string]json.RawMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]map[string]json.RawMessage(nil), r.fields...)
 }
 
 // filed is the id of every task a create was asked to file, in order.
@@ -582,6 +594,8 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
 		{"two objects", "application/json", good + good, newKey(),
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		{"arguments that are not an object", "application/json",
+			`{"args":["title"]}`, newKey(), http.StatusBadRequest, httpjson.CodeInvalidBody},
 		{"no operation key", "application/json", good, "",
 			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
 		{"a key that is not an operation id", "application/json", good, "r-1",
@@ -877,4 +891,69 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 		t.Errorf("a call whose caller hung up was recorded as %d — a 5xx counts "+
 			"a closed tab as this node failing", rec.Code)
 	}
+}
+
+// AN OPERATOR CALL'S NUMBERS ARRIVE EXACTLY, on both of this surface's
+// transports, as they do from a seat.
+//
+// Every other path into these tools reads a call's arguments through
+// json.Number — a seat's from its provider — and the tools are written for
+// that. The act and MCP transports decoded with the default decoder, which
+// turns every JSON number into a float64 first, so an integer past 2^53 was
+// rounded before any tool saw it: a whole-number custom-field value a person
+// typed was filed as one they never typed, and nothing said so.
+//
+// Mutation: decode the act envelope's `args` as a map with its own decoder, or
+// the MCP handler's with json.Unmarshal, and that transport's case goes red.
+func TestAnOperatorCallsNumbersArriveExactly(t *testing.T) {
+	t.Parallel()
+	const past = "9007199254740993" // 2^53 + 1, the first integer a float64 rounds
+	args := map[string]any{"title": "Rotate the signing key", "project": "ENG",
+		"fields": map[string]any{"points": json.Number(past)}}
+	filedExactly := func(t *testing.T, work *recordingWork) {
+		t.Helper()
+		filed := work.fieldsFiled()
+		if len(filed) != 1 {
+			t.Fatalf("the create reached the writer %d times", len(filed))
+		}
+		if got := string(filed[0]["points"]); got != past {
+			t.Errorf("points was filed as %s, want %s as it was sent", got, past)
+		}
+	}
+
+	t.Run("act", func(t *testing.T) {
+		t.Parallel()
+		work := &recordingWork{}
+		raw, err := json.Marshal(map[string]any{"args": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			tracker.CreateWorkItemTool, "application/json", string(raw), newKey())
+		if status != http.StatusOK {
+			t.Fatalf("the act answered %d %v", status, answer)
+		}
+		filedExactly(t, work)
+	})
+
+	t.Run("mcp", func(t *testing.T) {
+		t.Parallel()
+		work := &recordingWork{}
+		dir := &directory{people: map[string]iam.Principal{"founder": founder}}
+		server := httptest.NewServer(dir.middleware(actSurface(t, work).MCPHandler()))
+		t.Cleanup(server.Close)
+		sess := connectAs(t, server.URL+operator.MCPPath, "founder")
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+			Name: tracker.CreateWorkItemTool, Arguments: args,
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("the create was refused: %+v", res.Content)
+		}
+		filedExactly(t, work)
+	})
 }

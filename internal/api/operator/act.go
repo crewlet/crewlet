@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // ActPattern is the route the act transport is mounted at: ONE catalogue tool
@@ -126,8 +127,11 @@ type ActAnswer struct {
 // `Idempotency-Key`, which every surface that takes one reads it from — so a
 // retry is one script whichever route it wrote to, and the key is held to one
 // grammar and scoped by one rule.
+//
+// THE ARGUMENTS ARE HELD RAW and read by the one decode every transport into
+// a tool shares ([tools.DecodeCallArgs]), never by this envelope's decoder.
 type actRequest struct {
-	Args map[string]any `json:"args"`
+	Args json.RawMessage `json:"args"`
 }
 
 // Acts names the tools the act transport would serve this principal: the
@@ -225,7 +229,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	req, err := decodeAct(raw)
+	args, err := decodeAct(raw)
 	if err != nil {
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"tool": name, "detail": err.Error()})
@@ -239,10 +243,6 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	key, ok := opkey.Require(w, r)
 	if !ok {
 		return
-	}
-	args := req.Args
-	if args == nil {
-		args = map[string]any{}
 	}
 	if !NoOperationArg(args) {
 		RefuseOperationArg(w, name)
@@ -296,26 +296,36 @@ func declaresJSON(header string) bool {
 }
 
 // decodeAct reads the body as exactly one JSON object naming only the field the
-// transport takes.
+// transport takes, and answers the tool's arguments it carries — never nil.
 //
 // A KEY THIS TRANSPORT DOES NOT READ IS REFUSED rather than ignored: a client
 // naming its operation in the body (`op_id`) rather than in the
 // Idempotency-Key header would otherwise send every write believing it named
 // an operation it did not, and its retry would be a second write.
-func decodeAct(raw []byte) (actRequest, error) {
+//
+// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number ([tools.DecodeCallArgs]), as
+// they do on every other path into these tools. Decoded by this envelope's
+// own decoder they were float64s, so an integer past 2^53 — a vendor's
+// 19-digit id, a whole-number custom-field value — was rounded before any tool
+// saw it, and a person's press recorded a value they never sent.
+func decodeAct(raw []byte) (map[string]any, error) {
 	var req actRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
+		return nil, fmt.Errorf("the body must be one JSON object "+
 			"{\"args\": {…}}, with the operation in the %s header: %w",
 			opkey.Header, err)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return actRequest{}, errors.New("the body carries something after its " +
+		return nil, errors.New("the body carries something after its " +
 			"JSON object; send exactly one")
 	}
-	return req, nil
+	args, err := tools.DecodeCallArgs(req.Args)
+	if err != nil {
+		return nil, fmt.Errorf("the body's `args`: %w", err)
+	}
+	return args, nil
 }
 
 // receiptOf is a successful call's answer: the tool's own, verbatim, with the
