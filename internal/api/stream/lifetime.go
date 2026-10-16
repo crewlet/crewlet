@@ -406,7 +406,7 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
 			log.InfoContext(ctx, "stream_closed_undecided",
 				"hint", "an identity move this node cannot name anybody by; "+
 					"the tab reconnects and its handshake decides")
-			_ = conn.Close(CloseUndecided, "credential to be decided again")
+			_ = conn.Close(CloseUndecided, "Sign-in changed. Reconnecting.")
 			return
 		case <-l.published:
 			if !keepSeated(ctx, conn, cred.who, seatOf, &seen) {
@@ -421,7 +421,8 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
 				// them.
 				log.InfoContext(ctx, "stream_closed_audience_moved",
 					"login", cred.who.current().Login)
-				_ = conn.Close(CloseUndecided, "what this socket may read moved")
+				_ = conn.Close(CloseUndecided, "Your access changed. "+
+					"Reconnecting.")
 				return
 			}
 			if rewatch != nil {
@@ -485,7 +486,7 @@ func keepSeated(ctx context.Context, conn *websocket.Conn, who *asking,
 	// A SEAT THIS SOCKET HAS NOT YET SEEN THE PUBLISHED COMPANY HOLD: the
 	// handshake resolves the binding.
 	log.InfoContext(ctx, "stream_closed_seat_moved", "seat", p.Seat)
-	_ = conn.Close(CloseUndecided, "seat to be resolved again")
+	_ = conn.Close(CloseUndecided, "Your seat changed. Reconnecting.")
 	return false
 }
 
@@ -514,14 +515,15 @@ func decideOnce(ctx context.Context, conn *websocket.Conn, who *asking,
 		return false
 	case how == iam.Unknown:
 		log.WarnContext(ctx, "stream_closed_undecided",
-			"hint", "this node could not read what decides this socket's "+
-				"credential; the tab reconnects, and its handshake answers "+
-				"503 until the node can say")
-		_ = conn.Close(CloseUndecided, "credential could not be decided")
+			"hint", "Couldn't read sign-in data for this socket. The tab "+
+				"reconnects and gets a 503 until it can.")
+		_ = conn.Close(CloseUndecided, "Can't check your sign-in right now. "+
+			"Reconnecting.")
 		return false
 	case how != iam.Resolved:
 		log.InfoContext(ctx, "stream_closed_credential_ended")
-		_ = conn.Close(CloseUnauthenticated, "credential no longer accepted")
+		_ = conn.Close(CloseUnauthenticated, "Your session ended. Sign in "+
+			"again.")
 		return false
 	}
 	if before := who.current(); !sameActor(before, principal) {
@@ -531,7 +533,7 @@ func decideOnce(ctx context.Context, conn *websocket.Conn, who *asking,
 		log.InfoContext(ctx, "stream_closed_principal_moved",
 			"login", principal.Login, "was", before.Login,
 			"seat", principal.Seat, "seat_was", before.Seat)
-		_ = conn.Close(CloseUndecided, "who this socket acts as moved")
+		_ = conn.Close(CloseUndecided, "Your account changed. Reconnecting.")
 		return false
 	}
 	who.set(principal)

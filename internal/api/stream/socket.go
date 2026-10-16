@@ -675,7 +675,7 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {
 		return CloseUnauthenticated,
-			"watching a seat needs a credential this node can resolve"
+			"Sign in to watch a seat."
 	}
 	name := strings.TrimSpace(req.Seat)
 	if name == "" {
