@@ -21,7 +21,11 @@ import (
 //
 //  1. A named scalar present in the patch carries its COMPLETE new value,
 //     never an excerpt and never a diff. The 600-byte excerpts live in the
-//     notification, where a wake prompt is what they are for.
+//     notification, where a card is what they are for; a woken seat reads a
+//     comment whole from the payload instead (wakeBody). A new page's wake
+//     keeps its excerpt, as a pointer to a page too large to carry, and a
+//     save's is its message, which [MaxMessage] bounds below an excerpt's
+//     length so it is never cut.
 //  2. A collection the write TOUCHES is carried whole; one it does not touch
 //     is absent. That is what makes a record able to rebuild the row, and it
 //     is affordable because every collection here is capped.
