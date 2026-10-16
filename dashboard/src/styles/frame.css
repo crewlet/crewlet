@@ -534,75 +534,7 @@
   padding: var(--spacing-3);
 }
 
-/* WHO THIS BROWSER IS, and the reader's own preferences beside the name. */
-.user-block {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: var(--spacing-1) 0;
-}
-
-.user-block-who {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  padding: var(--spacing-1) var(--spacing-1);
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-a.user-block-who:hover {
-  background: var(--color-surface-hover);
-}
-
-/* WHERE THE READER IS, the sidebar's own mark: the user block is the
-   Account's row (the Account has none of its own), so on `#/account` it is
-   raised with the hairline the kit's current row wears — no hue, an outline
-   rather than a shadow so forced-colours mode keeps it — and "where am I"
-   reads one way down the whole rail. After `:hover`, so a current block shows
-   the lift rather than the hover overlay. */
-a.user-block-who[aria-current="page"] {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
-}
-
-a.user-block-who:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-/* THE RAIL'S PRESSABLE MARK, AT REST: the chevron a rail row that opens
-   something wears, in quiet ink, at the block's end. A name says nothing
-   about being a way to the reader's password and second factor, and the block
-   drew no mark at all until it was hovered. */
-.user-block-go {
-  flex: none;
-  margin-left: auto;
-  color: var(--color-text-tertiary);
-}
-
-.user-block-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: var(--font-line-height-snug);
-}
-
-.user-block-name {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-}
-
-.user-block-detail {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-}
-
+/* The reader's own preferences, in the account row's popover (`app/sidebar/UserBlock.tsx`). */
 /* AS WIDE AS ITS ROWS, the label column and the one control column: they are
    the widest thing the popover holds, so they set its width (over the kit's
    own floor), and the block FILLS that width rather than declaring one, so

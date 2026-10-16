@@ -193,7 +193,7 @@ describe("who the block says this is", () => {
     engine({ "GET /auth/session": { status: 200, body: { ...PERSON, name: "Ada Lovelace" } } });
     render(block(ada, "Ada Lovelace"));
     const who = await screen.findByRole("link", { name: /Ada Lovelace/ });
-    expect(who.querySelector(".user-block-detail")?.textContent).toBe("ada.lovelace");
+    expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("ada.lovelace");
     expect(who.textContent).not.toContain("human seat");
   });
 
@@ -263,7 +263,7 @@ describe("who the block says this is", () => {
     });
     render(block({ ...nobody, loading: true }));
     const who = await screen.findByRole("link", { name: /cara\.example/ });
-    expect(who.querySelector(".user-block-detail")?.textContent).toBe("@cara");
+    expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("@cara");
     expect(who.textContent).not.toContain("Signed in");
   });
 
@@ -315,7 +315,7 @@ describe("who the block says this is", () => {
     const link = screen.getByRole("link", { name: /your account/ });
     expect(link.getAttribute("href")).toBe("#/account");
     expect(link.getAttribute("title")).toBe(workspaceRow("account")!.hint);
-    expect(link.querySelector(".user-block-go")).not.toBeNull();
+    expect(link.querySelector(".crewlet-account-row__go")).not.toBeNull();
     // THE GRANTS ARE SAID IN THE POPOVER, under the login — never as the
     // link's title, which answered a question the reader had not asked.
     expect(link.getAttribute("title")).not.toMatch(/Holds/);
@@ -362,11 +362,25 @@ describe("who the block says this is", () => {
     expect(within(menu).queryByRole("button", { name: "Sign out everywhere" })).toBeNull();
   });
 
+  // A KEY FOR A FACE, for a principal that is not a person: the initials of
+  // "token:ops" drew "TO", as if it were somebody. A person keeps their
+  // initials.
+  test("an API token's session wears a key, and a person their initials", () => {
+    const badge = () => document.querySelector(".crewlet-account-row .crewlet-avatar")!;
+    render(block({ ...nobody, login: "token:ops", unbound: true, grants: [] }));
+    expect(badge().querySelector(".crewlet-avatar__icon svg")).not.toBeNull();
+    expect(badge().textContent).toBe("");
+    cleanup();
+    render(block(ada, "Founder"));
+    expect(badge().querySelector(".crewlet-avatar__icon")).toBeNull();
+    expect(badge().textContent).not.toBe("");
+  });
+
   // THE ONE BADGE THAT IS THE READER carries the accent's ring — and a badge
   // standing in for nobody, or for an answer still out, does not.
   test("the reader's own badge is ringed in the accent, once the engine has said who it is", () => {
     const ringed = () =>
-      document.querySelectorAll(".user-block .crewlet-avatar--ring-brand").length;
+      document.querySelectorAll(".crewlet-account-row .crewlet-avatar--ring-brand").length;
     render(block(ada, "Founder"));
     expect(ringed()).toBe(1);
     cleanup();
@@ -378,7 +392,7 @@ describe("who the block says this is", () => {
     ]) {
       cleanup();
       render(block(unknown));
-      expect(document.querySelector(".user-block .crewlet-avatar")).not.toBeNull();
+      expect(document.querySelector(".crewlet-account-row .crewlet-avatar")).not.toBeNull();
       expect(ringed()).toBe(0);
     }
   });
@@ -707,7 +721,7 @@ describe("the preferences", () => {
   test("the mode, the density and the theme are one column of one width", () => {
     open();
     const rows = [...document.querySelectorAll(".preferences-row")].map(
-      (row) => row.querySelector(".t-label")?.textContent,
+      (row) => row.querySelector(".crewlet-text--label")?.textContent,
     );
     expect(rows).toEqual(["Mode", "Density", "Theme"]);
     for (const name of ["Mode", "Density"]) {

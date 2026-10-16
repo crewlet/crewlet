@@ -1812,9 +1812,9 @@ test("the engine's row takes its control marks from the kit alone, and the user 
     expect(sheet(name), name).not.toMatch(/\.crewlet-app-shell__rail-row/);
   }
 
-  const css = sheet("frame.css");
-  expect(block(css, ".user-block-go")).toMatch(/color:\s*var\(--color-text-tertiary\)/);
-  const current = block(css, 'a.user-block-who[aria-current="page"]');
-  expect(current).toMatch(/background:\s*var\(--color-surface-elevated\)/);
-  expect(current).toMatch(/outline:\s*1px solid var\(--color-border-default\)/);
+  // THE USER BLOCK IS THE KIT'S AccountRow, whose chevron and current-row
+  // lift are asserted in uilet; no sheet of ours draws a second copy.
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(/\.user-block/);
+  }
 });

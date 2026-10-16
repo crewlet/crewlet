@@ -271,13 +271,6 @@
 .dot.accent {
   background: var(--color-brand-accent);
 }
-/* A badge that names its seat itself (`ui/SeatAvatar.tsx`): the wrapper is
-   the image a reader hears, so it takes the badge's box and nothing more —
-   no line box of its own around it, and never squeezed by a row it sits in. */
-.seat-avatar {
-  display: inline-flex;
-  flex: none;
-}
 
 /* A link that IS a row takes the page's text colour, not the link colour.
    Otherwise every seat name in every list renders in the accent — which is

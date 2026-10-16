@@ -1,39 +1,40 @@
 /**
  * A seat's badge tells seats apart, and still says who it is.
  *
- * The kit makes initials from the first two words of a name, so a company
- * that names its agents "Agent CEO" and "Agent CTO" drew both as `AC` — on the
- * chart, side by side, and in every "Unit lead" and "Reports to" row. These
- * cases hold the two halves of the fix: the initials come from the words that
- * differ, and what a screen reader hears is still the whole name.
+ * A company that names its agents "Agent CEO" and "Agent CTO" drew both as
+ * `AC`, on the chart side by side and in every "Unit lead" and "Reports to"
+ * row. The kit's Avatar now takes an agent's initials past that word and keeps
+ * the whole name as what a screen reader hears; these cases hold that the
+ * seat's badge gets both, through the kit.
  */
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { getInitials } from "@crewlethq/ui";
-import { SeatAvatar, badgeName, seatBadge } from "./SeatAvatar.tsx";
+import { avatarInitialsName, getInitials } from "@crewlethq/ui";
+import { SeatAvatar, seatBadge } from "./SeatAvatar.tsx";
 
 afterEach(cleanup);
 
 describe("a seat's badge", () => {
   test("two agents named for their role draw two different badges", () => {
-    expect(getInitials(badgeName("Agent CEO", "agent"))).toBe("CE");
-    expect(getInitials(badgeName("Agent CTO", "agent"))).toBe("CT");
-    expect(getInitials(badgeName("agent-cto", "agent"))).toBe("CT");
-    expect(getInitials(badgeName("Agent PM", "agent"))).toBe("PM");
+    expect(getInitials(avatarInitialsName("Agent CEO", "agent"))).toBe("CE");
+    expect(getInitials(avatarInitialsName("Agent CTO", "agent"))).toBe("CT");
+    expect(getInitials(avatarInitialsName("agent-cto", "agent"))).toBe("CT");
+    expect(getInitials(avatarInitialsName("Agent PM", "agent"))).toBe("PM");
   });
 
   test("the word is dropped only where the squircle already says it", () => {
     // A person's name is their name: the circle says nothing about "agent".
-    expect(badgeName("Agent Smith", "human")).toBe("Agent Smith");
+    expect(avatarInitialsName("Agent Smith", "human")).toBe("Agent Smith");
     // Only a LEADING word, and only the whole word.
-    expect(badgeName("Support Agent", "agent")).toBe("Support Agent");
-    expect(badgeName("Agentic Ops", "agent")).toBe("Agentic Ops");
+    expect(avatarInitialsName("Support Agent", "agent")).toBe("Support Agent");
+    expect(avatarInitialsName("Agentic Ops", "agent")).toBe("Agentic Ops");
     // A name that is nothing but the word keeps it rather than going blank.
-    expect(badgeName("Agent", "agent")).toBe("Agent");
-    expect(seatBadge("Agent CTO", undefined)).toEqual({ name: "CTO", kind: "agent" });
+    expect(avatarInitialsName("Agent", "agent")).toBe("Agent");
+    // A stack's member keeps the whole name, and the kit draws its initials.
+    expect(seatBadge("Agent CTO", undefined)).toEqual({ name: "Agent CTO", kind: "agent" });
     expect(seatBadge("Agent CTO", "human")).toEqual({ name: "Agent CTO", kind: "human" });
   });
 
@@ -93,7 +94,7 @@ describe("an agent drawn as itself", () => {
     expect(container.querySelector("[data-character]")).toBeNull();
     expect(container.querySelector(".crewlet-avatar")!.textContent).toBe("CT");
     expect(seatBadge("Agent CTO", "agent", { character: "octlet", color: "blue" })).toEqual({
-      name: "CTO",
+      name: "Agent CTO",
       kind: "agent",
       character: "octlet",
       hue: "blue",

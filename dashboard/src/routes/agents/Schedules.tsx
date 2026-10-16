@@ -121,11 +121,11 @@ type LedgerOutcome = Exclude<ScheduleRunRow["outcome"], "">;
 /**
  * Who a schedule wakes, in a cell: one seat by name, several by face and count.
  *
- * THE FACES ARE THE CHART'S. Each badge is drawn from the seat's badge name
- * (`seatBadge`), as every other badge of a seat is, so "Agent SWE", "Agent
- * Frontend SWE" and "Agent AI Systems Engineer" are SW, FS and AS here as they
- * are on the chart and the roster — handed the whole name, the kit made AS, AI
- * and AA of them, three badges nobody could match to a card. And at the kit's
+ * THE FACES ARE THE CHART'S. Each badge is the seat's own (`seatBadge`), as
+ * every other badge of a seat is, and the kit takes an agent's initials past
+ * its leading "agent" word, so "Agent SWE", "Agent Frontend SWE" and "Agent AI
+ * Systems Engineer" are SW, FS and AS here as they are on the chart and the
+ * roster, rather than AS, AI and AA, three badges nobody could match to a card. And at the kit's
  * default step, the design's stack: at the extra-small one the 8px each badge
  * is overlapped by cut every monogram's second letter away.
  */
