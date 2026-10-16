@@ -190,6 +190,12 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		if c, counted := census[name]; counted {
 			d.LinearizableReads, d.LinearizableReadsExpected = c.reads, c.expected
 		}
+		// THE FIELD THIS LOG'S CEILING IS SET BY, from the register's own
+		// declaration ([capacityBounds]), which `census_drift` names on
+		// the log's line: each log is sized by its own field.
+		if _, ceiling, known := capacityBounds(running.spec.Name); known {
+			d.CeilingField = ceiling.Field
+		}
 		// THE POINT THIS LOG'S TRIM COUNTS, under the operator's own
 		// policy and for this log alone — not the newest of every owner,
 		// and not the newest point whatever it covers. Under

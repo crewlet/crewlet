@@ -496,6 +496,15 @@ type Reading struct {
 	// until the first came back under.
 	LinearizableReads, LinearizableReadsExpected int
 
+	// LogCeilingField is the Tier A field that sets this log's byte ceiling
+	// (`stream.iam_log_max_bytes`, say), which a log past its census names
+	// in its own line: each log's ceiling is its own field, sized from
+	// what that log holds, and one remedy naming the mutation log's sent an
+	// operator of every other log to the wrong field. Empty where the
+	// caller named none. Per DOMAIN, filled by the report from
+	// [DomainInputs.CeilingField].
+	LogCeilingField string
+
 	// LogBytesPerDay is what one log took in over the trailing day,
 	// LogMaxBytes the ceiling its broker enforces and ReplayWindow the
 	// `min_age` the trim keeps — the window the log has to be able to
@@ -1091,14 +1100,24 @@ var table = []rule{
 		kind:   KindCensusDrift,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
+			// THE LOG'S OWN CEILING FIELD, where the caller named it: the
+			// remedy is one sentence for every log, and the field is
+			// what differs between them.
+			ceiling := ""
+			if r.LogCeilingField != "" {
+				ceiling = fmt.Sprintf("; its ceiling is `%s`", r.LogCeilingField)
+			}
 			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
-					"log was sized for", r.LinearizableReads,
-					r.LinearizableReadsExpected),
+					"log was sized for%s", r.LinearizableReads,
+					r.LinearizableReadsExpected, ceiling),
 				r.LinearizableReadsExpected > 0 &&
 					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},
-		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
-			"rate. See `stream.tracker_retention` in " +
+		remedy: "Each read past the census is a barrier record on the named log, " +
+			"so re-derive that log's own ceiling — the field its line names — " +
+			"adding what its barriers take at the real rate to whatever else the " +
+			"field is sized from, and the trim's cadence " +
+			"(`stream.tracker_retention`). See " +
 			"docs/getting-started/configuration.md.",
 	},
 	{
