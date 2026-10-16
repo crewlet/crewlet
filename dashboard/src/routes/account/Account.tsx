@@ -75,6 +75,10 @@ import {
   Tag,
   Text,
   useToast,
+  DescriptionList,
+  Inline,
+  InlineCode,
+  Stack,
 } from "@crewlethq/ui";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -183,26 +187,25 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
       <Card.Header icon={<KeyGlyph size="sm" />}>
         <Card.Title>{token ? "API token" : "Not a person’s account"}</Card.Title>
       </Card.Header>
-      <div className="col gap-3">
+      <Stack gap={3}>
         {/* WHICH CREDENTIAL, and nothing about what it lacks: the note above
             says that once, for the page. */}
         <Text as="p" variant="body">
           {token ? (
             <>
-              You’re signed in with the API token <code className="inline">{token}</code>.
+              You’re signed in with the API token <InlineCode>{token}</InlineCode>.
             </>
           ) : (
             <>
-              You’re signed in as <code className="inline">{session.login}</code>, which isn’t a
-              person.
+              You’re signed in as <InlineCode>{session.login}</InlineCode>, which isn’t a person.
             </>
           )}
         </Text>
-        <div className="row gap-2" style={{ flexWrap: "wrap", alignItems: "center" }}>
-          <span className="t-label">Access</span>
+        <Inline gap={2} wrap>
+          <Text variant="label">Access</Text>
           <AccessTags grants={session.grants} />
-        </div>
-      </div>
+        </Inline>
+      </Stack>
     </Card>
   );
 }
@@ -248,7 +251,7 @@ function PersonAccount({
   const grants = session.grants ?? [];
 
   return (
-    <div className="col gap-4">
+    <Stack gap={4}>
       <Profile session={session} profile={profile} />
       <Security credentials={credentials} onChanged={moved} />
       <Sessions session={session} sessions={sessions} onChanged={moved} />
@@ -258,7 +261,7 @@ function PersonAccount({
         credentials={credentials}
         onChanged={moved}
       />
-    </div>
+    </Stack>
   );
 }
 
@@ -290,15 +293,19 @@ function Profile({
         detail={profile.error?.detail || undefined}
         loading={profile.loading && !row}
       >
-        <dl className="prof-facts">
-          <dt>Login</dt>
-          <dd className="mono">{row?.login || session.login}</dd>
-          <dt>Name</dt>
-          <dd>{row?.sealed ? sealed : row?.name || <EmptyValue label="No name" />}</dd>
-          <dt>Email</dt>
-          <dd>{row?.sealed ? sealed : row?.email || <EmptyValue label="No address" />}</dd>
-          <dt>Seat</dt>
-          <dd>
+        <DescriptionList>
+          <DescriptionList.Item term="Login">
+            <Text variant="cell" mono>
+              {row?.login || session.login}
+            </Text>
+          </DescriptionList.Item>
+          <DescriptionList.Item term="Name">
+            {row?.sealed ? sealed : row?.name || <EmptyValue label="No name" />}
+          </DescriptionList.Item>
+          <DescriptionList.Item term="Email">
+            {row?.sealed ? sealed : row?.email || <EmptyValue label="No address" />}
+          </DescriptionList.Item>
+          <DescriptionList.Item term="Seat">
             {seat ? (
               <SeatFact handle={seat} />
             ) : (
@@ -306,14 +313,13 @@ function Profile({
               // that acts as its own credential rather than as a seat.
               <EmptyValue label="No seat" />
             )}
-          </dd>
-          <dt>Access</dt>
-          <dd>
+          </DescriptionList.Item>
+          <DescriptionList.Item term="Access">
             <AccessTags grants={row?.grants ?? session.grants} />
-          </dd>
-        </dl>
+          </DescriptionList.Item>
+        </DescriptionList>
       </QueryState>
-      <p className="t-caption muted" style={{ margin: 0 }}>
+      <Text as="p" variant="caption">
         {/* AN ADMIN IS SENT TO THEIR OWN ROW, where these are changed. */}
         {holds(row?.grants ?? session.grants ?? [], ADMIN) ? (
           <>
@@ -324,7 +330,7 @@ function Profile({
         ) : (
           "Only an admin can change these."
         )}
-      </p>
+      </Text>
     </Card>
   );
 }
@@ -350,22 +356,28 @@ function SeatFact({ handle }: { handle: string }) {
   const at = handleLabel(handle);
   if (!held) {
     return linked ? (
-      <a className="t-link mono" href={href(["agents", "seats", handle])}>
-        {at}
-      </a>
+      <Link href={href(["agents", "seats", handle])} size="inherit">
+        <Text variant="cell" mono>
+          {at}
+        </Text>
+      </Link>
     ) : (
-      <span className="mono">{at}</span>
+      <Text variant="cell" mono>
+        {at}
+      </Text>
     );
   }
   return (
-    <span className="row gap-2" style={{ flexWrap: "wrap" }}>
+    <Inline as="span" gap={2} wrap>
       {linked ? (
         <SeatCell handle={handle} name={held.name} kind={held.kind} avatar={held.avatar} />
       ) : (
         <SeatLabel name={held.name} kind={held.kind} avatar={held.avatar} />
       )}
-      <span className="mono muted">{at}</span>
-    </span>
+      <Text variant="cell" mono tone="tertiary">
+        {at}
+      </Text>
+    </Inline>
   );
 }
 
@@ -402,17 +414,17 @@ function Security({
       <Card.Header icon={<ShieldUserGlyph size="sm" />}>
         <Card.Title>Security</Card.Title>
       </Card.Header>
-      <div className="col gap-4">
+      <Stack gap={4}>
         {credentials.data === null ? (
-          <section className="col gap-1" aria-label="Two-step verification">
-            <span className="t-label">Two-step verification</span>
+          <Stack as="section" gap={1} aria-label="Two-step verification">
+            <Text variant="label">Two-step verification</Text>
             <QueryState
               error={credentials.code}
               refusal={credentials.refusal}
               detail={credentials.error?.detail || undefined}
               loading={credentials.loading}
             />
-          </section>
+          </Stack>
         ) : (
           <>
             <SecurityLine
@@ -453,7 +465,7 @@ function Security({
         >
           Signs you out elsewhere and stops your tokens.
         </SecurityLine>
-      </div>
+      </Stack>
       {dialog === "password" && (
         <LayerBoundary title="Change password" onClose={() => setDialog(null)}>
           <ChangePasswordDialog
@@ -493,19 +505,15 @@ function SecurityLine({
   children: string;
 }) {
   return (
-    <section
-      className="row gap-3"
-      aria-label={label}
-      style={{ flexWrap: "wrap", alignItems: "center" }}
-    >
-      <div className="col gap-1" style={{ flex: "1 1 20rem", minWidth: 0 }}>
-        <span className="t-label">{label}</span>
+    <Inline as="section" gap={3} justify="between" wrap aria-label={label}>
+      <Stack gap={1}>
+        <Text variant="label">{label}</Text>
         <Text as="p" variant="body" tone="secondary">
           {children}
         </Text>
-      </div>
+      </Stack>
       {action}
-    </section>
+    </Inline>
   );
 }
 
@@ -803,14 +811,14 @@ function Sessions({
         <Card.Title>Where you are signed in</Card.Title>
       </Card.Header>
       <Card.Body padding="sm">
-        <div className="row gap-3" style={{ flexWrap: "wrap" }}>
-          <p className="t-caption muted" style={{ margin: 0, flex: "1 1 16rem", minWidth: 0 }}>
+        <Inline gap={3} justify="between" wrap>
+          <Text as="p" variant="caption">
             Signs you out on every device and stops your tokens.
-          </p>
+          </Text>
           <Button size="small" variant="secondary" onClick={() => setEverywhere(true)}>
             Sign out everywhere
           </Button>
-        </div>
+        </Inline>
       </Card.Body>
       <QueryState
         error={sessions.code}
@@ -909,9 +917,9 @@ function Tokens({
       {/* IN A BODY, at the card's inset: drawn bare under a flush header it
           sat against the header's rule. */}
       <Card.Body padding="sm">
-        <p className="t-caption muted" style={{ margin: 0 }}>
+        <Text as="p" variant="caption">
           Tokens let a script or assistant act as you.
-        </p>
+        </Text>
       </Card.Body>
       <QueryState
         error={credentials.code}

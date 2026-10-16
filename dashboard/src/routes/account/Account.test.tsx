@@ -25,8 +25,6 @@
  * the session it shows.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -38,7 +36,6 @@ import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { withDerived } from "~/test/org.ts";
-import { SRC } from "~/test/source.ts";
 import { href } from "~/app/router.tsx";
 import {
   currentSessionNeed,
@@ -896,17 +893,15 @@ describe("the profile", () => {
   });
 
   // AT THE CARD'S OWN INSET: in a flush card the first fact touched the
-  // header's rule, and in a padded one the list's own padding doubled the
-  // left edge — so the list sits in the card's body, and the sheet takes the
-  // list's padding off there. Mutation: `padding="none"` on the card, or the
-  // rule dropped from screens.css.
+  // header's rule, so the list sits in the card's body. It is the kit's
+  // DescriptionList, which carries no padding of its own to double the edge.
+  // Mutation: `padding="none"` on the card, or a local list in its place.
   test("the facts sit in the card's body, at its inset", async () => {
     engine();
     mount();
     const seat = await seatFact();
     expect(seat.closest(".crewlet-card__body")).not.toBeNull();
-    const css = readFileSync(join(SRC, "styles", "screens.css"), "utf8");
-    expect(css).toMatch(/\.crewlet-card__body \.prof-facts \{\s*padding: 0;\s*\}/);
+    expect(seat.closest("dl.crewlet-description-list")).not.toBeNull();
   });
 });
 
