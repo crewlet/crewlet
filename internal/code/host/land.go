@@ -79,6 +79,12 @@ type landing struct {
 	Progress func(step string)
 }
 
+// objects is what every walk of the landing's history is bounded by
+// (gitproc.HistoryWalk): the live objects of its synced row, the repository
+// the push is judged on — read here, once, so no walk is handed a count of
+// its own.
+func (l *landing) objects() int64 { return l.Synced.Repo.LiveObjects }
+
 // landed is what a landing came to.
 type landed struct {
 	// Commands are the push's commands as its builder is answered: every
@@ -170,7 +176,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			todo = append(todo, i)
 		}
 	}
-	forced, stale, err := s.forceChecks(ctx, l.Scratch, cmds, todo)
+	forced, stale, err := s.forceChecks(ctx, l.Scratch, l.objects(), cmds, todo)
 	if err != nil {
 		return landed{}, unchecked(err)
 	}
@@ -227,7 +233,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 				}
 			}
 			detail := fmt.Sprintf("blob %s (%s) is %s, past code.limits.max_blob_bytes (%s)", short(oid),
-				s.pathOf(ctx, l.Scratch, sent, oid, ref.PackBytes()), humanBytes(size),
+				s.pathOf(ctx, l.Scratch, l.objects(), sent, oid, ref.PackBytes()), humanBytes(size),
 				humanBytes(limits.MaxBlobBytes))
 			for i := range cmds {
 				if cmds[i].Result == "" {
@@ -420,7 +426,8 @@ func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []strin
 	if len(news) > 0 && ref != nil {
 		packBytes := unstored.PackBytes()
 		listing.Go(func() {
-			if introduced, count, err = s.introduced(ctx, l.Scratch, news, packBytes); err != nil {
+			if introduced, count, err = s.introduced(ctx, l.Scratch, l.objects(), news,
+				packBytes); err != nil {
 				cancel(errListingFailed)
 				return
 			}

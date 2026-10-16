@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -16,6 +17,24 @@ import (
 // THE RECEIVE PIPELINE'S THREE SCANS of a push, each one git process in the
 // push's scratch, in sequence — never one pool process piped into another, which
 // would hold two slots of one lane at once and queue against itself.
+//
+// EVERY COMMIT WALK GOES BY GENERATION. A walk git makes newest first BY DATE
+// stops only once every commit it still holds is older than what it is
+// looking for, so a commit dated before its parent — a person's skewed
+// clock, a GIT_COMMITTER_DATE — walks the whole history. Where the scratch's
+// alternate has a commit-graph (the maintainer writes one), a walk can stop
+// on generation numbers instead, and three of the four take them:
+// merge-base --is-ancestor does by itself, and the listings
+// of what a push introduces and where a blob is are asked for in
+// TOPOLOGICAL ORDER (--topo-order), which is what makes rev-list walk by
+// generation — without it rev-list read every commit of the graph for a
+// skewed tip, 110–150 ms over 200 000 commits against 5 ms with it
+// (git 2.47.3 and 2.48.0 alike). The fourth is receive-pack's
+// own connectivity check, which is git's and takes no flag of ours
+// (gitproc.ReceivePackDeadline). Where there is no commit-graph yet, every
+// walk is by date whatever its flags, and each is bounded by what the
+// repository holds as well as by what the push sends (gitproc.HistoryWalk),
+// so a skewed push into a large history is slow, never refused.
 
 // forceChecks is every branch update a push makes, and whether each is forced:
 // one `merge-base --is-ancestor <old> <new>` a branch whose old and new are
@@ -31,7 +50,8 @@ import (
 // node's other readers — or itself — behind its own checks. Each is about 2 ms
 // a process (M2-gitproc's measured section), so a thousand updates in series
 // were 2–5 s of a person's push.
-func (s *Server) forceChecks(ctx context.Context, sc *cache.Scratch, cmds []code.Command, todo []int) (
+func (s *Server) forceChecks(ctx context.Context, sc *cache.Scratch, objects int64, cmds []code.Command,
+	todo []int) (
 	forced, stale map[int]bool, err error) {
 
 	forced, stale = map[int]bool{}, map[int]bool{}
@@ -58,7 +78,7 @@ func (s *Server) forceChecks(ctx context.Context, sc *cache.Scratch, cmds []code
 				i := todo[next]
 				next++
 				mu.Unlock()
-				isForced, isStale, cerr := s.isForced(ctx, sc, cmds[i].Old, cmds[i].New)
+				isForced, isStale, cerr := s.isForced(ctx, sc, objects, cmds[i].Old, cmds[i].New)
 				mu.Lock()
 				switch {
 				case cerr != nil && first == nil:
@@ -80,13 +100,19 @@ func (s *Server) forceChecks(ctx context.Context, sc *cache.Scratch, cmds []code
 	return forced, stale, nil
 }
 
-// isForced asks whether old is an ancestor of new in sc: exit 0 is not
-// forced, exit 1 is forced, and an old this company holds no object for is
-// stale.
-func (s *Server) isForced(ctx context.Context, sc *cache.Scratch, old, new string) (forced, stale bool, err error) {
-	res, err := s.o.Git.Run(ctx, gitproc.Cmd{
+// isForced asks whether old is an ancestor of new in sc, over a repository of
+// objects live objects: exit 0 is not forced, exit 1 is forced, and an old
+// this company holds no object for is stale. Bounded by one read attempt and
+// a walk of the history (gitproc.HistoryWalk): where the repository has no
+// commit-graph yet, a new commit dated before its parent walks every commit,
+// and a read's ten seconds alone refused the push into a repository of more
+// than about two million.
+func (s *Server) isForced(ctx context.Context, sc *cache.Scratch, objects int64, old, new string) (
+	forced, stale bool, err error) {
+
+	res, err := s.runGit(ctx, gitproc.Cmd{
 		Dir: sc.Dir, Alternate: sc.Alternate, Args: []string{"merge-base", "--is-ancestor", old, new},
-		Class: gitproc.ClassRead, Answers: []int{1}, Deadline: gitproc.ReadDeadline,
+		Class: gitproc.ClassRead, Answers: []int{1}, Deadline: forceDeadline(objects),
 	})
 	switch {
 	case errors.Is(err, gitproc.ErrMissingObject):
@@ -95,6 +121,19 @@ func (s *Server) isForced(ctx context.Context, sc *cache.Scratch, old, new strin
 		return false, false, fmt.Errorf("host: is %s an ancestor of %s: %w", old, new, err)
 	}
 	return res.Exit == 1, false, nil
+}
+
+// forceDeadline bounds one force check over a repository of objects live
+// objects: one read attempt, and a walk of the history.
+func forceDeadline(objects int64) time.Duration {
+	return gitproc.ReadDeadline + gitproc.HistoryWalk(objects)
+}
+
+// listingDeadline bounds one listing from a push's tips (introduced, pathOf)
+// over a repository of objects live objects: the pack's own work, and a walk
+// of the history.
+func listingDeadline(packBytes, objects int64) time.Duration {
+	return gitproc.PackWorkDeadline(packBytes) + gitproc.HistoryWalk(objects)
 }
 
 // errFound ends a scan at its answer: not a failure.
@@ -127,7 +166,7 @@ func (s *Server) largestBlob(ctx context.Context, sc *cache.Scratch, idxPath str
 		oid, size = string(fields[0]), n
 		return errFound
 	})
-	_, err = s.o.Git.Run(ctx, gitproc.Cmd{
+	_, err = s.runGit(ctx, gitproc.Cmd{
 		Dir: sc.Dir, Alternate: sc.Alternate, Args: []string{"cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)", "--buffer"},
 		Stdin: ids, Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
 	})
@@ -147,8 +186,10 @@ func (s *Server) largestBlob(ctx context.Context, sc *cache.Scratch, idxPath str
 // --objects` names it at from the ids the push sent (news: every command's new
 // id, refused or not, since the pack carries the objects of all of them), past
 // what the repository already holds — or "(unreachable in this push)" for a
-// blob no new tree names.
-func (s *Server) pathOf(ctx context.Context, sc *cache.Scratch, news []string, oid string, packBytes int64) string {
+// blob no new tree names. Walked in topological order, as introduced is.
+func (s *Server) pathOf(ctx context.Context, sc *cache.Scratch, objects int64, news []string, oid string,
+	packBytes int64) string {
+
 	path := "(unreachable in this push)"
 	lines := gitproc.NewLines(func(line []byte) error {
 		id, p, ok := bytes.Cut(line, []byte{' '})
@@ -158,9 +199,9 @@ func (s *Server) pathOf(ctx context.Context, sc *cache.Scratch, news []string, o
 		}
 		return nil
 	})
-	_, err := s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: sc.Dir, Alternate: sc.Alternate, Args: append(append([]string{"rev-list", "--objects"}, news...), "--not", "--alternate-refs"),
-		Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
+	_, err := s.runGit(ctx, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate, Args: append(append([]string{"rev-list", "--objects", "--topo-order"}, news...), "--not", "--alternate-refs"),
+		Stdout: lines, Class: gitproc.ClassRead, Deadline: listingDeadline(packBytes, objects),
 	})
 	if err != nil && !errors.Is(err, errFound) {
 		s.log.Warn("code_push_blob_path", "dir", sc.Dir, "blob", oid, "error", err)
@@ -170,8 +211,22 @@ func (s *Server) pathOf(ctx context.Context, sc *cache.Scratch, news []string, o
 
 // introduced is the commits the push introduces — reachable from its new
 // values and from no ref the repository holds — the first code.MaxIntroduced
-// of them in rev-list's order, and how many there are.
-func (s *Server) introduced(ctx context.Context, sc *cache.Scratch, news []string, packBytes int64) ([]string, int, error) {
+// of them in TOPOLOGICAL order, and how many there are.
+//
+// The order is what decides which ids a push row keeps when a push brings
+// more than code.MaxIntroduced (an import, a long-lived branch landing), and
+// topological order keeps the right ones: no commit is listed before every
+// child of it the push brings, and one line of history is listed whole before
+// another, so the row keeps the commits NEAREST THE PUSHED TIPS, each tip
+// first. Date order — what rev-list gives without the flag — kept the newest
+// by their stated dates, which a skewed clock decides: a tip dated before
+// the thousand commits under it was cut from its own row. Whoever reads the
+// row — `crewlet code status` and the code reads list it, IntroducedCount
+// says how many more there are — reads the commits a push brought nearest to
+// where it put the refs.
+func (s *Server) introduced(ctx context.Context, sc *cache.Scratch, objects int64, news []string,
+	packBytes int64) ([]string, int, error) {
+
 	var (
 		ids   []string
 		count int
@@ -183,9 +238,9 @@ func (s *Server) introduced(ctx context.Context, sc *cache.Scratch, news []strin
 		count++
 		return nil
 	})
-	_, err := s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: sc.Dir, Alternate: sc.Alternate, Args: append(append([]string{"rev-list"}, news...), "--not", "--alternate-refs"),
-		Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
+	_, err := s.runGit(ctx, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate, Args: append(append([]string{"rev-list", "--topo-order"}, news...), "--not", "--alternate-refs"),
+		Stdout: lines, Class: gitproc.ClassRead, Deadline: listingDeadline(packBytes, objects),
 	})
 	if err == nil {
 		err = lines.Close()

@@ -368,7 +368,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 
 	// 7 RECEIVE-PACK, in the scratch. No GIT_PROTOCOL: git never asks
 	// protocol v2 of a push.
-	res, runErr := s.o.Git.Run(work, gitproc.Cmd{
+	res, runErr := s.runGit(work, gitproc.Cmd{
 		Dir: scratch.Dir, Alternate: scratch.Alternate, Args: []string{"receive-pack", "--stateless-rpc", scratch.Dir},
 		Config: receiveConfig(p.limits), Hooks: s.o.Cache.Hooks(),
 		Env: []gitproc.KV{
@@ -376,7 +376,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 			{Key: gitproc.EnvHookToken, Value: sess.token},
 		},
 		Stdin: io.MultiReader(bytes.NewReader(sec.Raw), p.body), Stdout: p.out, Class: gitproc.ClassTransfer,
-		Deadline: gitproc.ReceivePackDeadline(p.limits.MaxPushBytes, HookBudget(s.o.Timing)),
+		Deadline: receivePackDeadline(p.limits, synced.Repo, sec.Commands, s.o.Timing),
 		Stall:    s.o.Timing.Stall, Indexed: sess.indexed,
 	})
 	// THE REQUEST'S OWN END — its client gone, or the host stopping — read

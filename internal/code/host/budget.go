@@ -1,6 +1,7 @@
 package host
 
 import (
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -172,6 +173,39 @@ func SpoolsPerCredential(transfers int) int {
 func HookBudget(t Timing) time.Duration {
 	return 3*gitproc.PackWorkDeadline(code.MaxPackBytes) + objstore.ReadBase +
 		objstore.PaceFor(code.MaxPackBytes) + ProposeBudget + t.PendingGrace
+}
+
+// receivePackDeadline bounds one push's receive-pack (gitproc.ReceivePackDeadline)
+// of cmds into repo — the row the push is judged on, as its round synced it —
+// under limits: the push's bytes at the floor pace; a walk of repo's history,
+// which git's own connectivity check is for a tip dated before its parent;
+// and the landing its hook runs inside the process, its own work (HookBudget)
+// and the walks of the history it may make (hookWalks). Every history term
+// reads repo's live objects HERE, so the one call site hands the row and
+// never a count it could get wrong.
+func receivePackDeadline(limits code.Limits, repo code.RepoRef, cmds []parsedCommand, t Timing) time.Duration {
+	return gitproc.ReceivePackDeadline(limits.MaxPushBytes, repo.LiveObjects,
+		HookBudget(t)+hookWalks(cmds, repo.LiveObjects))
+}
+
+// hookWalks bounds the walks of a repository's history a push's landing may
+// make beside its HookBudget, over a repository of objects live objects: one
+// for each force check (a branch update whose old and new are both commits,
+// one merge-base each, in series on a loaded node), one for the listing of
+// what the push introduces and one for the path of a blob over the limit —
+// each a gitproc.HistoryWalk, the term that bounds the process itself. Sized
+// by the repository, never by the push: a skewed push into a large history
+// with no commit-graph walks every commit in each of them, and a hook budget
+// of the push's own bytes killed receive-pack under its landing rather than
+// let the push be slow.
+func hookWalks(cmds []parsedCommand, objects int64) time.Duration {
+	walks := 2
+	for _, c := range cmds {
+		if c.Old != code.ZeroOID && c.New != code.ZeroOID && strings.HasPrefix(c.Ref, "refs/heads/") {
+			walks++
+		}
+	}
+	return time.Duration(walks) * gitproc.HistoryWalk(objects)
 }
 
 // uploadDeadline is the bundle put's own bound: the pace floor over its bytes.
