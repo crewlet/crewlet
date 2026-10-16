@@ -607,10 +607,15 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # receive-pack's index-pack at one thread (internal/code/gitproc), the git
 # cache's cold and delta syncs and a bundle's own file work, its index
 # maintenance and what a request pays across many packs, a node's boot of its
-# cache and what a directory sync costs a file (internal/code/cache), and the
+# cache and what a directory sync costs a file (internal/code/cache), the code
+# domain's applier, decide, reconcile and snapshot reads and what a push's
+# history costs every data node's disk (internal/code), the code host's
+# commit chain on one and three members (internal/code/codecluster), a push,
+# a warm fetch, and cold and warm clones end to end (internal/code/host), the
 # pace a client's connection is held to, on a real connection
-# (internal/api/paced). Each package's doc records what it measured, and on
-# what machine.
+# (internal/api/paced), and what every push pays to start its proc-receive
+# hook (cmd/crewlet). Each package's doc records what it measured, and on what
+# machine.
 #
 # NOT A GATE, AND NO CI JOB RUNS IT: a benchmark on a shared runner measures
 # the runner's neighbours, and a gate on figures that noisy is one somebody
@@ -618,8 +623,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # each, then benchstat (golang.org/x/perf/cmd/benchstat).
 #
 # -p 1: one package's binary at a time. Two measuring at once measure each
-# other, and internal/statelog and internal/objstore/natsobj/replicated stand up
-# three-member clusters, which is what internal/solo exists to keep alone.
+# other, and internal/statelog, internal/objstore/natsobj/replicated and
+# internal/code/codecluster stand up three-member clusters, which is what
+# internal/solo exists to keep alone.
 # Compiled first at full -p by PREBUILD, for test-solo's reason.
 # -run '^$': -bench alone runs every test as well.
 # No -race: the detector multiplies costs unevenly, so a figure taken under it
@@ -628,10 +634,14 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
 # package doc), and the arms whose fixture takes minutes and gigabytes —
 # internal/code/cache's 2 000-push cold sync, its 10 000-pack repositories,
-# its 5 GB index and its gigabyte split into hundreds of packs — unless
-# CREWLET_BENCH_LARGE=1; an arm that silently did not run reads as one that
-# measured nothing worth showing. Not through skipgate, for the same reason:
-# an allowance there would make that skip silent again.
+# its 5 GB index and its gigabyte split into hundreds of packs, and
+# internal/code/host's gigabyte history, hundred thousand refs and
+# 100 000-file tree — unless CREWLET_BENCH_LARGE=1; an arm that silently did
+# not run reads as one that measured nothing worth showing. Not through
+# skipgate, for the same reason: an allowance there would make that skip
+# silent again. CREWLET_BENCH_GIT names the git the code host's pools run (an
+# absolute path, codetest.BenchGit) — the engine image's, where the machine's
+# own is another; unset, the pools run the git on PATH.
 # BENCH_TIME 3s: the 128 MiB cases take most of a second an operation, so at
 # go's default of one second they are one or two operations whose first-touch
 # page faults are the figure; at three they are several.
@@ -644,20 +654,28 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # quarter hours, two of them the gigabyte split into packs, whose clones with
 # no index take minutes each, and a quarter of an hour BenchmarkColdSync's
 # cold syncs at S3's 100 and 200 ms first byte (two minutes and a half a
-# count: two more 2 000-push fixtures, and a minute of syncs). Eight hours
-# holds six counts of everything with room for a slower machine; a real
-# bucket's arm is bounded by its link.
+# count: two more 2 000-push fixtures, and a minute of syncs). The next is
+# internal/code/host: fifty minutes at six counts, and with
+# CREWLET_BENCH_LARGE=1 about two and a half hours — half an hour of it
+# BenchmarkPushSmall's gigabyte history and an hour BenchmarkCloneCold's
+# 2 000-push tree. A fixture is built once a run whatever BENCH_COUNT says,
+# since go test repeats only a leaf benchmark a count: the gigabyte's is ten
+# minutes and its arms four a count, the tree's eleven and its clones eight.
+# The timeout is each package's, as -p 1 runs them in turn. Eight hours holds
+# six counts of everything with room for a slower machine; a real bucket's
+# arm is bounded by its link.
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
-                 ./internal/code/gitproc ./internal/code/cache ./internal/api/paced \
+                 ./internal/code/gitproc ./internal/code/cache ./internal/code \
+                 ./internal/code/codecluster ./internal/code/host ./internal/api/paced \
                  ./cmd/crewlet
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: ## measure the object store, the state log's write path, git and its cache, a client's pace and the push hook's start (not a gate)
+bench: ## measure the object store, the state log's write path, git, its cache, the code host's pushes and clones, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

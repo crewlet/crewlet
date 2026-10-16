@@ -186,4 +186,167 @@
 // connection's goroutine turns a panic into that push's refusal: an error to
 // its hook, the stack logged once, the engine still running. The framing and
 // the parser are fuzzed (fuzz_test.go), seeded from what real git sends.
+//
+// # Measured
+//
+// On four vCPUs of a 2.1 GHz Xeon with SHA instructions, Go 1.27.2, every
+// pool running git 2.47.3 — the release the engine image installs, built
+// from source (CREWLET_BENCH_GIT) — and every client the machine's git
+// 2.43.0, all on one machine: one data node and two git nodes
+// (codetest.SoloNode), the broker fsyncing every write as stream.sync's
+// default does (SoloOptions.SyncAlways), the S3 fake answering each request
+// 100 ms after it arrives at 80 MB/s a connection. Three counts of three
+// seconds, the range given; the CREWLET_BENCH_LARGE arms one, as each says
+// (bench_test.go). No real bucket was measured.
+//
+// A PUSH (BenchmarkPushSmall) of one commit of one 4 KiB file, onto a copy
+// the receiving node had indexed whole before the arm (its own pushes
+// gathering outside the index, 19–22 of them on average), is 94–99 ms as the
+// person's git waits for it. The receiving node's request is 59–63 ms of it
+// (crewlet.code.push.duration, applied): receive-pack and its index-pack, 32
+// ms of transfer-lane CPU; the scans and the listing of the commits it
+// introduces, 8.3–8.6 ms of read-lane CPU; the bundle's put; the proposal
+// and the commit chain (internal/code's "What a push costs, measured"); and
+// the wait for its row. Its advertisement, a request of its own, is 16–17
+// ms, and the rest is git's client. Put to the S3 fake the request is
+// 150–157 ms and the push 184–192 ms: the one request on a push's path that
+// waits on the object store is its put, a first byte's worth. The OTHER git
+// node's delta sync of the push — the packed-refs merge and one GET of the
+// bundle — is 8.1–9.1 ms from memory and 111–113 ms from the fake.
+//
+// THE SERVER COST OF A PUSH — the rule a push is held to — is about 60 ms and
+// 2.4 µs a live ref, and does not grow with a history whose commits are each
+// newer than their parents: the request is 66–71 ms at a thousand live refs
+// and 90–95 at ten thousand, against 59–63 at one — and 71, 97 and 303 ms at
+// a thousand, ten thousand and a hundred thousand (code.MaxRefsPerRepo) over
+// a gigabyte of history in 455 680 commits (one count). What the refs cost is
+// receive-pack reading them (transfer CPU 41–44 ms at a thousand, 62 at ten
+// thousand, 228 at a hundred thousand) and the listing of what a push
+// introduces excluding every one (read CPU 10–11, 21–22 and 129 ms); the
+// push's advertisement, a request before it, is 13–15, 23–26 and 136 ms,
+// about 1.2 µs a ref, and the person's git 101–109, 172–182 and 1 960 ms for
+// the whole push, most of it the client's own work over the refs it was
+// shown. Each arm pushes to a node that read the repository whole and
+// indexed it just before, so what the refs cost is not mixed with packs
+// another arm left outside an index. The other node's sync, packed-refs
+// merged as a stream, is 8.0–9.4, 11–12 and 42 ms — at the bound 14% of the
+// request: the packed-refs a cache writes in place of reftable
+// (gitproc.MinVersion) cost a delta sync tens of milliseconds there and the
+// push nothing.
+//
+// A COMMIT DATED BEFORE ITS PARENT — a person's clock that is behind
+// (gittest.Skewed) — is what makes a push pay for the history, measured over
+// the same gigabyte (one count) on a node that read it whole:
+//
+//   - WITH NO COMMIT-GRAPH (every slot of the node's maintenance lane held, so
+//     the copy is as a node that just read it whole leaves it), every walk
+//     git makes goes by date and walks all 455 680 commits from such a tip:
+//     the force check 2.3 s, the listing of what the push introduces 2.5 s,
+//     the search for a blob's path 2.3 s and receive-pack's own connectivity
+//     check 2.4 s — 5.0–5.5 µs a commit, against 3–9 ms from a tip dated
+//     after its parent. The push's request is 6.9 s (4.5 s of read-lane CPU
+//     and 2.2 s of transfer-lane) against 71 ms, and as git waits for it
+//     14 s against 114 ms.
+//   - WITH THE COMMIT-GRAPH the maintainer writes first (internal/code/cache's
+//     GRAPH FIRST), the engine's own walks go by generation — the force
+//     check's merge-base by itself, the two listings asked for in
+//     --topo-order (scan.go) — and take 2.7, 4.2 and 7.7 ms from a skewed
+//     tip, the same as from any other. What is left is receive-pack's own
+//     connectivity check, which is GIT'S and takes no flag of ours: it walks
+//     by date with a graph or without, reading the graph in place of the
+//     commits, 0.30 s over the gigabyte (0.65 µs a commit) — the one cost of
+//     a push that follows the repository however its node is maintained, and
+//     bounded by gitproc.ReceivePackDeadline's history term rather than by
+//     anything the engine can flag. The request is 374 ms against 65.
+//   - THE PERSON'S OWN GIT walks too: a clone with no commit-graph of its own
+//     checks a push is a fast-forward by date, so a push whose branch's
+//     previous tip or new tip is dated before its parent cost the person's
+//     git some 4.8 s of its own over the gigabyte (a 4.9 s push whose
+//     request was 65 ms) — `git commit-graph write --reachable` in the clone
+//     is what spares it, and nothing on the server can.
+//
+// Every one of those walks is bounded by the history as well as by the push
+// (gitproc.HistoryWalk, 11 µs an object, twice the dearest per-commit cost
+// above), so a skewed push into a large history is slow and never refused.
+// The window in which a node walks by date lasts from the round that read a
+// copy whole to the graph's own write, 3.4 s over a gigabyte
+// of source history on a node with a slot free (internal/code/cache's
+// BenchmarkMidx, step=graph).
+//
+// A WARM FETCH (BenchmarkFetchWarm) — a v2 ls-refs, linearizable, and a fetch
+// of the one commit pushed since, from a cache whose maintainer had indexed
+// every pack before the first fetch, each push since a pack outside that
+// index (35–47 of them on average for one client, whose writer pushes every
+// fifty milliseconds and so never stands still for the index to be written
+// again) — is 45–50 ms at the median for one client (61–91 ms p99) and
+// 10–12 ms of the node's git CPU. Eight clients at once are 73–76 fetches a
+// second (90–95 ms at the median) and sixty-four 90–104, the p99 600–800 ms:
+// the machine's four cores running every client's git beside the node's
+// 9–11 ms a fetch. A repository of thirty-two pushes, every one in the index,
+// costs a fetch 1–1.5 ms more CPU than one of a single push. The barrier is a
+// linearizable read, 1.7–1.8 ms at the median on one data node and 4.8–5.5 ms
+// at three replicas (internal/statelog's measured section): a thirtieth of a
+// fetch, and a tenth.
+//
+// A COLD CLONE (BenchmarkCloneCold) — the first on a git node that never
+// served the repository, its cold sync, round and first upload-pack in series
+// before git's first byte — of two hundred pushes of fifty 3 000-byte files
+// (a tree of 10 000 files in a hundred directories, a 31.5 MB pack), from the
+// S3 fake, each client a person of their own:
+//
+//   - the cold sync is 1.39–1.45 s, two hundred GETs sixteen at a time, in
+//     every shape and for one clone or eight, which share it;
+//   - full is 5.5–5.7 s alone and 10.1–10.5 s each for eight at once,
+//     3.7–3.9 s of the node's git CPU a clone: a node with no bitmap yet
+//     walks and delta-searches the whole history for every clone;
+//   - blobless+checkout is 6.2–8.3 s for 32.3 MB, its checkout's one lazy
+//     fetch asking for 500 549 bytes of wants (fifty an object), held in
+//     memory under RequestMemoryBytes, and 3.8–3.9 s of CPU; eight at once
+//     take 13–20 s each;
+//   - depth1+blobless+cone is 2.3–2.4 s for 3.4 MB and 0.38–0.40 s of CPU —
+//     the sync over half of it — and 3.5–3.6 s each for eight;
+//   - treeless+cone is 2.3–2.5 s for 3.4 MB and 0.40–0.43 s of CPU, and
+//     3.5–3.8 s each for eight;
+//   - op=blob, one lazy fetch of one blob into a blobless clone from a warm
+//     node, is 37–39 ms and 11 ms of CPU.
+//
+// Ten times the tree (CREWLET_BENCH_LARGE, two counts: two thousand pushes,
+// 100 000 files in a thousand directories, a 334 MB pack) is ten times every
+// figure: the sync 13.4–13.8 s, past MidxRoundPacks so it writes the round's
+// index — 0.14 s of it (op=round-index), the GETs the rest; full 52–54 s
+// alone and 103–105 s each for eight, 35–38 s of CPU a clone;
+// blobless+checkout 42–44 s, its lazy fetch 5 000 553 bytes of wants —
+// spooled, past the mebibyte held in memory — and 14–15 s of CPU, 87–107 s
+// each for eight; depth1+blobless+cone 20 s for 33.8 MB and 3.3–3.8 s of
+// CPU, 29 s each for eight; treeless+cone 21 s and 3.8–4.0 s, 32 s each for
+// eight; and op=blob 66–68 ms and 45–46 ms of CPU. Every cold figure but
+// op=blob begins with the sync, so a balancer between a person and a node
+// that has not served a repository sees that long before git's first byte.
+//
+// ONE CREDENTIAL'S SPOOLS ARE CAPPED (SpoolsPerCredential: four on this
+// lane of sixteen), and a fifth is answered 503 at once (body.go): of eight
+// blobless checkouts of the 100 000-file tree under ONE token, each lazy
+// fetch spooled, a checkout failed on that 503 — git does not retry a lazy
+// fetch — which is why the arm's clients are people. So a CI fleet behind
+// one token running checkouts that large on a node this size does not run
+// four at a time: every checkout past the fourth at once FAILS, and is not
+// queued behind the four.
+//
+// A WARM CLONE (BenchmarkCloneWarm), the same tree from a node holding its
+// bitmap — on 2.47.3, reused from the bitmap's preferred pack alone
+// (gitproc.MultiPackReuse) — is 1.50–1.57 s full and 0.91–0.98 s of the
+// node's CPU a clone however many arrive: eight at once 3.5–3.6 s at the
+// median, thirty-two 8.4–9.0 s (p99 14–15 s) and 29–30 s of CPU for
+// thirty-two identical answers. depth1+blobless+cone is 0.87–0.89 s and
+// 0.37–0.38 s of CPU a clone, thirty-two at once 12 s of CPU. So identical
+// clones cost the node their count in CPU, which a cache of identical
+// answers would make one: the figure a pack-objects response cache is decided
+// on, and it is the same with MULTI-PACK REUSE. With the pools on 2.48.0,
+// which reuses from every pack of the bitmap verbatim, a full clone is
+// 1.51–1.52 s alone and 1.03–1.04 s of CPU, 0.98–0.99 s a clone at
+// thirty-two at once (31–32 s of CPU), and depth1+blobless+cone the same
+// 0.37 s: reuse from the preferred pack alone costs this repository's
+// clones nothing measurable — 2.48 spends some 6% more CPU on a full one —
+// so the image's 2.47 gives up nothing, and the response cache's figure is
+// the single-pack one.
 package host

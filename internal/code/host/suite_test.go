@@ -28,7 +28,14 @@ func TestTheHostPassesTheSuite(t *testing.T) {
 // s3Backend is a fresh in-process S3 bucket, through the production backend.
 func s3Backend(t *testing.T) objstore.Backend {
 	t.Helper()
-	srv := s3fake.Start(t, "files")
+	return s3Over(t, s3fake.Start(t, "files"))
+}
+
+// s3Over is the in-process bucket srv serves, through the production backend
+// — after whatever a benchmark set on srv (a first byte, a connection's
+// bandwidth).
+func s3Over(t testing.TB, srv *s3fake.Server) objstore.Backend {
+	t.Helper()
 	b, err := s3obj.Open(t.Context(), s3obj.Config{
 		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: "acme/",
 		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",

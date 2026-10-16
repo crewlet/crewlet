@@ -495,7 +495,12 @@ process through the pool and the index-pack a push runs
 (`internal/code/gitproc`), the git cache's cold and delta syncs and a
 bundle's own file work, its index maintenance and what a request pays across
 many packs, a node's boot of its cache and what a directory sync costs a file
-(`internal/code/cache`), the pace a client's connection is held to, on a
+(`internal/code/cache`), the code domain's applier, decide, reconcile and
+snapshot reads and what one push's history costs every data node's disk
+(`internal/code`), the code host's commit chain on one and three members
+(`internal/code/codecluster`), a person's push, a warm fetch, and cold and
+warm clones of every shape end to end through the code host
+(`internal/code/host`), the pace a client's connection is held to, on a
 real connection (`internal/api/paced`), and what every push pays to start its
 `proc-receive` hook, which is this binary (`cmd/crewlet`).
 
@@ -507,20 +512,32 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/code/gitproc`, `internal/code/cache`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
-| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector: six counts of every arm, the large ones included, take about five hours on four vCPUs |
+| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector, each package's: at six counts of every arm, the large ones included, `internal/code/cache` takes about five and three quarter hours on four vCPUs and `internal/code/host` about two and a half |
 
 The packages run one at a time (`-p 1`) and without the race detector, and the
 output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
-— the real-bucket arms of `internal/objstore/s3obj` and `internal/code/cache`
-skip unless `CREWLET_BENCH_S3_BUCKET` names a bucket (`internal/objstore/s3obj`'s
-doc lists the variables that do), and the arms of `internal/code/cache` whose
-fixture takes minutes and gigabytes — a cold sync of 2 000 pushes,
-repositories of 10 000 packs, a 5 GB index, a gigabyte split into hundreds
-of packs — skip unless `CREWLET_BENCH_LARGE=1`.
+— the real-bucket arms of `internal/objstore/s3obj`, `internal/code/cache` and
+`internal/code/host` skip unless `CREWLET_BENCH_S3_BUCKET` names a bucket
+(`internal/objstore/s3obj`'s doc lists the variables that do), and the arms
+whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
+sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte
+split into hundreds of packs; in `internal/code/host` a gigabyte history, a
+hundred thousand refs and a 100 000-file tree — skip unless
+`CREWLET_BENCH_LARGE=1`.
+
+`CREWLET_BENCH_GIT`, beside the `CREWLET_BENCH_S3_*` variables, names the git
+the code host's pools run in `internal/code/host` — an absolute path — while
+the client stays the git on `PATH` (`internal/code/codecluster`'s commit
+chain runs no git: its pushes carry no pack). A code host figure is the pool's git's as much as the
+engine's, so a figure the docs quote is taken on the git the engine image
+ships (Debian trixie's): where the machine's own git is another, build that
+release outside the tree — the pool runs only server-side programs, so
+`make NO_CURL=1 prefix=<dir> install` from its source is enough — and point
+the variable at `<dir>/bin/git`. Unset, the pools run the git on `PATH`.
 
 **A figure the design argues from is recorded in the package doc of what it
 measures**, with the machine it was measured on — its CPUs and model, and

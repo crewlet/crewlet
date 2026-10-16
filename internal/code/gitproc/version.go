@@ -33,8 +33,10 @@ var MinVersion = Version{2, 40, 0}
 // deltas"). 2.48.0 is the release that fixed it (tb/multi-pack-reuse-dupfix,
 // "Object reuse code based on multi-pack-index sent an unwanted copy of
 // object"), measured against the same repositories. An older git reuses from
-// the bitmap's preferred pack alone, which costs a clone CPU and never its
-// pack.
+// the bitmap's preferred pack alone, which costs a clone nothing measurable
+// and never its pack: a warm full clone of two hundred pushes of a 10 000-file
+// tree is 0.91–0.98 s of the node's CPU on 2.47.3 and 1.03–1.04 s with
+// multi-pack reuse on 2.48.0 (internal/code/host's BenchmarkCloneWarm).
 var MultiPackReuse = Version{2, 48, 0}
 
 // Version is a git release, compared on (Major, Minor, Patch).

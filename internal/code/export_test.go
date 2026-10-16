@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// Quiet is quiet, for this package's external benchmarks.
+var Quiet = quiet
+
 // SetPageLimits has r end every page at rows rows or bytes of encoded rows —
 // the cases that read a snapshot across several pages without seeding tens of
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.

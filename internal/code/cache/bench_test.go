@@ -27,8 +27,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
-	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 )
 
@@ -400,20 +398,9 @@ func quiet(b *testing.B) {
 // and without that index (BenchmarkPackLookup). Every fixture is real git — a
 // history fast-imported, each push's objects packed alone as the bundle a
 // receiving node's receive-pack stores, its row in the fake log — built with
-// the timer stopped.
-
-// largeEnv, set to 1, runs the arms whose fixture takes minutes and
-// gigabytes: 2 000 cold pushes, a repository of 10 000 packs, a 5 GB index.
-// A default `make bench` skips them, saying so under -v.
-const largeEnv = "CREWLET_BENCH_LARGE"
-
-// large skips b unless largeEnv is 1, naming what the arm would build.
-func large(b *testing.B, builds string) {
-	b.Helper()
-	if os.Getenv(largeEnv) != "1" {
-		b.Skipf("%s=1 runs this arm, whose fixture is %s", largeEnv, builds)
-	}
-}
+// the timer stopped. The arms whose fixture takes minutes and gigabytes — 2 000
+// cold pushes, a repository of 10 000 packs, a 5 GB index — run only under
+// gittest.LargeEnv.
 
 // benchWorkers is how many of a fixture's pushes are packed and stored at
 // once: a push's pack is mostly a git process starting, and its put to a
@@ -457,10 +444,6 @@ var s3FirstBytes = []time.Duration{100 * time.Millisecond, 200 * time.Millisecon
 // an object's bytes: 80 MB/s, the low end of what one S3 connection carries.
 const providerConnBytes = 80_000_000
 
-// realClear bounds clearing a real bucket's arm prefix: a hang detector, as
-// internal/objstore/s3obj's own benchmark's is.
-const realClear = 10 * time.Minute
-
 // commitsOf is ref's commits in src, oldest first.
 func commitsOf(b *testing.B, client *gittest.Client, src, ref string) []string {
 	b.Helper()
@@ -483,7 +466,6 @@ func chacha(domain byte, n uint64) (*rand.ChaCha8, *rand.Rand) {
 const (
 	drawsPushes byte = iota + 1
 	drawsNext
-	drawsHistory
 	drawsFiles
 )
 
@@ -661,27 +643,9 @@ func coldWorld(b *testing.B, bucket string, firstByte time.Duration) *syncWorld 
 		w.s3 = srv
 		return w
 	case "real":
-		cfg, ok := s3fake.RealBucket(b)
-		if !ok {
-			b.Skip("CREWLET_BENCH_S3_BUCKET names no bucket, so no real bucket is measured; " +
-				"internal/objstore/s3obj's package doc lists the variables that name one")
-		}
-		// A PREFIX OF THE ARM'S OWN, cleared when it ends: a real bucket
-		// outlives the run, and an arm killed part way leaves its objects
-		// under one prefix a person or a lifecycle rule can clear.
-		cfg.Prefix += objstore.KeyAt(time.Now()).String() + "/"
-		backend, err := s3obj.Open(b.Context(), cfg)
-		if err != nil {
-			b.Fatalf("open bucket %s: %v", cfg.Bucket, err)
-		}
-		b.Cleanup(func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(b.Context()), realClear)
-			defer cancel()
-			if err := objstoretest.Clear(ctx, backend); err != nil {
-				b.Errorf("clear %s in bucket %s: %v", cfg.Prefix, cfg.Bucket, err)
-			}
-		})
-		return syncWorldOver(b, backend)
+		// A PREFIX OF THE ARM'S OWN, cleared when it ends
+		// (s3fake.RealBackend).
+		return syncWorldOver(b, s3fake.RealBackend(b))
 	}
 	b.Fatalf("no bucket %q", bucket)
 	return nil
@@ -765,7 +729,7 @@ func BenchmarkColdSync(b *testing.B) {
 			}
 			b.Run(name, func(b *testing.B) {
 				if shape.packs > 200 {
-					large(b, "2 000 pushes packed and stored")
+					gittest.Large(b, "2 000 pushes packed and stored")
 				}
 				w := coldWorld(b, a.bucket, a.firstByte)
 				repo, total := w.coldRepo(b, shape)
@@ -901,7 +865,7 @@ func BenchmarkDeltaSync(b *testing.B) {
 	for _, packs := range []int{100, 10_000} {
 		b.Run(fmt.Sprintf("packs=%d", packs), func(b *testing.B) {
 			if packs > 100 {
-				large(b, "10 000 pushes packed and stored, synced twice")
+				gittest.Large(b, "10 000 pushes packed and stored, synced twice")
 			}
 			w := newSyncWorld(b, onMemory)
 			src := gittest.Empty(b)
@@ -958,108 +922,16 @@ func BenchmarkDeltaSync(b *testing.B) {
 	}
 }
 
-// THE HISTORY BenchmarkMidx indexes and BenchmarkPackLookup splits: a source
-// repository's composition, because what an index costs — the commit-graph
-// reads every commit, the bitmap selects and walks commits — follows the
-// commits as much as the objects. Every commit changes midxFilesPerCommit
-// files of one directory of midxDirFiles: a commit object, the root tree, its
-// directory's tree and four blobs, so commits are a seventh of the objects and
-// trees two sevenths, and a gigabyte of history is about 400 000 commits —
-// the hundreds of thousands a source repository of that size has. Each file's
-// versions are a chain of deltas: a session writes every version of each file
-// in turn (fast-import deltas a blob against the one before it in the
-// stream), each rewriting a midxWindow of the file with seeded random bytes,
-// then the session's commits, every file's version v before any file's v+1.
-// The count of files is what the size scales.
-const (
-	midxSessions       = 64
-	midxVersions       = 20
-	midxFileBytes      = 4 << 10
-	midxWindow         = 192
-	midxDirFiles       = 48 // a multiple of midxFilesPerCommit: no commit spans two directories
-	midxFilesPerCommit = 4
-)
-
-// midxBytesPerFile is about what one file adds to one session's pack — its
-// first version whole, the rest as deltas of a little over the window each,
-// and its share of the session's commits and trees — so a size's arm holds
-// about its size: measured, 99.4 MB of packs at 100MB and 1.004 GB at 1GB.
-const midxBytesPerFile = 11_800
-
-// midxCommits is how many commits a session over files files makes.
-func midxCommits(files int) int {
-	return midxVersions * ((files + midxFilesPerCommit - 1) / midxFilesPerCommit)
-}
-
-// midxStream is the fast-import stream of session s over cur, every file's
-// content as the session before left it. Its commits are the history's
-// first-th and on, each stamped benchEpoch and its number.
-func midxStream(s, first int, cur [][]byte, bytes *rand.ChaCha8, draw *rand.Rand) func(*bufio.Writer) error {
-	return func(w *bufio.Writer) error {
-		for f := range cur {
-			for v := range midxVersions {
-				if s == 0 && v == 0 {
-					_, _ = bytes.Read(cur[f])
-				} else {
-					off := draw.IntN(midxFileBytes - midxWindow)
-					_, _ = bytes.Read(cur[f][off : off+midxWindow])
-				}
-				fmt.Fprintf(w, "blob\nmark :%d\ndata %d\n", f*midxVersions+v+1, midxFileBytes)
-				_, _ = w.Write(cur[f])
-				if err := w.WriteByte('\n'); err != nil {
-					return err
-				}
-			}
-		}
-		n := first
-		for v := range midxVersions {
-			for lo := 0; lo < len(cur); lo += midxFilesPerCommit {
-				msg := fmt.Sprintf("session %d version %d files %d\n", s, v, lo)
-				fmt.Fprintf(w, "commit refs/heads/main\ncommitter %s %d +0000\ndata %d\n%s", benchIdent,
-					benchEpoch+n, len(msg), msg)
-				if s > 0 && n == first {
-					_, _ = w.WriteString("from refs/heads/main^0\n")
-				}
-				for f := lo; f < min(lo+midxFilesPerCommit, len(cur)); f++ {
-					fmt.Fprintf(w, "M 100644 :%d d%03d/f%05d\n", f*midxVersions+v+1, f/midxDirFiles, f)
-				}
-				if err := w.WriteByte('\n'); err != nil {
-					return err
-				}
-				n++
-			}
-		}
-		return nil
-	}
-}
-
-// history fast-imports a history of about size bytes into a bare repository
-// of its own, and answers the repository and main's commits, oldest first.
-func (w *syncWorld) history(b *testing.B, size int64) (string, []string) {
-	b.Helper()
-	files := max(1, int(size/midxSessions/midxBytesPerFile))
-	cur := make([][]byte, files)
-	for f := range cur {
-		cur[f] = make([]byte, midxFileBytes)
-	}
-	bytes, draw := chacha(drawsHistory, 0)
-	src := gittest.Empty(b)
-	for s := range midxSessions {
-		gittest.FastImport(b, w.client, src, midxStream(s, s*midxCommits(files), cur, bytes, draw))
-	}
-	return src, commitsOf(b, w.client, src, "main")
-}
-
 // midxRepo is BenchmarkMidx's repository of about size bytes in w's log and
-// store — one push a session, so midxSessions packs — with the history it
-// was pushed from, its main's commits, its pack rows, and the bytes and
-// objects they hold.
+// store — gittest.History's source repository, one push a session, so
+// gittest.HistorySessions packs — with the history it was pushed from, its
+// main's commits, its pack rows, and the bytes and objects they hold.
 func (w *syncWorld) midxRepo(b *testing.B, size int64) (repo, src string, commits []string, rows []code.PackRow,
 	total, objects int64) {
 
 	b.Helper()
-	src, commits = w.history(b, size)
-	pushes := splitPushes(commits, midxSessions)
+	src, commits = gittest.History(b, w.client, size)
+	pushes := splitPushes(commits, gittest.HistorySessions)
 	rows, total = w.storePushes(b, src, pushes)
 	for _, r := range rows {
 		objects += r.Objects
@@ -1148,7 +1020,7 @@ func BenchmarkMidx(b *testing.B) {
 	}{{"100MB", 100_000_000}, {"1GB", 1_000_000_000}, {"5GB", 5_000_000_000}} {
 		b.Run("size="+arm.name, func(b *testing.B) {
 			if arm.bytes > 1_000_000_000 {
-				large(b, "a 5 GB history fast-imported, packed, stored and synced")
+				gittest.Large(b, "a 5 GB history fast-imported, packed, stored and synced")
 			}
 			w := newSyncWorld(b, onMemory)
 			w.processes = runtime.NumCPU()
@@ -1264,7 +1136,7 @@ func BenchmarkVerify(b *testing.B) {
 	}{{"small", 0}, {"100MB", 100_000_000}, {"1GB", 1_000_000_000}} {
 		b.Run("size="+arm.name, func(b *testing.B) {
 			if arm.bytes >= 1_000_000_000 {
-				large(b, "a 1 GB history fast-imported, packed, stored and synced")
+				gittest.Large(b, "a 1 GB history fast-imported, packed, stored and synced")
 			}
 			w := newSyncWorld(b, onMemory)
 			w.processes = runtime.NumCPU()
@@ -1570,10 +1442,10 @@ func BenchmarkPackLookup(b *testing.B) {
 	for _, size := range lookupSizes {
 		b.Run("size="+size.name, func(b *testing.B) {
 			if size.bytes > 100_000_000 {
-				large(b, "a 1 GB history fast-imported, split into hundreds of packs three times over")
+				gittest.Large(b, "a 1 GB history fast-imported, split into hundreds of packs three times over")
 			}
 			w := newSyncWorld(b, onMemory)
-			src, commits := w.history(b, size.bytes)
+			src, commits := gittest.History(b, w.client, size.bytes)
 			var oids []string
 			for i := range 1_000 {
 				oids = append(oids, commits[i*len(commits)/1_000])
@@ -1583,7 +1455,7 @@ func BenchmarkPackLookup(b *testing.B) {
 			for _, packs := range size.packs {
 				b.Run(fmt.Sprintf("packs=%d", packs), func(b *testing.B) {
 					if packs > 1_000 {
-						large(b, "10 000 packs packed, stored and synced")
+						gittest.Large(b, "10 000 packs packed, stored and synced")
 					}
 					lookupArm(b, w, root, src, commits, packs, oids, have)
 				})
@@ -1694,7 +1566,7 @@ func BenchmarkPeel(b *testing.B) {
 	for _, packs := range []int{32, 128, 256, 512, 1_000, 5_000} {
 		b.Run(fmt.Sprintf("packs=%d", packs), func(b *testing.B) {
 			if packs > 1_000 {
-				large(b, "5 000 tagged pushes packed, stored and synced")
+				gittest.Large(b, "5 000 tagged pushes packed, stored and synced")
 			}
 			src := gittest.Empty(b)
 			gittest.FastImport(b, w.client, src, tagStream(packs))

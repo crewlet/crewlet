@@ -129,8 +129,17 @@ type SoloOptions struct {
 	// GitPath is the git every pool runs; "" is the one on PATH (a case
 	// that records what git ran sets gittest.Recording's).
 	GitPath string
+	// CacheMaxBytes is every git node's cache budget; 0 is the git node's
+	// default.
+	CacheMaxBytes int64
 	// Logger is every host's; nil is the package's own.
 	Logger *slog.Logger
+	// SyncAlways has the broker fsync every write before it acknowledges it,
+	// as stream.sync's default (always) has a deployment's: what a BENCHMARK
+	// sets, so a figure carries the record's fsync a production push pays. A
+	// case leaves it off — it judges what is written, never when it reaches
+	// the disk, and an fsync a record only slows the suite.
+	SyncAlways bool
 }
 
 // Solo is a NewFleet of SoloNodes over o, each case's shape laid over it — a
@@ -168,7 +177,7 @@ const (
 // own composition for the code domain, built from the two blocks every
 // topology is built from (StartDataNode, StartGitNode) over one embedded
 // broker.
-func SoloNode(t *testing.T, o SoloOptions) Fleet {
+func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	t.Helper()
 	if o.Objects == nil {
 		o.Objects = memobj.New()
@@ -183,7 +192,7 @@ func SoloNode(t *testing.T, o SoloOptions) Fleet {
 	if o.People == nil {
 		o.People = []string{"ceo", "dev"}
 	}
-	f := &solo{o: o, dir: t.TempDir(), creds: NewCredentials(o.People),
+	f := &SoloFleet{o: o, dir: t.TempDir(), creds: NewCredentials(o.People),
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
 		// order — is never in the future: a deletion is dated by its
 		// activation, and the purge judges its age on the wall clock.
@@ -206,18 +215,30 @@ func SoloNode(t *testing.T, o SoloOptions) Fleet {
 			},
 			Objects: func() objstore.Backend { return o.Objects }, Limits: o.Limits, Timing: o.Timing,
 			Faults: o.Faults, Credentials: f.creds, Audit: f.record,
-			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, GitPath: o.GitPath, Logger: o.Logger,
+			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
+			GitPath: o.GitPath, Logger: o.Logger,
 		}))
 	}
 	return f
 }
 
+// GitNode is the fleet's i-th git node, for a benchmark that stops it and
+// starts it again over an emptied directory — a node that has never served the
+// repository — while the rest of the fleet runs on.
+func (f *SoloFleet) GitNode(i int) *GitNode { return f.git[i] }
+
+// Data is the fleet's one data node, for a benchmark that proposes the pushes
+// of a fixture to its committer directly — refs created by records, without a
+// person's git paying its own cost for them.
+func (f *SoloFleet) Data() *DataNode { return f.data }
+
 // soloLogBytes is the code log's ceiling on a solo node: 64 MiB holds every
 // record the suite writes.
 const soloLogBytes = 64 << 20
 
-// solo is the one-data-node topology.
-type solo struct {
+// SoloFleet is the one-data-node topology: a Fleet, and its git nodes for a
+// benchmark that empties one between iterations (GitNode).
+type SoloFleet struct {
 	o     SoloOptions
 	dir   string
 	creds *Credentials
@@ -235,9 +256,9 @@ type solo struct {
 
 // openBroker opens the node's embedded broker over its own directory — the one
 // it had before, on a restart.
-func (f *solo) openBroker(t testing.TB) *js.Queue {
+func (f *SoloFleet) openBroker(t testing.TB) *js.Queue {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream")})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream"), SyncAlways: f.o.SyncAlways})
 	if err != nil {
 		t.Fatalf("codetest: open the broker: %v", err)
 	}
@@ -248,20 +269,21 @@ func (f *solo) openBroker(t testing.TB) *js.Queue {
 }
 
 // broker is the running incarnation's broker.
-func (f *solo) broker() *js.Queue {
+func (f *SoloFleet) broker() *js.Queue {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.brokers[len(f.brokers)-1]
 }
 
 // record keeps every push record a host published.
-func (f *solo) record(_ context.Context, e types.OperatorActed) {
+func (f *SoloFleet) record(_ context.Context, e types.OperatorActed) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.audited = append(f.audited, e)
 }
 
-func (f *solo) Nodes() []Node {
+// Nodes is every serving node the fleet runs now, in order (Fleet).
+func (f *SoloFleet) Nodes() []Node {
 	out := make([]Node, 0, len(f.git))
 	for _, g := range f.git {
 		if n := g.Node(); n != nil {
@@ -271,15 +293,22 @@ func (f *solo) Nodes() []Node {
 	return out
 }
 
-func (f *solo) Token(_ testing.TB, person string) string { return f.creds.Token(person) }
+// Token is a token bound to the human seat person, "" one bound to nobody
+// (Fleet).
+func (f *SoloFleet) Token(_ testing.TB, person string) string { return f.creds.Token(person) }
 
-func (f *solo) Faults() *codefault.Script { return f.o.Faults }
+// Faults is the fleet's fault script, shared across restarts (Fleet).
+func (f *SoloFleet) Faults() *codefault.Script { return f.o.Faults }
 
-func (f *solo) Objects() objstore.Backend { return f.o.Objects }
+// Objects is the object store's backend (Fleet).
+func (f *SoloFleet) Objects() objstore.Backend { return f.o.Objects }
 
-func (f *solo) DataNodes() []string { return []string{soloDataNode} }
+// DataNodes is the one data node's id (Fleet).
+func (f *SoloFleet) DataNodes() []string { return []string{soloDataNode} }
 
-func (f *solo) Repos(ctx context.Context) ([]string, error) {
+// Repos is the name of every active or archived repository, read
+// linearizable from the data node (Fleet).
+func (f *SoloFleet) Repos(ctx context.Context) ([]string, error) {
 	return ReposOf(ctx, f.data.Served().Read)
 }
 
@@ -305,7 +334,9 @@ func ReposOf(ctx context.Context,
 	}
 }
 
-func (f *solo) Rows(ctx context.Context, name string, fresh statelog.Freshness) (Rows, error) {
+// Rows is one repository's whole state as the data node's rows hold it at
+// fresh (Fleet).
+func (f *SoloFleet) Rows(ctx context.Context, name string, fresh statelog.Freshness) (Rows, error) {
 	served := f.data.Served()
 	return RowsOf(ctx, name, fresh, served.Resolve, served.Snapshot)
 }
@@ -325,7 +356,8 @@ func RowsOf(ctx context.Context, name string, fresh statelog.Freshness,
 	return snapshotRows(ctx, repo, fresh, state)
 }
 
-func (f *solo) Audited() []types.OperatorActed {
+// Audited is every push record a host published, in order (Fleet).
+func (f *SoloFleet) Audited() []types.OperatorActed {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.audited)
@@ -333,29 +365,34 @@ func (f *solo) Audited() []types.OperatorActed {
 
 // next is the fleet's next activation instant: monotone, so EnsureRepo never
 // meets an older one.
-func (f *solo) next() time.Time {
+func (f *SoloFleet) next() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.activations++
 	return f.base.Add(time.Duration(f.activations) * time.Second)
 }
 
-func (f *solo) Declare(t testing.TB, repos ...code.Declared) {
+// Declare ensures each repository at the fleet's next activation (Fleet).
+func (f *SoloFleet) Declare(t testing.TB, repos ...code.Declared) {
 	t.Helper()
 	f.data.Declare(t, f.next(), repos...)
 }
 
-func (f *solo) Remove(t testing.TB, name string) {
+// Remove deletes the named repository at the next activation (Fleet).
+func (f *SoloFleet) Remove(t testing.TB, name string) {
 	t.Helper()
 	f.data.Remove(t, f.next(), name)
 }
 
-func (f *solo) Purge(t testing.TB) {
+// Purge runs code-retention passes until every purge they began is done
+// (Fleet).
+func (f *SoloFleet) Purge(t testing.TB) {
 	t.Helper()
 	f.data.Purge(t)
 }
 
-func (f *solo) Collect(t testing.TB) collect.CollectionReport {
+// Collect runs one collection over the code estate (Fleet).
+func (f *SoloFleet) Collect(t testing.TB) collect.CollectionReport {
 	t.Helper()
 	return f.data.Collect(t, f.o.Objects)
 }
@@ -363,20 +400,21 @@ func (f *solo) Collect(t testing.TB) collect.CollectionReport {
 // Evict and Readmit go through the data node's operator writer
 // (soloOperatorNode): an evicted node's own records are dropped, its
 // readmission included, and a solo fleet has no peer to publish it.
-func (f *solo) Evict(t testing.TB, node string) {
+func (f *SoloFleet) Evict(t testing.TB, node string) {
 	t.Helper()
 	f.mustBeData(t, node)
 	f.data.Evict(t, node)
 }
 
-func (f *solo) Readmit(t testing.TB, node string) {
+// Readmit readmits the evicted data node (Fleet), as Evict says.
+func (f *SoloFleet) Readmit(t testing.TB, node string) {
 	t.Helper()
 	f.mustBeData(t, node)
 	f.data.Readmit(t, node)
 }
 
 // mustBeData fails t unless node is the fleet's one data node.
-func (f *solo) mustBeData(t testing.TB, node string) {
+func (f *SoloFleet) mustBeData(t testing.TB, node string) {
 	t.Helper()
 	if node != soloDataNode {
 		t.Fatalf("codetest: the solo fleet's data node is %q, not %q", soloDataNode, node)
@@ -388,7 +426,7 @@ func (f *solo) mustBeData(t testing.TB, node string) {
 // the broker stopped. It WAITS FOR NOTHING A CRASH MAY HOLD: an HTTP server's
 // Close and the committer's Stop wait for their held work in the teardown,
 // after the crashes are released.
-func (f *solo) Kill(t testing.TB, _ string) {
+func (f *SoloFleet) Kill(t testing.TB, _ string) {
 	t.Helper()
 	if f.data.proc() == nil {
 		t.Fatal("codetest: Kill of a fleet that is not running")
@@ -405,7 +443,7 @@ func (f *solo) Kill(t testing.TB, _ string) {
 // Restart rebuilds the process over the same directories: a new broker over
 // the old one's files, the data node and every git node — new listeners, so a
 // node's URL is the new one.
-func (f *solo) Restart(t testing.TB, _ string) {
+func (f *SoloFleet) Restart(t testing.TB, _ string) {
 	t.Helper()
 	if f.data.proc() != nil {
 		t.Fatal("codetest: Restart of a fleet that was not killed")
@@ -416,14 +454,15 @@ func (f *solo) Restart(t testing.TB, _ string) {
 	}
 }
 
-func (f *solo) PauseApplier(t testing.TB, _ string) (resume func()) {
+// PauseApplier stops the data node's applier until resume (Fleet).
+func (f *SoloFleet) PauseApplier(t testing.TB, _ string) (resume func()) {
 	t.Helper()
 	return f.data.PauseApplier(t)
 }
 
 // teardown stops every incarnation's broker, the crashes released FIRST —
 // though every node's own teardown, which ran before this one, released them.
-func (f *solo) teardown() {
+func (f *SoloFleet) teardown() {
 	f.o.Faults.ReleaseCrashes()
 	f.mu.Lock()
 	brokers := slices.Clone(f.brokers)
