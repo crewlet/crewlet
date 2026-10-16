@@ -540,7 +540,7 @@ func TestARefreshWalks(t *testing.T) {
 	serves(t, r, "deploy", "tag the release")
 }
 
-// A REFRESH FROM ANOTHER BACKEND WALKS NOTHING. The native page projection runs
+// A REFRESH FROM ANOTHER BACKEND WALKS NOTHING. The native pages applier runs
 // for the life of the node, so it goes on reporting native skill pages after an
 // apply moved the company's skills to Confluence, and walking the wiki for each
 // of those is a request that can find out nothing.

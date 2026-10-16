@@ -22,7 +22,7 @@ import (
 
 // newSkillSync builds the node's sync loop over its registry, stopped.
 //
-// Built with the engine rather than when it starts, so the native projection's
+// Built with the engine rather than when it starts, so the pages applier's
 // post-commit nudge, which is wired before the loop runs, has something to
 // nudge: a request made before the loop starts is kept and acted on once it
 // does.

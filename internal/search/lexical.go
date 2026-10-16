@@ -363,10 +363,11 @@ func excerptOf(body string) string {
 func (x *Indexer) Remove(ctx context.Context, source, id string) error {
 	return x.db.Tx(ctx, func(tx *sql.Tx) error {
 		// The postings cascade on kb_docs, so one delete is the whole
-		// removal — and it is the reason kb_docs has no foreign key back
-		// to the source tables: the projector deletes a source row and the
-		// indexer deletes the index row, in that order, and a cascade from
-		// the source would delete a posting list mid-write.
+		// removal. kb_docs has no foreign key back to the source tables,
+		// and could not: it is in this node's own estate and the sources
+		// are in the replicated one, which no statement joins across. The
+		// applier deletes a source row, and the indexer's orphan pass
+		// removes the index row after it.
 		_, err := tx.ExecContext(ctx,
 			`DELETE FROM kb_docs WHERE source = ? AND source_id = ?`, source, id)
 		return err
