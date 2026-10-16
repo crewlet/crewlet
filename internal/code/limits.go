@@ -58,8 +58,8 @@ const BarrierRecordBytes = 136
 // ratio (config's DerivedCodeLogNumerator, which [CodeLogMaxBytes] below is
 // spelled from) already counts the reference company's git barriers beside its
 // pushes: 1.9–3.8 MB a day, 13–27 MB over the default seven days — under a
-// fortieth of the tenth of a derived 10⅔ GiB ceiling, and under a quarter of
-// the tenth of even the 1 GiB floor. So the tenth is not what git was expected
+// fortieth of the tenth of a derived 10⅔ GiB ceiling, and a quarter of the
+// tenth of even the 1 GiB floor. So the tenth is not what git was expected
 // to take: it is room that git traffic well past that estimate grows into, and
 // census_drift, at twice the census, says when even that is outgrown and every
 // sizing decision under the log is stale. A JUDGEMENT: smaller fires
@@ -126,8 +126,8 @@ const (
 	// what this log takes a day at the reference company once seats push:
 	// 3 000 pushes at the MEASURED 1 292 bytes a push alone in its record
 	// (BenchmarkPushLogBytes), 3.9 MB, and its git clients' barriers at
-	// BarrierRecordBytes, 1.9–3.8 MB, against the tracker's 9.4 MB of
-	// records and 1.7 MB of barriers. It was the tracker's whole sixteen,
+	// BarrierRecordBytes, 1.9–3.8 MB, against the tracker's measured 9.7 MB
+	// of records and 1.7 MB of barriers. It was the tracker's whole sixteen,
 	// on an estimate of 2 KiB a push and no barriers, which put the two
 	// logs on "the same order" rather than at the ratio a blocked trim
 	// fills both in the same time.
