@@ -650,16 +650,16 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker and knowledge-base tools a seat holds — eighteen over
-the tracker and five over the pages — and eleven more that no seat is given:
+the tracker and five over the pages — and sixteen more that no seat is given:
 the saved views, the catalogue write, a person's own queue, inbox and pins, the
-trash, and the board drag. Each is decided by the same authority table a seat's
-calls are, and knowledge search sits beside them, with the gestures a person
-makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering a coding run's question. On the
-deployment's token its writes carry the token's own login, `token:founder`,
-with author kind `operator` — never an agent's — so an audit can tell them from
-an agent's. The token cannot write as your seat: a seat is held by one row of
-the identity directory, and yours is you. See
+trash, the board drag, and the gestures a person makes about the company rather
+than its work — pausing and resuming a seat, steering a running turn, answering
+a coding run's question and answering a question from the company's knowledge.
+Each is decided by the same authority table a seat's calls are, and knowledge
+search sits beside them. On the deployment's token its writes carry the token's
+own login, `token:founder`, with author kind `operator` — never an agent's — so
+an audit can tell them from an agent's. The token cannot write as your seat: a
+seat is held by one row of the identity directory, and yours is you. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
