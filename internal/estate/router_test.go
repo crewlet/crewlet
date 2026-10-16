@@ -541,6 +541,137 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	}
 }
 
+// A REPEATABLE WRITE NO NODE ANSWERED IS UNKNOWN, NEVER UNSERVED.
+//
+// Every holder was asked under the same operation, none ran it, and at least
+// one never answered — so that one may have run it. "No data node could serve it" is the claim that
+// nothing ran, and a caller told that writes again, under a FRESH id where it
+// minted none, which is a second write: a purge appended twice, a task filed
+// twice. A READ nobody answered is still unserved, since a read ran nothing
+// that matters; and a write every node REFUSED is unserved too, since a node
+// that answered "I did not run it" did not.
+func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	for _, node := range f.nodes {
+		node.set(func(n *fakeNode) { n.silent = true })
+	}
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-9",
+		worklet.Task{Project: "ENG"}, nil)
+	var unserved *ErrUnserved
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+		t.Fatalf("a write no node answered = %v, want ErrOutcomeUnknown and not "+
+			"ErrUnserved", err)
+	}
+	for _, name := range []string{"data-a", "data-b"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the unknown write %q does not name %s, which it was sent to", err, name)
+		}
+	}
+
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read no node answered = %v, want ErrUnserved", err)
+	}
+
+	refusing := newFleet(t, "data-a", "data-b")
+	for _, node := range refusing.nodes {
+		node.set(func(n *fakeNode) { n.outOfService = true })
+	}
+	_, err = refusing.client.WriterAs(swe).CreateTask(t.Context(), "op-10",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a write every node refused to run = %v, want ErrUnserved", err)
+	}
+
+	// ONE SILENT NODE IS ENOUGH: the other answering that it did not run
+	// the write says nothing about the one that never answered.
+	mixed := newFleet(t, "data-a", "data-b")
+	silentName, silent := mixed.first(t, mixed.client)
+	silent.set(func(n *fakeNode) { n.silent = true })
+	for name, node := range mixed.nodes {
+		if name != silentName {
+			node.set(func(n *fakeNode) { n.outOfService = true })
+		}
+	}
+	_, err = mixed.client.WriterAs(swe).CreateTask(t.Context(), "op-13",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) ||
+		!strings.Contains(err.Error(), silentName) {
+		t.Errorf("a write one node never answered and the other refused = %v, want "+
+			"ErrOutcomeUnknown naming %s", err, silentName)
+	}
+
+	// AND A WRITE WHOSE CALLER STOPPED LISTENING: the request was sent, and
+	// the caller's context ending says nothing about whether it ran.
+	wedged := newFleet(t, "data-a")
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	wedged.nodes["data-a"].set(func(n *fakeNode) { n.hang = hang })
+	wedged.client.writeBudget = 10 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	_, err = wedged.client.WriterAs(swe).CreateTask(ctx, "op-12",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a write whose caller's deadline ended while a node held it = %v, "+
+			"want ErrOutcomeUnknown carrying the deadline", err)
+	}
+}
+
+// A WRITE STOPPED BEFORE ITS NEXT ASK IS STILL ONE A SILENT NODE MAY HAVE RUN.
+//
+// A request that cannot be made at all ends the walk — no other node would
+// fare better — but a node the write was already sent to, and never heard
+// from, may have committed it. So the walk's answer is unknown, carrying what
+// stopped it, rather than the bare failure of the ask that came after: told
+// that, a caller sees a refusal and writes again under a fresh id.
+func TestAWriteWhoseNextAskFailsAfterASilentNodeIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	firstName, first := f.first(t, f.client)
+	first.set(func(n *fakeNode) { n.silent = true })
+	broken := errors.New("the queue went down between two asks")
+	r, err := NewRouter(RouterOptions{Self: "agent-1", Placement: f.placement,
+		Session: NewSession(), Envelopes: fleetEnvelopes,
+		Queue: &failingAfter{Asker: f.start(t), first: Subject(firstName), err: broken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.readBudget, r.writeBudget = 300*time.Millisecond, 300*time.Millisecond
+
+	_, err = r.WriterAs(swe).CreateTask(t.Context(), "op-11", worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, broken) {
+		t.Fatalf("a write sent to a silent node and then stopped = %v, want "+
+			"ErrOutcomeUnknown carrying what stopped it", err)
+	}
+	if !strings.Contains(err.Error(), firstName) {
+		t.Errorf("the unknown write %q does not name %s, which it was sent to", err, firstName)
+	}
+
+	// A READ STOPPED THE SAME WAY RAN NOTHING THAT MATTERS: the failure as
+	// it is.
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.Is(err, broken) ||
+		errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read stopped by its next ask = %v, want the ask's own failure", err)
+	}
+}
+
+// failingAfter asks the node on first through the fleet, and refuses every
+// other ask as one that could not be made at all.
+type failingAfter struct {
+	Asker
+	first string
+	err   error
+}
+
+func (a *failingAfter) Ask(ctx context.Context, subject string, request []byte,
+	want int) ([][]byte, error) {
+	if subject != a.first {
+		return nil, a.err
+	}
+	return a.Asker.Ask(ctx, subject, request, want)
+}
+
 // A WRITE'S POSITION IS THE NEXT REQUEST'S FLOOR, on whichever node answers
 // it — on the log of the operation's own domain, and on no other: a floor on
 // another domain's log, or on a stream no domain logs to, is never waited for.

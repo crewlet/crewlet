@@ -25,11 +25,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
-// repeat is not safe for — see [opOnceWrite]. It may have landed.
+// ErrOutcomeUnknown is a write that was sent and never answered. It may have
+// landed.
+//
+// TWO CLASSES REACH IT, and they differ in what makes the retry safe, which is
+// why the sentence names neither. A write a repeat is not safe for
+// ([opOnceWrite]) is reported at the first node that did not answer, and is
+// read back before it is written again. A write carrying its caller's
+// operation id ([opIdempotentWrite]) is asked of every other data node first,
+// and reported only when none of them ran it either — where repeating it
+// under that SAME id is the safe retry, and a fresh one is a second write.
 var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " +
-	"that did not answer, so whether it landed is unknown — read it back " +
-	"before writing again")
+	"that did not answer, so whether it landed is unknown")
 
 // sentinel is one error value whose identity crosses the wire.
 type sentinel struct {

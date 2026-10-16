@@ -175,8 +175,8 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // log that refused the append); a coordination store that did not answer
 // ([coord.ErrUnavailable]); the estate's router finding no data node to run
 // the call on ([estate.ErrUnserved]) — every node holding the company's
-// records answered that its copy is out of service or behind, or did not
-// answer at all; an estate held closed while a peer's snapshot is adopted
+// records answered that its copy is out of service or behind, or, for a read,
+// did not answer at all; an estate held closed while a peer's snapshot is adopted
 // ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
@@ -218,8 +218,10 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // sentinel this rule already knew, so until it was named here every such call
 // was answered `500` and told the caller sending it again would not help.
 // What the router COULD NOT ACCOUNT FOR is a different answer, never this one:
-// a write it sent and never heard back about ([estate.ErrOutcomeUnknown]) may
-// have landed, and is an unknown outcome ([UnknownCause]).
+// a write it sent and never heard back about — from the one node a write with
+// no key of its caller's goes to, or from every node a repeatable write was
+// asked of ([estate.ErrOutcomeUnknown]) — may have landed, and is an unknown
+// outcome ([UnknownCause]), told in [Unanswered].
 //
 // # Why the words are chosen rather than the error's own
 //
@@ -246,7 +248,7 @@ func Condition(err error) (words string, ok bool) {
 	case errors.As(err, new(*estate.ErrUnserved)):
 		return "no data node could serve it right now — every node holding the " +
 			"company's records answered that its copy is out of service or " +
-			"behind, or did not answer at all", true
+			"behind, or, asked to read, did not answer at all", true
 	case errors.Is(err, store.ErrNoEstate):
 		return "this node's store is closed while it adopts a peer's snapshot " +
 			"or shuts down", true
@@ -310,12 +312,20 @@ func faulted(ctx context.Context, tool string, err error, sentence string) tools
 }
 
 // toldOf is how a failed result's reason reads inside a sentence that names
-// what it stopped: [faultSaid] for a fault, whose error is the log's; a
-// condition's words ([Condition]); and otherwise the error's own — a refusal
-// the domain composed for a caller.
+// what it stopped: [faultSaid] for a fault, whose error is the log's;
+// [Unanswered] for a write no data node answered, whose error names every node
+// it was sent to; a condition's words ([Condition]); and otherwise the error's
+// own — a refusal the domain composed for a caller.
+//
+// THE UNANSWERED WRITE GOES BEFORE THE CONDITION, because one whose caller's
+// context ended while it waited carries that context's error too, and "it ran
+// out of time" read beside "did not finish" says the write did not land.
 func toldOf(failure tools.Result, err error) string {
 	if tools.RefusalOf(failure) == tools.RefusalInternalError {
 		return faultSaid
+	}
+	if errors.Is(err, estate.ErrOutcomeUnknown) {
+		return Unanswered
 	}
 	if why, ok := Condition(err); ok {
 		return why
@@ -438,10 +448,11 @@ func writeCause(actor Actor, err error) error {
 //   - a walking gesture that stopped at a step whose outcome is unknown
 //     ([worklet.ErrStepUnresolved]): the steps before it landed and the step
 //     itself may have;
-//   - a write the estate's router SENT to a data node that never answered,
-//     of a kind it may not send to a second ([estate.ErrOutcomeUnknown]) —
-//     a page write that names no operation of its own: the node may have
-//     run it before it went quiet.
+//   - a write the estate's router SENT and never heard back about
+//     ([estate.ErrOutcomeUnknown]): a page write that names no operation of
+//     its own, which goes to one data node only, or a write carrying its
+//     caller's operation that no data node it was asked of answered — each
+//     node that went quiet may have run it.
 //
 // BECAUSE EACH IS AN UNKNOWN, not a refusal: a caller answering in status
 // codes owes it the answer it gives every unknown — read back before writing
@@ -466,8 +477,12 @@ func UnknownCause(opID string, err error) error {
 
 // Unanswered is how a write the estate's router sent and never heard back
 // about ([estate.ErrOutcomeUnknown]) reads to whoever made it — in fixed
-// words, because the router's own name every node it asked.
-const Unanswered = "the data node this write was sent to did not answer, so " +
+// words, because the router's own name every node it asked. "A" DATA NODE,
+// NEVER "THE": a write with no key of its caller's goes to one data node, and
+// a repeatable one to every data node in turn, which ends unknown when none
+// ran it and any one of them stayed silent — the others may have answered
+// that they did not run it, so "none answered" would not be true either.
+const Unanswered = "a data node this write was sent to did not answer, so " +
 	"whether it landed is unknown"
 
 // clip flattens a caller-supplied string echoed back into a tool result or a

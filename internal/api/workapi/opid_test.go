@@ -1,7 +1,9 @@
 package workapi_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -236,6 +239,50 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A WRITE NO DATA NODE ANSWERED IS UNKNOWN, CARRYING ITS KEY — never a
+// refusal saying nothing ran.
+//
+// The estate's router asks every data node under the request's operation, and
+// each that stayed silent may have run it, so it answers
+// [estate.ErrOutcomeUnknown]. Told it as the estate unserved — `503
+// unavailable` and no outcome — a client read "nothing ran" and sent the
+// request again under a NEW key: a second purge, a second item. The answer is
+// the unknown every lost acknowledgement gets, settled by the same request
+// under the same key, and in fixed words, since the router's names the nodes.
+//
+// Mutation: drop ClassifyWrite's unknown arm and the purge's row goes red;
+// drop writeFailure's and the tool-backed row does.
+func TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+	}{
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}},
+		{"a write this surface makes", http.MethodPost,
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			r.writes.err = fmt.Errorf("%w (tracker.purge, asked of data-b, data-c)",
+				estate.ErrOutcomeUnknown)
+			key := statelog.NewOpID(time.Now(), "")
+			got := r.do(as(admin("ana")), c.method, c.target, c.body, opkey.Header, key)
+			if got.status != http.StatusServiceUnavailable ||
+				got.body["outcome"] != httpjson.OutcomeUnknown {
+				t.Fatalf("answered %d %v, want 503 saying its outcome is unknown",
+					got.status, got.body)
+			}
+			assertOperationOf(t, got, key)
+			if raw, _ := json.Marshal(got.body); strings.Contains(string(raw), "data-b") {
+				t.Errorf("the router's node list reached the answer: %s", raw)
+			}
+		})
 	}
 }
 

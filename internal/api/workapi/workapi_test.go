@@ -135,7 +135,9 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 		// is this node's undecided hint — never the `500` it answered while
 		// the router's refusal wrapped nothing the tools' rule knew. On a
 		// read this surface takes, a read a tool takes, a write a tool
-		// makes and a write this surface makes without one.
+		// makes and a write this surface makes without one. A write's is
+		// every node REFUSING it: one no node answered is an unknown
+		// outcome instead (TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey).
 		{"a read this surface takes that no data node served",
 			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
 			http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
@@ -146,12 +148,12 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 			map[string]any{"after": "ENG-2", "if_match": 3},
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 		{"a write a tool makes that no data node served",
-			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: out_of_service"} },
 			http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"},
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 		{"a write this surface makes that no data node served",
-			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: out_of_service"} },
 			http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 	} {

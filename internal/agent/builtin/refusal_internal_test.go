@@ -244,7 +244,7 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		{&statelog.Unavailable{Reason: statelog.ReasonLogFull}, tools.RefusalUnavailable},
 		{errors.New("doclet: read the container ENG: disk I/O"), tools.RefusalInternalError},
 	} {
-		if got := pageWriteFailure(t.Context(), "save_page", c.err); !got.Failed || tools.RefusalOf(got) != c.want {
+		if got := pageWriteFailure(t.Context(), "save_page", c.err, ""); !got.Failed || tools.RefusalOf(got) != c.want {
 			t.Errorf("pageWriteFailure(%v) = failed %v class %q, want %q",
 				c.err, got.Failed, tools.RefusalOf(got), c.want)
 		}

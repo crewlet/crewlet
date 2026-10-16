@@ -123,6 +123,7 @@ flowchart TD
     last -- ran it --> done
     lagging -- no --> unserved[Refused: no data node served it]
     last -- nobody ran it --> unserved
+    unserved -. a write some node never answered .-> unknown[Unknown:<br/>retry under the same operation id]
 ```
 
 - **This node first, where it is a data node.** A data node answers its own
@@ -136,12 +137,13 @@ flowchart TD
 - **A node that ran nothing is passed over, whatever the operation**: one whose
   copy is out of service (`out_of_service`), whose copy lags its logs (asked
   again last), or that is behind the caller's floor. What may be repeated once
-  a node *may* have run a write is the operation's own rule: a tracker write
-  moves on under the same operation id, a knowledge-base write that went
-  unanswered is reported as unknown and never sent twice, and a tracker write
-  one data node answered *unvouched* — its ledger cannot say whether the
-  operation landed — is asked of the next under the same id before the caller is
-  told the outcome is unknown.
+  a node *may* have run a write is the operation's own rule: a tracker write,
+  and a knowledge-base write carrying its caller's key (a seat's always does),
+  moves on under the same operation id; a knowledge-base write with no key
+  that went unanswered is reported as unknown and never sent twice; and a
+  write one data node answered *unvouched* — its ledger cannot say whether the
+  operation landed — is asked of the next under the same id before the caller
+  is told the outcome is unknown.
 - **Every request and every answer is signed.** A data node runs a write as
   the actor the request names, so the request is an instruction, and an
   unsigned one would be an instruction anybody who can reach the broker's port
@@ -160,10 +162,14 @@ flowchart TD
   bound the same way, by one implementation.
 - **Nobody answering is an answer that says so**, with what each data node said
   — never an empty list, which would say the company has none of what was asked
-  for. A knowledge search nobody answered is the one exception that does not
-  fail, because a search is best effort: it answers no hits, serves no mode
-  and covers none of the corpus, which every surface renders as "could not be
-  searched" rather than "nothing matched".
+  for. A write that went **unanswered** is the other kind of answer: a node
+  it was sent to may have run it, so the caller is told the outcome is
+  unknown — and the same operation id is the retry — rather than that no data
+  node served it, which is the claim that nothing ran and invites a second
+  write under a fresh id. A knowledge search nobody answered is the one
+  exception that does not fail, because a search is best effort: it answers
+  no hits, serves no mode and covers none of the corpus, which every surface
+  renders as "could not be searched" rather than "nothing matched".
 
 A read waits up to ten seconds on one data node before the next is asked, a
 write up to a minute (or the caller's own deadline); none is ever longer than
