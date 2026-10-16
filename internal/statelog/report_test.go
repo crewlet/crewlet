@@ -54,6 +54,9 @@ func healthyDomain(name string, feed bool) statelog.DomainInputs {
 		TrimFloor:      700,
 		Decision:       statelog.Trim(in.Terms()),
 		FloorState:     statelog.TrimFloorPublished,
+		// THE BACKUP THE TRIM ABOVE COUNTS, an hour old: a healthy log
+		// is covered, so a case that sets a backup policy is quiet on it.
+		BackupAt: in.BackupAt,
 	}
 }
 
@@ -283,6 +286,101 @@ func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T
 	}
 	if got, present := doc.Domains[1]["bytes_per_day"]; present {
 		t.Errorf("an unmeasured rate went out as %v, want the field absent", got)
+	}
+}
+
+// THE BACKUP-AGE ALARM AGES EACH LOG'S OWN BACKUP, AND NAMES THE LOG.
+//
+// Under `backup_floor: operator` every log is acknowledged on its own, so the
+// logs' backups have one age each. The reading used to carry ONE age, the
+// newest point's, and an operator who had just acknowledged one log read a
+// green alarm beside a tracker log whose acknowledgement was days old and a
+// pages log that had none — both trims blocked, neither said.
+func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
+	t.Parallel()
+	fresh := healthyDomain("tracker", true)
+	fresh.BackupAt = reportAt.Add(-time.Hour)
+	stale := healthyDomain("pages", true)
+	stale.BackupAt = reportAt.Add(-30 * time.Hour)
+	uncovered := healthyDomain("usage", false)
+	uncovered.BackupAt = time.Time{}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:       "node-1",
+		At:           reportAt,
+		BackupMaxAge: 24 * time.Hour,
+		Domains:      []statelog.DomainInputs{fresh, stale, uncovered},
+	})
+	fired := map[string]string{}
+	for _, a := range rep.Alarms {
+		if a.Kind != statelog.KindBackupAge {
+			continue
+		}
+		if len(a.Domains) == 0 {
+			t.Fatalf("the backup alarm reads %q and names no log", a.Detail)
+		}
+		for _, d := range a.Domains {
+			fired[d.Domain] = d.Detail
+		}
+		// THE LOG NOTHING COVERS LEADS, ahead of one whose copy is merely
+		// old: it is the one whose trim cannot advance at all.
+		if !strings.Contains(a.Detail, "no verified backup of this log") {
+			t.Errorf("the backup alarm leads with %q, want usage's missing backup", a.Detail)
+		}
+	}
+	if _, wrong := fired["tracker"]; wrong {
+		t.Errorf("the tracker's own backup is an hour old and it fired: %q", fired["tracker"])
+	}
+	if got := fired["pages"]; !strings.Contains(got, "30h old") {
+		t.Errorf("pages fired %q, want its own backup's 30h age — not the "+
+			"tracker's hour", got)
+	}
+	if got := fired["usage"]; !strings.Contains(got, "no verified backup of this log") {
+		t.Errorf("usage fired %q, want the absence of a backup covering it", got)
+	}
+	// AND IT LEADS IN EITHER ORDER: first in the report, it is not displaced
+	// by the log whose copy is merely old.
+	reversed := statelog.NewReport(statelog.ReportInputs{
+		NodeID:       "node-1",
+		At:           reportAt,
+		BackupMaxAge: 24 * time.Hour,
+		Domains:      []statelog.DomainInputs{uncovered, stale, fresh},
+	})
+	for _, a := range reversed.Alarms {
+		if a.Kind == statelog.KindBackupAge &&
+			!strings.Contains(a.Detail, "no verified backup of this log") {
+			t.Errorf("with the logs reversed the backup alarm leads with %q, want "+
+				"usage's missing backup", a.Detail)
+		}
+	}
+
+	// AND THE INSTANT IS ON THE ROW, absent where nothing covers the log —
+	// the one place the report says which acknowledgement each log waits on.
+	body, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Domains []map[string]any `json:"domains"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range wire.Domains {
+		_, has := d["backup_at"]
+		if want := d["domain"] != "usage"; has != want {
+			t.Errorf("%v carries backup_at = %v, want present %v", d["domain"], has, want)
+		}
+	}
+
+	// AND A DEPLOYMENT WITH NO POLICY IS NOT ALARMED AT, per log either.
+	quiet := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt,
+		Domains: []statelog.DomainInputs{stale, uncovered},
+	})
+	for _, a := range quiet.Alarms {
+		if a.Kind == statelog.KindBackupAge {
+			t.Errorf("no backup policy, and %s fired: %s", a.Kind, a.Detail)
+		}
 	}
 }
 
@@ -737,25 +835,26 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 // tracker writes a line pair per log for. So one log is put at the firing value
 // of every per-log condition beside a node reading that fires one of its own:
 // every alarm the report lists a log under must be a flagged kind, every
-// flagged kind must list it, and nothing the node raises may list a log. The
-// one node-wide kind that lists logs is `backup_age`, whose logs are the ones
-// its missing backup holds; this case takes no backup policy, so it is quiet.
+// flagged kind must list it, and nothing the node raises may list a log.
 func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)
 	// NEARLY FULL, and taking in a gibibyte a day against a gibibyte ceiling.
 	d.MaxBytes, d.Bytes = 1<<30, 1<<30-1
 	d.BytesPerDay = statelog.PerDay(1 << 30)
-	// BLOCKED ON A BACKUP NOBODY TOOK, for longer than the window, with a
-	// hundred records past it.
+	// BLOCKED ON A COUNTED SET NOBODY COULD READ, for longer than the
+	// window, with a hundred records past it — and covered by no backup.
+	// The applied term comes first, so the hold is trim_blocked's own: one
+	// on the backup term would be folded under this log's backup_age, and
+	// trim_blocked would list nothing.
 	in := statelog.TrimInputs{
-		Now: reportAt, HoldsReadable: true, CountedReadable: true,
-		Counted:      []statelog.NodePosition{{NodeID: "node-1", Seq: 900, At: reportAt}},
+		Now: reportAt, HoldsReadable: true,
 		BackupMaxAge: 24 * time.Hour, HasFeed: true, FeedReadable: true,
 		FeedAckFloor: 890, AgeFloor: 800, HoldStale: statelog.TrimHoldStale,
 	}
 	d.Decision = statelog.Trim(in.Terms())
 	d.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
+	d.BackupAt = time.Time{}
 	// HOLDING A RECORD PAST THE GRACE, and unable to read its floor.
 	d.DeferredAge, d.DeferredJudgesCopy = statelog.DeferralGrace+time.Minute, true
 	d.FloorUnknownFor = statelog.FloorCacheStale + time.Second
@@ -766,6 +865,7 @@ func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID: "node-1", At: reportAt, RegisterReadable: true,
 		ReplayWindow: replayWindow,
+		BackupMaxAge: 24 * time.Hour,
 		Reading:      statelog.Reading{ApplyLag: 2 * time.Minute},
 		Domains:      []statelog.DomainInputs{d},
 	})

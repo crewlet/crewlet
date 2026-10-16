@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -993,7 +994,30 @@ var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // ValidNodeID reports whether id is one a node could run under — the rule
 // [Node.ID] is resolved against, for a caller naming some OTHER node, such as
 // the operator gesture that evicts one.
-func ValidNodeID(id string) bool { return nodeIDPattern.MatchString(id) }
+func ValidNodeID(id string) bool {
+	return nodeIDPattern.MatchString(id) && reservedNodeID(id) == ""
+}
+
+// reservedNodeID is why id, which has a node id's shape, names something
+// other than a node — and empty for every id a node may take.
+//
+// THE OPERATOR'S BACKUP OWNER ([coord.OperatorBackupOwner]) is the one. The
+// fleet's backup register files a node's newest copy under the node's id and
+// the operator's acknowledgement of each log under that word, so a node
+// running under it announced its own copies as the operator's: under
+// `backup_floor: operator` they were counted as the off-host acknowledgement
+// the policy exists to wait for, and a copy reaching more than one log is
+// refused as an acknowledgement, so the node could not record a backup at all.
+// Refused here, where a node takes its id, rather than told apart in the
+// register, because nothing downstream can tell which of the two wrote a row.
+func reservedNodeID(id string) string {
+	if id == coord.OperatorBackupOwner {
+		return fmt.Sprintf("%q is reserved: the fleet's backup register files "+
+			"the operator's acknowledgements under it, so a node of that name "+
+			"would have its own backups read as one — choose another id", id)
+	}
+	return ""
+}
 
 // Node is Tier A identity of THIS process within the company.
 //
@@ -1091,6 +1115,8 @@ func (n *Node) validate(path Path) error {
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars): it lands in log fields and "+
 				"broker consumer names", n.ID)
+	} else if reserved := reservedNodeID(n.ID); reserved != "" {
+		p.add(at(path, "id"), ErrUnknownValue, "%s", reserved)
 	}
 
 	// An explicitly empty list is refused rather than read as "every
@@ -1209,6 +1235,9 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 		return "", fault(field("node.id"), ErrUnknownValue,
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars)", value)
+	}
+	if reserved := reservedNodeID(value); reserved != "" {
+		return "", fault(field("node.id"), ErrUnknownValue, "%s", reserved)
 	}
 	return value, nil
 }
@@ -1788,13 +1817,15 @@ type TrackerRetention struct {
 
 	// BackupFloor is whose word the trim takes for what is backed up.
 	//
-	// `engine` follows the newest backup the engine itself wrote and
-	// verified. `operator` follows an explicit acknowledgement, for a
-	// company whose policy is "trim only what is off-site" — which the
-	// engine cannot see for itself, because a backup is not a backup until
-	// it leaves the host. Under `operator` the trim does not advance until
-	// that acknowledgement has been given at least once, which is a state
-	// worth being warned about rather than discovering.
+	// PER LOG, under either value: each log's trim follows the newest
+	// counted backup that covers THAT log. `engine` counts the backups the
+	// engine itself wrote and verified. `operator` counts an explicit
+	// acknowledgement, for a company whose policy is "trim only what is
+	// off-site" — which the engine cannot see for itself, because a backup
+	// is not a backup until it leaves the host — and an acknowledgement
+	// names one log and is kept per log. Under `operator` a log's trim
+	// does not advance until that log has been acknowledged at least once,
+	// which is a state worth being warned about rather than discovering.
 	BackupFloor BackupFloor `yaml:"backup_floor,omitempty" json:"backup_floor,omitempty" js:"enum=engine|operator" desc:"Whose word the trim takes for what is backed up: engine (default) or operator."`
 
 	// SnapshotInterval is how stale a node's newest snapshot may be before
@@ -1819,12 +1850,13 @@ type TrackerRetention struct {
 type BackupFloor string
 
 const (
-	// BackupFloorEngine follows the newest backup the engine wrote and
-	// verified itself.
+	// BackupFloorEngine follows, for each log, the newest backup of it
+	// the engine wrote and verified itself.
 	BackupFloorEngine BackupFloor = "engine"
 
-	// BackupFloorOperator follows an explicit acknowledgement, for a
-	// company that trims only what has left the host.
+	// BackupFloorOperator follows, for each log, an explicit
+	// acknowledgement of that log, for a company that trims only what has
+	// left the host.
 	BackupFloorOperator BackupFloor = "operator"
 )
 

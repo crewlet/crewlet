@@ -40,6 +40,12 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 		nodeID: "node-a",
 		alarms: statelog.NewTracker(nil, nil),
 		pooled: map[string]poolCounters{},
+		// A SEARCH OVER ITS TARGET, so the table has something to raise:
+		// this node runs no log, and every alarm a log could raise is
+		// evaluated per log.
+		index: func(_ context.Context, out *statelog.Reading) {
+			out.SearchP95 = 2 * statelog.InteractiveSearchTarget
+		},
 	}
 	e := &Engine{}
 	if standing, evaluated := e.Alarms(); evaluated {
@@ -56,8 +62,8 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	for _, a := range report.Alarms {
 		want = append(want, a.Kind)
 	}
-	// A FLOOR: a fleet with no backup recorded raises `backup_age`, so a
-	// comparison of two empty lists cannot pass as agreement here.
+	// A FLOOR: the slow search above raises `search_slow`, so a comparison
+	// of two empty lists cannot pass as agreement here.
 	if len(want) == 0 {
 		t.Fatal("the report raised no alarm, so this compares nothing")
 	}

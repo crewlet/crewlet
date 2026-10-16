@@ -881,28 +881,32 @@ func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
 func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 	seq uint64, at time.Time, generation uint32, have bool) {
 
-	newest, ok := r.newestCounted(points)
+	newest, ok := r.newestCounted(points, stream)
 	if !ok {
-		return 0, time.Time{}, 0, false
-	}
-	reach, covers := newest.Streams[stream]
-	if !covers {
-		// A BACKUP THAT DOES NOT COVER THIS LOG IS NOT A BACKUP AT
-		// SEQUENCE ZERO — it is no backup of this domain at all, which
+		// NO COUNTED BACKUP COVERS THIS LOG, which is not a backup at
+		// sequence zero — it is no backup of this domain at all, which
 		// blocks. The distinction is the whole reason the term is
 		// three-valued.
 		return 0, time.Time{}, 0, false
 	}
+	reach := newest.Streams[stream]
 	return reach.Seq, newest.At, reach.Generation, true
 }
 
-// newestCounted is the newest verified backup the operator's policy takes the
-// word of — the one point both the trim's backup term and the backup-age alarm
-// read, through [coord.CountedBackups], so the alarm can never age a backup the
-// trim does not count.
-func (r *retention) newestCounted(points []coord.BackupPoint) (coord.BackupPoint, bool) {
-	return coord.NewestBackup(coord.CountedBackups(points,
-		r.cfg.Floor() == config.BackupFloorOperator))
+// newestCounted is the newest verified backup covering one log that the
+// operator's policy takes the word of — the one point both the trim's backup
+// term and the backup-age alarm read for that log, through
+// [coord.CountedBackups] and [coord.NewestBackupOf], so the alarm can never
+// age a backup the trim does not count.
+//
+// PER LOG, and the order of the two questions is the fix. Taking the newest
+// counted point and THEN asking whether it covered the log blocked every log it
+// did not: under `backup_floor: operator` an acknowledgement names one log, so
+// the newest one covered the log acknowledged last and every other log's trim
+// stopped, while the alarm aged that newest row and stayed green.
+func (r *retention) newestCounted(points []coord.BackupPoint, stream string) (coord.BackupPoint, bool) {
+	return coord.NewestBackupOf(coord.CountedBackups(points,
+		r.cfg.Floor() == config.BackupFloorOperator), stream)
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.

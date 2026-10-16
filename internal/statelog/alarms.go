@@ -325,10 +325,16 @@ type Reading struct {
 	// the trim runs once, and every node whose domain declares no ceiling.
 	HeadroomFraction *float64
 
-	// BackupAge is how old the newest verified backup is, and BackupMaxAge
-	// what the operator asked for. A zero BackupMaxAge is a node with no
-	// backup policy, which is not an alarm — it is a deployment that has
-	// said it does not want one.
+	// BackupAge is how old the backup one log's trim counts is — the
+	// newest verified point the policy counts that covers the log — and
+	// BackupMaxAge what the operator asked for. A zero BackupMaxAge is a
+	// node with no backup policy, which is not an alarm — it is a
+	// deployment that has said it does not want one.
+	//
+	// A PER-DOMAIN CONDITION, evaluated once per log from the report's
+	// rows ([ReportInputs.BackupMaxAge]) for the reason the headroom is:
+	// the logs' backups have one age each, and the one a node-wide
+	// reading carried was the newest point's, whatever it covered.
 	//
 	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
 	// is a real and reassuring value here — a copy verified this second —
@@ -573,12 +579,10 @@ type Alarm struct {
 	// Domains is every log this alarm stands on, for a condition that is a
 	// property of a log rather than of the node ([PerLogKinds]): the logs
 	// nearing or short of their ceiling, the logs whose trim is held, the
-	// logs holding a record past the deferral grace, the logs whose floor
-	// cannot be read and the logs past their census — and under
-	// [KindBackupAge] the logs whose [KindTrimBlocked] the missing or stale
-	// backup absorbs: held past their replay window and keeping records
-	// older than it. A younger hold is listed under no alarm. Empty for a
-	// node-wide condition.
+	// logs whose backup is missing or older than the policy, the logs
+	// holding a record past the deferral grace, the logs whose floor cannot
+	// be read and the logs past their census. Empty for a node-wide
+	// condition.
 	//
 	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
 	// The kind is the alarm's identity on the count, the gauge and every
@@ -602,17 +606,22 @@ type AlarmDomain struct {
 	// Domain is the log's registered name.
 	Domain string `json:"domain"`
 
-	// Detail is this log's own measurement, in the operator's units.
+	// Detail is this log's own measurement, in the operator's units —
+	// under [KindBackupAge], followed by its held trim's where Term is set,
+	// since that log raises no [KindTrimBlocked] to say it.
 	Detail string `json:"detail"`
 
 	// Term is the trim term holding this log, where the alarm is about its
-	// trim. It is the term's own name, which is what `crewlet retention
-	// status` prints and the retention guide is indexed by.
+	// trim: under [KindTrimBlocked], and under [KindBackupAge] for a log
+	// whose trim the backup term is holding, which raises no
+	// [KindTrimBlocked] of its own. It is the term's own name, which is what
+	// `crewlet retention status` prints and the retention guide is indexed
+	// by.
 	Term TermName `json:"term,omitempty"`
 
-	// Since is when this log's trim stopped advancing, where the alarm is
-	// about its trim. An instant rather than an age, so a reader renders
-	// the age against its own clock instead of trusting one frozen at the
+	// Since is when this log's trim stopped advancing, wherever Term is
+	// set. An instant rather than an age, so a reader renders the age
+	// against its own clock instead of trusting one frozen at the
 	// evaluation.
 	Since time.Time `json:"since,omitzero"`
 }
@@ -759,17 +768,23 @@ var table = []rule{
 				return "", false
 			}
 			if r.BackupAge == nil {
-				return fmt.Sprintf("no verified backup has been recorded, and "+
-					"the policy asks for one every %s", spoken(r.BackupMaxAge)), true
+				return fmt.Sprintf("no verified backup of this log has been "+
+					"recorded, and the policy asks for one every %s",
+					spoken(r.BackupMaxAge)), true
 			}
-			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", spoken(*r.BackupAge), spoken(r.BackupMaxAge)),
+			return fmt.Sprintf("the newest verified backup of this log is %s "+
+					"old, and the policy asks for %s", spoken(*r.BackupAge),
+					spoken(r.BackupMaxAge)),
 				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
-			"and check whatever was meant to run it. The trim does not " +
-			"advance past a backup older than the policy, and does not " +
-			"advance at all until there is one.",
+			"and check whatever was meant to run it; under `backup_floor: " +
+			"operator`, acknowledge each named log's off-host copy with " +
+			"`crewlet retention ack -stream <its stream> -position <n>`, n " +
+			"being the sequence the copy reaches. The trim does not advance " +
+			"a log past a backup older than the policy, and does not " +
+			"advance it at all until there is one.",
+		perLog: true,
 	},
 	{
 		// A BLOCKED TRIM IS AN ORDINARY STATE until it has cost something,
@@ -1165,10 +1180,10 @@ func Frac(v float64) *float64 { return &v }
 func PerDay(v uint64) *uint64 { return &v }
 
 // PerLogKinds is every alarm evaluated once per log rather than once per node,
-// in the table's own order: the six a reader of the reference has to know list
-// the logs they stand on ([Alarm.Domains]) and write a pair of log lines for
-// each of those logs ([Tracker]), while counting once on the health envelope
-// and the gauge.
+// in the table's own order: the seven a reader of the reference has to know
+// list the logs they stand on ([Alarm.Domains]) and write a pair of log lines
+// for each of those logs ([Tracker]), while counting once on the health
+// envelope and the gauge.
 func PerLogKinds() []Kind {
 	var out []Kind
 	for _, rule := range table {
@@ -1177,18 +1192,6 @@ func PerLogKinds() []Kind {
 		}
 	}
 	return out
-}
-
-// perLogKind reports whether kind is one of [PerLogKinds]: a condition whose
-// log lines the [Tracker] writes once per log it stands on. A kind the table
-// does not hold is not one.
-func perLogKind(kind Kind) bool {
-	for _, rule := range table {
-		if rule.kind == kind {
-			return rule.perLog
-		}
-	}
-	return false
 }
 
 // Age is a measured age, for the Reading field whose zero value is a real and

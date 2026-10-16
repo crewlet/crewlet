@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -874,6 +875,39 @@ func TestABackupThatDoesNotCoverALogIsNotABackupAtZero(t *testing.T) {
 	}
 }
 
+// THE TERM READS THE NEWEST COUNTED BACKUP THAT COVERS THE LOG, not the newest
+// counted backup and then whether it covers the log.
+//
+// Under `engine` a node's newest copy can leave a log out — a node that does
+// not run it, or ran it under another build — and an older copy of another
+// node's that does cover it is still that log's backup. Taking the newest point
+// first blocked the log on a backup that was never of it.
+func TestTheBackupTermReadsTheNewestBackupCoveringItsLog(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	points := []coord.BackupPoint{{
+		Owner: "node-a", At: at, Verified: true,
+		Streams: map[string]coord.Position{
+			"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Seq: 900},
+		},
+	}, {
+		Owner: "node-b", At: at.Add(-time.Hour), Verified: true,
+		Streams: map[string]coord.Position{
+			"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Seq: 700},
+			"CREWLET_PAGES_LOG":   {Stream: "CREWLET_PAGES_LOG", Seq: 300},
+		},
+	}}
+	r := &retention{cfg: config.TrackerRetention{BackupFloor: config.BackupFloorEngine}}
+	if seq, _, _, have := r.backupTerm(points, "CREWLET_TRACKER_LOG"); !have || seq != 900 {
+		t.Errorf("tracker term = (%d, %v), want node-a's newer 900", seq, have)
+	}
+	seq, taken, _, have := r.backupTerm(points, "CREWLET_PAGES_LOG")
+	if !have || seq != 300 || !taken.Equal(at.Add(-time.Hour)) {
+		t.Errorf("pages term = (%d at %v, %v), want node-b's 300 at its own "+
+			"instant — node-a's newer copy does not reach this log", seq, taken, have)
+	}
+}
+
 // THE SEARCH ALARMS' INPUTS ARE ACTUALLY FED.
 //
 // `search_scoped`, `search_degraded` and `search_slow` are each a property of
@@ -1124,7 +1158,46 @@ func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 	return false
 }
 
-// A COMPANY WITH NO BACKUP HANDS IN AN ABSENCE, NOT A FABRICATED AGE.
+// backupAlarms is each log's `backup_age` detail from one report, by domain:
+// the entries of the one alarm the kind raises ([statelog.Alarm.Domains]).
+func backupAlarms(t *testing.T, report statelog.Report) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, a := range report.Alarms {
+		if a.Kind != statelog.KindBackupAge {
+			continue
+		}
+		if len(a.Domains) == 0 {
+			t.Fatalf("backup_age reads %q and names no log", a.Detail)
+		}
+		for _, d := range a.Domains {
+			out[d.Domain] = d.Detail
+		}
+	}
+	return out
+}
+
+// everyLog is the stream of every log a running node holds, by domain.
+func everyLog(s *stateLog) map[string]string {
+	out := map[string]string{}
+	for _, running := range s.running() {
+		out[running.domain.Name()] = running.spec.Name
+	}
+	return out
+}
+
+// coveringEvery is a node's verified backup reaching every stream in logs.
+func coveringEvery(owner string, at time.Time, logs map[string]string) coord.BackupPoint {
+	p := coord.BackupPoint{Owner: owner, At: at, Verified: true,
+		Streams: map[string]coord.Position{}}
+	for _, stream := range logs {
+		p.Streams[stream] = coord.Position{Stream: stream, Seq: 1}
+	}
+	return p
+}
+
+// A COMPANY WITH NO BACKUP HANDS IN AN ABSENCE, NOT A FABRICATED AGE — on every
+// log, by name.
 //
 // The alarm has to fire — `backup_floor` refuses until a backup exists, so a
 // company that never takes one never trims — and the form this replaces bought
@@ -1136,39 +1209,50 @@ func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 // backup.
 func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	t.Parallel()
-	r := &retention{state: &stateLog{}, fleet: coordmem.NewFleet(), nodeID: "node-a"}
-	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	e, _ := aRunningNode(t)
+	e.stopRetention()
+	s := e.core.Load().log
+	logs := everyLog(s)
+	if len(logs) == 0 {
+		t.Fatal("the node runs no log, so this case evaluates nothing")
+	}
+	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 
-	none := r.reading(t.Context(), now, coord.BackupPoint{}, false, nil)
-	if none.BackupAge != nil {
-		t.Errorf("a fleet with no backup reported an age of %v", *none.BackupAge)
+	none := r.Report(t.Context())
+	fired := backupAlarms(t, none)
+	for domain := range logs {
+		detail, ok := fired[domain]
+		if !ok {
+			t.Errorf("%s has no backup and raised no backup_age — the trim will "+
+				"not advance it until one exists (alarms %v)", domain, none.Alarms)
+			continue
+		}
+		if strings.Contains(detail, " old") {
+			t.Errorf("%s: detail = %q names an age for a backup that does not exist",
+				domain, detail)
+		}
 	}
-	if none.BackupMaxAge != config.DefaultBackupMaxAge {
-		t.Fatalf("BackupMaxAge = %v, want the default %v — with no policy the "+
-			"alarm is silent and this case proves nothing",
-			none.BackupMaxAge, config.DefaultBackupMaxAge)
-	}
-	raised := statelog.Evaluate(none)
-	if !firedKind(raised, statelog.KindBackupAge) {
-		t.Fatalf("a fleet with no backup raised %v — the trim will not advance "+
-			"until one exists", raised)
-	}
-	for _, a := range raised {
-		if a.Kind == statelog.KindBackupAge && strings.Contains(a.Detail, " old") {
-			t.Errorf("detail = %q: it names an age for a backup that does not "+
-				"exist", a.Detail)
+	for _, d := range none.Domains {
+		if !d.BackupAt.IsZero() {
+			t.Errorf("%s reports a backup taken at %v, and none was", d.Domain, d.BackupAt)
 		}
 	}
 
-	// AND A REAL BACKUP IS STILL MEASURED against the same clock, so the
-	// nil above is the absence rather than a field nothing fills.
-	taken := r.reading(t.Context(), now,
-		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true, nil)
-	if taken.BackupAge == nil || *taken.BackupAge != 2*time.Hour {
-		t.Fatalf("a two-hour-old backup reported %v", taken.BackupAge)
+	// AND A REAL BACKUP IS STILL MEASURED, per log, so the absence above is
+	// the state rather than a field nothing fills.
+	taken := time.Now().UTC().Add(-2 * time.Hour)
+	if err := e.backends.Fleet.PutBackupPoint(t.Context(),
+		coveringEvery("node-a", taken, logs)); err != nil {
+		t.Fatal(err)
 	}
-	if got := statelog.Evaluate(taken); len(got) != 0 {
-		t.Errorf("a node inside its backup policy raised %v", got)
+	report := r.Report(t.Context())
+	if got := backupAlarms(t, report); len(got) != 0 {
+		t.Errorf("every log is inside its backup policy and raised %v", got)
+	}
+	for _, d := range report.Domains {
+		if !d.BackupAt.Equal(taken) {
+			t.Errorf("%s reports its backup at %v, want %v", d.Domain, d.BackupAt, taken)
+		}
 	}
 }
 
@@ -1181,14 +1265,12 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 // below a trim that could not move — the one state the alarm exists to name.
 func TestTheBackupAlarmAgesThePointThePolicyCounts(t *testing.T) {
 	t.Parallel()
-	fleet := coordmem.NewFleet()
-	taken := time.Now().UTC().Add(-time.Hour)
-	if err := fleet.PutBackupPoint(t.Context(), coord.BackupPoint{
-		Owner: "node-a", At: taken, Verified: true,
-		Streams: map[string]coord.Position{
-			"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Seq: 900},
-		},
-	}); err != nil {
+	e, _ := aRunningNode(t)
+	e.stopRetention()
+	s := e.core.Load().log
+	logs := everyLog(s)
+	if err := e.backends.Fleet.PutBackupPoint(t.Context(),
+		coveringEvery("node-a", time.Now().UTC().Add(-time.Hour), logs)); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -1197,16 +1279,102 @@ func TestTheBackupAlarmAgesThePointThePolicyCounts(t *testing.T) {
 	}{
 		// The node's own copy an hour ago is inside the default day.
 		{config.BackupFloorEngine, false},
-		// Nobody acknowledged anything, so there is no counted backup.
+		// Nobody acknowledged anything, so no log has a counted backup.
 		{config.BackupFloorOperator, true},
 	} {
-		r := &retention{state: &stateLog{}, fleet: fleet, nodeID: "node-a",
+		r := &retention{state: s, fleet: e.backends.Fleet, nodeID: "node-a",
 			cfg: config.TrackerRetention{BackupFloor: c.floor}}
-		report := r.Report(t.Context())
-		if got := firedKind(report.Alarms, statelog.KindBackupAge); got != c.fires {
-			t.Errorf("backup_floor %s: backup_age fired=%v, want %v — the alarm "+
-				"must age the point the trim counts", c.floor, got, c.fires)
+		fired := backupAlarms(t, r.Report(t.Context()))
+		for domain := range logs {
+			if _, got := fired[domain]; got != c.fires {
+				t.Errorf("backup_floor %s: %s backup_age fired=%v, want %v — the "+
+					"alarm must age the point the trim counts", c.floor, domain,
+					got, c.fires)
+			}
 		}
+	}
+}
+
+// EACH LOG IS TRIMMED AND AGED BY ITS OWN ACKNOWLEDGEMENT.
+//
+// Under `backup_floor: operator` the procedure is one acknowledgement per log,
+// in turn. The register kept one operator row, so each acknowledgement replaced
+// the last: the trim's backup term — which took the newest counted point and
+// then blocked every log it did not cover — trimmed only the log acknowledged
+// last, and the alarm aged that one row and stayed green. Here every log the
+// node runs is acknowledged in turn, through the register, and every one must
+// both be trimmable at its own reach and be aged by its own instant.
+func TestEachLogIsTrimmedAndAgedByItsOwnAcknowledgement(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	e.stopRetention()
+	s := e.core.Load().log
+	logs := everyLog(s)
+	if len(logs) < 2 {
+		t.Fatalf("the node runs %v, and acknowledging one log proves nothing "+
+			"about a second", logs)
+	}
+	r := &retention{state: s, fleet: e.backends.Fleet, nodeID: "node-a",
+		cfg: config.TrackerRetention{BackupFloor: config.BackupFloorOperator}}
+	acknowledge := func(stream string, seq uint64, at time.Time) {
+		t.Helper()
+		if err := e.backends.Fleet.PutBackupPoint(t.Context(), coord.BackupPoint{
+			Owner: coord.OperatorBackupOwner, At: at, Verified: true,
+			Streams: map[string]coord.Position{stream: {Stream: stream, Seq: seq}},
+		}); err != nil {
+			t.Fatalf("acknowledge %s: %v", stream, err)
+		}
+	}
+
+	now := time.Now().UTC()
+	type ack struct {
+		seq uint64
+		at  time.Time
+	}
+	want := map[string]ack{}
+	var i int
+	for _, domain := range slices.Sorted(maps.Keys(logs)) {
+		i++
+		want[domain] = ack{seq: uint64(100 * i), at: now.Add(-time.Duration(i) * time.Minute)}
+		acknowledge(logs[domain], want[domain].seq, want[domain].at)
+	}
+
+	shared, err := r.read(t.Context())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for domain, stream := range logs {
+		seq, at, _, have := r.backupTerm(shared.backups, stream)
+		if !have {
+			t.Errorf("%s: the backup term has no backup after every log was "+
+				"acknowledged in turn — a later acknowledgement withdrew this one",
+				domain)
+			continue
+		}
+		if seq != want[domain].seq || !at.Equal(want[domain].at) {
+			t.Errorf("%s: the term reaches %d at %v, want its own acknowledgement's "+
+				"%d at %v", domain, seq, at, want[domain].seq, want[domain].at)
+		}
+	}
+	report := r.Report(t.Context())
+	if got := backupAlarms(t, report); len(got) != 0 {
+		t.Errorf("every log was acknowledged minutes ago and backup_age fired: %v", got)
+	}
+	for _, d := range report.Domains {
+		if !d.BackupAt.Equal(want[d.Domain].at) {
+			t.Errorf("%s reports its backup at %v, want its own acknowledgement's %v",
+				d.Domain, d.BackupAt, want[d.Domain].at)
+		}
+	}
+
+	// ONE LOG'S ACKNOWLEDGEMENT GOES STALE, and the alarm names that log
+	// alone: the others' fresh acknowledgements are not its age.
+	stale := slices.Sorted(maps.Keys(logs))[0]
+	acknowledge(logs[stale], want[stale].seq, now.Add(-30*time.Hour))
+	fired := backupAlarms(t, r.Report(t.Context()))
+	if len(fired) != 1 || !strings.Contains(fired[stale], "30h") {
+		t.Errorf("after %s's acknowledgement aged past the policy backup_age "+
+			"fired %v, want %s alone at its own 30h", stale, fired, stale)
 	}
 }
 

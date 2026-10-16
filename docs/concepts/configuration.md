@@ -165,7 +165,10 @@ not need to set it to run a single engine. It starts with a letter or a digit
 and holds only letters, digits, `.`, `_` and `-`, at most 64 characters,
 because it ends up in broker consumer names and subjects — and an operator
 gesture naming a node, such as `crewlet retention evict`, holds the id it is
-given to the same rule.
+given to the same rule. One id of that shape is **reserved**: `operator`,
+which the fleet's backup register files the operator's
+[acknowledgements](../guides/retention.md#a-company-that-never-backs-up-never-trims)
+under, so a node of that name would have its own backups read as one.
 
 It must be **stable across restarts**, which is why it comes from the
 deployment rather than being generated per boot: anything the process
