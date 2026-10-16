@@ -304,7 +304,7 @@ function Profile({
             ) : (
               // A PERSON ALWAYS HOLDS ONE (ADR-0032), so this is a session
               // that acts as its own credential rather than as a seat.
-              <EmptyValue label="Bound to no seat" />
+              <EmptyValue label="No seat" />
             )}
           </dd>
           <dt>Access</dt>

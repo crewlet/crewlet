@@ -275,6 +275,12 @@ function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
 }
 
 /** Every answer in flight lands. */
+/** Open an opened principal's More menu and press one of its gestures. */
+async function more(name: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "More" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 async function settle() {
   await act(async () => {});
   await act(async () => {});
@@ -322,10 +328,9 @@ afterEach(() => {
 });
 
 // A READER WITHOUT ADMIN IS OFFERED NO CONTROL they could not use. The
-// control is an administrator, who sees every one of them — and NO "Invite
-// person": a person comes from a vacant seat, so the page points at the org
-// chart instead. Mutation: draw the pointer without Admin, or the button for
-// anybody, and a line here goes red.
+// control is an administrator, who sees every one of them, "Invite person"
+// first: it picks an open seat, since a person comes from a seat. Mutation:
+// draw a control without Admin, and a line here goes red.
 test("a reader without Admin sees no write control, and an administrator sees them", async () => {
   engine();
   location.hash = "#/settings/people?peek=person:p-bo";
@@ -339,27 +344,59 @@ test("a reader without Admin sees no write control, and an administrator sees th
     "Reading where a seat is reached needs Admin access. An admin can give it to you.",
   );
   await screen.findByText("Authenticator app");
-  for (const name of ["Invite person", "New service account", "Cancel", "Remove", "Revoke"]) {
+  for (const name of ["Invite person", "New service account", "Cancel", "Revoke"]) {
     expect(screen.queryByRole("button", { name: new RegExp(`^${name}`) })).toBeNull();
   }
-  expect(screen.queryByRole("link", { name: /Invite or create from the org chart/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "More" })).toBeNull();
   cleanup();
   engine();
   mount(ADMIN);
   await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
   await screen.findAllByRole("button", { name: "New service account" });
-  for (const name of ["New service account", "Cancel", "Remove", "Revoke"]) {
+  for (const name of ["Invite person", "New service account", "Cancel", "Revoke"]) {
     expect(screen.getAllByRole("button", { name: new RegExp(`^${name}`) }).length).toBeGreaterThan(
       0,
     );
   }
-  for (const name of ["Invite person", "Invite", "Create person"]) {
+  expect(screen.getByRole("button", { name: "More" })).toBeTruthy();
+  // A SEAT'S OWN GESTURES stay on the seat: this page invites through a picker.
+  for (const name of ["Invite", "Add person"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();
   }
-  expect(
-    screen.getByRole("link", { name: /Invite or create from the org chart/ }).getAttribute("href"),
-  ).toBe("#/agents");
+});
+
+// INVITE PERSON PICKS AN OPEN SEAT FIRST, then opens that seat's own
+// invitation: the seats offered are the ones nothing holds, and the invitation
+// names the seat chosen. Mutation: skip the picker, or offer a held seat, and
+// a line here goes red.
+test("invite person picks an open seat, then invites onto it", async () => {
+  const eng = engine({
+    "POST /iam/invitations": [
+      json(201, {
+        id: "inv-9",
+        seat: "lee",
+        url: "https://crewlet.example.com/dashboard#/invite/inv-9.s3cret",
+        expires_at: "2026-10-20T09:00:00Z",
+        outcome: "applied",
+      }),
+    ],
+  });
+  mount(ADMIN);
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const picker = await screen.findByRole("dialog", { name: "Invite person" });
+  await settle();
+  pick(within(picker).getByLabelText(/^Seat/), /Lee Ops/);
+  fireEvent.click(within(picker).getByRole("button", { name: "Continue" }));
+  const invite = await screen.findByRole("dialog", { name: "Invite someone as Lee Ops" });
+  fireEvent.change(within(invite).getByLabelText("Email address"), {
+    target: { value: "new@example.com" },
+  });
+  fireEvent.click(within(invite).getByRole("button", { name: "Invite" }));
+  await settle();
+  expect(eng.writes().map((w) => [w.path, (w.body as { seat?: string }).seat])).toEqual([
+    ["/iam/invitations", "lee"],
+  ]);
 });
 
 // CANCELLING AN INVITATION IS NEVER A BUTTON CALLED "CANCEL" BESIDE ANOTHER:
@@ -424,19 +461,23 @@ test("a write recorded but not yet applied here leaves its dialog only Done", as
   const cancel = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   fireEvent.click(within(cancel).getByRole("button", { name: "Cancel invitation" }));
   await settle();
-  expect(within(cancel).getByRole("status").textContent).toMatch(/^Recorded\./);
+  expect(within(cancel).getByRole("status").textContent).toMatch(
+    /^Saved\. The list will update in a moment\./,
+  );
   expect(within(cancel).queryByRole("button", { name: "Cancel invitation" })).toBeNull();
   expect(within(cancel).queryByRole("button", { name: "Keep it" })).toBeNull();
   fireEvent.click(within(cancel).getByRole("button", { name: "Done" }));
   expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
 
   location.hash = "#/settings/people?peek=person:p-bo";
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(within(edit).getByRole("status").textContent).toMatch(/^Recorded\./);
+  expect(within(edit).getByRole("status").textContent).toMatch(
+    /^Saved\. The list will update in a moment\./,
+  );
   expect(within(edit).queryByRole("button", { name: "Save" })).toBeNull();
   expect(eng.writes()).toHaveLength(2);
 });
@@ -497,52 +538,30 @@ test("a write held for a step-up says it waits for the person", async () => {
   expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
 });
 
-// A RESET SAYS WHAT THIS DEPLOYMENT ASKS: where a second factor is optional,
-// it promises no enrolment the next sign-in never asks for. The CONTROL is the
-// reset where one is required. Mutation: promise the enrolment whatever the
-// setting.
-test.each([
-  ["optional", /password alone until they set up a new one/],
-  ["required", /enrol a new factor at their next sign-in/],
-])("a second factor's reset says what %s asks", async (setting, after) => {
-  secondFactor = setting;
-  engine();
-  location.hash = "#/settings/people?peek=person:p-bo";
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
-  const reset = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
-  expect(await within(reset).findByText(after)).toBeTruthy();
-  secondFactor = "required";
-});
-
-// A PERSON KEEPS THEIR SEAT THROUGH A SUSPENSION, and a removal is what frees
-// it: both say so, naming the seat as the chart does — the seat the reader
-// looks for next. Mutation: name it by its handle, or say a suspension frees
-// it, and a line here goes red.
-test("a seated person's suspension withholds their seat, and a removal frees it, by name", async () => {
+// EACH GESTURE ON A PERSON SAYS WHAT THEY WILL NOTICE, in a sentence or two:
+// the dialog names the person and the one consequence that matters. A
+// suspended person keeps their seat; a removal opens it up. Mutation: drop a
+// sentence and its assertion goes red.
+test("a seated person's suspension and removal each say what happens to them", async () => {
   engine();
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
-  expect(suspend.textContent).toMatch(
-    /their seat Jane Founder is withheld — it stays theirs, and nobody else can hold it meanwhile/,
-  );
+  expect(within(suspend).getByText("They can’t sign in until reactivated.")).toBeTruthy();
   fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  await more("Remove");
   const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
   expect(remove.textContent).toMatch(
-    /their seat Jane Founder is freed and stands vacant in the org chart/,
+    /Their account is deleted and their seat opens up\. Can’t be undone\./,
   );
-  expect(remove.textContent).toMatch(/invite them onto a seat again/);
 });
 
 // A SERVICE ACCOUNT BOUND TO NO SEAT is told nothing about one, and its
-// removal is undone the way it was made — a create, never an invitation,
-// which nobody redeems for a machine. The CONTROL is the seated person above.
-// Mutation: name a seat whatever the row holds, or word a machine's removal
-// as a person's.
-test("a service account bound to no seat is told nothing about one, and is created back", async () => {
+// removal is worded as a service account's. The CONTROL is the seated person
+// above. Mutation: name a seat whatever the row holds, or word a machine's
+// removal as a person's.
+test("a service account bound to no seat is told nothing about one", async () => {
   engine();
   location.hash = "#/settings/people?peek=person:p-ci";
   mount();
@@ -550,54 +569,36 @@ test("a service account bound to no seat is told nothing about one, and is creat
   const suspend = await screen.findByRole("dialog", { name: "Suspend ci:release?" });
   expect(within(suspend).queryByText(/seat/)).toBeNull();
   fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  await more("Remove");
   const remove = await screen.findByRole("dialog", { name: "Remove ci:release?" });
   expect(within(remove).queryByText(/seat/)).toBeNull();
-  expect(remove.textContent).toMatch(/create the service account again/);
+  expect(remove.textContent).toMatch(/Deletes the service account and its tokens/);
   expect(remove.textContent).not.toMatch(/invite/);
 });
 
-// WHAT ENDS A PERSON'S SESSIONS ENDS THEIR RESET LINK, and each gesture that
-// does says so: an administrator who sent the link and then reset the second
-// factor of somebody who lost both handed them a link that answered 410, with
-// nothing on either dialog to say why. The link's own dialog names the order
-// that works, and a reactivation says the link it ended stays ended. Mutation:
-// drop the link from any one dialog and its assertion goes red.
-test("every gesture that ends a reset link says so, and the link comes after them", async () => {
+// THE MORE MENU'S GESTURES each name what stops working, in the words the
+// person's own Account uses: two-step verification, signing out everywhere,
+// a reset link that works once. Mutation: drop a sentence and its assertion
+// goes red.
+test("every gesture under More says what stops working", async () => {
   engine();
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
-  const factor = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
-  expect(
-    within(factor).getByText(
-      /every session, token and password reset link they hold ends — if they need a new password too, issue the link after this/,
-    ),
-  ).toBeTruthy();
+  await more("Reset two-step verification");
+  const factor = await screen.findByRole("dialog", {
+    name: "Reset Bo Lang’s two-step verification?",
+  });
+  expect(within(factor).getByText("Their app and recovery codes stop working.")).toBeTruthy();
   fireEvent.click(within(factor).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "End all sessions" }));
-  const sessions = await screen.findByRole("dialog", { name: "End every session Bo Lang holds?" });
+  await more("Sign out everywhere");
+  const sessions = await screen.findByRole("dialog", { name: "Sign Bo Lang out everywhere?" });
   expect(
-    within(sessions).getByText(
-      /any password reset link issued for them stop working too — if they need a new password, issue the link after this/,
-    ),
+    within(sessions).getByText("Their sessions, tokens and reset link stop working."),
   ).toBeTruthy();
   fireEvent.click(within(sessions).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
-  const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
-  expect(
-    within(suspend).getByText(/every session, token and password reset link they hold ends/),
-  ).toBeTruthy();
-  fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Issue password reset link" }));
-  const link = await screen.findByRole("dialog", {
-    name: "Issue a password reset link for Bo Lang?",
-  });
-  expect(
-    within(link).getByText(
-      /resetting their second factor, ending their sessions or suspending them ends it too — so issue it after those/,
-    ),
-  ).toBeTruthy();
+  await more("Get reset link");
+  const link = await screen.findByRole("dialog", { name: "Get a reset link for Bo Lang?" });
+  expect(within(link).getByText("Works once, for a day.")).toBeTruthy();
   cleanup();
 
   engine({}, () => ({
@@ -607,11 +608,7 @@ test("every gesture that ends a reset link says so, and the link comes after the
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Reactivate" }));
   const reactivate = await screen.findByRole("dialog", { name: "Reactivate Bo Lang?" });
-  expect(
-    within(reactivate).getByText(
-      /password reset link the suspension ended stay ended, so issue a new link if they need one/,
-    ),
-  ).toBeTruthy();
+  expect(within(reactivate).getByText("Bo Lang can sign in again.")).toBeTruthy();
 });
 
 // AN EDIT SENDS ONLY WHAT CHANGED, and a suspension is the stage alone.
@@ -621,7 +618,7 @@ test("an opened person's edit sends what changed, and suspending sends the stage
   });
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
@@ -654,7 +651,7 @@ test("an edit refused part way reads the directory again", async () => {
   });
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "bo.lange" } });
   fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
@@ -681,7 +678,7 @@ test("an edit sends what its editor changed, whatever the directory read since",
   );
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   people = {
     ...PEOPLE,
@@ -712,7 +709,7 @@ test("an edit offers the seat its person holds by the seat's name", async () => 
   }));
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   await settle();
   expect(within(edit).getAllByText("Jane Founder").length).toBeGreaterThan(0);
@@ -728,10 +725,10 @@ test("a person's edit offers no 'No seat', and moving them sends the seat chosen
   });
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   await settle();
-  expect(within(edit).getByText(/A person always holds one/)).toBeTruthy();
+  expect(within(edit).getByText("Pick an open seat.")).toBeTruthy();
   fireEvent.click(within(edit).getByLabelText("Seat"));
   expect(screen.queryByRole("option", { name: /No seat/ })).toBeNull();
   fireEvent.mouseDown(screen.getByRole("option", { name: /Lee Ops/ }));
@@ -753,7 +750,7 @@ test("a service account's edit offers No seat, and choosing it unbinds the accou
   );
   location.hash = "#/settings/people?peek=person:p-ci";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit ci:release" });
   await settle();
   expect(within(edit).getByText(/No seat unbinds it/)).toBeTruthy();
@@ -778,7 +775,7 @@ test("a grant change sends the ticks alone, whatever another administrator chang
   );
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   people = {
     ...PEOPLE,
@@ -853,7 +850,7 @@ test("unticking Admin keeps the apps it included", async () => {
   });
   location.hash = "#/settings/people?peek=person:p-di";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Di Moss" });
   const admin = within(edit).getByRole("checkbox", { name: "Admin" });
   const tracker = within(edit).getByRole("checkbox", { name: "Tracker" });
@@ -884,12 +881,12 @@ test("a machine's edit keeps a name this build does not know until it is unticke
   });
   location.hash = "#/settings/people?peek=person:p-ci";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit ci:release" });
   const unknown = within(edit).getByRole("checkbox", { name: "billing" });
   expect(unknown).toHaveProperty("checked", true);
   expect(unknown).toHaveProperty("disabled", false);
-  expect(within(edit).queryByText(/never reaches/)).toBeNull();
+  expect(within(edit).queryByText(/agents can’t send/)).toBeNull();
   fireEvent.click(unknown);
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
@@ -909,11 +906,11 @@ test("a service account's mint starts from its own access, and never a name this
   });
   location.hash = "#/settings/people?peek=person:p-ci";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Mint token" }));
-  const mint = await screen.findByRole("dialog", { name: "Mint a token for ci:release" });
+  await more("Create token");
+  const mint = await screen.findByRole("dialog", { name: "New token for ci:release" });
   expect(within(mint).queryByRole("checkbox", { name: "billing" })).toBeNull();
   expect(within(mint).getByRole("checkbox", { name: "Admin" })).toHaveProperty("checked", true);
-  fireEvent.click(within(mint).getByRole("button", { name: "Mint" }));
+  fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([{ grants: ["tracker", "admin", "knowledge"] }]);
 });
@@ -936,13 +933,13 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   });
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Issue password reset link" }));
-  const issue = await screen.findByRole("dialog", { name: /Issue a password reset link/ });
-  fireEvent.click(within(issue).getByRole("button", { name: "Issue link" }));
+  await more("Get reset link");
+  const issue = await screen.findByRole("dialog", { name: /Get a reset link/ });
+  fireEvent.click(within(issue).getByRole("button", { name: "Get link" }));
   await settle();
   expect(screen.getByText("https://crewlet.example.com/dashboard#/reset/c-reset.s")).toBeTruthy();
   // DONE ALONE: the link exists, and a Cancel read as a way to take it back.
-  const shown = screen.getByRole("dialog", { name: /Password reset link for/ });
+  const shown = screen.getByRole("dialog", { name: /Reset link for/ });
   expect(within(shown).queryByRole("button", { name: "Cancel" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
@@ -952,7 +949,7 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   await settle();
 
   // LAST, because a removal closes the panel it was made from.
-  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  await more("Remove");
   const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
   const confirm = within(remove).getByRole("button", { name: "Remove" });
   expect(confirm).toHaveProperty("disabled", true);
@@ -989,7 +986,7 @@ test("removing the open person closes their panel and says they were removed", a
   );
   location.hash = "#/settings/people?peek=person:p-bo";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+  await more("Remove");
   const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
   fireEvent.change(within(remove).getByLabelText("Type bo.lang to confirm"), {
     target: { value: "bo.lang" },
@@ -1031,19 +1028,19 @@ test("taking your own Admin in an edit says it is you, and when nobody else admi
     engine({}, directory);
     location.hash = "#/settings/people?peek=person:p-ana";
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     const edit = await screen.findByRole("dialog", { name: "Edit Ana Admin" });
     await settle();
     expect(within(edit).queryByText("This is you")).toBeNull();
-    expect(within(edit).getByText(/how you sign in, beside your address/)).toBeTruthy();
+    expect(within(edit).getByText("Lowercase words with dots, like jane.doe.")).toBeTruthy();
     fireEvent.click(within(edit).getByRole("checkbox", { name: "Admin" }));
     expect(within(edit).getByText("This is you")).toBeTruthy();
-    expect(within(edit).getByText(/you stop administering this company/)).toBeTruthy();
-    expect(within(edit).queryByText(/Nobody else active holds/) !== null).toBe(nobodyElse);
+    expect(within(edit).getByText(/You’ll lose admin access when you save/)).toBeTruthy();
+    expect(within(edit).queryByText(/You’re the only admin/) !== null).toBe(nobodyElse);
     // AND WHAT THEY KEEP IS SAID TO THEM: letting Tracker go too leaves them
     // no way to receive what agents send people.
     fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
-    expect(within(edit).getByText(/the work agents send to people never reaches you/)).toBeTruthy();
+    expect(within(edit).getByText(/agents can’t send you work/)).toBeTruthy();
     cleanup();
   }
 });
@@ -1073,47 +1070,51 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const suspend = await screen.findByRole("dialog", { name: "Suspend yourself?" });
   expect(within(suspend).getByText("This is you")).toBeTruthy();
-  expect(await within(suspend).findByText(/Nobody else active holds/)).toBeTruthy();
-  // THE WHOLE DIALOG SPEAKS TO THEM, its body included: "Ana Admin may not
-  // act while suspended" under "This is you" read as two people.
-  expect(within(suspend).getByText(/^You may not act while suspended/)).toBeTruthy();
+  expect(await within(suspend).findByText(/You’re the only admin/)).toBeTruthy();
+  // THE WHOLE DIALOG SPEAKS TO THEM, its body included: a third-person body
+  // under "This is you" read as two people.
+  expect(
+    within(suspend).getByText("You can’t sign in until another admin reactivates you."),
+  ).toBeTruthy();
   expect(within(suspend).queryByText(/Ana Admin/)).toBeNull();
   fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  await more("Remove");
   const remove = await screen.findByRole("dialog", { name: "Remove yourself?" });
-  expect(within(remove).getByText(/Nobody else active holds/)).toBeTruthy();
-  expect(within(remove).getByText(/^Your row, credentials and sessions are deleted/)).toBeTruthy();
+  expect(within(remove).getByText(/You’re the only admin/)).toBeTruthy();
+  expect(within(remove).getByText("Can’t be undone.")).toBeTruthy();
   fireEvent.click(within(remove).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "End all sessions" }));
-  const sessions = await screen.findByRole("dialog", { name: "End every session you hold?" });
-  expect(within(sessions).getByText(/^You are signed out everywhere/)).toBeTruthy();
-  fireEvent.click(within(sessions).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Reset second factor" }));
-  const factor = await screen.findByRole("dialog", { name: "Reset your second factor?" });
-  expect(within(factor).getByText(/^Your authenticator app/)).toBeTruthy();
+  await more("Sign out everywhere");
+  const sessions = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
   expect(
-    await within(factor).findByText(/You enrol a new factor at your next sign-in/),
+    within(sessions).getByText("Your sessions, tokens and reset link stop working."),
   ).toBeTruthy();
+  fireEvent.click(within(sessions).getByRole("button", { name: "Cancel" }));
+  await more("Reset two-step verification");
+  const factor = await screen.findByRole("dialog", {
+    name: "Reset your two-step verification?",
+  });
+  expect(within(factor).getByText("Your app and recovery codes stop working.")).toBeTruthy();
   fireEvent.click(within(factor).getByRole("button", { name: "Cancel" }));
   // AND A RESET LINK, which said "for Ana Admin … for them" to Ana herself,
   // and says where a password she knows is changed with no link at all.
-  fireEvent.click(screen.getByRole("button", { name: "Issue password reset link" }));
-  const link = await screen.findByRole("dialog", {
-    name: "Issue a password reset link for yourself?",
-  });
-  expect(within(link).getByText(/^The link lets you choose a new password/)).toBeTruthy();
-  expect(within(link).getByText(/Account › Security needs no link/)).toBeTruthy();
+  await more("Get reset link");
+  const link = await screen.findByRole("dialog", { name: "Get a reset link for yourself?" });
+  expect(
+    within(link).getByText(
+      "Works once, within a day. To change a known password, use Account › Security.",
+    ),
+  ).toBeTruthy();
   expect(within(link).queryByText(/Ana Admin/)).toBeNull();
   cleanup();
 
   administrators = 2;
   engine({}, directory);
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+  await more("Remove");
   const another = await screen.findByRole("dialog", { name: "Remove yourself?" });
   await settle();
   expect(within(another).getByText("This is you")).toBeTruthy();
-  expect(within(another).queryByText(/Nobody else active holds/)).toBeNull();
+  expect(within(another).queryByText(/You’re the only admin/)).toBeNull();
   cleanup();
 
   location.hash = "#/settings/people?peek=person:p-bo";
@@ -1122,13 +1123,11 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const theirs = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
   expect(within(theirs).queryByText("This is you")).toBeNull();
-  expect(within(theirs).getByText(/^Bo Lang may not act while suspended/)).toBeTruthy();
+  expect(within(theirs).getByText("They can’t sign in until reactivated.")).toBeTruthy();
   fireEvent.click(within(theirs).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Issue password reset link" }));
-  const theirLink = await screen.findByRole("dialog", {
-    name: "Issue a password reset link for Bo Lang?",
-  });
-  expect(within(theirLink).getByText(/^The link lets Bo Lang choose/)).toBeTruthy();
+  await more("Get reset link");
+  const theirLink = await screen.findByRole("dialog", { name: "Get a reset link for Bo Lang?" });
+  expect(within(theirLink).getByText("Works once, for a day.")).toBeTruthy();
 });
 
 // A SERVICE ACCOUNT IS A KEYED CREATE OF A MACHINE whose access STARTS EMPTY
@@ -1159,12 +1158,12 @@ test("a service account is created keyed and its token minted unkeyed from its g
   fireEvent.click(within(create).getByRole("checkbox", { name: "Tracker" }));
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();
-  fireEvent.click(screen.getByRole("button", { name: "Mint its token" }));
-  const mint = await screen.findByRole("dialog", { name: "Mint a token for ci:deploy" });
+  fireEvent.click(screen.getByRole("button", { name: "Create token" }));
+  const mint = await screen.findByRole("dialog", { name: "New token for ci:deploy" });
   // OUT OF THE ACCOUNT'S OWN ACCESS: what it does not hold is not offered.
   expect(within(mint).queryByRole("checkbox", { name: "Knowledge" })).toBeNull();
   expect(within(mint).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("checked", true);
-  fireEvent.click(within(mint).getByRole("button", { name: "Mint" }));
+  fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   const [created, minted] = eng.writes();
   expect(created?.body).toEqual({
@@ -1220,7 +1219,7 @@ test("a login outside its kind's grammar is refused under the field and not post
 
   location.hash = "#/settings/people?peek=person:p-bo";
   await settle();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "ci:bo" } });
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
@@ -1242,7 +1241,7 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
     ".crewlet-callout",
   ) as HTMLElement;
   expect(
-    within(callout).getByText(/choose your human seat and invite or create yourself/),
+    within(callout).getByText("Invite yourself from your seat in the org chart."),
   ).toBeTruthy();
   const chart = await within(callout).findByRole("link", { name: "Open the org chart" });
   expect(chart.getAttribute("href")).toBe("#/agents");
@@ -1257,7 +1256,7 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
   ) as HTMLElement;
   const add = await within(bare).findByRole("link", { name: "Add a human seat" });
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=human");
-  expect(within(bare).getByText(/no human seat for one/)).toBeTruthy();
+  expect(within(bare).getByText("No people in the chart yet. Add one in Edit org.")).toBeTruthy();
   cleanup();
 
   humanSeats = SEATS;
@@ -1286,7 +1285,7 @@ test("an unclaimed node running no company says to create the company first", as
   const callout = (await screen.findByText("Nobody has joined yet")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
-  expect(within(callout).getByText(/This node runs no company yet/)).toBeTruthy();
+  expect(within(callout).getByText("No company yet. Create one in Edit org.")).toBeTruthy();
   const create = within(callout).getByRole("link", { name: "Create the company" });
   expect(create.getAttribute("href")).toBe("#/agents/edit");
   expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
@@ -1329,10 +1328,7 @@ test("an unclaimed deployment with an open invitation says to open its link", as
   const callout = (await screen.findByText("Nobody has joined yet")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
-  await within(callout).findByText(/The invitation to sam@example\.com is waiting to be redeemed/);
-  expect(
-    within(callout).getByText(/cancelled below or on its seat, and issued again from the seat/),
-  ).toBeTruthy();
+  await within(callout).findByText("Lost the invitation link? Cancel it and invite again.");
   expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
   expect(screen.queryByText(/Nobody has been invited/)).toBeNull();
 });
