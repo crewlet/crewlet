@@ -460,7 +460,7 @@ type fakeNodeGate struct {
 	asked []engine.GateRequest
 }
 
-func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.GateResult, error) {
+func (f *fakeNodeGate) answer(req engine.GateRequest, verb string, refusal error) (engine.GateResult, error) {
 	f.mu.Lock()
 	f.asked = append(f.asked, req)
 	f.mu.Unlock()
@@ -472,22 +472,20 @@ func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.Gat
 		out.Node, out.OpID = req.Node, req.OpID
 		return out, nil
 	}
-	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: []engine.DomainGate{
-		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: req.OpID + ".evict.tracker",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 12}},
-		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: req.OpID + ".evict.pages",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 7}},
-	}}, nil
+	// EVERY LOG A NODE'S GESTURE WRITES, applied ([gateLogs]).
+	var domains []engine.DomainGate
+	for i, domain := range gateLogs() {
+		domains = append(domains, appliedOn(i, domain, req.OpID, verb, req.Node))
+	}
+	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: domains}, nil
 }
 
 func (f *fakeNodeGate) Evict(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
-	return f.answer(req, f.evict)
+	return f.answer(req, "evict", f.evict)
 }
 
 func (f *fakeNodeGate) Readmit(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
-	return f.answer(req, f.readmit)
+	return f.answer(req, "readmit", f.readmit)
 }
 
 // A READMISSION REFUSED BELOW THE FLOOR IS A 409 CARRYING BOTH NUMBERS, and a
