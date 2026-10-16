@@ -171,7 +171,11 @@ func exampleUnder(t *testing.T, page, heading string) map[string]any {
 		t.Fatalf("the section %q has no JSON example", heading)
 	}
 	body := section[open+len("```json\n"):]
-	body = body[:strings.Index(body, "\n```")]
+	end := strings.Index(body, "\n```")
+	if end < 0 {
+		t.Fatalf("the JSON example under %q has no closing fence", heading)
+	}
+	body = body[:end]
 	var out map[string]any
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatalf("the example under %q is not JSON: %v", heading, err)

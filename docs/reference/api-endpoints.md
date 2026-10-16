@@ -7754,13 +7754,14 @@ the way `/integrations` beside it always has been, and
 Authentication alone does not open it: it takes its own grant.
 
 Presence also carries what each node is **doing** — `in_flight`,
-`draining`, `posture` and `started_at` — because only the node running a
-seat knows those, and `/health` answers about whichever node served the
-request. They ride on the heartbeat that already re-sends roles and labels
-on every beat, rather than over a request/reply to the owning node: every
-answer would then be partial, it opens a new trust edge, and it duplicates
-the mechanism the lease table already is.
-
+`draining`, `posture`, `started_at`, how far its own copy of the company's
+records has come up (`appliers_ready` of `appliers_total`) and whether
+it serves admin (`admin`) — because only the node running a seat knows those,
+and `/health` answers about whichever node served the request. They ride on
+the heartbeat that already re-sends roles and labels on every beat, rather
+than over a request/reply to the owning node: every answer would then be
+partial, it opens a new trust edge, and it duplicates the mechanism the lease
+table already is.
 
 **Absent is not zero.** A node whose status read did not answer within its
 share of the heartbeat (`seat.StatusBudgetRatio`) — a read cut short by that
@@ -7774,6 +7775,52 @@ control plane — the read refused at once, or ran out of its budget — still
 publishes the rest of its status, its in-flight count, drain state, start time
 and `admin` among them, and no posture, never the `serve` its readiness probe
 falls back to in that case.
+
+`appliers_ready` of `appliers_total` counts the node's state-log
+appliers — one per domain, which every data node runs from boot — and how
+many of them are current. It answers a different question from
+`config_epoch`: a node can hold the current revision and still be applying
+the records its copy is derived from, and a node that is behind keeps the
+seats it holds but claims no new ones until it is level ([a copy that is
+behind](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)).
+That is why it is here and not on `/ready`: a node catching up is healthy —
+it serves its dashboard, answers its probes and runs the duties it holds — and
+only taking on a new seat waits for it. Both fields are absent on
+a node without `data`, which runs no loop and reads a data node's copy —
+never `0` of `0`, which a reader would have to know is not a stalled one.
+
+`admin` is the node's own [`api.auth.admin`](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app):
+`serve` or `refuse`. It is decided per node and per request, and nothing is
+written when it changes, so a fleet mid-rollout — or one that publishes
+admin on some nodes only — legally disagrees about it; this column is where
+that is said, rather than whether somebody can administer the company
+depending on which node a load balancer sent them to. Absent on a node that
+declares none, which only a node serving no API may do: a node not saying,
+never one that refuses.
+
+The configuration columns come from the control plane's apply status. The
+node's last attempt is `config_epoch`, `config_status` (`ok`, `error` or
+`degraded`), `config_error` and the revision that epoch stands for
+(`config_revision_id`). What it runs is `config_serving_revision_id`, which
+is not the attempt's revision where that attempt failed: a node that refuses
+the fleet's revision goes on serving the one before it. What it would start
+on if it restarted now is `config_boot_revision_id`, which moves only once an
+apply has succeeded, and is absent on a node that starts on nothing (one
+whose own database is discarded at every start, or one that has applied
+nothing and holds no offline choice). The epoch it last applied is
+`config_applied_epoch`, absent, never `0`, on a node that has applied
+nothing since it started. And `config_reported_at` is when the node last
+reported, so a node still on the previous revision reads as such. A node
+with no report there — one whose report aged past the freshness bound, the
+same record the fleet's posture decision reads — has `config_epoch` `0`, no
+boot revision or applied epoch, and the other columns empty. What they are
+compared against is `target_epoch` — the epoch the fleet is converging on
+— and `activation`, which names what that number stands for: its `epoch`,
+`revision_id`, when it was activated (`at`) and the `summary` whoever
+activated it wrote. Both are read from the one activation pointer, so they
+cannot describe two different activations; `activation` is `null` and
+`target_epoch` `0` where no revision has been activated or the pointer could
+not be read.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
@@ -7798,7 +7845,10 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
       "config_status": "ok", "config_error": "", "config_applied_epoch": 7,
       "config_serving_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
-      "config_reported_at": "2026-09-23T08:14:02.118Z"
+      "config_reported_at": "2026-09-23T08:14:02.118Z",
+      "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
+      "posture": "serve", "appliers_ready": 8, "appliers_total": 8,
+      "admin": "serve"
     }
   ],
   "seats": [
