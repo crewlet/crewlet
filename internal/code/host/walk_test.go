@@ -64,7 +64,7 @@ func TestAPushsWalksGoByGeneration(t *testing.T) {
 
 	// THE SCRATCH a push of one commit on top would be received in, with a
 	// commit-graph over the history — the maintainer writes one into the
-	// cache; here it is the scratch's own, which git reads the same
+	// cache first; here it is the scratch's own, which git reads the same
 	// way — and two commits on top of the tip, outside it: one dated after
 	// its parent, one dated before the history began.
 	synced, err := node.Cache().Sync(c.Ctx, c.Rows().Repo.ID, codetest.Linearizable)

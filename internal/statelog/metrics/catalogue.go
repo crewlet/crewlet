@@ -651,20 +651,27 @@ func Catalogue() []Instrument {
 				"bytes an object): the repository is indexed without one, and " +
 				"a clone walks its history; `index` (80): it is served from " +
 				"its packs' own indexes, a round's index included; `graph` " +
-				"(56): its walks parse every commit. Slower, never wrong. " +
+				"(56): its walks go by date, and a push of a commit dated " +
+				"before its parent walks every commit. Slower, never wrong. " +
 				"Rising is repositories outgrowing the node; the " +
 				"code_maintenance_refused alarm stands while any bitmap is " +
 				"refused.",
 		},
 		{
 			Name: CodeCacheMaintenanceRefused, Kind: KindGauge, Unit: UnitCount,
+			Attributes: []string{"step"},
 			Shows: "Repositories this node's git cache cannot write a bitmap " +
-				"of now, because one needs more memory than the node can give " +
-				"its background work — as its latest pass found them; each is " +
-				"indexed without one. Above zero raises " +
-				"code_maintenance_refused; falling back is a repository " +
-				"purged, evicted or rebuilt smaller, or a node given more " +
-				"memory, which the cache reads again every ten seconds.",
+				"(`step` `bitmap`) or a commit-graph (`graph`) of now, because " +
+				"one needs more memory than the node can give its background " +
+				"work — as its latest pass found them. Each refused a bitmap is " +
+				"indexed without one; each refused a commit-graph walks its " +
+				"history by date, so a push of a commit dated before its parent " +
+				"walks every commit — slower, never refused. Either above zero " +
+				"raises code_maintenance_refused, since a repository refused " +
+				"its graph is refused its bitmap too; falling back is a " +
+				"repository purged, evicted or rebuilt smaller, or a node " +
+				"given more memory, which the cache reads again every ten " +
+				"seconds.",
 		},
 		{
 			Name: CodeCacheRebuildRefusals, Kind: KindCounter, Unit: UnitCount,
