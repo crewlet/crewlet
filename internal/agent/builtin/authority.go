@@ -79,7 +79,7 @@ type Authorizer func(ctx context.Context, action authz.Action,
 // authority: "you may not", and "this node could not tell" are two answers,
 // and collapsing the second into the first tells somebody to go and ask for a
 // capability they already hold.
-var ErrRefused = errors.New("builtin: this party may not do that")
+var ErrRefused = errors.New("not allowed")
 
 // ErrUndecidable reports a call this node could not decide: the caller could
 // not be established, or the chart the rule reads could not be.
@@ -89,7 +89,7 @@ var ErrRefused = errors.New("builtin: this party may not do that")
 // undecidable, and a wiring that decided nothing ([ErrNoAuthorizer]) — and an
 // arm reading "everything else" would put the third in the second's 503,
 // telling a caller to retry a build that will never answer.
-var ErrUndecidable = errors.New("builtin: this node could not decide")
+var ErrUndecidable = errors.New("can't check access right now")
 
 // ErrNoAuthorizer reports deps nobody wired a decision into.
 //
@@ -112,11 +112,10 @@ func Decide(chart authz.Chart) Authorizer {
 		principal, how := iam.From(ctx)
 		switch how {
 		case iam.Unknown:
-			return fmt.Errorf("%w who is calling %s: %w", ErrUndecidable,
-				action, iam.Reason(ctx))
+			return fmt.Errorf("%w (can't tell who is calling): %w",
+				ErrUndecidable, iam.Reason(ctx))
 		case iam.Anonymous:
-			return fmt.Errorf("%w: %s needs one and none was presented",
-				ErrUnauthenticated, action)
+			return ErrUnauthenticated
 		}
 		return DecisionError(action,
 			authz.Decide(ctx, principal, action, object, chart, time.Now()))
@@ -128,7 +127,7 @@ func Decide(chart authz.Chart) Authorizer {
 // A REFUSAL — it wraps [ErrRefused] — and its own sentinel beside it, because
 // the HTTP surface answers it 401 where every other refusal is 403: "present
 // a credential" and "you may not" send a person to opposite places.
-var ErrUnauthenticated = fmt.Errorf("%w: nobody presented a credential", ErrRefused)
+var ErrUnauthenticated = fmt.Errorf("%w: sign in first", ErrRefused)
 
 // DecisionError is one authority decision as the error every surface reports
 // it with: nil for an allow, [ErrUndecidable] for a decision the node could
@@ -142,7 +141,7 @@ var ErrUnauthenticated = fmt.Errorf("%w: nobody presented a credential", ErrRefu
 func DecisionError(action authz.Action, d authz.Decision) error {
 	switch {
 	case d.Unknown():
-		return fmt.Errorf("%w %s: %w", ErrUndecidable, action, d.Err)
+		return fmt.Errorf("%w: %w", ErrUndecidable, d.Err)
 	case !d.Allowed:
 		return &DecisionRefused{Action: action, Decision: d}
 	}
@@ -168,7 +167,7 @@ type DecisionRefused struct {
 }
 
 func (e *DecisionRefused) Error() string {
-	return fmt.Sprintf("%s: %s refused (%s)", ErrRefused, e.Action, e.Decision.Reason)
+	return fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
 }
 
 // Unwrap makes every [DecisionRefused] an [ErrRefused].
@@ -787,5 +786,5 @@ func authorityClass(why error) mcp.Refusal {
 // who was refused would differ for every caller asking the same question, and
 // the caller already knows who they are.
 func Refusal(verb string, why error) string {
-	return fmt.Sprintf("%s was refused: %s", verb, why.Error())
+	return fmt.Sprintf("%s didn't run: %s", verb, why.Error())
 }
