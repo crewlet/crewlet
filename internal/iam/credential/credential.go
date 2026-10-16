@@ -105,4 +105,4 @@ import "errors"
 // refuse a new password hand [CheckStrength]'s error to the person choosing
 // it, verbatim, and the prefix this package's other errors carry for a log
 // reached a form as "Credential: this password cannot be used".
-var ErrWeak = errors.New("this password cannot be used")
+var ErrWeak = errors.New("this password can't be used")

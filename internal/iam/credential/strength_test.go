@@ -48,7 +48,7 @@ func TestTwelveCharactersIsTheOnlyRule(t *testing.T) {
 	// Mutation: put the prefix back on ErrWeak.
 	for _, weak := range []string{"short", "password1234"} {
 		err := credential.CheckStrength(weak, iam.MinPasswordChars)
-		if err == nil || !strings.HasPrefix(err.Error(), "this password cannot be used: ") {
+		if err == nil || !strings.HasPrefix(err.Error(), "this password can't be used: ") {
 			t.Errorf("the refusal of %q reads %q, want the sentence alone", weak, err)
 		}
 	}
@@ -69,7 +69,7 @@ func TestADeploymentFloorRaisesTheEnginesAndNothingLowersIt(t *testing.T) {
 	if !errors.Is(err, credential.ErrWeak) {
 		t.Fatalf("%q was accepted under a floor of 20: %v", fifteen, err)
 	}
-	if !strings.Contains(err.Error(), "minimum is 20") {
+	if !strings.Contains(err.Error(), "at least 20") {
 		t.Errorf("the refusal %q does not name the floor of 20", err)
 	}
 	if err := credential.CheckStrength(fifteen, 0); err != nil {
