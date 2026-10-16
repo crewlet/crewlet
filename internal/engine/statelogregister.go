@@ -124,11 +124,12 @@ type registration struct {
 
 	// Generation is the domain's own record of a reanchor — what opens a
 	// new generation on its log, in its own record format — or its
-	// declaration that it keeps none, which the vectors make
-	// ([search.GenerationRecord]). Required, for the reason
-	// [statelog.GenerationEncoder] gives: "this domain keeps no record of
-	// it" is a claim the domain makes about itself, and a nil here would be
-	// a log nobody could re-anchor, found by an operator mid-incident.
+	// declaration that it keeps none, which the vectors and the usage log
+	// make ([search.GenerationRecord], [usage.GenerationRecord]). Required,
+	// for the reason [statelog.GenerationEncoder] gives: "this domain keeps
+	// no record of it" is a claim the domain makes about itself, and a nil
+	// here would be a log nobody could re-anchor, found by an operator
+	// mid-incident.
 	Generation statelog.GenerationEncoder
 
 	// NewGate builds the writer the NODE GATE publishes this log's eviction
