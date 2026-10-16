@@ -91,6 +91,23 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 				Label: "API"}}), tools.RefusalInvalid},
 		{"a full tag set", fmt.Errorf("x: %w", &tracker.TagsFull{Project: "OPS",
 			Slug: "api"}), tools.RefusalInvalid},
+		// EVERY OTHER REFUSAL A DOMAIN DECIDED is its class too
+		// ([WriterClass]): with no arm of its own here each fell to the
+		// fault, and told a caller the node had broken over a comment
+		// that is not there or a remark that is not theirs.
+		{"a comment that is not there", fmt.Errorf("x: %w", tracker.ErrNoComment),
+			tools.RefusalNotFound},
+		{"a project that is not there", fmt.Errorf("x: %w", tracker.ErrNoProject),
+			tools.RefusalNotFound},
+		{"a remark that is not the caller's", fmt.Errorf("x: %w", tracker.ErrNotAuthor),
+			tools.RefusalForbidden},
+		// AND THE DOMAIN'S CLASS IS TAKEN BEFORE A CONDITION ITS ERROR
+		// ALSO CARRIES: a bulk edit refused while another applies wraps
+		// the log's unavailable beside its own sentinel, as the tracker
+		// writes it, and is the conflict the refusal vocabulary names for
+		// another bulk gesture holding the object.
+		{"a bulk edit already applying", fmt.Errorf("%w; retry in about 3 seconds: %w",
+			tracker.ErrBulkInFlight, statelog.ErrUnavailable), tools.RefusalConflict},
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
 		// written part of what it asked for, so it is never a refusal of
 		// what was asked: it is the class an interrupted call answers,
@@ -240,6 +257,9 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		{fmt.Errorf("x: %w", pages.ErrStaleVersion), tools.RefusalStaleVersion},
 		{fmt.Errorf("x: %w", pages.ErrConflict), tools.RefusalConflict},
 		{fmt.Errorf("x: %w", pages.ErrNotFound), tools.RefusalNotFound},
+		// AND WHAT NO ARM NAMES, BY THE DOMAINS' ONE TABLE ([WriterClass]).
+		{fmt.Errorf("x: %w", pages.ErrBadCursor), tools.RefusalInvalid},
+		{fmt.Errorf("x: %w", statelog.ErrExists), tools.RefusalExists},
 		{&statelog.Unavailable{Reason: statelog.ReasonLogFull}, tools.RefusalUnavailable},
 		{errors.New("pages: read the container ENG: disk I/O"), tools.RefusalInternalError},
 	} {

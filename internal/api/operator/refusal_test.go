@@ -170,7 +170,8 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 //
 // Mutation: drop the UnknownCause step from ClassifyWrite and the two
 // unknowns go red; drop the ErrUnserved arm from builtin.Condition and the
-// unserved estate does.
+// unserved estate does; class by a list of this package's own instead of
+// builtin.WriterClass and the domain rows do.
 func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -179,6 +180,16 @@ func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 		unknown bool
 	}{
 		{err: tracker.ErrNoTask, want: crewletmcp.RefusalNotFound},
+		// EVERY CLASS A DOMAIN DECIDES, by the tools' own table
+		// (builtin.WriterClass) rather than a shorter list here: each of
+		// these was a 500 on the surface while its tool classed it.
+		{err: fmt.Errorf("x: %w", tracker.ErrInboxFull), want: crewletmcp.RefusalInboxFull},
+		{err: fmt.Errorf("x: %w", tracker.ErrAlreadyAnswered),
+			want: crewletmcp.RefusalAlreadyAnswered},
+		{err: fmt.Errorf("x: %w", tracker.ErrReassignmentBudget),
+			want: crewletmcp.RefusalReassignmentBudget},
+		{err: fmt.Errorf("x: %w", &tracker.TagClash{Project: "OPS", Slug: "api"}),
+			want: crewletmcp.RefusalInvalid},
 		{err: &statelog.Unavailable{Reason: statelog.ReasonLogFull},
 			want: crewletmcp.RefusalUnavailable},
 		{err: fmt.Errorf("x: %w", coord.ErrUnavailable), want: crewletmcp.RefusalUnavailable},
