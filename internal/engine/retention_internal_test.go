@@ -1051,6 +1051,67 @@ func TestAnEvictedNodesBackupIsForgottenOnceNoLogCountsIt(t *testing.T) {
 	}
 }
 
+// A LOG PAST ITS CENSUS NAMES ITS OWN CEILING FIELD — every log a read
+// appends a barrier to, the field read from the register's own declaration.
+//
+// The alarm's remedy was one sentence for every log, sending the operator of
+// each to re-derive the mutation log's sizing: the identity estate's ceiling is
+// `stream.iam_log_max_bytes`, sized from headcount and sign-ins, and the
+// knowledge base's is its own field again. Each log's line now names the field
+// that sizes it, and no other log's.
+func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	e.stopRetention()
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	want := map[string]string{}
+	for _, entry := range register() {
+		if entry.Barrier == nil {
+			continue
+		}
+		want[entry.Domain.Name()] = entry.Ceiling(config.Stream{}, 0).Field
+		recorder.Add(metrics.StatelogBarriersApplied,
+			uint64(3*statelog.Census{Seats: 1}.Expected()),
+			metrics.Attrs{"domain": entry.Domain.Name(), "stream": entry.Domain.Stream().Name})
+	}
+	if len(want) < 6 {
+		t.Fatalf("%d registered log(s) take barriers, want at least the tracker's, "+
+			"the knowledge base's, the identity estate's, the artifacts log's, the "+
+			"artifact datastore's and the assistant's: %v", len(want), want)
+	}
+	r := &retention{state: e.core.Load().log, fleet: e.backends.Fleet, nodeID: "node-a",
+		metrics: recorder, seats: func() int { return 1 }}
+	report := r.Report(t.Context())
+	got := map[string]string{}
+	for _, alarm := range report.Alarms {
+		if alarm.Kind == statelog.KindCensusDrift {
+			for _, d := range alarm.Domains {
+				got[d.Domain] = d.Detail
+			}
+		}
+	}
+	for domain, field := range want {
+		detail, past := got[domain]
+		if !past {
+			t.Errorf("%s took three times its census and census_drift does not "+
+				"name it: %v", domain, got)
+			continue
+		}
+		if !strings.Contains(detail, "`"+field+"`") {
+			t.Errorf("%s's line is %q, want it to name its own ceiling `%s`",
+				domain, detail, field)
+		}
+		for other, otherField := range want {
+			if other != domain && otherField != field && strings.Contains(detail, otherField) {
+				t.Errorf("%s's line is %q, which names %s's ceiling", domain, detail, other)
+			}
+		}
+	}
+}
+
 // THE SEARCH ALARMS' INPUTS ARE ACTUALLY FED.
 //
 // `search_scoped`, `search_degraded` and `search_slow` are each a property of
