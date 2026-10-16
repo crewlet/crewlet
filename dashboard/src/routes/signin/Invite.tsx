@@ -61,6 +61,7 @@ import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { loginProblem } from "~/lib/login.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import { LANDING, useSignedIn } from "~/lib/session.ts";
 import { auth, RestError, type InvitationView } from "~/protocol/index.ts";
 import { parseLink } from "./link.ts";
@@ -269,7 +270,7 @@ function Redeem({
       )}
       <Callout variant="neutral">
         <Text as="span" variant="body">
-          You’ll join as <strong>{seat.name || seat.handle}</strong> (@{seat.handle}).
+          You’ll join as <strong>{seat.name || seat.handle}</strong> ({handleLabel(seat.handle)}).
         </Text>
       </Callout>
       <form

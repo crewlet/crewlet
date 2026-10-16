@@ -163,15 +163,15 @@ export function whoLine(
     }
     if (failed) {
       return {
-        name: "Could not tell who you are",
-        detail: "The engine did not answer",
+        name: "Can’t check who you are",
+        detail: "Try reloading",
         grants: "",
       };
     }
     return { name: "Checking who you are", detail: "Asking the engine", grants: "" };
   }
   if (viewer.anonymous) {
-    return { name: "Not signed in", detail: "Sign in to read and act", grants: "" };
+    return { name: "Not signed in", detail: "Sign in to continue", grants: "" };
   }
   const grants = grantsLine(viewer.grants);
   const name = readerName(session, viewer.login);
@@ -195,7 +195,7 @@ export function whoLine(
 function said(name: string, login: string, seat: string | null): { name: string; detail: string } {
   const parts: string[] = [];
   if (login && login !== name) parts.push(login);
-  if (seat === null) parts.push("Not bound to a seat");
+  if (seat === null) parts.push("No seat");
   else if (seat && seat !== name) parts.push(seat);
   return { name, detail: parts.join(" · ") };
 }
@@ -395,7 +395,7 @@ export function AccountActions({
           {grants && <span className="t-caption">{grants}</span>}
         </>
       ) : (
-        <span className="t-caption">The engine did not say who this browser is signed in as.</span>
+        <span className="t-caption">We couldn’t check who’s signed in.</span>
       )}
       {/* A LINK, not a button: it is a page, so ⌘-click opens it in a tab. */}
       {MENU_ROWS.map((ws) => (
@@ -418,7 +418,7 @@ export function AccountActions({
         <Button
           size="small"
           variant="ghost"
-          title="Ends every session you hold, on every device, and every personal access token"
+          title="Sign out on every device and stop your tokens"
           onClick={() => {
             onLeave?.();
             onSignOutEverywhere();

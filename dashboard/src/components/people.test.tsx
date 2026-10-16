@@ -173,15 +173,15 @@ afterEach(() => {
 
 describe("what a seat says about what holds it", () => {
   // A CARD HAS ROOM FOR A FEW WORDS, and an INVITED seat is not a vacant one:
-  // drawn as "Vacant", an administrator invited a second person onto a seat
+  // drawn as "Open seat", an administrator invited a second person onto a seat
   // the first invitation already holds. Mutation: drop the invitation arm and
-  // the invited row reads "Vacant".
+  // the invited row reads "Open seat".
   test("a card's line names the holder, the invitation or the vacancy", () => {
     expect(SEATS.map(holdingLine)).toEqual([
       "Held by ana.lee",
       "Held by ci:release",
       "Invited · lee@example.com",
-      "Vacant",
+      "Open seat",
     ]);
     // An address this node cannot open is never drawn as one.
     expect(
@@ -248,12 +248,12 @@ describe("a seat's holding", () => {
     const note = (await screen.findByText("lee@example.com")).closest(
       ".crewlet-callout",
     ) as HTMLElement;
-    expect(note.textContent).toMatch(/^Invited: lee@example\.com, until/);
+    expect(note.textContent).toMatch(/^Invited lee@example\.com\. Expires /);
     expect(within(note).queryByRole("button", { name: "Invite" })).toBeNull();
-    expect(within(note).queryByRole("button", { name: "Create person" })).toBeNull();
+    expect(within(note).queryByRole("button", { name: "Add person" })).toBeNull();
     fireEvent.click(within(note).getByRole("button", { name: "Cancel invitation" }));
     const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
-    expect(dialog.textContent).toMatch(/the address and the seat Lee Ops are free again/);
+    expect(dialog.textContent).toMatch(/The link stops working\./);
     const before = eng.reads("/iam/seats");
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
     await settle();
@@ -267,15 +267,15 @@ describe("a seat's holding", () => {
   test("a vacant seat offers an admin Invite and Create, and anybody else neither", async () => {
     engine();
     mount(<Holding seat={SAM} grants={ADMIN} />);
-    const note = (await screen.findByText("Nobody holds this seat.")).closest(
+    const note = (await screen.findByText("This seat is open.")).closest(
       ".crewlet-callout",
     ) as HTMLElement;
     expect(within(note).getByRole("button", { name: "Invite" })).toBeTruthy();
-    expect(within(note).getByRole("button", { name: "Create person" })).toBeTruthy();
+    expect(within(note).getByRole("button", { name: "Add person" })).toBeTruthy();
     cleanup();
     engine();
     mount(<Holding seat={SAM} grants={MEMBER} />);
-    const read = (await screen.findByText("Nobody holds this seat.")).closest(
+    const read = (await screen.findByText("This seat is open.")).closest(
       ".crewlet-callout",
     ) as HTMLElement;
     expect(within(read).queryByRole("button")).toBeNull();
@@ -314,14 +314,14 @@ describe("a seat's holding", () => {
       failure = null;
       const eng = engine({ "POST /iam/people": [json(201, CREATED)] });
       mount(<Holding seat={SAM} grants={ADMIN} />);
-      fireEvent.click(await screen.findByRole("button", { name: "Create person" }));
-      const dialog = screen.getByRole("dialog", { name: "Create a person on Sam Support" });
+      fireEvent.click(await screen.findByRole("button", { name: "Add person" }));
+      const dialog = screen.getByRole("dialog", { name: "Add someone as Sam Support" });
       fireEvent.change(within(dialog).getByLabelText("Email address"), {
         target: { value: "dee.ray@example.com" },
       });
       const before = eng.reads("/iam/seats");
       if (refused) failure = json(503, { error: "unavailable", message: "behind its log" });
-      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
       await settle();
       await settle();
       expect(eng.reads("/iam/seats")).toBeGreaterThan(before);
@@ -340,8 +340,10 @@ describe("a seat's holding", () => {
     seats = SEATS.filter((s) => s.handle !== "sam");
     engine();
     mount(<Holding seat={SAM} grants={ADMIN} />);
-    expect(await screen.findByText(/does not list this seat yet/)).toBeTruthy();
-    expect(screen.queryByText("Nobody holds this seat.")).toBeNull();
+    expect(
+      await screen.findByText("This seat isn’t ready yet. Try again in a moment."),
+    ).toBeTruthy();
+    expect(screen.queryByText("This seat is open.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   });
 });
@@ -349,7 +351,7 @@ describe("a seat's holding", () => {
 describe("an invitation onto a seat", () => {
   function invite() {
     mount(<InviteDialog seat={SAM} held={ADMIN} onClose={() => {}} onDone={() => {}} />);
-    return screen.getByRole("dialog", { name: "Invite a person to Sam Support" });
+    return screen.getByRole("dialog", { name: "Invite someone as Sam Support" });
   }
 
   // THE SEAT IS STATED, NOT OFFERED, and always sent: an invitation names the
@@ -370,7 +372,7 @@ describe("an invitation onto a seat", () => {
     const dialog = invite();
     expect(within(dialog).queryByRole("combobox")).toBeNull();
     expect(within(dialog).queryByLabelText("Seat")).toBeNull();
-    expect(dialog.textContent).toMatch(/For the seat Sam Support sam:/);
+    expect(dialog.textContent).toMatch(/The seat is held until they join\./);
     // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in the
     // tracker and the knowledge base unless somebody says otherwise.
     expect(within(dialog).getByRole("checkbox", { name: "Tracker" })).toHaveProperty(
@@ -398,7 +400,7 @@ describe("an invitation onto a seat", () => {
     expect(
       within(dialog).getByText("https://crewlet.example.com/dashboard#/invite/inv-2.s3cret"),
     ).toBeTruthy();
-    expect(within(dialog).getByText(/works once/).textContent).toMatch(/binds them to Sam Support/);
+    expect(within(dialog).getByText(/Copy it now\. You won’t see it again\. Expires/)).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Done" })).toBeTruthy();
   });
 
@@ -518,7 +520,7 @@ describe("an invitation onto a seat", () => {
 describe("a person created on a seat", () => {
   function create() {
     mount(<CreatePersonDialog seat={SAM} held={ADMIN} onClose={() => {}} onDone={() => {}} />);
-    return screen.getByRole("dialog", { name: "Create a person on Sam Support" });
+    return screen.getByRole("dialog", { name: "Add someone as Sam Support" });
   }
 
   const CREATED = {
@@ -540,11 +542,11 @@ describe("a person created on a seat", () => {
     const eng = engine({ "POST /iam/people": [json(201, CREATED)] });
     const dialog = create();
     expect(within(dialog).queryByRole("combobox")).toBeNull();
-    expect(dialog.textContent).toMatch(/For the seat Sam Support sam:/);
+    expect(dialog.textContent).toMatch(/They sign in once they set a password\./);
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee.ray@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     const [sent] = eng.writes();
     expect(sent?.path).toBe("/iam/people");
@@ -557,13 +559,11 @@ describe("a person created on a seat", () => {
       grants: ["tracker", "knowledge"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
-    expect(dialog.textContent).toMatch(/dee\.ray is on the seat Sam Support/);
+    expect(dialog.textContent).toMatch(/dee\.ray is now Sam Support/);
     expect(
       within(dialog).getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),
     ).toBeTruthy();
-    expect(within(dialog).getByText(/sets their first password, once/).textContent).toMatch(
-      /signs nobody in/,
-    );
+    expect(within(dialog).getByText(/Copy it now\. You won’t see it again\. Expires/)).toBeTruthy();
     // DONE ALONE: the person exists, and a Cancel read as a way to undo it.
     expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Done" })).toBeTruthy();
@@ -579,13 +579,13 @@ describe("a person created on a seat", () => {
       target: { value: "dee.ray@example.com" },
     });
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "ci:dee" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     expect(within(dialog).getByText(/Use lowercase words joined by dots/)).toBeTruthy();
     expect(eng.writes()).toEqual([]);
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "dee.ray" } });
     fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "Dee Ray" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     expect(eng.writes().map((w) => w.body)).toEqual([
       {
@@ -619,7 +619,7 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee.ray@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     expect(within(dialog).getByText(/could not confirm whether this landed/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
@@ -641,12 +641,12 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee.ray@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     expect(
       within(dialog)
         .getAllByRole("status")
-        .some((s) => /^Recorded\./.test(s.textContent ?? "")),
+        .some((s) => /^Saved\. The list will update in a moment\./.test(s.textContent ?? "")),
     ).toBe(true);
     expect(
       within(dialog).getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),
@@ -676,9 +676,9 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee.ray@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
-    expect(within(dialog).queryByText(/sets their first password/)).toBeNull();
+    expect(within(dialog).queryByText(/Copy it now/)).toBeNull();
     expect(within(dialog).getByText(/^The first password link no longer opens/)).toBeTruthy();
   });
 
@@ -696,10 +696,10 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee.ray@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     expect(within(dialog).getByRole("alert").textContent).toMatch(/human seat/);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
     const [first, second] = eng.writes();
     expect(second?.key).not.toBe(first?.key);
@@ -724,7 +724,7 @@ describe("cancelling an invitation", () => {
     const dialog = screen.getByRole("dialog", { name: "Cancel this invitation?" });
     expect(within(dialog).getByRole("button", { name: "Keep it" })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(dialog.textContent).toMatch(/the address is free to invite again/);
+    expect(dialog.textContent).toMatch(/The link stops working\./);
   });
 });
 
@@ -795,14 +795,14 @@ describe("the access picker", () => {
     expect(box("Admin").disabled).toBe(true);
     expect(box("Knowledge").disabled).toBe(true);
     expect(box("Tracker").disabled).toBe(false);
-    expect(screen.getByText("You do not hold Admin, so you cannot give it.")).toBeTruthy();
+    expect(screen.getByText("You can’t give Admin because you don’t have it.")).toBeTruthy();
   });
 });
 
 // WHAT A PERSON WILL MISS, said to the reader about themselves as well.
 test("the reach note speaks to the reader about their own access", () => {
   render(<AppReachNote grants={["knowledge"]} you />);
-  expect(screen.getByText(/never reaches you/)).toBeTruthy();
+  expect(screen.getByText(/agents can’t send you work/)).toBeTruthy();
   cleanup();
   render(<AppReachNote grants={["admin"]} you />);
   expect(document.body.textContent).toBe("");

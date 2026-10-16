@@ -430,7 +430,7 @@ export function MyWork({ section }: { section: MeSection }) {
         <Callout variant="info">
           You are <code className="inline">{viewer.login}</code> and not bound to a seat, so this is
           the day kept under that login: what you follow, what names you, and your own priorities.{" "}
-          <UnboundRemedy login={viewer.login} />
+          <UnboundRemedy />
         </Callout>
       )}
       {!whose &&

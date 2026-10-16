@@ -65,9 +65,11 @@ import {
   Button,
   Callout,
   Card,
+  Checkbox,
   EmptyValue,
   FormField,
   Input,
+  Link,
   Modal,
   Skeleton,
   Tag,
@@ -88,6 +90,8 @@ import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
+import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { ADMIN, holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -164,10 +168,10 @@ export function Account() {
  */
 function noteFor(session: SessionAnswer): string {
   if (session.kind === "person") {
-    return "Who you are signed in as, and what you can change about it yourself: your password, your second factor, where you are signed in and the tokens that act as you.";
+    return "Your profile, security, sessions and tokens.";
   }
   return tierATokenOf(session.login)
-    ? "Who this browser is signed in as. A deployment’s API token is its own credential rather than a person: it has no password, second factor or personal tokens to change here, and its session ends within the hour."
+    ? "Signed in with an API token. Ends within an hour."
     : "Who this browser is signed in as. A credential that is not a person has no password, second factor or personal tokens to change here.";
 }
 
@@ -177,7 +181,7 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
   return (
     <Card>
       <Card.Header icon={<KeyGlyph size="sm" />}>
-        <Card.Title>Not a person&rsquo;s account</Card.Title>
+        <Card.Title>{token ? "API token" : "Not a person’s account"}</Card.Title>
       </Card.Header>
       <div className="col gap-3">
         {/* WHICH CREDENTIAL, and nothing about what it lacks: the note above
@@ -185,18 +189,17 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
         <Text as="p" variant="body">
           {token ? (
             <>
-              You are signed in with this deployment&rsquo;s API token{" "}
-              <code className="inline">{token}</code>.
+              You’re signed in with the API token <code className="inline">{token}</code>.
             </>
           ) : (
             <>
-              You are signed in as <code className="inline">{session.login}</code>, which is not a
+              You’re signed in as <code className="inline">{session.login}</code>, which is not a
               person.
             </>
           )}
         </Text>
         <div className="row gap-2" style={{ flexWrap: "wrap", alignItems: "center" }}>
-          <span className="t-label">Its access</span>
+          <span className="t-label">Access</span>
           <AccessTags grants={session.grants} />
         </div>
       </div>
@@ -294,8 +297,6 @@ function Profile({
           <dd>{row?.sealed ? sealed : row?.name || <EmptyValue label="No name" />}</dd>
           <dt>Email</dt>
           <dd>{row?.sealed ? sealed : row?.email || <EmptyValue label="No address" />}</dd>
-          <dt>Kind</dt>
-          <dd>Person</dd>
           <dt>Seat</dt>
           <dd>
             {seat ? (
@@ -306,14 +307,23 @@ function Profile({
               <EmptyValue label="Bound to no seat" />
             )}
           </dd>
-          <dt>Your access</dt>
+          <dt>Access</dt>
           <dd>
             <AccessTags grants={row?.grants ?? session.grants} />
           </dd>
         </dl>
       </QueryState>
       <p className="t-caption muted" style={{ margin: 0 }}>
-        An administrator changes these, from Settings › People &amp; access.
+        {/* AN ADMIN IS SENT TO THEIR OWN ROW, where these are changed. */}
+        {holds(row?.grants ?? session.grants ?? [], ADMIN) ? (
+          <>
+            Change these in{" "}
+            <Link href={peekHref({ kind: "person", id: session.person })}>People &amp; access</Link>
+            .
+          </>
+        ) : (
+          "Only an admin can change these."
+        )}
       </p>
     </Card>
   );
@@ -409,13 +419,11 @@ function Security({
               label="Two-step verification"
               action={
                 <Button size="small" variant="secondary" onClick={() => setDialog("factor")}>
-                  {app ? "Replace authenticator…" : "Set up an authenticator…"}
+                  {app ? "Replace app…" : "Set up…"}
                 </Button>
               }
             >
-              {app
-                ? "An authenticator app is set up: signing in asks for its code as well as your password."
-                : "No authenticator app is set up: signing in asks for your password alone."}
+              {app ? "On." : "Off. Password only."}
             </SecurityLine>
             {/* ONLY BESIDE AN APP: held alone, recovery codes are a second
                 factor of their own, and the engine refuses to issue them. */}
@@ -424,13 +432,13 @@ function Security({
                 label="Recovery codes"
                 action={
                   <Button size="small" variant="secondary" onClick={() => setDialog("codes")}>
-                    New recovery codes…
+                    Create new codes…
                   </Button>
                 }
               >
                 {codes
-                  ? "You hold recovery codes: each signs you in once when your app is not to hand. A new set retires the one you hold."
-                  : "You hold no recovery codes: issue a set for the day your app is not to hand."}
+                  ? "For when you don’t have your app."
+                  : "None yet. Create a set for when you don’t have your app."}
               </SecurityLine>
             )}
           </>
@@ -443,7 +451,7 @@ function Security({
             </Button>
           }
         >
-          Changing it ends every other session and every personal access token you hold.
+          Signs you out elsewhere and stops your tokens.
         </SecurityLine>
       </div>
       {dialog === "password" && (
@@ -576,9 +584,8 @@ function ChangePasswordDialog({
         // saying why.
         toast.show({
           variant: "success",
-          title: "Your password is changed",
-          message:
-            "Every session you held has ended, this one included: sign in with the new password.",
+          title: "Password changed",
+          message: "Sign in again.",
         });
         goSignIn();
         return;
@@ -630,8 +637,7 @@ function ChangePasswordDialog({
     >
       {kept ? (
         <Callout variant="success" role="status">
-          Your password is changed. Every other session and every personal access token you held has
-          ended; this browser stays signed in.
+          Password changed. Signed out everywhere else.
         </Callout>
       ) : (
         <>
@@ -677,15 +683,15 @@ function ChangePasswordDialog({
 function changeRefusal(err: unknown, coded: boolean): string {
   if (err instanceof RestError) {
     if (err.code === "second_factor_required") {
-      return "Changing your password needs a code from your authenticator app, or one of your recovery codes, as well as your current password.";
+      return "Enter a code from your app or a recovery code too.";
     }
     if (err.code === "sign_in_refused" && coded && err.body.field !== "current_password") {
-      return "That password or code was not accepted. Check both and try again.";
+      return "Wrong password or code. Try again.";
     }
     // NOBODY KNOWS whether a change nothing confirmed landed: the next
     // sign-in with the new password is what says.
     if (err.unanswered || err.status === 503) {
-      return `${refusalText(err)} It is not known whether your password changed: if the new one signs you in, it did.`;
+      return `${refusalText(err)} Couldn’t confirm the change. Try your new password.`;
     }
   }
   return refusalText(err);
@@ -704,12 +710,8 @@ function SecondFactorCode({
   return (
     <FormField
       label="Code"
-      helper="The current code from your authenticator app, or one of your recovery codes."
-      error={
-        missing
-          ? "Type a code from your authenticator app, or one of your recovery codes: with your password, it proves the change is yours."
-          : undefined
-      }
+      helper="The current code from your app, or a recovery code."
+      error={missing ? "Enter a code from your app or a recovery code." : undefined}
     >
       {(field) => (
         <Input
@@ -740,9 +742,7 @@ function CurrentPassword({
   return (
     <FormField
       label="Current password"
-      error={
-        missing ? "Type your current password: it is what proves the change is yours." : undefined
-      }
+      error={missing ? "Enter your current password." : undefined}
     >
       {(field) => (
         <Input
@@ -805,8 +805,7 @@ function Sessions({
       <Card.Body padding="sm">
         <div className="row gap-3" style={{ flexWrap: "wrap" }}>
           <p className="t-caption muted" style={{ margin: 0, flex: "1 1 16rem", minWidth: 0 }}>
-            Signing out everywhere ends every session you hold, this one included, and every
-            personal access token you minted.
+            Signs you out on every device and stops your tokens.
           </p>
           <Button size="small" variant="secondary" onClick={() => setEverywhere(true)}>
             Sign out everywhere
@@ -886,16 +885,23 @@ function Tokens({
   const now = useNow();
   const [minting, setMinting] = useState(false);
   const [revoking, setRevoking] = useState<CredentialRow | null>(null);
+  // ONLY WORKING TOKENS UNLESS ASKED: revoked and expired rows stay in the
+  // directory for good, and listed by default they buried the live ones.
+  const [all, setAll] = useState(false);
   const tokens = (credentials.data ?? []).filter((c) => c.method === "token");
+  const working = tokens.filter((t) => !t.revoked);
   return (
     <Card padding="none">
       <Card.Header
         icon={<KeyGlyph size="sm" />}
-        count={credentials.data ? tokens.filter((t) => !t.revoked).length : undefined}
+        count={credentials.data ? working.length : undefined}
         actions={
-          <Button size="small" variant="secondary" onClick={() => setMinting(true)}>
-            New token
-          </Button>
+          <>
+            <Checkbox label="Show revoked and expired" checked={all} onCheckedChange={setAll} />
+            <Button size="small" variant="secondary" onClick={() => setMinting(true)}>
+              New token
+            </Button>
+          </>
         }
       >
         <Card.Title>Personal access tokens</Card.Title>
@@ -904,8 +910,7 @@ function Tokens({
           sat against the header's rule. */}
       <Card.Body padding="sm">
         <p className="t-caption muted" style={{ margin: 0 }}>
-          A token acts as you — for your assistant or a script — carrying what you chose of your
-          access, never more than you hold now.
+          Tokens let a script or assistant act as you.
         </p>
       </Card.Body>
       <QueryState
@@ -915,7 +920,7 @@ function Tokens({
         loading={credentials.loading && !credentials.data}
       >
         <DataGrid<CredentialRow>
-          rows={tokens}
+          rows={all ? tokens : working}
           rowKey={(c) => c.id}
           defaultSort="created"
           empty={{ title: "No tokens" }}
@@ -1027,8 +1032,7 @@ function RevokeToken({
         if (answer.kind === "done" && !answer.pending) onClose();
       }}
     >
-      Anything presenting it is refused from now on
-      {token.label ? ` — “${token.label}”` : ""}.
+      Anything using {token.label ? `“${token.label}”` : "it"} stops working.
     </ConfirmDialog>
   );
 }

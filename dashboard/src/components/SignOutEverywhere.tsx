@@ -17,6 +17,7 @@ import { Button, Callout, Modal, Text } from "@crewlethq/ui";
 import { refusalText } from "~/lib/refusal.ts";
 import { signOutEverywhere } from "~/lib/session.ts";
 import { useClient } from "~/lib/store-hooks.ts";
+import { STILL_WORKING } from "~/lib/waiting.ts";
 
 export function SignOutEverywhereDialog({ onClose }: { onClose: () => void }) {
   const { socket } = useClient();
@@ -43,7 +44,7 @@ export function SignOutEverywhereDialog({ onClose }: { onClose: () => void }) {
       title="Sign out everywhere?"
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={STILL_WORKING}
       stackBody
       onSubmit={() => void confirm()}
       footer={
@@ -58,8 +59,7 @@ export function SignOutEverywhereDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <Text as="p" variant="body">
-        This ends every session you hold, this one included, and every personal access token you
-        minted: a script or an assistant using one stops working until you mint it a new one.
+        Signs you out on every device and stops your tokens.
       </Text>
       {refusal && (
         <Callout variant="danger" role="alert">

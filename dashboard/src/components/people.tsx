@@ -72,7 +72,8 @@ import {
   holds,
   isGrant,
 } from "~/lib/access.ts";
-import { fmtDateTime, tsKey } from "~/lib/format.ts";
+import { fmtDate, fmtDateCompact, tsKey } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -266,7 +267,7 @@ export function AccessPicker({
         const included = g !== ADMIN && admin;
         const refused = may.includes(g)
           ? null
-          : `You do not hold ${ACCESS_WORDS[g].label}, so you cannot give it.`;
+          : `You can’t give ${ACCESS_WORDS[g].label} because you don’t have it.`;
         return (
           <Checkbox
             key={g}
@@ -284,7 +285,7 @@ export function AccessPicker({
         <Checkbox
           key={g}
           label={<span className="mono">{g}</span>}
-          description="A permission this dashboard does not know: it grants nothing here, and is kept until you untick it."
+          description="Unknown access. It does nothing here."
           checked={value.includes(g)}
           onCheckedChange={(on) => onChange(toggle(g, on))}
         />
@@ -316,22 +317,13 @@ export function AppReachNote({
   you?: boolean;
 }) {
   const have = expand(grants);
-  const who = you ? "you" : "they";
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
-    return (
-      <Callout variant="warning">
-        Overview only: {who} can read the org chart, the agents&rsquo; status and spend, and{" "}
-        {you ? "your" : "their"} own account — nothing in the work tracker or the knowledge base.
-      </Callout>
-    );
+    return <Callout variant="warning">Overview only: no tasks or pages.</Callout>;
   }
   if (!have.includes(TRACKER)) {
     return (
       <Callout variant="warning">
-        Without {accessLabel(TRACKER)}, the work agents send to people never reaches{" "}
-        {you ? "you" : "them"}: agents assign tasks, ask questions and wait on answers through the
-        tracker. {you ? "You" : "They"} can still open and answer an item an agent asks{" "}
-        {you ? "you" : "them"} about.
+        Without {accessLabel(TRACKER)}, agents can’t send {you ? "you" : "them"} work.
       </Callout>
     );
   }
@@ -356,7 +348,14 @@ export function ShownOnce({
   return (
     <div className="col gap-2">
       <FormField label={label}>
-        {() => <Copyable value={value} variant="block" monospace ariaLabel={`Copy the ${label}`} />}
+        {() => (
+          <Copyable
+            value={value}
+            variant="block"
+            monospace
+            ariaLabel={`Copy ${label.toLowerCase()}`}
+          />
+        )}
       </FormField>
       <Callout variant="warning">{children}</Callout>
     </div>
@@ -383,7 +382,7 @@ export function IamOutcome({ answer }: { answer: IamAnswer | null }) {
   if (answer.pending) {
     return (
       <Callout variant="neutral" role="status">
-        Recorded. This node has not applied it yet, so the lists here catch up in a moment.
+        Saved. The list will update in a moment.
       </Callout>
     );
   }
@@ -410,16 +409,11 @@ export function pressLabel(
  * seat for as long as they exist (ADR-0032). Binding its row to a human seat
  * is what would add the seat's work.
  */
-export function UnboundRemedy({ login }: { login: string }) {
+export function UnboundRemedy() {
   return (
     <>
-      Work the org chart hands to a seat reaches this credential once the directory binds its row to
-      a human seat nothing else holds: <code className="inline">crewlet iam bind ID SEAT</code>, or
-      — for a token no row holds yet —{" "}
-      <code className="inline">
-        crewlet iam create -kind machine -login {login} -seat SEAT -grants none
-      </code>
-      .
+      To get work here, bind this account to an open seat:{" "}
+      <code className="inline">crewlet iam bind ID SEAT</code>.
     </>
   );
 }
@@ -512,9 +506,7 @@ export function seatOptions(
   { none = false }: { none?: boolean } = {},
 ): SelectOption[] {
   return [
-    ...(none
-      ? [{ value: NO_SEAT, label: "No seat", description: "Acts as itself, under its own login" }]
-      : []),
+    ...(none ? [{ value: NO_SEAT, label: "No seat", description: "Acts as itself" }] : []),
     ...seats.map((s) => ({
       value: s.handle,
       label: s.name || s.handle,
@@ -548,10 +540,10 @@ export const SEAT_GESTURE_WORDS: Record<
   SeatGesture,
   { menu: string; button: string; icon: ReactNode }
 > = {
-  invite: { menu: "Invite to this seat…", button: "Invite", icon: <SendGlyph size="sm" /> },
+  invite: { menu: "Invite someone…", button: "Invite", icon: <SendGlyph size="sm" /> },
   create: {
-    menu: "Create a person on this seat…",
-    button: "Create person",
+    menu: "Add a person…",
+    button: "Add person",
     icon: <UserPlusGlyph size="sm" />,
   },
   cancel: { menu: "Cancel invitation", button: "Cancel invitation", icon: <BanGlyph size="sm" /> },
@@ -583,7 +575,7 @@ export function holdingLine(row: HumanSeat): string {
     const { email, sealed } = row.invitation;
     return email && !sealed ? `Invited · ${email}` : "Invited";
   }
-  return "Vacant";
+  return "Open seat";
 }
 
 /**
@@ -711,12 +703,7 @@ function SeatHoldingState({
   if (!row) {
     // THE LISTING IS THE RUNNING COMPANY'S, so a seat the chart draws and it
     // does not hold is one this node has not applied yet.
-    return (
-      <Callout variant="neutral">
-        The identity directory does not list this seat yet: this node has not applied the revision
-        that added it.
-      </Callout>
-    );
+    return <Callout variant="neutral">This seat isn’t ready yet. Try again in a moment.</Callout>;
   }
   const actions = manages
     ? seatGestures(row).map((gesture) => (
@@ -747,6 +734,7 @@ function SeatHoldingState({
  * beside it where the reader is sent that too (an admin, the holder).
  */
 export function HoldingSentence({ row, you = false }: { row: HumanSeat; you?: boolean }) {
+  const now = useNow();
   const { holder, invitation } = row;
   if (holder) {
     const stage = holder.stage && holder.stage !== "active" ? ` (${holder.stage})` : "";
@@ -771,28 +759,17 @@ export function HoldingSentence({ row, you = false }: { row: HumanSeat; you?: bo
   if (invitation) {
     return (
       <>
-        <span>Invited: </span>
+        <span>Invited </span>
         {invitation.sealed || !invitation.email ? (
-          "an address this node's keyring cannot open"
+          "an address this node can’t decrypt"
         ) : (
           <strong>{invitation.email}</strong>
         )}
-        , until {fmtDateTime(invitation.expires_at)}. Redeeming the link binds them to this seat;
-        until it is redeemed, cancelled or lapses, nobody else can be invited or bound to it.
+        . Expires {fmtDateCompact(invitation.expires_at, now)}.
       </>
     );
   }
-  return <span>Nobody holds this seat.</span>;
-}
-
-/** The seat a person-dialog is about, said as a fact rather than offered as a choice. */
-function SeatFact({ seat, children }: { seat: SeatName; children: ReactNode }) {
-  return (
-    <Text as="p" variant="body">
-      For the seat <strong>{seat.name || seat.handle}</strong>{" "}
-      <InlineCode>{seat.handle}</InlineCode>: {children}
-    </Text>
-  );
+  return <span>This seat is open.</span>;
 }
 
 /**
@@ -845,7 +822,7 @@ export function InviteDialog({
     <Modal
       open
       size="md"
-      title={`Invite a person to ${named}`}
+      title={`Invite someone as ${named}`}
       icon={<SendGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
@@ -872,10 +849,7 @@ export function InviteDialog({
       {done ? (
         url ? (
           <ShownOnce label="Invitation link" value={url}>
-            This link is the credential: it works once, for {email.trim()}, and expires{" "}
-            {fmtDateTime(expires)}. It is shown only now — send it yourself; this engine sends no
-            mail. Opening it is where they choose a login and a password, and redeeming it binds
-            them to {named}.
+            Copy it now. You won’t see it again. Expires {fmtDate(expires)}.
           </ShownOnce>
         ) : (
           <Text as="p" variant="body">
@@ -885,10 +859,9 @@ export function InviteDialog({
         )
       ) : (
         <>
-          <SeatFact seat={seat}>
-            redeeming the invitation binds them to it, so they act as that seat, and until then the
-            invitation holds it.
-          </SeatFact>
+          <Text as="p" variant="body">
+            The seat is held until they join.
+          </Text>
           <FormField label="Email address">
             {(field) => (
               <Input
@@ -980,7 +953,7 @@ export function CreatePersonDialog({
     <Modal
       open
       size="md"
-      title={`Create a person on ${named}`}
+      title={`Add someone as ${named}`}
       icon={<UserPlusGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
@@ -998,7 +971,7 @@ export function CreatePersonDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={write.busy || email.trim() === ""}>
-              {pressLabel(write, "Create", "Creating", waiting.asked)}
+              {pressLabel(write, "Add person", "Adding", waiting.asked)}
             </Button>
           </>
         )
@@ -1012,16 +985,13 @@ export function CreatePersonDialog({
                 <InlineCode>{took}</InlineCode> is
               </>
             ) : (
-              "They are"
+              "They’re"
             )}{" "}
-            on the seat {named}, and signs in with that login or {email.trim()}.
+            now {named}.
           </Text>
           {url ? (
             <ShownOnce label="Password link" value={url}>
-              This link sets their first password, once, and expires{" "}
-              {fmtDateTime(text("expires_at"))}. It is shown only now — send it to them yourself;
-              this engine sends no mail. It signs nobody in, and until it is used nobody can sign in
-              as them.
+              Copy it now. You won’t see it again. Expires {fmtDate(text("expires_at"))}.
             </ShownOnce>
           ) : text("detail") ? (
             // A RETRY THAT FOUND THE LINK CLOSED — spent, revoked or lapsed
@@ -1034,14 +1004,10 @@ export function CreatePersonDialog({
         </>
       ) : (
         <>
-          <SeatFact seat={seat}>
-            they are created on it, active at once, and act as that seat once they have set their
-            password.
-          </SeatFact>
-          <FormField
-            label="Email address"
-            helper="Where they can be reached, and one way to sign in."
-          >
+          <Text as="p" variant="body">
+            They sign in once they set a password.
+          </Text>
+          <FormField label="Email address" helper="They can sign in with it.">
             {(field) => (
               <Input
                 id={field.id}
@@ -1069,7 +1035,7 @@ export function CreatePersonDialog({
           <FormField
             label="Login"
             optional
-            helper="Lowercase words joined by dots, such as jane.doe. Left empty, the engine proposes one from the address and says which it took."
+            helper="Leave empty to use their email."
             error={tried ? (loginWrong ?? undefined) : undefined}
           >
             {(field) => (
@@ -1121,9 +1087,6 @@ export function CancelInvitation({
   onChanged: () => void;
 }) {
   const write = useIamGesture();
-  const frees = row.seat
-    ? `the address and the seat ${seatName || row.seat} are free again`
-    : "the address is free to invite again";
   return (
     <ConfirmDialog
       title="Cancel this invitation?"
@@ -1142,8 +1105,7 @@ export function CancelInvitation({
         if (answer.kind === "done" && !answer.pending) onClose();
       }}
     >
-      The link sent to {row.sealed || !row.email ? "this address" : <strong>{row.email}</strong>}{" "}
-      stops working at once, as one nobody issued, and {frees}.
+      The link stops working.
     </ConfirmDialog>
   );
 }
@@ -1287,18 +1249,19 @@ export function MintTokenDialog({
   const waiting = useWaiting();
   const [label, setLabel] = useState("");
   const [days, setDays] = useState("");
-  // WHAT STARTS TICKED. A SERVICE ACCOUNT'S MINT: the account's own access
-  // that the minter holds too, since the account exists to act with it, and
-  // the engine refuses a token carrying what its minter does not hold (the
-  // picker locks such a box, so one ticked here would be a refusal nobody
-  // could clear). A PERSON'S OWN: nothing. Everything they held started
-  // ticked, so somebody pressing Mint without reading held a bearer secret
-  // carrying Admin for their script; ticked one at a time, a token carries
-  // what its holder chose.
+  // WHAT STARTS TICKED: the owner's own access that the minter holds too,
+  // since the engine refuses a token carrying what its minter does not hold
+  // (the picker locks such a box, so one ticked here would be a refusal
+  // nobody could clear). A PERSON'S OWN starts with their access, the token
+  // they almost always want: with nothing ticked, one pressed through could
+  // not read its owner's own inbox. EXCEPT ADMIN, which a person ticks on
+  // purpose: a bearer secret carrying Admin is host access for whatever
+  // script holds it, so it is never the default.
   const carried = useMemo(() => {
-    if (self) return [];
     const may = expand(held);
-    return expand(owner.grants ?? []).filter((g) => isGrant(g) && may.includes(g));
+    return expand(owner.grants ?? []).filter(
+      (g) => isGrant(g) && may.includes(g) && !(self && g === ADMIN),
+    );
   }, [self, owner.grants, held]);
   const [grants, setGrants] = useState<string[]>(carried);
   const minted = write.answer?.kind === "done" ? write.answer.body : null;
@@ -1310,12 +1273,11 @@ export function MintTokenDialog({
     days.trim() === ""
       ? null
       : !Number.isInteger(lifetime) || lifetime < 1
-        ? "A whole number of days, at least one."
+        ? "Enter a whole number of days."
         : lifetime > TOKEN_MAX_DAYS
           ? `At most ${TOKEN_MAX_DAYS} days.`
           : null;
   const badDays = daysProblem !== null;
-  const actsAs: ReactNode = self ? "you" : owner.login || "the account";
 
   async function submit() {
     if (minted || badDays) return;
@@ -1341,7 +1303,7 @@ export function MintTokenDialog({
     <Modal
       open
       size="md"
-      title={self ? "New personal access token" : `Mint a token for ${owner.login || owner.id}`}
+      title={self ? "New personal access token" : `New token for ${owner.login || owner.id}`}
       icon={<KeyGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
@@ -1359,7 +1321,7 @@ export function MintTokenDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={write.busy || badDays}>
-              {pressLabel(write, "Mint", "Minting", waiting.asked)}
+              {pressLabel(write, "Create token", "Creating", waiting.asked)}
             </Button>
           </>
         )
@@ -1367,20 +1329,17 @@ export function MintTokenDialog({
     >
       {minted ? (
         <ShownOnce label="Token" value={token}>
-          This token acts as {actsAs}, with what it carries, until {fmtDateTime(expires)}. It is
-          shown only now and cannot be read back; present it as{" "}
-          <span className="mono">Authorization: Bearer …</span>.
+          Copy it now. You won’t see it again. Works until {fmtDate(expires)}. Send it as{" "}
+          <span className="mono">Authorization: Bearer &lt;token&gt;</span>.
         </ShownOnce>
       ) : (
         <>
           {self && (
             <Text as="p" variant="body" tone="secondary">
-              A token is for your own assistant or script: it acts as you, carrying only the access
-              you tick below and never more than you hold, and stops working when you change your
-              password or sign out everywhere.
+              For a script or assistant. Acts as you, with the access you pick.
             </Text>
           )}
-          <FormField label="Label" optional helper="What it is for, as its row will say.">
+          <FormField label="Label" optional helper="So you can tell tokens apart.">
             {(field) => (
               <Input
                 id={field.id}
@@ -1395,7 +1354,7 @@ export function MintTokenDialog({
           <FormField
             label="Expires in days"
             optional
-            helper={`Empty takes the engine's default of ${TOKEN_DEFAULT_DAYS} days; at most ${TOKEN_MAX_DAYS}.`}
+            helper={`Leave empty for ${TOKEN_DEFAULT_DAYS}. Max ${TOKEN_MAX_DAYS}.`}
             error={daysProblem ?? undefined}
           >
             {(field) => (
@@ -1423,9 +1382,7 @@ export function MintTokenDialog({
               was offered "Nothing to offer." beside an enabled Mint. */}
           {expand(grants).every((g) => !isGrant(g)) && (
             <Text as="p" variant="caption" tone="secondary">
-              With nothing ticked, the token reads the overview — the org chart, the agents&rsquo;
-              status and spend — and nothing in the work tracker or the knowledge base,{" "}
-              {self ? "your" : "the account's"} own inbox and queue included.
+              Nothing ticked: overview only. No tasks or pages.
             </Text>
           )}
         </>

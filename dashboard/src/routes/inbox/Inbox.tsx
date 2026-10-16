@@ -330,7 +330,7 @@ export function Inbox() {
       ) : viewer.unbound ? (
         <Callout variant="info" className="inbox-callout">
           You are <code className="inline">{viewer.login}</code> and not bound to a seat, so these
-          are the updates kept under that login. <UnboundRemedy login={viewer.login} />
+          are the updates kept under that login. <UnboundRemedy />
         </Callout>
       ) : null}
 

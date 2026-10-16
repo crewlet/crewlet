@@ -204,7 +204,7 @@ describe("who the block says this is", () => {
     const r = whoLine({ ...nobody, login: "token:ops", unbound: true, grants: [] }, "");
     expect(r).toEqual({
       name: "token:ops",
-      detail: "Not bound to a seat",
+      detail: "No seat",
       grants: "Access: Overview only",
     });
   });
@@ -219,7 +219,7 @@ describe("who the block says this is", () => {
     });
     expect(r).toEqual({
       name: "Bob Smith",
-      detail: "bob.smith · Not bound to a seat",
+      detail: "bob.smith · No seat",
       grants: "Access: Overview only",
     });
   });
@@ -249,7 +249,7 @@ describe("who the block says this is", () => {
     ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Access: Tracker" });
     // A SESSION BOUND TO NO SEAT says so, as the answered arm does.
     expect(whoLine({ ...nobody, loading: true }, "", { login: "token:ops" }).detail).toBe(
-      "Not bound to a seat",
+      "No seat",
     );
   });
 
@@ -352,7 +352,7 @@ describe("who the block says this is", () => {
   ])("a session read that failed on %s still offers the Account", async (_why, answer) => {
     engine({ "GET /auth/session": answer });
     render(block({ ...nobody, loading: true }));
-    expect(await screen.findByText("Could not tell who you are")).toBeTruthy();
+    expect(await screen.findByText("Can’t check who you are")).toBeTruthy();
     const link = screen.getByRole("link", { name: /your account/ });
     expect(link.getAttribute("href")).toBe("#/account");
     fireEvent.click(screen.getByRole("button", { name: "Account and preferences" }));
@@ -565,7 +565,9 @@ describe("signing out", () => {
     });
     everywhere();
     const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
-    expect(within(ask).getByText(/every personal access token you\s+minted/)).toBeDefined();
+    expect(
+      within(ask).getByText("Signs you out on every device and stops your tokens."),
+    ).toBeDefined();
     fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
     expect(await screen.findByText(/Signing out everywhere did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();

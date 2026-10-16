@@ -785,7 +785,7 @@ describe("who is looking", () => {
     await settle();
     expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
     // WHAT BINDING WOULD ADD, and the command that does it.
-    expect(screen.getByText(/a human seat nothing else holds/)).toBeTruthy();
+    expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
     expect(screen.getByText(/crewlet iam bind ID SEAT/)).toBeTruthy();
     const reads = asked.filter((a) => a.kind === "work_inbox");
     expect(reads.length).toBeGreaterThan(0);

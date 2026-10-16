@@ -191,11 +191,11 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
   location.hash = "#/agents/seats/sam";
   const sent = engine();
   await mount("sam", ["admin"]);
-  const note = (await screen.findByText("Nobody holds this seat.")).closest(
+  const note = (await screen.findByText("This seat is open.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
   fireEvent.click(await within(note).findByRole("button", { name: "Invite" }));
-  const dialog = await screen.findByRole("dialog", { name: "Invite a person to Sam Support" });
+  const dialog = await screen.findByRole("dialog", { name: "Invite someone as Sam Support" });
   expect(within(dialog).queryByLabelText("Seat")).toBeNull();
   fireEvent.change(within(dialog).getByLabelText("Email address"), {
     target: { value: "sam@example.com" },
@@ -218,15 +218,15 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
   location.hash = "#/agents/seats/sam";
   const sent = engine();
   await mount("sam", ["admin"]);
-  const note = (await screen.findByText("Nobody holds this seat.")).closest(
+  const note = (await screen.findByText("This seat is open.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
-  fireEvent.click(await within(note).findByRole("button", { name: "Create person" }));
-  const dialog = await screen.findByRole("dialog", { name: "Create a person on Sam Support" });
+  fireEvent.click(await within(note).findByRole("button", { name: "Add person" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add someone as Sam Support" });
   fireEvent.change(within(dialog).getByLabelText("Email address"), {
     target: { value: "sam.ito@example.com" },
   });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
   await act(async () => {});
   await act(async () => {});
   const post = sent.find((s) => s.method === "POST");
@@ -256,7 +256,7 @@ test("an invited seat names its invitation, and cancelling it frees the seat", a
   expect(within(note).queryByRole("button", { name: "Invite" })).toBeNull();
   fireEvent.click(within(note).getByRole("button", { name: "Cancel invitation" }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
-  expect(dialog.textContent).toMatch(/the seat Lee Ops are free again/);
+  expect(dialog.textContent).toMatch(/The link stops working\./);
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
   await act(async () => {});
   expect(sent.filter((s) => s.method !== "GET").map((s) => [s.method, s.path])).toEqual([
@@ -272,7 +272,7 @@ test("a seat listing that failed is said on the page", async () => {
   engine(json(500, { error: "internal", message: "boom" }));
   await mount("sam", ["admin"]);
   expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
-  expect(screen.queryByText("Nobody holds this seat.")).toBeNull();
+  expect(screen.queryByText("This seat is open.")).toBeNull();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
 });
 
@@ -280,7 +280,7 @@ test("a reader without Admin reads the fact and is offered no gesture", async ()
   location.hash = "#/agents/seats/sam";
   engine();
   await mount("sam", ["tracker", "knowledge"]);
-  const note = (await screen.findByText("Nobody holds this seat.")).closest(
+  const note = (await screen.findByText("This seat is open.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
   expect(within(note).queryByRole("button")).toBeNull();
@@ -325,7 +325,7 @@ test("a reader holding no app still reads who holds the seat", async () => {
   const sent = engine();
   await mount("sam", []);
   expect(sent.filter((s) => s.path === "/iam/seats")).toHaveLength(1);
-  const note = (await screen.findByText("Nobody holds this seat.")).closest(
+  const note = (await screen.findByText("This seat is open.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
   expect(within(note).queryByRole("button")).toBeNull();

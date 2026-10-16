@@ -12,6 +12,9 @@
 import { useSyncExternalStore } from "react";
 import { onStepUpAsked, stepUpAsked } from "~/protocol/index.ts";
 
+/** Why a dialog cannot be closed while the engine has its write. */
+export const STILL_WORKING = "Still working…";
+
 export interface Waiting {
   /** A step-up is being asked of the person right now. */
   asked: boolean;
@@ -23,6 +26,6 @@ export function useWaiting(): Waiting {
   const asked = useSyncExternalStore(onStepUpAsked, stepUpAsked, () => false);
   return {
     asked,
-    reason: asked ? "Waiting for you to confirm who you are." : "Waiting for the engine to answer.",
+    reason: asked ? "Waiting for you to confirm who you are." : STILL_WORKING,
   };
 }

@@ -295,9 +295,9 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   await mount(OPERATOR, { handle: "jane" });
   await act(async () => {});
   const foot = screen.getByRole("button", { name: "Invite" }).closest("footer") as HTMLElement;
-  expect(within(foot).getByRole("button", { name: "Create person" })).toBeTruthy();
-  fireEvent.click(within(foot).getByRole("button", { name: "Create person" }));
-  expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
+  expect(within(foot).getByRole("button", { name: "Add person" })).toBeTruthy();
+  fireEvent.click(within(foot).getByRole("button", { name: "Add person" }));
+  expect(screen.getByRole("dialog", { name: "Add someone as Jane Founder" })).toBeTruthy();
   cleanup();
 
   directory(VACANT);
@@ -307,7 +307,7 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
     "Nobody — the seat is vacant",
   );
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Create person" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Add person" })).toBeNull();
   cleanup();
 
   directory(INVITED);
@@ -320,7 +320,7 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   directory(HELD);
   await mount(OPERATOR, { handle: "jane" });
   await act(async () => {});
-  for (const name of ["Invite", "Create person", "Cancel invitation"]) {
+  for (const name of ["Invite", "Add person", "Cancel invitation"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();
   }
 });
