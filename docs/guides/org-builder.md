@@ -112,7 +112,7 @@ person holds exactly one human seat for as long as they exist, and is put on
 it by an invitation or an administrator's create that names it — so the seat
 you add here is the one you put yourself on once the company exists: sign in
 with the deployment's API token, open **Agents › Org chart** and press
-**Invite** or **Create person** on it (see [How the first person
+**Invite** or **Add person** on it (see [How the first person
 exists](../concepts/identity-and-access.md#how-the-first-person-exists)). A
 company that declares no human seat can admit nobody, the operator included,
 until one is added, and its check warns about that at `roles`. Unticking the
@@ -380,13 +380,13 @@ another character and colour before adding it.
 **A new human seat is vacant until somebody is put on it**, which no save
 does: who holds a seat is the identity directory's, not the company
 document's. Once the save is applied, the seat's card in **Agents › Org
-chart** reads **Vacant** — to everybody, since who holds a seat is the
+chart** reads **Open seat** — to everybody, since who holds a seat is the
 overview's — and an administrator invites somebody onto it or creates a person on
 it from there, its peek, its page or the **Person** section of its editor's
 **Profile** tab — see [Putting a person in the
 seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat). That
 section shows who holds the seat, by name, to everybody, with **Invite**,
-**Create person** and **Cancel invitation** for an administrator alone. Those gestures write the identity directory at
+**Add person** and **Cancel invitation** for an administrator alone. Those gestures write the identity directory at
 once, about the seat the running company holds, so the draft's **Apply** and
 **Undo** reach none of them — and a seat added in the draft is filled only
 once it is saved, since the directory knows only the seats a saved revision

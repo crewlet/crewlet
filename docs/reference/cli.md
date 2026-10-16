@@ -424,7 +424,7 @@ variable at all.
 
 **A person holds a human seat for as long as they are here.** They are invited
 onto a vacant one (`invite -seat`) or created on one (`create -seat`) — the
-seat's **Invite** and **Create person** in the dashboard's Agents › Org chart do
+seat's **Invite** and **Add person** in the dashboard's Agents › Org chart do
 the same — `bind` moves them to another, and `remove` frees it. Nothing
 clears a person's seat: `unbind` is for service accounts, whose seat is
 optional. `seats` lists which seats are free.
