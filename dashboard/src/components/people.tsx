@@ -49,6 +49,9 @@ import {
   Tag,
   Text,
   type SelectOption,
+  CheckboxGroup,
+  ConfirmField,
+  confirmMatches,
 } from "@crewlethq/ui";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { DateCell } from "~/app/frame/cells.tsx";
@@ -256,13 +259,7 @@ export function AccessPicker({
     return on ? [...value, g] : value.filter((x) => x !== g);
   };
   return (
-    <fieldset className="col gap-1" style={{ border: 0, margin: 0, padding: 0 }}>
-      <legend className="t-label">{legend}</legend>
-      {offered.length === 0 && unknown.length === 0 && (
-        <Text as="p" variant="caption" tone="secondary">
-          Nothing to offer.
-        </Text>
-      )}
+    <CheckboxGroup legend={legend} emptyMessage="Nothing to offer.">
       {offered.map((g) => {
         const included = g !== ADMIN && admin;
         const refused = may.includes(g)
@@ -290,7 +287,7 @@ export function AccessPicker({
           onCheckedChange={(on) => onChange(toggle(g, on))}
         />
       ))}
-    </fieldset>
+    </CheckboxGroup>
   );
 }
 
@@ -1144,7 +1141,7 @@ export function ConfirmDialog({
 }) {
   const [typed, setTyped] = useState("");
   const waiting = useWaiting();
-  const ready = !typeToConfirm || typed.trim() === typeToConfirm;
+  const ready = !typeToConfirm || confirmMatches(typed, typeToConfirm);
   // REFUSED AS STALE, what this was about has moved on — an invitation
   // redeemed in the meantime — and the same request is refused the same
   // however often it is pressed. So the dialog offers only a way out: it kept
@@ -1189,21 +1186,10 @@ export function ConfirmDialog({
     >
       <div className="t-body">{children}</div>
       {typeToConfirm && (
-        // NOT A FormField, whose label is set in capitals: the value is typed
-        // exactly, so it is shown exactly. Read as ROBERT.SMITH, typing that
-        // kept the button disabled with no word why.
-        <label className="col" style={{ gap: 6 }}>
-          <span className="t-caption">
-            Type <InlineCode>{typeToConfirm}</InlineCode> to confirm
-          </span>
-          <Input
-            autoFocus
-            width="full"
-            spellCheck={false}
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-          />
-        </label>
+        // A FORM FIELD LIKE EVERY OTHER. The value is typed exactly, so it is
+        // shown exactly: the kit's label keeps a literal's case inside its
+        // capitals, where ROBERT.SMITH kept the button disabled with no word why.
+        <ConfirmField phrase={typeToConfirm} value={typed} onValueChange={setTyped} autoFocus />
       )}
       <IamOutcome answer={write.answer} />
     </Modal>
