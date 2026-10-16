@@ -198,7 +198,21 @@ func TestSummaries(t *testing.T) {
 		name: "a sign-in names its method and its second factor",
 		payload: IAMSessionStarted{Login: "jane.doe", Method: SignInPassword,
 			SecondFactor: FactorTOTP},
-		want: "jane.doe signed in (password + totp)",
+		want: "jane.doe signed in (password and authenticator app)",
+	}, {
+		// THE WORDS A PERSON READS, never the wire values.
+		name:    "a token's sign-in names the method in words",
+		payload: IAMSessionStarted{Login: "token:ci", Method: SignInToken},
+		want:    "token:ci signed in (API token)",
+	}, {
+		name: "a mint names the credential in words",
+		payload: IAMCredentialMinted{Credential: "c-1", Kind: CredentialTOTP,
+			Owner: "p-1"},
+		want: "Authenticator app created for p-1",
+	}, {
+		name:    "a revocation of an unnamed kind still reads as a sentence",
+		payload: IAMCredentialRevoked{Credential: "c-1", Owner: "p-1"},
+		want:    "A credential revoked for p-1",
 	}, {
 		name:    "a sign-out nobody could be named for names no author",
 		payload: IAMSessionEnded{Person: "p-1", Lineage: "0192aabbccddeeff", Reason: EndLogout},
@@ -220,7 +234,7 @@ func TestSummaries(t *testing.T) {
 		payload: IAMLoginFailures{Sources: []SourceFailures{{Failures: 2}},
 			Overflow: 900},
 		want: "902 failed attempt(s) in one minute from 1 source(s); most from an " +
-			"unidentified client (2); 900 from sources past the per-minute cap",
+			"unidentified client (2); 900 more from other addresses",
 	}, {
 		name: "an unverifiable record names the key and what the node holds",
 		payload: RecordUnverifiable{Domain: "iam", KeyID: "k3",
@@ -240,9 +254,8 @@ func TestSummaries(t *testing.T) {
 		name: "a second factor at its ceiling says the password is known",
 		payload: IAMSecondFactorThrottled{Person: "p-1", Login: "jane.doe",
 			Remote: "203.0.113.9"},
-		want: "Second factor of jane.doe reached the throttle's ceiling, the last " +
-			"wrong code from 203.0.113.9: somebody holding the password is " +
-			"guessing at the code",
+		want: "Too many wrong two-step codes for jane.doe, the last from " +
+			"203.0.113.9. Someone may know their password.",
 	}, {
 		name:    "a reset link issued says it is a reset",
 		payload: IAMPasswordResetIssued{Person: "p-1", Credential: "c-1"},
@@ -255,8 +268,8 @@ func TestSummaries(t *testing.T) {
 	}, {
 		name:    "a reset spent says what it ended",
 		payload: IAMPasswordReset{Person: "p-1", Login: "jane.doe"},
-		want: "jane.doe set a new password from a reset link, ending every " +
-			"session and token they held",
+		want: "jane.doe set a new password with a reset link and was signed " +
+			"out everywhere",
 	}, {
 		// AND A FIRST PASSWORD ENDS NOTHING, so it does not claim to.
 		name:    "a first password spent claims to end nothing",
@@ -265,7 +278,7 @@ func TestSummaries(t *testing.T) {
 	}, {
 		name:    "a grant change lists both directions",
 		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"admin"}, Removed: []string{"tracker", "knowledge"}},
-		want:    "Grants of p-1 changed: +admin; -tracker, -knowledge",
+		want:    "Access for p-1 changed: +admin; -tracker, -knowledge",
 	}, {
 		name:    "a skip names the seat and the reason",
 		payload: NotificationSkipped{Handle: "swe", Reason: "human seat", NotificationSource: "jira"},
