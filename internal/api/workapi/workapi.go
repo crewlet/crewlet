@@ -922,17 +922,21 @@ func positionOf(at statelog.Position) any {
 // AN EMPTY BODY IS NO ARGUMENTS, which is what a DELETE and a restore send.
 // Anything else must be one JSON object: the arguments are the tool's own, by
 // its own names, so there is nothing here to translate and nothing to drop.
+//
+// THROUGH THE ONE DECODE every transport into a tool shares
+// ([tools.DecodeCallArgs]), so a number reaches the tool as a json.Number, as
+// it does from a seat: decoded to a float64, an integer past 2^53 — a vendor's
+// 19-digit id, a whole-number custom-field value — was rounded before any tool
+// saw it, and a body with a second JSON value after its object was read as
+// its first.
 func readArgs(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 	raw, err := httpjson.ReadBody(w, r, MaxBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return nil, false
 	}
-	args := map[string]any{}
-	if strings.TrimSpace(string(raw)) == "" {
-		return args, true
-	}
-	if err := json.Unmarshal(raw, &args); err != nil {
+	args, err := tools.DecodeCallArgs(raw)
+	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "the body must be one JSON object of " +
 				"the verb's own arguments: " + err.Error()})
@@ -989,6 +993,14 @@ func contains(list []string, s string) bool {
 
 // ifMatch folds an `If-Match` header into the argument a tool takes for it,
 // refusing a request that states two different versions.
+//
+// THE BODY'S VERSION IS READ AS ITS TEXT, exactly: the arguments arrive as
+// json.Number ([readArgs]), and a body that states anything but the header's
+// whole number — another number, a fraction, a negative, a string — states a
+// second version and is refused. It was read as a float64 and truncated, so
+// `"if_match": 3.5` beside `If-Match: 3` agreed with it and was overwritten,
+// and a negative one converted to whatever the platform made of it. The
+// header's version is written back in the same form, as the tool reads one.
 func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
 	field string) bool {
 
@@ -1003,12 +1015,13 @@ func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
 				"as a number — " + strconv.Quote(header) + " is not one"})
 		return false
 	}
-	if held, ok := args[field].(float64); ok && uint64(held) != version {
+	stated := json.Number(strconv.FormatUint(version, 10))
+	if held, ok := args[field]; ok && held != nil && held != stated {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": fmt.Sprintf("If-Match says %d and the "+
 				"body's %s says %v; send one", version, field, held)})
 		return false
 	}
-	args[field] = float64(version)
+	args[field] = stated
 	return true
 }
