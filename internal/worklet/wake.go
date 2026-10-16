@@ -920,12 +920,14 @@ func relationMembers(relations []Relation, kind RelationKind) []string {
 // excerpt is what a card shows, cut rune-safely to the display limit.
 //
 // MARKED, and the marker counted against the cap. A card is the whole of what
-// most recipients read — the wake prompt renders it under "What changed" and a
-// digest coalesces on it — so a comment cut at exactly six hundred bytes and
-// handed over unmarked reads as a comment that ENDED there, which is a
-// different message. [textcut.Within] rather than Ellipsis because
-// [Notify.Validate] REFUSES an excerpt above MaxExcerpt: a marker outside the
-// budget would turn every long comment into a failed write.
+// most of its readers see — a person's inbox, the item's history and the
+// activity feed show it, and the wake prompt renders it under "What changed"
+// only where it was stated rather than cut from the payload, a woken seat
+// reading the whole text otherwise ([wakeBody]) — so a comment cut at exactly
+// six hundred bytes and handed over unmarked reads as a comment that ENDED
+// there, which is a different message. [textcut.Within] rather than Ellipsis
+// because [Notify.Validate] REFUSES an excerpt above MaxExcerpt: a marker
+// outside the budget would turn every long comment into a failed write.
 //
 // AN ANSWER THAT CHOSE LEADS WITH THE CHOICE — `Chose “Ship Friday”: <body>` —
 // because the choice is the answer and the body is its reason: cut at the cap,
