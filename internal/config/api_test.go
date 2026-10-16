@@ -356,18 +356,23 @@ func TestAnUnknownGrantIsRefusedNamingTheSet(t *testing.T) {
 // A RETIRED KEY IS REFUSED, never ignored, and the control is what makes that
 // matter: ignoring `allow_anonymous_read: false` runs the OPPOSITE posture
 // from the one the file asks for, and ignoring `disabled: true` runs the
-// opposite of that. No release ever shipped one of these keys, so there is no
-// named advice to keep for them: each is refused as the unknown field it is,
-// at its own line, because both tiers decode with unknown keys refused.
+// opposite of that. Each is refused at its own line, because both tiers
+// decode with unknown keys refused, and BY NAME: the refusal says the key was
+// removed and what replaces it, never "check the spelling" (see removedKeys).
 //
-// Mutation: decode Tier A without KnownFields and every row is accepted.
+// Mutation: decode Tier A without KnownFields and every row is accepted;
+// drop an entry from removedKeys and its row reads as a misspelling.
 func TestEveryRetiredKeyIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, doc string }{
-		{"allow_anonymous_read", "api:\n  auth:\n    allow_anonymous_read: false\n"},
-		{"api.auth.disabled", "api:\n  auth:\n    disabled: true\n"},
-		{"api.auth.oidc", "api:\n  auth:\n    oidc:\n      issuer: https://idp.example.com\n"},
-		{"api.auth.bootstrap", "api:\n  auth:\n    bootstrap: closed\n"},
+	for _, tc := range []struct{ name, doc, says string }{
+		{"api.auth.allow_anonymous_read", "api:\n  auth:\n    allow_anonymous_read: false\n",
+			"every request now needs a credential"},
+		{"api.auth.disabled", "api:\n  auth:\n    disabled: true\n",
+			"every request now needs a credential"},
+		{"api.auth.oidc", "api:\n  auth:\n    oidc:\n      issuer: https://idp.example.com\n",
+			"password and two-step verification"},
+		{"api.auth.bootstrap", "api:\n  auth:\n    bootstrap: closed\n",
+			"crewlet iam invite"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -376,11 +381,26 @@ func TestEveryRetiredKeyIsRefused(t *testing.T) {
 				t.Fatalf("`%s` was accepted, so the file asks for one posture "+
 					"and the engine runs the other", tc.name)
 			}
-			if !errors.Is(err, ErrUnknownField) {
-				t.Errorf("err = %v, want ErrUnknownField", err)
-			}
+			assertRemoved(t, err, tc.name, tc.says)
 		})
 	}
+	t.Run("contact.crewlet_operator_id", func(t *testing.T) {
+		t.Parallel()
+		_, err := ParseCompany([]byte("name: Acme\nroles:\n  - handle: ana\n" +
+			"    kind: human\n    contact:\n      crewlet_operator_id: founder\n"))
+		if err == nil {
+			t.Fatal("`contact.crewlet_operator_id` was accepted")
+		}
+		assertRemoved(t, err, "contact.crewlet_operator_id", "token:<id> -seat")
+	})
+	// THE SAME WORD IN ANOTHER BLOCK IS AN ORDINARY TYPO, and reads like one.
+	t.Run("a disabled key outside api.auth", func(t *testing.T) {
+		t.Parallel()
+		_, err := ParseRunnableBootstrap([]byte("api:\n  disabled: true\n"), EnvOnly())
+		if err == nil || !strings.Contains(err.Error(), "Check the spelling") {
+			t.Fatalf("err = %v, want the ordinary unknown-setting refusal", err)
+		}
+	})
 	for _, key := range []string{"public_base_url", "dashboard_base_url"} {
 		t.Run("integrations."+key, func(t *testing.T) {
 			t.Parallel()
@@ -674,5 +694,23 @@ func TestANodeServingNoApiWarnsAboutNoneOfIt(t *testing.T) {
 					"its API: %s", external, w.Path)
 			}
 		}
+	}
+}
+
+// assertRemoved holds a refusal to the named form a removed key is answered
+// with: an unknown field, naming the key, saying it was removed and what
+// replaces it, and never sending its reader to check a spelling.
+func assertRemoved(t *testing.T, err error, key, says string) {
+	t.Helper()
+	if !errors.Is(err, ErrUnknownField) {
+		t.Errorf("err = %v, want ErrUnknownField", err)
+	}
+	for _, want := range []string{"`" + key + "` was removed", says} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "Check the spelling") {
+		t.Errorf("a removed key was reported as a misspelling: %v", err)
 	}
 }
