@@ -61,7 +61,7 @@ func (g *gatePublisher) open() { g.once.Do(func() { close(g.gate) }) }
 // committerOn is a committer on n over pub, at the harness's clock, with a
 // recorder of its own. A gate is opened before the committer stops, so a case
 // that fails while holding one still ends.
-func committerOn(t *testing.T, n *node, pub code.Publisher,
+func committerOn(t testing.TB, n *node, pub code.Publisher,
 	tune ...func(*code.CommitterOptions)) (*code.Committer, *metrics.Recorder) {
 
 	t.Helper()
@@ -91,7 +91,7 @@ func committerOn(t *testing.T, n *node, pub code.Publisher,
 }
 
 // repoOn is a fresh repository on n, with main at a commit.
-func repoOn(t *testing.T, n *node, name string) string {
+func repoOn(t testing.TB, n *node, name string) string {
 	t.Helper()
 	repo := n.ensure(name, suiteSettings(), t1).RepoID
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", code.ZeroOID, oidOf("A"))))
