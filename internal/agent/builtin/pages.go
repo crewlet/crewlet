@@ -110,7 +110,7 @@ type PageDeps struct {
 
 	// Await is handed the position every page write landed at, so the next
 	// read sees it. See [WorkDeps.Await]: same seam, same reason, the same
-	// two places the wait happens — and it matters more here: a page's
+	// floor the wait happens behind — and it matters more here: a page's
 	// SavePage takes the version it read, so a turn that writes and then
 	// re-reads from a copy that has not caught up gets a stale version and
 	// its next save is refused.

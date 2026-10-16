@@ -350,12 +350,15 @@ type WorkDeps struct {
 	// see its own write files it again. It is applied after every write
 	// here for that reason, never before a read.
 	//
-	// WHERE THE WAIT HAPPENS is the surface's. A seat's tools hand the
-	// position to the node's session floor (the estate router's), which
-	// every later read carries to whichever copy answers it — this node's
-	// or a peer's — and that copy waits; nothing waits here. A surface
-	// that reads this node's own rows directly, as the operator's does,
-	// waits here for this node's applier instead.
+	// WHERE THE WAIT HAPPENS is the copy that answers next, never here.
+	// Every surface — a seat's tools, the operator's assistant and a
+	// person's own work and page routes alike — hands the position to the
+	// node's session floor (the estate router's), which every later read
+	// carries to whichever copy answers it, this node's or a peer's, and
+	// that copy waits. Waiting here for this node's own applier would be
+	// waiting on a copy the router may not ask: the operator's surface did
+	// exactly that while it read this node's rows directly, and through the
+	// router it raises the floor like a seat's.
 	//
 	// It takes a POSITION rather than a revision, because that is what a
 	// log write answers with: a place on a stream, comparable only against

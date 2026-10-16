@@ -1681,11 +1681,12 @@ func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
 	return e.router.Pages(), true
 }
 
-// AwaitEstate waits until whichever holder answers this node's next read has
-// applied at — the router's session floor, which a surface's write raises so
-// its own next read sees it ([estate.Router.Await]) — the same wait a seat's
-// tools are handed, and for the same reason: this node's own applier is not the
-// one that answers once its copy is out of service.
+// AwaitEstate raises the router's session floor to at ([estate.Router.Await]),
+// so whichever holder answers this node's next read waits until it has applied
+// that far — the seam a seat's tools are handed, and for the same reason: this
+// node's own applier is not the one that answers once its copy is out of
+// service. It waits for nothing itself and returns at once; the wait is the
+// next read's, on whichever copy takes it.
 func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 	if e.router == nil {
 		return nil
