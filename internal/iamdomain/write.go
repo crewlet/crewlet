@@ -429,15 +429,14 @@ var ErrRefused = errors.New("not allowed")
 // whether or not this build can parse what follows.
 func (w *Writer) mayAdminister(op OpKind) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return fmt.Errorf("%w: %w: %s was asked through the machine token %s, "+
-			"and an administrative identity record needs a person present — "+
-			"sign in and make it yourself", ErrRefused, ErrTokenRefused, op,
+		return fmt.Errorf("%w: %w. Sign in and do it yourself (%s, token %s)",
+			ErrRefused, ErrTokenRefused, op,
 			w.OperatorID)
 	}
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s requires %s, and this party holds %v", ErrRefused,
+	return fmt.Errorf("%w: %s needs %s, and you have %v", ErrRefused,
 		op, iam.GrantAdmin, w.Grants)
 }
 
@@ -594,9 +593,8 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 	}
 	if len(reason) > MaxReason {
 		return MutationRecord{}, fmt.Errorf("%w: the reason on this %s is %d "+
-			"bytes and the cap is %d — it is rendered into an authentication "+
-			"trail beside the op that caused it, so it says WHICH cause fired "+
-			"rather than narrating", ErrInvalid, op, len(reason), MaxReason)
+			"bytes, and the limit is %d. Keep it to a short label",
+			ErrInvalid, op, len(reason), MaxReason)
 	}
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{

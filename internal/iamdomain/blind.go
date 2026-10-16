@@ -107,14 +107,12 @@ type Blinder struct{ key []byte }
 // look exactly as it does when it is working.
 func NewBlinder(key []byte) (*Blinder, error) {
 	if len(key) == 0 {
-		return nil, fmt.Errorf("%w: the company's %s is unset, so this node "+
-			"cannot resolve an address to a person and cannot form the blind "+
-			"the directory compares one by", ErrNoBlindKey, BlindKeyName)
+		return nil, fmt.Errorf("%w: the company's %s isn't set, so this node "+
+			"can't look people up by email", ErrNoBlindKey, BlindKeyName)
 	}
 	if len(key) < MinBlindKeyBytes {
-		return nil, fmt.Errorf("%w: the company's %s is %d bytes and the floor "+
-			"is %d — a short key is what makes an address space an attacker can "+
-			"enumerate into a lookup table", ErrNoBlindKey, BlindKeyName,
+		return nil, fmt.Errorf("%w: the company's %s is %d bytes, and it "+
+			"needs at least %d", ErrNoBlindKey, BlindKeyName,
 			len(key), MinBlindKeyBytes)
 	}
 	return &Blinder{key: append([]byte(nil), key...)}, nil
@@ -169,8 +167,7 @@ func (b *Blinder) Email(address string) (string, error) {
 		// typed: an address of nothing but whitespace reaches here past a
 		// check for an empty one, and unclassified it was a 500 telling an
 		// administrator the engine was broken.
-		return "", fmt.Errorf("%w: an empty address has no blind — one "+
-			"would be a value every addressless person in the company shares",
+		return "", fmt.Errorf("%w: the email address is empty",
 			ErrNotFindable)
 	}
 	return b.derive("email", folded)

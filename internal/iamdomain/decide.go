@@ -310,9 +310,8 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 	case err != nil:
 		return Created{Result: result}, err
 	case !found && result.Outcome != statelog.OutcomeApplied:
-		return Created{Result: result}, fmt.Errorf("iamdomain: operation %s "+
-			"created person %s and this node has not applied it yet, so it "+
-			"cannot say whether their first password link still opens — retry "+
+		return Created{Result: result}, fmt.Errorf("request %s added person "+
+			"%s, and this node hasn't caught up yet. Retry with "+
 			"the same key: %w", result.OpID, personID, statelog.ErrUnavailable)
 	case found && row.Opens(link.Secret, w.Now()):
 		link.ExpiresAt = row.ExpiresAt
@@ -435,23 +434,20 @@ func (in Creation) validate(now time.Time) error {
 		// ([ResetStages]) was answered with a link on the first attempt
 		// and with [Created.LinkClosed] on its own retry — two answers to
 		// one operation. A different stage is a stage change afterwards.
-		return fmt.Errorf("%w: a created person is %s from the moment the "+
-			"create lands — their first password link is how they get in, and "+
-			"at %q it would set a password nobody can sign in with; create "+
-			"them, then change their stage", ErrInvalid, iam.StageActive,
+		return fmt.Errorf("%w: a new person starts as %s, not %q. Add them, "+
+			"then change their stage", ErrInvalid, iam.StageActive,
 			in.Stage)
 	case in.Kind == iam.KindMachine && !in.LinkExpiresAt.IsZero():
-		return fmt.Errorf("%w: a service account has no password, so its "+
-			"create issues no password link and takes no link expiry",
+		return fmt.Errorf("%w: a service account has no password, so leave "+
+			"out the link expiry",
 			ErrInvalid)
 	case in.Kind == iam.KindPerson && in.LinkExpiresAt.IsZero():
-		return fmt.Errorf("%w: creating a person issues their first password "+
-			"link, which needs an expiry — one read as `never` sets their "+
-			"password for whoever holds it, for the life of the company",
+		return fmt.Errorf("%w: a new person's password link "+
+			"needs an expiry date",
 			ErrInvalid)
 	case in.Kind == iam.KindPerson && !in.LinkExpiresAt.After(now):
-		return fmt.Errorf("%w: the first password link's expiry %s is "+
-			"already past", ErrInvalid,
+		return fmt.Errorf("%w: the password link's expiry date %s "+
+			"has already passed", ErrInvalid,
 			in.LinkExpiresAt.UTC().Format(time.RFC3339))
 	}
 	return nil
@@ -503,9 +499,9 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// is a node that has not applied it yet, and another node can
 		// redeem the link. Never the issue's "create a company first",
 		// which is advice to an administrator and not to an invitee.
-		return statelog.Result{}, fmt.Errorf("%w: invitation %s binds seat "+
-			"%q and this node runs no company yet to find it in — another "+
-			"node can redeem it (%v)", statelog.ErrUnavailable, in.Invitation,
+		return statelog.Result{}, fmt.Errorf("%w: invitation %s is for seat "+
+			"%q, and this node has no company yet. Try again shortly (%v)",
+			statelog.ErrUnavailable, in.Invitation,
 			in.Seat, err)
 	case errors.Is(err, statelog.ErrUnavailable):
 		return statelog.Result{}, err
@@ -514,8 +510,9 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// own answer is an invalid value an administrator typed, and wrapped
 		// here it told a surface the invitee had sent a bad request, when
 		// what they hold is a link the company's chart has since retired.
-		return statelog.Result{}, fmt.Errorf("%w: invitation %s binds a seat "+
-			"it can no longer bind (%v)", ErrRefused, in.Invitation, err)
+		return statelog.Result{}, fmt.Errorf("%w: invitation %s is for a "+
+			"seat that's no longer available (%v)",
+			ErrRefused, in.Invitation, err)
 	}
 	return w.enrol(ctx, enrolment{
 		personID: in.PersonID, kind: iam.KindPerson, stage: in.Stage,
@@ -596,9 +593,8 @@ func (in Redemption) validate() error {
 		// REFUSED rather than invalid: it is what a link without its
 		// secret comes to, and its remedy is the one every way a link
 		// stops working has — ask for a new one.
-		return fmt.Errorf("%w: redeeming invitation %s needs the secret its "+
-			"link carries beside the id — the id alone is in every snapshot "+
-			"and proxy log, and opens nothing", ErrRefused, in.Invitation)
+		return fmt.Errorf("%w: invitation %s needs the full "+
+			"link, not just its id", ErrRefused, in.Invitation)
 	case in.Seat == "":
 		// A CALLER'S FAULT, never the invitee's: every invitation holds a
 		// seat ([Writer.Invite]), and the surface redeeming one hands on the
@@ -645,11 +641,8 @@ func (w *Writer) enrolmentBlind(ctx context.Context, email string) (
 	*Blinder, string, error) {
 
 	if w.sealer == nil || (email != "" && w.blinds == nil) {
-		return nil, "", fmt.Errorf("iamdomain: this node cannot enrol "+
-			"anybody: it has %s. An enrolment has to derive the blind the "+
-			"directory compares an address by and seal the values that belong "+
-			"to the person, and a node that guessed at either would put two "+
-			"people on one address", w.missingKeys())
+		return nil, "", fmt.Errorf("iamdomain: this node can't add "+
+			"people: it has %s", w.missingKeys())
 	}
 	if email == "" {
 		return nil, "", nil
@@ -864,12 +857,12 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 //     operation under a new key.
 func (e *enrolment) alreadyEnrolled() error {
 	if e.invitation != "" {
-		return fmt.Errorf("%w: invitation %s has already been used — the "+
-			"person it created is enrolled", ErrRefused, e.invitation)
+		return fmt.Errorf("%w: invitation %s has already been used",
+			ErrRefused, e.invitation)
 	}
-	return fmt.Errorf("%w: person %s already exists, and operation %s is not "+
-		"the one that created them — a new person is a new operation under a "+
-		"new key", ErrOperationReused, e.personID, e.opID)
+	return fmt.Errorf("%w: person %s already exists, and request %s didn't "+
+		"create them. Use a new key to add someone new",
+		ErrOperationReused, e.personID, e.opID)
 }
 
 // isEnrolled reports whether a person row exists, read inside a decide's
@@ -907,36 +900,31 @@ func validateEnrolment(e enrolment) error {
 		// are — and neither has a login grammar, so the row would be
 		// findable by an address alone and act as nothing the rest of
 		// the engine can name.
-		return fmt.Errorf("%w: %q is not a kind the directory enrols — want "+
-			"%s or %s", ErrNotEnrollable, e.kind, iam.KindPerson, iam.KindMachine)
+		return fmt.Errorf("%w: %q isn't a kind (use %s or %s)",
+			ErrNotEnrollable, e.kind, iam.KindPerson, iam.KindMachine)
 	case !e.stage.Valid():
 		return fmt.Errorf("%w: %q is not an enrolment stage", ErrInvalid, e.stage)
 	case len(e.name) > MaxName:
-		return fmt.Errorf("%w: the name is %d bytes and the cap is %d",
+		return fmt.Errorf("%w: the name is %d bytes, and the limit is %d",
 			ErrInvalid, len(e.name), MaxName)
 	case len(e.email) > MaxAddress:
-		return fmt.Errorf("%w: the address is %d bytes and the cap is %d, the "+
-			"longest RFC 5321 permits", ErrInvalid, len(e.email), MaxAddress)
+		return fmt.Errorf("%w: the email address is %d bytes, "+
+			"and the limit is %d", ErrInvalid, len(e.email), MaxAddress)
 	case len(e.reason) > MaxReason:
-		return fmt.Errorf("%w: the reason on this enrolment is %d bytes and "+
-			"the cap is %d — it is rendered into an authentication trail "+
-			"beside the op that caused it, so it says WHICH cause fired "+
-			"rather than narrating", ErrInvalid, len(e.reason), MaxReason)
+		return fmt.Errorf("%w: the reason is %d bytes, and the limit is %d. "+
+			"Keep it to a short label", ErrInvalid, len(e.reason), MaxReason)
 	case e.kind == iam.KindPerson && iam.NormalizeEmail(e.email) == "":
 		// JUDGED ON WHAT IT FOLDS TO, which is what finds them: an
 		// address of nothing but whitespace is no address.
-		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
-			"the interactive login key, and somebody with none can never "+
-			"sign in", ErrNotFindable)
+		return fmt.Errorf("%w: a person needs an email address to sign in",
+			ErrNotFindable)
 	case e.kind == iam.KindMachine && e.login == "":
 		// A MACHINE NEEDS NO ADDRESS and must still be FINDABLE. It has
 		// no login page and no mailbox — `svc:ci` proves itself with a
 		// token — so requiring an address would have meant inventing
 		// one, and a row that is not named is a credential holder
 		// nobody can list, revoke or audit.
-		return fmt.Errorf("%w: enrolling a %s needs a login — it has no login "+
-			"page and therefore no address, so the login is the only thing "+
-			"that finds it", ErrNotFindable, e.kind)
+		return fmt.Errorf("%w: a %s needs a login", ErrNotFindable, e.kind)
 	case e.login == "":
 		// A PERSON NEEDS ONE TOO, and not to be found: their address
 		// already does that. A login is the NAME they sign in and are
@@ -949,10 +937,8 @@ func validateEnrolment(e enrolment) error {
 		// it or takes the one proposed from the address, and an
 		// invitation's form proposes one for the person to keep or
 		// change.
-		return fmt.Errorf("%w: enrolling a person needs a login — lowercase "+
-			"segments joined by DOTS (jane.doe). It is the name they sign in "+
-			"and are recorded under, and without one they would be recorded "+
-			"as nobody", ErrInvalidLogin)
+		return fmt.Errorf("%w: a person needs a login: lowercase words "+
+			"joined by dots, like jane.doe", ErrInvalidLogin)
 	}
 	return loginFits(e.kind, e.login)
 }
@@ -991,8 +977,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("%w: invitation %s is not held on this node, so "+
-			"nothing says what redeeming it confers", ErrRefused, e.invitation)
+		return "", fmt.Errorf("%w: this node doesn't have invitation %s",
+			ErrRefused, e.invitation)
 	case err != nil:
 		return "", fmt.Errorf("iamdomain: read invitation %s: %w", e.invitation, err)
 	}
@@ -1007,17 +993,17 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		// naming an invitation's id — which every snapshot and proxy log
 		// holds — is not holding its link. An invitation issued before
 		// links carried a secret has no verifier and admits nobody.
-		return "", fmt.Errorf("%w: the secret presented is not the one invitation "+
-			"%s's link carries", ErrRefused, e.invitation)
+		return "", fmt.Errorf("%w: that isn't the link for invitation %s",
+			ErrRefused, e.invitation)
 	case held != e.blind:
-		return "", fmt.Errorf("%w: invitation %s was issued to another address — "+
-			"holding somebody's link is not holding their address",
+		return "", fmt.Errorf("%w: invitation %s is for a "+
+			"different email address",
 			ErrRefused, e.invitation)
 	case spent != 0:
 		return "", fmt.Errorf("%w: invitation %s has already been used",
 			ErrRefused, e.invitation)
 	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
-		return "", fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
+		return "", fmt.Errorf("%w: invitation %s has expired", ErrRefused,
 			e.invitation)
 	}
 	// WHAT WAS OFFERED, READ THROUGH [iam.Expand]: an invitation offering
@@ -1027,9 +1013,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	offered := iam.Expand(invitation.Grants)
 	for _, g := range e.grants {
 		if !slices.Contains(offered, g) {
-			return "", fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
-				"%s is not among them — a redemption hands out what was "+
-				"offered and nothing more", ErrRefused, e.invitation,
+			return "", fmt.Errorf("%w: invitation %s gives %v, which "+
+				"doesn't include %s", ErrRefused, e.invitation,
 				invitation.Grants, g)
 		}
 	}
@@ -1038,9 +1023,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
 	if e.seat != invitation.Seat {
-		return "", fmt.Errorf("%w: invitation %s binds seat %q, and the "+
-			"redemption names %q — a redemption binds what was offered and "+
-			"nothing else", ErrRefused, e.invitation, invitation.Seat, e.seat)
+		return "", fmt.Errorf("%w: invitation %s is for seat %q, not %q",
+			ErrRefused, e.invitation, invitation.Seat, e.seat)
 	}
 	return invitation.InvitedBy, nil
 }
@@ -1058,15 +1042,12 @@ func loginFits(kind iam.Kind, login string) error {
 	if iam.ValidLoginFor(kind, login) {
 		return nil
 	}
-	shape := "a person's login is lowercase segments joined by DOTS (jane.doe)"
+	shape := "Use lowercase words joined by dots, like jane.doe"
 	if kind == iam.KindMachine {
-		shape = "a machine's login is lowercase segments joined by a COLON " +
-			"(ci:release, or token:<id> for a Tier A token)"
+		shape = "Use lowercase words joined by a colon, like ci:release (or " +
+			"token:<id> for an API token)"
 	}
-	return fmt.Errorf("%w: %q is not a login a %s may hold — %s, at most %d "+
-		"characters. Each kind has its own separator, which keeps it apart "+
-		"from a seat handle and from the other kind's names, and the bound is "+
-		"a seat handle's, since the two share every author column",
+	return fmt.Errorf("%w: %q isn't a valid %s login. %s, up to %d characters",
 		ErrInvalidLogin, login, kind, shape, iam.MaxLogin)
 }
 
@@ -1175,9 +1156,8 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 		// under — so a principal with none would be recorded as nobody,
 		// and a machine enrolled under `token:<id>` silently unbound from
 		// its Tier A token.
-		return statelog.Result{}, fmt.Errorf("%w: a login is never cleared, "+
-			"only changed — every principal holds one, and it is the name "+
-			"their changes are recorded under", ErrInvalidLogin)
+		return statelog.Result{}, fmt.Errorf("%w: a login can be "+
+			"changed but not removed", ErrInvalidLogin)
 	}
 	// THE SEAT IS ASKED OF THE RUNNING ORGANISATION BEFORE THE SNAPSHOT,
 	// which is in memory rather than in the replicated estate, and recorded
@@ -1405,9 +1385,8 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 		return statelog.Result{}, err
 	}
 	if !stage.Valid() {
-		return statelog.Result{}, fmt.Errorf("%w: %q is not an enrolment "+
-			"stage — only `active` may act, which is an allowlist of one, so a "+
-			"stage this build cannot name would suspend somebody by accident",
+		return statelog.Result{}, fmt.Errorf("%w: %q isn't a stage "+
+			"this engine knows",
 			ErrInvalid, stage)
 	}
 	rec, err := w.record(PersonSubject(personID), OpStatus, personID,
@@ -1745,9 +1724,9 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 func (w *Writer) missingKeys() string {
 	switch {
 	case w.blinds == nil && w.sealer == nil:
-		return "neither a blind-index key nor a keyring to seal with"
+		return "no email lookup key and no keyring"
 	case w.blinds == nil:
-		return "no blind-index key"
+		return "no email lookup key"
 	default:
 		return "no keyring to seal with"
 	}
@@ -1802,8 +1781,8 @@ func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
 		personID).Scan(&kind, &held.EmailBlind, &held.Login, &held.SeatID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", Identifiers{}, fmt.Errorf("%w: this node holds no person "+
-			"%s", ErrNotFound, personID)
+		return "", Identifiers{}, fmt.Errorf("%w on this node: %s",
+			ErrNotFound, personID)
 	case err != nil:
 		return "", Identifiers{}, fmt.Errorf("iamdomain: read person %s: %w",
 			personID, err)
@@ -1848,8 +1827,8 @@ func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
 // unchecked.
 func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 	if w.seats == nil {
-		return "", fmt.Errorf("%w: iamdomain: this writer has no organisation "+
-			"to check seat %q against", statelog.ErrUnavailable, handle)
+		return "", fmt.Errorf("%w: this node can't check seat %q yet. "+
+			"Try again shortly", statelog.ErrUnavailable, handle)
 	}
 	seat, found, err := w.seats.Seat(ctx, handle)
 	switch {
@@ -1857,21 +1836,17 @@ func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 		return "", fmt.Errorf("%w: seat %q cannot be bound until the company "+
 			"declaring it is running here (%w)", ErrNoCompany, handle, err)
 	case err != nil:
-		return "", fmt.Errorf("%w: iamdomain: read the organisation this node "+
-			"runs to check seat %q: %w", statelog.ErrUnavailable, handle, err)
+		return "", fmt.Errorf("%w: this node couldn't read the org chart to "+
+			"check seat %q: %w", statelog.ErrUnavailable, handle, err)
 	case !found:
 		// ErrInvalid, because it is a value the caller typed: before this
 		// was classified it fell through to a 500, telling an
 		// administrator who mistyped a handle that the engine was broken.
-		return "", fmt.Errorf("%w: the company this node runs has no seat %q. "+
-			"This check is ADVISORY — it reads the configuration this node "+
-			"applied — so it is here to catch a typo; if a revision added the "+
-			"seat moments ago, retry", ErrInvalid, handle)
+		return "", fmt.Errorf("%w: there's no seat %q in the org chart. If "+
+			"it was just added, try again in a moment", ErrInvalid, handle)
 	case seat.Kind != session.SeatKindHuman:
-		return "", fmt.Errorf("%w: seat %q is a %s seat, and every binding — a "+
-			"person's, or a service account's or a Tier A token's machine row — "+
-			"names a HUMAN seat: an agent seat has no person to hold it, and "+
-			"whoever is bound to one is refused on every request", ErrInvalid,
+		return "", fmt.Errorf("%w: seat %q isn't a human seat (it's %s). "+
+			"Pick a human seat", ErrInvalid,
 			handle, seat.Kind)
 	}
 	return seat.Handle, nil
@@ -2078,24 +2053,21 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 			"the verifier its secret is checked against — the secret itself " +
 			"is never published")
 	case len(in.Label) > MaxTokenLabel:
-		return TokenMinted{}, fmt.Errorf("%w: a token's label is %d bytes and "+
-			"the cap is %d — it names which of somebody's tokens to revoke, "+
-			"and a listing renders it on every row", ErrInvalidToken,
+		return TokenMinted{}, fmt.Errorf("%w: the token label is %d bytes, "+
+			"and the limit is %d", ErrInvalidToken,
 			len(in.Label), MaxTokenLabel)
 	case in.ExpiresAt.IsZero():
-		return TokenMinted{}, fmt.Errorf("%w: a token needs an expiry; one "+
-			"read as `never` is a credential that outlives whoever minted it",
+		return TokenMinted{}, fmt.Errorf("%w: a token needs an expiry date",
 			ErrInvalidToken)
 	}
 	now := w.Now()
 	switch {
 	case !in.ExpiresAt.After(now):
-		return TokenMinted{}, fmt.Errorf("%w: the expiry %s is already past",
+		return TokenMinted{}, fmt.Errorf("%w: the expiry date %s "+
+			"has already passed",
 			ErrInvalidToken, in.ExpiresAt.UTC().Format(time.RFC3339))
 	case in.ExpiresAt.Sub(now) > credential.MaxTokenLifetime:
-		return TokenMinted{}, fmt.Errorf("%w: a token may last at most %d "+
-			"days; `forever` is deliberately unexpressible, because a bearer "+
-			"secret nothing re-proves outlives whoever minted it",
+		return TokenMinted{}, fmt.Errorf("%w: a token can last %d days at most",
 			ErrInvalidToken, int(credential.MaxTokenLifetime/(24*time.Hour)))
 	}
 
@@ -2120,10 +2092,8 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		}
 		if owner.Kind == iam.KindMachine &&
 			strings.HasPrefix(login, iam.TokenLoginPrefix) {
-			return fmt.Errorf("%w: %s is the directory's row for a Tier A "+
-				"token, which binds that token to a seat; it is not an "+
-				"account, and a token minted on it would act under the "+
-				"configuration file's name", ErrRefused, login)
+			return fmt.Errorf("%w: %s belongs to an API token, not an "+
+				"account, so it can't have access tokens", ErrRefused, login)
 		}
 		if err = w.mayMintFor(in, owner); err != nil {
 			return err
@@ -2258,8 +2228,8 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	holds := iam.Expand(owner)
 	for _, g := range grants {
 		if !g.Valid() || !slices.Contains(holds, g) {
-			return nil, fmt.Errorf("%w: a token carries a subset of what its "+
-				"owner carries, and %s is not among %v", ErrRefused, g, owner)
+			return nil, fmt.Errorf("%w: a token can only have its owner's "+
+				"access, and %s isn't in %v", ErrRefused, g, owner)
 		}
 	}
 	if err := w.MayConfer(nil, grants); err != nil {
@@ -2272,11 +2242,11 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 func tokenOwnable(personID string, owner Person) error {
 	switch {
 	case owner.Kind != iam.KindPerson && owner.Kind != iam.KindMachine:
-		return fmt.Errorf("%w: %s is not an enrolled person or machine, so "+
-			"there is nobody for a token to act as", ErrRefused, personID)
+		return fmt.Errorf("%w: %s isn't a person or service account here",
+			ErrRefused, personID)
 	case !owner.Stage.MayAct():
-		return fmt.Errorf("%w: %s is %q, and a token acts only as somebody "+
-			"who may act", ErrRefused, personID, owner.Stage)
+		return fmt.Errorf("%w: %s is %q, so a token can't act for them",
+			ErrRefused, personID, owner.Stage)
 	}
 	return nil
 }
@@ -2308,26 +2278,22 @@ func tokenOwnable(personID string, owner Person) error {
 // otherwise pass the person arm below as that owner.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 	if iam.ValidMachineTokenName(w.OperatorID) {
-		return fmt.Errorf("%w: this party is acting through the machine "+
-			"token %s, and no token is minted from another — one would renew "+
-			"itself for ever with nobody present. Mint while signed in",
+		return fmt.Errorf("%w: you're using the access token %s, and a token "+
+			"can't create another. Sign in to create one",
 			ErrRefused, w.OperatorID)
 	}
 	switch owner.Kind {
 	case iam.KindPerson:
 		if w.Principal == "" || w.Principal != in.PersonID {
-			return fmt.Errorf("%w: %s is a person, and a person's own access "+
-				"token is minted by that person alone — whoever mints one sees "+
-				"its value, and it acts as them. They mint their own while "+
-				"signed in (`crewlet iam token -login <their login>`); an "+
-				"administrator mints tokens for service accounts only",
+			return fmt.Errorf("%w: %s is a person, so only they can create "+
+				"their personal access tokens. Admins create tokens for "+
+				"service accounts only",
 				ErrRefused, in.PersonID)
 		}
 	case iam.KindMachine:
 		if !w.Can(iam.GrantAdmin) {
-			return fmt.Errorf("%w: minting a token for the service account %s "+
-				"takes %s — it has no login page, so the token is minted "+
-				"for it by an administrator", ErrRefused, in.PersonID,
+			return fmt.Errorf("%w: creating a token for the service "+
+				"account %s needs %s", ErrRefused, in.PersonID,
 				iam.GrantAdmin)
 		}
 	}
@@ -2413,18 +2379,16 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	case iam.NormalizeEmail(in.Email) == "":
 		// NOT FINDABLE, as an enrolment with no address is: a value the
 		// caller left out, which unclassified was a 500.
-		return InviteIssued{}, fmt.Errorf("%w: an invitation needs the "+
-			"address it is for — it is what the directory holds the "+
-			"invitation against every person and every open invitation by",
+		return InviteIssued{}, fmt.Errorf("%w: an invitation needs "+
+			"an email address",
 			ErrNotFindable)
 	case len(in.Email) > MaxAddress:
-		return InviteIssued{}, fmt.Errorf("%w: the address is %d bytes and the "+
-			"cap is %d, the longest RFC 5321 permits", ErrInvalid,
+		return InviteIssued{}, fmt.Errorf("%w: the email address is %d "+
+			"bytes, and the limit is %d", ErrInvalid,
 			len(in.Email), MaxAddress)
 	case in.ExpiresAt.IsZero():
-		return InviteIssued{}, fmt.Errorf("%w: an invitation needs an expiry; "+
-			"one read as `never` is a superuser claim that stays live in "+
-			"somebody's mailbox for the life of the company", ErrInvalid)
+		return InviteIssued{}, fmt.Errorf("%w: an invitation "+
+			"needs an expiry date", ErrInvalid)
 	case in.Seat == "":
 		return InviteIssued{}, fmt.Errorf("%w: an invitation creates a person, "+
 			"so it names the human seat they will hold", ErrSeatRequired)
@@ -2443,8 +2407,8 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, err
 	}
 	if w.blinds == nil || w.sealer == nil {
-		return InviteIssued{}, fmt.Errorf("iamdomain: this node cannot "+
-			"mint an invitation: %s", w.missingKeys())
+		return InviteIssued{}, fmt.Errorf("iamdomain: this node can't create "+
+			"invitations: it has %s", w.missingKeys())
 	}
 	blinder, err := w.blinds.Blinder(ctx)
 	if err != nil {
@@ -2576,15 +2540,14 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 	case err != nil:
 		return time.Time{}, err
 	case applied:
-		return time.Time{}, fmt.Errorf("%w: operation %s issued invitation %s, "+
-			"which this node applied and the retention sweep has since "+
-			"collected — it was redeemed or aged out, so its link admits "+
-			"nobody; issue a new one under a new key", ErrOperationReused,
+		return time.Time{}, fmt.Errorf("%w: request %s already sent "+
+			"invitation %s, which has been used or expired. Send a new "+
+			"one with a new key", ErrOperationReused,
 			in.OpID, id)
 	}
-	return time.Time{}, fmt.Errorf("iamdomain: operation %s issued invitation "+
-		"%s and this node has not applied it yet, so it cannot say on which "+
-		"terms — retry the same key: %w", in.OpID, id, statelog.ErrUnavailable)
+	return time.Time{}, fmt.Errorf("request %s sent invitation %s, and this "+
+		"node hasn't caught up yet. Retry with the same key: %w",
+		in.OpID, id, statelog.ErrUnavailable)
 }
 
 // ErrOperationReused reports an operation key that already names something
@@ -2634,16 +2597,16 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 	switch {
 	case held != blind || !sameGrants(stored.Grants, in.Grants) ||
 		stored.Seat != seat:
-		return fmt.Errorf("%w: operation %s already issued invitation %s on "+
-			"other terms — a retry is the same request; a new invitation needs "+
-			"a new key", ErrOperationReused, in.OpID, id)
+		return fmt.Errorf("%w: request %s already sent invitation %s with "+
+			"different details. Use a new key for a new invitation",
+			ErrOperationReused, in.OpID, id)
 	case redeemed != 0:
-		return fmt.Errorf("%w: the invitation operation %s issued has been "+
-			"redeemed", ErrOperationReused, in.OpID)
+		return fmt.Errorf("%w: the invitation from request %s has been used",
+			ErrOperationReused, in.OpID)
 	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
 		// NO EXPIRY IS AGED OUT, for [Writer.redeemable]'s reason.
-		return fmt.Errorf("%w: the invitation operation %s issued has aged "+
-			"out; issue a new one under a new key", ErrOperationReused, in.OpID)
+		return fmt.Errorf("%w: the invitation from request %s has expired. "+
+			"Send a new one with a new key", ErrOperationReused, in.OpID)
 	}
 	// THE DEADLINE IT WAS ISSUED WITH, which is the one its link keeps: a
 	// retry an hour later is not a later invitation.
@@ -2919,8 +2882,8 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 			return err
 		}
 		if person.Kind != iam.KindPerson {
-			return fmt.Errorf("%w: %s is a %s, and only a person holds a "+
-				"password", ErrRefused, in.PersonID, person.Kind)
+			return fmt.Errorf("%w: %s is a %s, and only people have passwords",
+				ErrRefused, in.PersonID, person.Kind)
 		}
 		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
@@ -3071,14 +3034,13 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	// the ciphertext the record carries would be whichever run landed.
 	sealedName := ""
 	if in.Name != nil && len(*in.Name) > MaxName {
-		return statelog.Result{}, fmt.Errorf("%w: the name is %d bytes and the "+
-			"cap is %d", ErrInvalid, len(*in.Name), MaxName)
+		return statelog.Result{}, fmt.Errorf("%w: the name is %d bytes, "+
+			"and the limit is %d", ErrInvalid, len(*in.Name), MaxName)
 	}
 	if in.Name != nil {
 		if w.sealer == nil {
-			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
-				"cannot change a name: it has %s, and a name is sealed "+
-				"before it is published", w.missingKeys())
+			return statelog.Result{}, fmt.Errorf("iamdomain: this node can't "+
+				"change names: it has %s", w.missingKeys())
 		}
 		var err error
 		if sealedName, err = w.sealer.Seal(in.PersonID, FieldName,
@@ -3177,13 +3139,12 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 func keepsStanding(held, updated Person) error {
 	switch {
 	case updated.Kind != held.Kind:
-		return fmt.Errorf("%w: a principal's kind never changes — this one "+
-			"is a %s; remove it and create a %s instead", ErrInvalid,
+		return fmt.Errorf("%w: an account's kind can't change (this one is a "+
+			"%s). Remove it and add a %s instead", ErrInvalid,
 			held.Kind, updated.Kind)
 	case updated.Stage != held.Stage:
-		return fmt.Errorf("%w: a stage moves only through a stage change, "+
-			"which ends what a stage that may not act holds — not through an "+
-			"edit of the person's document", ErrInvalid)
+		return fmt.Errorf("%w: a stage can't be changed with an edit. Use a "+
+			"stage change instead", ErrInvalid)
 	}
 	return nil
 }
@@ -3218,13 +3179,11 @@ func (w *Writer) MayConfer(before, after []iam.Grant) error {
 			continue
 		}
 		if !g.Valid() {
-			return fmt.Errorf("%w: %q is not a permission this build knows, so "+
-				"it cannot be added — one already on the row is kept, and may "+
-				"be removed. The set is %v", ErrRefused, g, iam.AllGrants)
+			return fmt.Errorf("%w: %q isn't a permission. Choose from %v",
+				ErrRefused, g, iam.AllGrants)
 		}
-		return fmt.Errorf("%w: conferring %s needs the same grant, and this "+
-			"party holds %v — a caller may not hand out what they do not "+
-			"themselves hold, on their own record or on anybody else's",
+		return fmt.Errorf("%w: you can't give %s because you don't have "+
+			"it (you have %v)",
 			ErrRefused, g, w.Grants)
 	}
 	return nil
