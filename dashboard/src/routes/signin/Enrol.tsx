@@ -21,8 +21,11 @@
  */
 
 import { useState } from "react";
+import { Button, useToast } from "@crewlethq/ui";
 import { useRoute } from "~/app/router.tsx";
-import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
+import { refusalText } from "~/lib/refusal.ts";
+import { signOut, useSignedIn, type SignedInAs } from "~/lib/session.ts";
+import { useClient } from "~/lib/store-hooks.ts";
 import { FirstRecoveryCodes, SecondFactorSetup } from "./SecondFactor.tsx";
 import { SignInPage } from "./SignInPage.tsx";
 
@@ -37,19 +40,42 @@ export function Enrol() {
   return (
     <SignInPage
       title={enrolled ? "Save your recovery codes" : "Set up two-step verification"}
-      lede={
-        enrolled
-          ? undefined
-          : "This company asks everybody who signs in with a password to confirm it with an authenticator app as well. Until you have added one, nothing else opens."
-      }
+      lede={enrolled ? undefined : "This company requires it."}
     >
       {enrolled ? (
         <FirstRecoveryCodes onDone={() => signedIn(enrolled, next)} />
       ) : (
-        <SecondFactorSetup
-          onEnrolled={(answer) => setEnrolled(answer.session ?? { status: "signed_in" })}
-        />
+        <>
+          <SecondFactorSetup
+            onEnrolled={(answer) => setEnrolled(answer.session ?? { status: "signed_in" })}
+          />
+          <SignOutInstead />
+        </>
       )}
     </SignInPage>
+  );
+}
+
+/**
+ * THE WAY OUT of a screen nothing else opens past: somebody without their
+ * phone, or signed in to the wrong account, is otherwise stuck here.
+ */
+function SignOutInstead() {
+  const toast = useToast();
+  const { socket } = useClient();
+  return (
+    <div>
+      <Button
+        size="small"
+        variant="ghost"
+        onClick={() => {
+          signOut(socket).catch((err: unknown) =>
+            toast.failed(`Signing out did not go through. ${refusalText(err)}`),
+          );
+        }}
+      >
+        Sign out
+      </Button>
+    </div>
   );
 }

@@ -123,7 +123,9 @@ function alerts(): string[] {
 }
 
 async function confirmCode(code: string) {
-  fireEvent.change(await screen.findByLabelText(/six-digit code/i), { target: { value: code } });
+  fireEvent.change(await screen.findByLabelText(/^code from the app/i), {
+    target: { value: code },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 }
 
@@ -159,7 +161,7 @@ describe("enrolling", () => {
     await mount();
 
     expect(await screen.findByText(groupedKey("JBSWY3DPEHPK3PXPJBSWY3DP"))).toBeDefined();
-    expect(screen.getByRole("link", { name: "open it in the app" }).getAttribute("href")).toBe(
+    expect(screen.getByRole("link", { name: "Open it in your app" }).getAttribute("href")).toBe(
       (SEED.body as { uri: string }).uri,
     );
     // THE SAME URI, drawn to scan and read back by a decoder.
@@ -200,7 +202,7 @@ describe("enrolling", () => {
     for (const code of CODES) expect(await screen.findByText(code)).toBeDefined();
     expect(sent.filter((s) => s.path === "/auth/totp/recovery")).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole("button", { name: /I have saved them/ }));
+    fireEvent.click(screen.getByRole("button", { name: "I’ve saved them" }));
     await waitFor(() => expect(location.hash).toBe(NEXT));
     // THE SOCKET WAS REFUSED under the restricted session, and the frame
     // the reader lands in dials it under the whole one; and the need that
@@ -232,7 +234,7 @@ describe("enrolling", () => {
         "That code does not match the secret. Check the authenticator app has the right account, and that this device's clock is correct.",
       ),
     );
-    expect((screen.getByLabelText(/six-digit code/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/^code from the app/i) as HTMLInputElement).value).toBe("");
   });
 
   // A PASSWORD NEVER REPLACES A FACTOR: a session that could only enrol,
@@ -266,7 +268,7 @@ describe("enrolling", () => {
     });
     await mount();
     await confirmCode("123456");
-    fireEvent.click(await screen.findByRole("button", { name: "Continue without recovery codes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
     await waitFor(() => expect(location.hash).toBe(NEXT));
   });
 });

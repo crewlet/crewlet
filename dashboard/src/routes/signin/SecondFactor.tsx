@@ -116,7 +116,7 @@ export function SecondFactorSetup({
           </Button>
         }
       >
-        {unread} Nothing has been set up yet.
+        {unread} Nothing was set up.
       </Callout>
     );
   }
@@ -138,11 +138,11 @@ export function SecondFactorSetup({
             </Text>
             <QrCode value={seed.uri} label="QR code for your authenticator app" />
             <Text as="p" variant="body">
-              Cannot scan it? On this device,{" "}
+              Can’t scan it?{" "}
               <a className="prose-link" href={seed.uri}>
-                open it in the app
+                Open it in your app
               </a>
-              ; on another, type this key into it.
+              , or type this key.
             </Text>
             <div className="signin-row">
               <code className="inline">{groupedKey(seed.secret)}</code>
@@ -151,10 +151,7 @@ export function SecondFactorSetup({
           </div>
         </li>
         <li>
-          <FormField
-            label="The six-digit code the app now shows"
-            helper="It changes every thirty seconds; any current one works."
-          >
+          <FormField label="Code from the app" helper="The 6-digit code it shows now.">
             {(field) => (
               <Input
                 id={field.id}
@@ -256,28 +253,26 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
     return (
       <div className="signin-form">
         <Callout variant="warning" role="alert">
-          {refusal} Your authenticator is set up; these codes are the way back in if you lose it.
+          {refusal} Couldn’t create recovery codes.
         </Callout>
         <Button variant="primary" onClick={() => void issue()}>
           Try again
         </Button>
         <Button variant="ghost" onClick={onDone}>
-          Continue without recovery codes
+          Skip for now
         </Button>
       </div>
     );
   }
-  if (!codes) return <Skeleton variant="text" rows={4} label="Issuing recovery codes" />;
+  if (!codes) return <Skeleton variant="text" rows={4} label="Creating recovery codes" />;
   return (
     <div className="signin-form">
       <Text as="p" variant="body">
-        Your authenticator is set up. Keep these recovery codes somewhere safe: each one signs you
-        in once in place of a code from the app. <strong>They are shown this once</strong> — the
-        engine keeps only a fingerprint of each and cannot show them again.
+        Save these recovery codes. Each works once. <strong>You won’t see them again.</strong>
       </Text>
       <RecoveryCodeList codes={codes} />
       <Button variant="primary" onClick={onDone}>
-        I have saved them — continue
+        I’ve saved them
       </Button>
     </div>
   );
@@ -328,14 +323,12 @@ export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClos
         <FirstRecoveryCodes onDone={onClose} />
       ) : enrolled ? (
         <Text as="p" variant="body">
-          Your authenticator is set up, and signing in asks for its code from now on. Codes from the
-          app it replaced no longer work; your recovery codes are unchanged.
+          Authenticator set up. Codes from your old app stop working.
         </Text>
       ) : (
         <>
           <Text as="p" variant="body" tone="secondary">
-            Signing in will ask for a code from this app as well as your password. If you already
-            use one, this replaces it.
+            You’ll need a code from this app to sign in. Replaces any earlier app.
           </Text>
           <SecondFactorSetup onEnrolled={() => setEnrolled(true)} />
         </>
@@ -375,12 +368,10 @@ export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose:
       // claim a person would find out was false on the day they need it.
       const unknown = err instanceof RestError && (err.status === 503 || err.status === 0);
       const aftermath = unknown
-        ? held
-          ? "It is not known whether a new set was stored, which would retire the one you hold — issue a new set to be sure."
-          : "It is not known whether a set was stored — issue a new set to be sure."
+        ? "Couldn’t confirm new codes were saved. Create a new set."
         : held
-          ? "No codes were issued; the set you hold still works."
-          : "No codes were issued.";
+          ? "No codes created. Your current codes still work."
+          : "No codes created.";
       setRefusal(`${refusalText(err)} ${aftermath}`);
     } finally {
       setBusy(false);
@@ -400,7 +391,7 @@ export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose:
       footer={
         codes ? (
           <Button variant="primary" onClick={onClose}>
-            I have saved them
+            I’ve saved them
           </Button>
         ) : (
           <>
@@ -408,7 +399,7 @@ export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose:
               Cancel
             </Button>
             <Button variant="primary" onClick={() => void issue()} disabled={busy}>
-              {busy ? "Issuing" : "Issue new codes"}
+              {busy ? "Creating" : "Create new codes"}
             </Button>
           </>
         )
@@ -417,15 +408,15 @@ export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose:
       {codes ? (
         <>
           <Text as="p" variant="body">
-            {held && "Your earlier codes no longer work. "}Keep these somewhere safe:{" "}
-            <strong>they are shown this once</strong>.
+            {held && "Old codes stopped working. "}Save these now.{" "}
+            <strong>You won’t see them again.</strong>
           </Text>
           <RecoveryCodeList codes={codes} />
         </>
       ) : (
         <Text as="p" variant="body" tone="secondary">
-          Each recovery code signs you in once in place of a code from your authenticator, for the
-          day you do not have it.{held && " Issuing a new set retires the one you hold now."}
+          Each code works once, for when you don’t have your app.
+          {held && " A new set replaces the old one."}
         </Text>
       )}
       {refusal && (

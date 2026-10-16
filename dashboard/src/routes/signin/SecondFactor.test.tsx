@@ -84,7 +84,7 @@ describe("recovery codes", () => {
     await screen.findByRole("dialog", { name: "Recovery codes" });
     expect(sent.filter((s) => s.path === "/auth/totp/recovery")).toEqual([]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Issue new codes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create new codes" }));
     expect(await screen.findByText("a1b2-c3d4")).toBeDefined();
     expect(screen.getByText("e5f6-g7h8")).toBeDefined();
     expect(sent.filter((s) => s.path === "/auth/totp/recovery")).toHaveLength(1);
@@ -102,10 +102,10 @@ describe("recovery codes", () => {
       engine({ "POST /auth/totp/recovery": { status: 200, body: { codes: ["a1b2-c3d4"] } } });
       dialog(held);
       await screen.findByRole("dialog", { name: "Recovery codes" });
-      expect(screen.queryByText(/retires the one you hold/) !== null).toBe(earlier);
-      fireEvent.click(screen.getByRole("button", { name: "Issue new codes" }));
+      expect(screen.queryByText(/A new set replaces the old one/) !== null).toBe(earlier);
+      fireEvent.click(screen.getByRole("button", { name: "Create new codes" }));
       await screen.findByText("a1b2-c3d4");
-      expect(screen.queryByText(/earlier codes no longer work/) !== null).toBe(earlier);
+      expect(screen.queryByText(/Old codes stopped working/) !== null).toBe(earlier);
     },
   );
 
@@ -117,8 +117,10 @@ describe("recovery codes", () => {
       },
     });
     dialog();
-    fireEvent.click(await screen.findByRole("button", { name: "Issue new codes" }));
-    expect(await screen.findByText(/It is not known whether a new set was stored/)).toBeDefined();
+    fireEvent.click(await screen.findByRole("button", { name: "Create new codes" }));
+    expect(
+      await screen.findByText(/Couldn’t confirm new codes were saved\. Create a new set\./),
+    ).toBeDefined();
     expect(screen.queryByText(/still works/)).toBeNull();
   });
 });
@@ -147,7 +149,7 @@ describe("setting up an authenticator", () => {
     // ASKED AND NOT ANSWERED: no code, no key and no link stand in for a seed.
     expect(screen.queryByRole("img", QR)).toBeNull();
     expect(screen.queryByText(groupedKey(SECRET))).toBeNull();
-    expect(screen.queryByRole("link", { name: "open it in the app" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open it in your app" })).toBeNull();
 
     answer(SEED);
     // EXACTLY THE URI THE ENGINE ANSWERED, read back off the drawing by a
@@ -161,7 +163,9 @@ describe("setting up an authenticator", () => {
     setup();
     await screen.findByRole("img", QR);
     expect(screen.getByText(groupedKey(SECRET))).toBeDefined();
-    expect(screen.getByRole("link", { name: "open it in the app" }).getAttribute("href")).toBe(URI);
+    expect(screen.getByRole("link", { name: "Open it in your app" }).getAttribute("href")).toBe(
+      URI,
+    );
     expect(screen.getByRole("button", { name: "Copy key" })).toBeDefined();
   });
 
@@ -182,9 +186,9 @@ describe("setting up an authenticator", () => {
     rerender(tree(true));
     expect(scan(await screen.findByRole("img", QR))).toBe(URI);
     expect(sent.filter((s) => s.path === "/auth/totp")).toHaveLength(1);
-    fireEvent.change(screen.getByLabelText(/six-digit code/i), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText(/^code from the app/i), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await screen.findByText(/Your authenticator is set up/);
+    await screen.findByText(/Authenticator set up\./);
     expect(screen.queryByRole("img", QR)).toBeNull();
     expect(screen.queryByText(groupedKey(SECRET))).toBeNull();
   });

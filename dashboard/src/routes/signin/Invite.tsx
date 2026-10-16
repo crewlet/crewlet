@@ -41,9 +41,10 @@
  *
  * Every person holds a human seat, so every invitation names the one its
  * redemption binds them to — and a redemption is refused when the chart no
- * longer holds it as a human seat. The view says which seat it is, or — a seat
- * with no handle — that the chart has none to name; this screen warns before
- * the form, since a warning after a password is typed is a wasted form.
+ * longer holds it as a human seat. The view says which seat it is, or (a seat
+ * with no handle) that the chart has none to name; this screen then shows
+ * only that message, with no form, since a form that can only be refused is
+ * wasted work.
  *
  * # A browser already signed in is told so
  *
@@ -56,7 +57,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button, Callout, EmptyState, FormField, Input, Skeleton, Text } from "@crewlethq/ui";
-import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { loginProblem } from "~/lib/login.ts";
@@ -73,16 +74,16 @@ type Read =
   | { state: "failed"; sentence: string };
 
 export function Invite({ link }: { link: string }) {
+  const nav = useNavigator();
   const parsed = parseLink(link);
   if (!parsed) {
     return (
-      <SignInPage title="This invitation link is incomplete">
-        <EmptyState
-          icon={<CompassGlyph size={32} />}
-          title="Part of the link is missing."
-          description="An invitation link ends in two parts joined by a dot. Copy the whole link from the message it came in, or ask whoever sent it for a new one."
-          headingLevel="none"
-        />
+      <SignInPage title="This invitation link is incomplete" lede="Copy the whole link.">
+        <div>
+          <Button variant="secondary" onClick={() => nav.to(["login"])}>
+            Go to sign in
+          </Button>
+        </div>
       </SignInPage>
     );
   }
@@ -137,7 +138,7 @@ function Invitation({ id, secret }: { id: string; secret: string }) {
               </Button>
             }
           >
-            {read.sentence} Nothing about the invitation has been decided — it has not been used.
+            {read.sentence} Not used. Try again.
           </Callout>
         </SignInPage>
       );
@@ -156,11 +157,11 @@ function Invitation({ id, secret }: { id: string; secret: string }) {
 function Spent({ sentence }: { sentence: string }) {
   const nav = useNavigator();
   return (
-    <SignInPage title="This invitation can no longer be used">
+    <SignInPage title="This invitation can’t be used">
       <EmptyState
         icon={<KeyGlyph size={32} />}
         title={sentence}
-        description="A link works once, and for a limited time. If you already joined with it, sign in instead."
+        description="Already joined? Sign in."
         headingLevel="none"
         action={
           <Button variant="secondary" onClick={() => nav.to(["login"])}>
@@ -184,8 +185,11 @@ function Redeem({
   onSpent: (sentence: string) => void;
 }) {
   const signedIn = useSignedIn();
+  const nav = useNavigator();
   const [login, setLogin] = useState(view.login ?? "");
-  const [name, setName] = useState("");
+  // PREFILLED WITH THE SEAT'S NAME, which already names the person; they can
+  // still change it.
+  const [name, setName] = useState(view.seat?.name ?? "");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [tried, setTried] = useState(false);
@@ -221,46 +225,53 @@ function Redeem({
   }
 
   const seat = view.seat;
-  return (
-    <SignInPage
-      title="Join your company on Crewlet"
-      lede={
+  const title = "Join your company on Crewlet";
+  const lede = (
+    <>
+      {view.invited_by ? (
         <>
-          {view.invited_by ? (
-            <>
-              <strong>{view.invited_by}</strong> invited{" "}
-            </>
-          ) : (
-            "This is an invitation for "
-          )}
-          <strong>{view.email}</strong>. Choose how you sign in, and you are in.
+          <strong>{view.invited_by}</strong> invited you as{" "}
         </>
-      }
-    >
+      ) : (
+        "You’re invited as "
+      )}
+      <strong>{view.email}</strong>.
+    </>
+  );
+
+  // THE ENGINE REFUSES THIS REDEMPTION, and says so only once it is posted:
+  // the seat it binds is no longer a human seat of this node's chart. So the
+  // form is not offered at all, since filling it in could only end in that
+  // refusal; somebody who already joined is offered the sign-in instead.
+  if (!seat?.handle) {
+    return (
+      <SignInPage title={title} lede={lede}>
+        <Callout
+          variant="warning"
+          action={
+            <Button size="small" variant="secondary" onClick={() => nav.to(["login"])}>
+              Sign in
+            </Button>
+          }
+        >
+          This invitation’s seat was removed. Ask for a new one.
+        </Callout>
+      </SignInPage>
+    );
+  }
+
+  return (
+    <SignInPage title={title} lede={lede}>
       {view.signed_in_as && (
         <Callout variant="warning">
-          This browser is signed in as <strong>{view.signed_in_as}</strong>. Joining signs that
-          session out and signs you in as the person this invitation is for.
+          Signed in as <strong>{view.signed_in_as}</strong>. Joining signs you out first.
         </Callout>
       )}
-      {seat?.handle ? (
-        <Callout variant="neutral">
-          <Text as="span" variant="body">
-            You will hold the seat <strong>{seat.name || seat.handle}</strong>{" "}
-            <code className="inline">{seat.handle}</code> in the org chart: work addressed to it
-            reaches you, and your changes are recorded under it.
-          </Text>
-        </Callout>
-      ) : (
-        // THE ENGINE REFUSES THIS REDEMPTION, and says so only once it is
-        // posted: the seat it binds is no longer a human seat of this node's
-        // chart. Saying it before the person types a password is the
-        // difference between a warning and a wasted form.
-        <Callout variant="warning">
-          The seat this invitation was for is no longer in the org chart, so redeeming it will be
-          refused. Ask whoever sent it for a new one.
-        </Callout>
-      )}
+      <Callout variant="neutral">
+        <Text as="span" variant="body">
+          You’ll join as <strong>{seat.name || seat.handle}</strong> (@{seat.handle}).
+        </Text>
+      </Callout>
       <form
         className="signin-form"
         onSubmit={(e) => {
@@ -281,7 +292,7 @@ function Redeem({
         />
         <FormField
           label="Login"
-          helper="How you sign in, beside your address. Lowercase words joined by dots, such as jane.doe."
+          helper="Lowercase words with dots, like jane.doe."
           error={tried ? (loginMissing ? "Choose a login." : (loginWrong ?? undefined)) : undefined}
         >
           {(field) => (

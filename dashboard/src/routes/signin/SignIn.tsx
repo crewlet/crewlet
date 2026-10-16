@@ -22,11 +22,11 @@
  * the day sign-in itself is broken. On a deployment whose `/health` says
  * `identity: unclaimed` — nobody has JOINED yet, which an open invitation does
  * not change, since redeeming it is what creates its person — it is the ONLY
- * way in, so the token form is open from the start and the page says how to
- * begin: sign in with the token, then open Agents › Org chart, choose your
- * human seat and invite or create yourself on it — every person holds one, so
- * a seat is where a person comes from — or open the link of an invitation
- * already issued. `unknown` (a node that cannot read its identity estate) and a
+ * way in, so the token form comes first, open, with the primary button, and
+ * the page says how to begin: sign in with the token, then invite yourself
+ * from Agents › Org chart. The password form is still served there, folded
+ * behind "Sign in with a password instead", so the first thing a founder
+ * tries is the one thing that works. `unknown` (a node that cannot read its identity estate) and a
  * `/health` that did not answer are not "unclaimed": they keep the ordinary
  * page, because telling somebody to invite a founder into a company that has
  * one is the wrong instruction to guess.
@@ -142,17 +142,15 @@ export function SignIn() {
       title="Sign in to Crewlet"
       lede={
         unclaimed
-          ? "Nobody has joined this deployment yet."
+          ? "Nobody has joined yet. Sign in with an API token."
           : reset
-            ? "Your password is set. Sign in with it — a second factor you hold is still asked for."
-            : "Use the login or email address your invitation was for."
+            ? "Your password is set. Sign in below."
+            : "Sign in with your login or email."
       }
     >
       {read && current === null && (
         <Callout variant="warning" title="You were signed out">
-          Your session in this browser ended without a sign-out here: it was signed out from another
-          browser or tab, ended by a password change or by an administrator, or it timed out. Sign
-          in again to carry on.
+          Your session ended. Sign in again.
         </Callout>
       )}
       {current && (
@@ -164,38 +162,61 @@ export function SignIn() {
             </Button>
           }
         >
-          This browser is already signed in as <code className="inline">{current.login}</code>.
-          Signing in below replaces that session in this browser.
+          Signed in as <code className="inline">{current.login}</code>. Signing in here switches
+          accounts.
         </Callout>
       )}
-      {unclaimed && (
-        <Callout variant="neutral" title="Getting started">
-          Sign in with one of this deployment&rsquo;s API tokens — the founder token its{" "}
-          <code className="inline">crewlet.yaml</code> declares under{" "}
-          <code className="inline">api.auth.tokens</code> — then open Agents › Org chart, choose
-          your human seat and invite or create yourself on it. The link it shows is where you choose
-          your password; if you have a link already, open it instead.
-        </Callout>
+      {unclaimed ? (
+        <>
+          <Callout variant="neutral" title="Getting started">
+            Sign in with your API token, then invite yourself from Agents › Org chart.
+          </Callout>
+          <TokenForm open onSignedIn={(answer) => signedIn(answer, next)} />
+          {/* THE TOKEN IS THE ONLY WAY IN before anybody joins, so the password
+              form, which is always served, waits folded below it. */}
+          <Disclosure title="Sign in with a password instead" size="compact" variant="aside">
+            <PasswordForm
+              focus={false}
+              typed={typed}
+              onSignedIn={(answer) => signedIn(answer, next)}
+            />
+          </Disclosure>
+        </>
+      ) : (
+        <>
+          <PasswordForm focus typed={typed} onSignedIn={(answer) => signedIn(answer, next)} />
+          <TokenForm open={false} onSignedIn={(answer) => signedIn(answer, next)} />
+        </>
       )}
-      <PasswordForm
-        focus={!unclaimed}
-        typed={typed}
-        onSignedIn={(answer) => signedIn(answer, next)}
-      />
-      <TokenForm open={unclaimed} onSignedIn={(answer) => signedIn(answer, next)} />
     </SignInPage>
   );
 }
 
-/** How long until a throttled attempt is looked at again, held on the button. */
-function useWait(): [boolean, (seconds: number) => void] {
+/**
+ * The whole seconds until a throttled attempt is looked at again, 0 when there
+ * is no wait. It ticks once a second, so the button can count it down.
+ */
+function useWait(): [number, (seconds: number) => void] {
   const [until, setUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (until === 0) return;
-    const timer = setTimeout(() => setUntil(0), Math.max(0, until - Date.now()));
-    return () => clearTimeout(timer);
+    const timer = setInterval(() => {
+      const tick = Date.now();
+      setNow(tick);
+      if (tick >= until) setUntil(0);
+    }, 1000);
+    return () => clearInterval(timer);
   }, [until]);
-  return [until !== 0, (seconds) => setUntil(Date.now() + seconds * 1000)];
+  const left = until === 0 ? 0 : Math.max(0, Math.ceil((until - now) / 1000));
+  return [
+    left,
+    (seconds) => {
+      const start = Date.now();
+      setNow(start);
+      setUntil(start + seconds * 1000);
+    },
+  ];
 }
 
 function PasswordForm({
@@ -217,7 +238,8 @@ function PasswordForm({
   const [asked, setAsked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const [waiting, wait] = useWait();
+  const [left, wait] = useWait();
+  const waiting = left > 0;
 
   // A CHANGED LOGIN OR PASSWORD IS A NEW ATTEMPT, and the code prompt was an
   // answer about the old one.
@@ -297,10 +319,7 @@ function PasswordForm({
         )}
       </FormField>
       {asked && (
-        <FormField
-          label="Code"
-          helper="The six-digit code from your authenticator app, or one of your recovery codes."
-        >
+        <FormField label="Code" helper="The 6-digit code from your app, or a recovery code.">
           {(field) => (
             <Input
               id={field.id}
@@ -322,8 +341,11 @@ function PasswordForm({
         </Callout>
       )}
       <Button type="submit" variant="primary" disabled={busy || waiting || !ready}>
-        {busy ? "Signing in" : "Sign in"}
+        {busy ? "Signing in" : waiting ? `Try again in ${left}s` : "Sign in"}
       </Button>
+      <Text as="p" variant="caption" tone="secondary">
+        Forgot your password? Ask an admin for a reset link.
+      </Text>
     </form>
   );
 }
@@ -364,10 +386,7 @@ function TokenForm({
         void submit();
       }}
     >
-      <FormField
-        label="API token"
-        helper="One of this deployment's api.auth.tokens values. It is exchanged for a one-hour session and this browser does not keep it."
-      >
+      <FormField label="API token" helper="A token from api.auth.tokens. Signs you in for an hour.">
         {(field) => (
           <Input
             id={field.id}
@@ -387,8 +406,12 @@ function TokenForm({
           {refusal}
         </Callout>
       )}
-      <Button type="submit" variant="secondary" disabled={busy || typed.trim() === ""}>
-        {busy ? "Signing in" : "Sign in with the token"}
+      <Button
+        type="submit"
+        variant={open ? "primary" : "secondary"}
+        disabled={busy || typed.trim() === ""}
+      >
+        {busy ? "Signing in" : "Sign in with token"}
       </Button>
     </form>
   );
@@ -397,8 +420,7 @@ function TokenForm({
   return (
     <Disclosure title="Use an API token instead" size="compact" variant="aside">
       <Text as="p" variant="body" tone="secondary">
-        For an operator before anybody has been invited, or when signing in with a password is not
-        working.
+        For first-time setup, or when password sign-in fails.
       </Text>
       {form}
     </Disclosure>

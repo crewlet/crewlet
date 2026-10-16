@@ -163,7 +163,9 @@ describe("reading the link", () => {
   test("a link cut short says so, and asks the engine nothing", async () => {
     const sent = engine({});
     await mount(ID);
-    expect(screen.getByText("Part of the link is missing.")).toBeDefined();
+    expect(screen.getByText("Copy the whole link.")).toBeDefined();
+    // NOT A DEAD END: the page offers the sign-in.
+    expect(screen.getByRole("button", { name: "Go to sign in" })).toBeDefined();
     expect(sent.filter((s) => s.url.includes("/auth/invite/"))).toEqual([]);
   });
 });
@@ -180,6 +182,8 @@ describe("what the screen shows before anything is spent", () => {
     expect(screen.getByText("ana.founder")).toBeDefined();
     expect(screen.getByText("Jane Doe")).toBeDefined();
     expect(screen.getByText(/At least 12 characters/)).toBeDefined();
+    // THE SEAT ALREADY NAMES THE PERSON, so their name starts filled in.
+    expect((screen.getByLabelText(/^Your name/) as HTMLInputElement).value).toBe("Jane Doe");
   });
 
   // REDEEMING ENDS THE SESSION THIS BROWSER HOLDS, so the form says whose it
@@ -195,13 +199,13 @@ describe("what the screen shows before anything is spent", () => {
     await mount();
     await screen.findByLabelText("Login");
     expect(screen.getByText("dave.lee")).toBeDefined();
-    expect(screen.getByText(/Joining signs that session out/)).toBeDefined();
+    expect(screen.getByText(/Joining signs you out first/)).toBeDefined();
   });
 
   // EVERY INVITATION NAMES A SEAT, and a redemption is refused when the chart
-  // no longer holds it as a human seat — which the view says with a seat that
-  // has no handle. Said before the form: a warning after a password is typed
-  // is a wasted form. A view with no seat at all is not one the engine sends
+  // no longer holds it as a human seat, which the view says with a seat that
+  // has no handle. So no form is offered: filling it in could only end in the
+  // refusal, and the one next step is the sign-in. A view with no seat at all is not one the engine sends
   // (a link naming none is the dead link's 410), and it is warned the same
   // rather than offered as a seat. The CONTROL is the view above, which names
   // a seat and draws no warning. Mutation: draw the warning only for a seat
@@ -210,28 +214,29 @@ describe("what the screen shows before anything is spent", () => {
   test.each([
     ["names a seat the chart no longer holds", { seat: {} }],
     ["names no seat at all", { seat: undefined }],
-  ])("a link that %s warns before any password that redeeming is refused", async (_, seat) => {
+  ])("a link that %s says so and offers no form", async (_, seat) => {
     engine({ [`GET ${PATH}`]: { status: 200, body: { ...(VIEW.body as object), ...seat } } });
     await mount();
-    const login = await screen.findByLabelText("Login");
-    const warning = screen.getByText(/so redeeming it will be refused/);
-    expect(warning.compareDocumentPosition(login) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByText(/You will hold the seat/)).toBeNull();
+    await screen.findByText("This invitation’s seat was removed. Ask for a new one.");
+    expect(screen.queryByLabelText("Login")).toBeNull();
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect(screen.queryByText(/You’ll join as/)).toBeNull();
   });
 
   test("a link naming a seat says the person will hold it, and warns nothing", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
     await mount();
     await screen.findByLabelText("Login");
-    expect(screen.getByText(/You will hold the seat/)).toBeDefined();
-    expect(screen.queryByText(/so redeeming it will be refused/)).toBeNull();
+    expect(screen.getByText(/You’ll join as/)).toBeDefined();
+    expect(screen.queryByText(/seat was removed/)).toBeNull();
   });
 
   test("a browser signed in as nobody is told nothing about a session", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
     await mount();
     await screen.findByLabelText("Login");
-    expect(screen.queryByText(/Joining signs that session out/)).toBeNull();
+    expect(screen.queryByText(/Joining signs you out first/)).toBeNull();
   });
 
   // ONE ANSWER for redeemed, withdrawn, expired and a wrong secret — in the
@@ -261,7 +266,7 @@ describe("what the screen shows before anything is spent", () => {
     });
     await mount();
     const again = await screen.findByRole("button", { name: "Try again" });
-    expect(alerts().join(" ")).toContain("it has not been used");
+    expect(alerts().join(" ")).toContain("Not used. Try again.");
     fireEvent.click(again);
     expect(await screen.findByLabelText("Login")).toBeDefined();
   });
@@ -275,7 +280,7 @@ describe("redeeming it", () => {
     type("Password", "too-short");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
-    expect(await screen.findByText(/is 9 characters, and the minimum is 12/)).toBeDefined();
+    expect(await screen.findByText("Use at least 12 characters (this has 9).")).toBeDefined();
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
@@ -307,7 +312,7 @@ describe("redeeming it", () => {
     type("Confirm password", "correct horse battery stable");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
-    expect(await screen.findByText("The two passwords are not the same.")).toBeDefined();
+    expect(await screen.findByText("The passwords don’t match.")).toBeDefined();
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
