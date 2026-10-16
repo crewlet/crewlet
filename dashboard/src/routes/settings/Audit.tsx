@@ -89,7 +89,16 @@
 
 import { useMemo, useRef } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { Callout, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyValue,
+  Input,
+  Select,
+  Skeleton,
+  Tag,
+  DownloadButton,
+} from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
@@ -98,7 +107,6 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DownloadButton } from "~/ui/primitives.tsx";
 import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
@@ -891,7 +899,6 @@ export function Audit() {
             the read the download is about to make — and said nothing either
             way; `DownloadButton` waits a task and says what happened. */}
         <DownloadButton
-          variant="ghost"
           label="Export CSV"
           filename="crewlet-audit.csv"
           mime="text/csv;charset=utf-8"

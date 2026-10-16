@@ -88,14 +88,14 @@ and the next colour round the six, so a company growing one agent at a time is
 told apart before anybody has chosen; the suggestion is written into the new
 seat, where its author can change it.
 
-The fourth is a **QR code** (`ui/QrCode.tsx`), which is not colour at all but
-a symbol a camera reads: black modules on its own white plate, the quiet zone
-included, in the dark theme as in the light one and under forced colours too.
-A code is specified dark on light, and reading one inverted is something some
-scanners do and others do not, so a code inverted to suit the dark theme is
-one some authenticator apps will not read. Its two inks are literals in that one
-component, because no token is a fixed black and a fixed white; nothing reads
-state from them and nothing else is painted with them.
+The fourth is a **QR code** (`@crewlethq/ui`'s `QrCode`), which is not colour
+at all but a symbol a camera reads: black modules on its own white plate, the
+quiet zone included, in the dark theme as in the light one and under forced
+colours too. A code is specified dark on light, and reading one inverted is
+something some scanners do and others do not, so a code inverted to suit the
+dark theme is one some authenticator apps will not read. Its two inks are the
+`color.qr` tokens, which are the same in every palette; nothing reads state
+from them and nothing else is painted with them.
 
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -8460,8 +8460,8 @@ to.
    tell two things apart, use their names. The third-party app marks in
    `@crewlethq/icons`, the org charts' toned agent nodes (Agents › Org chart
    and Edit org), an agent's own profile icon, a Crewlet character in the
-   colour its author chose, and a QR code's black on white (`ui/QrCode.tsx`,
-   whose two inks are the one colour literal a component of ours holds) are
+   colour its author chose, and a QR code's black on white (`@crewlethq/ui`'s
+   `QrCode`, whose two inks are the fixed `color.qr` tokens) are
    the four bounded exceptions (see "The one rule" above); nothing else is. The character and colour lists are the
    contract's (`contract/avatar.ts`), held to the engine's and to the design
    system's, and one reading of them (`lib/avatar.ts`'s `avatarOf`) draws a

@@ -7,7 +7,7 @@
 
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag, CopyButton } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   FileTextGlyph,
@@ -18,11 +18,6 @@ import {
   UserGlyph,
   HashGlyph,
 } from "@crewlethq/icons/glyphs";
-// OURS, AND THERE IS NO PEER. `Copyable` renders the value it copies and is
-// named by it; this is a bare ACTION over text derived at press time — a
-// payload that is not on the screen as a string — with its own copied /
-// refused feedback. See the report.
-import { CopyButton } from "~/ui/primitives.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -280,6 +275,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   data.payload ? (
                     <CopyButton
                       text={() => JSON.stringify(data.payload, null, 2)}
+                      variant="secondary"
                       title="this event's payload, as JSON"
                     />
                   ) : undefined
@@ -434,6 +430,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                   actions={
                     <CopyButton
                       text={() => JSON.stringify(payload, null, 2)}
+                      variant="secondary"
                       title="this event's payload, as JSON"
                     />
                   }

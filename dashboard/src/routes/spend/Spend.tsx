@@ -44,7 +44,6 @@ import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { DownloadButton } from "~/ui/primitives.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { ByAgent } from "./ByAgent.tsx";
@@ -55,6 +54,7 @@ import { Hero } from "./Hero.tsx";
 import { PhaseChart } from "./PhaseChart.tsx";
 import { Workers } from "./Workers.tsx";
 import { agentLines, spendCsv, spendOffer, spendWindowParams, windowWords } from "./model.ts";
+import { DownloadButton } from "@crewlethq/ui";
 
 /** The dimensions the chart splits on — the contract's six, and nothing else. */
 const GROUP_VALUES: readonly string[] = GROUPS.map((g) => g.value);
@@ -113,7 +113,6 @@ export function Spend() {
       <PageActions>
         <TimeRangePicker range={range} ariaLabel="Window" />
         <DownloadButton
-          variant="ghost"
           label="Export"
           filename={`crewlet-spend-${rollup?.from ?? "window"}-${rollup?.to ?? ""}.csv`}
           mime="text/csv;charset=utf-8"

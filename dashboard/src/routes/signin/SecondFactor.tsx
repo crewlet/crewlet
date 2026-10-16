@@ -30,7 +30,7 @@
  * and one slip is a first code that does not match and the whole key typed
  * again. So the seed's `otpauth://` URI — the value the engine answered,
  * exactly, and the same one the link opens — is drawn as a QR code
- * ([QrCode], inline SVG, nothing fetched), and the key and the link stay
+ * (`@crewlethq/ui`'s `QrCode`, inline SVG, nothing fetched), and the key and the link stay
  * beside it for whoever cannot scan: an app on this same device opens the
  * link, and one that only takes typing gets the key, grouped in fours. The
  * code is drawn only while the seed is on screen, like the key, and the URI
@@ -38,10 +38,19 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Callout, FormField, Input, Modal, Skeleton, Text } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  CopyButton,
+  DownloadButton,
+  FormField,
+  Input,
+  Modal,
+  QrCode,
+  Skeleton,
+  Text,
+} from "@crewlethq/ui";
 import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
-import { CopyButton, DownloadButton } from "~/ui/primitives.tsx";
-import { QrCode } from "~/ui/QrCode.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useWaiting } from "~/lib/waiting.ts";
@@ -146,7 +155,7 @@ export function SecondFactorSetup({
             </Text>
             <div className="signin-row">
               <code className="inline">{groupedKey(seed.secret)}</code>
-              <CopyButton text={seed.secret} label="Copy key" variant="ghost" />
+              <CopyButton text={seed.secret} label="Copy key" />
             </div>
           </div>
         </li>
@@ -208,13 +217,8 @@ export function RecoveryCodeList({ codes }: { codes: readonly string[] }) {
         ))}
       </ul>
       <div className="signin-row">
-        <CopyButton text={text} label="Copy all" />
-        <DownloadButton
-          text={text}
-          filename="crewlet-recovery-codes.txt"
-          mime="text/plain;charset=utf-8"
-          label="Download"
-        />
+        <CopyButton text={text} label="Copy all" variant="secondary" />
+        <DownloadButton text={text} filename="crewlet-recovery-codes.txt" variant="secondary" />
       </div>
     </div>
   );

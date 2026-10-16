@@ -82,6 +82,8 @@ import {
   useToast,
   writeClipboard,
   type MenuItem,
+  CopyButton,
+  downloadText,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
@@ -102,14 +104,10 @@ import {
   SaveGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
-// STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` is a bare ACTION over
-// text derived at press time — `Copyable` renders the value it copies and is
-// named by it — and `downloadText` is the file save behind `DownloadButton`,
-// for a menu item: nothing over there saves a file at all.
 // `PhaseTag` has a real peer (`Tag` carries the three phase variants), but it
 // is a primitive in `~/ui`, so porting it is that file's half rather than a
 // copy inlined into a route. See the report.
-import { CopyButton, downloadText, PhaseTag, uiletTone, type Tone } from "~/ui/primitives.tsx";
+import { PhaseTag, uiletTone, type Tone } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -1814,7 +1812,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         description: "the same JSON, saved as a file",
         icon: <SaveGlyph size="sm" />,
         onSelect: () => {
-          const { started, name } = downloadText(turnJSON(), `turn-${turnId}.json`);
+          const { started, name } = downloadText(
+            turnJSON(),
+            `turn-${turnId}.json`,
+            "application/json;charset=utf-8",
+          );
           if (started) toast.ok(`Download started: ${name}`);
           else toast.show({ variant: "warning", title: "The browser refused the download" });
         },
@@ -2123,9 +2125,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     {rec.summary && (
                       <Disclosure
                         title="Turn summary event"
-                        actions={
-                          <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
-                        }
+                        actions={<CopyButton text={summaryJSON} title="copy this record" />}
                       >
                         <CodeBlock
                           plain
@@ -2139,13 +2139,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     {rec.learning && (
                       <Disclosure
                         title="Learning record"
-                        actions={
-                          <CopyButton
-                            text={learningJSON}
-                            variant="ghost"
-                            title="copy this record"
-                          />
-                        }
+                        actions={<CopyButton text={learningJSON} title="copy this record" />}
                       >
                         <CodeBlock
                           plain
