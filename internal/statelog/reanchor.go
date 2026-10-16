@@ -148,9 +148,11 @@ type ReanchorInputs struct {
 	// NIL FOR EVERY OTHER CASE: a recreated log is followed from its first
 	// record and an abandoned one from these rows' own checkpoint, so each
 	// applies everything past where it starts. And nil for a domain that
-	// claims no identity — the vectors — whose post-restore records are
-	// re-embeddings of sources: skipping them keeps these rows' vectors, which
-	// describe the sources these rows' own domains keep.
+	// claims no identity — the vectors and the usage days — which every data
+	// node re-anchors on its own copy, with no fleet guard and no walk of the
+	// tail. The vectors' post-restore records are re-embeddings of sources:
+	// skipping them keeps these rows' vectors, which describe the sources
+	// these rows' own domains keep.
 	Unheld *TailRecord
 
 	// Opened is the sequence of THIS node's own record opening the
