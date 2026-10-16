@@ -231,13 +231,14 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 		detail string
 	}{
 		{"a login outside a person's grammar",
-			fmt.Errorf("%w: \"token:ops\" is not a login a person may hold",
-				iamdomain.ErrInvalidLogin),
+			fmt.Errorf("%w: \"token:ops\" isn't a valid person login. Use "+
+				"lowercase words joined by dots, like jane.doe, up to 64 "+
+				"characters", iamdomain.ErrInvalidLogin),
 			http.StatusBadRequest, "token:ops"},
 		{"a value outside a bound the domain holds",
-			fmt.Errorf("%w: the name is 300 bytes and the cap is 256",
+			fmt.Errorf("%w: the name is 300 bytes, and the limit is 256",
 				iamdomain.ErrInvalid),
-			http.StatusBadRequest, "the cap is 256"},
+			http.StatusBadRequest, "the limit is 256"},
 		{"a login somebody holds",
 			&iamdomain.ErrTaken{Field: iamdomain.UniqueLogin, Value: "dana.sre",
 				Person: holder},

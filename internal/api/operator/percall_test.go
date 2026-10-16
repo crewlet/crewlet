@@ -2,6 +2,7 @@ package operator_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -155,8 +156,10 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 		t.Fatalf("the board was served after the tracker was withdrawn, on the "+
 			"session opened while it was held: %s", out)
 	}
-	if !strings.Contains(out, "refused") {
-		t.Errorf("the refusal does not read as one: %s", out)
+	// IN THE TOOL GATE'S OWN WORDS ([builtin.Refusal]), whatever they are:
+	// the verb, then why it did not run.
+	if lead := builtin.Refusal(tracker.ListWorkItemsTool, errors.New("")); !strings.HasPrefix(out, lead) {
+		t.Errorf("the refusal does not read as the tool gate's (%q): %s", lead, out)
 	}
 
 	// AND RESTORED, so the refusal above is the grant and not a session

@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 )
 
 // fifteen is a password fifteen characters long and on no blocklist: over the
@@ -106,8 +108,16 @@ func assertFloorAnswer(t *testing.T, what string, rec *httptest.ResponseRecorder
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	detail, _ := body["detail"].(string)
-	if want := "minimum is " + strconv.Itoa(floor); !strings.Contains(detail, want) {
-		t.Errorf("%s refused with %q, which does not say %q", what, detail, want)
+	// THE DOMAIN'S OWN REFUSAL, as the API boundary writes it: the floor
+	// is named in the words the strength check uses, whatever they are.
+	weak := credential.CheckStrength(fifteen, floor)
+	if weak == nil {
+		t.Fatalf("a floor of %d takes %q, so this case asserts nothing", floor, fifteen)
+	}
+	if want := httpjson.Sentence(weak.Error()); detail != want ||
+		!strings.Contains(detail, strconv.Itoa(floor)) {
+		t.Errorf("%s refused with %q, want %q naming the floor %d", what,
+			detail, want, floor)
 	}
 }
 

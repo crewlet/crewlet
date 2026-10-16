@@ -1669,7 +1669,8 @@ func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 	// calls dangling, in the rule's own words, and asks about nobody the
 	// directory does not bind — the service account acting as itself.
 	var asked []string
-	const why = `seat "founder" is a "agent" seat; bind them to another human seat, or remove them`
+	const why = `seat "founder" is a "agent" seat now, and only a "human" seat ` +
+		`can be held. Move them to another human seat, or remove them`
 	with := newRig(t, func(o *iamapi.Options) {
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			asked = append(asked, row.ID)
