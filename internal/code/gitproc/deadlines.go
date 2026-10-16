@@ -31,6 +31,12 @@ import (
 //     the engine's hook after both, since all three phases run inside one
 //     process: bounded by the client's leg alone, a client at the floor pace
 //     spends the whole budget uploading and the run is killed in index-pack.
+//   - A WALK OF A REPOSITORY'S HISTORY adds [HistoryWalk] to whatever else
+//     bounds it — a push's force check and its listings, and receive-pack's
+//     own connectivity check — because what such a walk costs is set by the
+//     repository and not by the push: a commit dated before its parent walks
+//     every commit there is, and a bound sized by the push alone refused a
+//     small push into a large history rather than letting it be slow.
 //
 // These are BOUNDS on a client that trickles. A client that stops moving is
 // ended by [TransferStall] long before either transfer deadline.
@@ -135,11 +141,65 @@ func UploadPackDeadline(liveBytes int64) time.Duration {
 	return transferDeadline(liveBytes)
 }
 
-// ReceivePackDeadline bounds one receive-pack. Its three phases run in series
-// in one process: the client's upload and index-pack's work over what arrived
-// (together the transfer formula over maxPushBytes), and then the engine's
-// proc-receive hook, whose own bound — the object-store put, the propose, the
-// pending wait — the caller passes as hook.
-func ReceivePackDeadline(maxPushBytes int64, hook time.Duration) time.Duration {
-	return transferDeadline(maxPushBytes) + hook
+// ReceivePackDeadline bounds one receive-pack into a repository holding
+// liveObjects objects. Its phases run in series in one process: the client's
+// upload and index-pack's work over what arrived (together the transfer
+// formula over maxPushBytes); git's own connectivity check of the new tips
+// against every ref, a walk of the history ([HistoryWalk]); and then the
+// engine's proc-receive hook, whose own bound — its scans and walks, the
+// object-store put, the propose, the pending wait — the caller passes as
+// hook.
+//
+// THE CONNECTIVITY CHECK IS GIT'S, and it walks by date whatever the
+// repository holds: `rev-list --objects --stdin --not --all`, with no flag
+// the engine can add, so a tip dated before its parent walks the whole
+// history with a commit-graph (which it reads in place of the commits, an
+// eighth of the cost: 0.65 µs a commit against 5.2) and without one. That is the one step of a push whose
+// cost follows the repository however its node is maintained, and this term
+// is what lets it be slow rather than refused.
+func ReceivePackDeadline(maxPushBytes, liveObjects int64, hook time.Duration) time.Duration {
+	return transferDeadline(maxPushBytes) + HistoryWalk(liveObjects) + hook
+}
+
+// WalkPerObject is what a walk of a repository's history is given for every
+// object the repository holds: the term a push's walks carry beside the one
+// sized by the push (HistoryWalk).
+//
+// git walks commits newest first BY DATE wherever it has no generation number
+// to stop on — every walk where the repository has no commit-graph, and a
+// walk that is not asked for in topological order everywhere — so a commit
+// dated before its parent (a person's skewed clock, a GIT_COMMITTER_DATE) is
+// a reason to walk every commit of the history. MEASURED with git 2.47.3, the
+// release the engine image ships, on four vCPUs, over the gigabyte history
+// BenchmarkPushSmall pushes (455 680 commits, 3.27 million objects; its
+// step= arms, a tip dated before the history began): with no commit-graph,
+// 5.0–5.5 µs a commit — the force check's merge-base 5.1, the listing of
+// what a push introduces 5.5, the search for a blob's path 5.0 and
+// receive-pack's connectivity check 5.2, 0.70–0.77 µs an object of that
+// history, 2.3–2.5 s a walk — and with one, the connectivity check 0.65 µs a
+// commit, while the walks the engine asks for by generation take a few
+// milliseconds whatever the tip's date.
+//
+// ELEVEN MICROSECONDS AN OBJECT: the term multiplies the repository's LIVE
+// OBJECTS, which the rows count and which bound its commits from above, so
+// its figure is the per-COMMIT cost, never the per-object one — a commit adds
+// at least itself, a tree and a blob, so commits are at most a third of a
+// history's objects and nearly all of them only in a history of commits that
+// change nothing, and a bound read off the gigabyte's seventh would refuse a
+// skewed push into a history of small commits. Twice the dearest measured
+// per-commit cost (the listing's 5.5 µs), for a node whose cores are shared
+// with the store and the broker; the largest repository the defaults admit
+// (some 60 million objects, code.DefaultRepoMaxBytes) is given eleven minutes
+// a walk, against the hours a pack of that size is given (PackWorkDeadline).
+const WalkPerObject = 11 * time.Microsecond
+
+// HistoryWalk bounds one walk of the whole history of a repository holding
+// objects live objects: objects × WalkPerObject. It is what any of a push's
+// walks may cost however small the push, and it is added to their other
+// bounds, never in place of them.
+func HistoryWalk(objects int64) time.Duration {
+	if objects <= 0 {
+		return 0
+	}
+	return time.Duration(objects) * WalkPerObject
 }

@@ -159,6 +159,15 @@ type Server struct {
 	// check of a proposal before its bundle is stored — a field so the suite
 	// can stand in a receiver's bug, which no push reaches (export_test.go).
 	checkProposal func(code.Proposal) error
+
+	// runGit is o.Git.Run, through which every git process the server starts
+	// goes — a field so the suite can read each Cmd as the pool is handed it
+	// (export_test.go). A push's deadlines are formed at their call sites
+	// from what the push sends and what its repository holds, and only the
+	// Cmd that reaches the pool says a call site formed them from the right
+	// ones: a helper that adds the history term proves nothing about a call
+	// site that hands it no history.
+	runGit func(context.Context, gitproc.Cmd) (gitproc.Result, error)
 }
 
 // New builds a Server, refusing every required field missing, by name, in one
@@ -189,7 +198,7 @@ func New(o Options) (*Server, error) {
 		return nil, fmt.Errorf("%w: %s missing or zero", ErrOptions, strings.Join(missing, ", "))
 	}
 	s := &Server{o: o, log: o.Logger, now: o.Now, requestMemory: RequestMemoryBytes,
-		checkProposal: code.Proposal.ValidateUnstored}
+		checkProposal: code.Proposal.ValidateUnstored, runGit: o.Git.Run}
 	if s.log == nil {
 		s.log = logging.Get("code.host")
 	}

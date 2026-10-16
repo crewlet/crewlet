@@ -1161,7 +1161,14 @@ cache on its own disk. What such a node needs from its host:
   before the engine gives it up: 10 s and a second a mebibyte for git's
   indexing and for each of the engine's three scans of the pack, and a minute
   and 30 s a mebibyte (the floor every transfer is held to) for the object
-  store's put — about 34 s a mebibyte in all.
+  store's put — about 34 s a mebibyte in all. A push into a large repository
+  adds what walking its history may take: a commit dated before its parent —
+  a clock that is behind — walks every commit of the repository in
+  receive-pack's own connectivity check, and, until the node has written the
+  repository's commit-graph, in each of the engine's listings and each branch
+  update's force check too, and each such walk is given 11 µs an object of the
+  repository: 33 s at three million objects, a gigabyte of source history,
+  which such a walk takes about two and a half seconds to finish.
 - **Memory for its transfers, cores for its reads.** Each clone, fetch or push
   holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
   240 bytes for every object of a repository it clones whole) and a core only

@@ -88,7 +88,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	// IN THE INCARNATION, so a damaged one is rebuilt under this request
 	// (repairing).
 	err = s.repairing(ctx, r, adm.name, &synced, cache.DamageReason, out.Started, func(in cache.Synced) error {
-		_, gerr := s.o.Git.Run(ctx, gitproc.Cmd{
+		_, gerr := s.runGit(ctx, gitproc.Cmd{
 			Dir:  in.Dir,
 			Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", in.Dir},
 			// THE CACHE'S ONE SERVE CONFIGURATION, so the advertisement
@@ -124,7 +124,7 @@ func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *ht
 			return err
 		}
 		defer view.Remove()
-		_, err = s.o.Git.Run(ctx, gitproc.Cmd{
+		_, err = s.runGit(ctx, gitproc.Cmd{
 			Dir: view.Dir, Alternate: view.Alternate,
 			Args:   []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
 			Config: append(receiveConfig(s.limits()), s.o.Cache.AdvertiseConfig()...),

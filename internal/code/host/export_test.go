@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -127,7 +130,66 @@ func Land(ctx context.Context, s *Server, l TestLanding) (TestLanded, error) {
 		Position: ld.Result.position, OK: ld.Result.ok, PackBytes: ld.Result.packBytes, Adopted: ld.Adopted}, err
 }
 
+// IsForced is s's force check of old against new in sc, over a repository of
+// objects live objects.
+func IsForced(ctx context.Context, s *Server, sc *cache.Scratch, objects int64, old, new string) (bool, bool, error) {
+	return s.isForced(ctx, sc, objects, old, new)
+}
+
+// Introduced is s's listing of the commits a push of news introduces in sc,
+// over a repository of objects live objects.
+func Introduced(ctx context.Context, s *Server, sc *cache.Scratch, objects int64, news []string,
+	packBytes int64) ([]string, int, error) {
+
+	return s.introduced(ctx, sc, objects, news, packBytes)
+}
+
+// PathOf is s's search for the path a push of news reaches oid by in sc.
+func PathOf(ctx context.Context, s *Server, sc *cache.Scratch, objects int64, news []string, oid string,
+	packBytes int64) string {
+
+	return s.pathOf(ctx, sc, objects, news, oid, packBytes)
+}
+
+// The bounds of a push's walks: one force check's, and one listing's.
+var (
+	ForceDeadline   = forceDeadline
+	ListingDeadline = listingDeadline
+)
+
+// HookWalks is what a push of cmds — each {old, new, ref} — may spend walking
+// a repository of objects live objects beside its hook budget.
+func HookWalks(cmds [][3]string, objects int64) time.Duration {
+	parsed := make([]parsedCommand, len(cmds))
+	for i, c := range cmds {
+		parsed[i] = parsedCommand{Old: c[0], New: c[1], Ref: c[2]}
+	}
+	return hookWalks(parsed, objects)
+}
+
 // SetProposalCheck replaces s's own check of a proposal before its bundle is
 // stored (code.Proposal.ValidateUnstored) — how a case stands in the
 // receiver's bug no push reaches. Set before s's first push.
 func SetProposalCheck(s *Server, check func(code.Proposal) error) { s.checkProposal = check }
+
+// RecordGit has s record every gitproc.Cmd it hands the pool from now on, and
+// answers a reader of what it has recorded, in order. Set before s's first
+// request: the server reads the field on every request's goroutine.
+func RecordGit(s *Server) func() []gitproc.Cmd {
+	var (
+		mu   sync.Mutex
+		cmds []gitproc.Cmd
+	)
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		mu.Lock()
+		cmds = append(cmds, c)
+		mu.Unlock()
+		return run(ctx, c)
+	}
+	return func() []gitproc.Cmd {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(cmds)
+	}
+}

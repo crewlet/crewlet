@@ -90,7 +90,7 @@ func TestTheHookBudgetIsItsSteps(t *testing.T) {
 	if got, want := host.HookBudget(host.Production), 42510*time.Second; got != want {
 		t.Errorf("HookBudget at the defaults = %v (%d s), the documented %v", got, int64(got.Seconds()), want)
 	}
-	if got, want := gitproc.ReceivePackDeadline(1<<30, host.HookBudget(host.Production)), 74324*time.Second; got != want {
+	if got, want := gitproc.ReceivePackDeadline(1<<30, 0, host.HookBudget(host.Production)), 74324*time.Second; got != want {
 		t.Errorf("ReceivePackDeadline(1 GiB) = %v (%d s), the documented %v", got, int64(got.Seconds()), want)
 	}
 }
@@ -101,13 +101,16 @@ func TestTheHookBudgetIsItsSteps(t *testing.T) {
 // take before it gives a push up — the proposal's two write attempts and the
 // pending grace whatever the push's size, and for a large push the pack's own
 // work: git's indexing and the hook's three scans at gitproc.PackWorkDeadline
-// each, and the put at the pace floor. A figure stated beside the constants
-// rather than from them was 60 s, under the three minutes a one-commit push may
-// be silent when its committer fails over or its row resolves pending, and a
-// balancer at it cut exactly the pushes whose outcome may already be durable.
+// each, and the put at the pace floor; and for a large repository each walk
+// of its history (gitproc.HistoryWalk), which a commit dated before its
+// parent may make whatever the push's size. A figure stated beside the
+// constants rather than from them was 60 s, under the three minutes a
+// one-commit push may be silent when its committer fails over or its row
+// resolves pending, and a balancer at it cut exactly the pushes whose outcome
+// may already be durable.
 //
-// Mutation: change ProposeBudget, the pending grace, PackWorkPerMiB or the
-// pace floor, and the page no longer says what the session takes.
+// Mutation: change ProposeBudget, the pending grace, PackWorkPerMiB, the pace
+// floor or WalkPerObject, and the page no longer says what the session takes.
 func TestTheIdleTimeoutForAClientWithoutSideBandIsTheSessionsBounds(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "deployment.md"))
 	if err != nil {
@@ -126,6 +129,10 @@ func TestTheIdleTimeoutForAClientWithoutSideBandIsTheSessionsBounds(t *testing.T
 		objstore.ReadBase+objstore.PaceFor(code.MaxPackBytes)+fixed; got != want {
 		t.Fatalf("HookBudget is %v and the page's steps sum to %v: say there what the hook does", got, want)
 	}
+	if walk := gitproc.HistoryWalk(3_000_000); walk != 33*time.Second {
+		t.Fatalf("a walk of three million objects is given %v, the page's 33 s: say there what it is, and here",
+			walk)
+	}
 	work := gitproc.PackWorkDeadline(1)
 	perMiB := 4*(gitproc.PackWorkDeadline(2<<20)-work) + objstore.MiBPace
 	if work != gitproc.ReadDeadline+time.Second || gitproc.PackWorkDeadline(2<<20)-work != time.Second ||
@@ -142,6 +149,7 @@ func TestTheIdleTimeoutForAClientWithoutSideBandIsTheSessionsBounds(t *testing.T
 		fmt.Sprintf("a minute and %d s a mebibyte (the floor every transfer is held to) for the object store's put",
 			objstore.MiBPace/time.Second),
 		fmt.Sprintf("about %d s a mebibyte in all", perMiB/time.Second),
+		fmt.Sprintf("each such walk is given %d µs an object of the repository", gitproc.WalkPerObject/time.Microsecond),
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("docs/guides/deployment.md does not say %q", want)

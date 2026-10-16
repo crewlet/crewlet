@@ -59,6 +59,44 @@
 // second copy of its steps (ADR-0008): TestEveryPushTakesTheOneLanding holds
 // the proposal, the upload and the adoption to it.
 //
+// # A push's walks go by generation, and are bounded by the history
+//
+// A push walks its repository's history up to four times: the force check's
+// merge-base for each branch update, the listing of what it introduces, the
+// search for a blob's path when one is over the limit, and receive-pack's own
+// connectivity check. git walks commits newest first BY DATE wherever it has
+// no generation number to stop on, so a commit dated before its parent — a
+// person's clock that is behind — is a reason to walk every commit there is.
+// Two rules keep that from costing a push more than it must, and from
+// refusing it:
+//
+//   - EVERY WALK THE ENGINE ASKS FOR GOES BY GENERATION where the cache's
+//     copy has a commit-graph, which the maintainer writes: merge-base
+//     --is-ancestor does by itself, and the listings ask rev-list for
+//     --topo-order (scan.go), without which it reads every commit of the
+//     graph for a skewed tip.
+//     Measured over a 200 000-commit history with one skewed commit on its
+//     tip (git 2.47.3; 2.48.0 and 2.43.0 alike): the listing 110–150 ms in
+//     date order with a graph against 5 ms by generation, and every walk
+//     0.8–1.0 s with no graph, against 5 ms from a tip dated after its
+//     parent.
+//   - NO WALK IS BOUNDED BY THE PUSH ALONE. Each is given what a walk of the
+//     whole history may cost (gitproc.HistoryWalk, an amount per live object
+//     of the repository) beside what it was given for the push's own bytes,
+//     because what the walk costs is set by the repository: bounded by the
+//     push alone, a small skewed push into a repository of a couple of
+//     million commits with no graph yet was refused by its own deadline —
+//     ten seconds for the force check — rather than merely slow.
+//
+// RECEIVE-PACK'S CONNECTIVITY CHECK IS GIT'S, `rev-list --objects --stdin
+// --not --all` with no flag the engine can add, and it walks by date with a
+// graph or without — 0.85–0.90 s over the 200 000 commits from a skewed tip
+// with none and 157 ms with one, where it reads the graph in place of the
+// commits. It is the one cost of a push that grows with the repository
+// however its node is maintained, and it is bounded by the history term the
+// receive-pack process is given (gitproc.ReceivePackDeadline), never by
+// anything the engine can flag.
+//
 // # Every answer that names a ref is linearizable; an object id has no level
 //
 // A v0 advertisement, a v2 `ls-refs` and a push's advertisement read the code
