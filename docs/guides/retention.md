@@ -1922,8 +1922,12 @@ it comes from an assumed 125 linearizable reads a day per agent seat, which is
 assumption: each log is expected to take 125 reads a day per agent seat (a
 company with none is counted as one), plus what the engine reads on its own —
 the object store's collector, one in the fleet, pins the tracker's log 25 times
-a day (24 collections and one audit) — and the alarm fires on the log furthest
-past twice its census.
+a day (24 collections and one audit) — and the alarm names every log past twice
+its census, each with the Tier A field that sets that log's own ceiling —
+`stream.tracker_log_max_bytes` on the mutation log, `stream.iam_log_max_bytes`
+on the identity estate's: every read past the census is a barrier record on
+that log, so it is that field's sizing the extra reads have outgrown, whatever
+else the field is sized from.
 The rate is the log's, counted where every data node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they
