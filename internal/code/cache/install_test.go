@@ -895,31 +895,65 @@ func sections(b gittest.Bundled) ([]byte, []byte, []byte) {
 	return b.Bytes[:b.PackBytes], b.Bytes[b.PackBytes : b.PackBytes+b.IndexBytes], b.Bytes[b.PackBytes+b.IndexBytes:]
 }
 
-// failOnHit fails the n'th hit of one point, and only that one.
-type failOnHit struct {
-	point codefault.Point
-	n     int
+// failFrom fails a round's downloads from its n'th on, until disarmed —
+// the n'th only once the n-1 packs before it are placed (before, closed by
+// the install hook), saying first that it has been reached. So which packs a
+// failed round installed is the round's ORDER, never the scheduler's: the
+// fault point is the top of a download, before its turn and its GET, so the
+// n'th could otherwise fire while the pack before it is still on the wire,
+// and its failure end that GET too. Every hit after the n'th fails as well,
+// so no later pack is installed whatever runs first.
+type failFrom struct {
+	point           codefault.Point
+	n               int
+	before, reached chan struct{}
 
 	mu   sync.Mutex
 	hits int
+	off  bool
 }
 
-func (f *failOnHit) Hit(_ context.Context, p codefault.Point, _ int64) error {
+var errFailedDownload = errors.New("a download that failed")
+
+func (f *failFrom) Hit(ctx context.Context, p codefault.Point, _ int64) error {
 	if p != f.point {
 		return nil
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.hits++
-	if f.hits == f.n {
-		return errors.New("a download that failed")
+	hit, off := f.hits, f.off
+	f.mu.Unlock()
+	switch {
+	case off || hit < f.n:
+		return nil
+	case hit == f.n:
+		close(f.reached)
+		select {
+		case <-f.before:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-time.After(hangDetector):
+			return fmt.Errorf("the %d packs before the failing download were not placed in %v", f.n-1,
+				hangDetector)
+		}
 	}
-	return nil
+	return errFailedDownload
+}
+
+// disarm lets every later hit through.
+func (f *failFrom) disarm() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.off = true
 }
 
 // A FAILED ROUND LEAVES NO TEMPORARY FILES — and keeps what it installed:
 // the packs before the failure are named by rows, so the next round skips
-// them and downloads only the rest.
+// them and downloads only the rest. One GET at a time, the round's third
+// download failing once the two before it are placed — and the second's GET
+// held until the third has reached its failure, the schedule in which a
+// failure at the top of the third download ended the second's GET and the
+// case read one pack installed where the round's order put two.
 func TestAFailedRoundLeavesNoTemporaryFiles(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -927,11 +961,28 @@ func TestAFailedRoundLeavesNoTemporaryFiles(t *testing.T) {
 	for range 6 {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
-	c := w.open(t, func(o *cache.Options) { o.Faults = &failOnHit{point: codefault.SyncDownload, n: 3} })
-	cache.SetFetchConcurrency(c, 1)
-	if _, err := c.Sync(t.Context(), repo, linearizable); err == nil {
-		t.Fatal("a round whose third download failed succeeded")
+	faults := &failFrom{point: codefault.SyncDownload, n: 3, before: make(chan struct{}),
+		reached: make(chan struct{})}
+	var opens atomic.Int32
+	w.objects.hold = func(objstore.Key) <-chan struct{} {
+		if opens.Add(1) == 2 {
+			return faults.reached
+		}
+		return nil
 	}
+	c := w.open(t, func(o *cache.Options) { o.Faults = faults })
+	cache.SetFetchConcurrency(c, 1)
+	var placed atomic.Int32
+	closeBefore := sync.OnceFunc(func() { close(faults.before) })
+	cache.SetInstallHook(c, func(stage, _ string) {
+		if stage == "idx" && placed.Add(1) == int32(faults.n-1) {
+			closeBefore()
+		}
+	})
+	if _, err := c.Sync(t.Context(), repo, linearizable); !errors.Is(err, errFailedDownload) {
+		t.Fatalf("a round whose third download failed answered %v, want that failure", err)
+	}
+	faults.disarm()
 	w.tmpEmpty(t)
 	installed := 0
 	for _, name := range packFiles(t, w.dir(t, c, repo)) {
