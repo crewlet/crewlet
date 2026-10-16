@@ -453,9 +453,9 @@ func (s *Syncer) SetSource(src Source) {
 // Refresh asks for a complete walk of the current source, from a backend that
 // can say something moved in its container but not which page.
 //
-// A REFRESH FROM ANOTHER BACKEND IS IGNORED. Doclet's page projection runs
+// A REFRESH FROM ANOTHER BACKEND IS IGNORED. Doclet's pages applier runs
 // for the life of the node, so a company that moved its skills to Confluence
-// by an apply still has a projection reporting Doclet skill pages, and a
+// by an apply still has an applier reporting Doclet skill pages, and a
 // Doclet commit is no reason to walk a different wiki. Coalesced: however
 // many arrive before the loop runs, it walks once.
 func (s *Syncer) Refresh(backend string) {

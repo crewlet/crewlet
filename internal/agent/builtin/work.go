@@ -3655,8 +3655,8 @@ func jsonResult(v any) (tools.Result, error) {
 
 // readFailure explains a read that could not be served.
 //
-// IT NEVER SAYS "NOTHING FOUND". A projection that has not caught up must not
-// be able to tell a seat the company has no work — it would file a duplicate,
+// IT NEVER SAYS "NOTHING FOUND". A copy that has not caught up with its log
+// must not be able to tell a seat the company has no work — it would file a duplicate,
 // or abandon work it was told to do.
 //
 // AND IT NEVER SAYS "TRY AGAIN" ABOUT THE REQUEST. A read refused for what it

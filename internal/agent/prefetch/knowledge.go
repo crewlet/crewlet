@@ -126,8 +126,8 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	if !f.src.Knowledge.CanSearch(r.Seat, r.Org) {
 		return knowledgeBlock{}
 	}
-	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
-	// during that window every search answers empty. Said out loud rather
+	// A BACKEND THAT KEEPS AN INDEX can be behind the records it indexes,
+	// and during that window every search answers empty. Said out loud rather
 	// than searched anyway, and BEFORE the query call: the auxiliary model
 	// round trip would be spent producing a query nothing can match, which
 	// is the same waste CanSearch's gate exists to avoid.

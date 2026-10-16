@@ -710,11 +710,9 @@ func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) 
 //
 // # Why the shape is the question and not the mechanism
 //
-// Every loop this node runs is a state-log APPLIER — the wiki's projector, the
-// one loop of another kind, went when the knowledge base became a domain — so
-// every row is a domain's ([ReplicationStatus.Kind] is always `domain`). The
-// type is still shaped by what the fleet view asks rather than by how an
-// applier works, because that is what outlived the projector.
+// Every loop this node runs is a state-log APPLIER, so every row is one
+// domain's. The type is shaped by what the fleet view asks rather than by how
+// an applier works, because the question is what an operator reads.
 //
 // What the fleet view asks is not about the mechanism. It asks "how many of
 // this node's copies of the company's state have caught up" — the question
@@ -726,10 +724,6 @@ func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) 
 type ReplicationStatus struct {
 	// Name is the domain, which is what an operator sees.
 	Name string
-
-	// Kind is the loop's mechanism: `domain` on every row this build
-	// reports, the `projection` rows having gone with the projector.
-	Kind string
 
 	// Ready is this loop's copy being one a seat's
 	// tools may be attached to. It is NOT strict readiness — see

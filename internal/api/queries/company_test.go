@@ -3088,7 +3088,7 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	// UNDER THE STATUS KEY, which is where the presence heartbeat puts it
 	// and where [coord.StatusFromMeta] looks.
 	claim("node-a", map[string]any{coord.StatusKey: coord.NodeStatus{
-		ProjectionsReady: 2, ProjectionsTotal: 3,
+		AppliersReady: 2, AppliersTotal: 3,
 	}.Meta()})
 	claim("node-b", map[string]any{coord.StatusKey: coord.NodeStatus{}.Meta()})
 
@@ -3099,14 +3099,14 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	for _, row := range rows(t, body["nodes"]) {
 		byID[fmt.Sprint(row["id"])] = row
 	}
-	if got := byID["node-a"]["projections_ready"]; got != float64(2) {
-		t.Errorf("node-a reports %v of its projections ready, want 2", got)
+	if got := byID["node-a"]["appliers_ready"]; got != float64(2) {
+		t.Errorf("node-a reports %v of its appliers ready, want 2", got)
 	}
-	if got := byID["node-a"]["projections_total"]; got != float64(3) {
+	if got := byID["node-a"]["appliers_total"]; got != float64(3) {
 		t.Errorf("node-a reports a total of %v, want 3", got)
 	}
-	if _, present := byID["node-b"]["projections_total"]; present {
-		t.Error("a node that published no projection counts carries a total " +
+	if _, present := byID["node-b"]["appliers_total"]; present {
+		t.Error("a node that published no applier counts carries a total " +
 			"anyway, so a screen draws 0 of 0 — which reads as ready")
 	}
 }

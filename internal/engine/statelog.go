@@ -3486,7 +3486,7 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	out := make([]ReplicationStatus, 0, len(held))
 	for _, running := range held {
 		name := running.domain.Name()
-		row := ReplicationStatus{Name: name, Kind: "domain"}
+		row := ReplicationStatus{Name: name}
 		health, err := s.health(ctx, running)
 		switch {
 		case err != nil:

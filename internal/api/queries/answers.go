@@ -327,10 +327,11 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are this node's projections of Worklet and Doclet.
-	// Nil leaves their questions unregistered, which is the honest
-	// answer for a company on Jira and Confluence:
-	// there is no native record for this node to have a copy of.
+	// Work and Pages are Worklet and Doclet, read through the estate
+	// router and resolved per question: a company whose tracker or wiki is
+	// a vendor's has each of that half's questions answered unknown, as an
+	// unregistered question is. Nil — a surface built without them —
+	// leaves their questions unregistered.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this

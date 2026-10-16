@@ -875,8 +875,8 @@ export function nodeFacts({
       // once the total is non-zero.
       label: "Copies",
       value:
-        node.projections_total != null && node.projections_total > 0
-          ? `${node.projections_ready ?? 0} of ${node.projections_total} ready`
+        node.appliers_total != null && node.appliers_total > 0
+          ? `${node.appliers_ready ?? 0} of ${node.appliers_total} ready`
           : "",
     },
     {
