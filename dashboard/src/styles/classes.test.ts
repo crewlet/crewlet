@@ -671,6 +671,11 @@ const ALLOWED: Allowed[] = [
   },
 
   {
+    name: "crewlet-inline-code",
+    why: "uilet's InlineCode writes it. styles/screens.css draws a model key that is a link (`.prof-chain-model`) in the link ink and underlines it under the pointer, which the chip cannot know it is inside. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card--flush",
     why: "uilet's Card writes it for `padding=\"none\"` content that reaches the card's edges. styles/screens.css turns its `overflow: hidden` into `clip`, which is what the recipe's own comment asks for — `hidden` also makes the card a scroll container, and a sticky box confined to a scrollport that can never scroll never has `top` applied, so every DataGrid inside a flush card had a dead column head. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

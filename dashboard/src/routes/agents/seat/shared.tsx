@@ -157,7 +157,7 @@ export function ModelChain({ keys }: { keys: readonly string[] }) {
             </span>
           )}
           <a className="prof-chain-model" href={href(["settings", "models", key])}>
-            <code className="inline">{key}</code>
+            <InlineCode>{key}</InlineCode>
           </a>
         </span>
       ))}

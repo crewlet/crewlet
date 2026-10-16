@@ -1642,10 +1642,10 @@ a.prof-row:hover {
 .prof-chain-model {
   text-decoration: none;
 }
-.prof-chain-model code.inline {
+.prof-chain-model .crewlet-inline-code {
   color: var(--color-brand-accent-ink);
 }
-.prof-chain-model:hover code.inline {
+.prof-chain-model:hover .crewlet-inline-code {
   text-decoration: underline;
   text-underline-offset: 2px;
 }

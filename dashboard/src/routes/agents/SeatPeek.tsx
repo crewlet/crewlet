@@ -82,6 +82,7 @@ import {
   Meter,
   StatusDot,
   Tag,
+  InlineCode,
 } from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -525,7 +526,7 @@ function HeldBy({ row }: { row: HumanSeat }) {
     return (
       <span>
         {holder.kind === "machine" && "The service account "}
-        <code className="inline">{holder.login || holder.person}</code>
+        <InlineCode>{holder.login || holder.person}</InlineCode>
         {stage}
       </span>
     );

@@ -45,7 +45,7 @@
  */
 
 import { createElement, type ReactNode } from "react";
-import { Highlight } from "@crewlethq/ui";
+import { Highlight, InlineCode } from "@crewlethq/ui";
 
 /** One parsed block. The renderer walks these; nothing else does. */
 type Block =
@@ -801,13 +801,7 @@ export function renderInline(
       // the flag. Up to [UnbrokenCode] characters it is kept on one line; a
       // longer one (a URL, a whole config line) still wraps, since holding it
       // whole would overflow a phone's column.
-      out.push(
-        createElement(
-          "code",
-          { key, className: code.length <= UnbrokenCode ? "inline is-whole" : "inline" },
-          code,
-        ),
-      );
+      out.push(createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code));
     } else if (g.src !== undefined) {
       const src = safeHref(g.src);
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is

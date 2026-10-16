@@ -42,7 +42,7 @@ import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
-import { Button, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, EmptyState, EmptyValue, Skeleton, Tag, InlineCode } from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -418,7 +418,7 @@ function ViewFacts({ view }: { view: WorkView }) {
         <div className="list">
           {params.map(([key, value]) => (
             <div key={key} className="thread-entry">
-              <code className="inline">{key}</code>
+              <InlineCode>{key}</InlineCode>
               <span className="truncate t-cell" style={{ flex: 1 }}>
                 {String(value)}
               </span>

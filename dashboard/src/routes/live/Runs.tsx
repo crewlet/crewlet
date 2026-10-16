@@ -44,6 +44,7 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  InlineCode,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -219,7 +220,7 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
-    { label: "Branch", value: run.branch ? <code className="inline">{run.branch}</code> : "" },
+    { label: "Branch", value: run.branch ? <InlineCode>{run.branch}</InlineCode> : "" },
     // NOT "up / reclaimed" as a plain word pair: whether the box still exists
     // is the difference between a run somebody can answer and a run whose work
     // is gone, and `FactLine` drops a fact whose value is empty — so this one
@@ -368,7 +369,7 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
       </div>
       {last && (
         <span className="t-caption">
-          Last: <code className="inline">{last.name}</code> · {fmtTime(last.at)}
+          Last: <InlineCode>{last.name}</InlineCode> · {fmtTime(last.at)}
         </span>
       )}
     </section>
@@ -464,7 +465,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
                         },
                         {
                           label: "Turn",
-                          value: <code className="inline">{run.turn_id}</code>,
+                          value: <InlineCode>{run.turn_id}</InlineCode>,
                           path: ["live", "turns", run.turn_id],
                         },
                       ],
@@ -941,7 +942,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
                     },
                     {
                       label: "Turn",
-                      value: <code className="inline">{run.turn_id}</code>,
+                      value: <InlineCode>{run.turn_id}</InlineCode>,
                       path: ["live", "turns", run.turn_id],
                     },
                   ],
@@ -999,7 +1000,7 @@ function CollectedRun({
                 { label: "Coding agent", value: record.codingAgent },
                 {
                   label: "Box",
-                  value: record.sandboxId ? <code className="inline">{record.sandboxId}</code> : "",
+                  value: record.sandboxId ? <InlineCode>{record.sandboxId}</InlineCode> : "",
                 },
                 {
                   label: "Delivered",
@@ -1164,7 +1165,7 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
     <Disclosure
       title={
         <span className="row gap-2 baseline">
-          <code className="inline">{call.name}</code>
+          <InlineCode>{call.name}</InlineCode>
           {call.failed && <Tag variant="danger">failed</Tag>}
           <span className="spacer" />
           <span className="t-caption">{fmtTime(call.at)}</span>

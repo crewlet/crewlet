@@ -9,7 +9,15 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Callout, EmptyState, Section as UiSection, Tag, cx } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  Section as UiSection,
+  Tag,
+  cx,
+  InlineCode,
+} from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
@@ -423,7 +431,7 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
     >
       {needsWords("This answer", refusal.grants)}{" "}
       <span className="t-caption">
-        Refused as <code className="inline">{refusal.reason}</code>.
+        Refused as <InlineCode>{refusal.reason}</InlineCode>.
       </span>
     </Callout>
   );

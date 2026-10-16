@@ -410,7 +410,7 @@ export function UnboundRemedy() {
   return (
     <>
       To get work here, bind this account to an open seat:{" "}
-      <code className="inline">crewlet iam bind ID SEAT</code>.
+      <InlineCode>crewlet iam bind ID SEAT</InlineCode>.
     </>
   );
 }
@@ -736,7 +736,7 @@ export function HoldingSentence({ row, you = false }: { row: HumanSeat; you?: bo
   if (holder) {
     const stage = holder.stage && holder.stage !== "active" ? ` (${holder.stage})` : "";
     const named = holder.name !== undefined && holder.name !== "";
-    const login = holder.login ? <code className="inline">{holder.login}</code> : null;
+    const login = holder.login ? <InlineCode>{holder.login}</InlineCode> : null;
     return (
       <>
         Held by {you && "you, as "}

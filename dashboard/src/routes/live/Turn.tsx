@@ -84,6 +84,7 @@ import {
   type MenuItem,
   CopyButton,
   downloadText,
+  InlineCode,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
@@ -2110,7 +2111,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                                 label: "Conversation",
                                 value: (
                                   <span className="row gap-2 baseline">
-                                    <code className="inline">{conversation}</code>
+                                    <InlineCode>{conversation}</InlineCode>
                                     <span className="t-caption">
                                       the external conversation this turn served
                                     </span>

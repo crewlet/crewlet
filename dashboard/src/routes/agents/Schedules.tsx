@@ -39,6 +39,7 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  InlineCode,
 } from "@crewlethq/ui";
 import {
   CalendarGlyph,
@@ -288,9 +289,9 @@ export function CronReading({ cron, timezone }: { cron: string; timezone?: strin
   const said = describeCron(cron);
   return (
     <span className="col cron-cell">
-      <code className="inline nowrap" title={timezone ? `timezone: ${timezone}` : undefined}>
+      <InlineCode whole title={timezone ? `timezone: ${timezone}` : undefined}>
         {cron}
-      </code>
+      </InlineCode>
       {said && <span className="t-caption">{said}</span>}
     </span>
   );
@@ -517,7 +518,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
         // which beats a reader working out why `0 9 * * *` in Asia/Tokyo is
         // listed at midnight.
         <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
-          Runs on <code className="inline">{row.timezone}</code> time. Shown in your time zone.
+          Runs on <InlineCode>{row.timezone}</InlineCode> time. Shown in your time zone.
         </p>
       )}
     </Card>

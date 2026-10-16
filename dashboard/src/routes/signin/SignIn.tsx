@@ -86,7 +86,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Callout, Disclosure, FormField, Input, Text } from "@crewlethq/ui";
+import { Button, Callout, Disclosure, FormField, Input, Text, InlineCode } from "@crewlethq/ui";
 import { useRoute } from "~/app/router.tsx";
 import { currentReader } from "~/lib/reader.ts";
 import { refusalText } from "~/lib/refusal.ts";
@@ -162,8 +162,7 @@ export function SignIn() {
             </Button>
           }
         >
-          Signed in as <code className="inline">{current.login}</code>. Signing in here switches
-          accounts.
+          Signed in as <InlineCode>{current.login}</InlineCode>. Signing in here switches accounts.
         </Callout>
       )}
       {unclaimed ? (

@@ -1,4 +1,4 @@
-import { Button, EmptyState } from "@crewlethq/ui";
+import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CompassGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 
@@ -22,7 +22,7 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
       description={
         <>
           {hint ? <>{capitalise(hint)}. </> : null}
-          The address was <code className="inline">{route.hash}</code>.
+          The address was <InlineCode>{route.hash}</InlineCode>.
         </>
       }
       action={

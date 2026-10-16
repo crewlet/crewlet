@@ -145,7 +145,7 @@ describe("a company page", () => {
     expect(el.querySelector("strong")?.textContent).toBe("one NATS cluster");
     expect(el.querySelector("em")?.textContent).toBe("second");
     expect(el.querySelector("ol")?.querySelectorAll("li")).toHaveLength(3);
-    expect(el.querySelector("code.inline")?.textContent).toBe("stream.type: pulsar");
+    expect(el.querySelector("code.crewlet-inline-code")?.textContent).toBe("stream.type: pulsar");
     expect(el.querySelector("pre code")?.textContent).toContain("topics.NotificationsInbound");
     expect(el.querySelector("blockquote")?.textContent).toContain("compare-and-set");
     expect(el.querySelector("hr")).not.toBeNull();
@@ -518,9 +518,9 @@ describe("inline code", () => {
   // or it would overflow a phone's column.
   it("keeps a short span whole and lets a long one wrap", () => {
     const el = draw("Wait (`nimbus jobs wait --node <n>`) or read `" + "x".repeat(40) + "`.");
-    const [short, long] = Array.from(el.querySelectorAll("code.inline"));
-    expect(short?.classList.contains("is-whole")).toBe(true);
-    expect(long?.classList.contains("is-whole")).toBe(false);
+    const [short, long] = Array.from(el.querySelectorAll("code.crewlet-inline-code"));
+    expect(short?.classList.contains("crewlet-inline-code--whole")).toBe(true);
+    expect(long?.classList.contains("crewlet-inline-code--whole")).toBe(false);
     expect("nimbus jobs wait --node <n>".length).toBeLessThanOrEqual(UnbrokenCode);
   });
 });

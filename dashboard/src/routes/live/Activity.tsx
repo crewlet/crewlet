@@ -40,7 +40,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, FilterChip, Input, Skeleton, Tag, InlineCode } from "@crewlethq/ui";
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -467,7 +467,7 @@ export function Activity() {
             aria-label={`Remove filter: only trace ${trace}'s events`}
           >
             <span className="chip-removable">
-              Trace <code className="inline">{trace.slice(0, 8)}</code>
+              Trace <InlineCode>{trace.slice(0, 8)}</InlineCode>
               <XGlyph size="xs" aria-hidden="true" />
             </span>
           </FilterChip>
@@ -479,7 +479,7 @@ export function Activity() {
             aria-label={`Remove filter: only channel ${channel}'s events`}
           >
             <span className="chip-removable">
-              A2A channel <code className="inline">{channel.slice(0, 8)}</code>
+              A2A channel <InlineCode>{channel.slice(0, 8)}</InlineCode>
               <XGlyph size="xs" aria-hidden="true" />
             </span>
           </FilterChip>

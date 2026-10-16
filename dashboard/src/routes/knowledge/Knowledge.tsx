@@ -50,6 +50,7 @@ import {
   SegmentedControl,
   Skeleton,
   highlightTerms,
+  InlineCode,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -865,14 +866,14 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
           {answer.reason === "no_backend" && (
             <>
               {" "}
-              Set <code className="inline">knowledge.backend</code> to{" "}
-              <code className="inline">native</code> or <code className="inline">confluence</code>.
+              Set <InlineCode>knowledge.backend</InlineCode> to <InlineCode>native</InlineCode> or{" "}
+              <InlineCode>confluence</InlineCode>.
             </>
           )}
           {answer.reason === "no_scope" && (
             <>
               {" "}
-              Add spaces to <code className="inline">knowledge.scope</code>.
+              Add spaces to <InlineCode>knowledge.scope</InlineCode>.
             </>
           )}
         </span>
@@ -974,7 +975,7 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
             <ul className="coverage-nodes">
               {partial.nodes.map((n) => (
                 <li key={n.id}>
-                  <code className="inline">{n.id}</code>
+                  <InlineCode>{n.id}</InlineCode>
                   {n.error ? `: ${n.error}` : ""}
                 </li>
               ))}

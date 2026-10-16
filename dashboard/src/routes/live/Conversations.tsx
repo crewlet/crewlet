@@ -29,7 +29,16 @@
 import { useCallback, useMemo } from "react";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyState,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  InlineCode,
+} from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -275,7 +284,7 @@ function ChannelBody({
                   value: span == null ? undefined : fmtDuration(span),
                   title: "From ask to close",
                 },
-                { label: "Channel", value: <code className="inline">{channel.id}</code> },
+                { label: "Channel", value: <InlineCode>{channel.id}</InlineCode> },
               ],
             },
           ]}

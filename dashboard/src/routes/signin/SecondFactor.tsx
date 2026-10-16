@@ -49,6 +49,7 @@ import {
   QrCode,
   Skeleton,
   Text,
+  InlineCode,
 } from "@crewlethq/ui";
 import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
@@ -154,7 +155,7 @@ export function SecondFactorSetup({
               , or type this key.
             </Text>
             <div className="signin-row">
-              <code className="inline">{groupedKey(seed.secret)}</code>
+              <InlineCode>{groupedKey(seed.secret)}</InlineCode>
               <CopyButton text={seed.secret} label="Copy key" />
             </div>
           </div>
@@ -212,7 +213,7 @@ export function RecoveryCodeList({ codes }: { codes: readonly string[] }) {
       <ul className="signin-code-list" aria-label="Recovery codes">
         {codes.map((code) => (
           <li key={code}>
-            <code className="inline">{code}</code>
+            <InlineCode>{code}</InlineCode>
           </li>
         ))}
       </ul>

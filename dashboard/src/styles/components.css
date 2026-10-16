@@ -588,24 +588,6 @@ a.seat-chip:hover {
   min-width: 0;
 }
 
-/* ---- Inline code -------------------------------------------------------- */
-
-code.inline {
-  font-size: 0.92em;
-  background: var(--color-surface-inset);
-  border-radius: var(--radius-xs);
-  padding: 1px 4px;
-  color: var(--color-text-secondary);
-  /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
-     public base URLs. Without this the chip is pushed whole onto its own
-     line and the sentence around it is torn into fragments. */
-  overflow-wrap: anywhere;
-}
-/* A SHORT SPAN IS NOT BROKEN at its spaces — see `UnbrokenCode` in
-   lib/markdown.ts, which decides what short is. */
-code.inline.is-whole {
-  white-space: nowrap;
-}
 /* A REFUSAL'S PROBLEMS, one per line.
  *
  * A validation refusal is several of them joined with newlines, and HTML
@@ -624,8 +606,8 @@ code.inline.is-whole {
    problems are drawn with: `tone="inherit"` is the chip inside a message that
    carries that message's ink, and `variant="reference"` is the `${VAR}` face
    that says a name of a sealed entry rather than a path in the document. The
-   two recipes that used to follow this one, `.field-error code.inline` and
-   `.field-error code.inline.is-reference`, only ever reached a chip inside a
+   two recipes that used to follow this one, a local inline-code chip inside a
+   field error and its reference variant, only ever reached a chip inside a
    FIELD's error: the same chip inside the setup dialog's danger banner kept
    its own quiet grey, which is the half nobody noticed. */
 

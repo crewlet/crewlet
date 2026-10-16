@@ -7,7 +7,16 @@
 
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag, CopyButton } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  CodeBlock,
+  Disclosure,
+  Skeleton,
+  Tag,
+  CopyButton,
+  InlineCode,
+} from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   FileTextGlyph,
@@ -75,11 +84,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
   return [
     {
       label: "Type",
-      value: (
-        <code className="inline" title={event.type}>
-          {event.type}
-        </code>
-      ),
+      value: <InlineCode title={event.type}>{event.type}</InlineCode>,
       token: true,
     },
     { label: "Category", value: humanize(event.category) || "system" },
@@ -101,9 +106,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
     {
       label: "Trace",
       value: event.trace_id ? (
-        <code className="inline" title={event.trace_id}>
-          {event.trace_id}
-        </code>
+        <InlineCode title={event.trace_id}>{event.trace_id}</InlineCode>
       ) : (
         <span className="muted">not traced</span>
       ),
@@ -127,7 +130,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
 function envelopeProperties(event: EventRecord): Property[] {
   return [
     { label: "Source", value: event.source },
-    { label: "Topic", value: event.topic ? <code className="inline">{event.topic}</code> : "" },
+    { label: "Topic", value: event.topic ? <InlineCode>{event.topic}</InlineCode> : "" },
     {
       label: "Span",
       value: event.span_id ? (
@@ -315,7 +318,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                       properties: Object.entries(data.tags).map(([k, v]) => ({
                         label: k,
                         identifierLabel: true,
-                        value: <code className="inline">{v}</code>,
+                        value: <InlineCode>{v}</InlineCode>,
                       })),
                     },
                   ]}
@@ -411,7 +414,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                             properties: Object.entries(data.tags).map(([k, v]) => ({
                               label: k,
                               identifierLabel: true,
-                              value: <code className="inline">{v}</code>,
+                              value: <InlineCode>{v}</InlineCode>,
                             })),
                           },
                         ]

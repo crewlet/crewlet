@@ -892,11 +892,7 @@ export function nodeFacts({
           // all, and in one fact track the clamp broke a pseudo-version as
           // "v0.0.0-" over "20260929172955-…". Two tracks on one line, the
           // whole string in the title where even two are too narrow.
-          value: (
-            <code className="inline" title={version}>
-              {version}
-            </code>
-          ),
+          value: <InlineCode title={version}>{version}</InlineCode>,
           token: true,
         }
       : {

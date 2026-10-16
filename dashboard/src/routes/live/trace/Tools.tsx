@@ -19,7 +19,7 @@
  * about the same call.
  */
 
-import { Tag } from "@crewlethq/ui";
+import { Tag, InlineCode } from "@crewlethq/ui";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { fmtDuration } from "~/lib/format.ts";
 import { callMeasured, phaseLabel, type Waterfall } from "~/lib/waterfall.ts";
@@ -45,7 +45,7 @@ const COLUMNS: GridColumn<Row>[] = [
   {
     key: "tool",
     header: "Tool",
-    cell: (r) => <code className="inline">{r.call.name}</code>,
+    cell: (r) => <InlineCode>{r.call.name}</InlineCode>,
     sortValue: (r) => r.call.name,
     phoneLead: true,
   },
