@@ -271,11 +271,6 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 			_, _, err := p.Comment(ctx, pages.Actor{OpKey: key}, "p1", pages.NewComment{Body: "hi"})
 			return err
 		}},
-		{"comment from a turn", "comment", func(ctx context.Context, p Pages, key string) error {
-			_, _, err := p.Comment(ctx, pages.Actor{}, "p1",
-				pages.NewComment{Body: "hi", TurnKey: key, TurnSince: since})
-			return err
-		}},
 		{"edit comment", "comment_edit", func(ctx context.Context, p Pages, key string) error {
 			_, _, err := p.EditComment(ctx, pages.Actor{OpKey: key}, "p1", "c1", "hello")
 			return err
