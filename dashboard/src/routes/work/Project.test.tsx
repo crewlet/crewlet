@@ -128,7 +128,7 @@ test("the purpose is the sentence under the name, above the census", async () =>
   await waitFor(() => expect(screen.getByText("Build and ship the product")).toBeTruthy());
   const note = container.querySelector(".page-note");
   expect(note?.textContent).toBe("Build and ship the product");
-  expect(precedes(container.querySelector(".object-head"), note)).toBe(true);
+  expect(precedes(container.querySelector(".crewlet-object-header"), note)).toBe(true);
   expect(precedes(note, container.querySelector(".work-census"))).toBe(true);
 });
 
@@ -263,7 +263,7 @@ test("the Tasks lens draws no container header above the work", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
-  expect(container.querySelector(".object-head")).toBeNull();
+  expect(container.querySelector(".crewlet-object-header")).toBeNull();
   expect(screen.queryByText("Build and ship the product")).toBeNull();
 });
 
@@ -384,7 +384,7 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
   );
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
-  const head = container.querySelector(".object-head");
+  const head = container.querySelector(".crewlet-object-header");
   const note = container.querySelector(".page-note");
   const banner = screen.getByText(/New work here reaches nobody/).closest(".crewlet-callout");
   expect(precedes(head, note)).toBe(true);

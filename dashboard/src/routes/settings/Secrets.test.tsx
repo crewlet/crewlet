@@ -500,7 +500,9 @@ test("the credential's peek says each property once", async () => {
   render(<CredentialPeek name="GITHUB_TOKEN" />);
   expect(await screen.findByText("Where it came from")).toBeDefined();
   const said = (label: string) =>
-    [...document.querySelectorAll(".fact-label, dt")].filter((el) => el.textContent === label);
+    [...document.querySelectorAll(".crewlet-fact-line__label, dt")].filter(
+      (el) => el.textContent === label,
+    );
   for (const label of ["Source", "Key id", "Set by", "Updated"]) {
     expect(said(label), label).toHaveLength(1);
   }

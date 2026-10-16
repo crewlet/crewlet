@@ -268,7 +268,7 @@ test("a model no seat names says so in the same words on the list and on its pag
   cleanup();
   mount("spare", { answer });
   await settle();
-  const fact = screen.getByText("Runs").closest(".fact") as HTMLElement;
+  const fact = screen.getByText("Runs").closest(".crewlet-fact-line__fact") as HTMLElement;
   expect(within(fact).getByText("No seat names it")).toBeDefined();
   expect(within(fact).queryByText(/0 seats/)).toBeNull();
 });
@@ -282,7 +282,9 @@ test("a model's page keeps its vendor id whole on one line, all of it on the tit
   mount("fast", { answer });
   await settle();
   const value = screen.getByText(long);
-  expect(value.closest(".fact")!.classList.contains("is-token")).toBe(true);
+  expect(
+    value.closest(".crewlet-fact-line__fact")!.classList.contains("crewlet-fact-line__fact--token"),
+  ).toBe(true);
   expect(value.getAttribute("title")).toBe(long);
 });
 

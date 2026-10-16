@@ -744,7 +744,7 @@ function wokeBy(view: TurnView): string {
  * `v1.2` and `mattermost_post_message` whole — a bare `.` split every one of
  * them. Prose with no boundary at all is returned as it stands: a summary that
  * is one long sentence is still one sentence, and the two-line clamp on
- * `.object-title` is what bounds that case, because a cut mid-clause reads as
+ * `.crewlet-object-header__title` is what bounds that case, because a cut mid-clause reads as
  * a broken string rather than as a short title.
  */
 export function lead(prose: string): string {

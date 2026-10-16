@@ -423,7 +423,9 @@ describe("routing", () => {
     );
     // The addressed tool is drawn above the catalogue in its own header —
     // once the viewer has said this reader is an admin, whose screen it is.
-    await waitFor(() => expect(one.view.container.querySelector(".object-head")).not.toBeNull());
+    await waitFor(() =>
+      expect(one.view.container.querySelector(".crewlet-object-header")).not.toBeNull(),
+    );
     one.view.unmount();
     cleanup();
 
