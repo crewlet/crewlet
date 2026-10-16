@@ -548,6 +548,142 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 	}
 }
 
+// A BODY'S NUMBERS ARRIVE EXACTLY, as a seat's do.
+//
+// Every other path into the tools reads a call's arguments through
+// json.Number, and this surface decoded its bodies with the default decoder,
+// which turns every number into a float64 first: an integer past 2^53 — a
+// whole-number custom-field value somebody typed — was rounded before the
+// tool saw it, and filed as one they never typed.
+//
+// Mutation: decode readArgs' body with json.Unmarshal and the value is filed
+// rounded.
+func TestABodysNumbersArriveExactly(t *testing.T) {
+	t.Parallel()
+	const past = "9007199254740993" // 2^53 + 1, the first integer a float64 rounds
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items",
+		`{"title": "rotate the key", "project": "ENG", "fields": {"points": `+past+`}}`)
+	if got.status != http.StatusOK || len(r.writes.created) != 1 {
+		t.Fatalf("answered %d %v and created %d", got.status, got.body, len(r.writes.created))
+	}
+	if filed := string(r.writes.created[0].Fields["points"]); filed != past {
+		t.Errorf("points was filed as %s, want %s as it was sent", filed, past)
+	}
+	// AND ONE OBJECT: a second value after it is a request nobody can say
+	// which half of to make.
+	if got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items",
+		`{"title": "rotate the key", "project": "ENG"} {"title": "and this"}`); got.status != http.StatusBadRequest {
+		t.Errorf("a body carrying two JSON values answered %d %v", got.status, got.body)
+	}
+}
+
+// A BODY THAT STATES ANOTHER VERSION THAN ITS If-Match IS REFUSED, whatever
+// shape the second version takes, and one that states the SAME version is
+// taken, however it spells it.
+//
+// The body's version is read as the tool reads it ([argval.Whole], ADR-0059):
+// `"3"`, 3.0 and 3e0 are version 3 to every tool that takes a version, so a
+// body stating any of them beside `If-Match: 3` is the same request said
+// twice. The body's version was read as a float64 and truncated, so
+// `if_match: 3.5` beside `If-Match: 3` agreed with it and was silently
+// overwritten; and once a body's numbers arrive as json.Number, a float64
+// assertion matches nothing at all, so every disagreement would pass; and
+// compared by its spelling, `"3"` beside `If-Match: 3` was refused as a
+// second version, though the tool takes the same body without the header.
+//
+// Mutation: compare the body's value by its float64, skip a value that is not
+// one, or compare it by its spelling, and a row goes red.
+func TestABodyDisagreeingWithItsIfMatchIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"the same version", `{"after": "ENG-2", "if_match": 3}`, http.StatusOK},
+		{"the same version as text", `{"after": "ENG-2", "if_match": "3"}`, http.StatusOK},
+		{"the same version with a zero fraction", `{"after": "ENG-2", "if_match": 3.0}`,
+			http.StatusOK},
+		{"the same version with an exponent", `{"after": "ENG-2", "if_match": 3e0}`,
+			http.StatusOK},
+		{"a null, which states none", `{"after": "ENG-2", "if_match": null}`, http.StatusOK},
+		{"another version", `{"after": "ENG-2", "if_match": 4}`, http.StatusBadRequest},
+		{"another version as text", `{"after": "ENG-2", "if_match": "4"}`,
+			http.StatusBadRequest},
+		{"a fraction of it", `{"after": "ENG-2", "if_match": 3.5}`, http.StatusBadRequest},
+		{"a negative", `{"after": "ENG-2", "if_match": -3}`, http.StatusBadRequest},
+		{"text that spells no number", `{"after": "ENG-2", "if_match": "three"}`,
+			http.StatusBadRequest},
+		{"a number with text after it", `{"after": "ENG-2", "if_match": "3 days"}`,
+			http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			got := r.do(as(colleague("ana")), http.MethodPost, "/worklet/items/ENG-1/rank",
+				c.body, "If-Match", "3")
+			if got.status != c.want {
+				t.Fatalf("answered %d %v, want %d", got.status, got.body, c.want)
+			}
+			switch {
+			case c.want == http.StatusOK && (len(r.writes.placed) != 1 || r.writes.placed[0].IfMatch != 3):
+				t.Errorf("the tracker was asked to place %+v, want version 3", r.writes.placed)
+			case c.want != http.StatusOK && len(r.writes.placed) != 0:
+				t.Errorf("a request stating two versions placed %+v", r.writes.placed)
+			}
+		})
+	}
+	// A PAGE'S BASE IS READ THE SAME WAY: save_page reads its base_version
+	// through the one integer reader too.
+	for _, c := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"the page's base as text", `{"body": "new steps", "base_version": "2"}`,
+			http.StatusOK},
+		{"another base as text", `{"body": "new steps", "base_version": "3"}`,
+			http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			got := r.do(as(colleague("ana")), http.MethodPut, "/doclet/pages/p-1",
+				c.body, "If-Match", "2")
+			if got.status != c.want {
+				t.Fatalf("answered %d %v, want %d", got.status, got.body, c.want)
+			}
+			saved := slices.Equal(r.kb.did, []string{"save p-1"})
+			if saved != (c.want == http.StatusOK) {
+				t.Errorf("the knowledge base was asked to %v", r.kb.did)
+			}
+		})
+	}
+}
+
+// AN If-Match PAST THE RANGE A TOOL READS A VERSION IN IS NO VERSION, and is
+// refused as the header's own `400 invalid_body`: every tool that takes a
+// version reads it as an int ([argval.Whole]), so a larger number names
+// nothing any tool can be handed. Folded as it was, the tool's own check
+// refused it as an argument sent in a form the tool does not take, a refusal
+// of the request's arguments rather than of its header.
+//
+// Mutation: parse the header as any uint64 again, and this answers 422.
+func TestAnIfMatchNoToolCanReadIsNoVersion(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	got := r.do(as(colleague("ana")), http.MethodPost, "/worklet/items/ENG-1/rank",
+		`{"after": "ENG-2"}`, "If-Match", "9223372036854775808")
+	if got.status != http.StatusBadRequest || got.body["error"] != string(httpjson.CodeInvalidBody) {
+		t.Errorf("If-Match past the int range answered %d %v, want 400 %s",
+			got.status, got.body, httpjson.CodeInvalidBody)
+	}
+	if len(r.writes.placed) != 0 {
+		t.Errorf("a version no tool can read placed %+v", r.writes.placed)
+	}
+}
+
 // ---- the gestures no tool makes ---------------------------------------- //
 
 // A REMARK ON A WORK ITEM IS REWRITTEN BY ITS AUTHOR.

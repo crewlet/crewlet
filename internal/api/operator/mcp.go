@@ -2,7 +2,6 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // MCPPath is the route the MCP transport is mounted at.
@@ -79,11 +79,12 @@ func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 // anybody, which is the same rule a seat's tools follow and the same reason.
 func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var args map[string]any
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
-			}
+		// THE ONE DECODE every transport into a tool shares
+		// ([toolargs.Decode]): through json.Number, so a number past
+		// 2^53 reaches the tool as the caller sent it.
+		args, err := toolargs.Decode(req.Params.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
 		}
 		result, err := s.run(ctx, cat, Call{
 			Transport: types.TransportMCP, Tool: name, Args: args,

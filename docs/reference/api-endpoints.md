@@ -5649,7 +5649,9 @@ next call on, and never admits a call as one person and makes it as another.
 content type is `415` before anything is read — a cross-site form can send
 those without a preflight — and a key the envelope does not take is refused
 `400 invalid_body` rather than ignored. `args` is the tool's own arguments,
-exactly as the tool's schema names them. The body is capped at 1 114 112
+exactly as the tool's schema names them, and its numbers reach the tool
+exactly as written — an integer past 2^53 is never rounded on the way in, as
+it is not from a seat or over `/operator/mcp`. The body is capped at 1 114 112
 bytes: twice the largest legal page, because a page escapes to up to twice its
 length as a JSON string, plus 64 KiB for the rest.
 
@@ -5832,6 +5834,17 @@ is the tool's own arguments, by the tool's own names, and its answer is the
 tool's own receipt. One implementation of "file an item" rather than three,
 because copies drift on exactly the parts nobody looks at — which field is
 trimmed, which default applies, what a refusal says.
+
+A body is exactly **one JSON object** — a second value after it is `400
+invalid_body` — and its numbers reach the tool exactly as written, as a seat's
+and your assistant's do: an integer past 2^53 (a vendor's 19-digit id, a
+whole-number custom-field value) is never rounded on the way in. Where a route
+takes a version, an `If-Match` header supplies it as the number you read, and
+one that names no version (`"three"`, a negative, or a number of 2^63 or more)
+is `400 invalid_body`; a body that names the same argument must name the same
+version as the tool reads it (`3`, `3.0` and `"3"` are one version), and
+anything else — another version, a fraction, a negative, text that spells no
+whole number — is `400 invalid_body` rather than one of the two chosen for you.
 
 Every route is **guarded**, reads and writes alike, and the half the company
 does not run is **absent** rather than refusing: a company on
