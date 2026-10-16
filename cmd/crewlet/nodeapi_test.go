@@ -112,7 +112,7 @@ func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 		for _, f := range danglingFindings(t, base) {
 			detail, _ := f["detail"].(string)
 			if f["person"] == bot && f["seat"] == "founder" &&
-				strings.Contains(detail, "unbind") {
+				strings.Contains(detail, "Unbind them") {
 				return
 			}
 		}

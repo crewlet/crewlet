@@ -122,14 +122,12 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 	}
 	switch {
 	case vouch.Lag > statelog.StallGrace:
-		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
-			"this node, and its identity applier is %s behind — past the %s "+
-			"stall grace, so it cannot say the binding still stands", login,
-			seen.Seat, vouch.Lag, statelog.StallGrace)
+		return session.PersonRow{}, fmt.Errorf("engine: can't confirm %s is bound "+
+			"to %s: this node is %s behind on identity changes (limit %s)",
+			login, seen.Seat, vouch.Lag, statelog.StallGrace)
 	case vouch.Deferred:
-		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
-			"this node, which holds a record it cannot decode about that "+
-			"machine's bucket, so it cannot say the binding still stands",
+		return session.PersonRow{}, fmt.Errorf("engine: can't confirm %s is bound "+
+			"to %s: this node holds an identity change it can't read",
 			login, seen.Seat)
 	}
 	// THE BINDING AND NOTHING ELSE. The row's grants are deliberately

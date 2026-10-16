@@ -320,14 +320,10 @@ func judgeBlindKeyMint(ctx context.Context, logEnd func(context.Context) (uint64
 		return err
 	}
 	if holds {
-		return fmt.Errorf("%w: %s is missing from the company's secret store "+
-			"while the identity estate holds values derived under it, so it "+
-			"was deleted rather than never minted — a new key would orphan "+
-			"every address in the directory and let each be taken again. "+
-			"It is the engine's own key, which no operator command writes: "+
-			"restore the coordination store's secrets from the backup that "+
-			"holds it (docs/guides/backup.md, Restoring); the engine will not "+
-			"mint over it", iamdomain.ErrNoBlindKey, iamdomain.BlindKeyName)
+		return fmt.Errorf("%w: %s was deleted from the secret store, and "+
+			"people's email addresses depend on it. Restore the secrets from "+
+			"a backup (docs/guides/backup.md, Restoring)",
+			iamdomain.ErrNoBlindKey, iamdomain.BlindKeyName)
 	}
 	return nil
 }

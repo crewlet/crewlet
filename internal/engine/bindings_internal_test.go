@@ -147,12 +147,15 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 				t.Errorf("detail %q does not name the seat %q", detail,
 					tc.row.Seat)
 			}
+			// CASE-BLIND, because the remedy opens its own sentence and
+			// what is asserted is what it says, not where it starts.
+			lower := strings.ToLower(detail)
 			for _, want := range tc.says {
-				if !strings.Contains(detail, want) {
+				if !strings.Contains(lower, strings.ToLower(want)) {
 					t.Errorf("detail %q does not say %q", detail, want)
 				}
 			}
-			if tc.never != "" && strings.Contains(detail, tc.never) {
+			if tc.never != "" && strings.Contains(lower, strings.ToLower(tc.never)) {
 				t.Errorf("detail %q tells an administrator to %s a %s, which "+
 					"the directory refuses — a person always holds a seat",
 					detail, tc.never, tc.row.Kind)

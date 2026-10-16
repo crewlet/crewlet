@@ -1353,7 +1353,7 @@ behind: it cannot say which of them holds the seat, and another node can.
   "findings": [
     {"kind": "binding_dangling", "person": "018f3a9c-…", "login": "jane.doe",
      "seat": "platform-lead",
-     "detail": "seat \"platform-lead\" is not a seat of the company this node runs; move them to another human seat, or remove them — a person always holds a seat"}
+     "detail": "seat \"platform-lead\" isn't in the org chart anymore. Move them to another human seat, or remove them"}
   ],
   "position": "CREWLET_IAM_LOG@0:1840",
   "people_with_admin": 2,
