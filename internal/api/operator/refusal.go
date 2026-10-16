@@ -14,11 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
-	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ONE REFUSAL MAPPING: what a call that did not do what it was asked is
@@ -67,9 +65,13 @@ import (
 // that dropped what it was about left a client holding a key and nothing
 // saying where to look whether it landed. The `about` every transport hands
 // [Fail].
+//
+// THE ARGUMENTS ARE EVERY NATIVE DOMAIN'S OWN ([builtin.ObjectArgs]), declared
+// once beside the domain's refusal classes, rather than a list here: a list
+// here was one more place a domain added later had to be remembered in.
 func About(tool string, args map[string]any) httpjson.Detail {
 	about := httpjson.Detail{"tool": tool}
-	for _, field := range []string{"item", "page", "project", "handle"} {
+	for _, field := range builtin.ObjectArgs() {
 		if named, ok := args[field].(string); ok && strings.TrimSpace(named) != "" {
 			about[field] = named
 		}
@@ -444,23 +446,14 @@ const KeyFields = "fields"
 const ReusedKey = "What this change was about moved since it was first sent, " +
 	"so nothing was written. Look again, then make the change."
 
-// writeClass is the class a writer's error is refused under.
+// writeClass is the class a writer's error is refused under: the class its
+// domain decided ([builtin.WriterClass] — the one table the tools' own
+// failures are classed by, every native domain's, so a domain added beside the
+// tracker and the knowledge base is never a 500 for a content refusal here
+// while its tools class it), a condition's, or a fault.
 func writeClass(err error) crewletmcp.Refusal {
-	switch {
-	case errors.Is(err, worklet.ErrNoTask), errors.Is(err, worklet.ErrNoComment),
-		errors.Is(err, worklet.ErrNoProject), errors.Is(err, doclet.ErrNotFound):
-		return crewletmcp.RefusalNotFound
-	case errors.Is(err, worklet.ErrStaleVersion), errors.Is(err, doclet.ErrStaleVersion):
-		return crewletmcp.RefusalStaleVersion
-	case errors.Is(err, doclet.ErrTitleTaken), errors.Is(err, statelog.ErrExists):
-		return crewletmcp.RefusalExists
-	case errors.Is(err, doclet.ErrConflict), errors.Is(err, statelog.ErrConflict):
-		return crewletmcp.RefusalConflict
-	case errors.Is(err, worklet.ErrForbidden), errors.Is(err, worklet.ErrNotAuthor),
-		errors.Is(err, doclet.ErrReserved):
-		return crewletmcp.RefusalForbidden
-	case errors.Is(err, worklet.ErrInvalid), errors.Is(err, doclet.ErrInvalid):
-		return crewletmcp.RefusalInvalid
+	if class, ok := builtin.WriterClass(err); ok {
+		return class
 	}
 	if _, ok := builtin.Condition(err); ok {
 		return crewletmcp.RefusalUnavailable

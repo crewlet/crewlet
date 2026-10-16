@@ -3889,6 +3889,15 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		return out(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %s",
 			name, worklet.Sentence(err)))
 	}
+	if class, ok := WriterClass(err); ok {
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class and its
+		// writer's sentence ([WriterClass], the one table the human write
+		// surface classes its tool-less writers by too). Without it a
+		// refusal no arm above names — a comment that is not there, a
+		// remark that is not the caller's — fell to the fault below and
+		// told a caller the node had broken.
+		return out(class, fmt.Sprintf("%s was refused: %s.", name, worklet.Sentence(err)))
+	}
 	if why, ok := Condition(err); ok {
 		return out(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%s). "+
 			"The change was NOT made — do not report it as done.", name, why))

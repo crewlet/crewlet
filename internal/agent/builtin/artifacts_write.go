@@ -653,6 +653,12 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"somebody else kept changing the artifact. Read it again with get_artifact "+
 			"before retrying.", tool))
 	}
+	if class, ok := WriterClass(err); ok {
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
+		// [writeFailure]'s same arm: a write the log refused because the
+		// artifact's purge had begun, which no arm above names.
+		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s.", tool, said))
+	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not land "+
 			"(%s). Nothing was changed: do not report it as done. Try again shortly.", tool, why))
