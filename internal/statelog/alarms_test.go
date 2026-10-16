@@ -63,7 +63,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"no backup at all": {
 			statelog.KindBackupAge,
 			statelog.Reading{BackupMaxAge: 24 * time.Hour},
-			"no verified backup has been recorded",
+			"no verified backup of this log has been recorded",
 		},
 		// THE TERM IS NOT THE MEASUREMENT: it rides on the log the alarm
 		// stands on (AlarmDomain.Term), and the sentence says how long and
@@ -479,8 +479,8 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		t.Fatalf("a company with no backup raised %v — the trim will not "+
 			"advance until one exists", kindsOf(got))
 	}
-	if want := "no verified backup has been recorded, and the policy asks for " +
-		"one every 24h"; alarm.Detail != want {
+	if want := "no verified backup of this log has been recorded, and the " +
+		"policy asks for one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
 	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was
@@ -573,7 +573,7 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 // ONE KIND ON TWO LOGS IS ONE ALARM AND TWO PAIRS OF LOG LINES: each log is
 // logged when it comes to stand under the kind and when it leaves it.
 //
-// Six conditions are evaluated once per log, and the report lists every log a
+// Seven conditions are evaluated once per log, and the report lists every log a
 // kind stands on under its one alarm, so one `trim_blocked` can stand on the
 // tracker's log and the knowledge base's. Keyed on the kind alone, the tracker
 // folded the second log into the first: it raised no line of its own, the
@@ -581,13 +581,11 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 // `alarm_cleared` that finally came carried the knowledge base's detail against
 // the tracker's start. The gauge stays one series per kind, up while either is.
 //
-// AND A NODE-WIDE KIND IS ONE PAIR OF LINES whatever logs it lists: the logs
-// `backup_age` holds are one problem with one remedy, so a log joining its list
-// writes nothing.
+// AND A NODE-WIDE KIND IS ONE PAIR OF LINES naming no log, beside them.
 //
-// Mutation: key the instances on the kind alone, form one per listed log for a
-// node-wide kind, or report a kind's age from whichever of its logs the map
-// hands back last rather than the longest, and this fails.
+// Mutation: key the instances on the kind alone, or report a kind's age from
+// whichever of its logs the map hands back last rather than the longest, and
+// this fails.
 func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()
@@ -621,40 +619,45 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 		return a
 	}
 	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind"}
-	noBackup := statelog.Alarm{Kind: statelog.KindBackupAge,
-		Detail: "no verified backup has been recorded"}
+	uncovered := statelog.Alarm{Kind: statelog.KindBackupAge,
+		Domains: []statelog.AlarmDomain{{Domain: "usage",
+			Detail: "no verified backup of this log has been recorded"}}}
+	uncovered.Detail = uncovered.Domains[0].Detail
 
 	// The tracker's log first, alone.
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, noBackup, blocked("tracker")})
-	if raised := lines("alarm_raised"); len(raised) != 3 {
-		t.Fatalf("raising two node alarms and one log's trim_blocked wrote %d "+
-			"line(s), want three: %v", len(raised), raised)
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("tracker")})
+	if raised := lines("alarm_raised"); len(raised) != 2 {
+		t.Fatalf("raising a node alarm and one log's trim_blocked wrote %d "+
+			"line(s), want two: %v", len(raised), raised)
 	}
 
 	// THE KNOWLEDGE BASE'S LOG JOINS a kind that is already up: its own line.
-	// And a log joining backup_age's list is no line at all.
+	// And another per-log kind raised on a third log: its own line too.
 	clock = clock.Add(5 * time.Minute)
-	withHeld := noBackup
-	withHeld.Domains = []statelog.AlarmDomain{held("usage")}
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, withHeld, blocked("tracker", "pages")})
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, uncovered, blocked("tracker", "pages")})
 	raised := lines("alarm_raised")
 	if len(raised) != 4 {
-		t.Fatalf("a second log joining trim_blocked, and a log listed under "+
-			"backup_age, wrote %d raise line(s) in all, want four: %v", len(raised), raised)
+		t.Fatalf("a second log joining trim_blocked, and backup_age raised on a "+
+			"third, wrote %d raise line(s) in all, want four: %v", len(raised), raised)
 	}
 	domains := map[string]bool{}
 	for _, line := range raised {
-		if line["alarm"] != string(statelog.KindTrimBlocked) {
-			// A NODE'S ALARM NAMES NO LOG, even one that lists logs.
+		switch line["alarm"] {
+		case string(statelog.KindApplyLag):
+			// A NODE'S ALARM NAMES NO LOG.
 			if _, named := line["domain"]; named {
 				t.Errorf("a node-wide alarm's line names a log: %v", line)
 			}
-			continue
-		}
-		domain, _ := line["domain"].(string)
-		domains[domain] = true
-		if line["detail"] != held(domain).Detail {
-			t.Errorf("the %s log's line carries another's detail: %v", domain, line)
+		case string(statelog.KindBackupAge):
+			if line["domain"] != "usage" || line["detail"] != uncovered.Detail {
+				t.Errorf("backup_age's line reads %v; want the usage log's own", line)
+			}
+		default:
+			domain, _ := line["domain"].(string)
+			domains[domain] = true
+			if line["detail"] != held(domain).Detail {
+				t.Errorf("the %s log's line carries another's detail: %v", domain, line)
+			}
 		}
 	}
 	if !domains["tracker"] || !domains["pages"] {
@@ -673,7 +676,7 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	// THE TRACKER'S LOG LEAVES while the knowledge base's stands: its own line,
 	// its own age, its own detail, and the kind is still up.
 	clock = clock.Add(20 * time.Minute)
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, withHeld, blocked("pages")})
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, uncovered, blocked("pages")})
 	cleared := lines("alarm_cleared")
 	if len(cleared) != 1 || cleared[0]["domain"] != "tracker" ||
 		cleared[0]["for"] != "25m" || cleared[0]["detail"] != held("tracker").Detail {
