@@ -726,6 +726,10 @@ type DomainInputs struct {
 	// evaluated per log, because each log was sized for its own census.
 	LinearizableReads, LinearizableReadsExpected int
 
+	// CeilingField is the Tier A field that sets this log's byte ceiling,
+	// which a log past its census names ([Reading.LogCeilingField]).
+	CeilingField string
+
 	// Tombstones is this log's own evictions: with the register's rows
 	// naming the log and the live data nodes ([ReportInputs.Live]), the
 	// three inputs the trim counts the log's nodes from, which the node
@@ -1246,6 +1250,7 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
 			LinearizableReads:         held.LinearizableReads,
 			LinearizableReadsExpected: held.LinearizableReadsExpected,
+			LogCeilingField:           held.CeilingField,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)
