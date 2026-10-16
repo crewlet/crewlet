@@ -219,6 +219,7 @@ var typedKinds = []typedKind{
 	{"worklet.ErrAmbiguousAnswer", reflect.TypeFor[*worklet.ErrAmbiguousAnswer]()},
 	{"worklet.ErrFutureVersion", reflect.TypeFor[*worklet.ErrFutureVersion]()},
 	{"worklet.MoveStopped", reflect.TypeFor[*worklet.MoveStopped]()},
+	{"worklet.Refusal", reflect.TypeFor[*worklet.Refusal]()},
 	{"worklet.SubtreeStopped", reflect.TypeFor[*worklet.SubtreeStopped]()},
 	{"worklet.TagClash", reflect.TypeFor[*worklet.TagClash]()},
 	{"worklet.TagsFull", reflect.TypeFor[*worklet.TagsFull]()},
@@ -226,6 +227,7 @@ var typedKinds = []typedKind{
 
 	{"doclet.ErrFutureVersion", reflect.TypeFor[*doclet.ErrFutureVersion]()},
 	{"doclet.ErrUnknownVersion", reflect.TypeFor[doclet.ErrUnknownVersion]()},
+	{"doclet.InvalidError", reflect.TypeFor[*doclet.InvalidError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},

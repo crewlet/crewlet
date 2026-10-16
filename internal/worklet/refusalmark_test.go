@@ -119,8 +119,8 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 // TestNoRefusalSpellsThePackagePrefix walks EVERY file of the package, not
 // only [writeFiles] — a read's parameter check is built with [invalid] too —
 // for a refusal whose sentence opens with "worklet:". The prefix is the
-// refusal's own to add ([refusal.Error]): spelled again, the log reads
-// "worklet: tracker: …" and [Sentence] hands a person the package's name.
+// refusal's own to add ([Refusal.Error]): spelled again, the log reads
+// "worklet: tracker: …" and [Sentence] hands its reader the package's name.
 func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -171,7 +171,7 @@ func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 // [forbidden] and [forbiddenAs]: the Go error reads as every error here does, prefix and
 // all, which is the text a model was tuned against; a sentinel the sentence
 // wraps is still reachable beside the mark; and [Sentence] is the words alone,
-// which is what a person is shown.
+// which is what a tool tells a model.
 func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 	t.Parallel()
 	inner := errors.New("disk")
