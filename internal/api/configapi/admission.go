@@ -124,7 +124,7 @@ func (e *AdmissionError) Error() string {
 	for _, r := range e.Refused {
 		parts = append(parts, r.Kind+" "+r.ID)
 	}
-	return "configapi: this write changes what its caller may not: " +
+	return "configapi: this change reaches outside what you lead: " +
 		strings.Join(parts, ", ")
 }
 
@@ -209,11 +209,9 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
 	detail := authz.RefusalDetail(err.Refused[0].Reason, []iam.Grant{iam.GrantAdmin})
 	detail["refused"] = err.Refused
-	detail["hint"] = "a lead may change only the seats and units inside a unit " +
-		"they lead, on both sides of the write, and no setting, credential, " +
-		"${VAR}, project, space, channel, address or contact id; a write that " +
-		"changes nothing re-publishes the company and is admin's; each " +
-		"refused part names the place it reaches"
+	detail["hint"] = "Leads can change seats and units in their own units " +
+		"only. Settings, credentials, ${VAR} references, projects, spaces, " +
+		"channels, addresses and contact ids need admin."
 	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 }
 

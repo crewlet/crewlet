@@ -96,7 +96,7 @@ type SeatHolder struct {
 func (h SeatHolder) held() string {
 	switch {
 	case h.Invitation != "":
-		return "open invitation " + h.Invitation
+		return "an open invitation (" + h.Invitation + ")"
 	case h.Kind == iam.KindMachine:
 		return "service account " + cmp.Or(h.Login, h.Person)
 	}
@@ -214,7 +214,7 @@ func (e *SeatHeldError) Error() string {
 		seats = append(seats, seat+" (held by "+h.held()+")")
 	}
 	slices.Sort(seats)
-	return "configapi: this write removes a human seat that is still held: " +
+	return "this change removes human seats that people still hold: " +
 		strings.Join(seats, "; ")
 }
 
@@ -226,9 +226,9 @@ type HoldersUnavailableError struct {
 }
 
 func (e *HoldersUnavailableError) Error() string {
-	return fmt.Sprintf("configapi: this write removes the human seat(s) %s, and "+
-		"the identity directory could not be read to see whether anybody holds "+
-		"them: %v", strings.Join(e.Seats, ", "), e.Err)
+	return fmt.Sprintf("configapi: this change removes the human seat(s) %s, "+
+		"and this node can't check who holds them right now: %v",
+		strings.Join(e.Seats, ", "), e.Err)
 }
 
 func (e *HoldersUnavailableError) Unwrap() error { return e.Err }

@@ -108,9 +108,8 @@ func Require(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 // errNoKey is [Require]'s refusal of a request that named no operation.
-var errNoKey = errors.New("this route takes the operation from the " + Header +
-	" header, and the request carried none: mint one operation id when the " +
-	"gesture begins and send it, unchanged, on every retry of it")
+var errNoKey = errors.New("send a " + Header + " header. Use one new id per " +
+	"change, and send the same one on every retry")
 
 // scoped holds a caller's key to the grammar and scopes it.
 func scoped(w http.ResponseWriter, r *http.Request, given string) (string, bool) {
@@ -203,16 +202,12 @@ func Refuse(w http.ResponseWriter, err error) {
 // it.
 func UnknownDetail(unvouched bool) string {
 	if unvouched {
-		return "this node's operation ledger cannot vouch for this change, so " +
-			"the same request asked here answers the same way until the change " +
-			"reaches this node. Read whether it landed, or send it with the SAME " +
-			Header + " to another node; never under a fresh one, which is a " +
-			"second change if the first one landed."
+		return "This node can't confirm this change yet. Check whether it " +
+			"saved, or retry on another node with the same " + Header + ". " +
+			"Don't use a new one."
 	}
-	return "this node cannot establish what happened to this change. Retry it " +
-		"with the SAME operation id — send op_id back as the " + Header +
-		" header — because a fresh one would defeat the ledger that makes the " +
-		"retry safe."
+	return "Couldn't confirm this change was saved. Retry with the same op_id " +
+		"as the " + Header + " header."
 }
 
 // Digest is what binds a write's operation to its request: the path (the

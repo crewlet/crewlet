@@ -137,9 +137,9 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// caller resolves with a new key, never by waiting.
 		detail["field"] = opkey.Header
 		detail["op_id"] = key
-		detail["detail"] = sentence + " — under this " + opkey.Header + " the " +
-			"write already landed on something else, since what this request " +
-			"names has changed; read it again and send this one under a new key"
+		detail["detail"] = strings.TrimSuffix(sentence, ".") + ". This " +
+			opkey.Header + " was already used for a different change. Read it " +
+			"again and send it with a new key."
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput, detail)
 	case refusedFor(cause, statelog.ReasonDeleted):
 		// A PERMANENT DELETION MARKER on what the write is about: it was

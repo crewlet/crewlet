@@ -193,8 +193,8 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	// the surface's interface would pass its own refusal.
 	sealer := e.PersonSealer()
 	if sealer == nil {
-		return nil, nil, errors.New("api: the sign-in surface: this node " +
-			"holds no keyring to seal a second factor with")
+		return nil, nil, errors.New("api: sign-in needs a keyring. Set " +
+			"`secrets.keys` in this node's config file")
 	}
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
@@ -304,8 +304,8 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 	// panic.
 	sealer := e.PersonSealer()
 	if sealer == nil {
-		return nil, errors.New("api: the identity directory: this node holds " +
-			"no keyring to open anybody's name with")
+		return nil, errors.New("api: the people directory needs a keyring. " +
+			"Set `secrets.keys` in this node's config file")
 	}
 	surface, err := iamapi.New(iamapi.Options{
 		Directory: reader,
@@ -359,10 +359,8 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 // errNoIdentityEstate is a human surface asked of an engine that holds no
 // identity estate — one [engine.New] did not build, since every engine it
 // builds runs the estate from boot.
-var errNoIdentityEstate = errors.New("api: the engine runs no identity estate, " +
-	"so there is nobody to sign in or enrol — a node that serves the API holds " +
-	"the estate (its roles include `data`) and runs it from boot, whether or " +
-	"not it has a company")
+var errNoIdentityEstate = errors.New("api: this node serves the API but has " +
+	"no `data` role, so nobody can sign in. Add `data` to `node.roles`")
 
 // operatorSurface builds the operator surface over this engine: ONE server per
 // node, whose catalogue is built for every call from the halves the node

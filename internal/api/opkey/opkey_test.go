@@ -294,7 +294,7 @@ func TestAnUnknownSaysToRetryUnderTheSameKey(t *testing.T) {
 	t.Parallel()
 	for _, unvouched := range []bool{false, true} {
 		said := opkey.UnknownDetail(unvouched)
-		if !strings.Contains(said, opkey.Header) || !strings.Contains(said, "SAME") {
+		if !strings.Contains(said, opkey.Header) || !strings.Contains(said, "same") {
 			t.Errorf("unvouched=%v: %q does not say to send the same operation "+
 				"back as the %s", unvouched, said, opkey.Header)
 		}

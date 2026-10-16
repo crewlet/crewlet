@@ -260,8 +260,8 @@ func reserved(w http.ResponseWriter, name string) bool {
 	}
 	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeReservedName, map[string]string{
 		"detail": secrets.ErrReservedName.Error(),
-		"hint": "the address index's key belongs to the identity estate; a " +
-			"rekey moves it with everything else",
+		"hint": "A rekey moves it with everything else (crewlet secrets " +
+			"rekey).",
 	})
 	return true
 }
@@ -490,9 +490,8 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 				"engine_keys_moved": rekeyed.EngineKeys,
 				"identity":          identity,
 				"identity_unknown":  len(report.Unknown),
-				"hint": "not every person's values could be confirmed re-sealed " +
-					"in the identity estate; run the rekey again, which moves " +
-					"only what is still under an old key",
+				"hint": "Some people's details weren't moved to the new key. " +
+					"Run the rekey again.",
 			})
 			return
 		}

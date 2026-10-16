@@ -371,8 +371,8 @@ func TestAnInvitedSeatCannotBeTakenOutOfTheCompany(t *testing.T) {
 						"(%q): %s", secret, res.Body)
 				}
 			}
-			if !strings.Contains(res.Body.String(), "open invitation "+
-				samInvited.Invitation) || !strings.Contains(res.Body.String(),
+			if !strings.Contains(res.Body.String(), "an open invitation ("+
+				samInvited.Invitation+")") || !strings.Contains(res.Body.String(),
 				"DELETE /iam/invitations/{id}") {
 				t.Errorf("the refusal does not say an invitation holds the seat "+
 					"and how to cancel it: %s", res.Body)
