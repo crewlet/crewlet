@@ -830,6 +830,51 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	}
 }
 
+// A PAGE REMARK CARRIES THE CALL'S OWN ARGUMENTS in its operation key, so a
+// call that named the page another way is another call. The repeat count
+// compares the arguments as typed and the store's parts are what the call
+// resolved to, so without the digest "ok" on p1, the same again, "ok" on "p1 "
+// (trimmed to p1), "other" on p1 and "ok" on p1 once more gave the last call
+// the third one's key: it was answered with that comment's success and
+// nothing was written. Held end to end over the real store in internal/doclet
+// (TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage).
+//
+// Mutation: drop the digest from pageOpKey's identity and keys[4] equals
+// keys[2].
+func TestAPageRemarkNamedAnotherWayIsAnotherCall(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	turn := workTurn(t)
+	turn.Calls = turnctx.NewCallLog()
+	surface := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{builtin.CommentOnPageTool}).ForTurn(turn)
+	for _, call := range [][2]string{{"p1", "ok"}, {"p1", "ok"}, {"p1 ", "ok"},
+		{"p1", "other"}, {"p1", "ok"}} {
+		res, err := surface.Execute(t.Context(), llm.ToolCall{
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": call[0], "body": call[1]},
+		})
+		if err != nil || res.Failed {
+			t.Fatalf("comment %q on %q = (%+v, %v)", call[1], call[0], res, err)
+		}
+	}
+	keys := kb.keys
+	if len(keys) != 5 {
+		t.Fatalf("five remarks reached the store as %d", len(keys))
+	}
+	if keys[1] != keys[0] {
+		t.Errorf("a remark repeated with nothing between carried key %q after %q", keys[1], keys[0])
+	}
+	if keys[2] == keys[0] {
+		t.Errorf("a remark naming the page another way carried the first one's key %q", keys[0])
+	}
+	if keys[4] == keys[2] {
+		t.Errorf("\"ok\" on p1 after other calls carried key %q, the one the call "+
+			"naming \"p1 \" carried — it is that comment's retry and writes nothing "+
+			"(keys %v)", keys[4], keys)
+	}
+}
+
 // A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE.
 //
 // Every page tool answered with an id and a revision whatever the write's
