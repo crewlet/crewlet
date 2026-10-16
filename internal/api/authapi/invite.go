@@ -286,7 +286,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		Invitation:       held.ID,
 		InvitationSecret: in.Secret,
 		Seat:             held.Seat,
-		OpID:             opID, Reason: "redeemed an invitation",
+		OpID:             opID, Reason: "accepted an invitation",
 	})
 	if err != nil {
 		if errors.Is(err, iamdomain.ErrRefused) {
@@ -388,14 +388,14 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 	case errors.As(err, &taken):
 		log.InfoContext(r.Context(), event, "refused", "taken",
 			"field", string(taken.Field))
-		detail := "that login is already taken — choose another"
+		detail := "That login is already taken. Choose another."
 		if taken.Field == iamdomain.UniqueSeat {
 			// NAMING NEITHER THE SEAT'S HOLDER NOR THE SEAT'S OTHER
 			// NAMES, for the paragraph above's reason: what the caller
 			// can act on is that the seat is gone, and the remedy is
 			// whoever sent them.
-			detail = "the seat this invitation binds is already held by " +
-				"somebody in this company — ask whoever sent it for a new one"
+			detail = "Someone else already has this invitation's seat. Ask " +
+				"whoever sent it for a new one."
 		}
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": detail})

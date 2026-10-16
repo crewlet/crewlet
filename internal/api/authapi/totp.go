@@ -143,9 +143,9 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		// would send them to check a password that was right.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{
-				"detail": "that code does not match the secret",
-				"hint": "check the authenticator app has the right account, " +
-					"and that this device's clock is correct",
+				"detail": "That code doesn't match.",
+				"hint": "Check that your authenticator app shows the right " +
+					"account and your device's clock is correct.",
 			})
 		return
 	}
@@ -173,7 +173,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	const reason = "enrolled a second factor"
+	const reason = "set up two-step verification"
 	// A FRESH OPERATION PER ENROLMENT, in the grammar the ledger vouches for
 	// a retry by: this request is the whole of it, and an attempt asked
 	// again is a new enrolment of the same seed. It was `totp:<person>:<id>`,
@@ -199,11 +199,10 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 			"person", person, "lineage", replaced.Bearer.Lineage.String())
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeSecondFactorRequired,
 			map[string]string{
-				"detail": "this account holds a second factor now, and this " +
-					"session was opened on a password alone, so it cannot " +
-					"enrol another over it",
-				"hint": "sign in again with the code from your authenticator " +
-					"app, or one of your recovery codes",
+				"detail": "Two-step verification is already set up on this " +
+					"account.",
+				"hint": "Sign in again with a code from your authenticator " +
+					"app, or a recovery code.",
 			})
 		return
 	}
@@ -352,7 +351,7 @@ func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 		stepUp: true, replaces: replaced.Bearer.Lineage.String(),
 		absolute: replaced.Bearer.AbsoluteExpiresAt,
 		provedAt: &proved,
-		because:  "replaced by a second factor's enrolment",
+		because:  "replaced after setting up two-step verification",
 	})
 	if !ok {
 		return
@@ -403,9 +402,8 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, errNoAuthenticator) {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalid,
-			map[string]string{"detail": "recovery codes stand in for an " +
-				"authenticator app, and this account holds none: set one up " +
-				"first, which issues the first codes with it"})
+			map[string]string{"detail": "Set up an authenticator app first. " +
+				"You'll get recovery codes with it."})
 		return
 	}
 	if err != nil {
@@ -492,7 +490,8 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 	}
 	window, _ := authz.RecencyOf(authz.ActionCredentialProof)
 	if principal.Kind != iam.KindPerson {
-		refuseStepUp(w, window, "a machine credential holds no second factor")
+		refuseStepUp(w, window, "Only people can set up two-step "+
+			"verification.")
 		return iam.Principal{}, false
 	}
 	d := authz.Decide(r.Context(), principal, authz.ActionCredentialProof,

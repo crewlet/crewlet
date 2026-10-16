@@ -175,11 +175,11 @@ func (c *CSRF) RefuseCrossSite(w http.ResponseWriter, r *http.Request) bool {
 	switch origin := r.Header.Get("Origin"); {
 	case origin == "":
 		if c.cookieAuthenticated(r) {
-			c.refuse(w, r, "a cookie-authenticated request carried no Origin")
+			c.refuse(w, r, "The request had no Origin header.")
 			return true
 		}
 	case !c.Permits(origin):
-		c.refuse(w, r, "Origin "+origin+" is not an address this deployment is reached at")
+		c.refuse(w, r, origin+" isn't an address for this deployment.")
 		return true
 	}
 	return false
@@ -213,8 +213,7 @@ func (c *CSRF) refuse(w http.ResponseWriter, r *http.Request, why string) {
 	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeCSRFOrigin,
 		map[string]string{
 			"detail": why,
-			"hint": "a browser sends Origin on every state-changing request; " +
-				"name this deployment's address in api.external_url, and any " +
-				"other hostname it is reached at in api.auth.allowed_origins",
+			"hint": "Set this deployment's address in `api.external_url`, " +
+				"and any other hostname in `api.auth.allowed_origins`.",
 		})
 }

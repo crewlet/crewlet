@@ -92,33 +92,22 @@ func NewDevPrincipal(login string, b *config.Bootstrap) (*DevPrincipal, error) {
 		return nil, nil
 	}
 	if !version.IsDevelopment() {
-		return nil, fmt.Errorf("-dev-principal is refused by a binary that is "+
-			"not a development build (this one reports version %q): it "+
-			"authenticates every request with no credential at all, and a "+
-			"setting that reaches production does so by being copied into an "+
-			"image. Build from source to use it, or create an "+
-			"`api.auth.tokens` entry, which is listable, revocable and "+
-			"audited", version.String())
+		return nil, fmt.Errorf("-dev-principal only works on a development "+
+			"build (this one is %q). Use an `api.auth.tokens` entry instead",
+			version.String())
 	}
 	if b == nil {
-		return nil, fmt.Errorf("-dev-principal needs a configuration to read " +
-			"`api.host` and `api.auth.admin` from: without one it cannot " +
-			"establish that this node binds loopback, and it is refused rather " +
-			"than assumed")
+		return nil, fmt.Errorf("-dev-principal needs a config file with " +
+			"`api.host` and `api.auth.admin`. Pass one with -config")
 	}
 	if !BindIsLoopback(b.API.Host) {
-		return nil, fmt.Errorf("-dev-principal is refused on `api.host: %q`, "+
-			"which other machines can reach: it authenticates every request "+
-			"with no credential at all, so the bind is the only thing that "+
-			"keeps it to this machine. Set `api.host` to 127.0.0.1, or create "+
-			"an `api.auth.tokens` entry for anything reachable from elsewhere",
-			b.API.Host)
+		return nil, fmt.Errorf("-dev-principal only works on loopback, and "+
+			"`api.host: %q` isn't. Set `api.host` to 127.0.0.1, or use an "+
+			"`api.auth.tokens` entry", b.API.Host)
 	}
 	if strings.ContainsAny(login, ":.") {
-		return nil, fmt.Errorf("-dev-principal %q may not contain `:` or `.`: "+
-			"internal/iam keeps three identity namespaces apart by the SHAPE "+
-			"of the name, and a login carrying either separator would collide "+
-			"with a machine handle or a person's dotted login", login)
+		return nil, fmt.Errorf("-dev-principal %q can't contain `:` or `.`. "+
+			"Use a single word, like a seat handle", login)
 	}
 	return &DevPrincipal{
 		login:  DevPrincipalLoginPrefix + login,

@@ -124,9 +124,8 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if principal.Kind != iam.KindPerson {
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden,
-			map[string]string{"detail": "a password belongs to a person, and " +
-				"this request acts as a credential of the deployment's own, " +
-				"which has none — sign in as the person whose password it is"})
+			map[string]string{"detail": "Only people have passwords. Sign in " +
+				"as the person whose password it is."})
 		return
 	}
 	if !s.mayChangeOwnPassword(w, r, principal) {
@@ -171,8 +170,9 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// re-checking the new password on a form that is not a sign-in.
 	refuse := func(why string) {
 		s.refuseSignInWith(w, r, adm, attempt, why, map[string]string{
-			"field":  "current_password",
-			"detail": "your current password was not accepted — check it and try again"})
+			"field": "current_password",
+			"detail": "Your current password isn't right. Check it and try " +
+				"again."})
 	}
 	if held.ID != principal.ID.String() || !stageAdmits(held.Stage) {
 		if s.decoy(w, r, adm, in.CurrentPassword) {
@@ -250,9 +250,8 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errPasswordMoved):
 		s.clearSession(w)
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
-			map[string]string{"detail": "this password was changed or reset " +
-				"since this request checked it, which ended this session — " +
-				"sign in with the new one"})
+			map[string]string{"detail": "Your password was changed somewhere " +
+				"else, so you've been signed out. Sign in with the new one."})
 		return
 	case removed(err):
 		s.proofOfRemoved(w, r)
@@ -275,9 +274,8 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		s.clearSession(w)
 		httpjson.Write(w, http.StatusAccepted, passwordChanged{
 			Status: "password_changed",
-			Detail: "the password is changed and every session ended; this " +
-				"node has not applied the change yet, so sign in again with " +
-				"the new password",
+			Detail: "Password changed, and you've been signed out " +
+				"everywhere. Sign in again with the new password.",
 		})
 		return
 	}

@@ -206,7 +206,7 @@ func TestACollapsedWriteIsNeverBuiltOn(t *testing.T) {
 			// refused as a copy, "could not make that change" — would
 			// send a client to find out what it could have been told.
 			if detail, _ := body["detail"].(string); !strings.Contains(detail,
-				"landed as a copy") {
+				"this request can't use it") {
 				t.Errorf("the answer says %q, not that the change landed as a "+
 					"copy this call cannot prove is its own", detail)
 			}

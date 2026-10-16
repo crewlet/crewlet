@@ -166,10 +166,8 @@ func enrolmentRefusal() *Refusal {
 	return &Refusal{
 		Status: http.StatusForbidden,
 		Code:   httpjson.CodeSecondFactorEnrolmentRequired,
-		Detail: "this session was opened with a password alone, and this " +
-			"deployment requires a second factor you do not hold yet: enrol " +
-			"one with POST " + PathAuthTOTP + " — until you do, this session " +
-			"can do nothing else",
+		Detail: "This company requires two-step verification. Set it up " +
+			"(POST " + PathAuthTOTP + ") before you do anything else.",
 		spares: EnrolmentAdmits,
 	}
 }

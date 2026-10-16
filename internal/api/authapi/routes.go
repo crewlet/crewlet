@@ -162,10 +162,10 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	if !presented {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{
-				"detail": "this route exchanges a Tier A token, presented as " +
-					"the bearer, for a session",
-				"hint": "a session already in hand is used as it is; see " +
-					"GET /auth/session",
+				"detail": "Send an API token in the Authorization header to " +
+					"sign in with it.",
+				"hint": "Already signed in? Use your session as it is (GET " +
+					"/auth/session).",
 			})
 		return
 	}
@@ -246,9 +246,8 @@ func machineToken(w http.ResponseWriter, r *http.Request, window iam.Recency) bo
 	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
 		return false
 	}
-	refuseStepUp(w, window, "a machine token proves nobody is present, so it "+
-		"cannot confirm its owner's identity or change how they prove it; sign "+
-		"in as the person")
+	refuseStepUp(w, window, "Access tokens can't confirm it's you or change "+
+		"how you sign in. Sign in as yourself.")
 	return true
 }
 
@@ -295,7 +294,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		// the step-up rather than a gap in it: a credential in a config
 		// file cannot prove a person is at the keyboard.
 		refuseStepUp(w, iam.RecencyStepUp,
-			"a machine credential cannot confirm a person's identity")
+			"Only a person can confirm it's them. Sign in as yourself.")
 		return
 	}
 	// NOR CAN A TOKEN ACTING AS A PERSON, which the kind above cannot see.

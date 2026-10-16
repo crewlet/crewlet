@@ -357,7 +357,7 @@ func TestAFirstPasswordLinkSaysSo(t *testing.T) {
 	}{
 		{"a created person's first link", created, true, "set their first password"},
 		{"a reset of a person holding a password (the control)", passwordOnly,
-			false, "set a new password from a reset link"},
+			false, "set a new password with a reset link"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

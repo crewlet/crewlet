@@ -143,7 +143,7 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	// link, and issuing that one revokes this ([iamdomain.RevokeResetLinks]),
 	// so a link that still opens in the record's snapshot is one whose
 	// person still held no password when it was read.
-	reason := "set a new password from a reset link"
+	reason := "set a new password with a reset link"
 	if held.First {
 		reason = "set their first password"
 	}
