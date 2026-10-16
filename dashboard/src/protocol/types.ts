@@ -2126,6 +2126,14 @@ export interface RetentionDomain {
    * proof that a node was readmitted. ABSENT when they were read.
    */
   evictions_unreadable?: boolean;
+  /**
+   * When the backup this log's trim counts was taken: the newest verified
+   * point the `backup_floor` policy counts that covers this log's stream — a
+   * node's copy, or the operator's acknowledgement of this log. ABSENT where
+   * none covers it, which is the state the backup term blocks on and
+   * `backup_age` names, per log.
+   */
+  backup_at?: string;
 }
 
 /** Why the answering node refuses a domain. */
@@ -2236,9 +2244,11 @@ export interface RetentionAlarm {
   remedy: string;
   /**
    * Every log the alarm stands on, each with its own measurement. Under
-   * `backup_age` these are the logs the missing or stale backup has held past
-   * their replay window, which raise no `trim_blocked` of their own; a younger
-   * hold is listed nowhere. Absent for a node-wide condition.
+   * `backup_age` these are the logs whose own counted backup is missing or
+   * older than the policy — each log is acknowledged and aged on its own — and
+   * one of them the backup term has held past its replay window carries the
+   * term there, raising no `trim_blocked` of its own. Absent for a node-wide
+   * condition.
    */
   domains?: RetentionAlarmDomain[];
 }
@@ -2247,7 +2257,8 @@ export interface RetentionAlarm {
 export interface RetentionAlarmDomain {
   domain: string;
   detail: string;
-  /** The trim term holding this log, where the alarm is about its trim. */
+  /** The trim term holding this log, where the alarm is about its trim: under
+   *  `trim_blocked`, and under `backup_age` for a hold folded there. */
   term?: RetentionTermName;
   /** When this log's trim stopped advancing. */
   since?: string;
