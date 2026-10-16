@@ -29,10 +29,17 @@ func (Domain) Name() string { return "tracker" }
 //
 // Crossing it REFUSES an append rather than dropping the oldest record —
 // nothing on this stream is derivable from anything else, so shedding history
-// is data loss with a tidy name. At the modelled growth rate a completely
-// blocked trim reaches it in five years, which is an unmistakable operator
-// failure rather than a surprise; the operator dial is real because at a
-// three-year-old company the ceiling is two years away.
+// is data loss with a tidy name.
+//
+// SIXTEEN GIBIBYTES IS FIVE YEARS OF THE REFERENCE COMPANY'S RECORDS,
+// MEASURED: its day takes 9.7 MB of this log (the package doc's "What a day
+// costs the log, measured"), which fills it in 4.9 years, and
+// TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay holds that day within a
+// tenth of this ceiling's five years. Its seats' linearizable reads add 1.7 MB
+// a day of barriers, so a completely blocked trim reaches it in a little over
+// four years — an unmistakable operator failure rather than a surprise — and
+// the operator dial is real because at a three-year-old company whose trim
+// never ran the ceiling is about a year away.
 const TrackerLogMaxBytes = 16 << 30
 
 // TrackerLogDuplicates is the window the broker collapses a repeated
