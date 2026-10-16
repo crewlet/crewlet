@@ -655,7 +655,8 @@ func checkLedgerEntry(entry registration) error {
 }
 
 // checkIdentityEntry is what [checkRegister] asks of an entry about the
-// fleet's counted set — which only an identity-claiming log keeps.
+// fleet's counted set — which only an identity-claiming log keeps — and about
+// the generation record that guards it.
 //
 // THREE ANSWERS A DOMAIN THAT CLAIMS IDENTITY MUST GIVE, each about a node the
 // fleet has evicted:
@@ -673,9 +674,20 @@ func checkLedgerEntry(entry registration) error {
 //
 // And a domain that claims none declares no gate writer: nobody is counted on
 // its log, so a gate record there would be a record nothing reads.
+//
+// A GENERATION RECORD EXACTLY WHERE IDENTITY IS CLAIMED, both ways. The record
+// a reanchor appends is what makes two operators re-anchoring one log at once
+// a first-writer-wins race on its subject ([statelog.GenerationEncoder]), and
+// the audit row a log keeps of who opened which generation is applied from it.
+// An identity log whose encoder kept none could be opened at one generation by
+// two nodes with nothing reporting it, and the transition only branches on
+// what the encoder answers, so nothing else would say so; a log that claims no
+// identity and keeps one writes an audit row nobody reads. Asked here rather
+// than when an operator re-anchors, which is mid-incident.
 func checkIdentityEntry(entry registration) error {
 	domain := entry.Domain
 	name := domain.Name()
+	_, keeps := entry.Generation.GenerationSubject(1)
 	if !domain.ClaimsIdentity() {
 		if entry.NewGate != nil {
 			return fmt.Errorf("engine: the state-log register's entry for %q "+
@@ -683,7 +695,20 @@ func checkIdentityEntry(entry registration) error {
 				"the trim counts nobody on its log, so an eviction written there "+
 				"would be a record nothing reads", name)
 		}
+		if keeps {
+			return fmt.Errorf("engine: the state-log register's entry for %q keeps "+
+				"a generation record, and the domain claims no identity — a "+
+				"reanchor of it would write an audit row nobody reads; a domain "+
+				"that keeps none says so through its own encoder, as the vectors do",
+				name)
+		}
 		return nil
+	}
+	if !keeps {
+		return fmt.Errorf("engine: domain %q claims identity and its generation "+
+			"encoder keeps no record, so two operators re-anchoring its log at "+
+			"once could each open the same generation with nothing to say so — "+
+			"the record is the first-writer-wins between them", name)
 	}
 	if _, lists := domain.(evictionLister); !lists {
 		return fmt.Errorf("engine: domain %q claims identity and cannot list the "+

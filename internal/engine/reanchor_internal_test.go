@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -895,6 +896,105 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 			WHERE key = 'ENG' AND purpose = 'after' AND version >= ?`,
 			int64(gen)*statelog.GenerationStride) == 1
 	})
+}
+
+// A REANCHOR OF THE USAGE LOG LETS TODAY'S SPEND MOVE AGAIN.
+//
+// The usage applier's guard is a position: a seat-day moves only for a record
+// above the version its row holds. A log rebuilt at the same generation counts
+// from one again, so every later publish of a day the estate already holds sits
+// below that row and is dropped — today's spend freezes on every node until the
+// day turns over, and nothing reports it. The reanchor is what moves the domain
+// to a generation every new record sits above, and nothing else exercised it
+// for this log.
+//
+// The domain keeps no generation RECORD — it claims no identity, so there is no
+// first-writer-wins to protect — which is why this case asserts the outcome the
+// reanchor exists for rather than an audit row.
+func TestAReanchorOfTheUsageLogLetsTodaysSpendMoveAgain(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	c := e.core.Load()
+	s := c.log
+	running := s.Domain(usage.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the node runs no usage log")
+	}
+	day := time.Now().UTC().Format(time.DateOnly)
+	seat := usage.Subject{Kind: usage.KindSeat, Node: c.nodeID, Day: day, Seat: "seat-1"}
+	publishTurns := func(turns int) statelog.Result {
+		t.Helper()
+		opID := fmt.Sprintf("usage-test-%d", turns)
+		rec := usage.Record{
+			RecordEnvelope: usage.RecordEnvelope{OpID: opID, Subject: seat, Writer: c.nodeID},
+			Handle:         "alice",
+			Turns:          &usage.Turns{Count: int64(turns)},
+		}
+		body, err := rec.Encode()
+		if err != nil {
+			t.Fatalf("encode the seat-day: %v", err)
+		}
+		env, err := usage.Domain{}.Envelope(body)
+		if err != nil {
+			t.Fatalf("read the seat-day's envelope: %v", err)
+		}
+		// THROUGH THE RUNNING LOG'S OWN PUBLISHER, the request shape the
+		// usage publisher forms, so the frame is signed and stamped as
+		// every record on this log is.
+		res, err := running.publisher.Publish(t.Context(), statelog.Request{
+			Subject: env.Subject, Scope: env.Scope,
+			OpID:    opID,
+			Pattern: statelog.PatternAdditive,
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				stamped := rec
+				stamped.Gen, stamped.Writer = stamp.Gen, stamp.Writer
+				payload, err := stamped.Encode()
+				return statelog.Decision{Payload: payload}, err
+			},
+		})
+		if err != nil || res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("publish the seat-day at %d turn(s): %+v, %v", turns, res, err)
+		}
+		return res
+	}
+	turnsHeld := func(turns int) func() bool {
+		return func() bool {
+			return countRows(t, e, `SELECT COUNT(*) FROM usage_turns
+				WHERE day = ? AND node = ? AND agent_id = ? AND turns = ?`,
+				day, c.nodeID, "seat-1", turns) == 1
+		}
+	}
+
+	publishTurns(1)
+	waitUntil(t, 10*time.Second, "the first seat-day to apply", turnsHeld(1))
+
+	rebuildLog(t, js, usage.Domain{}.Stream())
+	s.publishPositions(t.Context())
+	stream := usage.Domain{}.Stream().Name
+	view, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v — a recreated usage log no operator can "+
+			"recover freezes today's spend on every node", err)
+	}
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
+	})
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	gen := plan.Generation
+	waitUntil(t, 10*time.Second, "the usage applier to resume", func() bool {
+		r := running.runner
+		return r.StreamIdentity() == nil && r.Committed().Generation == gen
+	})
+
+	// THE SAME DAY, PUBLISHED AGAIN ON THE ADOPTED LOG, MOVES: its position
+	// is in the new generation, above the row the old log left.
+	if res := publishTurns(2); res.Position.Generation != gen {
+		t.Fatalf("the seat-day after the reanchor landed in generation %d, want %d",
+			res.Position.Generation, gen)
+	}
+	waitUntil(t, 10*time.Second, "the seat-day to move after the reanchor", turnsHeld(2))
 }
 
 // ONE DOMAIN'S LOOP HALTS AND RESUMES WITHOUT THE OTHERS.
