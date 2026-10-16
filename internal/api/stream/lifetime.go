@@ -356,12 +356,12 @@ func (s *Service) CredentialsMoved(m Moved) {
 // rewatch decides the watched seat again, as whoever is asking now. seatOf is
 // the published company's word on a seat. audienceMoved reports whether the
 // principal's audience on the company now published differs from the one the
-// socket was opened with ([Service.AudienceFor]); nil asks nothing. now is the service's clock, which
-// the credential's end is measured against — the one the guard deciding it
-// reads, rather than a second, private reading of the wall clock: a node whose
-// guard was handed a clock this timer did not read re-decided every socket
-// once a second, its deadline long past by one clock and hours off by the
-// other.
+// socket was opened with ([Service.AudienceFor]); nil asks nothing. now is the
+// service's clock, which the credential's end is measured against — the one
+// the guard deciding it reads, rather than a second, private reading of the
+// wall clock: a node whose guard was handed a clock this timer did not read
+// re-decided every socket once a second, its deadline long past by one clock
+// and hours off by the other.
 func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
 	cred credential, seatOf SeatOfFunc, now func() time.Time,
 	audienceMoved func(context.Context, iam.Principal) bool,
