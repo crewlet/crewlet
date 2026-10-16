@@ -3888,8 +3888,9 @@ answers carries one shape:
 ```
 
 - `nodes` is every node asked or heard from, sorted by id; the node you
-  asked is always one and always answered — a failure of its own store is an
-  error, not a gap.
+  asked is always one and always answered — it is a data node, since serving
+  the API takes the `data` role, and a failure of its own store is an error,
+  not a gap.
 - `complete` is true only when the node roster could be read **and** every
   node on it answered. A node that did not is named with why: no answer
   inside the two-second fleet read budget, a build speaking another version
