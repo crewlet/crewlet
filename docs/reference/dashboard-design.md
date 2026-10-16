@@ -8527,22 +8527,25 @@ refused before the round trip, and the engine's own refusal of a directory —
 occupied, or one its host cannot create or write — is said on the field. The request
 waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
-newest backup the trim counts, the `backup_floor` policy, how many were
-requested and failed (over the span the event log reads, named from the
-`event_history_seconds` the engine reports rather than written into the
-screen, or "in the newest N" when the history filled its page), and the
+oldest backup any log's trim reads (each log reads the newest counted backup
+that covers it, so under `operator` there is one per log acknowledged, and the
+stalest is the one the backup-age alarm leads with), the `backup_floor` policy,
+how many were requested and failed (over the span the event log reads, named
+from the `event_history_seconds` the engine reports rather than written into
+the screen, or "in the newest N" when the history filled its page), and the
 backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
 nothing backed up and every node's history read, the figure says "none yet"
-and the two lists are not drawn. Otherwise come **Newest per owner**, each node's newest copy and
-the operator's acknowledgement, with its directory, size (none for an
-acknowledgement, never 0), reach, and whether the trim counts it: exactly one
-row reads **counted · newest**, the engine's choice rather than the latest
+and the two lists are not drawn. Otherwise come **Newest per node and log**,
+each node's newest copy and the operator's newest acknowledgement of each log,
+one row per log, with its directory, size (none for an acknowledgement, never
+0), reach, and whether the trim counts it: a row reads **counted · newest**
+where some log's trim reads it, the engine's choice rather than the latest
 date, so a newer copy nobody verified reads **not verified**. Then **Backup
 history**: every backup a person asked any node for over the event log's 30
 days, with the node that holds it, the person, the directory and whether its
 manifest was written. A failure is drawn as one. Neither table is derived from
-the other: the register keeps each owner's newest point only, which is why a
-failed night shows in the history alone.
+the other: the register keeps each node's newest point and each log's newest
+acknowledgement only, which is why a failed night shows in the history alone.
 
 **Audit log** reads five sources over one window: Worklet's feed, Doclet's
 changes, the configuration history, the credential rows,
