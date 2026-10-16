@@ -109,14 +109,14 @@ func TestACompanyWriterThatNamesNoTokenIsWarnedAbout(t *testing.T) {
 		"a typo names no token, and leaves the document frozen": {
 			writers: []string{"operater"},
 			want: map[string]string{
-				"api.auth.company_writers[0]": `"operater" names no token`,
-				"api.auth.company_writers":    "freezes the document",
+				"api.auth.company_writers[0]": `"operater" isn't in`,
+				"api.auth.company_writers":    "nobody can change the company config",
 			},
 		},
 		"one stray id beside a real one is named alone": {
 			writers: []string{"operator", "gitops"},
 			want: map[string]string{
-				"api.auth.company_writers[1]": `"gitops" names no token`,
+				"api.auth.company_writers[1]": `"gitops" isn't in`,
 			},
 		},
 	} {

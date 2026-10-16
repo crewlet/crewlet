@@ -283,26 +283,22 @@ func (p *APIPublic) validate(path Path, ingress bool) error {
 	}
 	if p.Port == 0 && (p.Host != "" || strings.TrimSpace(p.ExternalURL) != "") {
 		probs.add(at(path, "port"), ErrMissing,
-			"is required once host or external_url is set: both describe the "+
-				"public LISTENER, and without a port this node opens none")
+			"is required when host or external_url is set. Without a port, "+
+				"the public listener doesn't open")
 	}
 	raw := strings.TrimSpace(p.ExternalURL)
 	if raw == "" {
 		if p.Enabled() && ingress {
 			probs.add(at(path, "external_url"), ErrMissing,
-				"required once the public listener is set on an ingress node: the "+
-					"webhooks, app manifests and sandbox endpoints it serves are "+
-					"served ONLY on it, so every address handed to a vendor or a "+
-					"box is built on this one and api.external_url answers 404 for "+
-					"them. Write it as scheme://host[:port], e.g. "+
-					"https://hooks.example.com")
+				"required when the public listener is set. Set it to the "+
+					"address vendors reach, e.g. https://hooks.example.com")
 		}
 		return probs.err()
 	}
 	probs.wrap(checkExternalURL(at(path, "external_url"), raw,
-		"every webhook, app manifest and sandbox endpoint URL is built on it, "+
-			"and a vendor refuses one without a scheme",
-		"a vendor and a sandbox box reach this listener on"))
+		"webhook and sandbox URLs are built on it, and vendors refuse one "+
+			"without a scheme",
+		"vendors and sandboxes use to reach this listener"))
 	return probs.err()
 }
 
@@ -354,22 +350,17 @@ func (a *API) validateExternalURL(path Path, serving bool) error {
 	if raw == "" {
 		if serving {
 			p.add(at(path, "external_url"), ErrMissing,
-				"required once this node serves the API (`api.port` is set and "+
-					"node.roles holds ingress): it decides the session cookie's "+
-					"Secure flag and __Host- prefix, the origin every write is "+
-					"checked against and every link a person is sent. The engine "+
-					"sits behind a TLS-terminating proxy and cannot read any of "+
-					"that off the request. Write it as scheme://host[:port], e.g. "+
-					"https://crewlet.example.com or http://localhost:%d",
+				"required when this node serves the API (`api.port` is set and "+
+					"`node.roles` has ingress). Set it to the address people use "+
+					"for the dashboard, e.g. https://crewlet.example.com or "+
+					"http://localhost:%d",
 				DefaultAPIPort)
 		}
 		return p.err()
 	}
 	p.wrap(checkExternalURL(at(path, "external_url"), raw,
-		"a browser Origin, a cookie's Secure flag and every link built on it are "+
-			"all decided by the scheme, so a value without one decides them "+
-			"wrongly rather than failing",
-		"a browser reaches this deployment on"))
+		"the scheme sets cookie security and every link, so it can't be guessed",
+		"people use to reach this deployment in a browser"))
 	return p.err()
 }
 
@@ -389,7 +380,7 @@ func checkExternalURL(path Path, raw, why, reachedBy string) error {
 		return p.err()
 	}
 	if parsed.Hostname() == "" {
-		p.add(path, ErrShape, "%q names no host: it is the address %s", raw, reachedBy)
+		p.add(path, ErrShape, "%q has no host. It must be the address %s", raw, reachedBy)
 	}
 	// A PATH, A QUERY OR A FRAGMENT IS REFUSED rather than trimmed. Every
 	// consumer concatenates onto this value, so `https://x/crewlet/`
@@ -401,10 +392,8 @@ func checkExternalURL(path Path, raw, why, reachedBy string) error {
 	// the one thing normalised.
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		p.add(path, ErrShape,
-			"%q carries a query or a fragment: every URL this engine builds is "+
-				"this value with a path appended, so neither can survive the "+
-				"concatenation. Write the scheme, host, port and path prefix "+
-				"alone", raw)
+			"%q has a query or fragment. Use only the scheme, host, port and "+
+				"path", raw)
 	}
 	return p.err()
 }
@@ -434,11 +423,8 @@ func checkTrustedProxy(path Path, block string) error {
 				bits = 128
 			}
 			p.add(path, ErrShape,
-				"%q is an address rather than a block, and it is refused rather "+
-					"than read as one host: the other reading is a subnet "+
-					"somebody abbreviated, and trusting a whole subnet by "+
-					"accident is not a mistake this can make on your behalf. "+
-					"Write %s/%d for the one host", entry, entry, bits)
+				"%q is an address, not a block. To trust just that host, "+
+					"write %s/%d", entry, entry, bits)
 			break
 		}
 		p.add(path, ErrShape,
@@ -462,10 +448,9 @@ func checkTrustedProxy(path Path, block string) error {
 		// addresses.
 		if prefix.Bits() == 0 {
 			p.add(path, ErrShape,
-				"%q trusts every peer's forwarded header, which means every "+
-					"caller chooses their own client address — their own rate "+
-					"limit bucket and their own audit row. Name the proxies' "+
-					"own block, e.g. 10.0.0.0/8", entry)
+				"%q trusts every caller, so anyone could fake their address. "+
+					"List your proxies' address block instead, e.g. 10.0.0.0/8",
+				entry)
 		}
 		if prefix.Addr() != prefix.Masked().Addr() {
 			p.add(path, ErrShape,
@@ -775,12 +760,11 @@ func (s APISession) validate(path Path) error {
 		checkDurationRange(&p, at(path, name), raw, lo, hi, why)
 	}
 	check("absolute", s.AbsoluteRaw, SessionAbsoluteFloor, SessionAbsoluteCeiling,
-		"below an hour a session ends inside its own step-up window, and past a "+
-			"month a bearer already issued outlives any change to this setting, "+
-			"because the deadline is signed into it")
+		"under an hour ends sessions too soon, and over a month keeps old "+
+			"sessions alive after you change it")
 	check("step_up", s.StepUpRaw, SessionStepUpFloor, SessionStepUpCeiling,
-		"below five minutes an administrator re-proves their identity between "+
-			"one screen and the next, and past a day a step-up is not one")
+		"under five minutes asks people to confirm it's them too often, and "+
+			"over a day doesn't protect anything")
 	return p.err()
 }
 
@@ -835,13 +819,11 @@ func (a APIAudit) validate(path Path) error {
 	var p problems
 	checkDurationRange(&p, at(path, "changes"), a.ChangesRaw,
 		AuditChangesFloor, AuditChangesCeiling,
-		"below ninety days a grant change is gone before the quarter it was "+
-			"made in is reviewed, and past about three years this is a "+
-			"retention policy rather than an audit horizon")
+		"keep permission changes at least 90 days so a quarterly review can "+
+			"see them")
 	checkDurationRange(&p, at(path, "sessions"), a.SessionsRaw,
 		AuditSessionsFloor, AuditSessionsCeiling,
-		"below a week an intrusion is unreconstructable, and past four hundred "+
-			"days the sign-in rows outlive the change rows that explain them")
+		"keep sign-ins at least a week so incidents can be investigated")
 	// THE ORDER BETWEEN THEM IS THE RULE. A session row from three
 	// hundred days ago answers "who signed in"; what it does not answer
 	// is what that person was allowed to do, which is a change row. Keep
@@ -849,9 +831,8 @@ func (a APIAudit) validate(path Path) error {
 	// sign-in it cannot interpret.
 	if a.Sessions() > a.Changes() {
 		p.add(at(path, "sessions"), ErrConflict,
-			"%s is longer than `changes` (%s), so a sign-in would outlive the "+
-				"record of what that person was allowed to do when they made "+
-				"it. Raise `changes` or lower this", a.Sessions(), a.Changes())
+			"%s can't be longer than `changes` (%s). Raise `changes` or lower "+
+				"this", a.Sessions(), a.Changes())
 	}
 	return p.err()
 }
@@ -880,25 +861,20 @@ func (a *APIAuth) validatePasswords(path Path, api API, serving bool) error {
 	if a.TOTP == iam.SecondFactorOptional && serving &&
 		!api.externalLoopback() && !a.AcceptInsecure {
 		p.add(at(path, "totp"), ErrConflict,
-			"`optional` on a deployment a browser reaches at %s means a "+
-				"password alone signs somebody in over the network. Remove the "+
-				"line (unset is `required`), or acknowledge it with "+
-				"`accept_insecure: true` — which is logged at WARN on every "+
-				"start", api.ExternalBase())
+			"`optional` allows password-only sign-in at %s. Remove the line "+
+				"to require two-step verification, or set `accept_insecure: true`",
+			api.ExternalBase())
 	}
 	if n := a.MinPasswordLength; n != 0 {
 		switch {
 		case n < iam.MinPasswordChars:
 			p.add(at(path, "min_password_length"), ErrOutOfRange,
-				"%d is below the engine's own floor of %d, and it is refused "+
-					"rather than raised: a file asking for %d is a file whose "+
-					"writer believes %d is enough. Remove the line to take the "+
-					"floor", n, iam.MinPasswordChars, n, n)
+				"%d is below the minimum of %d. Remove the line to use the "+
+					"minimum", n, iam.MinPasswordChars)
 		case n > MaxPasswordLength:
 			p.add(at(path, "min_password_length"), ErrOutOfRange,
-				"%d is past %d, which is already far longer than any passphrase "+
-					"somebody will type: a minimum nobody can satisfy is a "+
-					"deployment nobody can enrol in", n, MaxPasswordLength)
+				"%d is over the maximum of %d. Nobody could set a password that "+
+					"long", n, MaxPasswordLength)
 		}
 	}
 	return p.err()
@@ -970,14 +946,12 @@ func (a *APIAuth) validateWriters(path Path) error {
 		wp := idx(at(path, "company_writers"), i)
 		switch {
 		case strings.TrimSpace(id) == "":
-			p.add(wp, ErrMissing, "an empty writer names no token: remove the "+
-				"entry, or write the id of the token the managing system holds")
+			p.add(wp, ErrMissing, "this entry is empty. Remove it, or put the "+
+				"id of the API token the managing system uses")
 		case !iam.ValidTokenID(id):
 			p.add(wp, ErrUnknownValue,
-				"writer %q is not a token id, so no token can ever be it and the "+
-					"system it was meant to name is locked out: a token id is "+
-					"lowercase letters, digits and hyphens, optionally joined by "+
-					"colons, in at most %d characters", id,
+				"%q isn't a valid token id. Use lowercase letters, digits and "+
+					"hyphens, optionally joined by colons, up to %d characters", id,
 				iam.MaxLogin-len(iam.TokenLoginPrefix))
 		}
 		if _, dup := writers[id]; dup && id != "" {
@@ -995,16 +969,12 @@ func (a *APIAuth) validateAdmin(path Path, serving bool) error {
 	case a.Admin == "":
 		if serving {
 			p.add(at(path, "admin"), ErrMissing,
-				"required once this node serves the API: `serve` grants admin "+
-					"to those who hold it on this node, and `refuse` clamps admin "+
-					"away here and keeps every app. There is no default, because "+
-					"either one is a decision about whether this node publishes "+
-					"host access, and that is the operator's to make")
+				"required when this node serves the API. Set `serve` to allow "+
+					"admin on this node, or `refuse` to block it (apps still work)")
 		}
 	case !a.Admin.Valid():
 		p.add(at(path, "admin"), ErrUnknownValue,
-			"%q is not an admin posture this build knows. The set is %v",
-			a.Admin, iam.AdminPostures)
+			"%q isn't a valid value. Use one of %v", a.Admin, iam.AdminPostures)
 	}
 	return p.err()
 }
@@ -1018,8 +988,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 		tp := idx(at(path, "tokens"), i)
 		if t.ID == "" {
 			p.add(at(tp, "id"), ErrMissing,
-				"every token needs a label: it names the login `token:<id>` every "+
-					"write made with the token is recorded under")
+				"every token needs an id. Changes made with the token are "+
+					"recorded as `token:<id>`")
 		}
 		if _, dup := seen[t.ID]; dup && t.ID != "" {
 			// Two tokens sharing a label make the audit trail
@@ -1036,13 +1006,10 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 		// would arrive only when somebody tried.
 		if t.ID != "" && !iam.ValidTokenID(t.ID) {
 			p.add(at(tp, "id"), ErrUnknownValue,
-				"token id %q would act under the login %q, which is not a "+
-					"machine handle: use lowercase letters, digits and hyphens, "+
-					"optionally joined by colons (founder, ci-pipeline, "+
-					"ci:release), in at most %d characters so the login stays "+
-					"within %d. It is recorded as the author of every write "+
-					"made with the token, and a login outside the grammar can "+
-					"never be bound to a seat", t.ID, iam.TokenLogin(t.ID),
+				"token id %q makes the login %q, which isn't valid. Use "+
+					"lowercase letters, digits, hyphens and colons (like "+
+					"ci:release), up to %d characters (logins can be %d)",
+				t.ID, iam.TokenLogin(t.ID),
 				iam.MaxLogin-len(iam.TokenLoginPrefix), iam.MaxLogin)
 		}
 		seen[t.ID] = struct{}{}
@@ -1057,9 +1024,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 		switch {
 		case t.Token == "":
 			p.add(at(tp, "token"), ErrMissing,
-				"token must not be empty. If this is a ${VAR}, the variable is "+
-					"unset — Tier A resolves from the environment alone, and an "+
-					"unset reference expands to nothing rather than failing")
+				"token is empty. If it's a ${VAR}, that variable isn't set in "+
+					"this node's environment")
 		default:
 			if err := secrets.CheckOperatorToken(t.Token); err != nil {
 				// THE VALUE NEVER REACHES THE MESSAGE. This
@@ -1071,9 +1037,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 
 		if len(t.Grants) == 0 {
 			p.add(at(tp, "grants"), ErrMissing,
-				"required and non-empty: a credential's blast radius is stated "+
-					"where it is pinned, never inferred. Name what this token "+
-					"is for — the full set is %v", iam.AllGrants)
+				"required. List the permissions this token gets, from %v",
+				iam.AllGrants)
 		}
 		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.Admin))
 	}
@@ -1090,12 +1055,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 	//     else to present.
 	if serving && len(a.Tokens) == 0 {
 		p.add(at(path, "tokens"), ErrMissing,
-			"at least one token is required once this node serves the API. The "+
-				"identity estate of a fresh deployment is empty, "+
-				"so this is what puts the first person on their human seat "+
-				"(`crewlet iam invite <address> -seat <handle>`); and on a "+
-				"running one it is the way back in when an "+
-				"administrator has locked themselves out. Generate one with "+
+			"at least one token is required when this node serves the API. "+
+				"You need it to invite the first person. Generate one with "+
 				"`crewlet secrets keygen` and point `token:` at a ${VAR}")
 	}
 	return p.err()
@@ -1118,16 +1079,16 @@ func checkGrants(path Path, grants []iam.Grant, admin iam.AdminPosture) error {
 		gp := idx(path, i)
 		if !g.Valid() {
 			p.add(gp, ErrUnknownValue,
-				"%q is not a permission this build knows. The set is %v", g, iam.AllGrants)
+				"%q isn't a permission. Use one of %v", g, iam.AllGrants)
 		}
 	}
 	if admin == iam.AdminRefuse && slices.Contains(iam.Expand(grants), iam.GrantAdmin) {
 		for i, g := range grants {
 			if g == iam.GrantAdmin {
 				p.add(idx(path, i), ErrConflict,
-					"`api.auth.admin` is refuse, so this node clamps admin away "+
-						"and this token would carry its apps alone. Serve admin "+
-						"on this node, or drop admin from the token")
+					"`api.auth.admin` is refuse, so this token can't use admin "+
+						"on this node. Set `api.auth.admin: serve`, or remove "+
+						"admin from the token")
 			}
 		}
 	}
@@ -1144,7 +1105,7 @@ func checkDurationRange(p *problems, path Path, raw string, lo, hi time.Duration
 	d, err := time.ParseDuration(raw)
 	if err != nil {
 		p.add(path, ErrShape,
-			"%q is not a duration, write it as 24h, 7d is 168h, 30m", raw)
+			"%q isn't a duration. Write it like 30m, 24h or 168h (7 days)", raw)
 		return
 	}
 	if d < lo || d > hi {
@@ -1174,24 +1135,19 @@ func checkOrigin(path Path, origin string) error {
 		p.add(path, ErrMissing, "an empty origin matches nothing: remove the "+
 			"entry, or name a site as scheme://host[:port]")
 	case origin == "*":
-		p.add(path, ErrShape, "%q is not an origin and is refused rather "+
-			"than honoured: it would let any site a logged-in operator "+
-			"visits read this API — which carries LLM transcripts, diary "+
-			"entries and the whole event stream. Name each site, as "+
+		p.add(path, ErrShape, "%q isn't allowed: any website could act as "+
+			"the signed-in person. List each site instead, e.g. "+
 			"https://ops.example.com", origin)
 	case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
-		p.add(path, ErrShape, "%q has no scheme: a browser's Origin header "+
-			"is always scheme://host[:port], so this matches nothing. Write "+
-			"https://%s", origin, origin)
+		p.add(path, ErrShape, "%q has no scheme, so it matches nothing. "+
+			"Write https://%s", origin, origin)
 	case strings.HasSuffix(origin, "/"):
-		p.add(path, ErrShape, "%q ends in a slash: a browser's Origin "+
-			"header carries no path, so this matches nothing. Write %q",
-			origin, strings.TrimRight(origin, "/"))
+		p.add(path, ErrShape, "%q ends in a slash, so it matches nothing. "+
+			"Write %q", origin, strings.TrimRight(origin, "/"))
 	default:
 		if rest := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://"); strings.Contains(rest, "/") {
-			p.add(path, ErrShape, "%q carries a path: a browser's Origin "+
-				"header is the scheme, host and port alone, so this matches "+
-				"nothing", origin)
+			p.add(path, ErrShape, "%q has a path, so it matches nothing. Use "+
+				"only the scheme, host and port", origin)
 		}
 	}
 	return p.err()
@@ -1220,10 +1176,9 @@ func (a API) warnings(serving bool) []Warning {
 	// out loud every time, exactly as the engine logs it on every start.
 	if auth.AcceptInsecure {
 		out = append(out, advisory(field("api.auth.accept_insecure"),
-			"a posture that would otherwise be refused off loopback is in "+
-				"force: this deployment is reached at "+a.ExternalBase()+
-				" and `accept_insecure` is what lets it stand. Remove it once "+
-				"it is reached over TLS with a second factor required"))
+			"insecure sign-in settings are allowed at "+a.ExternalBase()+
+				" because `accept_insecure` is on. Remove it once you use "+
+				"https and two-step verification"))
 	}
 
 	// AN `http://` EXTERNAL URL ON A ROUTABLE HOST means the session
@@ -1236,10 +1191,8 @@ func (a API) warnings(serving bool) []Warning {
 	// factor — IS refused, by the rule beside it.
 	if strings.HasPrefix(a.ExternalBase(), "http://") && !a.externalLoopback() {
 		out = append(out, advisory(field("api.external_url"),
-			"a browser reaches this deployment over plain http, so the session "+
-				"cookie cannot be marked Secure and every credential it "+
-				"carries travels in the clear. Terminate TLS in front of this "+
-				"node and name the https address here"))
+			"this deployment uses plain http, so passwords travel "+
+				"unencrypted. Put TLS in front and set the https address here"))
 	}
 
 	// AN `https://` EXTERNAL URL WITH NO TRUSTED PROXY is one client. The
@@ -1258,14 +1211,9 @@ func (a API) warnings(serving bool) []Warning {
 	// file can tell the two apart.
 	if strings.HasPrefix(a.ExternalBase(), "https://") && len(a.TrustedProxies) == 0 {
 		out = append(out, advisory(field("api.trusted_proxies"),
-			"this deployment is reached over https, which something in front "+
-				"of it terminates, and no proxy is trusted — so every caller's "+
-				"source is that front end's address. The sign-in throttle then "+
-				"keys every caller's attempts at one login together, so a "+
-				"stranger guessing at somebody's login slows that person's own "+
-				"sign-in, and every audit row names the front end. Name the "+
-				"proxy's own address block here; leave it empty only where the "+
-				"front end passes each client's own address through as the peer"))
+			"this deployment uses https but trusts no proxy, so every caller "+
+				"shows the proxy's address. Add your proxy's address block, "+
+				"unless it passes client addresses through"))
 	}
 
 	return out

@@ -146,7 +146,7 @@ func TestASatelliteServingNoApiIsRefusedWithoutAKeyring(t *testing.T) {
 	if !errors.Is(err, ErrMissing) {
 		t.Errorf("err = %v, want ErrMissing", err)
 	}
-	for _, says := range []string{"secrets.keys", "every state log", "crewlet secrets keygen"} {
+	for _, says := range []string{"secrets.keys", "every node in a fleet", "crewlet secrets keygen"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
@@ -250,7 +250,7 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 		t.Parallel()
 		b := serving()
 		b.API.Auth.Tokens[0].Grants = nil
-		refuses(t, b, "stated where it is pinned")
+		refuses(t, b, "List the permissions this token gets")
 	})
 }
 
@@ -403,9 +403,9 @@ func TestTheExternalURLIsRefusedWhenItCannotBeAnAddress(t *testing.T) {
 	for _, tc := range []struct{ name, url, want string }{
 		{"no scheme", "crewlet.example.com", "must start with http://"},
 		{"a scheme a browser never sends", "ftp://crewlet.example.com", "must start with http://"},
-		{"no host", "https://", "names no host"},
-		{"a query", "https://crewlet.example.com?a=b", "query or a fragment"},
-		{"a fragment", "https://crewlet.example.com#x", "query or a fragment"},
+		{"no host", "https://", "has no host"},
+		{"a query", "https://crewlet.example.com?a=b", "query or fragment"},
+		{"a fragment", "https://crewlet.example.com#x", "query or fragment"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -433,9 +433,9 @@ func TestTheExternalURLIsRefusedWhenItCannotBeAnAddress(t *testing.T) {
 func TestTrustedProxiesRefusesWhatCannotMeanWhatItSays(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, block, want string }{
-		{"everything", "0.0.0.0/0", "trusts every peer's forwarded header"},
-		{"everything, v6", "::/0", "trusts every peer's forwarded header"},
-		{"a bare address", "10.0.0.7", "is an address rather than a block"},
+		{"everything", "0.0.0.0/0", "anyone could fake their address"},
+		{"everything, v6", "::/0", "anyone could fake their address"},
+		{"a bare address", "10.0.0.7", "is an address, not a block"},
 		{"not a block at all", "not-a-network", "is not a CIDR block"},
 		{"host bits below the prefix", "10.1.2.3/8", "host bits set below its prefix"},
 		{"nothing", "", "an empty entry matches nothing"},
@@ -499,7 +499,7 @@ func TestTheSecondFactorIsRequiredUnlessOptionalIsStatedAndJudgedOnTheExternalUR
 	t.Run("optional off loopback is refused", func(t *testing.T) {
 		t.Parallel()
 		refuses(t, auth(iam.SecondFactorOptional, false, "https://crewlet.example.com"),
-			"signs somebody in over the network")
+			"allows password-only sign-in")
 	})
 	t.Run("optional on loopback is fine", func(t *testing.T) {
 		t.Parallel()
@@ -529,7 +529,7 @@ func TestTheSecondFactorIsRequiredUnlessOptionalIsStatedAndJudgedOnTheExternalUR
 		t.Parallel()
 		b := auth(iam.SecondFactorOptional, false, "https://crewlet.example.com")
 		b.API.Host = "127.0.0.1"
-		refuses(t, b, "signs somebody in over the network")
+		refuses(t, b, "allows password-only sign-in")
 	})
 }
 
@@ -537,10 +537,10 @@ func TestAPasswordFloorBelowTheEngineOwnIsRefusedRatherThanRaised(t *testing.T) 
 	t.Parallel()
 	b := serving()
 	b.API.Auth.MinPasswordLength = 8
-	refuses(t, b, "below the engine's own floor")
+	refuses(t, b, "below the minimum of")
 
 	b.API.Auth.MinPasswordLength = MaxPasswordLength + 1
-	refuses(t, b, "nobody can satisfy")
+	refuses(t, b, "over the maximum of")
 
 	b.API.Auth.MinPasswordLength = 0
 	if got := b.API.Auth.Passwords(); got != iam.MinPasswordChars {

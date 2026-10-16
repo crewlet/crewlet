@@ -672,16 +672,9 @@ func (b *Bootstrap) validateTopology() error {
 	// message can name the whole deployment rather than the block.
 	if len(b.Secrets.Keys) == 0 {
 		p.add(field("secrets.keys"), ErrMissing,
-			"required on every node: every record on every state log is "+
-				"signed and verified under the keyring, because the broker "+
-				"authenticates nothing, and a node without the data role signs "+
-				"what it asks of the estate and verifies what it is answered. It "+
-				"also authenticates the company document a node fetches from its "+
-				"peers, seals the company's own credentials at rest, signs every "+
-				"per-run token and — on a node serving the API — every session "+
-				"cookie. Generate a key with `crewlet secrets keygen` and point "+
-				"`material:` at a ${VAR} holding it; every node of a fleet holds "+
-				"the same keys")
+			"required on every node, and every node in a fleet needs the same "+
+				"keys. Generate one with `crewlet secrets keygen` and point "+
+				"`material:` at a ${VAR}")
 	}
 
 	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
@@ -2461,8 +2454,8 @@ func (s *Secrets) TokenMaterial() runtoken.Material {
 func (s *Secrets) Cipher() (secrets.Cipher, error) {
 	if !s.Enabled() {
 		return nil, fault(field("secrets.keys"), ErrMissing,
-			"there is no keyring to seal or open with, and every node needs one: "+
-				"generate a key with `crewlet secrets keygen` and add it")
+			"this node has no keyring. Generate a key with `crewlet secrets "+
+				"keygen` and add it to `secrets.keys`")
 	}
 	ring := secrets.Keyring{
 		ActiveID: s.ActiveKeyID,

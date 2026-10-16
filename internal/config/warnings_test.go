@@ -537,13 +537,10 @@ func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 				t.Errorf("warning = %+v, want an advisory at `roles` about no "+
 					"seat or unit in particular", w)
 			}
-			// WHAT HAPPENS, WHY, WHEN IT IS FINE, AND WHAT TO DO — the
-			// last as the command that works, which names the seat.
+			// WHAT HAPPENS, WHEN IT IS FINE, AND WHAT TO DO.
 			for _, says := range []string{
 				"no `kind: human` seat", "nobody can be invited",
-				"every person holds a human seat", "Tier A tokens",
-				"Agents › Org chart",
-				"`crewlet iam invite <address> -seat <handle>`",
+				"agents run it alone", "add a human seat for each person",
 			} {
 				if !strings.Contains(w.Message, says) {
 					t.Errorf("the advisory does not say %q: %q", says, w.Message)

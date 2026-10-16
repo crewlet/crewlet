@@ -170,7 +170,7 @@ func TestTheWildcardOriginRefusalSaysWhatItWouldExpose(t *testing.T) {
 	if err == nil {
 		t.Fatal("a wildcard origin was accepted")
 	}
-	for _, want := range []string{"any site", "https://ops.example.com"} {
+	for _, want := range []string{"any website", "https://ops.example.com"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
 		}
