@@ -1857,6 +1857,11 @@ backup until it leaves the host and the engine cannot see that it has. Both
 flags are required: an acknowledgement moves the floor the trim deletes
 against, so there is no value to guess.
 
+One acknowledgement covers the one log it names, and is kept per log:
+acknowledging the next log leaves this one standing, and each log's trim reads
+its own. Under `operator`, acknowledge every log once its copy is off the host
+— a log never acknowledged is never trimmed, and `backup_age` names it.
+
 ### `crewlet retention evict` / `readmit`
 
 ```

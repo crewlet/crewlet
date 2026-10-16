@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -288,6 +289,67 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 		t.Errorf("the point is owned by %q (verified: %v), and under "+
 			"backup_floor: operator only a verified operator point counts",
 			register.point.Owner, register.point.Verified)
+	}
+}
+
+// EVERY LOG'S ACKNOWLEDGEMENT STANDS BESIDE THE OTHERS.
+//
+// Under `backup_floor: operator` the procedure is one acknowledgement per
+// log, in turn. The route writes each one to the fleet's register, and
+// the register kept ONE operator row: each acknowledgement replaced the last,
+// so following the procedure left exactly one log covered — whichever was
+// acknowledged last — and the trim blocked on the others. Here the route writes
+// to the real register, and every log acknowledged must still be covered, at
+// its own reach, after the last.
+func TestEveryLogsAcknowledgementStandsBesideTheOthers(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	node := &fakeStateLog{generations: map[string]uint32{
+		"CREWLET_TRACKER_LOG":     3,
+		"CREWLET_PAGES_LOG":       7,
+		"CREWLET_TRACKER_VECTORS": 1,
+	}}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: fleet, Capacity: node})
+	acks := []struct {
+		stream     string
+		seq        uint64
+		generation uint32
+	}{
+		{"CREWLET_TRACKER_LOG", 918100000, 3},
+		{"CREWLET_PAGES_LOG", 40400, 7},
+		{"CREWLET_TRACKER_VECTORS", 77000, 1},
+	}
+	for _, ack := range acks {
+		code, body := postAck(t, a, fmt.Sprintf("/worklet/retention/ack?stream=%s&position=%d",
+			ack.stream, ack.seq))
+		if code != http.StatusOK {
+			t.Fatalf("acknowledging %s answered %d: %v", ack.stream, code, body)
+		}
+	}
+
+	points, err := fleet.BackupPoints(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := coord.CountedBackups(points, true)
+	for _, ack := range acks {
+		newest, ok := coord.NewestBackupOf(counted, ack.stream)
+		if !ok {
+			t.Errorf("%s is covered by no acknowledgement after all three were "+
+				"given — a later one replaced it (register %+v)", ack.stream, points)
+			continue
+		}
+		at := newest.Streams[ack.stream]
+		if at.Seq != ack.seq || at.Generation != ack.generation {
+			t.Errorf("%s is acknowledged at %d (generation %d), want its own %d "+
+				"(generation %d)", ack.stream, at.Seq, at.Generation, ack.seq,
+				ack.generation)
+		}
+		if len(newest.Streams) != 1 {
+			t.Errorf("the acknowledgement covering %s reaches %v — each names the "+
+				"one log it was given for", ack.stream, newest.Streams)
+		}
 	}
 }
 

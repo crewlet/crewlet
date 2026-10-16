@@ -1129,12 +1129,15 @@ stream:
                                     #   the log is the only copy of what no node
                                     #   has applied yet
   #   backup_floor: engine          #   whose word the trim takes for what is
-                                    #   backed up. `engine` follows the newest
-                                    #   backup the engine wrote and verified;
-                                    #   `operator` follows an explicit
-                                    #   acknowledgement, for a company that trims
-                                    #   only what has left the host — and then
-                                    #   trims NOTHING until somebody says so
+                                    #   backed up, PER LOG: each log follows the
+                                    #   newest counted backup covering it.
+                                    #   `engine` counts the backups the engine
+                                    #   wrote and verified; `operator` an
+                                    #   explicit acknowledgement of each log
+                                    #   (`crewlet retention ack -stream`), for a
+                                    #   company that trims only what has left
+                                    #   the host — and then trims NOTHING of a
+                                    #   log until somebody says so for that log
   #   snapshot_interval: 24h        #   how stale a node's newest snapshot may be
                                     #   before it takes another (1h..7d). A
                                     #   snapshot is a full copy of the replicated

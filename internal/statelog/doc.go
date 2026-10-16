@@ -542,11 +542,12 @@
 // hold — and ONE evaluation feeds every surface, so a gauge, a log line and a
 // screen cannot disagree about whether something is wrong. A condition that
 // is a property of ONE LOG — its headroom, its ceiling against its window, a
-// blocked trim, a record held past the deferral grace, a floor this node
-// cannot read, a read rate past its census — is evaluated once per log
-// ([Report]), because its consequence and its remedy are that log's: the
-// grace takes a node's copy out of service for one log and nothing for
-// another, and a node behind two re-anchors needs two. The kind is still ONE
+// blocked trim, the age of the backup its trim counts, a record held past the
+// deferral grace, a floor this node cannot read, a read rate past its census
+// — is evaluated once per log ([Report]), because its consequence and its
+// remedy are that log's: the grace takes a node's copy out of service for one
+// log and nothing for another, a node behind two re-anchors needs two, and an
+// operator acknowledgement covers the one log it names. The kind is still ONE
 // ALARM, listing every log it stands on with that log's own measurement
 // ([Alarm.Domains]), because the count, the gauge and the screen read one
 // cause on four logs as one problem; and each log's onset and clearing is

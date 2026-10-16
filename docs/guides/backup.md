@@ -260,12 +260,14 @@ copy when it has one. The copy can take minutes on a large store; closing the
 dialog does not stop it, and the outcome arrives as a notice either way.
 
 The same screen shows what the fleet has backed up
-([`GET /backups`](../reference/api-endpoints.md#get-backups)): each owner's
-newest copy — its directory, size, reach and whether the trim counts it, with
-the one the trim reads marked **newest** — and the **backup history**, every
-backup a person asked any node for over the event log's 30 days, failures
-included and each with the host that holds it. The register keeps only each
-owner's newest point, so the history is where a failed night shows.
+([`GET /backups`](../reference/api-endpoints.md#get-backups)): each node's
+newest copy and the operator's newest acknowledgement of each log — its
+directory, size, reach and whether the trim counts it, with every point some
+log's trim reads marked **newest** — and the **backup history**, every backup a
+person asked any node for over the event log's 30 days, failures included and
+each with the host that holds it. The register keeps only each node's newest
+point and each log's newest acknowledgement, so the history is where a failed
+night shows.
 
 ### One node, or every node?
 

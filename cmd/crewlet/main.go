@@ -2436,9 +2436,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: retentionSource(ctx, e),
-			// WHAT THE FLEET HAS BACKED UP: each owner's newest
-			// announced point, marked by the policy the trim takes —
-			// Tier A, fixed for the life of this process.
+			// WHAT THE FLEET HAS BACKED UP: each node's newest
+			// announced point and the operator's newest
+			// acknowledgement of each log, marked by the policy the
+			// trim takes — Tier A, fixed for the life of this process.
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,

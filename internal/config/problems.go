@@ -662,9 +662,35 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	// A FLEET THAT TRIMS ONLY WHAT IT HAS BEEN TOLD IS OFF-SITE does not
-	// trim until somebody tells it, and the log grows until its ceiling
+	// trim until somebody tells it, and each log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
+	//
+	// AND IT IS TOLD PER LOG. An acknowledgement names one stream
+	// (`crewlet retention ack -stream`), and the backup term blocks any log
+	// the counted point does not cover, so an operator who acknowledged the
+	// mutation log and read "until the first acknowledgement" as the whole
+	// gate would expect the knowledge base's log to trim too, and it does
+	// not.
+	//
+	// EVERY CEILING THE TRIM IS ALL THAT HOLDS BACK, rather than the
+	// mutation log's alone: the backup term is evaluated per log, and the
+	// six ordered logs — the tracker's, the knowledge base's, the artifacts'
+	// and their datastore's, the identity estate's and the Dashboard
+	// Assistant's — carry no age bound, so nothing else ever removes a
+	// record from them. Naming one field sent an operator to the wrong
+	// ceiling whenever another log filled first: a full identity log refuses
+	// every sign-in and every change to who may do what, and a full
+	// assistant log every question somebody asks the assistant, since it
+	// cannot record the turn.
+	//
+	// AND EVERY LOG, the two compacted ones included. They age their
+	// records out on the broker whatever the trim decides, so they never
+	// refuse a write — but the backup term and the `backup_age` alarm are
+	// evaluated on every running log alike, so a log nobody acknowledged
+	// raises that alarm for as long as nobody does. An advisory that named
+	// the ordered logs alone sent an operator to acknowledge those and leave
+	// two alarms firing for ever.
 	//
 	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
 	// readers decide which backups count under it, and both are armed with
@@ -685,10 +711,24 @@ func (b *Bootstrap) Warnings() []Warning {
 	if b.Profile("").HoldsData() &&
 		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
-			"`operator` means the trim advances only as far as somebody "+
-				"has acknowledged a backup. Until the first acknowledgement the log "+
-				"is never trimmed, and it grows until `stream.tracker_log_max_bytes` "+
-				"starts refusing writes"))
+			"`operator` means every state log is trimmed only as far as a "+
+				"backup of that log has been acknowledged, once per log "+
+				"(`crewlet retention ack -stream <log> -position <n>`; "+
+				"`crewlet retention status` names all eight). Until its own "+
+				"acknowledgement a log is never trimmed. The six ordered logs "+
+				"grow until their own ceiling starts refusing writes: "+
+				"`stream.tracker_log_max_bytes`, `stream.pages_log_max_bytes`, "+
+				"`stream.artifacts_log_max_bytes`, "+
+				"`stream.artifact_data_log_max_bytes`, "+
+				"`stream.iam_log_max_bytes`, where a full log refuses every "+
+				"sign-in, and `stream.assistant_log_max_bytes`, where it "+
+				"refuses every question somebody asks the Dashboard "+
+				"Assistant. The two compacted logs "+
+				"(`stream.tracker_vectors_max_bytes`, "+
+				"`stream.usage_log_max_bytes`) age their records out on the "+
+				"broker regardless, but wait on an acknowledgement just the "+
+				"same: each log's `backup_age` alarm fires until it has one, "+
+				"and again once it is older than `backup_max_age`"))
 	}
 
 	// NOBODY OWNS THE BACKUP. A company that never backs up never trims,

@@ -99,14 +99,15 @@ alarm list is in [Alarms](../reference/alarms.md).
 
 **An alarm is one per kind, however many logs it stands on.** A condition
 that is a property of a log (`log_headroom`, `log_ceiling_short`,
-`trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`) lists every
-log it stands on in its `domains`, each with that log's own measurement, so
-four held logs are one `trim_blocked` on the health count, the gauge and the
-dashboard rather than four; `crewlet retention status` prints them under the
-alarm, one log in its headline and several as a line each. The `alarm_raised`
-and `alarm_cleared` log lines are still written per log, carrying it as
-`domain`, so a second log joining an alarm that is already up, and the first
-one leaving it while the second stands, are each said with their own start.
+`backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`)
+lists every log it stands on in its `domains`, each with that log's own
+measurement, so four held logs are one `trim_blocked` on the health count, the
+gauge and the dashboard rather than four; `crewlet retention status` prints
+them under the alarm, one log in its headline and several as a line each. The
+`alarm_raised` and `alarm_cleared` log lines are still written per log,
+carrying it as `domain`, so a second log joining an alarm that is already up,
+and the first one leaving it while the second stands, are each said with their
+own start.
 
 ## The six terms
 
@@ -249,26 +250,45 @@ Two policies decide which copies count:
   crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
   ```
 
-  Under this policy the trim does not advance until that acknowledgement has
-  been given at least once, and `crewlet validate` warns about it on every
-  node that holds data — the nodes that run the trim — as each of those nodes
-  does on every start, in a `config_advisory` line. A node without `data`
-  runs no trim and reads none of `stream.tracker_retention`, so it is not
-  warned.
+  An acknowledgement names ONE stream and is kept per stream: acknowledging
+  the next log leaves the last one's acknowledgement standing. Under this
+  policy every log is trimmed only as far as an acknowledgement of that log
+  says, so the procedure is one acknowledgement per log. A log never
+  acknowledged is never trimmed: the six ordered logs, `CREWLET_TRACKER_LOG`,
+  `CREWLET_PAGES_LOG`, `CREWLET_ARTIFACTS_LOG`, `CREWLET_ARTIFACT_DATA_LOG`,
+  `CREWLET_IAM_LOG` and `CREWLET_ASSISTANT_LOG`, each grow until their own
+  ceiling refuses writes — a full identity log refuses every sign-in, and a
+  full assistant log every question the assistant is asked — while the two
+  compacted logs, `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
+  records out on the broker whatever the trim decides; their trim and its
+  alarms wait on an acknowledgement just the same.
+  `crewlet validate` warns about this policy on every node that holds data —
+  the nodes that run the trim — as each of those nodes does on every start, in
+  a `config_advisory` line. A node without `data` runs no trim and reads none
+  of `stream.tracker_retention`, so it is not warned.
 
-The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
-under the same policy: under `operator` a node's nightly copies are fresh
-while the trim waits on an acknowledgement, and the alarm fires on the missing
+Each log's trim reads **the newest counted backup that covers that log**:
+under `engine`, a node's copy that leaves a log out does not stand in for it,
+and an older copy of another node's that covers it does. The **backup-age
+alarm** (`backup_age`) ages the same point per log, under the same policy:
+under `operator` a node's nightly copies are fresh while each trim waits on
+its acknowledgement, and the alarm fires on each log's own missing or stale
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-It names every log whose trim the backup term has held for longer than that
-log's `min_age` replay window plus a trim tick while the log keeps records older
-than the window — exactly the logs that would otherwise raise `trim_blocked`
-([above](#a-blocked-trim-is-ordinary-until-it-has-kept-something)) — and those
-logs raise no `trim_blocked` of their own: the backup is the one thing to do
-about all of them. A log the backup term has held for less than that, or that
+It is one alarm naming every such log, leading with the one whose backup is
+missing or oldest. A log it names whose trim the backup term has held for longer
+than that log's `min_age` replay window plus a trim tick, while the log keeps
+records older than the window — exactly a log that would otherwise raise
+`trim_blocked` ([above](#a-blocked-trim-is-ordinary-until-it-has-kept-something))
+— raises no `trim_blocked` of its own: its entry under `backup_age` carries the
+term, the instant the trim stopped and what the hold is keeping, because the
+backup is the one thing to do about it. A hold younger than that, or one that
 keeps nothing past the window, is listed under no alarm; `crewlet retention
-status` still shows its block from the first tick. **Settings › Backups &
-retention** marks that point **counted · newest**.
+status` still shows its block from the first tick. And a log the backup term
+holds while its own backup is inside the policy (a copy taken on an earlier
+generation of the log) stays under `trim_blocked`, since nothing else names it.
+The retention report carries each log's point as that domain's `backup_at`, and
+**Settings › Backups & retention** marks every point some log's trim reads
+**counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -1835,10 +1855,11 @@ snapshot.
 
 So the trim is part of an erasure, and a blocked one is an erasure that has not
 finished: the identity log named by an alarm holding its trim — under
-`trim_blocked`, or under `backup_age` while the backup term is what holds it,
-since that alarm lists the logs it holds and those raise no `trim_blocked` of
-their own ([the backup term](#a-company-that-never-backs-up-never-trims)) — is
-also the answer to "is that person's name still on disk". The remedy is the
+`trim_blocked`, or under `backup_age` with the `backup_floor` term on its
+entry, where the backup term holds it while the identity log's own backup is
+missing or stale, since a hold folded there raises no `trim_blocked` of its own
+([the backup term](#a-company-that-never-backs-up-never-trims)) — is also the
+answer to "is that person's name still on disk". The remedy is the
 term's own — a backup that never left the host, a pin nobody released — and
 never a shorter `min_age` for its own sake, which only moves when a record
 *may* go.

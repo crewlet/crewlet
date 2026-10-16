@@ -343,7 +343,7 @@ node means nothing was done.
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `admin`** and a recent proof, as the removal by name does |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
-| `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
+| `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
@@ -3710,7 +3710,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: when its last beat is older than the beat interval it keeps (a second at the shipped lease TTL, which is how often a turning duty beats), and then how long since that beat, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. Absent on a node whose duty is on its beat, so its presence is what to alert on. |
 | `identity` | Whether this company has its **first person**: `ready` once a person is enrolled, `unclaimed` while nobody is — a service account alone signs nobody in with a password, so it does not count — a fresh install waiting for [its first person](../concepts/identity-and-access.md#how-the-first-person-exists) to be invited into, or created on, a human seat its company declares, under a Tier A token. A person an administrator creates makes it `ready` the moment the create lands, before they have spent the first password link it handed back: it says somebody exists, not that they have chosen a password yet. It is `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to put a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
-| `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`, and `backup_age` for the logs the backup term has held past their replay window, which raise no `trim_blocked` of their own) lists them in its `domains`, each with its own measurement, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
+| `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each with its own measurement, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes) — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those surfaces a node short, and this is where that stays visible after the log line has scrolled away. |
 | `objects` | `{direct_upload}`: whether an upload may go straight to the object store's S3 bucket on a presigned put. `available`, or `unavailable (<reason>)`: always so on the default `nats` backend, whose bucket only the fleet reaches, and on an `s3` bucket whose provider the boot probe could not prove refuses a body that does not match its `x-amz-checksum-sha256` and a second put under `If-None-Match: *` (see [The boot probe](../concepts/object-store.md#the-boot-probe-and-direct-uploads)). Unavailable is no fault: every upload then streams through the engine. Absent on a node running no object store. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
@@ -4418,7 +4418,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the ledger keys on — hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
-| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
+| `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
@@ -6241,6 +6241,7 @@ is three per-node facts attributed to a fleet.
       "trim_to": 0,
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
+      "backup_at": "2031-03-29T02:00:00Z",
       "prose": "Nothing is being trimmed on tracker: ...",
       "terms": [{"name": "applied", "state": "ok", "seq": 918279004, "detail": "..."}]
     }
@@ -6251,7 +6252,7 @@ is three per-node facts attributed to a fleet.
               "rejoin_window_seconds": 1800},
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "...",
               "domains": [{"domain": "tracker",
-                           "detail": "the trim has not advanced for 73h 14m, and the log is keeping up to 1840 record(s) older than its 24h replay window",
+                           "detail": "the newest verified backup of this log is 97h 14m old, and the policy asks for 24h; the trim has not advanced for 73h 14m, and the log is keeping up to 1840 record(s) older than its 24h replay window",
                            "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
 }
 ```
@@ -6263,15 +6264,17 @@ its own `detail`, and for a held trim the `term` holding it and `since`, when it
 stopped advancing; `detail` is then the most pressing log's. A log that would
 raise `trim_blocked` (held longer than its replay window plus a trim tick, while
 keeping records older than the window) is listed under `backup_age` instead
-while the backup term holds it and `backup_age` fires, because the backup is its
-remedy; a younger backup hold is listed under neither. So
+while the backup term holds it and that log's own `backup_age` fires, because
+the backup is its remedy: its entry there carries the `term` and `since`, and
+its `detail` is its backup's measurement followed by what the hold is keeping.
+A younger backup hold raises no `trim_blocked` to fold, and a backup hold on a
+log whose own backup is inside the policy stays under `trim_blocked`. So
 `alarms` has one entry per kind, and its length is the health envelope's
 `alarms.count`. The `alarm_raised` and `alarm_cleared` log lines are the one
 place a log stands alone: a condition that is a property of a log writes a pair
 per log it stands on, carrying it as `domain`, so a log joining an alarm that is
 already up, and a log leaving one that stays up, are each said with their own
-start. `backup_age` is about the node, and writes one pair whatever logs it
-lists.
+start.
 
 `trim_floor` and `trim_to` are two different numbers, and a blocked domain is
 where they part. `trim_floor` is the floor the fleet has published: everything
@@ -6342,6 +6345,15 @@ retention status` and **Settings › Backups & retention** say so above the node
 block, and that screen keeps an eviction it just made on the row until a report
 whose evictions were read.
 
+**`backup_at`** is when the backup this log's trim counts was taken: the newest
+verified point the `backup_floor` policy takes the word of that covers this
+log's stream — a node's copy under `engine`, the operator's acknowledgement of
+this log under `operator`. It is **absent** where no counted backup covers the
+log, which is the state the `backup_floor` term blocks on. The `backup_age`
+alarm is evaluated per log from it and lists each log in its `domains` with its
+own age, because the logs' backups have one age each: under `operator` every
+log is acknowledged on its own.
+
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
 the one alarm an operator cannot ignore fires on. It is a fraction of the
@@ -6374,7 +6386,7 @@ controls, and a caller without it is refused `403` naming it.
 
 | Route | What it does |
 |---|---|
-| `POST /worklet/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
+| `POST /worklet/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. It is **filed under that stream**: acknowledging another log writes another point and leaves this one standing, and each log's trim reads its own — under `backup_floor: operator` that is one acknowledgement per log. |
 | `POST /worklet/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log: Worklet's, Doclet's and the identity estate's; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions`, `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** (a judgement nobody could make is not one that came back clear), with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
 | `POST /worklet/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to any log, when in any one of those logs the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence (its last published position is more than one below that bound), or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published`: false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register or a floor unreadable, a log's first surviving sequence unreadable, or this node behind a reanchor the fleet has made. The body carries `detail`, `hint`, `actions` `["retry_same_op", "other_node"]` and, where one log could not be judged, that `log`. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
@@ -8329,12 +8341,15 @@ holds the company's sealed credentials.
 
 Two records, because they answer two questions:
 
-- **`points`** — each owner's NEWEST backup, from the fleet's backup register:
+- **`points`** — each node's NEWEST backup, from the fleet's backup register:
   what each node announced when its manifest was written, plus the operator's
-  acknowledgement (`crewlet retention ack`, `kind: "operator"`). `counted`
-  says the trim may count it — the `backup_floor` policy (`policy`) takes this
-  owner's word and the copy was verified — and exactly one counted point is
-  `newest`: the one the trim's backup term reads. `bytes` is the whole
+  newest acknowledgement of each log (`crewlet retention ack`, `kind:
+  "operator"`), one point per log acknowledged, each covering that log alone.
+  `counted` says the trim may count it — the `backup_floor` policy (`policy`)
+  takes this owner's word and the copy was verified — and a point is `newest`
+  where some log's backup term reads it: for at least one log it covers, the
+  newest counted point covering that log. Several can be — under `operator`,
+  one per log acknowledged. `bytes` is the whole
   artefact (every database copy and stream snapshot) and is absent on an
   acknowledgement, which asserts a copy the engine never saw. `covers` is how
   far the copy reaches in each state-log stream.

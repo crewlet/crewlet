@@ -593,8 +593,8 @@ func retentionAlarms(stderr io.Writer, report retentionReport) error {
 // ONE LOG IS FOLDED INTO THE HEADLINE. An alarm standing on a single log whose
 // measurement is the headline's printed that sentence twice, once as the
 // alarm and once as its only log; it reads `kind on log (term): detail`
-// instead. Several logs, or the logs a backup alarm is holding, are one line
-// each under it.
+// instead. Several logs are one line each under it, each with its own
+// measurement and the term holding it.
 func printRetentionAlarm(w io.Writer, alarm retentionAlarm) {
 	if len(alarm.Domains) == 1 && alarm.Domains[0].Detail == alarm.Detail {
 		fmt.Fprintf(w, "%s on %s: %s\n  %s\n",

@@ -60,19 +60,17 @@ type Tracker struct {
 // instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
 // the log it stands on when it is a per-log condition ([PerLogKinds]).
 //
-// THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Six conditions are evaluated
-// once per log ([Report]), so one alarm can stand on the tracker's log and the
-// knowledge base's at once ([Alarm.Domains]). Keyed on the kind, the second log
-// joining it raised no line of its own, a log whose condition cleared while
-// another's stood said nothing, and the one `alarm_cleared` that finally came
-// carried the LAST log's detail against the FIRST one's start.
+// THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Seven conditions are
+// evaluated once per log ([Report]), so one alarm can stand on the tracker's
+// log and the knowledge base's at once ([Alarm.Domains]). Keyed on the kind,
+// the second log joining it raised no line of its own, a log whose condition
+// cleared while another's stood said nothing, and the one `alarm_cleared` that
+// finally came carried the LAST log's detail against the FIRST one's start.
 //
 // AND THE KIND ALONE IS STILL THE ALARM'S IDENTITY everywhere else: the alarm
 // is one per kind, the gauge one series per kind and [Tracker.Standing] one
 // entry per kind, so an instance is a log line's key and nothing more. A
-// node-wide kind is one instance with no log, even where it lists logs of its
-// own: `backup_age` names the logs it holds past their replay window, and those
-// are one problem with one remedy rather than a line each.
+// node-wide kind lists no log, so it is one instance with none.
 type instance struct {
 	kind   Kind
 	domain string
@@ -85,10 +83,14 @@ type firing struct {
 }
 
 // instancesOf is an alarm's instances, each with the detail its lines carry:
-// one per log a per-log kind stands on, carrying that log's own measurement,
-// and otherwise one with no log, carrying the alarm's.
+// one per log the alarm stands on, carrying that log's own measurement, and
+// otherwise one with no log, carrying the alarm's.
+//
+// THE LOGS AN ALARM LISTS ARE ITS INSTANCES, with no second check of the kind:
+// only a per-log kind lists any, which the report's own test holds in both
+// directions, so a check here would be a second opinion about one fact.
 func instancesOf(a Alarm) ([]instance, []string) {
-	if !perLogKind(a.Kind) || len(a.Domains) == 0 {
+	if len(a.Domains) == 0 {
 		return []instance{{kind: a.Kind}}, []string{a.Detail}
 	}
 	keys := make([]instance, 0, len(a.Domains))

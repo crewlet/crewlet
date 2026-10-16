@@ -60,17 +60,18 @@ var alarmMeaning = map[Kind]string{
 		"rather than dropping records; on every log that claims identity " +
 		"(Worklet's, Doclet's and the identity estate's) an " +
 		"eviction still lands in the gate reserve above that ceiling.",
-	KindBackupAge: "No verified backup has been recorded, or the newest is " +
-		"older than the policy asks for. The trim does not advance either way, " +
-		"and the alarm names every log whose trim the backup term is holding " +
-		"past its replay window, so those logs raise no `trim_blocked` of " +
-		"their own.",
+	KindBackupAge: "No verified backup of a log has been recorded, or the " +
+		"newest one covering it is older than the policy asks for. The trim " +
+		"does not advance that log either way. One alarm names every such " +
+		"log, leading with the one whose backup is missing or oldest, and a " +
+		"log it names whose trim the backup term is holding past its replay " +
+		"window raises no `trim_blocked` of its own.",
 	KindTrimBlocked: "A log's trim has been blocked for longer than its " +
 		"`min_age` replay window plus one trim tick, and the log is keeping " +
 		"records older than that window, so it is holding what a working trim " +
 		"would have removed and growing toward its ceiling. One alarm names " +
 		"every such log and the term holding each, leading with the one held " +
-		"longest; a log the backup term holds while `backup_age` fires is " +
+		"longest; a log the backup term holds while `backup_age` names it is " +
 		"named there instead. A young fleet blocked on its first backup or " +
 		"snapshot donors does not raise it: nothing in its log is past the " +
 		"window yet.",

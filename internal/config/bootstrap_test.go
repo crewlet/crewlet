@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -21,6 +22,7 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 	}{
 		{"node id shape", "node:\n  id: has space\n", "node.id", ErrUnknownValue},
 		{"node id too long", "node:\n  id: " + strings.Repeat("a", 65) + "\n", "node.id", ErrUnknownValue},
+		{"node id the operator's backups are filed under", "node:\n  id: operator\n", "node.id", ErrUnknownValue},
 		{"unknown node role", "node:\n  roles: [ingres]\n", "node.roles", ErrUnknownValue},
 		{"empty node roles", "node:\n  roles: []\n", "node.roles", ErrMissing},
 		{"blank label key", "node:\n  labels:\n    \"\": eu\n", "node.labels", ErrMissing},
@@ -445,6 +447,29 @@ func TestResolveNodeIDPrecedence(t *testing.T) {
 		b := &Bootstrap{Node: Node{ID: "${MY_POD}"}}
 		if _, err := ResolveNodeID(b, r); err == nil {
 			t.Fatal("a malformed resolved id was accepted")
+		}
+	})
+
+	// THE OPERATOR'S BACKUP OWNER IS NOT A NODE. The backup register files the
+	// operator's acknowledgements under that word, so a node running under it
+	// announced its own copies as the operator's — counted as the off-host
+	// acknowledgement under `backup_floor: operator`, or refused as one. It is
+	// refused wherever a node takes its id, and by the rule a gesture naming
+	// some other node is held to.
+	t.Run("the operator's backup owner is refused", func(t *testing.T) {
+		r := NewResolver(MapSource{NodeIDEnvVar: coord.OperatorBackupOwner})
+		_, err := ResolveNodeID(&Bootstrap{}, r)
+		if !errors.Is(err, ErrUnknownValue) || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("a node id of %q answered %v, want a refusal saying it is reserved",
+				coord.OperatorBackupOwner, err)
+		}
+		if ValidNodeID(coord.OperatorBackupOwner) {
+			t.Errorf("ValidNodeID accepts %q, so a gesture could name it as a node",
+				coord.OperatorBackupOwner)
+		}
+		// Only the word itself: an id that merely contains it names a node.
+		if !ValidNodeID("operator-1") {
+			t.Error("ValidNodeID refuses operator-1, which is an ordinary node id")
 		}
 	})
 }
