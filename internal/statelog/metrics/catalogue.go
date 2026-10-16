@@ -498,11 +498,11 @@ func Catalogue() []Instrument {
 			Name: HistoryAnswers, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"question", "coverage"},
 			Shows: "What each fleet history read covered: `complete` when " +
-				"every live node answered inside the fleet read budget, " +
+				"every live data node answered inside the fleet read budget, " +
 				"`partial` when one did not. Turn-level detail lives only " +
-				"on the node that published it, so a partial answer is " +
-				"missing that node's rows — and the history_partial alarm " +
-				"is a fraction of this counter.",
+				"on the data node that published it or keeps it in custody, " +
+				"so a partial answer is missing that node's rows — and the " +
+				"history_partial alarm is a fraction of this counter.",
 		},
 
 		// ---- the store ------------------------------------------------
