@@ -837,6 +837,38 @@ func Catalogue() []Instrument {
 				"caches downloading whole repositories; a `delta` tail is the " +
 				"barrier and the sync every answer that names a ref waits for.",
 		},
+		{
+			Name: CodeHostSpoolWaits, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Fetch requests large enough to spool — a partial clone's " +
+				"lazy fetch past a mebibyte of wants — that could not start " +
+				"spooling, or take room for the rest of their body, at once on " +
+				"this node and waited their turn, by `outcome`: `granted`, " +
+				"served after its wait; `expired`, answered 503 after waiting " +
+				"55 s unserved; `abandoned`, its request ended while it " +
+				"waited; and `refused`, answered 503 at once because it had to " +
+				"wait and found no place to — the node's waiting room full, " +
+				"four places a git transfer slot, or its credential's quarter " +
+				"of it, a lane's width. git does not retry a lazy fetch, so " +
+				"every `expired` or `refused` is a checkout that failed, and " +
+				"git prints only the status: the `code_fetch_spool_unserved` " +
+				"line names the token and what held it back. `granted` " +
+				"climbing is a credential at its quarter of the node's " +
+				"spooling — one token behind several CI runners, which a " +
+				"token per runner ends — or a node whose spooling is full: " +
+				"more git transfer slots (more memory, a wider " +
+				"`git.max_transfers`) or more git nodes.",
+		},
+		{
+			Name: CodeHostSpoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long each fetch counted by " +
+				"`crewlet.code.host.spool.waits` waited for room to spool, by " +
+				"the same `outcome` (`granted`, `expired`, `abandoned`; a " +
+				"`refused` one waited for nothing). The `granted` tail is what " +
+				"the wait adds to a checkout; one nearing 55 s is a node about " +
+				"to answer checkouts 503.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,

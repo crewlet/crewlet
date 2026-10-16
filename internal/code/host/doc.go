@@ -126,8 +126,20 @@
 // is bounded by the most a request to ITS repository can legitimately name —
 // fifty bytes for each object its live packs hold and each live ref, beside
 // the mebibyte (RequestBound) — and the spools draw on a node-wide allowance
-// of their own, never the cache's budget, of which one credential holds a
-// quarter at most, in bytes and in spools. The wants are read back from
+// of their own, never the cache's budget, a quarter of it one credential's: a
+// spool takes its room as its client sends and holds the whole request with
+// its head moved in from memory; while its body arrives it claims at most
+// SpoolRequestBytes, and every grant keeps the bodies arriving able to finish
+// oldest first, so a body waits only for a spool that ended or a body older
+// than itself, and a slow client holds what it has sent and no turn. A request
+// that finds no room WAITS ITS TURN for it rather than being refused, since
+// git does not retry the lazy fetch a checkout makes: first come first served
+// within its credential, the node's in arrival order across credentials, a
+// request waiting to start holding its head in a place of the waiting room and
+// nothing more, and a wait ending, unserved, a keepalive short of the minute
+// a balancer is told to allow a quiet git request (spool.go) — which a cold
+// sync of the requests ahead outlasts, so a token whose spooled requests pass
+// its quarter fails the rest on a cold node. The wants are read back from
 // wherever the request is, as a stream, by the negotiation's parse and by the
 // cache's check of what it lacks, and never held whole; and the request is
 // GIVEN BACK the moment upload-pack has read it and started its answer, since
@@ -323,14 +335,17 @@
 // op=blob begins with the sync, so a balancer between a person and a node
 // that has not served a repository sees that long before git's first byte.
 //
-// ONE CREDENTIAL'S SPOOLS ARE CAPPED (SpoolsPerCredential: four on this
-// lane of sixteen), and a fifth is answered 503 at once (body.go): of eight
-// blobless checkouts of the 100 000-file tree under ONE token, each lazy
-// fetch spooled, a checkout failed on that 503 — git does not retry a lazy
-// fetch — which is why the arm's clients are people. So a CI fleet behind
-// one token running checkouts that large on a node this size does not run
-// four at a time: every checkout past the fourth at once FAILS, and is not
-// queued behind the four.
+// ONE CREDENTIAL'S SPOOLING IS CAPPED at a quarter of the room
+// (SpoolCredentialBytes, 256 MiB on this lane of sixteen), and a request past
+// it WAITS ITS TURN (spool.go). It was once answered 503 at once, and before
+// that the fifth of one credential's bodies arriving was: of eight blobless
+// checkouts of the 100 000-file tree under ONE token, each lazy fetch spooled,
+// a checkout failed on that 503 — git does not retry a lazy fetch. Eight such
+// fetches, 40 MB, now fit one token's quarter whole, so under one token they
+// would not queue either; the arm's clients are people, one token each, because
+// it measures eight clones at once, and
+// TestBloblessCheckoutsBehindOneTokenAllSucceed is what holds that every
+// checkout behind one token is served.
 //
 // A WARM CLONE (BenchmarkCloneWarm), the same tree from a node holding its
 // bitmap — on 2.47.3, reused from the bitmap's preferred pack alone

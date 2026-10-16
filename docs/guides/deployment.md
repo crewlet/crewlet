@@ -1150,6 +1150,12 @@ cache on its own disk. What such a node needs from its host:
   route `/git/<name>` by repository — a balancer hashing the path to a node,
   with the next one in line when it is down — so each repository stays warm on
   one or two nodes. Routing by repository is never required for correctness.
+  A fetch large enough to spool — a partial clone's checkout asking for more
+  than a mebibyte of objects — that finds the node's room for such requests in
+  use is silent too: it waits up to 55 s for its turn, a keepalive interval
+  inside the minute, and is answered 503 if its turn has not come, so an idle
+  timeout of a minute lets the node's own answer through rather than cutting
+  the request with the balancer's.
   A client that does not ask for side-band (every git since 1.6 asks, so this
   is a hand-built client) hears nothing during a push from the end of its
   upload to its report: git's own keepalive (`receive.keepAlive`) and the
@@ -1171,6 +1177,35 @@ cache on its own disk. What such a node needs from its host:
   update's force check too, and each such walk is given 11 µs an object of the
   repository: 33 s at three million objects, a gigabyte of source history,
   which such a walk takes about two and a half seconds to finish.
+- **A token for each CI runner.** A fetch large enough to spool — a blobless
+  checkout's lazy fetch, past a mebibyte of wants — holds its room from its
+  first spooled byte until git has read it and started answering, its sync
+  included, and one credential's may hold a quarter of the node's room at
+  once: 256 MiB on a four-core node, each up to 64 MiB, about 1.3 million
+  objects. Fetches past that quarter wait their turn behind the token's own,
+  up to 55 s each, and a lane's width of git transfer slots of them may wait
+  at once — 16 on a four-core node, past which the excess is answered 503 at
+  once. How long they wait is how long the ones ahead of them hold their
+  room: a moment on a node that holds the repository, and the cold sync above
+  on one that does not — longer than the wait, which stays 55 s whatever idle
+  timeout the balancer is given, so on a cold node the fetches past a token's
+  quarter are answered 503, and git does not retry a lazy fetch, so those
+  checkouts fail. N runners behind one token, each asking for
+  B bytes at once, meet that once N × B passes the quarter: thirteen lazy
+  fetches of 20 MB fill a four-core node's 256 MiB, and the fourteenth and
+  every one after it fail on a cold sync. Give each runner a token of its
+  own, and the limit is the node's whole room — fifty-three such fetches on a
+  four-core node's gibibyte, which a cold sync can fill too; routing by
+  repository, above, keeps the syncs warm. A fetch whose body is still
+  arriving holds no turn: it holds what its client has sent, and the node
+  keeps one fetch's 64 MiB free of those behind the oldest still arriving, so
+  a slow client holds others up only once the fetches arriving hold all but
+  that of the room — 960 MiB of a four-core node's gibibyte, 192 MiB of a
+  token's quarter. `crewlet.code.host.spool.waits` by `outcome` shows the
+  waiting ([Metrics](../reference/metrics.md)), and a
+  `code_fetch_spool_unserved` line names the token behind any that was not
+  served and what held it back — git itself prints only
+  `error: RPC failed; HTTP 503`.
 - **Memory for its transfers, cores for its reads.** Each clone, fetch or push
   holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
   240 bytes for every object of a repository it clones whole) and a core only

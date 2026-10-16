@@ -92,10 +92,6 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 			", or against another node")
 	case errors.Is(err, cache.ErrStopped):
 		stopping(w)
-	case errors.Is(err, errSpoolFull):
-		retry(w, BusyRetryAfter)
-		auth.GitText(w, http.StatusServiceUnavailable, "this node's room for large fetch requests is in "+
-			"use ("+sentence(err.Error())+"): retry in "+seconds(BusyRetryAfter)+", or against another node")
 	case errors.Is(err, gitproc.ErrBusy):
 		retry(w, BusyRetryAfter)
 		auth.GitText(w, http.StatusServiceUnavailable, "every git slot on this node stayed busy for "+

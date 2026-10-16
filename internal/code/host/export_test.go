@@ -59,14 +59,61 @@ func IdxOIDs(path string) (int64, io.ReadCloser, error) { return idxOIDs(path) }
 // it spools the rest (RequestMemoryBytes in production).
 func SetRequestMemory(s *Server, n int) { s.requestMemory = n }
 
-// SetSpools replaces s's spool allowance: limit bytes, share bytes and
-// perCredential spools a credential may hold at once.
-func SetSpools(s *Server, limit, share int64, perCredential int) {
-	s.spools = newSpools(limit, share, perCredential)
+// SpoolSizes are a spool allowance's bounds, as SetSpools takes them.
+type SpoolSizes struct {
+	// Limit and Share are the bytes every spool, and each credential's, may
+	// hold at once; Request is the most one request spools, and what a body
+	// whose client declared no length claims.
+	Limit, Share, Request int64
+	// Grain is the most room a body asks for at a time; zero is the
+	// production's mebibyte.
+	Grain int64
+	// Places and PlacesPerCredential are how many requests may wait to start.
+	Places, PlacesPerCredential int
 }
 
-// SpoolsInUse is the bytes and the spools s's allowance holds right now.
+// SpoolSizesFor is the production allowance for a transfer lane of transfers
+// slots.
+func SpoolSizesFor(transfers int) SpoolSizes {
+	z := spoolSizesFor(transfers)
+	return SpoolSizes{Limit: z.limit, Share: z.share, Request: z.request, Grain: z.grain, Places: z.places,
+		PlacesPerCredential: z.placesPerCredential}
+}
+
+// SpoolSizesCheck is why z cannot be an allowance, nil when it can.
+func SpoolSizesCheck(z SpoolSizes) error { return z.sizes().check() }
+
+func (z SpoolSizes) sizes() spoolSizes {
+	grain := z.Grain
+	if grain == 0 {
+		grain = spoolGrain
+	}
+	return spoolSizes{limit: z.Limit, share: z.Share, request: z.Request, grain: grain, places: z.Places,
+		placesPerCredential: z.PlacesPerCredential}
+}
+
+// SetSpools replaces s's spool allowance with one of sizes z. Set before the
+// requests a case sends: the server reads the field on every request's
+// goroutine.
+func SetSpools(s *Server, z SpoolSizes) { s.spools = newSpools(z.sizes()) }
+
+// SpoolsInUse is the bytes s's spool allowance holds right now, and the spools
+// open — bodies arriving, and bodies that ended and are not yet given back.
 func SpoolsInUse(s *Server) (int64, int) { return s.spools.inUse() }
+
+// SpoolsArriving is how many of s's spools have their bodies arriving now.
+func SpoolsArriving(s *Server) int { return s.spools.arrivingNow() }
+
+// SpoolWaiting is how many requests wait for room in s's spool allowance
+// right now.
+func SpoolWaiting(s *Server) int { return s.spools.waiters() }
+
+// SpoolPlaces is how many places s's spool waiting room has given out now.
+func SpoolPlaces(s *Server) int { return s.spools.placesHeld() }
+
+// SpoolOutcomes is every outcome a request's turn at the spool allowance ends
+// in, as crewlet.code.host.spool.waits counts it.
+func SpoolOutcomes() []string { return slices.Clone(spoolOutcomes) }
 
 // SetRequestMemoryAllowance replaces s's request memory allowance.
 func SetRequestMemoryAllowance(s *Server, limit int64) { s.heads = newAllowance(limit) }

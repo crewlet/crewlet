@@ -57,7 +57,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := s.readRequest(ctx, decoded, declared, adm.operatorID, s.boundOf(adm))
 	if err != nil {
-		s.requestRefused(w, r, adm.name, err)
+		s.requestRefused(w, r, adm, err)
 		return
 	}
 	defer body.close()
@@ -174,23 +174,41 @@ func (s *Server) boundOf(adm admission) func(context.Context, bool) (int64, erro
 }
 
 // requestRefused answers a fetch request that could not be read: past its
-// repository's bound or past what one credential may spool on this node (413),
-// the spool allowance spent (503), the client's body failing (400), or the
-// rows or the cache's volume failing (503).
-func (s *Server) requestRefused(w http.ResponseWriter, r *http.Request, name string, err error) {
+// repository's bound or past what this node spools for one request (413), its
+// turn at the spool allowance ended unserved (503, spoolRefused), the client's
+// body failing or running past the length it declared (400), or the rows or
+// the cache's volume failing (503).
+func (s *Server) requestRefused(w http.ResponseWriter, r *http.Request, adm admission, err error) {
+	name := adm.name
+	var unserved *spoolUnserved
 	switch {
+	case errors.As(err, &unserved):
+		s.spoolRefused(w, r, adm, unserved)
 	case errors.Is(err, errRequestTooLarge):
 		auth.GitText(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this fetch request is larger than "+
 			"any repository %s holds could need — %s — which is fifty bytes for each object and live ref "+
 			"it holds, and a mebibyte", name, strings.TrimPrefix(err.Error(), errRequestTooLarge.Error()+": ")))
-	case errors.Is(err, errSpoolPastShare):
+	case errors.Is(err, errSpoolPastCeiling):
 		auth.GitText(w, http.StatusRequestEntityTooLarge, "this fetch request is larger than this node "+
-			"takes from one credential at once ("+sentence(strings.TrimPrefix(err.Error(),
-			errSpoolPastShare.Error()+": "))+"); fetch through a node with more cores and the memory to back them, or fewer objects at once")
+			"spools for one request ("+sentence(strings.TrimPrefix(err.Error(), errSpoolPastCeiling.Error()+": "))+
+			"); fetch fewer objects at once — a sparse checkout asks only for the files it checks out")
 	case errors.Is(err, paced.ErrBody), errors.Is(err, gzip.ErrChecksum), errors.Is(err, gzip.ErrHeader),
-		errors.Is(err, io.ErrUnexpectedEOF):
+		errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, errPastClaim):
 		auth.GitText(w, http.StatusBadRequest, "the request body could not be read: "+sentence(err.Error()))
 	default:
 		s.syncFailed(w, r, name, err)
 	}
+}
+
+// spoolRefused answers a fetch whose turn at the spool allowance ended
+// unserved — its wait expired, or it was refused a place to wait — 503 with
+// BusyRetryAfter, saying what held it back, and logged with the credential
+// that sent it: git does not retry a lazy fetch, so this is a checkout that
+// failed, and the line is how an operator finds the token behind it.
+func (s *Server) spoolRefused(w http.ResponseWriter, r *http.Request, adm admission, e *spoolUnserved) {
+	s.log.Warn("code_fetch_spool_unserved", "repo", adm.name, "path", r.URL.Path, "operator_id", adm.operatorID,
+		"reason", e.reason, "error", e)
+	retry(w, BusyRetryAfter)
+	auth.GitText(w, http.StatusServiceUnavailable, "this node's room for large fetch requests is in use: "+
+		sentence(e.detail)+"; retry in "+seconds(BusyRetryAfter)+", or against another node")
 }

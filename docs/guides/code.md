@@ -164,8 +164,20 @@ platform's keychain works too (`git config --global credential.helper
 osxkeychain`, `libsecret` or `manager`); `credential.helper store` keeps the
 token in plain text in `~/.git-credentials`.
 
-**In CI**, hand the token over without a prompt. The same helper, for one
-command, through `-c`:
+**In CI**, give each runner a token of its own. A token shared by many
+runners works while their blobless checkouts' lazy fetches fit together in a
+quarter of a node's room for large requests — 256 MiB on a four-core node —
+and the checkouts past that wait their turn, up to 55 s, behind the ones
+ahead of them. Those hold their room until the node has synced the repository
+and git has read them, so on a node that has not served the repository
+lately — a cold sync of a minute or two — the ones waiting past the quarter
+fail: thirteen lazy fetches of 20 MB fill a four-core node's quarter, and the
+fourteenth and every later one fail their checkouts. A token per runner lifts
+that to the node's whole room, and routing each repository to the nodes that
+hold it keeps the syncs warm ([Deployment](deployment.md)).
+
+Hand the token over without a prompt. The same helper, for one command,
+through `-c`:
 
 ```sh
 CREWLET_API_TOKEN=$CREWLET_TOKEN git -c credential.helper= \
@@ -203,8 +215,9 @@ with `--object-format=sha256` cannot push to one.
 
 ### What git tells you, and what to do
 
-Every refusal names its reason in the line git prints. The ones a person meets
-most:
+Every refusal names its reason in the line git prints — but for a fetch's
+request refused in the middle of a transfer, where git prints only the HTTP
+status and the node's log keeps the reason. The ones a person meets most:
 
 | git prints | What to do |
 |---|---|
@@ -216,6 +229,7 @@ most:
 | `(unknown: outcome unknown (op …); …)` | The answer was lost — it may or may not have landed. Fetch, then push again. |
 | `(not_applied: …)` | The push was recorded and every node dropped it: nothing landed. Push again. |
 | `… retry in 30 s …` (a `503`) | The node is draining or stopping: retry, and a balancer sends you to another. |
+| `error: RPC failed; HTTP 503 …` then `fatal: could not fetch <id> from promisor remote` (the checkout of a blobless clone) | The checkout's one fetch for the files it lacks found the node's room for large fetch requests in use — it waited 55 s for its turn, or found no place to wait — and git does not retry it: run the checkout again. git prints no reason for a request answered mid-transfer; the node's `code_fetch_spool_unserved` line names the token and what held it back, and if it was the token's own requests, the token is shared by several CI runners — give each its own. |
 
 An `ok` from the engine means the push's own record **has been applied** — it
 is never said of a push that is merely on its way. Every other condition, the
