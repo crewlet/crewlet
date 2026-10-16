@@ -17,24 +17,25 @@ import (
 
 // Worklet and Doclet, read for a screen.
 //
-// # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
+// # These read A DATA NODE'S COPY, and that is the whole reason they are cheap
 //
 // Every other way to answer "what is on the board" is a listing over the
 // fleet's own record — O(keys) message deliveries, on a request path, for a
-// page a dashboard refreshes. This node's copy is what makes it a SQL query
-// instead, and it is the same copy a seat's own tools read, so an operator and
-// an agent looking at one task see one task.
+// page a dashboard refreshes. A copy of the replicated estate is what makes it
+// a SQL query instead, and it is reached through the same estate router a
+// seat's own tools read through, so an operator and an agent looking at one
+// task see one task: this node's copy while it serves, another data node's
+// while it does not. Only a data node serves these screens — Tier A refuses
+// `ingress` without `data` — so the router is here for the copy that is out
+// of service, never for a node holding none.
 //
-// The two halves reach that copy differently, and the difference is visible in
-// the answers rather than hidden here: the tracker's rows are derived by an
-// applier from an ordered log, so every answer carries the level it was served
-// at and what it could not account for; the wiki's are maintained by a
-// projector following a bucket's change feed, which could only say hydrated or
-// not.
+// Both halves' rows are derived by a state-log applier from an ordered log, so
+// every answer carries the level it was served at and the position it
+// answered at, rather than a flag saying whether the copy was ready.
 //
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
-// Both native backends are state-log domains now, so both say it the same way:
+// Both native backends are state-log domains, so both say it the same way:
 // through the coverage every answer carries, which is a POSITION rather than a
 // boolean. "This company has no work" is an answer a person acts on — they
 // file the duplicate, they conclude the migration failed — and a node that has

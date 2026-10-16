@@ -23,9 +23,10 @@ import (
 
 // newSkillSync builds the node's sync loop over its registry, stopped.
 //
-// Built with the engine rather than when it starts, so Doclet's post-commit
-// nudge, which is wired before the loop runs, has something to nudge: a
-// request made before the loop starts is kept and acted on once it does.
+// Built with the engine rather than when it starts, so the post-commit nudge
+// from Doclet's applier, which is wired before the loop runs, has something
+// to nudge: a request made before the loop starts is kept and acted on once
+// it does.
 func (e *Engine) newSkillSync(nodeID string) error {
 	opts := skillsync.Options{
 		Registry: e.skills, Node: nodeID, OnChange: e.auditSkills,

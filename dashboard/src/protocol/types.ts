@@ -1888,7 +1888,8 @@ export interface FleetNode {
   config_applied_epoch?: number;
   config_reported_at?: string;
   /**
-   * How far this node's own derived copies have come up — `ready` of `total`.
+   * How far this node's state-log appliers have come up — `ready` of `total`,
+   * one per registered domain.
    *
    * A DIFFERENT QUESTION FROM THE EPOCH: a node can hold the current revision
    * and still be replaying the log the state is derived from, and only one of
@@ -1902,8 +1903,8 @@ export interface FleetNode {
    * non-zero, so absent is "this node is not saying", never "nothing is
    * ready" — the same rule `in_flight` follows.
    */
-  projections_ready?: number;
-  projections_total?: number;
+  appliers_ready?: number;
+  appliers_total?: number;
   in_flight?: number;
   draining?: boolean;
   started_at?: string;

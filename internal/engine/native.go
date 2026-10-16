@@ -81,7 +81,8 @@ import (
 // without `data` holds neither: it runs [remoteNative] instead, and reaches the
 // halves through a data node.
 type native struct {
-	// indexer keeps the lexical search index behind the page projection.
+	// indexer keeps the lexical search index behind this node's applied
+	// pages and tasks.
 	indexer *search.Indexer
 
 	// writer is the tracker's write authority and pages the wiki's.
@@ -1202,16 +1203,16 @@ func parentOf(o *org.Organization, child *org.Unit) *org.Unit {
 	return nil
 }
 
-// skillDetector answers whether a page body is a tool skill, for the
-// projection's derived flag.
+// skillDetector answers whether a page body is a tool skill, for the flag the
+// pages applier derives.
 type skillDetector struct{}
 
 // IsSkill reports a body that parses as a tool skill.
 //
-// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the projected flag
+// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the derived flag
 // means exactly what the registry means by it: a page the sync would admit.
-// A second heuristic here would let one page be a skill to the projection
-// and prose to the loader — and the disagreement is silent, because each
+// A second heuristic here would let one page be a skill to the applier and
+// prose to the loader — and the disagreement is silent, because each
 // half is self-consistent.
 func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 
@@ -1869,8 +1870,8 @@ func (m seatMentions) Mentions(text string) []string {
 // every such node to walk its container through a data node. Several data
 // nodes announce one edit; a hearer coalesces them into one walk.
 //
-// NAMED AS DOCLET'S, because the projection outlives an apply that moves the
-// company's skills to Confluence, and the loop ignores a refresh from a
+// NAMED AS DOCLET'S, because the pages applier outlives an apply that moves
+// the company's skills to Confluence, and the loop ignores a refresh from a
 // backend its source is not on.
 func (e *Engine) nudgeSkills() { e.skillSync.Announce(skillBackend(config.KnowledgeDoclet)) }
 
@@ -1900,8 +1901,8 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 	return out, nil
 }
 
-// walkDocletSkills reads the tool-skill container out of this node's own page
-// projection.
+// walkDocletSkills reads the tool-skill container out of this node's own
+// applied pages.
 //
 // # It waits for hydration first
 //
@@ -1952,8 +1953,8 @@ func (e *Engine) awaitHydration(ctx context.Context) bool {
 	return true
 }
 
-// hydrationPoll is how often the first skill read checks whether the
-// projection has caught up.
+// hydrationPoll is how often the first skill read checks whether this node's
+// copy has caught up with its logs.
 //
 // A quarter-second. The wait is bounded by a boot reconcile, which is
 // hundreds of milliseconds on an ordinary company and minutes on a large one

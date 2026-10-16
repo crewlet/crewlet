@@ -1552,8 +1552,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, err
 	}
 
-	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
-	// projection nudges it from a post-commit hook: a nudge with nothing to
+	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose pages
+	// applier nudges it from its post-commit half: a nudge with nothing to
 	// land on would be lost. Building it starts nothing.
 	if err = e.newSkillSync(nodeID); err != nil {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
@@ -3291,12 +3291,12 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	// data node; none on a node without `data`, which runs no applier — so
 	// an operator asking why a fresh node holds no seats can see
 	// the answer in the fleet view rather than inferring it from an empty
-	// claim list. See [coord.NodeStatus.ProjectionsReady] for why this is
+	// claim list. See [coord.NodeStatus.AppliersReady] for why this is
 	// not a readiness signal.
 	for _, loop := range e.StateLogStatus(ctx) {
-		status.ProjectionsTotal++
+		status.AppliersTotal++
 		if loop.Ready {
-			status.ProjectionsReady++
+			status.AppliersReady++
 		}
 	}
 	if fn := e.posture.Load(); fn != nil {

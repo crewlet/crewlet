@@ -1,8 +1,8 @@
 /**
  * The facts a node wears, and the one that had no reader at all.
  *
- * `internal/api/queries/fleet.go` has written `projections_ready` /
- * `projections_total` on every node row since they were added, with a comment
+ * `internal/api/queries/fleet.go` has written `appliers_ready` /
+ * `appliers_total` on every node row since they were added, with a comment
  * saying where the fact belongs: "the fleet view", because it is the answer to
  * "why is the new node holding nothing". The client type never declared them
  * and no screen read them, so the answer carried the fact and nobody could see
@@ -90,10 +90,10 @@ describe("nodeFacts", () => {
   test("a node that is still replaying says how far it has come", () => {
     // Two integers, not a bool: "3 of 5" and "0 of 2" are the two readings an
     // operator has to tell apart, which is why the engine sends a pair.
-    expect(fact(node({ projections_ready: 3, projections_total: 5 }), "Copies")?.value).toBe(
+    expect(fact(node({ appliers_ready: 3, appliers_total: 5 }), "Copies")?.value).toBe(
       "3 of 5 ready",
     );
-    expect(fact(node({ projections_ready: 0, projections_total: 2 }), "Copies")?.value).toBe(
+    expect(fact(node({ appliers_ready: 0, appliers_total: 2 }), "Copies")?.value).toBe(
       "0 of 2 ready",
     );
   });
@@ -119,7 +119,7 @@ describe("nodeFacts", () => {
     // non-zero, so a dash here would claim a reading the engine does not keep
     // — and `FactLine` drops an empty value, which is the honest rendering.
     expect(fact(node(), "Copies")?.value).toBe("");
-    expect(fact(node({ projections_total: 0 }), "Copies")?.value).toBe("");
+    expect(fact(node({ appliers_total: 0 }), "Copies")?.value).toBe("");
   });
 
   // THE ROLES ARE A FACT, AND A SET: the Nodes table gives its Roles column
@@ -137,7 +137,7 @@ describe("nodeFacts", () => {
     // A node can hold the current revision and still be replaying the log its
     // state is derived from; only one of those makes its seats servable.
     const labels = nodeFacts({
-      node: node({ projections_ready: 1, projections_total: 4 }),
+      node: node({ appliers_ready: 1, appliers_total: 4 }),
       answer: AT3,
     }).map((f) => f.label);
     expect(labels.indexOf("Copies")).toBe(labels.indexOf("Epoch") + 1);
