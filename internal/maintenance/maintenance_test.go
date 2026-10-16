@@ -1,8 +1,11 @@
 package maintenance_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -11,10 +14,50 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
 var base = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+
+// logs is where this package's own log lines go while the suite runs.
+//
+// A TESTMAIN OWNS THE PROCESS'S LOGGING, which is what [logging.Configure]
+// says about itself, and this package needs the lines rather than merely
+// wanting them quiet: a horizon the worker has to raise is answered with a
+// WARNING and, on the tick itself, with nothing else — the value it raises to
+// is the one the caller already asked for — so the line IS the behaviour.
+var logs = &syncBuffer{}
+
+// syncBuffer is a writer a logger and a test may both touch.
+//
+// Go resumes a parallel test only once every sequential one has finished, so
+// a reader here never overlaps a case that logs — but the detector reads the
+// handler's own goroutine, and a buffer with no lock is a race whether or not
+// anything ever interleaves.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// since returns what has been logged since a mark, and a mark for next time.
+func (b *syncBuffer) since(mark int) (string, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	all := b.buf.String()
+	return all[mark:], len(all)
+}
+
+func TestMain(m *testing.M) {
+	logging.Configure(slog.LevelWarn, logging.FormatText, logs)
+	os.Exit(m.Run())
+}
 
 // recorder is a job that remembers the cutoff it was handed.
 type recorder struct {
@@ -116,6 +159,66 @@ func TestAHorizonBelowTheTickIsRaisedToIt(t *testing.T) {
 	}
 	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour)) {
 		t.Fatalf("cutoff %s, want the raised horizon %s", got, base.Add(-time.Hour))
+	}
+}
+
+// A horizon sitting exactly ON the tick is the boundary [maintenance.Interval]
+// names, and it is reported rather than accepted in silence.
+//
+// Raising it changes no number — the value already IS the tick — so the
+// warning is the whole of the behaviour, and that is the point: a retention
+// equal to the sweep's own cadence is one the SWEEP decides rather than the
+// caller, and the caller is the only one who will ever size a table from it.
+// The condition was strictly below, so this case passed without a word.
+//
+// NOT PARALLEL, because it reads a process-wide log sink.
+func TestAHorizonExactlyAtTheTickIsReported(t *testing.T) {
+	_, mark := logs.since(0)
+	var r recorder
+	w := newWorker(t, maintenance.Options{
+		Now:      fixed(base),
+		Interval: time.Hour,
+		Jobs: []maintenance.Job{
+			{Name: "on_the_floor", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run},
+		},
+	})
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour)) {
+		t.Fatalf("cutoff %s, want the tick %s", got, base.Add(-time.Hour))
+	}
+	written, _ := logs.since(mark)
+	if !strings.Contains(written, "maintenance_horizon_raised_to_the_tick") ||
+		!strings.Contains(written, "on_the_floor") {
+		t.Fatalf("a horizon equal to the tick logged %q, want the raise warning "+
+			"naming the job — at the floor the value is the sweep's answer "+
+			"rather than the caller's, and nothing else ever says so", written)
+	}
+}
+
+// And a horizon above the tick, by as little as a second, says nothing — so
+// the warning above is a verdict rather than a line every worker prints.
+//
+// NOT PARALLEL, for [TestAHorizonExactlyAtTheTickIsReported]'s reason.
+func TestAHorizonAboveTheTickIsNotReported(t *testing.T) {
+	_, mark := logs.since(0)
+	var r recorder
+	w := newWorker(t, maintenance.Options{
+		Now:      fixed(base),
+		Interval: time.Hour,
+		Jobs: []maintenance.Job{
+			{Name: "roomy", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour + time.Second), Run: r.run},
+		},
+	})
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour - time.Second)) {
+		t.Fatalf("cutoff %s, want the job's own horizon %s", got, base.Add(-time.Hour-time.Second))
+	}
+	if written, _ := logs.since(mark); strings.Contains(written, "roomy") {
+		t.Fatalf("a horizon above the tick logged %q, want silence", written)
 	}
 }
 
