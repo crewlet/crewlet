@@ -244,7 +244,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		// redeemer. An address with nothing to propose from is refused
 		// naming the field the caller fills in; an absent address is the
 		// domain's to refuse, naming the address.
-		if login = iam.LoginFromAddress(email); login == "" {
+		if login = iam.LoginFor(in.Name, email); login == "" {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 				map[string]string{"field": "login", "detail": "Couldn't make " +
 					"a login from that address. Send one, like jane.doe."})

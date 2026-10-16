@@ -1621,7 +1621,7 @@ func stamp(v any) string {
 // holds, is a real state the table should name.
 func dash(in string) string {
 	if in == "" {
-		return "—"
+		return "–"
 	}
 	return in
 }

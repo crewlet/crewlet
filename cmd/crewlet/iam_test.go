@@ -1322,7 +1322,7 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 	}
 	// A vacant row dashes its unit, holder, stage, invitation and expiry; a
 	// held one names its holder, so it dashes one fewer.
-	if got := strings.Count(rows["v"], "—"); got != 5 {
+	if got := strings.Count(rows["v"], "–"); got != 5 {
 		t.Fatalf("the vacant control row is %q, with %d dashes, want 5", rows["v"], got)
 	}
 	for handle, want := range map[string]string{
@@ -1331,7 +1331,7 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 		"c": "(held)",
 		"d": "CI (service account)",
 	} {
-		if !strings.Contains(rows[handle], want) || strings.Count(rows[handle], "—") != 4 {
+		if !strings.Contains(rows[handle], want) || strings.Count(rows[handle], "–") != 4 {
 			t.Errorf("the row for held seat %s is %q, want its holder said as %q "+
 				"rather than a dash", handle, rows[handle], want)
 		}

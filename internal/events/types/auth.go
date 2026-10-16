@@ -440,7 +440,7 @@ func (e IAMStepUpCompleted) Actor() string { return e.Login }
 func (e IAMStepUpCompleted) Summary() string {
 	how := "password"
 	if e.SecondFactor != "" {
-		how += " + " + string(e.SecondFactor)
+		how += " and " + factorWord(e.SecondFactor)
 	}
 	return lead(orSomebody(e.Login, e.Person), "confirmed it's them ("+how+")")
 }
