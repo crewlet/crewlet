@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -39,33 +37,6 @@ type NewComment struct {
 	// Mentions are handles this comment named. Each is woken whether or
 	// not they watch, and each is subscribed.
 	Mentions []string
-
-	// TurnKey makes a comment made from a turn idempotent: a re-run turn
-	// posts once.
-	//
-	// IT DERIVES THE OPERATION ID rather than only the comment's own, so a
-	// re-run is the SAME operation: inside the log's duplicate window the
-	// broker collapses its append, past it the comment's own id makes the
-	// apply an upsert of the row the first run wrote, and once this node's
-	// ledger has lost the first run's row the state log answers it
-	// `unknown` rather than deciding it again — which is what TurnSince is
-	// for.
-	TurnKey string
-
-	// TurnSince is when the unit of work TurnKey names began, and it is the
-	// instant the derived operation id carries (see statelog.DeriveOpID).
-	// It must be the key's own — reproduced by every re-run — and never the
-	// instant of this call: the state log refuses to decide again an
-	// operation minted before its ledger's watermark whose row it no longer
-	// holds, and a call's own clock is always after it.
-	TurnSince time.Time
-
-	// Repeat is how many earlier calls in the turn's run asked the same
-	// tool for something else — see turnctx.CallLog. It is part of the
-	// derived id, so a remark made again after a different one is a second
-	// comment rather than the first one's retry, while a remark repeated
-	// with nothing between stays one. Zero adds nothing to the id.
-	Repeat int
 
 	Quiet bool
 }
@@ -396,33 +367,30 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 
 // commentOpID is the operation this comment belongs to.
 //
-// DERIVED FROM THE TURN when one is named, so a re-run turn is one operation
+// DERIVED FROM THE CALLER'S KEY ([Actor.OpKey]) where it brought one — a
+// turn's call through its own key, which a seat's tools derive from the turn,
+// the call's arguments and its repeat count in the run; a person's request
+// through its Idempotency-Key — so a retry or a re-run turn is one operation
 // the ledger collapses rather than a second comment. The comment's own id is
 // the same value: one comment is one operation here, and two identifiers for
 // one thing is two places for a retry to disagree with itself.
 //
-// AND IT CARRIES THE INSTANT THE WORK BEGAN, never this call's, for the reason
-// [NewComment.TurnSince] gives — the turn's own, or, when there is no turn,
-// the one the caller's [Actor.OpKey] was minted at: a request retried after an
-// `unknown` must post once, and a comment is the gesture a person is most
-// likely to press twice.
+// AND IT CARRIES THE INSTANT THE KEY WAS MINTED, never this call's: the state
+// log refuses to decide again an operation minted before its ledger's
+// watermark whose row it no longer holds, and a call's own clock is always
+// after it — while a request retried after an `unknown` must post once, and a
+// comment is the gesture a person is most likely to press twice.
 func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) string {
-	key, at := strings.TrimSpace(in.TurnKey), in.TurnSince
-	if key == "" {
-		key = strings.TrimSpace(actor.OpKey)
-		at, _ = statelog.OpMintedAt(key)
-	}
+	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
 		return s.newSeqID()
 	}
+	at, _ := statelog.OpMintedAt(key)
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	identity := []string{commentNamespace, pageID, key, hex.EncodeToString(sum[:])}
-	if in.Repeat > 0 {
-		identity = append(identity, "repeat:"+strconv.Itoa(in.Repeat))
-	}
 	// UNNAMED, because this is the comment's own id as well and a reader
-	// addresses it: the page and the turn it came from are on the row.
-	return statelog.DeriveOpID(at, "", identity...)
+	// addresses it: the page and the call it came from are on the row.
+	return statelog.DeriveOpID(at, "", commentNamespace, pageID, key,
+		hex.EncodeToString(sum[:]))
 }
 
 // commentNamespace scopes the derived operation ids. FIXED for the life of the

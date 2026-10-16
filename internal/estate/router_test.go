@@ -161,13 +161,7 @@ func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
 func (f *fakeNode) Comment(_ context.Context, actor doclet.Actor, _ string,
 	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	f.note("comment")
-	// THE TURN'S KEY FIRST, the order the pages store derives a comment's
-	// id in.
-	if in.TurnKey != "" {
-		f.keyed(in.TurnKey)
-	} else {
-		f.keyed(actor.OpKey)
-	}
+	f.keyed(actor.OpKey)
 	return doclet.Comment{Body: in.Body}, doclet.Written{}, nil
 }
 
