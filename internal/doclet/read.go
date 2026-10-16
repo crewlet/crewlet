@@ -42,14 +42,18 @@ import (
 // every multi-statement answer runs inside one `BEGIN DEFERRED`, and the
 // framework's read is where that transaction now comes from.
 type Reader struct {
-	db  store.ReplicatedReader
 	log *statelog.Reader
 }
 
 // ReaderOptions configure a reader.
+//
+// NO STORE HANDLE, and that is the point rather than an omission: every
+// statement a page read issues runs inside the transaction the framework's
+// read opens ([statelog.Reader]), which is what the read level, the snapshot
+// and the coverage probe all rest on. A handle beside it is a door a
+// statement can leave through, outside all three — one the reader carried
+// and never read, which kept the door shut by luck rather than by design.
 type ReaderOptions struct {
-	DB store.ReplicatedReader
-
 	// Log is this domain's read authority. REQUIRED: without it every read
 	// level is a label rather than a guarantee, which is silent at every
 	// surface that renders one.
@@ -58,16 +62,13 @@ type ReaderOptions struct {
 
 // NewReader builds the knowledge base's read side.
 func NewReader(opts ReaderOptions) (*Reader, error) {
-	if opts.DB.IsZero() {
-		return nil, errors.New("doclet: a store is required")
-	}
 	if opts.Log == nil {
 		return nil, errors.New("doclet: a reader needs its domain's read " +
 			"authority — without it every read level is a label rather than " +
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	return &Reader{db: opts.DB, log: opts.Log}, nil
+	return &Reader{log: opts.Log}, nil
 }
 
 // Filter narrows a page listing.
