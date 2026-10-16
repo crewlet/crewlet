@@ -160,6 +160,12 @@ type applier struct {
 	// budgets is what was left of each wait's context when the wait began —
 	// the budget a write handed its applier — in order.
 	budgets []time.Duration
+
+	// beforeOp, when set, runs as a ledger read begins — which is how a
+	// case ends a caller's context between a wait that succeeded and the
+	// read after it — and an error it returns fails that read, as a store
+	// that is busy or closed fails it.
+	beforeOp func() error
 }
 
 // noteBudget records what is left of ctx's deadline as a wait begins. The
@@ -318,7 +324,19 @@ func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statel
 	return ctx.Err()
 }
 
-func (a *applier) Op(_ context.Context, opID string) (statelog.OpEntry, bool, error) {
+func (a *applier) Op(ctx context.Context, opID string) (statelog.OpEntry, bool, error) {
+	a.mu.Lock()
+	before := a.beforeOp
+	a.mu.Unlock()
+	if before != nil {
+		if err := before(); err != nil {
+			return statelog.OpEntry{}, false, err
+		}
+	}
+	// A READ ON AN ENDED CONTEXT FAILS, as the store's own does.
+	if err := ctx.Err(); err != nil {
+		return statelog.OpEntry{}, false, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	entry, ok := a.ops[opID]

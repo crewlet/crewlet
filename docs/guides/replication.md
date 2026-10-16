@@ -49,9 +49,17 @@ different with each.
 - **`pending`** — the record is durable at its position and this node has not
   applied it yet. **The write succeeded.** Do not retry it; retrying publishes
   a second record. What is not yet true is that you can read it back here.
+  It is also the answer when the **caller** stops waiting — its own deadline
+  or a cancellation — after the broker has acknowledged the record, and when
+  this node cannot finish reading what the record produced, because its store
+  was busy or closed while it adopted a snapshot: nothing then can un-write
+  the record, so a durable write is never answered as a failure.
 - **`unknown`** — nothing can be established about the record. It may be on the
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
+  A write whose acknowledgement was lost, and whose subject's newest record
+  this node could not read as its own before its wait ended, answers this
+  too, with no position: that record may be another writer's.
   It is also what a write answers when the broker **says** the record may yet
   land: on a clustered stream, a second append under an operation id whose
   first record is proposed and not yet applied (`duplicate message id is in

@@ -1613,6 +1613,34 @@ const (
 	landedFound
 )
 
+// unresolved is the answer for a durable append this call could not resolve
+// on this node — its apply wait ended first, on the budget or because the
+// caller stopped waiting, or a read past the wait failed — and it says exactly
+// what is known about the record at `at`.
+//
+// PENDING AT `at` where the record there is THIS operation's: the broker's
+// word when it acknowledged this call's own append or collapsed it onto a
+// copy, and otherwise the record's own operation id, read off the log — which
+// answers whatever this node has applied. UNKNOWN, WITH NO POSITION, where the
+// ambiguous path FOUND the record newest on the subject and nobody here could
+// read it as this operation's: it may be anybody's, and pending there would
+// tell the caller "your write is durable here" about another writer's record
+// ([Result.Position]). A caller that has stopped waiting is not read for: the
+// read would fail on its context, and the same operation id retried is
+// answered from the ledger once this node has applied that far.
+//
+// ours is whether the call already knows the record is this operation's.
+func (p *Publisher) unresolved(ctx context.Context, req Request, at Position, ours bool) Result {
+	if !ours && ctx.Err() == nil {
+		env, _, found, err := p.recordAt(ctx, at)
+		ours = err == nil && found && env.OpID == req.OpID
+	}
+	if !ours {
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Waited: true}
+	}
+	return Result{Outcome: OutcomePending, Position: at, OpID: req.OpID, Waited: true}
+}
+
 // resolve answers what a durable record at p actually produced, and it is
 // called by the ambiguous path AND by every ordinary write the moment its own
 // acknowledgement names a position — INCLUDING the branch where the wait
@@ -1697,6 +1725,21 @@ const (
 // call's own append, or the copy it collapsed onto — so that is answered
 // pending without asking. A record the ambiguous path FOUND is not known to be
 // this operation's ([Result.Position]), so that one is resolved like any other.
+//
+// # And a resolution that cannot finish is still an answer about the record
+//
+// Past the broker's acknowledgement nothing this call does can un-write the
+// record, so nothing past it may be answered as a FAILURE: a caller reads a
+// context error, or a store that was busy or closed, as a write that did not
+// land — a seat's tool says the change was NOT made and the command line that
+// it wrote nothing — about a record every other node is applying. When the
+// wait ends without this node reaching `at`, on the budget or because the
+// CALLER stopped waiting, and when a read after the wait fails — the caller
+// stopping, or this node's store not answering — the answer is what is known
+// of the record at `at` ([Publisher.unresolved]). What remains a failure is a
+// conclusion the reads reached: a gate that dropped the record, a ledger row
+// that is not this node's to answer, a log that contradicts its own
+// acknowledgement.
 func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing, gen uint32, body []byte) (Result, error) {
 	if req.NoWait && landed != landedFound {
 		// THE ANSWER THE ACKNOWLEDGEMENT ALREADY ESTABLISHES. Durable at
@@ -1711,19 +1754,32 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	defer cancel()
 
 	if err := p.waiter.WaitApplied(waitCtx, req.Scope, at); err != nil {
-		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
-		}
-		// DURABLE AT p, UNRESOLVED HERE. Never "applied", and never a
-		// failure: every other node will apply it, and the caller has a
-		// position to resolve with rather than a retry to make.
+		// DURABLE, UNRESOLVED HERE — whether the budget ran out or the
+		// caller stopped waiting, since the record is on the log either
+		// way. Never "applied", and never a failure: every other node will
+		// apply it, and the caller has a position to resolve with rather
+		// than a retry to make.
 		//
 		// WAITED, unlike the [Request.NoWait] arm above, and this is the
 		// pending that says something about the NODE: it was asked and
-		// did not arrive inside the budget.
-		return Result{
-			Outcome: OutcomePending, Position: at, OpID: req.OpID, Waited: true,
-		}, nil
+		// did not arrive inside the time it was given.
+		return p.unresolved(ctx, req, at, landed != landedFound), nil
+	}
+	// unread is a read past the wait that failed, answered by what is known
+	// of the record at `at` rather than by the failure — whatever failed it.
+	// The caller stopping is the common cause and an ordinary one; a store
+	// that was busy, or closed while this node adopts a snapshot, is the
+	// other, and it fails the read and not the write, which is durable all
+	// the same. known is whether the record at `at` is this operation's, as
+	// far as this call has established it.
+	known := landed != landedFound
+	unread := func(err error) (Result, error) {
+		if ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "statelog_resolve_incomplete",
+				"domain", p.domain.Name(), "subject", req.Subject.String(),
+				"op_id", req.OpID, "position", at.String(), "err", err.Error())
+		}
+		return p.unresolved(ctx, req, at, known), nil
 	}
 
 	// THE LEDGER IS ONLY ASKED WHERE THERE IS ONE. A ledgerless domain's
@@ -1732,7 +1788,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	if p.domain.OpsTable() != "" {
 		entry, ok, err := p.rows.Op(ctx, req.OpID)
 		if err != nil {
-			return Result{}, fmt.Errorf("statelog: read the operation ledger: %w", err)
+			return unread(fmt.Errorf("statelog: read the operation ledger: %w", err))
 		}
 		if ok {
 			if err := p.heldHere(req, entry); err != nil {
@@ -1780,6 +1836,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Waited: true}, nil
 		}
 		ours = env.OpID == req.OpID
+		known = known || ours
 		switch {
 		case ours:
 			// THIS OPERATION'S COPY, so its body is the record the gates
@@ -1804,7 +1861,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	}
 	reason, gated, err := p.voided(ctx, req, at, ours, writer, gen, body)
 	if err != nil {
-		return Result{}, err
+		return unread(err)
 	}
 	if gated {
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
@@ -1888,7 +1945,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	// this node was acknowledged for.
 	vouched, err := p.vouches(ctx, req)
 	if err != nil {
-		return Result{}, err
+		return unread(err)
 	}
 
 	if ours {
