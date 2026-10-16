@@ -606,8 +606,8 @@ type GenerationFacts struct {
 //
 // DECLARED HERE because the transition is the caller. And REQUIRED of every
 // domain rather than optional, because "this domain keeps no record of it" is a
-// claim the domain has to make about itself — the vectors make it, and say
-// why — rather than something a nil could leave unsaid.
+// claim the domain has to make about itself — the vectors and the usage log
+// each make it, and say why — rather than something a nil could leave unsaid.
 type GenerationEncoder interface {
 	// GenerationRecord encodes the record, and reports false for a domain
 	// that keeps none.
