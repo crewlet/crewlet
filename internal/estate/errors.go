@@ -211,6 +211,7 @@ var typedKinds = []typedKind{
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
+	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
