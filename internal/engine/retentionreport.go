@@ -80,12 +80,10 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		floors[row.Domain] = row
 	}
 	backups, _ := r.fleet.BackupPoints(ctx)
-	// THE POINT THE TRIM COUNTS, under the operator's own policy — not the
-	// newest of every owner. Under `backup_floor: operator` the nodes' own
-	// nightly copies are fresh while the trim waits on an acknowledgement,
-	// and an alarm aging the copies stayed green beside a log that could not
-	// be trimmed.
-	newest, haveBackup := r.newestCounted(backups)
+	// THE BACKUP POLICY IS AGED PER LOG, against the point each log's trim
+	// counts — see [retention.newestCounted] and the `BackupAt` filled per
+	// domain below.
+	in.BackupMaxAge = r.cfg.BackupMaxAge()
 
 	// perLog is each identity-claiming log's own tombstones, which the node
 	// block folds into one answer per node below.
@@ -192,11 +190,21 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		if c, counted := census[name]; counted {
 			d.LinearizableReads, d.LinearizableReadsExpected = c.reads, c.expected
 		}
+		// THE POINT THIS LOG'S TRIM COUNTS, under the operator's own
+		// policy and for this log alone — not the newest of every owner,
+		// and not the newest point whatever it covers. Under
+		// `backup_floor: operator` the nodes' own nightly copies are fresh
+		// while the trim waits on an acknowledgement, and each log is
+		// acknowledged on its own: an alarm aging any one point stayed
+		// green beside the logs that point left out.
+		if newest, ok := r.newestCounted(backups, running.spec.Name); ok {
+			d.BackupAt = newest.At
+		}
 		in.Domains = append(in.Domains, d)
 	}
 	in.Tombstones = fleetTombstones(perLog)
 
-	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
+	in.Reading = r.reading(ctx, now, healths)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
 }
@@ -418,9 +426,9 @@ func (r *retention) replica() statelog.ReplicaReport {
 
 // reading is this node's alarm inputs, MINUS the per-domain ones — the log's
 // headroom, its ceiling against its window, a blocked trim and what it keeps,
-// a record held past the deferral grace and an unreadable floor — which the
-// report evaluates from the domain rows and [retention.Report]'s own
-// per-domain inputs.
+// the age of the backup its trim counts, a record held past the deferral grace
+// and an unreadable floor — which the report evaluates from the domain rows and
+// [retention.Report]'s own per-domain inputs.
 //
 // A FIELD THIS NODE CANNOT MEASURE IS LEFT AT ITS ZERO VALUE, which every
 // condition reads as "nothing to report" rather than as "at the floor" — see
@@ -428,22 +436,9 @@ func (r *retention) replica() statelog.ReplicaReport {
 // backend and no maintenance in flight evaluate the same table as one with all
 // three.
 func (r *retention) reading(ctx context.Context, now time.Time,
-	newest coord.BackupPoint, haveBackup bool,
 	healths map[string]domainHealth) statelog.Reading {
 
-	out := statelog.Reading{BackupMaxAge: r.cfg.BackupMaxAge()}
-	if haveBackup {
-		out.BackupAge = statelog.Age(now.Sub(newest.At))
-	}
-	// AND NO BACKUP AT ALL IS LEFT NIL, which is the state itself rather
-	// than an age standing in for it. The alarm fires on nil exactly as it
-	// fires on an age past the policy — "a company that never backs up
-	// never trims" is the term it is about to hit — but it says which of
-	// the two it is. What this replaces filled the field with
-	// `BackupMaxAge + time.Hour` to reach the same threshold, and the
-	// alarm then told a company four seconds old that its newest verified
-	// backup was twenty-five hours old, one line above the trim term
-	// reporting that no backup had been recorded at all.
+	var out statelog.Reading
 	for _, running := range r.state.running() {
 		name := running.domain.Name()
 		if running == nil {

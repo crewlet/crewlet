@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,10 +100,11 @@ func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 // measure the clock has, and the log must be named nowhere, because the age
 // term the tick published keeps every record the log holds. Then the published
 // floor is what the duty would publish once the records had aged (the same
-// block, its age term past the log's head) and the log must be named, under
-// the alarm whose remedy it is: the BACKUP's, since the backup term is what
-// holds it and `backup_age` is up on a node that has never taken one, so it
-// raises no `trim_blocked` of its own and the one cause reads as one problem.
+// block, its age term past the log's head) and the log's hold must be named,
+// under the alarm whose remedy it is: the BACKUP's, since the backup term is
+// what holds it and that log's own `backup_age` is up on a node that has never
+// taken one, so it raises no `trim_blocked` of its own and the one cause reads
+// as one problem.
 // A floor published at another generation must not be read as this log's at
 // all.
 func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
@@ -154,9 +156,19 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 				name, d.BlockedBy)
 		}
 	}
-	if len(backup.Domains) != 0 {
-		t.Fatalf("backup_age names %+v while nothing in any log is past the window",
-			backup.Domains)
+	// EVERY LOG IS NAMED FOR ITS MISSING BACKUP, and none with the hold: a
+	// block that keeps nothing past the window raised no trim_blocked to fold.
+	if !slices.ContainsFunc(backup.Domains, func(d statelog.AlarmDomain) bool {
+		return d.Domain == name
+	}) {
+		t.Fatalf("backup_age stands on %+v and not on the %s log, which no "+
+			"backup covers", backup.Domains, name)
+	}
+	for _, d := range backup.Domains {
+		if d.Term != "" || !d.Since.IsZero() {
+			t.Fatalf("backup_age names %+v with its trim's hold while nothing in "+
+				"any log is past the window", d)
+		}
 	}
 
 	// THE SAME BLOCK, AS THE DUTY PUBLISHES IT ONCE THE LOG HAS AGED: its
@@ -216,9 +228,12 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 		t.Error("a floor published at another generation raised trim_blocked " +
 			"against this log's sequences")
 	}
-	if backup, _ := alarmOf(after, statelog.KindBackupAge); len(backup.Domains) != 0 {
-		t.Errorf("a floor published at another generation is named under backup_age "+
-			"against this log's sequences: %+v", backup.Domains)
+	backup, _ = alarmOf(after, statelog.KindBackupAge)
+	for _, d := range backup.Domains {
+		if d.Term != "" {
+			t.Errorf("a floor published at another generation is folded under "+
+				"backup_age against this log's sequences: %+v", d)
+		}
 	}
 	for _, d := range after.Domains {
 		if d.Domain == name && d.BlockedBy != "" {
