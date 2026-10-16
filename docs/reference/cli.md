@@ -1811,9 +1811,9 @@ checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
 identity-claiming log — the tracker's, the knowledge base's and the identity
 estate's — keeps for gate records ([the gate
 reserve](../guides/retention.md#the-gate-reserve)), `-` on the vector
-changelog, which keeps none; `HEADROOM` is what is left of the rest, the
-ceiling ordinary writes are refused at — so a log at `0%` still takes an
-eviction.
+changelog and the usage log, which keep none; `HEADROOM` is what is left of
+the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
+takes an eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
 vector log and the identity estate's have no wake feed, and an
