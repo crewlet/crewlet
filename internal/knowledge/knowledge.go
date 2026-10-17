@@ -43,8 +43,9 @@
 // # The rule every caller honours
 //
 // A QUERY IS BOUNDED, and the bound is declared here ([MaxQueryBytes]) for
-// both of the engine's ranked searches — this seam's and the tracker's item
-// search, which share this package's vocabulary. Every surface refuses a
+// every one of the engine's ranked searches — this seam's, the tracker's item
+// search, which shares this package's vocabulary, and chat's message search,
+// which ranks its own corpus on the same terms. Every surface refuses a
 // longer one in its own words before it reaches a backend, because best effort
 // would answer "could not be searched" and send the asker back with the same
 // paste; nothing cuts one, because a search on part of a question answers a
