@@ -25,9 +25,12 @@ func newFollows() *follows { return &follows{rows: map[string]string{}} }
 
 func key(b, h, c, th string) string { return b + "|" + h + "|" + c + "|" + th }
 
-func (f *follows) Follow(_ context.Context, b, h, c, th, reason string, _ time.Time) error {
+func (f *follows) Follow(_ context.Context, b, h, c, th string, _ time.Time,
+	choose func(string, bool) string) (string, error) {
+	held, ok := f.rows[key(b, h, c, th)]
+	reason := choose(held, ok)
 	f.rows[key(b, h, c, th)] = reason
-	return nil
+	return reason, nil
 }
 
 func (f *follows) Following(_ context.Context, b, h, c, th string) (string, bool, error) {
@@ -342,6 +345,35 @@ func TestABroadcastsThreadIsFollowedAsABroadcast(t *testing.T) {
 	}
 	if mattermost.Prompt().Address.Addressed(reply.Metadata) {
 		t.Error("a reply under a broadcast obliges every seat in the room to answer it")
+	}
+}
+
+// A BROADCAST IN A THREAD THE SEAT WAS NAMED IN STILL OBLIGES IT. The message
+// reached it as a broadcast, and it is in the thread because it was named —
+// which is what the follow key carries, so the rule reads an answer owed.
+func TestABroadcastInANamedThreadStillObliges(t *testing.T) {
+	p, store := parser(t, newFollows())
+	if _, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "root-1", "p2", "@agent-swe can you look"
+	})); !ok {
+		t.Fatal("a mention in a thread did not reach the seat")
+	}
+	got, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "root-1", "p3", "@here any update?"
+	}))
+	if !ok {
+		t.Fatal("a broadcast in a followed thread was dropped")
+	}
+	if got.Metadata[notify.FollowReasonField] != string(notify.FollowCollective) ||
+		got.Metadata[notify.FollowingField] != string(notify.FollowMention) {
+		t.Fatalf("the broadcast reached the seat as %q in a thread it follows as %q",
+			got.Metadata[notify.FollowReasonField], got.Metadata[notify.FollowingField])
+	}
+	if !mattermost.Prompt().Address.Addressed(got.Metadata) {
+		t.Error("a broadcast in a thread the seat was named in does not oblige an answer")
+	}
+	if held := store.rows[key(mattermost.Backend, "swe", "C1", "root-1")]; held != string(notify.FollowMention) {
+		t.Fatalf("the broadcast downgraded the follow to %q", held)
 	}
 }
 
