@@ -312,31 +312,36 @@ var allowed = []Allowance{
 	// check the object positions it reads through a multi-pack-index and die
 	// "invalid MIDX object position, MIDX is likely corrupt"; an older git
 	// (2.40 to 2.46, the suite's floor up) dies of a segmentation fault on
-	// the same damaged reverse index and says nothing a table can read, so a
-	// case whose subject is that message has nothing to provoke there
-	// (gittest.NamesMidxPosition). It does not fire where the engine runs —
-	// the image's git is 2.47 — nor on CI's runners, whose git is newer; it
+	// the same damaged reverse index and reports nothing, so a case whose
+	// SUBJECT is that report has nothing to provoke there
+	// (gittest.NamesMidxPosition). gitproc's TestTheFormatTableIsWhatGitSays
+	// needs no entry: its rows state the gits they hold on, and assert what
+	// every other git reports instead. It does not fire where the engine runs
+	// — the image's git is 2.47 — nor on CI's runners, whose git is newer; it
 	// fires on a workstation with an older distribution's git, such as
 	// Ubuntu 24.04's 2.43.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/code/gitproc",
-		Test: "TestClassifiesWhatRealGitSays/" +
-			"a_multi-pack-index_whose_reverse_index_is_overwritten_beside_its_bitmap/rev-list_over_its_bitmap",
-		When: Environment,
-		Why: "Needs git 2.47 or newer. It is the only row that provokes the line from a real " +
-			"damaged multi-pack-index; TestTheTableMatchesItsLines holds both patterns to git's " +
-			"own wording of it on every machine, through the same compiled table.",
+		Test:    "TestEveryProcessInTheTreeReportsToOneStream/a_clone_over_a_damaged_reverse_index",
+		When:    Environment,
+		Why: "Needs git 2.47 or newer, whose clone's pack-objects reports the damaged reverse " +
+			"index as a child's event; an older one's pack-objects dies of a segmentation fault " +
+			"and reports nothing, so there is no child's report to read. A child's events on " +
+			"the one stream are held on every git by this test's short-push arm (index-pack's) " +
+			"and its commit-graph arm (pack-objects'), and what an older git reports here by " +
+			"TestTheFormatTableIsWhatGitSays's E case.",
 	},
 	{
 		Package: "internal/code/host",
 		Test:    "TestADamagedMidxBitmapIsRepaired/protocol=0",
 		When:    Environment,
-		Why: "Needs git 2.47 or newer, for a clone's pack-objects to name the damage it " +
-			"meets. The side band's reading and the held answer are held on every machine " +
-			"by the answerScan and sink cases, over the bytes such a git writes, and the " +
-			"in-place repair by cache's TestADamagedMidxIsRepairedInPlace, which needs no " +
-			"such git.",
+		Why: "Needs git 2.47 or newer, for a clone's pack-objects to report the damage it " +
+			"meets. The report's format is held to git's on every git that makes it by " +
+			"gitproc's TestTheFormatTableIsWhatGitSays (its position row), the held answer " +
+			"on every machine by the answerScan and sink cases over the bytes such a git " +
+			"writes, and the in-place repair by cache's TestADamagedMidxIsRepairedInPlace, " +
+			"which needs no such git.",
 	},
 	{
 		Package: "internal/code/host",
@@ -355,6 +360,26 @@ var allowed = []Allowance{
 		Test:    "TestADamagedMidxBitmapIsRepaired/protocol=2/progress",
 		When:    Environment,
 		Why:     "Needs git 2.47 or newer: the protocol=0 case's reason, under v2 with --progress.",
+	},
+
+	// -----------------------------------------------------------------
+	// Environment: a git that names a damaged packed object only in words.
+	// git 2.56 reports a packed object whose header states the wrong size
+	// through a bare "%s" and nothing else, which the pool records as a hint
+	// naming a pack; 2.55 reports it by a format of its own (a row), and
+	// older gits only `not our ref`. So the case whose SUBJECT is that hint's
+	// repair has nothing to provoke below 2.56. Its control — a stand-in
+	// upload-pack naming a sound pack in that very sentence — runs on every
+	// git, as does the repair's own unit case.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/code/host",
+		Test:    "TestAPackedObjectOnlyAPercentSNamesIsRepairedUnderTheRequest/a_pack_whose_object's_size_is_wrong",
+		When:    Environment,
+		Why: "Needs git 2.56 or newer, the first to report this damage through a bare %s alone. " +
+			"The hint's reading is held on every git by gitproc's TestAHintIsOnlyTheOneAnchoredMessage, " +
+			"its confirmation by cache's TestAHintIsConfirmedAgainstThePacksRow, and the repair's " +
+			"path by TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows and this case's stand-in control.",
 	},
 }
 

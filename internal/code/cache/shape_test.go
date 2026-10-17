@@ -143,7 +143,7 @@ func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 				t.Fatalf("ShapeReason(%v) = %q, %v; want shape", err, reason, ok)
 			}
 
-			repaired, err := c.Rebuild(t.Context(), s, cache.RebuildShape)
+			repaired, err := c.Rebuild(t.Context(), s, cache.RebuildShape, 0)
 			if err != nil {
 				t.Fatalf("Rebuild(shape): %v", err)
 			}
@@ -311,7 +311,7 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 
 			armed <- struct{}{}
 			spoil(t, s.Dir)
-			rebuilt, err := c.Rebuild(t.Context(), s, cache.RebuildShape)
+			rebuilt, err := c.Rebuild(t.Context(), s, cache.RebuildShape, 0)
 			if err != nil {
 				t.Fatalf("Rebuild(shape) of a shape the sweep did not end: %v", err)
 			}
@@ -331,7 +331,7 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 
 			armed <- struct{}{}
 			spoil(t, rebuilt.Dir)
-			if _, err := c.Rebuild(t.Context(), rebuilt, cache.RebuildShape); !errors.Is(err, cache.ErrRebuildRefused) {
+			if _, err := c.Rebuild(t.Context(), rebuilt, cache.RebuildShape, 0); !errors.Is(err, cache.ErrRebuildRefused) {
 				t.Fatalf("a second shape the sweep did not end, inside the cooldown = %v, want ErrRebuildRefused", err)
 			}
 			if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "cooldown"); got != 1 {

@@ -36,6 +36,12 @@ var (
 	// ErrHome: the pool's HOME is not an empty directory.
 	ErrHome = errors.New("gitproc: git's HOME is not an empty directory")
 
+	// ErrNoTrace: the node's git wrote no trace2 event stream on the
+	// descriptor the pool gave it, so no failure it reports could be
+	// classified (trace.go) — refused at New rather than run with every
+	// damaged cache read as git's own failure.
+	ErrNoTrace = errors.New("gitproc: git wrote no trace2 event stream")
+
 	// ErrDeadline: the run outlived its Cmd.Deadline and was killed.
 	ErrDeadline = errors.New("gitproc: git ran past its deadline")
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -345,14 +346,47 @@ func (c *Cache) start(e *entry) {
 //
 // The body runs holding the entry's write lock: nothing changes what the
 // directory holds beside a round (entry.write).
+//
+// A ROUND WHOSE OWN GIT NAMED A PACK ONLY IN WORDS ENDS BEFORE IT HASHES IT
+// (hinted, confirmRound). The hash is minutes of a slow disk for the largest
+// pack a push stores, and writes nothing; so the round lets the write lock go
+// AND stops being the repository's running round first — its incarnation
+// pinned until its callers are answered, so no eviction takes the directory
+// the hash reads — and the round queued behind it starts at once. Kept
+// running, it held every LINEARIZABLE caller of the repository behind the
+// hash, since such a caller never rides a round that began before it asked
+// (join): every answer that names a ref is linearizable, so every fetch's
+// and every push's advertisement on the node waited for a verdict none of
+// them had asked for. Only the hinted round's own callers wait for it, and
+// once it is reached they are answered as any round's are: by the repair of
+// damage it confirms — if the incarnation is still the entry's — or with
+// git's own failure. An incarnation a rebuild replaced while the pack was
+// hashed serves nobody, so its callers are queued again for a round on the
+// current one; a pack that rounds queued meanwhile meet the same hint about
+// is hashed once, every one of them waiting for the one verdict (packCheck).
 func (c *Cache) run(e *entry, r *round) {
 	inc, kind, err := c.converging(e, r)
+	var (
+		h    *hinted
+		held Synced
+	)
+	if errors.As(err, &h) {
+		e.mu.Lock()
+		held = c.pin(e, h.inc, SyncNone)
+		e.running = nil
+		c.start(e)
+		e.mu.Unlock()
+		err = c.confirmRound(e, h)
+	}
 	e.mu.Lock()
 	var (
 		d       *damaged
 		quit    *refused
 		refusee []*waiter
 	)
+	// replaced: the round's incarnation stopped being the entry's while its
+	// hint was hashed, so what its git met is no copy that still serves.
+	replaced := h != nil && !e.dead && e.current != h.inc
 	if r.rebuild == "" && errors.As(err, &d) && !e.dead && e.current == d.inc {
 		quit, refusee = c.damagedRound(e, r, d)
 	}
@@ -361,15 +395,20 @@ func (c *Cache) run(e *entry, r *round) {
 		failedRebuild(r.of, err)
 	}
 	for _, w := range r.waiters {
-		if requeue && !w.rebuild && !w.gone {
+		if (replaced || requeue && !w.rebuild) && !w.gone {
 			c.queue(e, w)
 			continue
 		}
 		c.answer(e, w, inc, kind, err)
 	}
-	e.running = nil
+	if e.running == r {
+		e.running = nil
+	}
 	c.start(e)
 	e.mu.Unlock()
+	// Let go only now: every caller holds its own pin or is queued again,
+	// so the copy was never evictable between the hash and their answers.
+	held.Release()
 	if quit != nil {
 		// COUNTED AND LOGGED BEFORE IT IS ANSWERED, as Rebuild's own
 		// refusal is: a caller woken by the refusal reads a counter and a
@@ -400,10 +439,15 @@ func (c *Cache) run(e *entry, r *round) {
 //     repaired IN PLACE (markWhole): the incarnation is read whole by the
 //     round queued behind this one, whose sweep puts every shape the pool
 //     refuses right and reuses every pack it holds, so it costs no GET; the
-//     callers are queued for that round. Damage a sweep did not end — a
-//     shape refusal past the sweep of the very round that met it, a pack or
-//     an object git could not read — is a REBUILD, asked for as Rebuild asks
-//     for one (askRebuild: joined if one is queued, refused by the same
+//     callers are queued for that round. DAMAGED DERIVED FILES (the peel's
+//     cat-file reads the multi-pack-index) are repaired IN PLACE the same
+//     way, the next round dropping the files the damage named — unless THIS
+//     round had already dropped every one of them, in which case the damage
+//     survived its drop and is a pack's: asked as RebuildCorrupt, below.
+//     Damage a sweep or a drop did not end — a shape refusal past the sweep
+//     of the very round that met it, derived damage past its drop, a pack
+//     or an object git could not read — is a REBUILD, asked for as Rebuild
+//     asks for one (askRebuild: joined if one is queued, refused by the same
 //     rules, counted as an ask of the incarnation's line). A refused rebuild
 //     answers its callers as it answers Rebuild (ErrRebuildRefused); one that
 //     fails answers them as it answers the callers of any round it was queued
@@ -427,19 +471,26 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 	switch {
 	case len(asking) == 0:
 		return nil, nil
-	case d.reason == RebuildShape && !d.swept:
-		markWhole(d.inc, RebuildShape)
+	case d.reason == RebuildShape && !d.swept,
+		d.reason == RebuildDerived && d.drops&^d.dropped != 0:
+		markWhole(d.inc, d.reason, d.drops)
 		for _, w := range asking {
 			c.queue(e, w)
 		}
 		return nil, nil
 	}
-	next, rule := c.askRebuild(e, d.inc, d.reason, true, nil, c.now())
+	reason := d.reason
+	if reason == RebuildDerived {
+		// Every file the damage names was dropped by the round that met it:
+		// what git could not read is no derived file of the copy's.
+		reason = RebuildCorrupt
+	}
+	next, rule := c.askRebuild(e, d.inc, reason, true, nil, c.now())
 	if rule == "" {
 		next.waiters = append(next.waiters, asking...)
 		return nil, nil
 	}
-	f := c.refusal(e, d.name, d.reason, rule, c.now())
+	f := c.refusal(e, d.name, reason, rule, c.now())
 	return &f, asking
 }
 
@@ -452,13 +503,14 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 // sweep may predate the damage it answers, converges nothing. No new
 // incarnation, and no GET for a pack the incarnation holds: a directory the
 // pool refuses for its shape lost none of its packs, and a multi-pack-index
-// is a derived file — RebuildMidx also has the round drop it (dropMidx),
-// whatever reason the read is counted under.
-func markWhole(inc *incarnation, reason RebuildReason) {
+// or a commit-graph is a derived file — RebuildDerived also has the round
+// drop the files drops names (incarnation.drop), whatever reason the read is
+// counted under.
+func markWhole(inc *incarnation, reason RebuildReason, drops gitproc.Part) {
 	inc.converged = false
 	inc.marks++
-	if reason == RebuildMidx {
-		inc.dropMidx = true
+	if reason == RebuildDerived {
+		inc.drop |= drops
 	}
 	if inc.reread == "" {
 		inc.reread = reason
@@ -476,7 +528,12 @@ type damaged struct {
 	// directory its image and held it to the pool's shape check — so a shape
 	// refusal there is one the sweep did not end.
 	swept bool
-	err   error
+	// drops is the derived files a RebuildDerived damage names
+	// (DerivedDrops), and dropped those the round that met it had itself
+	// dropped (applied.dropped): damage in files the round just dropped
+	// survived the drop.
+	drops, dropped gitproc.Part
+	err            error
 }
 
 func (d *damaged) Error() string { return d.err.Error() }
@@ -683,12 +740,26 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 				"object", missing.Pack.Object.String(), "damaged", missing.Damaged)
 			return nil, "", err
 		case err != nil:
-			if reason, ok := DamageReason(err); ok && rebuild == "" {
+			reason, ok := DamageReason(err)
+			if hints := hintsOf(err); !ok && rebuild == "" && len(hints) > 0 {
+				// Damage the round's own git named only in words (a hint,
+				// gitproc.Hint): the pack it nominates is held to its row —
+				// by Cache.run, once the write lock is let go and the round
+				// has ended, since a hash is minutes of a slow disk and
+				// nobody but the round's own callers waits on it — and only
+				// a pack that is not the row's asks a repair.
+				h := &hinted{inc: inc, name: snap.repo.Name, full: snap.full, hints: hints, err: err}
+				if snap.full {
+					h.rows = &snap
+				}
+				return nil, "", h
+			}
+			if ok && rebuild == "" {
 				// The round's own git, in inc, named its damage — or, on a
 				// full answer, the sweep left a shape the pool refuses:
 				// Cache.run makes the repair of it this round's answer.
 				return nil, "", &damaged{inc: inc, name: snap.repo.Name, reason: reason, swept: snap.full,
-					err: err}
+					drops: DerivedDrops(err), dropped: res.dropped, err: err}
 			}
 			return nil, "", err
 		}
@@ -726,6 +797,9 @@ func (c *Cache) reread(reason RebuildReason, which func(*incarnation) bool) uint
 type applied struct {
 	packsAdded int
 	trashed    bool
+	// dropped is the derived files the round dropped for a mark
+	// (incarnation.drop), taken before anything else the round did.
+	dropped gitproc.Part
 }
 
 // apply makes inc equal to snap — steps 4 to 8 of converge. epoch is the
@@ -760,35 +834,41 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	indexed := false
 	var strays []string
 	if snap.full {
-		// A MIDX-DAMAGE REPAIR (RebuildMidx) drops the multi-pack-index here,
-		// before the round's own index decides: the damage is confined to
-		// that derived file, which git only mmaps and the maintainer rewrites
-		// from the packs this incarnation already holds, so the round (at
-		// MidxRoundPacks packs) or the maintainer (its next tick, now due
-		// because measure finds no bitmap) writes a sound one over the same
-		// packs — no download, where a whole-repository rebuild would GET
-		// every pack again. packStrays drops it too when a pack is removed;
-		// this covers the common case where only the index is damaged and no
-		// pack moves. Read off its own mark (dropMidx), whatever the read is
-		// counted under, and TAKEN before the drop, so a request that names
-		// the index damaged while this round runs marks it again for the
-		// next; a drop that fails puts the mark back.
+		// A DERIVED-DAMAGE REPAIR (RebuildDerived) drops the files the damage
+		// named here, before the round's own index decides: the damage is
+		// confined to derived files git only mmaps, which the maintainer
+		// rewrites from the packs this incarnation already holds, so the
+		// round (an index, at MidxRoundPacks packs) or the maintainer (its
+		// next pass, which measure now finds due: no bitmap, or no graph,
+		// which it writes first) writes sound ones over the same packs — no
+		// download, where a whole-repository rebuild would GET every pack
+		// again. By PART: the multi-pack-index's files, the commit-graph, or
+		// both for a chunk-format message, which names neither file — a
+		// damaged graph's table of contents read as the index's dropped the
+		// index and its bitmap and kept the graph that failed. packStrays
+		// drops both too when a pack is removed; this covers the common case
+		// where only a derived file is damaged and no pack moves. Read off
+		// its own mark (incarnation.drop), whatever the read is counted
+		// under, and TAKEN before the drop, so a request that names a
+		// derived file damaged while this round runs marks it again for the
+		// next; a drop that fails puts its part back.
 		e.mu.Lock()
-		dropMidx := inc.dropMidx
-		inc.dropMidx = false
+		drop := inc.drop
+		inc.drop = 0
 		e.mu.Unlock()
-		if dropMidx {
-			if err = c.dropMultiPackIndex(inc); err != nil {
+		if drop != 0 {
+			if err = c.dropDerived(inc, drop); err != nil {
 				e.mu.Lock()
-				inc.dropMidx = true
+				inc.drop |= drop
 				e.mu.Unlock()
-				return res, fmt.Errorf("cache: sync %s: drop multi-pack-index: %w", e.id, err)
+				return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
 			}
-			res.trashed = true
-			// A multi-pack-index git could not read, dropped in place: the
-			// derived file was damaged, not the repository, and the round or
-			// the maintainer writes a sound one over the same packs.
-			c.log.Warn("code_cache_midx_repaired", "repo", e.id, "incarnation", inc.n)
+			res.trashed, res.dropped = true, drop
+			// Derived files git could not read, dropped in place: they were
+			// damaged, not the repository, and the round or the maintainer
+			// writes sound ones over the same packs.
+			c.log.Warn("code_cache_derived_repaired", "repo", e.id, "incarnation", inc.n,
+				"files", derivedFiles(drop))
 		}
 		// The sweep's pack half is DECIDED here and done once the refs are
 		// in; an index that may name a pack it will remove goes now, and so

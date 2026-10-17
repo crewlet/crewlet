@@ -185,13 +185,13 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
 	s := w.sync(t, c, repo)
-	first, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt)
+	first, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt, 0)
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	defer first.Release()
 	write(t, filepath.Join(first.Dir, "refs", "heads", "loose"), "x\n")
-	if _, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt, 0); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused", err)
 	}
 	repaired, err := verify(t.Context(), c, repo, true)
@@ -200,7 +200,7 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 			repaired, err)
 	}
 	rebuilt := w.sync(t, c, repo)
-	again, err := c.Rebuild(t.Context(), rebuilt, cache.RebuildCorrupt)
+	again, err := c.Rebuild(t.Context(), rebuilt, cache.RebuildCorrupt, 0)
 	if err != nil {
 		t.Fatalf("a rebuild of the incarnation a verified repair made: %v", err)
 	}

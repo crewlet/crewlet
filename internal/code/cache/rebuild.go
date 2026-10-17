@@ -15,13 +15,26 @@ import (
 )
 
 // REQUEST-TIME REPAIR. A git process the host ran in a cache that git itself
-// found damaged — a pack, an index or a multi-pack-index it could not read
-// (gitproc.ErrCorrupt), or an object a row names that no installed pack holds
-// (gitproc.ErrMissingObject) — or that the pool refused to start there because
-// the directory is not the shape the engine writes (gitproc.ErrRepoShape)
-// makes the host REPAIR the cache ([Cache.Rebuild]) and retry its request once
-// on the answer. [DamageReason] is the one reading of such a failure, the
-// host's and the cache's alike.
+// found damaged — a pack, an index, a multi-pack-index or a commit-graph it
+// could not read (gitproc.ErrCorrupt, with the part its report named), or an
+// object a row names that no installed pack holds (gitproc.ErrMissingObject)
+// — or that the pool refused to start there because the directory is not the
+// shape the engine writes (gitproc.ErrRepoShape) makes the host REPAIR the
+// cache ([Cache.Rebuild]) and retry its request once on the answer.
+// [DamageReason] is the one reading of such a failure, the host's and the
+// cache's alike, and it reads what the pool read from git's trace2 format
+// strings — never git's words, which a request can write (gitproc's package
+// doc). A damage git names only in words — 2.56's corrupt packed object,
+// under a bare "%s" — is a hint, which decides nothing until the pack it
+// nominates is held to its row ([Cache.ConfirmHint]).
+//
+// A DERIVED FILE IS REPAIRED IN PLACE. The multi-pack-index (its bitmap and
+// reverse index beside it) and the commit-graph are files the maintainer
+// writes from the packs the incarnation already holds, so damage git named in
+// them alone ([RebuildDerived]) is repaired by dropping THOSE files — by the
+// part the damage named, and both for a chunk-format file whose message names
+// neither (gitproc.Damage.Drops) — in a whole read in place, with no download:
+// the round or the maintainer writes them again over the same packs.
 //
 // A SHAPE IS REPAIRED IN PLACE. The pool refuses a directory for its shape
 // before git starts, so a shape refusal says nothing against any pack — and
@@ -80,24 +93,25 @@ type RebuildReason string
 
 const (
 	// RebuildCorrupt is a git process in the cache classified
-	// gitproc.ErrCorrupt whose damage is NOT confined to the
-	// multi-pack-index (RebuildMidx is that): a pack or an index git could
-	// not read, which only a whole re-read from the object store repairs.
+	// gitproc.ErrCorrupt whose damage is NOT confined to derived files
+	// (RebuildDerived is that): a pack or an index git could not read, which
+	// only a whole re-read from the object store repairs.
 	RebuildCorrupt RebuildReason = "corrupt"
-	// RebuildMidx is damage confined to the multi-pack-index — its reverse
-	// index, its bitmap, or the index itself (gitproc.ErrCorrupt whose line
-	// names the multi-pack-index: "invalid MIDX object position", "MIDX is
-	// likely corrupt", or "...multi-pack-index..."). It is a DERIVED file git
-	// only mmaps, written by the maintainer from the packs the incarnation
-	// already holds, so it is repaired IN PLACE like a shape: a whole read
-	// that DROPS the damaged multi-pack-index (and its bitmap and .rev; the
-	// commit-graph, which names no position in it, is kept) so
-	// the round or the maintainer writes a sound one over the same packs —
-	// no download, no new incarnation, where a whole-repository rebuild
-	// would GET every pack again (thousands, for a large repository). Only
-	// damage that SURVIVES this in-place repair — a pack the dropped index
-	// named is itself damaged — escalates to RebuildCorrupt (repair.go).
-	RebuildMidx RebuildReason = "midx"
+	// RebuildDerived is damage git named only in DERIVED files — the
+	// multi-pack-index (its bitmap, its reverse index), the commit-graph, or
+	// a chunk-format file of either — in any process over the incarnation
+	// (a gitproc.Damage whose parts are all derived, gitproc.Damage.Derived).
+	// Those are files git only mmaps, written by the maintainer from the
+	// packs the incarnation already holds, so it is repaired IN PLACE like a
+	// shape: a whole read that DROPS the files the damage named
+	// (gitproc.Damage.Drops: the index's, the graph, or both for a
+	// chunk-format message, which names neither) so the round or the
+	// maintainer writes sound ones over the same packs — no download, no new
+	// incarnation, where a whole-repository rebuild would GET every pack
+	// again (thousands, for a large repository). Only damage that SURVIVES
+	// this in-place repair — a pack the dropped index named is itself
+	// damaged — escalates to RebuildCorrupt (repair.go, damagedRound).
+	RebuildDerived RebuildReason = "derived"
 	// RebuildMissing is a git process in the cache classified
 	// gitproc.ErrMissingObject: an object a row names that no installed
 	// pack holds.
@@ -132,25 +146,29 @@ const (
 )
 
 // RebuildReasons is every [RebuildReason].
-var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMidx, RebuildMissing, RebuildShape, RebuildStream,
+var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildDerived, RebuildMissing, RebuildShape, RebuildStream,
 	RebuildRewound, RebuildVerify}
 
 // gitReasons are the reasons a git process's failure gives through
 // [DamageReason] and [ShapeReason] and that reach [askRebuild] — so the ones
-// crewlet.code.cache.rebuild.refusals can carry. RebuildMidx is NOT one: it is
-// supplied by the host (a fetch whose side band names the multi-pack-index),
-// is always repaired in place, and so is never refused.
+// crewlet.code.cache.rebuild.refusals can carry. RebuildDerived is NOT one:
+// it is always repaired in place, and so is never refused — a derived file
+// whose damage survives its drop is asked as RebuildCorrupt.
 var gitReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildShape}
 
 // rebuildReasons are every reason [Cache.Rebuild] takes: the git reasons plus
-// the host's RebuildMidx.
-var rebuildReasons = append(append([]RebuildReason{}, gitReasons...), RebuildMidx)
+// RebuildDerived.
+var rebuildReasons = append(append([]RebuildReason{}, gitReasons...), RebuildDerived)
 
 // inPlaceReasons are the damage a WHOLE READ IN PLACE repairs — no new
-// incarnation, no download: a shape its sweep puts right (RebuildShape), and a
-// multi-pack-index its round drops and rewrites over the same packs
-// (RebuildMidx). The others replace the incarnation.
-var inPlaceReasons = []RebuildReason{RebuildShape, RebuildMidx}
+// incarnation, no download: a shape its sweep puts right (RebuildShape), and
+// derived files its round drops and the round or the maintainer rewrites
+// over the same packs (RebuildDerived). The others replace the incarnation.
+var inPlaceReasons = []RebuildReason{RebuildShape, RebuildDerived}
+
+// derivedParts are the parts a derived repair may drop: the
+// multi-pack-index's files and the commit-graph.
+const derivedParts = gitproc.PartMultiPackIndex | gitproc.PartCommitGraph
 
 // inPlace reports whether r is repaired by a whole read in place rather than a
 // new incarnation.
@@ -161,14 +179,19 @@ func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) 
 
 // DamageReason is the damage a git process whose directory is one of this
 // cache's incarnations failed with names, and whether it is damage the cache
-// repairs ([Cache.Rebuild]): [RebuildCorrupt] for gitproc.ErrCorrupt,
-// [RebuildMissing] for gitproc.ErrMissingObject, [RebuildShape] for
-// gitproc.ErrRepoShape — the pool's refusal to start one there, which names
-// the incarnation, since a process run in it names no alternate. Never
-// gitproc.ErrNotOurRef, which a want the repository never served and a lost
-// pack print alike (the next linearizable sync re-downloads any pack whose
-// file is gone), and never a refusal of the call itself (gitproc.ErrConfig
-// and its siblings), which no directory causes.
+// repairs ([Cache.Rebuild]): [RebuildShape] for gitproc.ErrRepoShape — the
+// pool's refusal to start one there, which names the incarnation, since a
+// process run in it names no alternate; [RebuildDerived] for a
+// gitproc.Damage of kind gitproc.ErrCorrupt whose parts are all derived files
+// (gitproc.Damage.Derived; the files to drop are its Drops); [RebuildCorrupt]
+// for any other gitproc.ErrCorrupt; [RebuildMissing] for
+// gitproc.ErrMissingObject — read with errors.Is, so a bare sentinel (the
+// peel's own, refs.go) reads too. Never gitproc.ErrNotOurRef, which a want the
+// repository never served and a lost pack print alike (the next linearizable
+// sync re-downloads any pack whose file is gone), and never a refusal of the
+// call itself (gitproc.ErrConfig and its siblings), which no directory causes.
+// Every one of these is read from what the pool read of git's trace2 format
+// strings, which carry no request text (gitproc's package doc).
 //
 // THE PROCESS'S DIRECTORY decides what its failure describes. One run in a
 // push's scratch or an advertisement view reads the incarnation only as its
@@ -176,9 +199,12 @@ func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) 
 // index-pack reads the CLIENT's pack, so its ErrCorrupt is that pack's
 // (gitproc.ExitError) — such a caller asks [ShapeReason].
 func DamageReason(err error) (RebuildReason, bool) {
+	var dmg *gitproc.Damage
 	switch {
 	case errors.Is(err, gitproc.ErrRepoShape):
 		return RebuildShape, true
+	case errors.As(err, &dmg) && errors.Is(dmg.Kind, gitproc.ErrCorrupt) && dmg.Derived():
+		return RebuildDerived, true
 	case errors.Is(err, gitproc.ErrCorrupt):
 		return RebuildCorrupt, true
 	case errors.Is(err, gitproc.ErrMissingObject):
@@ -202,9 +228,22 @@ func ShapeReason(err error) (RebuildReason, bool) {
 	return "", false
 }
 
+// DerivedDrops is the derived files a failure's damage names to drop
+// (gitproc.Damage.Drops) — what [Cache.Rebuild] takes beside
+// [RebuildDerived] — and none for any other failure.
+func DerivedDrops(err error) gitproc.Part {
+	var dmg *gitproc.Damage
+	if errors.As(err, &dmg) && dmg.Derived() {
+		return dmg.Drops()
+	}
+	return 0
+}
+
 // Rebuild repairs the incarnation failed was handed out of, and answers the
 // repaired directory pinned. reason is what the host's git process over
-// failed.Dir was refused or classified as ([DamageReason], [ShapeReason]):
+// failed.Dir was refused or classified as ([DamageReason], [ShapeReason]),
+// and drops the derived files a [RebuildDerived] drops ([DerivedDrops]) —
+// none for any other reason:
 //
 //   - [RebuildShape] reads the incarnation whole IN PLACE (markWhole): the
 //     round that answers is a full one that started after the mark, whose
@@ -212,15 +251,14 @@ func ShapeReason(err error) (RebuildReason, bool) {
 //     incarnation holds — no new incarnation, no download, and none of a
 //     rebuild's refusals, since it costs a read of the rows. A shape that
 //     sweep did not end is rebuilt by the round itself (Cache.run).
-//   - [RebuildMidx] reads the incarnation whole IN PLACE the same way, and
-//     its round DROPS the damaged multi-pack-index (apply) so it or the
-//     maintainer writes a sound one over the same packs — no download —
+//   - [RebuildDerived] reads the incarnation whole IN PLACE the same way,
+//     and its round DROPS the derived files drops names (apply) so it or
+//     the maintainer writes sound ones over the same packs — no download —
 //     whatever else the incarnation is already marked to be read whole for
 //     (a shape, a log recreated or gone back), which the read is then
-//     counted under instead (dropMidx). The
-//     host asks it only when a fetch's side band names the multi-pack-index;
-//     damage it does not end (a pack the index named is itself damaged)
-//     escalates to [RebuildCorrupt] on the retry (repair.go).
+//     counted under instead (incarnation.drop). Damage it does not end (a
+//     pack the index named is itself damaged) escalates to
+//     [RebuildCorrupt] on the retry (repair.go).
 //   - [RebuildCorrupt] and [RebuildMissing] replace it with the NEXT
 //     incarnation, read whole at the log's head: one whose rebuild is queued
 //     or running joins it, and one a rebuild could not end the failure of is
@@ -231,10 +269,19 @@ func ShapeReason(err error) (RebuildReason, bool) {
 // with no repair. failed stays the caller's to release. ctx bounds the
 // caller's wait and nothing else: the repair runs on for anybody else
 // waiting on it.
-func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason) (Synced, error) {
+func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason, drops gitproc.Part) (Synced,
+	error) {
+
 	if !slices.Contains(rebuildReasons, reason) {
 		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process over the cache "+
 			"failed with, one of %v, and %q is not", ErrInvalid, rebuildReasons, reason)
+	}
+	switch {
+	case reason == RebuildDerived && (drops == 0 || drops&^derivedParts != 0):
+		return Synced{}, fmt.Errorf("%w: a derived repair drops the multi-pack-index, the commit-graph or both "+
+			"(gitproc.Damage.Drops), not %v", ErrInvalid, drops)
+	case reason != RebuildDerived && drops != 0:
+		return Synced{}, fmt.Errorf("%w: only a derived repair drops files, and %q is not one", ErrInvalid, reason)
 	}
 	if err := c.handedOut(failed, "a rebuild"); err != nil {
 		return Synced{}, err
@@ -242,7 +289,7 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason
 	if c.isStopped() {
 		return Synced{}, ErrStopped
 	}
-	return c.rebuild(ctx, failed, reason, true, nil)
+	return c.rebuild(ctx, failed, reason, drops, true, nil)
 }
 
 // rebuild is Rebuild's body, for a failed this cache handed out and a reason
@@ -254,7 +301,7 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason
 // checksums of the packs of failed's incarnation the caller has just held to
 // their rows (seedRebuild) — Verify's; nil from a git process's failure,
 // which says nothing of which pack is damaged.
-func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason, refuse bool,
+func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason, drops gitproc.Part, refuse bool,
 	whole []string) (Synced, error) {
 	e := failed.entry
 	now := c.now()
@@ -267,12 +314,13 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason
 		return c.Sync(ctx, e.id, linearizable)
 	}
 	if inPlace(reason) {
-		// IN PLACE (a shape, or a damaged multi-pack-index): a linearizable
+		// IN PLACE (a shape, or damaged derived files): a linearizable
 		// caller joins only the round queued behind the one running, which
 		// starts after the mark and so reads the incarnation whole — the
-		// midx case dropping the damaged index so the round rewrites it, with
-		// no download and no new incarnation (apply).
-		markWhole(failed.inc, reason)
+		// derived case dropping the damaged files so the round or the
+		// maintainer rewrites them, with no download and no new incarnation
+		// (apply).
+		markWhole(failed.inc, reason, drops)
 		w := newWaiter(linearizable)
 		c.join(e, w)
 		e.mu.Unlock()

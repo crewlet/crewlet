@@ -76,21 +76,36 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 		Stdin: in, Stdout: lines, Class: gitproc.ClassRead,
 		Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
 	})
+	// The check asks cat-file about object ids alone, which loads the
+	// multi-pack-index and never the commit-graph, so a chunk-format report
+	// it makes is the index's (gitproc.Damage.Narrow): its repair drops the
+	// index, and keeps the graph every walk of the repository goes by.
+	var damage error
+	if d := (*gitproc.Damage)(nil); errors.As(res.Damage, &d) {
+		damage = d.Narrow(gitproc.PartMultiPackIndex)
+	}
 	switch {
-	case res.Damage != nil && (err == nil || errors.Is(err, errFoundMissing)):
+	case damage != nil && (err == nil || errors.Is(err, errFoundMissing)):
 		// AN ANSWER READ OVER DAMAGE IS THE DAMAGE'S: cat-file calls an
 		// object in a pack whose index it cannot read `missing` and exits
-		// 0, only its stderr naming the index. Taken as absent, the
-		// fetch's upload-pack refuses that want IN BAND (`not our ref`),
-		// past the first byte no repair can retry under — so damage named
-		// on any line is the check's answer, whatever it said of the ids,
-		// and the host repairs the incarnation under it
-		// (cache.DamageReason). A pack whose files are gone prints nothing
-		// and is an absent id: the linearizable sync installs it again.
+		// 0, only a report naming the index — read from the run's trace2
+		// events (gitproc), never its stderr. Taken as absent, the fetch's
+		// upload-pack refuses that want IN BAND (`not our ref`), past the
+		// first byte no repair can retry under — so damage any event named
+		// is the check's answer, whatever it said of the ids, and the host
+		// repairs the incarnation under it (cache.DamageReason). A pack
+		// whose files are gone reports nothing and is an absent id: the
+		// linearizable sync installs it again.
 		return "", fmt.Errorf("cache: which objects of %s are missing: git cat-file read a damaged repository: %w: %s",
-			s.entry.id, res.Damage, res.LastLine())
+			s.entry.id, damage, res.LastLine())
 	case errors.Is(err, errFoundMissing):
 		return missing, nil
+	case damage != nil:
+		// A damage cat-file died of: named FIRST, so a repair reading the
+		// failure (cache.DamageReason, DerivedDrops) meets it as narrowed
+		// before the run's own.
+		return "", fmt.Errorf("cache: which objects of %s are missing: git cat-file read a damaged repository: %w — %w",
+			s.entry.id, damage, err)
 	case err == nil:
 		err = lines.Close()
 	}

@@ -86,9 +86,9 @@ func cacheCount(c *codetest.Case, name string, attrs map[string]string) uint64 {
 // fetch, refused only by a push's processes.
 //
 // Mutation: read ErrRepoShape as no damage (cache.DamageReason and
-// cache.ShapeReason), and each fails with a 503; read an upload-pack run's
-// failure from its answer's side band alone (fetchDamage), and the ls-refs
-// does.
+// cache.ShapeReason), and each fails with a 503; read an upload-pack run as
+// a scratch's is read (fetch.go's inIncarnation → asAlternate), and the
+// ls-refs does.
 func TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest(t *testing.T) {
 	t.Parallel()
 	for damageName, damage := range shapeDamage {

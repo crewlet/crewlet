@@ -18,12 +18,13 @@ import (
 // idle timeout cuts a transfer that is merely working.
 //
 // A FETCH'S SINK HOLDS MORE (holdPack): the answer's first byte is upload-pack's
-// negotiation, written before its pack-objects runs, and pack-objects names a
-// damaged cache only after it, in the side band (band.go). So until the pack
-// begins, what upload-pack writes is held and read rather than written, and
-// the response starts only with the pack — or with git's own failure, when
-// the run's answer stands (release) — so a run that met damage before its
-// pack has shown the client nothing and is run again over the repaired cache.
+// negotiation, written before its pack-objects runs, and pack-objects meets a
+// damaged cache only after it (band.go). So until the pack begins, what
+// upload-pack writes is held and read for the pack's beginning rather than
+// written, and the response starts only with the pack — or with git's own
+// failure, when the run's answer stands (release) — so a run that met damage
+// before its pack has shown the client nothing and is run again over the
+// repaired cache.
 type sink struct {
 	w           http.ResponseWriter
 	contentType string
@@ -81,18 +82,6 @@ func (s *sink) again() {
 	if s.out == nil && s.hold != nil {
 		s.hold = &preamble{}
 	}
-}
-
-// judged is err, the failure of the run whose answer the sink holds, with the
-// damage the answer's side band named folded in (answerScan.judged); err
-// itself once the answer has started, or for a sink that holds nothing.
-func (s *sink) judged(err error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.out != nil || s.hold == nil {
-		return err
-	}
-	return s.hold.scan.judged(err)
 }
 
 // Write starts the response at its first byte and writes p — for a held

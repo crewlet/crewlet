@@ -308,9 +308,46 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 // dropIndexes moves the multi-pack-index files and the commit-graph into
 // trash/ — before a pack they may name is removed.
 func (c *Cache) dropIndexes(inc *incarnation) error {
-	if err := c.dropMultiPackIndex(inc); err != nil {
-		return err
+	return c.dropDerived(inc, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph)
+}
+
+// dropDerived moves the derived files drop names into trash/: the
+// multi-pack-index's (gitproc.PartMultiPackIndex) and the commit-graph
+// (gitproc.PartCommitGraph) — what the repair of damaged derived files drops
+// (apply), by the part the damage named, and both when a pack they may name
+// is removed (dropIndexes).
+func (c *Cache) dropDerived(inc *incarnation, drop gitproc.Part) error {
+	if drop&gitproc.PartMultiPackIndex != 0 {
+		if err := c.dropMultiPackIndex(inc); err != nil {
+			return err
+		}
 	}
+	if drop&gitproc.PartCommitGraph != 0 {
+		return c.dropCommitGraph(inc)
+	}
+	return nil
+}
+
+// derivedFiles names the files a drop of drop moves, for its log line.
+func derivedFiles(drop gitproc.Part) []string {
+	var files []string
+	if drop&gitproc.PartMultiPackIndex != 0 {
+		files = append(files, "multi-pack-index")
+	}
+	if drop&gitproc.PartCommitGraph != 0 {
+		files = append(files, "commit-graph")
+	}
+	return files
+}
+
+// dropCommitGraph moves the commit-graph into trash/ and nothing else: what
+// the repair of a damaged commit-graph drops. The multi-pack-index beside it
+// names no commit-graph position, so it stays — dropped too, a repair of the
+// graph would also throw away a bitmap that took the maintainer minutes to
+// write. measure then finds the graph missing, and the maintainer writes it
+// first (its graph-first rule), so the window in which walks go by date is
+// that write's.
+func (c *Cache) dropCommitGraph(inc *incarnation) error {
 	graph := filepath.Join(inc.dir, "objects", "info", "commit-graph")
 	if err := toTrash(c.dir, graph, newV7()+"-"+filepath.Base(graph)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err

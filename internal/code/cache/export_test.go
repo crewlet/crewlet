@@ -618,6 +618,22 @@ func SetNodeFetches(c *Cache, n int64) { c.fetches = newFetchSlots(n) }
 // any sync.
 func SetInstallHook(c *Cache, fn func(stage, packDir string)) { c.installHook = fn }
 
+// SetHashHook makes every hash of a hint's pack call fn with the pack's
+// checksum and the hash's bound, once it holds its first read slot
+// (ConfirmHint).
+func SetHashHook(c *Cache, fn func(pack string, bound time.Duration)) { c.hashHook = fn }
+
+// WriteLockHeld reports whether something holds repoID's write lock whole —
+// a round, or a check's listing — at this instant (entry.write).
+func WriteLockHeld(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	if !e.write.TryAcquire(1) {
+		return true
+	}
+	e.write.Release(1)
+	return false
+}
+
 // Waiting is how many callers wait on a round of repoID.
 func Waiting(c *Cache, repoID string) int {
 	e := lookup(c, repoID)
@@ -671,7 +687,7 @@ func HashPacks(ctx context.Context, dir string) (int64, error) {
 	var read int64
 	for _, p := range packs {
 		stem := p[:len(p)-len(".pack")]
-		if _, err := hashBundle(ctx, stem, buf); err != nil {
+		if _, err := hashBundle(ctx, stem, buf, nil); err != nil {
 			return read, err
 		}
 		for _, ext := range []string{".pack", ".idx", ".rev"} {
@@ -686,13 +702,14 @@ func HashPacks(ctx context.Context, dir string) (int64, error) {
 }
 
 // MarkWhole marks repoID's current incarnation to be read whole in place for
-// reason, as a request's in-place repair does before its round runs
-// (markWhole) — and nothing more: no round is asked.
-func MarkWhole(c *Cache, repoID string, reason RebuildReason) {
+// reason (dropping drops, for RebuildDerived), as a request's in-place repair
+// does before its round runs (markWhole) — and nothing more: no round is
+// asked.
+func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	markWhole(e.current, reason)
+	markWhole(e.current, reason, drops)
 }
 
 // Reread marks every current incarnation to be read whole for reason, as a

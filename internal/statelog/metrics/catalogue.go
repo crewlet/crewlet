@@ -641,6 +641,45 @@ func Catalogue() []Instrument {
 				"the repositories this node serves.",
 		},
 		{
+			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Packs of this node's git cache that a git process named " +
+				"as holding a corrupt object in words alone — git 2.56 and " +
+				"later report a packed object's damage through a bare " +
+				"message, which nothing reads as damage — one a naming, by " +
+				"the verdict that answered it (`outcome`): `confirmed`, the " +
+				"pack's bytes are not its row's and the repository is rebuilt " +
+				"(counted under `crewlet.code.cache.rebuilds{reason=corrupt}`); " +
+				"`sound`, its bytes are the row's and nothing is repaired; " +
+				"`unknown`, no row names the pack at the log's head; " +
+				"`unread`, no verdict — the rows or the pack could not be " +
+				"read in time, or its files moved under the hash; `gone`, " +
+				"the request left before the verdict, the hash going on for " +
+				"the next. `confirmed` rising is disk damage a verify of the " +
+				"repository names; `sound` rising is git naming damage the " +
+				"pack does not hold — a git bug, or a request that made git " +
+				"print the sentence — which costs one hash of the pack's " +
+				"files and never a rebuild; `unread` and `gone` rising is a " +
+				"node too busy or a disk too slow to decide a hash inside its " +
+				"bound. Beside `crewlet.code.cache.hint.hashes`, the namings " +
+				"one hash answered.",
+		},
+		{
+			Name: CodeCacheHintHashes, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Hashes of a pack of this node's git cache that git named " +
+				"corrupt in words alone (`crewlet.code.cache.hints`), by what " +
+				"each decided (`outcome`): `confirmed`, `sound`, `unknown` and " +
+				"`unread`, as there. One a pack's files however many namings " +
+				"wait on it — a naming of a pack being hashed waits for that " +
+				"hash, and a verdict is kept for as long as the pack's files " +
+				"are the ones it was reached on — each run on the cache's own " +
+				"time rather than a request's, a read slot a 64 MiB piece, and " +
+				"bounded by the hash alone. Namings less hashes is what " +
+				"waiting saved; `unread` here is a hash the node could not " +
+				"fit, which the next naming starts again.",
+		},
+		{
 			Name: CodeCacheMaintenanceRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason", "step"},
 			Shows: "Steps of the background work on a repository this node's " +
@@ -709,18 +748,22 @@ func Catalogue() []Instrument {
 			Name: CodeCacheRebuilds, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
 			Shows: "Repositories this node's git cache read whole from the " +
-				"rows again, by `reason`. `corrupt`, `midx`, `missing` and " +
+				"rows again, by `reason`. `corrupt`, `derived`, `missing` and " +
 				"`shape` are a repair a git process asked for — a request's " +
-				"or a sync's own. `corrupt` and `missing` are a rebuild into " +
+				"or a sync's own — read from the format strings of git's " +
+				"own reports, which no request can write. `corrupt` and " +
+				"`missing` are a rebuild into " +
 				"a new directory beside the damaged one, downloading every " +
 				"pack again: it found a pack or an index it could not read, " +
-				"or an object a row names that no pack held. `midx` is a " +
-				"damaged multi-pack-index (its reverse index, its bitmap, or " +
-				"the index itself), repaired IN PLACE — the same directory " +
-				"read whole again, its multi-pack-index DROPPED so the round " +
-				"or the maintainer rewrites a sound one over the same packs, " +
-				"none downloaded — since that index is a derived file, not " +
-				"the repository; damage it does not end escalates to " +
+				"or an object a row names that no pack held. `derived` is a " +
+				"damaged derived file (the multi-pack-index with its bitmap " +
+				"and reverse index, the commit-graph, or a chunk-format file " +
+				"of either), named by any git process over the copy and " +
+				"repaired IN PLACE — the same directory read whole again, " +
+				"the files the damage named DROPPED so the round or the " +
+				"maintainer rewrites sound ones over the same packs, none " +
+				"downloaded — since those are derived files, not the " +
+				"repository; damage the drop does not end escalates to " +
 				"`corrupt`. `shape` is the " +
 				"pool refusing to run git there because the directory is " +
 				"not the shape the engine writes (its config edited, a " +
@@ -748,10 +791,10 @@ func Catalogue() []Instrument {
 				"position that log never had or has since given to other " +
 				"records. A repository marked to be read whole for more " +
 				"than one reason at once is read once and counted once, " +
-				"under the first: a damaged multi-pack-index found on a " +
-				"copy already marked for its shape or for the log is " +
-				"counted under that reason, its index dropped all the same " +
-				"(logged `code_cache_midx_repaired`).",
+				"under the first: damaged derived files found on a " +
+				"copy already marked for its shape or for the log are " +
+				"counted under that reason, dropped all the same " +
+				"(logged `code_cache_derived_repaired`).",
 		},
 		{
 			Name: CodeCacheRepos, Kind: KindGauge, Unit: UnitCount,

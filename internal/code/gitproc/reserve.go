@@ -27,7 +27,9 @@ import (
 //
 // THE MAINTENANCE LANE ALONE, because it is the one lane that never waits: a
 // reservation of a lane that queues would be a slot a waiting request queues
-// behind while its holder reads files no git process is reading.
+// behind while its holder reads files no git process is reading. (A READ slot
+// is held only by work that IS a read's — [Pool.HoldRead] — and only while
+// that work runs.)
 type Reserved struct {
 	p       *Pool
 	release func()
@@ -101,4 +103,32 @@ func (r *Reserved) Release() {
 	}
 	r.released = true
 	r.release()
+}
+
+// HoldRead takes one slot of the READ lane for in-process work that is a
+// read's — the cache's hash of a pack a hint names (internal/code/cache) —
+// exactly as a read's run is admitted: in arrival order, waiting at most
+// [SlotWait] and [ErrBusy] past it, or its caller's own end; counted in the
+// lane's running gauge while it is held. release gives it back, once however
+// often it is called. It runs nothing.
+//
+// A SLOT OF THE READ LANE, because that lane counts a core a slot for the
+// work requests wait on, and hashing is a core's work a request waits on —
+// never a semaphore of its own beside the lanes, which would count the same
+// cores twice and let N hashes and N reads run on N cores at once. HELD ONLY
+// WHILE THE WORK RUNS, a piece at a time by its caller, and never across a
+// wait for anything else: the lanes' rule (admit) is that nothing waits for a
+// slot of a lane it holds, and a holder that waited would be a slot every
+// queued read waits behind while nothing runs — Reserve's reason for
+// reserving only the maintenance lane.
+func (p *Pool) HoldRead(ctx context.Context) (release func(), err error) {
+	free, _, err := p.admit(ctx, ClassRead)
+	if err != nil {
+		return nil, err
+	}
+	p.track(ClassRead, +1)
+	return sync.OnceFunc(func() {
+		p.track(ClassRead, -1)
+		free()
+	}), nil
 }

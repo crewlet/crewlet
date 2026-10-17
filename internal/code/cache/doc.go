@@ -98,7 +98,8 @@
 // request (a partial clone's checkout names every blob it lacks in one
 // request, which the host spools), and ended at the first absent one. A
 // check that met DAMAGE on the way answers the damage, never an absent id
-// (gitproc.Result.Damage): cat-file calls an object behind a truncated index
+// (gitproc.Result.Damage, read from the run's trace2 reports whatever its
+// exit status): cat-file calls an object behind a truncated index
 // `missing` and exits 0, and taken as absent the fetch's upload-pack refuses
 // that want in band, past the first byte the host's repair can retry under.
 //
@@ -176,14 +177,15 @@
 //
 // # Damage is repaired once, in place where nothing is lost
 //
-// A git process the host ran over a cache that git found damaged — a pack or
-// an index it could not read, an object a row names that no pack holds — or
-// that the pool refused to start because the directory is not the shape the
-// engine writes (gitproc.ErrRepoShape), makes the host [Cache.Rebuild] it,
-// read as [DamageReason] reads the failure; a round whose own git — the peel
-// of the tags it sets — names the same damage is answered the same way
-// (Cache.run), under the same rules. What the repair is follows from what
-// was lost:
+// A git process the host ran over a cache that git found damaged — a pack, an
+// index or a derived file it could not read, an object a row names that no
+// pack holds, as the formats of its trace2 reports name them (gitproc), never
+// their words — or that the pool refused to start because the directory is
+// not the shape the engine writes (gitproc.ErrRepoShape), makes the host
+// [Cache.Rebuild] it, read as [DamageReason] reads the failure; a round whose
+// own git — the peel of the tags it sets — names the same damage is answered
+// the same way (Cache.run), under the same rules. What the repair is follows
+// from what was lost:
 //
 //   - A SHAPE loses nothing — the pool refuses the directory before git reads
 //     a byte of it, so every pack is still whole — and is repaired IN PLACE:
@@ -196,6 +198,16 @@
 //     pool's own check (gitproc.CheckShape), so a shape it did not end — a
 //     directory something keeps writing into — is seen there rather than by
 //     the next request, and only that goes on to a rebuild.
+//   - A DERIVED FILE loses nothing either: a multi-pack-index (its bitmap,
+//     its reverse index) or a commit-graph is written here from the packs
+//     the incarnation already holds, so damage git names in derived files
+//     ALONE ([RebuildDerived]) is repaired in place the same way, the round
+//     DROPPING the files the damage names ([DerivedDrops]: the index, the
+//     graph, or both for a chunk-format message, which names neither) for
+//     the round or the maintainer to write sound ones over the same packs.
+//     A round whose own git meets it marks the same drop; a round that had
+//     dropped those very files and meets the damage again asks a rebuild
+//     ([RebuildCorrupt]) — the damage was the packs'.
 //   - Everything else is read whole at the log's head into the NEXT
 //     incarnation, beside the one its readers hold, which replaces it once
 //     converged.
@@ -215,6 +227,26 @@
 // with no rebuild asked of it for [RebuildQuiet] meets its next failure as
 // new damage. A check's own sync (below) repairs nothing: the damage it
 // meets is the check's to report.
+//
+// A damage git names ONLY IN WORDS — git 2.56 reports a corrupt packed
+// object through a bare "%s", a format that names nothing — is a HINT naming
+// a pack (gitproc.Hint), and repairs nothing until [Cache.ConfirmHint] has
+// hashed that pack, as a check does, against the row naming it: a pack that
+// is not its row's is [RebuildCorrupt], a sound one is no repair, and a pack
+// no row names is no damage of the copy. A pack is hashed ONCE however many
+// hints name it, on the cache's lifetime rather than any request's — every
+// hint about a pack being hashed waits for that hash as long as its own
+// caller does, and a caller that leaves leaves it running for the next —
+// because damage that fails a hot repository fails every request in flight
+// on it together, and a hash a balancer's cut ended would start from byte
+// zero for the next. A verdict is kept with the pack's files' identity and
+// reused while they are those files; the hash is bounded by [HashBudget] and
+// runs a piece at a time under a read slot (gitproc.Pool.HoldRead); and a
+// round's own git is confirmed once the round has let the entry's write lock
+// go and ENDED, its incarnation pinned, so the round queued behind it runs at
+// once and only the hinted round's own callers wait on a hash — never a
+// linearizable caller, which every answer naming a ref is, and which no round
+// begun before it answers (hint.go). A message only nominates.
 //
 // A check ([Cache.AdmitVerify], [Verification.Run]) is the operator's side of
 // it: every pack the rows name hashed against its row as the bundle the push

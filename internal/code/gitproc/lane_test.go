@@ -556,3 +556,89 @@ func lentAndRepaid(t *testing.T, p *gitproc.Pool, rec *metrics.Recorder) {
 		t.Fatalf("after the run returned the read lane holds %d and lends %d", held, lent)
 	}
 }
+
+// A HELD READ SLOT IS A READ'S. Pool.HoldRead admits in-process work as a
+// read's run is admitted: with the read lane's one slot held, a read run
+// waits and is refused ErrBusy after SlotWait; a hold released hands its slot
+// to the run queued first, ahead of a hold asked after it; a hold its caller
+// gives up waiting for is that, never a busy node; and the running gauge
+// counts a hold while it is held. So work a request waits on — the cache's
+// hash of a pack a hint names — runs on a core the read lane counts, never
+// beside every read on cores it counts already.
+//
+// Mutations: HoldRead takes no slot — the run is admitted at once; a hold
+// jumps the queue (a waiter queued at the front) — the run queued before it
+// is refused busy.
+func TestHoldReadIsAReadSlot(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder(t)
+	p := fakePool(t, "", gitproc.Options{MaxProcesses: 1, Metrics: rec})
+	gitproc.SetTimings(p, 300*time.Millisecond, time.Second)
+	if p.Slots(gitproc.ClassRead) != 1 {
+		t.Fatalf("the read lane has %d slots, want 1", p.Slots(gitproc.ClassRead))
+	}
+
+	release, err := p.HoldRead(t.Context())
+	if err != nil {
+		t.Fatalf("a hold of an idle lane: %v", err)
+	}
+	awaitGauge(t, rec, metrics.CodeGitProcesses, string(gitproc.ClassRead), 1)
+	res, err := p.Run(t.Context(), quick(gitproc.ClassRead))
+	if !errors.Is(err, gitproc.ErrBusy) || res.Waited < 300*time.Millisecond {
+		t.Fatalf("a read past a held slot: waited %v, %v; want ErrBusy after 300ms", res.Waited, err)
+	}
+	if _, err := p.HoldRead(t.Context()); !errors.Is(err, gitproc.ErrBusy) {
+		t.Fatalf("a second hold of a held lane: %v, want ErrBusy", err)
+	}
+	release()
+	release() // once, however often it is called
+	if held, _ := gitproc.ReadLane(p); held != 0 {
+		t.Fatalf("after the hold's release the read lane holds %d slots", held)
+	}
+	awaitGauge(t, rec, metrics.CodeGitProcesses, string(gitproc.ClassRead), 0)
+
+	// In arrival order: a run queued behind a hold takes its slot ahead of a
+	// hold asked after it.
+	gitproc.SetTimings(p, hang, time.Second)
+	first, err := p.HoldRead(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := start(t.Context(), p, quick(gitproc.ClassRead))
+	time.Sleep(100 * time.Millisecond) // long enough to be queued; a run admitted early fails above
+	second := make(chan func(), 1)
+	go func() {
+		r, err := p.HoldRead(t.Context())
+		if err != nil {
+			t.Errorf("the hold asked after the queued run: %v", err)
+			r = func() {}
+		}
+		second <- r
+	}()
+	time.Sleep(100 * time.Millisecond)
+	first()
+	if o := await(t, queued, "the run queued ahead of a hold"); o.err != nil {
+		t.Fatalf("the queued run, handed the slot: %v", o.err)
+	}
+	select {
+	case r := <-second:
+		r()
+	case <-time.After(hang):
+		t.Fatalf("the hold asked after the run was never given the slot")
+	}
+
+	// A caller that gives up waiting is that, never a busy node.
+	held, err := p.HoldRead(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := p.HoldRead(ctx); !errors.Is(err, context.Canceled) || errors.Is(err, gitproc.ErrBusy) {
+		t.Fatalf("a hold whose caller went away: %v, want context.Canceled and not ErrBusy", err)
+	}
+}

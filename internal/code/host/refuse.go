@@ -189,8 +189,9 @@ func (s *Server) gitStopped(w http.ResponseWriter, r *http.Request, name string,
 //     outside its allowlists (ErrConfig, ErrEnv), capturing output a call site
 //     must stream (ErrCaptureFull, whose own message says so), or reaching a
 //     pool that should never have been built — git's HOME not empty
-//     (ErrHome), a git below the floor (*gitproc.ErrTooOld), both refused by
-//     gitproc.New and never by a run;
+//     (ErrHome), a git below the floor (*gitproc.ErrTooOld), a git that
+//     writes no trace2 stream (ErrNoTrace), each refused by gitproc.New and
+//     never by a run;
 //   - the cache refusing the host's call (cache.ErrInvalid): a Synced or a
 //     scratch it did not hand out, an id that is no canonical UUID, an
 //     adoption whose row and scratch disagree;
@@ -199,7 +200,8 @@ func refusedByCaller(err error) bool {
 	var old *gitproc.ErrTooOld
 	return errors.Is(err, gitproc.ErrInvalid) || errors.Is(err, gitproc.ErrNoDeadline) ||
 		errors.Is(err, gitproc.ErrConfig) || errors.Is(err, gitproc.ErrEnv) ||
-		errors.Is(err, gitproc.ErrHome) || errors.As(err, &old) || errors.Is(err, gitproc.ErrCaptureFull) ||
+		errors.Is(err, gitproc.ErrHome) || errors.As(err, &old) || errors.Is(err, gitproc.ErrNoTrace) ||
+		errors.Is(err, gitproc.ErrCaptureFull) ||
 		errors.Is(err, cache.ErrInvalid) || errors.Is(err, code.ErrBadLevel)
 }
 
@@ -283,14 +285,16 @@ func failedLine(r *http.Request) string {
 	return "code_fetch_failed"
 }
 
-// kindOf is an exit's classified kind, in words.
+// kindOf is an exit's classified kind, in words: its Kind, the highest the
+// run named — never whichever errors.Is reaches first, since an exit matches
+// every kind its run named.
 func kindOf(e *gitproc.ExitError) string {
 	switch {
-	case errors.Is(e, gitproc.ErrCorrupt):
+	case errors.Is(e.Kind, gitproc.ErrCorrupt):
 		return "corrupt"
-	case errors.Is(e, gitproc.ErrMissingObject):
+	case errors.Is(e.Kind, gitproc.ErrMissingObject):
 		return "missing object"
-	case errors.Is(e, gitproc.ErrNotOurRef):
+	case errors.Is(e.Kind, gitproc.ErrNotOurRef):
 		return "not our ref"
 	}
 	return "failed"

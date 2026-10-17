@@ -352,6 +352,22 @@ const FsckBytesPerObject = 192
 // operator's sweep for days.
 const VerifyHashPerMiB = 100 * time.Millisecond
 
+// CheckPieceBytes is how much of a file a hash reads in one slot of the read
+// lane (gitproc.Pool.HoldRead) before it gives the slot back and queues for
+// the next: a hint's confirmation (hint.go) hashes up to the largest bundle a
+// push stores, MaxPackBytes with its index, and held whole that is one core
+// for its whole read — 1.3 s warm, about 11 s cold at a gp3 volume's 125 MB/s
+// — with every read queued on a node of few slots waiting behind it.
+//
+// 64 MiB. A piece is 61–69 ms of hashing at BenchmarkVerify's 0.95–1.08 ms a
+// mebibyte (SHA-256 with the CPU's extensions, from the page cache), about
+// 0.2 s without them (272–347 MB/s measured for this hash on a CPU without),
+// and 0.54 s read cold at 125 MB/s: the most a read the lane queues behind
+// it waits, in arrival order. Smaller, and a hash on a saturated lane — where
+// every piece queues behind every read already waiting — makes less progress
+// a turn for the same waits; larger, and a read waits longer behind each.
+const CheckPieceBytes = 64 << 20
+
 // MaintenanceMemoryPerCore is how much memory the maintenance runs BESIDE
 // THE LARGEST ONE IN FLIGHT may be charged at together, for every core the
 // node's memory backs at gitproc.CoreMemory a core (the read lane's slots,

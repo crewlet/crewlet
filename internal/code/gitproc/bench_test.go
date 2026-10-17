@@ -649,3 +649,50 @@ func sentence(r *rand.Rand, words []string) string {
 	s.WriteByte('\n')
 	return s.String()
 }
+
+// BenchmarkTraceSink is the reader every run's trace2 stream passes through,
+// over three streams as git writes them, read in the 64 KiB pieces a pipe
+// hands over:
+//
+//   - healthy is a clone's: upload-pack and its pack-objects, each its
+//     version, start, ancestry, name, a few region and data events and its
+//     exit — the stream every successful run pays for;
+//   - damaged is the same clone over a damaged reverse index: pack-objects'
+//     position row and upload-pack's abort beside it;
+//   - echo is a request's 390 KB echo of one pkt-line of control bytes and
+//     the exit after it — the longest line a request can make git write,
+//     skipped whole.
+func BenchmarkTraceSink(b *testing.B) {
+	child := func(argv ...string) string {
+		return versionLine(2, "2.47.3") + startLine(2, argv...) +
+			`{"event":"cmd_name","sid":"` + sidAt(2) + `","thread":"main","name":"pack-objects","hierarchy":"upload-pack/pack-objects"}` + "\n"
+	}
+	region := func(depth int) string {
+		return `{"event":"region_enter","sid":"` + sidAt(depth) + `","thread":"main","nesting":1,"category":"pack-objects","label":"enumerate-objects"}` + "\n" +
+			`{"event":"region_leave","sid":"` + sidAt(depth) + `","thread":"main","t_rel":0.000412,"nesting":1,"category":"pack-objects","label":"enumerate-objects"}` + "\n"
+	}
+	leader := versionLine(1, "2.47.3") + startLine(1, "git", "upload-pack", "--stateless-rpc", "/srv/r.git") +
+		`{"event":"cmd_ancestry","sid":"` + sidAt(1) + `","thread":"main","ancestry":["crewlet"]}` + "\n"
+	healthy := leader + child("git", "pack-objects", "--revs", "--thin", "--stdout") + region(2) + region(2) +
+		exitLine(2, 0) + exitLine(1, 0)
+	damaged := leader + child("git", "pack-objects", "--revs", "--thin", "--stdout") + region(2) +
+		errorLine(2, "invalid MIDX object position, MIDX is likely corrupt",
+			"invalid MIDX object position, MIDX is likely corrupt") + exitLine(2, 128) +
+		errorLine(1, "git upload-pack: %s", "git upload-pack: git-pack-objects died with error.") +
+		errorLine(1, "%s", "git upload-pack: aborting due to possible repository corruption on the remote side.") +
+		exitLine(1, 128)
+	echo := leader + errorLine(1, "unexpected line: '%s'", "unexpected line: '"+controlBytes(65000)+"'") +
+		exitLine(1, 128)
+	for _, tc := range []struct{ name, stream string }{
+		{"healthy", healthy}, {"damaged", damaged}, {"echo", echo},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			stream := []byte(tc.stream)
+			b.SetBytes(int64(len(stream)))
+			b.ReportAllocs()
+			for b.Loop() {
+				gitproc.ReadTrace("/srv/r.git", stream, 64<<10)
+			}
+		})
+	}
+}

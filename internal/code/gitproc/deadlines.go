@@ -104,9 +104,10 @@ const CaptureMax = 1 << 20
 const CopyBuffer = 64 << 10
 
 // StderrTail is how much of git's stderr a [Result] keeps: the last 16 KiB,
-// which holds every line a failure ends with. Classification reads every line
-// as it arrives, so a damage line pushed out of the tail still decides the
-// kind.
+// which holds every line a failure ends with — the human's message
+// ([Result.LastLine]). Nothing classifies it: what a run's failure means is
+// read from its trace2 events (trace.go), which carry no request text and are
+// read whole however much stderr git writes.
 const StderrTail = 16 << 10
 
 // PackWorkDeadline bounds LOCAL git work proportional to a pack or a

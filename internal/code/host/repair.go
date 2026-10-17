@@ -2,12 +2,14 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
 // A DAMAGED CACHE IS REPAIRED UNDER THE REQUEST THAT FOUND IT, and the git
@@ -15,79 +17,103 @@ import (
 // over a repository's cache, and never twice. The cache is disposable: derived
 // from the rows and the object store and derived again when damaged
 // (cache.Cache.Rebuild — a directory the pool refuses for its shape read whole
-// in place, with no download; a pack or an object git could not read rebuilt
-// into the next incarnation), so a failure that names its damage is the
-// cache's to repair, not the client's to retry. Answered instead, every
-// request after it would meet the same directory and the same failure until a
-// restart's full round or an operator's repair, and git would print an answer
-// that no retry keeps.
+// in place, and derived files git could not read dropped in place, with no
+// download; a pack or an object git could not read rebuilt into the next
+// incarnation), so a failure that names its damage is the cache's to repair,
+// not the client's to retry. Answered instead, every request after it would
+// meet the same directory and the same failure until a restart's full round or
+// an operator's repair, and git would print an answer that no retry keeps.
 //
-// WHAT A FAILURE NAMES DEPENDS ON WHERE THE PROCESS RAN, AND ON WHAT ITS
-// REQUEST CAN WRITE, so each call says which reading it takes. A process IN
-// the incarnation whose words no request reaches — an advertisement, which
-// reads no request, and the check of missing wants, fed object ids alone —
-// names its packs and its shape (cache.DamageReason). Upload-pack reads the
-// client's request and ECHOES it on its stderr when it refuses a line
-// ("unexpected line: '<arg>'", newlines and all), so a request quoting a
-// damage phrase could make its stderr name any damage: its run is read only
-// where no request writes — its answer's side band, which carries
-// pack-objects' words, and the pool's refusal of the incarnation's shape,
-// made before git starts — and never from its own stderr (fetchDamage).
-// What upload-pack meets ITSELF before its first byte — an object its
-// negotiation cannot parse — is therefore answered in git's own words and
-// never repaired under that request: it is repaired by the next request
-// that meets it where no request writes (the wants check looks up every
-// want before upload-pack runs; pack-objects reads every object a fetch
-// packs, a clone's every object), or by an operator's check asked to repair
-// (`crewlet code verify -repair`). A process in a push's scratch or an
-// advertisement view reads the incarnation only as its alternate, where only
-// the alternate's shape is the cache's (cache.ShapeReason) — that scratch's
-// index-pack reads the client's pack, whose damage is the client's, and a
-// refusal of the scratch's own shape is a directory this request made, which
-// the next makes again.
+// WHAT A FAILURE NAMES IS READ FROM GIT'S TRACE2 FORMAT STRINGS, never from
+// its words. Every process the pool runs reports to one stream — upload-pack
+// and its pack-objects, receive-pack and its index-pack — and the pool reads
+// the FORMAT of each report, the constant git's source passed, which carries
+// none of the request's text (gitproc). That matters most for upload-pack,
+// which copies the client's request into what it dies with ("unexpected line:
+// '<arg>'", newlines and all): read by its words, a request quoting a damage
+// phrase made it name any damage, and any token that may fetch forced a cache
+// to be read whole again; read by its formats, it names none. So every
+// process IN the incarnation — an advertisement, the check of missing wants,
+// upload-pack itself — is read by cache.DamageReason (inIncarnation), and
+// what upload-pack meets itself before its first byte is repaired under the
+// request that met it, like any other process's damage. A DAMAGE GIT NAMES
+// ONLY IN WORDS — 2.56's corrupt packed object, which it reports through a
+// bare "%s" — is a hint: the pack it nominates is held to its row
+// (cache.Cache.ConfirmHint), and only a pack that is not the row's is
+// repaired, so no message decides a repair. A process in a push's scratch or
+// an advertisement view reads the incarnation only as its alternate, where
+// only the alternate's shape is the cache's (asAlternate, cache.ShapeReason)
+// — that scratch's index-pack reads the client's pack, whose damage is the
+// client's, a hint there names the scratch's own pack, and a refusal of the
+// scratch's own shape is a directory this request made, which the next makes
+// again.
 //
 // Only a process that failed BEFORE ITS FIRST BYTE is run again: past it the
 // response has begun, and only git's own words, or a cut, can end it. A shape
 // refusal always is one: the pool refuses the directory before it starts git
 // or reads a byte of the request. A fetch's first byte is its PACK's (sink.go,
-// band.go): what upload-pack writes before it is held and read, because its
-// pack-objects names a damaged copy only after upload-pack's first line, in
-// the answer's side band, and never on upload-pack's stderr.
+// band.go): what upload-pack writes before it is held, because its
+// pack-objects meets a damaged copy only after upload-pack's first line.
 
-// repairing runs run over *synced and, when it fails before the response's
-// first byte (started) with damage reasonOf says the cache repairs, has the
-// cache repair it (cache.Cache.Rebuild: a shape in place, a pack or an object
-// into the next incarnation) and runs it once more over the repaired one,
-// which replaces *synced — released here, the repaired one the caller's to
-// release as *synced always is. What it answers is the last run's error, or
-// the repair's own: a refused rebuild (cache.ErrRebuildRefused) is answered as
-// that, never as the failure that asked for it, and damage met again on the
-// repaired copy is marked errStillDamaged — the cache's repair did not end it
-// — so it is never answered as git's own failure, or a scratch's own shape.
-func (s *Server) repairing(ctx context.Context, r *http.Request, name string, synced *cache.Synced,
-	reasonOf func(error) (cache.RebuildReason, bool), started func() bool, run func(cache.Synced) error) error {
-
-	return repair(ctx, s.log, s.o.Cache, r, name, synced, reasonOf, started, run)
+// reading is how a run's failure is read for the damage the cache repairs:
+// reasonOf the reading, and hints whether a hint the run's trace recorded
+// names one of the incarnation's packs (cache.Cache.ConfirmHint).
+type reading struct {
+	reasonOf func(error) (cache.RebuildReason, bool)
+	hints    bool
 }
 
-// rebuilder is the cache's repair as repair asks it (cache.Cache.Rebuild).
+var (
+	// inIncarnation reads a process run IN the incarnation: every damage
+	// cache.DamageReason names, and a hint its trace recorded, which names
+	// one of the incarnation's packs.
+	inIncarnation = reading{reasonOf: cache.DamageReason, hints: true}
+	// asAlternate reads a process run in a push's scratch or an
+	// advertisement view, whose one alternate is the incarnation: only the
+	// alternate's shape (cache.ShapeReason). A hint there names the
+	// scratch's own pack — the client's — and asks nothing of the cache.
+	asAlternate = reading{reasonOf: cache.ShapeReason}
+)
+
+// repairing runs run over *synced and, when it fails before the response's
+// first byte (started) with damage read says the cache repairs, has the
+// cache repair it (cache.Cache.Rebuild: a shape or derived files in place, a
+// pack or an object into the next incarnation) and runs it once more over the
+// repaired one, which replaces *synced — released here, the repaired one the
+// caller's to release as *synced always is. What it answers is the last run's
+// error, or the repair's own: a refused rebuild (cache.ErrRebuildRefused) is
+// answered as that, never as the failure that asked for it, and damage met
+// again on the repaired copy is marked errStillDamaged — the cache's repair
+// did not end it — so it is never answered as git's own failure, or a
+// scratch's own shape.
+func (s *Server) repairing(ctx context.Context, r *http.Request, name string, synced *cache.Synced, read reading,
+	started func() bool, run func(cache.Synced) error) error {
+
+	return repair(ctx, s.log, s.o.Cache, r, name, synced, read, started, run)
+}
+
+// rebuilder is the cache's repair as repair asks it (cache.Cache.Rebuild,
+// cache.Cache.ConfirmHint).
 type rebuilder interface {
-	Rebuild(ctx context.Context, failed cache.Synced, reason cache.RebuildReason) (cache.Synced, error)
+	Rebuild(ctx context.Context, failed cache.Synced, reason cache.RebuildReason, drops gitproc.Part) (cache.Synced,
+		error)
+	ConfirmHint(ctx context.Context, s cache.Synced, h gitproc.Hint) (cache.RebuildReason, bool)
 }
 
 // maxRepairs is how many times repair asks the cache to repair one request's
 // cache before it gives up (errStillDamaged): two, so a cheap IN-PLACE repair
-// can ESCALATE to a whole-repository rebuild. A fetch whose side band names a
-// damaged multi-pack-index is first repaired in place (RebuildMidx: drop and
-// rewrite the index, no download); if the retry still meets damage, it is the
-// underlying pack's, named now by a line that is not the index's, and the
-// second repair reads the repository whole (RebuildCorrupt). A reason met a
-// SECOND time, or a third distinct reason, is damage no repair ends.
+// can ESCALATE to a whole-repository rebuild. Damage git names in derived
+// files alone — a multi-pack-index, a commit-graph — is first repaired in
+// place (RebuildDerived: drop and rewrite them, no download); if the retry
+// still meets damage, it is the underlying pack's, named now by a report that
+// is not a derived file's, and the second repair reads the repository whole
+// (RebuildCorrupt). A reason met a SECOND time, or a third distinct reason, is
+// damage no repair ends. A hint's confirmation counts as the repair it asks.
 const maxRepairs = 2
 
 // repair is repairing over any rebuilder, logging on log.
 func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request, name string, synced *cache.Synced,
-	reasonOf func(error) (cache.RebuildReason, bool), started func() bool, run func(cache.Synced) error) error {
+	read reading, started func() bool, run func(cache.Synced) error) error {
 
 	done := map[cache.RebuildReason]bool{}
 	for {
@@ -95,7 +121,10 @@ func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request,
 		if err == nil || started() {
 			return err
 		}
-		reason, repairs := reasonOf(err)
+		reason, repairs := read.reasonOf(err)
+		if !repairs && read.hints {
+			reason, repairs = confirmed(ctx, c, *synced, err)
+		}
 		switch {
 		case !repairs:
 			return err
@@ -107,13 +136,33 @@ func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request,
 		}
 		done[reason] = true
 		log.Info(retriedLine(r), "repo", name, "reason", string(reason), "error", err)
-		rebuilt, rerr := c.Rebuild(ctx, *synced, reason)
+		var drops gitproc.Part
+		if reason == cache.RebuildDerived {
+			drops = cache.DerivedDrops(err)
+		}
+		rebuilt, rerr := c.Rebuild(ctx, *synced, reason, drops)
 		if rerr != nil {
 			return rerr
 		}
 		synced.Release()
 		*synced = rebuilt
 	}
+}
+
+// confirmed is the repair a failure's hints ask once their packs are held to
+// their rows (cache.Cache.ConfirmHint): the first hint whose pack is not its
+// row's, or none.
+func confirmed(ctx context.Context, c rebuilder, synced cache.Synced, err error) (cache.RebuildReason, bool) {
+	var exit *gitproc.ExitError
+	if !errors.As(err, &exit) {
+		return "", false
+	}
+	for _, h := range exit.Result.Trace.Hints {
+		if reason, ok := c.ConfirmHint(ctx, synced, h); ok {
+			return reason, true
+		}
+	}
+	return "", false
 }
 
 // retriedLine is the line a request whose cache was rebuilt under it is

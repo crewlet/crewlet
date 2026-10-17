@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -474,31 +475,349 @@ func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
 	}
 }
 
+// UPLOAD-PACK'S OWN DAMAGE IS REPAIRED UNDER THE REQUEST THAT MET IT. A cache
+// whose tip commit's pack entry has its compressed bytes damaged (G) passes
+// the check of a fetch's wants — cat-file reads only the entry's header and
+// the index, and names nothing — and upload-pack then dies parsing the want,
+// BEFORE it writes its pack. Its trace names the damage by git's own format,
+// so the cache is rebuilt from the object store and the fetch run again over
+// the same request and served, under either protocol. Read only from its
+// answer's side band, as before, upload-pack's own failure was answered in
+// git's words on every fetch of such a copy until a later request elsewhere
+// or an operator repaired it.
+//
+// The retry is logged naming upload-pack's failure: had the wants check met
+// the damage, it would name cat-file's (TestTheWantsCheckRepairsWhatItsCatFileNames),
+// and the case would not be about upload-pack at all.
+//
+// Mutation: read an upload-pack run as a push's scratch is read (fetch.go's
+// inIncarnation → asAlternate), and every arm answers git's failure with
+// nothing rebuilt.
+func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
+	t.Parallel()
+	for _, v := range []int{0, 2} {
+		t.Run(fmt.Sprintf("protocol=%d", v), func(t *testing.T) {
+			t.Parallel()
+			var l logs
+			c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+			p := codetest.NewPerson(t, c.Fleet, "ceo")
+			work := p.Init()
+			head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
+			c.MustPush(p, work, "main")
+			dir := incarnationDir(t, c)
+			pack, _, data := entryOf(t, dir, head)
+			overwriteFile(t, pack, data+4, mangled(readAt(t, pack, data+4, 6)))
+
+			clone, stderr, err := p.TryClone(c.Ctx, c.URL(0), "--config", fmt.Sprintf("protocol.version=%d", v))
+			if err != nil {
+				t.Fatalf("a clone of a cache whose tip is damaged: %v\n%s", err, stderr)
+			}
+			if got := p.Head(clone); got != head {
+				t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
+			}
+			if n := l.count("code_fetch_retried", `"reason":"corrupt"`, "git upload-pack exited"); n != 1 {
+				t.Errorf("code_fetch_retried reason=corrupt naming upload-pack's failure was logged %d times, "+
+					"want once: %q", n, l.lines("code_fetch_retried"))
+			}
+			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 1 {
+				t.Errorf("%s{reason=corrupt} = %d, want one rebuild", metrics.CodeCacheRebuilds, got)
+			}
+			if now := incarnationDir(t, c); now == dir {
+				t.Errorf("the cache is still %s: a damaged pack is rebuilt into a new incarnation", dir)
+			}
+		})
+	}
+}
+
+// THE WANTS CHECK REPAIRS WHAT ITS CAT-FILE NAMES. A fetch's wants are asked
+// of the copy before upload-pack runs (cache.Missing's cat-file), and damage
+// that check meets is repaired under the fetch: an entry of a type git does
+// not know (G1) and a pack index whose every offset lies past its pack (M) by
+// a rebuild, and a multi-pack-index missing a chunk it requires (F7, fatal for
+// every reader) IN PLACE — the derived file dropped and the SAME incarnation
+// answering — and the fetch served. Each fetch is the request alone, so
+// cat-file is the first git to read the copy. And a multi-pack-index whose
+// table of contents ends early (F6, a CHUNK-FORMAT report, which names
+// neither derived file): the check's cat-file is asked about object ids
+// alone, which loads the index and never the commit-graph, so the report is
+// the index's — the repair drops the index alone, and keeps the graph every
+// walk of the repository goes by.
+//
+// Mutations: map no row for F7's format (`multi-pack-index required pack-name
+// chunk missing or corrupted`, and before 2.43 `multi-pack-index missing
+// required pack-name chunk`) and its arm answers git's failure; read the
+// check's chunk report as both files' (no gitproc.Damage.Narrow) and F6's
+// repair drops the graph with the index.
+func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		damage func(t *testing.T, c *codetest.Case, head string) string // the incarnation it damaged
+		reason string
+		moves  bool
+		// dropped is what the in-place repair says it dropped
+		// (code_cache_derived_repaired's files), where the case states it.
+		dropped string
+	}{
+		{"F6 a multi-pack-index's table of contents ending early", func(t *testing.T, c *codetest.Case, _ string) string {
+			dir := maintainersBitmap(t, c)
+			eventually(t, "the maintainer's commit-graph", func() bool {
+				_, err := os.Stat(filepath.Join(dir, "objects", "info", "commit-graph"))
+				return err == nil
+			})
+			// The first chunk's id zeroed: the terminating id, read too early.
+			overwriteFile(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"),
+				gittest.ChunkRow(gittest.MidxHeader, 0), []byte{0, 0, 0, 0})
+			return dir
+		}, "derived", false, `"files":["multi-pack-index"]`},
+		{"G1 the tip's type", func(t *testing.T, c *codetest.Case, head string) string {
+			dir := incarnationDir(t, c)
+			pack, start, _ := entryOf(t, dir, head)
+			b := readAt(t, pack, start, 1)[0]
+			overwriteFile(t, pack, start, []byte{b&0x8f | 5<<4}) // type 5 is reserved
+			return dir
+		}, "corrupt", true, ""},
+		{"M every index offset past its pack", func(t *testing.T, c *codetest.Case, _ string) string {
+			dir := incarnationDir(t, c)
+			idx, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.idx"))
+			if err != nil || len(idx) == 0 {
+				t.Fatalf("no pack index under %s: %v", dir, err)
+			}
+			for _, path := range idx {
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := int64(binary.BigEndian.Uint32(body[8+255*4:]))
+				overwriteFile(t, path, 8+256*4+n*24, bytes.Repeat([]byte{0x00, 0x0f, 0xff, 0xff}, int(n)))
+			}
+			return dir
+		}, "corrupt", true, ""},
+		{"F7 a multi-pack-index's pack names missing", func(t *testing.T, c *codetest.Case, _ string) string {
+			dir := maintainersBitmap(t, c)
+			gittest.RenameChunk(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"), gittest.MidxHeader,
+				"PNAM", "XNAM")
+			return dir
+		}, "derived", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var l logs
+			c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+			p := codetest.NewPerson(t, c.Fleet, "ceo")
+			work := p.Init()
+			head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
+			c.MustPush(p, work, "main")
+			dir := tc.damage(t, c, head)
+
+			resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants([]string{head}))
+			if resp.StatusCode != http.StatusOK || !strings.Contains(answer, "packfile\n") {
+				t.Errorf("a fetch of the damaged cache answered %d %q, want its pack", resp.StatusCode, short(answer))
+			}
+			if n := l.count("code_fetch_retried", `"reason":"`+tc.reason+`"`, "git cat-file"); n != 1 {
+				t.Errorf("code_fetch_retried reason=%s naming cat-file's failure was logged %d times, want once: %q",
+					tc.reason, n, l.lines("code_fetch_retried"))
+			}
+			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": tc.reason}); got != 1 {
+				t.Errorf("%s{reason=%s} = %d, want one repair", metrics.CodeCacheRebuilds, tc.reason, got)
+			}
+			if now := incarnationDir(t, c); (now != dir) != tc.moves {
+				t.Errorf("the repaired cache is %s, was %s: want a new incarnation %v", now, dir, tc.moves)
+			}
+			if tc.dropped == "" {
+				return
+			}
+			if n := l.count("code_cache_derived_repaired", tc.dropped); n != 1 {
+				t.Errorf("code_cache_derived_repaired with %s was logged %d times, want once: %q", tc.dropped, n,
+					l.lines("code_cache_derived_repaired"))
+			}
+		})
+	}
+}
+
+// A PACKED OBJECT ONLY A "%s" NAMES IS REPAIRED UNDER THE REQUEST, once its
+// pack is held to its row. Git 2.56 reports a packed object whose stated size
+// is wrong (S1) through a bare "%s" alone — upload-pack, parsing the want,
+// says "packed object <id> (stored in ./objects/pack/pack-<sum>.pack) is
+// corrupt" and nothing a format names — so the run names no damage, only a
+// HINT (gitproc), and the cache hashes the pack it nominates against its row
+// (cache.Cache.ConfirmHint): a pack that is not its row's is rebuilt and the
+// fetch served. Below 2.56 git names the same damage otherwise (2.55 by a
+// row; older gits only `not our ref`), so the real arm skips there, declared
+// (internal/skipgate).
+//
+// And its control, on any git: a HEALTHY copy whose upload-pack — a stand-in
+// in front of the real git — dies naming one of the copy's own packs in that
+// very sentence. The pack is hashed, found sound, and nothing is rebuilt: a
+// message only nominates.
+//
+// Mutations: repair on a hint without hashing its pack (the control
+// rebuilds); drop the hint path from repair (S1 answers git's failure).
+func TestAPackedObjectOnlyAPercentSNamesIsRepairedUnderTheRequest(t *testing.T) {
+	t.Parallel()
+	t.Run("a pack whose object's size is wrong", func(t *testing.T) {
+		t.Parallel()
+		var l logs
+		c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+		if got := c.Fleet.Nodes()[0].Pool().Version(); !got.AtLeast(namesPackedObjectOnlyByPercentS) {
+			t.Skipf("git %s names a packed object whose size is wrong by a row or by nothing (from %s it is a "+
+				"bare %%s alone)", got, namesPackedObjectOnlyByPercentS)
+		}
+		p := codetest.NewPerson(t, c.Fleet, "ceo")
+		work := p.Init()
+		head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
+		c.MustPush(p, work, "main")
+		pack, start, _ := entryOf(t, incarnationDir(t, c), head)
+		b := readAt(t, pack, start, 1)[0]
+		if b&0x0f == 0x0f {
+			b-- // the size nibble is full: one less is as wrong
+		} else {
+			b++
+		}
+		overwriteFile(t, pack, start, []byte{b})
+
+		clone, stderr, err := p.TryClone(c.Ctx, c.URL(0))
+		if err != nil {
+			t.Fatalf("a clone of a cache whose tip's size is wrong: %v\n%s", err, stderr)
+		}
+		if got := p.Head(clone); got != head {
+			t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
+		}
+		if got := cacheCount(c, metrics.CodeCacheHints, map[string]string{"outcome": "confirmed"}); got != 1 {
+			t.Errorf("%s{outcome=confirmed} = %d, want the one hint confirmed", metrics.CodeCacheHints, got)
+		}
+		if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 1 {
+			t.Errorf("%s{reason=corrupt} = %d, want one rebuild", metrics.CodeCacheRebuilds, got)
+		}
+		if n := l.count("code_fetch_retried", `"reason":"corrupt"`); n != 1 {
+			t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want once", n)
+		}
+	})
+	t.Run("a stand-in naming a sound pack", func(t *testing.T) {
+		t.Parallel()
+		// Its upload-pack reads the request and dies naming the copy's first
+		// pack in git's own sentence, on the trace stream as git reports it.
+		fake := gittest.Wrap(t, `case " $* " in
+*" --advertise-refs "*) ;;
+*" upload-pack "*)
+	cat >/dev/null
+	set -- ./objects/pack/pack-*.pack
+	msg="packed object `+strings.Repeat("ab", 20)+` (stored in $1) is corrupt"
+	ev='{"event":"error","sid":"stand-in","thread":"main","msg":"'"$msg"'","fmt":"%s"}'
+	eval 'printf "%s\n" "$ev" >&'"$GIT_TRACE2_EVENT"
+	printf 'fatal: %s\n' "$msg" >&2
+	exit 128 ;;
+esac`)
+		var l logs
+		c := newCase(t, codetest.SoloOptions{GitPath: fake, Logger: l.logger()}, codetest.Settings())
+		p := codetest.NewPerson(t, c.Fleet, "ceo")
+		work := p.Init()
+		p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+		c.MustPush(p, work, "main")
+		dir := incarnationDir(t, c)
+
+		if _, _, err := p.TryClone(c.Ctx, c.URL(0)); err == nil {
+			t.Fatal("a clone whose upload-pack dies was served")
+		}
+		if got := cacheCount(c, metrics.CodeCacheHints, map[string]string{"outcome": "sound"}); got != 1 {
+			t.Errorf("%s{outcome=sound} = %d, want the one hint hashed and found sound", metrics.CodeCacheHints, got)
+		}
+		if got := cacheCount(c, metrics.CodeCacheRebuilds, nil); got != 0 {
+			t.Errorf("a hint naming a sound pack caused %d rebuilds, want none", got)
+		}
+		if n := l.count("code_fetch_retried"); n != 0 {
+			t.Errorf("a hint naming a sound pack was retried %d times", n)
+		}
+		if now := incarnationDir(t, c); now != dir {
+			t.Errorf("a hint naming a sound pack moved the incarnation from %s to %s", dir, now)
+		}
+	})
+}
+
+// namesPackedObjectOnlyByPercentS is the first git that reports a packed
+// object whose header states the wrong size through a bare "%s" alone (S1).
+var namesPackedObjectOnlyByPercentS = gitproc.Version{Major: 2, Minor: 56}
+
+// entryOf is the pack file under dir holding oid, where oid's entry begins in
+// it and where its header (its type and size, seven bits a byte) ends.
+func entryOf(t *testing.T, dir, oid string) (pack string, start, data int64) {
+	t.Helper()
+	idx, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.idx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range idx {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := hex.DecodeString(oid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(body, raw) {
+			continue
+		}
+		pack = strings.TrimSuffix(path, ".idx") + ".pack"
+		start, _ = gittest.PackEntry(t, path, oid)
+		data = start
+		for readAt(t, pack, data, 1)[0]&0x80 != 0 {
+			data++
+		}
+		return pack, start, data + 1
+	}
+	t.Fatalf("no pack under %s holds %s", dir, oid)
+	return "", 0, 0
+}
+
+// readAt is n bytes of path from at.
+func readAt(t *testing.T, path string, at, n int64) []byte {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[at : at+n]
+}
+
+// mangled is every byte of b XORed with 0xff: a stretch of a zlib stream git
+// cannot inflate whatever it held.
+func mangled(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		out[i] = c ^ 0xff
+	}
+	return out
+}
+
 // A CACHE WHOSE BITMAP GIT CALLS LIKELY CORRUPT IS REPAIRED IN PLACE UNDER THE
 // FETCH THAT FOUND IT, and the fetch served. A clone reads the maintainer's
 // multi-pack-index bitmap, and over a damaged reverse index the clone's
 // pack-objects dies "invalid MIDX object position, MIDX is likely corrupt" —
-// a line upload-pack relays in its answer's side band, its own stderr saying
-// only that pack-objects died, and AFTER the answer's first line ("packfile",
-// or v0's NAK). So the host holds the answer until its pack begins, reads
-// git's words in it, and on damage repairs the cache (reason `midx`) and runs
-// upload-pack again over the same request. The repair is IN PLACE: the damaged
-// multi-pack-index is a DERIVED file, dropped and rewritten over the same
-// packs the incarnation already holds — the SAME incarnation, no download —
-// where other corruption needs the whole repository read into a new one. The
-// repaired copy serves the clone without a bitmap until its maintainer writes
-// one. Before, every clone of such a copy failed "remote: aborting due to
-// possible repository corruption on the remote side" until an operator's
-// repair.
+// AFTER upload-pack's answer's first line ("packfile", or v0's NAK), and
+// reported on the trace2 stream every process of the tree writes to, at
+// pack-objects' depth (gitproc). So the host holds the answer until its pack
+// begins — the line pack-objects dies with is a report, which keeps the hold
+// (band.go) — and the run's trace names a damaged multi-pack-index, a DERIVED
+// file: the cache drops it in place (reason `derived`) and upload-pack runs
+// again over the same request. The repair is IN PLACE: dropped and rewritten
+// over the same packs the incarnation already holds — the SAME incarnation,
+// no download — where other corruption needs the whole repository read into
+// a new one. The repaired copy serves the clone without a bitmap until its
+// maintainer writes one. Before, every clone of such a copy failed "remote:
+// aborting due to possible repository corruption on the remote side" until
+// an operator's repair.
 //
 // The `progress` arm clones with `--progress`, so pack-objects writes a
-// progress line before its pack: it holds the "a progress line naming no
-// damage begins the pack" rule (band.go) against real git on the served
+// progress line before its pack: it holds the "a band-2 line that is no
+// report begins the pack" rule (band.go) against real git on the served
 // retry, where the damaged run dies before any progress.
 //
-// Mutation: drop the midx patterns from gitproc's table, start the answer at
-// its first byte as before, or replace the in-place midx repair with a full
-// rebuild (incarnation moves), and this fails.
+// Mutation: drop the position row from gitproc's format table, keep the
+// trace pipe from the children (run.go's ExtraFiles), start the answer at its
+// first byte as before, take `fatal: ` out of the report prefixes, or replace
+// the in-place derived repair with a full rebuild (incarnation moves), and
+// this fails.
 func TestADamagedMidxBitmapIsRepaired(t *testing.T) {
 	t.Parallel()
 	for _, v := range []int{0, 2} {
@@ -536,11 +855,11 @@ func TestADamagedMidxBitmapIsRepaired(t *testing.T) {
 				if got := p.Head(clone); got != head {
 					t.Errorf("the clone after the repair is at %s, want %s", got, head)
 				}
-				if n := l.count("code_fetch_retried", `"reason":"midx"`, "MIDX is likely corrupt"); n != 1 {
-					t.Errorf("code_fetch_retried reason=midx naming git's words was logged %d times, want once", n)
+				if n := l.count("code_fetch_retried", `"reason":"derived"`, "MIDX is likely corrupt"); n != 1 {
+					t.Errorf("code_fetch_retried reason=derived naming git's words was logged %d times, want once", n)
 				}
-				if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "midx"}); got != 1 {
-					t.Errorf("%s{reason=midx} = %d, want one in-place repair", metrics.CodeCacheRebuilds, got)
+				if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "derived"}); got != 1 {
+					t.Errorf("%s{reason=derived} = %d, want one in-place repair", metrics.CodeCacheRebuilds, got)
 				}
 				if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 0 {
 					t.Errorf("%s{reason=corrupt} = %d: a damaged index needs no whole-repository rebuild",
@@ -622,75 +941,156 @@ func TestANotOurRefIsNeverARebuild(t *testing.T) {
 }
 
 // A CRAFTED REQUEST CANNOT FORCE A REBUILD. upload-pack ECHOES the client's
-// request lines when it refuses them — "fatal: unexpected line: '<arg>'", a
-// bad filter's quoted type, a want it could not parse — so a fetch whose
-// argument quotes a damage phrase ("is corrupt", "MIDX is likely corrupt")
-// would, if the host classified upload-pack's stderr, be read as a damaged
-// cache and rebuilt. A rebuild reads the whole repository from the object
-// store again, and a token bound to nobody may fetch, so that would be an
-// unauthenticated way to force thousands of GETs. The host repairs a fetch
-// only on damage its answer's SIDE BAND names (fetchDamage), which is
-// pack-objects' own words and carries no echoed request text, so none of
-// these touches the cache.
+// request text in the messages it dies with — "unexpected line: '<arg>'", a
+// bad filter's quoted value, a want it could not parse, newlines and all — so
+// a fetch whose argument carries git's own damage sentences would, if the
+// host read those messages, be taken for a damaged cache and rebuilt: a whole
+// repository read from the object store again, at the word of any token that
+// may fetch, a token bound to nobody among them. The host reads a run only by
+// the FORMATS of its trace2 reports (gitproc), which carry none of the
+// request's text, so none of these touches the cache: no rebuild of any
+// reason, no retry, and no hint hashed — the payload carries git's sentence
+// for a corrupt packed object, naming one of the copy's own packs, which is a
+// hint only as a report's whole message.
 //
-// It runs on any git: upload-pack echoes a bad request whatever its version,
-// and the assertion — no rebuild — holds even where the echo's wording
-// differs, since a negotiation-phase failure writes no side band at all.
+// Every form a client can send upload-pack that carries text of its own is
+// sent, under v2 and v0, through the host's own request handling (a form the
+// host refuses itself reaches no git at all). The payload is a sentence of
+// git's for every part of the repository a report can name, and the hint's;
+// gitproc's TestARequestCannotNameTheDamage sends every row's sentence, its
+// format and 65 000 control bytes through every form against real
+// upload-pack, the layer that reads them.
 //
-// Mutation: key the fetch's repair on cache.DamageReason (the run's stderr)
-// again, and the v2 and v0 arms rebuild the cache.
+// Mutations: read the run's stderr through the regexps this replaced, or
+// classify the events' messages by the rows' formats as substrings, and the
+// echo forms rebuild the cache.
 func TestACraftedRequestCannotForceARebuild(t *testing.T) {
 	t.Parallel()
-	phrases := []string{
-		"is corrupt",
-		"MIDX is likely corrupt",
-		"invalid MIDX object position",
-		"fatal: multi-pack-index is corrupt",
-		"serious inflate inconsistency",
-		"early EOF",
+	var l logs
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	before := incarnationDir(t, c)
+	packs, err := filepath.Glob(filepath.Join(before, "objects", "pack", "pack-*.pack"))
+	if err != nil || len(packs) == 0 {
+		t.Fatalf("no pack under %s: %v", before, err)
 	}
-	// Each arm makes upload-pack RUN and die quoting the phrase on its
-	// stderr: a v2 fetch whose argument line is the phrase ("unexpected line:
-	// '<phrase>'"), and a v0 want it cannot read as an object id ("expected to
-	// get object ID, not '<phrase>'"). A bad filter spec echoes its type value
-	// the same way; it is left out only because its value cannot carry a
-	// space, and the same side-band-only rule closes it.
-	for _, send := range []struct {
-		name     string
-		protocol string
-		body     func(phrase string) string
-	}{
-		{"a v2 fetch argument", v2, func(p string) string {
-			return pkt("command=fetch\n") + "0001" + pkt(p+"\n") + "0000"
-		}},
-		{"a v0 want", "", func(p string) string {
-			return pkt("want "+p+"\n") + "0000" + pkt("done\n")
-		}},
-	} {
-		for _, phrase := range phrases {
-			t.Run(send.name+"/"+phrase, func(t *testing.T) {
-				t.Parallel()
-				var l logs
-				c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
-				p := codetest.NewPerson(t, c.Fleet, "ceo")
-				work := p.Init()
-				p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
-				c.MustPush(p, work, "main")
-				before := incarnationDir(t, c)
+	pack := "./objects/pack/" + filepath.Base(packs[0])
+	oid := strings.Repeat("ab", 20)
+	payload := strings.Join([]string{
+		// pack
+		"packfile " + pack + " does not match index",
+		"inflate: data stream error (incorrect header check)",
+		"index file " + strings.TrimSuffix(pack, ".pack") + ".idx is too small",
+		"reverse-index file " + strings.TrimSuffix(pack, ".pack") + ".rev is corrupt",
+		"early EOF",
+		// multi-pack-index and its bitmap
+		"multi-pack-index signature 0x00000000 does not match signature 0x4d494458",
+		"invalid MIDX object position, MIDX is likely corrupt",
+		"multi-pack-index required pack-name chunk missing or corrupted",
+		"corrupted bitmap index file (wrong header)",
+		// commit-graph
+		"commit-graph signature 0 does not match signature 43475048",
+		"invalid parent position 5",
+		// a chunk-format file
+		"final chunk has non-zero id 0",
+		"duplicate chunk ID 4f494446 found",
+		// an object
+		"bad object " + oid,
+		"Not a valid object name " + oid,
+		"missing blob object '" + oid + "'",
+		"did not receive expected object " + oid,
+		// the hint's sentence, naming one of the copy's own packs
+		"packed object " + head + " (stored in " + pack + ") is corrupt",
+	}, "\n")
 
-				post(t, c, 0, "ceo", "git-upload-pack", send.protocol, send.body(phrase))
-
-				if n := l.count("code_fetch_retried"); n != 0 {
-					t.Errorf("a request quoting %q was retried %d times — its stderr classified as damage", phrase, n)
-				}
-				if got := cacheCount(c, metrics.CodeCacheRebuilds, nil); got != 0 {
-					t.Errorf("a request quoting %q caused %d rebuilds, want none", phrase, got)
-				}
-				if now := incarnationDir(t, c); now != before {
-					t.Errorf("a request quoting %q moved the incarnation from %s to %s", phrase, before, now)
-				}
-			})
+	wantTip := "want " + head
+	fetch := func(args ...string) string {
+		b := pkt("command=fetch\n") + "0001"
+		for _, a := range args {
+			b += pkt(a + "\n")
 		}
+		return b + pkt("done\n") + "0000"
+	}
+	command := func(name string, caps []string, args ...string) string {
+		b := pkt("command=" + name + "\n")
+		for _, c := range caps {
+			b += pkt(c + "\n")
+		}
+		b += "0001"
+		for _, a := range args {
+			b += pkt(a + "\n")
+		}
+		return b + "0000"
+	}
+	v0 := func(lines ...string) string {
+		b := pkt(lines[0] + "\n")
+		for _, line := range lines[1:] {
+			if line == "" {
+				b += "0000"
+				continue
+			}
+			b += pkt(line + "\n")
+		}
+		return b
+	}
+	for _, form := range []struct {
+		name, protocol string
+		body           func(p string) string
+	}{
+		{"v2 an unknown line", v2, func(p string) string { return fetch(wantTip, p) }},
+		{"v2 an unknown line holding a newline", v2, func(p string) string { return fetch(wantTip, "x\n"+p) }},
+		{"v2 filter", v2, func(p string) string { return fetch(wantTip, "filter "+p) }},
+		{"v2 filter blob:limit", v2, func(p string) string { return fetch(wantTip, "filter blob:limit="+p) }},
+		{"v2 filter object:type", v2, func(p string) string { return fetch(wantTip, "filter object:type="+p) }},
+		{"v2 want", v2, func(p string) string { return fetch("want " + p) }},
+		{"v2 have", v2, func(p string) string { return fetch(wantTip, "have "+p) }},
+		{"v2 shallow", v2, func(p string) string { return fetch(wantTip, "shallow "+p) }},
+		{"v2 deepen", v2, func(p string) string { return fetch(wantTip, "deepen "+p) }},
+		{"v2 deepen-since", v2, func(p string) string { return fetch(wantTip, "deepen-since "+p) }},
+		{"v2 deepen-not", v2, func(p string) string { return fetch(wantTip, "deepen-not "+p) }},
+		{"v2 want-ref", v2, func(p string) string { return fetch("want-ref " + p) }},
+		{"v2 ls-refs an unknown argument", v2, func(p string) string { return command("ls-refs", nil, p) }},
+		{"v2 an unknown command", v2, func(p string) string { return command(p, nil) }},
+		{"v2 object-format", v2, func(p string) string {
+			return command("fetch", []string{"object-format=" + p}, wantTip, "done")
+		}},
+		{"v2 session-id", v2, func(p string) string {
+			return command("fetch", []string{"session-id=" + p}, wantTip, "done")
+		}},
+		{"v2 an unknown capability", v2, func(p string) string { return command("fetch", []string{p}, wantTip, "done") }},
+		{"v0 want", "", func(p string) string { return v0("want "+p, "", "done") }},
+		{"v0 shallow", "", func(p string) string { return v0(wantTip, "shallow "+p, "", "done") }},
+		{"v0 deepen", "", func(p string) string { return v0(wantTip, "deepen "+p, "", "done") }},
+		{"v0 deepen-since", "", func(p string) string { return v0(wantTip, "deepen-since "+p, "", "done") }},
+		{"v0 deepen-not", "", func(p string) string { return v0(wantTip, "deepen-not "+p, "", "done") }},
+		{"v0 filter", "", func(p string) string { return v0(wantTip+" filter", "filter "+p, "", "done") }},
+		{"v0 have", "", func(p string) string { return v0(wantTip, "", "have "+p, "done") }},
+		{"v0 garbage", "", func(p string) string { return v0(p, "", "done") }},
+		{"v0 garbage holding a newline", "", func(p string) string { return v0("x\n"+p, "", "done") }},
+		{"v0 garbage among the haves", "", func(p string) string { return v0(wantTip, "", p, "done") }},
+		{"v1 want", "version=1", func(p string) string { return v0("want "+p, "", "done") }},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			resp, answer := post(t, c, 0, "ceo", "git-upload-pack", form.protocol, form.body(payload))
+			if resp.StatusCode == http.StatusServiceUnavailable && strings.Contains(answer, "repair") {
+				t.Errorf("answered %d %q: a request's own text taken for damage", resp.StatusCode, short(answer))
+			}
+		})
+	}
+	if n := l.count("code_fetch_retried"); n != 0 {
+		t.Errorf("requests quoting git's damage sentences were retried %d times — their text read as damage", n)
+	}
+	if got := cacheCount(c, metrics.CodeCacheRebuilds, nil); got != 0 {
+		t.Errorf("requests quoting git's damage sentences caused %d rebuilds, want none", got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheHints, nil); got != 0 {
+		t.Errorf("requests quoting git's sentence for a corrupt packed object had %d packs hashed, want none", got)
+	}
+	if now := incarnationDir(t, c); now != before {
+		t.Errorf("requests quoting git's damage sentences moved the incarnation from %s to %s", before, now)
 	}
 }
 

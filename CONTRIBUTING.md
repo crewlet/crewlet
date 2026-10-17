@@ -12,7 +12,15 @@ on `PATH` — on macOS, Homebrew's: Apple's bundled git is 2.39. The code host
 runs real git as a subprocess, and its suites drive real git both as the
 engine and as a client; a machine without it, or with an older one, FAILS
 them (`internal/code/gitproc/gittest.Require`) rather than skipping, because
-git is a prerequisite of the suite, not something a machine may lack. **A
+git is a prerequisite of the suite, not something a machine may lack. What
+the engine reads of a failed git is the FORMAT of each report git makes to its
+trace2 stream, checked against a table of git's own formats that is held,
+version by version, to what real git reports over real damaged repositories.
+When the git the engine image ships moves, re-measure that table against the
+new git by putting it first on `PATH`:
+`PATH=<prefix>/bin:$PATH go test -count=1 -run 'TestTheFormatTableIsWhatGitSays|TestARequestCannotNameTheDamage' ./internal/code/gitproc/`
+— `gittest.Require` takes the `PATH`'s git, and a row whose range does not
+hold names the format and the git that disagreed. **A
 current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
 dashboard or running `internal/e2e`'s client replay does. Nothing in the tree

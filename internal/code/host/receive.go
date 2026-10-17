@@ -205,7 +205,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	out := newSink(w, "application/x-git-receive-pack-result", s.now)
 	defer out.End()
 	var rcv received
-	runErr := s.repairing(ctx, r, adm.name, &synced, cache.ShapeReason,
+	runErr := s.repairing(ctx, r, adm.name, &synced, asAlternate,
 		func() bool { return rcv.answered || rcv.claimed || rcv.ended || out.Started() },
 		func(in cache.Synced) error {
 			rcv = s.receiveOver(ctx, w, r, receiving{adm: adm, sec: sec, body: body, limits: limits,

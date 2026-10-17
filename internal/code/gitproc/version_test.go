@@ -254,3 +254,36 @@ func TestTheLaneSizesAreResolvedHere(t *testing.T) {
 		}
 	}
 }
+
+// A GIT WRITING NO TRACE IS REFUSED. The code host classifies a damaged cache
+// from the trace2 event stream alone, so a git built or patched without
+// trace2 — one that answers `version` and writes nothing on the descriptor
+// the pool gave it — would read every damage as an unclassified failure and
+// never repair one. New refuses it, naming the path; the same version that
+// writes its stream is a pool. A git BELOW THE FLOOR is refused for its
+// version whatever stream it writes: one older than 2.22 writes no trace2 at
+// all, and "built or patched without it" would send its operator after a
+// fault it does not have, where the floor's refusal names the version found
+// and the one wanted.
+//
+// Mutations: drop New's check, and the first arm is a pool — red; check the
+// stream before the version, and the last arm is ErrNoTrace — red.
+func TestAGitWritingNoTraceIsRefused(t *testing.T) {
+	t.Parallel()
+	silent := gittest.FakeWithoutTrace(t, "git version 2.47.3", "")
+	_, err := gitproc.New(t.Context(), gitproc.Options{Path: silent, Home: filepath.Join(t.TempDir(), "home")})
+	if !errors.Is(err, gitproc.ErrNoTrace) || !strings.Contains(err.Error(), silent) {
+		t.Fatalf("New over a git writing no trace = %v, want ErrNoTrace naming %s", err, silent)
+	}
+	newPool(t, gitproc.Options{Path: gittest.Fake(t, "git version 2.47.3", "")})
+
+	ancient := gittest.FakeWithoutTrace(t, "git version 2.20.1", "")
+	_, err = gitproc.New(t.Context(), gitproc.Options{Path: ancient, Home: filepath.Join(t.TempDir(), "home")})
+	var tooOld *gitproc.ErrTooOld
+	if !errors.As(err, &tooOld) || errors.Is(err, gitproc.ErrNoTrace) {
+		t.Fatalf("New over git 2.20.1, which writes no trace = %v, want *ErrTooOld and not ErrNoTrace", err)
+	}
+	if tooOld.Found != (gitproc.Version{Major: 2, Minor: 20, Patch: 1}) || tooOld.Want != gitproc.MinVersion {
+		t.Fatalf("ErrTooOld = %+v, want 2.20.1 found and the floor wanted", tooOld)
+	}
+}

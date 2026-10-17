@@ -967,3 +967,98 @@ func reading(rec *metrics.Recorder, name, class string) metrics.Snapshot {
 	}
 	return metrics.Snapshot{}
 }
+
+// A RUN READS ITS TRACE TO THE END. A process that writes a mebibyte of trace
+// lines with no pause — far past what a pipe holds — and then a damage event
+// is read to its end: the run returns when the process exits, with the
+// damage, and never waits on its own deadline for a writer it stopped reading.
+//
+// Mutation: stop reading the trace at a cap, and the stand-in blocks on its
+// write until the deadline ends it — red.
+func TestARunReadsItsTraceToTheEnd(t *testing.T) {
+	t.Parallel()
+	data := `{"event":"data","sid":"` + testSID + `","thread":"main","t_abs":0.1,"t_rel":0.1,"nesting":1,` +
+		`"category":"index","key":"read","value":"` + strings.Repeat("v", 100) + `"}`
+	damage := strings.TrimSuffix(errorLine(1, "index file %s is too small",
+		"index file ./objects/pack/pack-1.idx is too small"), "\n")
+	p := fakePool(t, "yes "+quote(data)+" | head -n 8192 >&3\nprintf '%s\\n' "+quote(damage)+" >&3\nexit 128",
+		gitproc.Options{})
+	start := time.Now()
+	res, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"rev-list"}, Class: gitproc.ClassRead,
+		Deadline: 20 * time.Second})
+	var exit *gitproc.ExitError
+	if !errors.As(err, &exit) || !errors.Is(exit.Kind, gitproc.ErrCorrupt) || res.Exit != 128 || res.Damage == nil {
+		t.Fatalf("after %v: exit %d, damage %v, %v; want the stand-in's own exit with the damage it reported",
+			time.Since(start), res.Exit, res.Damage, err)
+	}
+	if res.Trace.Events < 8192 {
+		t.Errorf("the run read %d of the stream's lines, want every one", res.Trace.Events)
+	}
+}
+
+// EVERY PROCESS IN THE TREE REPORTS TO ONE STREAM. git hands the descriptor
+// and the environment on to every process it starts, so what a child says is
+// read as surely as the leader's: a short push through real receive-pack,
+// which itself exits 0 and reports the failure in its answer, carries
+// index-pack's "early EOF" (a child's, at depth 2) as its Result's damage;
+// from git 2.47 a clone over a damaged reverse index carries pack-objects'
+// position row (upload-pack's child); and a commit-graph's damaged chunk
+// table under upload-pack is named whichever process of the tree read it.
+//
+// Mutation: classify only the leader's own events (a sid with no "/") — the
+// short push's arm is red.
+func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	p := realPool(t, gitproc.Options{})
+
+	t.Run("a short push", func(t *testing.T) {
+		d := &damaged{f: f, p: p}
+		stdout, stderr, err := f.client.Try(t, f.wt, strings.NewReader(f.tip()+"\n"),
+			"pack-objects", "--revs", "--stdout", "-q")
+		if err != nil {
+			t.Fatalf("pack-objects of the history: %v\n%s", err, stderr)
+		}
+		d.dir = gittest.Empty(t)
+		d.stdin = []byte(pkt(strings.Repeat("0", 40)+" "+f.tip()+" refs/heads/main\x00report-status\n") +
+			"0000" + stdout[:300])
+		res, err := p.Run(t.Context(), receiveCut(t, d))
+		if err != nil || !errors.Is(res.Damage, gitproc.ErrCorrupt) {
+			t.Fatalf("receive-pack over a short pack: %v, damage %v (formats %q); want an answer carrying "+
+				"index-pack's damage", err, res.Damage, res.Trace.Formats)
+		}
+	})
+	t.Run("a clone over a damaged reverse index", func(t *testing.T) {
+		if !p.Version().AtLeast(gittest.NamesMidxPosition) {
+			// Before 2.47 pack-objects does not check the positions and
+			// dies of a segmentation fault saying nothing — there is no
+			// child's report to read: TestTheFormatTableIsWhatGitSays
+			// holds what such a git says instead (E). Declared in
+			// skipgate, so a run that skips it says so.
+			t.Skipf("git %s: a clone's pack-objects reports a damaged reverse index from %s (gittest.NamesMidxPosition)",
+				p.Version(), gittest.NamesMidxPosition)
+		}
+		d := &damaged{f: f, p: p}
+		d.dir, d.older, d.newer = f.packed(t)
+		writeMidx(t, d)
+		start, end := gittest.MidxChunk(t, d.midx(), "RIDX")
+		overwrite(t, d.midx(), start, bytes.Repeat([]byte{0xff}, int(end-start)))
+		_, err := p.Run(t.Context(), fetchV2(d.dir, f.tip()))
+		var dmg *gitproc.Damage
+		if !errors.Is(err, gitproc.ErrCorrupt) || !errors.As(err, &dmg) || dmg.Parts != gitproc.PartMultiPackIndex {
+			t.Fatalf("a clone over a damaged reverse index: %v, want pack-objects' damage to the index", err)
+		}
+	})
+	t.Run("a commit-graph's chunk table under upload-pack", func(t *testing.T) {
+		d := &damaged{f: f, p: p}
+		d.dir, d.older, d.newer = f.packed(t)
+		writeGraph(t, d)
+		overwrite(t, d.graph(), gittest.ChunkRow(gittest.GraphHeader, 0), []byte{0, 0, 0, 0})
+		res, err := p.Run(t.Context(), fetchV2(d.dir, f.tip()))
+		var dmg *gitproc.Damage
+		if err != nil || !errors.As(res.Damage, &dmg) || dmg.Parts != gitproc.PartChunk {
+			t.Fatalf("a clone over a damaged graph: %v, damage %v; want the answer and the chunk named", err,
+				res.Damage)
+		}
+	})
+}

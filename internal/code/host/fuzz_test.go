@@ -2,7 +2,6 @@ package host
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitref"
 )
@@ -188,8 +186,8 @@ func FuzzPktLines(f *testing.F) {
 
 // FuzzAnswerScan: an upload-pack answer is read alike however its writes cut
 // it — the pool hands a fetch's sink whatever pieces git's pipe gave it — and
-// the reading never panics nor holds more than gitproc.MaxLine of a side
-// band's line. Seeded with git's own answers and a damaged clone's.
+// the reading never panics nor holds more than reportLead of a side band's
+// line. Seeded with git's own answers and a damaged clone's.
 func FuzzAnswerScan(f *testing.F) {
 	for _, seed := range gitTranscripts(f) {
 		f.Add(seed, []byte{3, 7, 250})
@@ -203,25 +201,23 @@ func FuzzAnswerScan(f *testing.F) {
 	f.Fuzz(func(t *testing.T, answer, cuts []byte) {
 		var whole, pieces answerScan
 		whole.scan(answer)
-		whole.finish()
 		rest := answer
 		for _, c := range cuts {
 			n := int(c) % (len(rest) + 1)
 			pieces.scan(rest[:n])
 			rest = rest[n:]
+			if len(pieces.lead) > reportLead {
+				t.Fatalf("band 2's line in progress holds %d bytes", len(pieces.lead))
+			}
 		}
 		pieces.scan(rest)
-		pieces.finish()
-		if whole.begun != pieces.begun || whole.raw != pieces.raw ||
-			!errors.Is(whole.words.Kind(), pieces.words.Kind()) || whole.words.Named() != pieces.words.Named() {
-			t.Fatalf("read whole: begun %v raw %v %v %q; in pieces: begun %v raw %v %v %q", whole.begun,
-				whole.raw, whole.words.Kind(), whole.words.Named(), pieces.begun, pieces.raw,
-				pieces.words.Kind(), pieces.words.Named())
+		if whole.begun != pieces.begun || whole.raw != pieces.raw {
+			t.Fatalf("read whole: begun %v raw %v; in pieces: begun %v raw %v", whole.begun, whole.raw,
+				pieces.begun, pieces.raw)
 		}
-		for i, text := range pieces.text {
-			if len(text) > gitproc.MaxLine {
-				t.Fatalf("band %d holds a line of %d bytes", i+2, len(text))
-			}
+		if len(whole.lead) > reportLead || len(pieces.lead) > reportLead {
+			t.Fatalf("band 2's line in progress holds %d bytes whole, %d in pieces", len(whole.lead),
+				len(pieces.lead))
 		}
 	})
 }

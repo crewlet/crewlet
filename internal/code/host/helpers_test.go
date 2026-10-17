@@ -167,6 +167,19 @@ func (l *logs) count(msg string, attrs ...string) int {
 	return n
 }
 
+// lines is every line logged as msg, for a failure to quote.
+func (l *logs) lines(msg string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for line := range strings.Lines(l.buf.String()) {
+		if strings.Contains(line, `"msg":"`+msg+`"`) {
+			out = append(out, strings.TrimSpace(line))
+		}
+	}
+	return out
+}
+
 // at is every line logged at level ("ERROR", "WARN", …).
 func (l *logs) at(level string) []string {
 	l.mu.Lock()

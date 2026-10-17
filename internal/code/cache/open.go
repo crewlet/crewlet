@@ -99,6 +99,9 @@ type Cache struct {
 	// installHook, when set, is called at each stage of a pack's install
 	// (the suite's, export_test.go).
 	installHook func(stage, packDir string)
+	// hashHook, when set, is called with its bound as a hint's pack is hashed
+	// (ConfirmHint; the suite's, export_test.go).
+	hashHook func(pack string, bound time.Duration)
 
 	// releaseClaim gives back this process's hold on the directory, taken
 	// over from Prepare: once, by Stop when nothing of the cache's is

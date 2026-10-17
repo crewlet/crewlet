@@ -179,19 +179,54 @@
 // a run's CPU lands in whichever window it ends in, all at once, however
 // long it ran.
 //
-// # What went wrong is classified from git's own words
+// # What went wrong is classified from git's own format strings
 //
-// Every stderr line is read as it arrives and classified by a table built
-// from real damaged repositories (classify_test.go): a pack, index or
-// multi-pack-index git could not read — git 2.47's "invalid MIDX object
-// position, MIDX is likely corrupt" for a bitmap read through a damaged
-// reverse index among them ([ErrCorrupt]), an object git could not find
-// ([ErrMissingObject]), a want upload-pack does not serve ([ErrNotOurRef]) —
-// never a rebuild trigger, since an absent want and a cache that lost a pack
-// print the same line — or none of those ([ErrFailed]). LC_ALL=C, because the
-// table matches git's English. Git's words met anywhere else — the side band
-// of upload-pack's answer, where its pack-objects names a fetch's damage — are
-// read by the same table ([Words]).
+// Every process the pool runs — and everything it starts — writes git's
+// trace2 event stream to a pipe the pool gives it as fd 3
+// (GIT_TRACE2_EVENT=3, brief, nesting 1), and every report git makes (die,
+// error, warning, BUG) is an `error` event carrying its FORMAT: the constant
+// git's source passed, beside the message with its arguments filled in. The
+// run is classified by the formats its events carry, looked up whole — every
+// printf conversion read as one, so a platform's PRIuMAX matches — in a table
+// of git's own formats built from real damaged repositories and held, per git
+// version, both ways (classify_test.go): a pack, its index or reverse index, a
+// multi-pack-index or its bitmap, a commit-graph, or a chunk-format file git
+// could not read ([ErrCorrupt], with the [Part] it named), an object git could
+// not find ([ErrMissingObject]), a want upload-pack does not serve
+// ([ErrNotOurRef] — never a rebuild trigger, since an absent want and a cache
+// that lost a pack print the same line), or none of those ([ErrFailed]).
+//
+// NEVER BY THE MESSAGE, AND NEVER BY STDERR, because upload-pack copies the
+// client's request text into the messages it dies with — "unexpected line:
+// '<arg>'", a filter spec, an unparsed want, newlines and all — so reading the
+// words let any token that may fetch force a cache to be read whole again
+// from the object store. The request's text lands only in an event's message;
+// the 21 formats a request was measured to reach (74 forms on four gits) are
+// constants of git's, none a row. stderr stays the human's message
+// (Result.Stderr, LastLine). A line of the stream past [MaxLine] is skipped
+// whole (an echo can be 390 KB; no damage event is near 1 KB), and a git that
+// writes no stream is refused at [New] ([ErrNoTrace]). The one damage git 2.56
+// names only through a bare "%s" — a corrupt packed object — is a [Hint]
+// naming a pack, which decides nothing until that pack's bytes are held to its
+// row (the cache's ConfirmHint).
+//
+// A run that names two kinds is BOTH: an [ExitError]'s Kind is the highest,
+// and errors.Is reaches every kind the run named ([Trace.Kinds]), so a
+// question about one is never answered by another that outranks it — a force
+// check's missing old commit beside a multi-pack-index git reads around is
+// still a stale update.
+//
+// It costs git's write of each event and its read of /proc for its ancestry:
+// MEASURED against the build before it, a warm fetch's four processes take
+// 1.5 ms more of the node's git CPU — 10.5 → 12.0 ms, +15%, about 0.3–0.4 ms
+// a process — and eight clients at once fetch 5% fewer a second
+// (internal/code/host's measured section, git 2.47.3), while a clone's
+// share is lost in its own spread; the planning pass, timing single
+// processes on 2.43, 2.47 and 2.56, had put it at 0.16–0.30 ms a process. The
+// reader here costs 1.4 µs for a healthy fetch's stream, 5.2 µs for one
+// carrying three error events and 40 µs to skip a 390 KB echo
+// (BenchmarkTraceSink). That is the price of a classification no request can
+// steer; the next section has the pool's own arms re-measured.
 //
 // # Measured
 //
@@ -223,6 +258,17 @@
 // already in the repository and is read back and compared, the worst case
 // and the figure [PackWorkPerMiB] is anchored to (its one second a mebibyte
 // is seven times it), and at 8.8 MiB/s (0.11 s) when every object is new.
+//
+// The trace stream, re-measured against the build before it — the same arms,
+// six counts each alternated between the two trees, medians, on four vCPUs of
+// a 2.1 GHz Xeon shared with other builds, git 2.43.0: `git version` through
+// the pool 1.84 → 2.03 ms and a rev-parse 2.20 → 2.30 ms, 0.1–0.2 ms a
+// process of wall; the read lane saturated 0.71 →
+// 0.76 ms a process, about 1 320 a second rather than 1 400; the clone of the
+// 18 MiB pack 93 → 96 ms; and a scratch's rev-parse, the thousand-id cat-file
+// and the copy path each moved less than its own run-to-run spread (a single
+// arm's six runs span 0.3–1.3 ms of a 2–3 ms process here). What it costs a
+// request is the code host's (internal/code/host, its warm fetch).
 //
 // git ≥ 2.40 ([MinVersion]); the engine image ships 2.47 (Debian trixie),
 // and a git CVE is an engine CVE on a git node: the image tracks Debian's
@@ -362,7 +408,8 @@ type Pool struct {
 }
 
 // New builds a pool over the node's git, checks it is at least [MinVersion]
-// (an [*ErrTooOld] otherwise), and resolves the lanes' sizes. Every refusal
+// (an [*ErrTooOld] otherwise) and then that it writes the trace2 event stream
+// ([ErrNoTrace] otherwise), and resolves the lanes' sizes. Every refusal
 // names what to change.
 func New(ctx context.Context, o Options) (*Pool, error) {
 	git := o.Path
@@ -445,8 +492,26 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 			// temporary shallow files.
 			"GIT_GRAFT_FILE=/dev/null/grafts",
 			"GIT_SHALLOW_FILE=/dev/null/shallow",
-			// The classification table reads git's English.
+			// The classification table reads git's format strings, which
+			// are the translated ones: under C, gettext answers each with
+			// its msgid, the English git's source spells.
 			"LC_ALL=C",
+			// THE TRACE2 EVENT STREAM, on fd 3 — ExtraFiles[0], the pipe
+			// Run reads (trace.go). Set for EVERY run, never a call site's
+			// option: one that forgot it would turn a damaged cache back
+			// into a permanent failure with nothing saying so. Nothing a
+			// configuration file holds moves or enriches it (trace2 reads
+			// its settings from the environment first, then from system
+			// and global configuration only, both off above), and the
+			// environment is built, so GIT_TRACE2_CONFIG_PARAMS and
+			// GIT_TRACE2_ENV_VARS are never set.
+			"GIT_TRACE2_EVENT=3",
+			// No time, file or line on an event: the classification reads
+			// none of them, and they are 30% of the bytes.
+			"GIT_TRACE2_EVENT_BRIEF=1",
+			// Region and data events of the outermost regions only; an
+			// error event is no region and is written at any depth.
+			"GIT_TRACE2_EVENT_NESTING=1",
 		},
 		memory:      memory,
 		fixedMemory: o.Memory > 0,
@@ -475,6 +540,18 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if !found.AtLeast(MinVersion) {
 		return nil, &ErrTooOld{Path: git, Found: found, Want: MinVersion}
 	}
+	// A git that writes no event stream can classify no failure: every
+	// damaged cache would be answered as git's own failure, silently, and
+	// every git since 2.22 writes one — so one at or above the floor that
+	// does not is refused rather than run. Asked AFTER the floor, because a
+	// git below 2.22 writes no stream either, and the floor's refusal names
+	// what is actually wrong with it.
+	if res.Trace.Version == "" {
+		return nil, fmt.Errorf("%w: git %s (%s) wrote no trace2 event stream on the descriptor the pool gave it "+
+			"(GIT_TRACE2_EVENT=3): the code host classifies a damaged cache from it, and every git since 2.22 "+
+			"writes it, so this git was built or patched without it — install the engine image's git",
+			ErrNoTrace, git, found)
+	}
 	p.version = found
 	p.reuse = "true"
 	if found.AtLeast(MultiPackReuse) {
@@ -482,7 +559,8 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	}
 	p.log.Info("code_git_ready", "path", git, "version", found.String(),
 		"read_slots", p.read.size, "maintenance_slots", p.maint.size, "transfer_slots", p.transfer.size,
-		"pack_reuse", p.reuse, "home", home, "memory", memory.Bytes, "memory_from", memory.From)
+		"pack_reuse", p.reuse, "home", home, "memory", memory.Bytes, "memory_from", memory.From,
+		"trace_evt", res.Trace.EventVersion)
 	return p, nil
 }
 

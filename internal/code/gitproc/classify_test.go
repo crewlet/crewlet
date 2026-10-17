@@ -3,11 +3,12 @@ package gitproc_test
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -53,11 +54,19 @@ func (f *fixture) tip() string { return f.commits[3] }
 // its extension.
 func (f *fixture) bare(t *testing.T) (dir, newer string) {
 	t.Helper()
+	dir, _, newer = f.packed(t)
+	return dir, newer
+}
+
+// packed is a fresh copy and both its packs' paths without their extension.
+func (f *fixture) packed(t *testing.T) (dir, older, newer string) {
+	t.Helper()
 	dir = gittest.Empty(t)
-	gittest.Pack(t, f.client, dir, f.wt, f.commits[2])
-	cs := gittest.Pack(t, f.client, dir, f.wt, f.tip(), "^"+f.commits[2])
+	oc := gittest.Pack(t, f.client, dir, f.wt, f.commits[2])
+	nc := gittest.Pack(t, f.client, dir, f.wt, f.tip(), "^"+f.commits[2])
 	gittest.SetRefs(t, dir, map[string]string{"refs/heads/main": f.tip()})
-	return dir, filepath.Join(dir, "objects", "pack", "pack-"+cs)
+	pack := filepath.Join(dir, "objects", "pack")
+	return dir, filepath.Join(pack, "pack-"+oc), filepath.Join(pack, "pack-"+nc)
 }
 
 // writable makes a file git wrote read-only writable, for a case to damage.
@@ -89,6 +98,28 @@ func overwrite(t *testing.T, path string, at int64, b []byte) {
 	}
 }
 
+func appendTo(t *testing.T, path string, b []byte) {
+	t.Helper()
+	writable(t, path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.Write(b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readByte(t *testing.T, path string, at int64) byte {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[at]
+}
+
 func size(t *testing.T, path string) int64 {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -116,13 +147,46 @@ func copyOf(t *testing.T, path string) string {
 func fetchV2(dir, want string) gitproc.Cmd {
 	return gitproc.Cmd{
 		Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir}, Protocol: "version=2",
-		Stdin: strings.NewReader(pkt("command=fetch\n") + "0001" + pkt("thin-pack\n") + pkt("want "+want+"\n") + pkt("done\n") + "0000"),
-		Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+		Config: serveConfig,
+		Stdin:  strings.NewReader(pkt("command=fetch\n") + "0001" + pkt("thin-pack\n") + pkt("want "+want+"\n") + pkt("done\n") + "0000"),
+		Class:  gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
 	}
 }
 
+// fetchV2Progress is fetchV2 asking for progress and the side band, as a
+// clone at a terminal does.
+func fetchV2Progress(dir, want string) gitproc.Cmd {
+	c := fetchV2(dir, want)
+	c.Stdin = strings.NewReader(pkt("command=fetch\n") + "0001" + pkt("thin-pack\n") + pkt("ofs-delta\n") +
+		pkt("want "+want+"\n") + pkt("done\n") + "0000")
+	return c
+}
+
+// serveConfig is the cache's serve configuration (cache.ServeConfig) the
+// fetches here run under: the multi-pack-index and its bitmap read, partial
+// clones' filters admitted. A literal, since a cache is not this package's.
+var serveConfig = []gitproc.KV{
+	{Key: "core.multiPackIndex", Value: "true"},
+	{Key: "pack.useBitmaps", Value: "true"},
+	{Key: "uploadpack.allowFilter", Value: "true"},
+	{Key: "uploadpackfilter.allow", Value: "false"},
+	{Key: "uploadpackfilter.blob:none.allow", Value: "true"},
+	{Key: "uploadpackfilter.blob:limit.allow", Value: "true"},
+	{Key: "uploadpackfilter.tree.maxDepth", Value: "0"},
+	{Key: "uploadpackfilter.object:type.allow", Value: "true"},
+	{Key: "uploadpackfilter.combine.allow", Value: "true"},
+	{Key: "uploadpack.keepAlive", Value: "5"},
+}
+
 func read(dir string, args ...string) gitproc.Cmd {
-	return gitproc.Cmd{Dir: dir, Args: args, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline}
+	return gitproc.Cmd{Dir: dir, Args: args, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
+		Config: []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}}}
+}
+
+func batchCheck(dir string, ids ...string) gitproc.Cmd {
+	c := read(dir, "cat-file", "--batch-check")
+	c.Stdin = strings.NewReader(strings.Join(ids, "\n") + "\n")
+	return c
 }
 
 func maintenance(dir string, args ...string) gitproc.Cmd {
@@ -138,153 +202,1131 @@ func indexPack(t *testing.T, pack string) gitproc.Cmd {
 		Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(size(t, cp))}
 }
 
-// FAILURES ARE CLASSIFIED FROM WHAT REAL GIT SAYS about real damage — every
-// row a repository damaged the way a cache can be, and the command that meets
-// it. A git that rewords a message fails here rather than turning a damaged
-// cache into a 500.
-func TestClassifiesWhatRealGitSays(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t)
-	p := realPool(t, gitproc.Options{})
-	type row struct {
-		name string
-		cmd  func(t *testing.T, dir, newer string) gitproc.Cmd
-		want error
+// v is a git version, for the ranges a format is printed over.
+func v(major, minor int) gitproc.Version { return gitproc.Version{Major: major, Minor: minor} }
+
+// before reports whether running is older than at.
+func before(running, at gitproc.Version) bool { return !running.AtLeast(at) }
+
+// The formats git prints over only part of the floor's range of versions:
+// [From, To), To zero for every later git. Every other row is printed by every
+// git from the floor (2.40). Measured on 2.40.4, 2.43.0, 2.47.3, 2.48.0 and
+// 2.56.0, and from git's source (and the planning pass's 2.55.0) where a
+// boundary falls between two of those.
+type span struct{ From, To gitproc.Version }
+
+func (s span) holds(running gitproc.Version) bool {
+	return running.AtLeast(s.From) && (s.To == (gitproc.Version{}) || before(running, s.To))
+}
+
+var printedOver = map[string]span{
+	// 2.56 formats the sentence into a buffer and dies with "%s" (the hint).
+	`packed object %s (stored in %s) is corrupt`: {v(2, 40), v(2, 56)},
+	// Before 2.47 the same damage is a segmentation fault.
+	`invalid MIDX object position, MIDX is likely corrupt`: {v(2, 47), gitproc.Version{}},
+	// The required chunks, reworded at 2.43.
+	`multi-pack-index missing required pack-name chunk`:                   {v(2, 40), v(2, 43)},
+	`multi-pack-index missing required OID fanout chunk`:                  {v(2, 40), v(2, 43)},
+	`multi-pack-index missing required OID lookup chunk`:                  {v(2, 40), v(2, 43)},
+	`multi-pack-index missing required object offsets chunk`:              {v(2, 40), v(2, 43)},
+	`multi-pack-index required pack-name chunk missing or corrupted`:      {v(2, 43), gitproc.Version{}},
+	`multi-pack-index required OID fanout chunk missing or corrupted`:     {v(2, 43), gitproc.Version{}},
+	`multi-pack-index required OID lookup chunk missing or corrupted`:     {v(2, 43), gitproc.Version{}},
+	`multi-pack-index required object offsets chunk missing or corrupted`: {v(2, 43), gitproc.Version{}},
+	// The graph's fanout chunk, reworded at 2.44; its size checked from 2.43.
+	`commit-graph is missing the OID Fanout chunk`:                {v(2, 40), v(2, 44)},
+	`commit-graph oid fanout chunk is wrong size`:                 {v(2, 43), gitproc.Version{}},
+	`commit-graph required OID fanout chunk missing or corrupted`: {v(2, 44), gitproc.Version{}},
+	// A chunk's alignment, checked from 2.43.
+	`chunk id %x not %d-byte aligned`: {v(2, 43), gitproc.Version{}},
+}
+
+// span is the versions that print format.
+func spanOf(format string) span {
+	if s, ok := printedOver[format]; ok {
+		return s
 	}
-	for _, damage := range []struct {
-		name   string
-		damage func(t *testing.T, dir, newer string)
-		rows   []row
-	}{
-		{"the newer pack removed", func(t *testing.T, _, newer string) {
-			for _, ext := range []string{".pack", ".idx", ".rev"} {
-				if err := os.Remove(newer + ext); err != nil {
-					t.Fatal(err)
-				}
+	return span{v(2, 40), gitproc.Version{}}
+}
+
+// result is what a run is held to: the table's formats its events matched
+// (spelled as the table spells them), its kind — nil for a run that answered
+// — the parts its Damage named (none: no Damage), the hints it recorded, and
+// whether a signal ended it.
+type result struct {
+	rows   []string
+	kind   error
+	parts  gitproc.Part
+	hints  int
+	signal bool
+}
+
+// arm is one command over one case's damage, and what it is held to on the
+// running git.
+type arm struct {
+	name string
+	cmd  func(t *testing.T, d *damaged) gitproc.Cmd
+	want func(running gitproc.Version) result
+}
+
+// damaged is one case's damaged copy.
+type damaged struct {
+	f                   *fixture
+	p                   *gitproc.Pool
+	dir, older, newer   string
+	deltaTree, baseTree string // the delta fixture's
+	stdin               []byte // a case's pack or push, for a command reading its stdin
+}
+
+// damageCase is one damage and the commands that meet it; drops is
+// Damage.Drops() for a derived damage.
+type damageCase struct {
+	name   string
+	setup  func(t *testing.T, d *damaged) // nil: the fixture's two packs
+	damage func(t *testing.T, d *damaged)
+	drops  gitproc.Part
+	arms   []arm
+}
+
+func always(r result) func(gitproc.Version) result { return func(gitproc.Version) result { return r } }
+
+func rows(r ...string) []string { return r }
+
+// on is the arm cmd with the same result on every git.
+func on(name string, cmd func(t *testing.T, d *damaged) gitproc.Cmd, r result) arm {
+	return arm{name: name, cmd: cmd, want: always(r)}
+}
+
+func revList(_ *testing.T, d *damaged) gitproc.Cmd {
+	return read(d.dir, "rev-list", "--objects", d.f.tip())
+}
+
+func mergeBase(_ *testing.T, d *damaged) gitproc.Cmd {
+	c := read(d.dir, "merge-base", "--is-ancestor", d.f.commits[2], d.f.tip())
+	c.Answers = []int{1}
+	return c
+}
+
+func catTip(_ *testing.T, d *damaged) gitproc.Cmd { return batchCheck(d.dir, d.f.tip()) }
+
+func fetchTip(_ *testing.T, d *damaged) gitproc.Cmd { return fetchV2(d.dir, d.f.tip()) }
+
+func bitmapWalk(_ *testing.T, d *damaged) gitproc.Cmd {
+	return read(d.dir, "rev-list", "--objects", "--use-bitmap-index", "--count", "--all")
+}
+
+// writeMidx writes the maintainer's multi-pack-index with its bitmap over d's
+// packs.
+func writeMidx(t *testing.T, d *damaged) {
+	t.Helper()
+	c := maintenance(d.dir, "multi-pack-index", "write", "--bitmap", "--no-progress")
+	c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"},
+		{Key: "pack.writeBitmapLookupTable", Value: "true"}}
+	if _, err := d.p.Run(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeGraph writes the maintainer's commit-graph over d's refs.
+func writeGraph(t *testing.T, d *damaged) {
+	t.Helper()
+	if _, err := d.p.Run(t.Context(), maintenance(d.dir, "commit-graph", "write", "--reachable", "--no-progress")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (d *damaged) midx() string { return filepath.Join(d.dir, "objects", "pack", "multi-pack-index") }
+func (d *damaged) graph() string {
+	return filepath.Join(d.dir, "objects", "info", "commit-graph")
+}
+
+// bitmap is the multi-pack-index's bitmap file.
+func (d *damaged) bitmap(t *testing.T) string {
+	t.Helper()
+	found, _ := filepath.Glob(filepath.Join(d.dir, "objects", "pack", "multi-pack-index-*.bitmap"))
+	if len(found) != 1 {
+		t.Fatalf("the multi-pack-index has %d bitmaps, want one", len(found))
+	}
+	return found[0]
+}
+
+// tableOffset adds delta to row i's offset in the chunk-format file at path.
+func tableOffset(t *testing.T, path string, header, i int, set func(uint64) uint64) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := gittest.ChunkRow(header, i) + 4
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], set(binary.BigEndian.Uint64(body[at:at+8])))
+	overwrite(t, path, at, b[:])
+}
+
+// graphCommit is where commit oid's CDAT entry begins in the commit-graph
+// at path: its position in the OIDL chunk, which the CDAT entries follow,
+// each the root tree's id, two parent positions and a date.
+func graphCommit(t *testing.T, path, oid string) int64 {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, end := gittest.GraphChunk(t, path, "OIDL")
+	data, _ := gittest.GraphChunk(t, path, "CDAT")
+	for i := int64(0); lookup+20*i < end; i++ {
+		if fmt.Sprintf("%x", body[lookup+20*i:lookup+20*i+20]) == oid {
+			return data + 36*i
+		}
+	}
+	t.Fatalf("the commit-graph holds no %s", oid)
+	return 0
+}
+
+// graphPosition is commit oid's position in the commit-graph at path.
+func graphPosition(t *testing.T, path, oid string) uint32 {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, end := gittest.GraphChunk(t, path, "OIDL")
+	for i := int64(0); lookup+20*i < end; i++ {
+		if fmt.Sprintf("%x", body[lookup+20*i:lookup+20*i+20]) == oid {
+			return uint32(i)
+		}
+	}
+	t.Fatalf("the commit-graph holds no %s", oid)
+	return 0
+}
+
+// entryHeader is where the header of oid's entry in the pack at stem ends:
+// its type and size, a byte a seven bits more.
+func entryHeader(t *testing.T, stem, oid string) (start, data int64) {
+	t.Helper()
+	start, _ = gittest.PackEntry(t, stem+".idx", oid)
+	data = start
+	for readByte(t, stem+".pack", data)&0x80 != 0 {
+		data++
+	}
+	return start, data + 1
+}
+
+// mangled is every byte of b XORed with 0xff.
+func mangled(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		out[i] = c ^ 0xff
+	}
+	return out
+}
+
+// bytesAt is n bytes of path from at.
+func bytesAt(t *testing.T, path string, at, n int64) []byte {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[at : at+n]
+}
+
+// removePack removes stem's three files.
+func removePack(t *testing.T, stem string) {
+	t.Helper()
+	for _, ext := range []string{".pack", ".idx", ".rev"} {
+		if err := os.Remove(stem + ext); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// formatCases is every damage a cache can hold that git names — and the
+// commands over it that the engine runs — with what each git says. Each case
+// damages its own copy, every byte offset read from the file's own header and
+// table of contents.
+func formatCases(f *fixture) []damageCase {
+	corrupt := func(r ...string) result { return result{rows: r, kind: gitproc.ErrCorrupt, parts: gitproc.PartPack} }
+	missing := func(r ...string) result {
+		return result{rows: r, kind: gitproc.ErrMissingObject, parts: gitproc.PartObject}
+	}
+	// A run that answered over damage it reported: exit 0, the damage named.
+	answered := func(parts gitproc.Part, r ...string) result { return result{rows: r, parts: parts} }
+	midxFatal := func(r ...string) result {
+		return result{rows: r, kind: gitproc.ErrCorrupt, parts: gitproc.PartMultiPackIndex}
+	}
+	packed := `packed object %s (stored in %s) is corrupt`
+	notOurs := `git upload-pack: not our ref %s`
+	required := func(chunk string) func(gitproc.Version) result {
+		return func(running gitproc.Version) result {
+			if before(running, v(2, 43)) {
+				return midxFatal(`multi-pack-index missing required ` + chunk + ` chunk`)
 			}
-		}, []row{
-			{"rev-list", func(_ *testing.T, dir, _ string) gitproc.Cmd { return read(dir, "rev-list", "--objects", f.tip()) }, gitproc.ErrMissingObject},
-			{"cat-file", func(_ *testing.T, dir, _ string) gitproc.Cmd { return read(dir, "cat-file", "-t", f.tip()) }, gitproc.ErrMissingObject},
-			{"merge-base", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				return read(dir, "merge-base", "--is-ancestor", f.commits[2], f.tip())
-			}, gitproc.ErrMissingObject},
-			{"fsck", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				return maintenance(dir, "fsck", "--connectivity-only", "--no-dangling", "--no-progress")
-			}, gitproc.ErrMissingObject},
-			{"upload-pack v2", func(_ *testing.T, dir, _ string) gitproc.Cmd { return fetchV2(dir, f.tip()) }, gitproc.ErrNotOurRef},
+			return midxFatal(`multi-pack-index required ` + chunk + ` chunk missing or corrupted`)
+		}
+	}
+	midxCase := func(name string, damage func(t *testing.T, d *damaged), drops gitproc.Part, arms ...arm) damageCase {
+		return damageCase{name: name, setup: writeMidx, damage: damage, drops: drops, arms: arms}
+	}
+	graphCase := func(name string, damage func(t *testing.T, d *damaged), drops gitproc.Part, arms ...arm) damageCase {
+		return damageCase{name: name, setup: writeGraph, damage: damage, drops: drops, arms: arms}
+	}
+	// Every reader of a multi-pack-index damage that is fatal for whatever
+	// loads the index.
+	fatalForAll := func(want func(gitproc.Version) result) []arm {
+		return []arm{
+			{name: "rev-list", cmd: revList, want: want},
+			{name: "merge-base", cmd: mergeBase, want: want},
+			{name: "cat-file --batch-check", cmd: catTip, want: want},
+			{name: "upload-pack v2", cmd: fetchTip, want: want},
+		}
+	}
+	// Every reader of a damage git reads around: exit 0, the damage named.
+	tolerated := func(parts gitproc.Part, r ...string) []arm {
+		return []arm{
+			on("rev-list", revList, answered(parts, r...)),
+			on("cat-file --batch-check", catTip, answered(parts, r...)),
+		}
+	}
+	graphTolerated := func(parts gitproc.Part, r ...string) []arm {
+		return []arm{
+			on("rev-list", revList, answered(parts, r...)),
+			on("merge-base", mergeBase, answered(parts, r...)),
+			on("upload-pack v2", fetchTip, answered(parts, r...)),
+		}
+	}
+
+	return []damageCase{
+		{name: "A the newer pack removed", damage: func(t *testing.T, d *damaged) { removePack(t, d.newer) }, arms: []arm{
+			on("rev-list", revList, missing(`bad object %s`)),
+			on("cat-file -t", func(_ *testing.T, d *damaged) gitproc.Cmd { return read(d.dir, "cat-file", "-t", f.tip()) },
+				missing(`git cat-file: could not get object info`)),
+			on("merge-base", mergeBase, missing(`Not a valid commit name %s`)),
+			on("fsck --connectivity-only", func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return maintenance(d.dir, "fsck", "--connectivity-only", "--no-dangling", "--no-progress")
+			}, missing(`%s: invalid sha1 pointer %s`)),
+			on("upload-pack v2", fetchTip, result{rows: rows(notOurs), kind: gitproc.ErrNotOurRef}),
 		}},
-		{"the newer index truncated", func(t *testing.T, _, newer string) { truncate(t, newer+".idx", 100) }, []row{
-			{"rev-list", func(_ *testing.T, dir, _ string) gitproc.Cmd { return read(dir, "rev-list", "--objects", f.tip()) }, gitproc.ErrCorrupt},
-			// It also prints "not our ref" for the tip it can no longer
+		{name: "A2 the older pack removed", damage: func(t *testing.T, d *damaged) { removePack(t, d.older) }, arms: []arm{
+			on("rev-list", revList, missing(`Could not read %s`, `Failed to traverse parents of commit %s`)),
+			on("rev-list --topo-order", func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return read(d.dir, "rev-list", "--topo-order", f.tip())
+			}, missing(`Could not read %s`)),
+			{name: "merge-base of the tip's parent", cmd: func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return read(d.dir, "merge-base", f.tip()+"~1", f.tip())
+			}, want: func(running gitproc.Version) result {
+				if running.AtLeast(v(2, 55)) {
+					return missing(`Could not read %s`, `Not a valid commit name %s`)
+				}
+				return missing(`Not a valid commit name %s`)
+			}},
+			on("upload-pack v2 with progress", func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return fetchV2Progress(d.dir, f.tip())
+			}, missing(`Could not read %s`, `Failed to traverse parents of commit %s`)),
+		}},
+		{name: "B the newer index truncated", damage: func(t *testing.T, d *damaged) { truncate(t, d.newer+".idx", 100) }, arms: []arm{
+			on("rev-list", revList, corrupt(`index file %s is too small`, `bad object %s`)),
+			// It also reports "not our ref" for the tip it can no longer
 			// find: damage outranks it.
-			{"upload-pack v2", func(_ *testing.T, dir, _ string) gitproc.Cmd { return fetchV2(dir, f.tip()) }, gitproc.ErrCorrupt},
+			on("upload-pack v2", fetchTip, corrupt(`index file %s is too small`, notOurs)),
+			on("cat-file --batch-check", catTip, answered(gitproc.PartPack, `index file %s is too small`)),
 		}},
-		{"eight bytes flipped in the newer pack", func(t *testing.T, _, newer string) {
-			overwrite(t, newer+".pack", size(t, newer+".pack")/2, bytes.Repeat([]byte{0xff}, 8))
-		}, []row{
-			{"cat-file", func(_ *testing.T, dir, _ string) gitproc.Cmd { return read(dir, "cat-file", "-p", f.tip()+":big.txt") }, gitproc.ErrCorrupt},
-			{"fsck", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				return maintenance(dir, "fsck", "--no-dangling", "--no-progress")
-			}, gitproc.ErrCorrupt},
-			{"index-pack", func(t *testing.T, _, newer string) gitproc.Cmd { return indexPack(t, newer+".pack") }, gitproc.ErrCorrupt},
+		{name: "C eight bytes flipped in the newer pack", damage: func(t *testing.T, d *damaged) {
+			mid := size(t, d.newer+".pack") / 2
+			overwrite(t, d.newer+".pack", mid, mangled(bytesAt(t, d.newer+".pack", mid, 8)))
+		}, arms: []arm{
+			{name: "cat-file -p", cmd: func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return read(d.dir, "cat-file", "-p", f.tip()+":big.txt")
+			}, want: func(running gitproc.Version) result {
+				if running.AtLeast(v(2, 56)) {
+					r := corrupt(`inflate: %s (%s)`)
+					r.hints = 1
+					return r
+				}
+				return corrupt(`inflate: %s (%s)`, packed)
+			}},
+			on("fsck", func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return maintenance(d.dir, "fsck", "--no-dangling", "--no-progress")
+			}, corrupt(`%s pack checksum mismatch`, `index CRC mismatch for object %s from %s at offset %lu`,
+				`inflate: %s (%s)`, `cannot unpack %s from %s at offset %lu`)),
+			on("index-pack", func(t *testing.T, d *damaged) gitproc.Cmd { return indexPack(t, d.newer+".pack") },
+				corrupt(`inflate: %s (%s)`, `pack has bad object at offset %lu: %s`)),
+			{name: "pack-objects", cmd: func(t *testing.T, d *damaged) gitproc.Cmd {
+				c := read(d.dir, "pack-objects", "--revs", "-q", filepath.Join(t.TempDir(), "out"))
+				c.Stdin = strings.NewReader(f.tip() + "\n")
+				return c
+			}, want: func(running gitproc.Version) result {
+				switch {
+				case running.AtLeast(v(2, 56)):
+					r := corrupt(`bad packed object CRC for %s`)
+					r.hints = 1
+					return r
+				case running.AtLeast(v(2, 55)):
+					return corrupt(`bad packed object CRC for %s`, packed)
+				}
+				return corrupt(`bad packed object CRC for %s`, `unable to read %s`)
+			}},
 		}},
-		{"the newer pack truncated to a third", func(t *testing.T, _, newer string) {
-			truncate(t, newer+".pack", size(t, newer+".pack")/3)
-		}, []row{
-			{"rev-list", func(_ *testing.T, dir, _ string) gitproc.Cmd { return read(dir, "rev-list", "--objects", f.tip()) }, gitproc.ErrCorrupt},
-			{"index-pack", func(t *testing.T, _, newer string) gitproc.Cmd { return indexPack(t, newer+".pack") }, gitproc.ErrCorrupt},
+		{name: "D the newer pack truncated to a third", damage: func(t *testing.T, d *damaged) {
+			truncate(t, d.newer+".pack", size(t, d.newer+".pack")/3)
+		}, arms: []arm{
+			on("rev-list", revList, corrupt(`packfile %s does not match index`, `bad object %s`)),
+			on("index-pack", func(t *testing.T, d *damaged) gitproc.Cmd { return indexPack(t, d.newer+".pack") },
+				corrupt(`early EOF`)),
+			on("upload-pack v2", fetchTip, corrupt(`packfile %s does not match index`, notOurs)),
 		}},
 		// THE BITMAP'S POSITIONS, which the reverse index maps: the
 		// maintainer's whole multi-pack-index with its bitmap, as a clone
 		// reads it, and its reverse index (the RIDX chunk) overwritten —
-		// every position it holds past the index's objects. The bitmap
-		// itself is left whole: overwritten too, git 2.56 stops at the
-		// bitmap first and says only "Out of memory, realloc failed".
-		{"a multi-pack-index whose reverse index is overwritten beside its bitmap", func(t *testing.T, dir, _ string) {
-			if v := p.Version(); !v.AtLeast(gittest.NamesMidxPosition) {
-				t.Skipf("git %s does not check a multi-pack-index's object positions (from %s): a bitmapped "+
-					"walk over this damage dies of a segmentation fault, saying nothing a table can read",
-					v, gittest.NamesMidxPosition)
-			}
-			c := maintenance(dir, "multi-pack-index", "write", "--bitmap", "--no-progress")
-			c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"},
-				{Key: "pack.writeBitmapLookupTable", Value: "true"}}
-			if _, err := p.Run(t.Context(), c); err != nil {
-				t.Fatal(err)
-			}
-			midx := filepath.Join(dir, "objects", "pack", "multi-pack-index")
-			start, end := gittest.MidxChunk(t, midx, "RIDX")
-			overwrite(t, midx, start, bytes.Repeat([]byte{0xff}, int(end-start)))
-		}, []row{
-			{"rev-list over its bitmap", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				c := read(dir, "rev-list", "--objects", "--use-bitmap-index", "--count", "--all")
-				c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}}
-				return c
-			}, gitproc.ErrCorrupt},
-		}},
-		{"a multi-pack-index with its signature overwritten", func(t *testing.T, dir, _ string) {
-			c := maintenance(dir, "multi-pack-index", "write", "--no-progress")
-			c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}}
-			if _, err := p.Run(t.Context(), c); err != nil {
-				t.Fatal(err)
-			}
-			overwrite(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"), 0, []byte{0xde, 0xad, 0xbe, 0xef})
-		}, []row{
-			{"rev-list", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				c := read(dir, "rev-list", "--objects", f.tip())
-				c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}}
-				return c
-			}, gitproc.ErrCorrupt},
-		}},
-		{"no damage", func(*testing.T, string, string) {}, []row{
-			{"upload-pack v0 of an absent want", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				return gitproc.Cmd{
-					Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir},
-					Stdin: strings.NewReader(pkt("want 0123456789012345678901234567890123456789\n") + "0000" + pkt("done\n")),
-					Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+		// every position it holds past the index's objects. The bitmap itself
+		// is left whole: overwritten too, git 2.56 stops at the bitmap first
+		// and says only "Out of memory, realloc failed". Before 2.47 git does
+		// not check the positions, and dies of a segmentation fault saying
+		// nothing a table can read.
+		midxCase("E a multi-pack-index whose reverse index is overwritten beside its bitmap", func(t *testing.T, d *damaged) {
+			start, end := gittest.MidxChunk(t, d.midx(), "RIDX")
+			overwrite(t, d.midx(), start, bytes.Repeat([]byte{0xff}, int(end-start)))
+		}, gitproc.PartMultiPackIndex,
+			arm{name: "rev-list over its bitmap", cmd: bitmapWalk, want: func(running gitproc.Version) result {
+				if before(running, gittest.NamesMidxPosition) {
+					return result{kind: gitproc.ErrFailed, signal: true}
 				}
-			}, gitproc.ErrNotOurRef},
-			{"rev-parse of an absent ref", func(_ *testing.T, dir, _ string) gitproc.Cmd {
-				return read(dir, "rev-parse", "--verify", "refs/heads/absent")
-			}, gitproc.ErrFailed},
+				return midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)
+			}},
+			arm{name: "upload-pack v2", cmd: fetchTip, want: func(running gitproc.Version) result {
+				if before(running, gittest.NamesMidxPosition) {
+					return result{kind: gitproc.ErrFailed}
+				}
+				return midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)
+			}}),
+		midxCase("F a multi-pack-index with its signature overwritten", func(t *testing.T, d *damaged) {
+			overwrite(t, d.midx(), 0, []byte{0xde, 0xad, 0xbe, 0xef})
+		}, gitproc.PartMultiPackIndex,
+			on("rev-list", revList, midxFatal(`multi-pack-index signature 0x%08x does not match signature 0x%08x`)),
+			on("upload-pack v2", fetchTip, midxFatal(`multi-pack-index signature 0x%08x does not match signature 0x%08x`))),
+		midxCase("F2 a multi-pack-index truncated", func(t *testing.T, d *damaged) { truncate(t, d.midx(), 20) },
+			gitproc.PartMultiPackIndex, tolerated(gitproc.PartMultiPackIndex, `multi-pack-index file %s is too small`)...),
+		midxCase("F3 a multi-pack-index's version", func(t *testing.T, d *damaged) { overwrite(t, d.midx(), 4, []byte{9}) },
+			gitproc.PartMultiPackIndex, on("rev-list", revList, midxFatal(`multi-pack-index version %d not recognized`))),
+		midxCase("F4 a multi-pack-index's hash version", func(t *testing.T, d *damaged) { overwrite(t, d.midx(), 5, []byte{7}) },
+			gitproc.PartMultiPackIndex, tolerated(gitproc.PartMultiPackIndex,
+				`multi-pack-index hash version %u does not match version %u`)...),
+		midxCase("F5 a multi-pack-index counting no chunks", func(t *testing.T, d *damaged) { overwrite(t, d.midx(), 6, []byte{0}) },
+			gitproc.PartMultiPackIndex|gitproc.PartCommitGraph, tolerated(gitproc.PartChunk, `final chunk has non-zero id %x`)...),
+		midxCase("F6 a multi-pack-index's first chunk id zeroed", func(t *testing.T, d *damaged) {
+			overwrite(t, d.midx(), gittest.ChunkRow(gittest.MidxHeader, 0), []byte{0, 0, 0, 0})
+		}, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
+			tolerated(gitproc.PartChunk, `terminating chunk id appears earlier than expected`)...),
+		midxCase("F7 a multi-pack-index's pack names missing", func(t *testing.T, d *damaged) {
+			gittest.RenameChunk(t, d.midx(), gittest.MidxHeader, "PNAM", "XNAM")
+		}, gitproc.PartMultiPackIndex, fatalForAll(required("pack-name"))...),
+		midxCase("F8 a multi-pack-index's fanout missing", func(t *testing.T, d *damaged) {
+			gittest.RenameChunk(t, d.midx(), gittest.MidxHeader, "OIDF", "XIDF")
+		}, gitproc.PartMultiPackIndex, fatalForAll(required("OID fanout"))...),
+		midxCase("F8L a multi-pack-index's lookup missing", func(t *testing.T, d *damaged) {
+			gittest.RenameChunk(t, d.midx(), gittest.MidxHeader, "OIDL", "XIDL")
+		}, gitproc.PartMultiPackIndex, fatalForAll(required("OID lookup"))...),
+		midxCase("F8O a multi-pack-index's offsets missing", func(t *testing.T, d *damaged) {
+			gittest.RenameChunk(t, d.midx(), gittest.MidxHeader, "OOFF", "XOFF")
+		}, gitproc.PartMultiPackIndex, fatalForAll(required("object offsets"))...),
+		midxCase("F9 a multi-pack-index's pack names out of order", func(t *testing.T, d *damaged) {
+			start, _ := gittest.MidxChunk(t, d.midx(), "PNAM")
+			overwrite(t, d.midx(), start, []byte("z")) // "pack-…" sorts after every other "pack-…"
+		}, gitproc.PartMultiPackIndex, fatalForAll(always(midxFatal(`multi-pack-index pack names out of order: '%s' before '%s'`)))...),
+		midxCase("F10 a multi-pack-index's chunk offset past its end", func(t *testing.T, d *damaged) {
+			tableOffset(t, d.midx(), gittest.MidxHeader, 1, func(uint64) uint64 { return 1 << 40 })
+		}, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
+			tolerated(gitproc.PartChunk, `improper chunk offset(s) %lx and %lx`)...),
+		midxCase("F11 a multi-pack-index's chunk misaligned", func(t *testing.T, d *damaged) {
+			tableOffset(t, d.midx(), gittest.MidxHeader, 1, func(off uint64) uint64 { return off + 1 })
+		}, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
+			arm{name: "rev-list", cmd: revList, want: func(running gitproc.Version) result {
+				if before(running, v(2, 43)) {
+					return answered(gitproc.PartChunk, `improper chunk offset(s) %lx and %lx`)
+				}
+				return answered(gitproc.PartChunk, `chunk id %x not %d-byte aligned`)
+			}}),
+		midxCase("F12 a multi-pack-index's chunk named twice", func(t *testing.T, d *damaged) {
+			body, err := os.ReadFile(d.midx())
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := gittest.ChunkRow(gittest.MidxHeader, 0)
+			overwrite(t, d.midx(), gittest.ChunkRow(gittest.MidxHeader, 1), body[first:first+4])
+		}, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
+			tolerated(gitproc.PartChunk, `duplicate chunk ID %x found`)...),
+		{name: "G the tip commit's compressed bytes flipped", damage: func(t *testing.T, d *damaged) {
+			_, data := entryHeader(t, d.newer, f.tip())
+			overwrite(t, d.newer+".pack", data+4, mangled(bytesAt(t, d.newer+".pack", data+4, 6)))
+		}, arms: []arm{
+			{name: "upload-pack v2", cmd: fetchTip, want: func(running gitproc.Version) result {
+				switch {
+				case running.AtLeast(v(2, 56)):
+					r := corrupt(`inflate: %s (%s)`)
+					r.hints = 1
+					return r
+				case running.AtLeast(v(2, 55)):
+					return corrupt(`inflate: %s (%s)`, packed)
+				}
+				return corrupt(`inflate: %s (%s)`, notOurs)
+			}},
+			{name: "rev-list", cmd: revList, want: func(running gitproc.Version) result {
+				switch {
+				case running.AtLeast(v(2, 56)):
+					r := corrupt(`inflate: %s (%s)`)
+					r.hints = 1
+					return r
+				case running.AtLeast(v(2, 55)):
+					return corrupt(`inflate: %s (%s)`, packed)
+				}
+				return corrupt(`inflate: %s (%s)`, `bad object %s`)
+			}},
 		}},
-	} {
-		for _, r := range damage.rows {
-			t.Run(damage.name+"/"+r.name, func(t *testing.T) {
-				dir, newer := f.bare(t)
-				damage.damage(t, dir, newer)
-				c := r.cmd(t, dir, newer)
+		{name: "G1 the tip commit's type", damage: func(t *testing.T, d *damaged) {
+			start, _ := entryHeader(t, d.newer, f.tip())
+			b := readByte(t, d.newer+".pack", start)
+			overwrite(t, d.newer+".pack", start, []byte{b&0x8f | 5<<4}) // type 5 is reserved
+		}, arms: []arm{
+			{name: "upload-pack v2", cmd: fetchTip, want: unknownType},
+			{name: "rev-list", cmd: revList, want: unknownType},
+		}},
+		{name: "H the big blob in a pack of its own, removed", setup: func(t *testing.T, d *damaged) {
+			// The copy again: the older pack, the tip's commit and tree in a
+			// pack, and the big blob alone in a third.
+			d.dir = gittest.Empty(t)
+			gittest.Pack(t, f.client, d.dir, f.wt, f.commits[2])
+			gittest.PackObjects(t, f.client, d.dir, f.wt, f.tip(),
+				strings.TrimSpace(f.client.Run(t, f.wt, "rev-parse", f.tip()+"^{tree}")))
+			only := gittest.PackObjects(t, f.client, d.dir, f.wt,
+				strings.TrimSpace(f.client.Run(t, f.wt, "rev-parse", f.tip()+":big.txt")))
+			d.newer = filepath.Join(d.dir, "objects", "pack", "pack-"+only)
+			gittest.SetRefs(t, d.dir, map[string]string{"refs/heads/main": f.tip()})
+		}, damage: func(t *testing.T, d *damaged) { removePack(t, d.newer) }, arms: []arm{
+			on("upload-pack v2", fetchTip, missing(`unable to read %s`)),
+			on("rev-list", revList, missing(`missing %s object '%s'`)),
+			// fsck's findings are on its stdout, never a report: its verdict
+			// is the check's to read, and names no kind.
+			on("fsck --connectivity-only", func(_ *testing.T, d *damaged) gitproc.Cmd {
+				return maintenance(d.dir, "fsck", "--connectivity-only", "--no-dangling", "--no-progress")
+			}, result{kind: gitproc.ErrFailed}),
+		}},
+		graphCase("I a commit-graph's signature", func(t *testing.T, d *damaged) {
+			overwrite(t, d.graph(), 0, []byte{0xde, 0xad, 0xbe, 0xef})
+		}, gitproc.PartCommitGraph, graphTolerated(gitproc.PartCommitGraph, `commit-graph signature %X does not match signature %X`)...),
+		graphCase("I2 a commit-graph truncated", func(t *testing.T, d *damaged) { truncate(t, d.graph(), 20) },
+			gitproc.PartCommitGraph, on("rev-list", revList, answered(gitproc.PartCommitGraph, `commit-graph file is too small`))),
+		graphCase("I3 a commit-graph's version", func(t *testing.T, d *damaged) { overwrite(t, d.graph(), 4, []byte{9}) },
+			gitproc.PartCommitGraph, on("rev-list", revList, answered(gitproc.PartCommitGraph,
+				`commit-graph version %X does not match version %X`))),
+		graphCase("I4 a commit-graph's hash version", func(t *testing.T, d *damaged) { overwrite(t, d.graph(), 5, []byte{7}) },
+			gitproc.PartCommitGraph, on("rev-list", revList, answered(gitproc.PartCommitGraph,
+				`commit-graph hash version %X does not match version %X`))),
+		graphCase("I5 a commit-graph's first chunk id zeroed", func(t *testing.T, d *damaged) {
+			overwrite(t, d.graph(), gittest.ChunkRow(gittest.GraphHeader, 0), []byte{0, 0, 0, 0})
+		}, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
+			graphTolerated(gitproc.PartChunk, `terminating chunk id appears earlier than expected`)...),
+		graphCase("I6 a commit-graph counting no chunks", func(t *testing.T, d *damaged) { overwrite(t, d.graph(), 6, []byte{0}) },
+			gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
+			graphTolerated(gitproc.PartChunk, `final chunk has non-zero id %x`)...),
+		graphCase("I7 a commit-graph's first chunk three bytes on", func(t *testing.T, d *damaged) {
+			tableOffset(t, d.graph(), gittest.GraphHeader, 0, func(off uint64) uint64 { return off + 3 })
+		}, gitproc.PartCommitGraph, arm{name: "rev-list", cmd: revList, want: func(running gitproc.Version) result {
+			switch {
+			case before(running, v(2, 43)):
+				// No size check on the fanout before 2.43: a read past it.
+				return result{kind: gitproc.ErrFailed, signal: true}
+			case before(running, v(2, 44)):
+				return answered(gitproc.PartCommitGraph, `commit-graph is missing the OID Fanout chunk`,
+					`commit-graph oid fanout chunk is wrong size`)
+			}
+			return answered(gitproc.PartCommitGraph, `commit-graph oid fanout chunk is wrong size`,
+				`commit-graph required OID fanout chunk missing or corrupted`)
+		}}),
+		graphCase("I8 a commit-graph's parent past its commits", func(t *testing.T, d *damaged) {
+			overwrite(t, d.graph(), graphCommit(t, d.graph(), f.tip())+20, []byte{0x00, 0xff, 0xff, 0xff})
+		}, gitproc.PartCommitGraph, on("rev-list", revList, result{rows: rows(`invalid parent position %u`),
+			kind: gitproc.ErrCorrupt, parts: gitproc.PartCommitGraph})),
+		// A PARENT THAT IS ANOTHER COMMIT OF THE GRAPH: git answers wrong and
+		// says nothing — no table can see it; held so a git that starts
+		// naming it is noticed.
+		graphCase("I9 a commit-graph's parent pointing at its own commit", func(t *testing.T, d *damaged) {
+			var b [4]byte
+			binary.BigEndian.PutUint32(b[:], graphPosition(t, d.graph(), f.tip()))
+			overwrite(t, d.graph(), graphCommit(t, d.graph(), f.tip())+20, b[:])
+		}, 0, on("rev-list", revList, result{})),
+		graphCase("I10 a commit-graph's fanout missing", func(t *testing.T, d *damaged) {
+			gittest.RenameChunk(t, d.graph(), gittest.GraphHeader, "OIDF", "XIDF")
+		}, gitproc.PartCommitGraph, arm{name: "rev-list", cmd: revList, want: func(running gitproc.Version) result {
+			if before(running, v(2, 44)) {
+				return answered(gitproc.PartCommitGraph, `commit-graph is missing the OID Fanout chunk`)
+			}
+			return answered(gitproc.PartCommitGraph, `commit-graph required OID fanout chunk missing or corrupted`)
+		}}),
+		graphCase("I11 a commit-graph's generation past its overflow", func(t *testing.T, d *damaged) {
+			start, _ := gittest.GraphChunk(t, d.graph(), "GDA2")
+			at := start + 4*int64(graphPosition(t, d.graph(), f.tip()))
+			overwrite(t, d.graph(), at, []byte{0x80 | readByte(t, d.graph(), at)})
+		}, gitproc.PartCommitGraph, on("rev-list", revList, result{
+			rows: rows(`commit-graph requires overflow generation data but has none`),
+			kind: gitproc.ErrCorrupt, parts: gitproc.PartCommitGraph})),
+		midxCase("K1 a bitmap's signature", func(t *testing.T, d *damaged) {
+			overwrite(t, d.bitmap(t), 0, []byte{0xde, 0xad, 0xbe, 0xef})
+		}, gitproc.PartMultiPackIndex, bitmapArms(answered(gitproc.PartMultiPackIndex, `corrupted bitmap index file (wrong header)`))...),
+		midxCase("K2 a bitmap truncated", func(t *testing.T, d *damaged) { truncate(t, d.bitmap(t), 30) },
+			gitproc.PartMultiPackIndex, bitmapArms(answered(gitproc.PartMultiPackIndex, `corrupted bitmap index (too small)`))...),
+		midxCase("K3 a bitmap's version", func(t *testing.T, d *damaged) { overwrite(t, d.bitmap(t), 4, []byte{0, 9}) },
+			gitproc.PartMultiPackIndex, bitmapArms(answered(gitproc.PartMultiPackIndex,
+				`unsupported version '%d' for bitmap index file`))...),
+		{name: "M every index offset past the pack", damage: func(t *testing.T, d *damaged) {
+			for _, stem := range []string{d.older, d.newer} {
+				idx := stem + ".idx"
+				body, err := os.ReadFile(idx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := int64(binary.BigEndian.Uint32(body[8+255*4:]))
+				offsets := 8 + 256*4 + n*24
+				overwrite(t, idx, offsets, bytes.Repeat([]byte{0x00, 0x0f, 0xff, 0xff}, int(n)))
+			}
+		}, arms: []arm{
+			on("rev-list", revList, corrupt(`offset beyond end of packfile (truncated pack?)`)),
+			on("upload-pack v2", fetchTip, corrupt(`offset beyond end of packfile (truncated pack?)`)),
+			on("cat-file --batch-check", catTip, corrupt(`offset beyond end of packfile (truncated pack?)`)),
+		}},
+		// A DELTA'S OWN BYTES: its zlib header mangled, so the delta cannot
+		// be inflated over a base git read whole.
+		{name: "P a delta's compressed data", setup: deltaCopy(f), damage: func(t *testing.T, d *damaged) {
+			at := deltaData(t, d)
+			overwrite(t, d.newer+".pack", at, mangled(bytesAt(t, d.newer+".pack", at, 2)))
+		}, arms: []arm{
+			{name: "cat-file -p", cmd: catDelta,
+				want: deltaRead(`failed to unpack compressed delta at offset %lu from %s`)},
+		}},
+		// A DELTA'S BASE OFFSET past every object: git cannot even say what
+		// type the delta is, and calls the object absent.
+		{name: "P2 a delta's base offset past the pack's start", setup: deltaCopy(f), damage: func(t *testing.T, d *damaged) {
+			_, data := entryHeader(t, d.newer, d.deltaTree)
+			overwrite(t, d.newer+".pack", data, []byte{0xff})
+		}, arms: []arm{
+			on("cat-file -p", catDelta, missing(`Not a valid object name %s`)),
+		}},
+		// A DELTA'S BASE whose own bytes are damaged: git reads the delta
+		// and cannot read what it applies to.
+		{name: "P3 a delta base's compressed data", setup: deltaCopy(f), damage: func(t *testing.T, d *damaged) {
+			_, at := entryHeader(t, d.newer, d.baseTree)
+			overwrite(t, d.newer+".pack", at, mangled(bytesAt(t, d.newer+".pack", at, 2)))
+		}, arms: []arm{
+			{name: "cat-file -p", cmd: catDelta,
+				want: deltaRead(`failed to read delta base object %s at offset %lu from %s`)},
+		}},
+		{name: "R1 every reverse index truncated", damage: revs(func(t *testing.T, rev string) { truncate(t, rev, 20) }),
+			arms: revArms(`reverse-index file %s is too small`)},
+		{name: "R2 every reverse index's signature", damage: revs(func(t *testing.T, rev string) {
+			overwrite(t, rev, 0, []byte{0xde, 0xad, 0xbe, 0xef})
+		}), arms: revArms(`reverse-index file %s has unknown signature`)},
+		{name: "R3 every reverse index's version", damage: revs(func(t *testing.T, rev string) {
+			overwrite(t, rev, 7, []byte{9})
+		}), arms: revArms(`reverse-index file %s has unsupported version %u`)},
+		{name: "R4 every reverse index's hash id", damage: revs(func(t *testing.T, rev string) {
+			overwrite(t, rev, 11, []byte{7})
+		}), arms: revArms(`reverse-index file %s has unsupported hash id %u`)},
+		{name: "R5 every reverse index four bytes long", damage: revs(func(t *testing.T, rev string) {
+			appendTo(t, rev, []byte{0, 0, 0, 0})
+		}), arms: revArms(`reverse-index file %s is corrupt`)},
+		{name: "S1 the tip commit's stated size one more", damage: func(t *testing.T, d *damaged) {
+			start, _ := entryHeader(t, d.newer, f.tip())
+			b := readByte(t, d.newer+".pack", start)
+			if b&0x0f == 0x0f {
+				t.Fatalf("the tip's size nibble is full: %#x", b)
+			}
+			overwrite(t, d.newer+".pack", start, []byte{b + 1})
+		}, arms: []arm{
+			{name: "rev-list", cmd: revList, want: sizeOff(missing(`bad object %s`))},
+			{name: "merge-base", cmd: mergeBase, want: sizeOff(missing(`Not a valid commit name %s`))},
+			{name: "upload-pack v2", cmd: fetchTip, want: sizeOff(result{rows: rows(notOurs), kind: gitproc.ErrNotOurRef})},
+		}},
+		{name: "S2 the tip commit's checksum zeroed", damage: func(t *testing.T, d *damaged) {
+			_, end := gittest.PackEntry(t, d.newer+".idx", f.tip())
+			overwrite(t, d.newer+".pack", end-4, []byte{0, 0, 0, 0})
+		}, arms: []arm{
+			{name: "rev-list", cmd: revList, want: func(running gitproc.Version) result {
+				switch {
+				case running.AtLeast(v(2, 56)):
+					r := corrupt(`inflate: %s (%s)`)
+					r.hints = 1
+					return r
+				case running.AtLeast(v(2, 55)):
+					return corrupt(`inflate: %s (%s)`, packed)
+				}
+				return corrupt(`inflate: %s (%s)`, `bad object %s`)
+			}},
+		}},
+		// WHAT A PUSH'S index-pack SAYS of the CLIENT's pack — kinds the
+		// receiver reads as the client's, never the cache's.
+		{name: "N1 a thin pack's one delta on an absent base", setup: thinPack(f, 1), arms: []arm{
+			on("index-pack --stdin", indexStdin, corrupt(`pack has %d unresolved delta`)),
+		}},
+		{name: "N2 a thin pack's two deltas on absent bases", setup: thinPack(f, 2), arms: []arm{
+			on("index-pack --stdin", indexStdin, corrupt(`pack has %d unresolved deltas`)),
+		}},
+		{name: "Q the tip commit alone", setup: func(t *testing.T, d *damaged) {
+			stdout, stderr, err := f.client.Try(t, f.wt, strings.NewReader(f.tip()+"\n"), "pack-objects", "--stdout", "-q")
+			if err != nil {
+				t.Fatalf("pack-objects of the tip commit: %v\n%s", err, stderr)
+			}
+			d.dir, d.stdin = gittest.Empty(t), []byte(stdout)
+		}, arms: []arm{
+			on("index-pack --stdin --strict", func(_ *testing.T, d *damaged) gitproc.Cmd {
+				c := indexStdin(nil, d)
+				c.Args = append(c.Args, "--strict")
+				return c
+			}, missing(`did not receive expected object %s`)),
+		}},
+		{name: "a push whose pack is cut short", setup: func(t *testing.T, d *damaged) {
+			stdout, stderr, err := f.client.Try(t, f.wt, strings.NewReader(f.tip()+"\n"),
+				"pack-objects", "--revs", "--stdout", "-q")
+			if err != nil {
+				t.Fatalf("pack-objects of the history: %v\n%s", err, stderr)
+			}
+			d.dir = gittest.Empty(t)
+			d.stdin = []byte(pkt(strings.Repeat("0", 40)+" "+f.tip()+" refs/heads/main\x00report-status\n") +
+				"0000" + stdout[:300])
+		}, arms: []arm{
+			// receive-pack answers in its report and exits 0; the failure is
+			// its index-pack's, a child's report on the one stream.
+			on("receive-pack", receiveCut, answered(gitproc.PartPack, `early EOF`)),
+		}},
+		// A READER OF A SPLIT GRAPH WHOSE LAYER WENT — what git prints of a
+		// healthy repository when a reader races git's own rewrite of the
+		// chain. It is no row, and the reader answers.
+		{name: "a commit-graph chain missing a layer", setup: func(t *testing.T, d *damaged) {
+			for range 2 {
+				if _, err := d.p.Run(t.Context(), maintenance(d.dir, "commit-graph", "write", "--reachable", "--split",
+					"--no-progress")); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, damage: func(t *testing.T, d *damaged) {
+			layers, _ := filepath.Glob(filepath.Join(d.dir, "objects", "info", "commit-graphs", "graph-*.graph"))
+			if len(layers) == 0 {
+				t.Fatal("the split write left no layer")
+			}
+			for _, layer := range layers {
+				if err := os.Remove(layer); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, arms: []arm{on("rev-list", revList, result{})}},
+	}
+}
+
+// thinPack is a copy holding nothing and a thin pack of n deltas, each on a
+// blob of the commit before, which the pack does not carry.
+func thinPack(f *fixture, n int) func(t *testing.T, d *damaged) {
+	return func(t *testing.T, d *damaged) {
+		t.Helper()
+		c := f.client
+		wt := c.Init(t)
+		files, changed := map[string]string{}, map[string]string{}
+		for i := range n {
+			name := fmt.Sprintf("big%d.txt", i)
+			// Each its own content, so each is a blob of its own and a
+			// delta of its own.
+			files[name] = name + "\n" + bigFile()
+			changed[name] = "changed\n" + name + "\n" + bigFile()
+		}
+		base := c.Commit(t, wt, files, "base")
+		tip := c.Commit(t, wt, changed, "changed")
+		stdout, stderr, err := c.Try(t, wt, strings.NewReader(tip+"\n^"+base+"\n"),
+			"pack-objects", "--revs", "--thin", "--stdout", "-q")
+		if err != nil {
+			t.Fatalf("a thin pack: %v\n%s", err, stderr)
+		}
+		d.dir, d.stdin = gittest.Empty(t), []byte(stdout)
+	}
+}
+
+// indexStdin is index-pack reading d's pack on its stdin, in d's repository:
+// what receive-pack's index-pack does with a push's pack.
+func indexStdin(_ *testing.T, d *damaged) gitproc.Cmd {
+	return gitproc.Cmd{Dir: d.dir, Args: []string{"index-pack", "--stdin"}, Stdin: bytes.NewReader(d.stdin),
+		Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(int64(len(d.stdin)))}
+}
+
+// receiveCut is receive-pack taking d's push.
+func receiveCut(_ *testing.T, d *damaged) gitproc.Cmd {
+	indexed := make(chan struct{})
+	close(indexed)
+	return gitproc.Cmd{Dir: d.dir, Args: []string{"receive-pack", "--stateless-rpc", d.dir},
+		Stdin: bytes.NewReader(d.stdin), Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline, Indexed: indexed}
+}
+
+// unknownType is what an entry of an unknown type is reported as.
+func unknownType(running gitproc.Version) result {
+	r := result{rows: rows(`unknown object type %i at offset %lu in %s`), kind: gitproc.ErrCorrupt,
+		parts: gitproc.PartPack}
+	if running.AtLeast(v(2, 56)) {
+		r.hints = 1
+		return r
+	}
+	r.rows = append(r.rows, `packed object %s (stored in %s) is corrupt`)
+	return r
+}
+
+// sizeOff is S1 on each git: before 2.55 what an object git cannot find is
+// reported as (older), 2.55 the corrupt object's own row, and from 2.56 that
+// sentence through "%s" alone — no kind, no damage, one hint.
+func sizeOff(older result) func(gitproc.Version) result {
+	return func(running gitproc.Version) result {
+		switch {
+		case running.AtLeast(v(2, 56)):
+			return result{kind: gitproc.ErrFailed, hints: 1}
+		case running.AtLeast(v(2, 55)):
+			return result{rows: rows(`packed object %s (stored in %s) is corrupt`), kind: gitproc.ErrCorrupt,
+				parts: gitproc.PartPack}
+		}
+		return older
+	}
+}
+
+// bitmapArms is a bitmap's damage, met by a clone and by a bitmapped walk.
+func bitmapArms(r result) []arm {
+	return []arm{on("upload-pack v2", fetchTip, r), on("rev-list over its bitmap", bitmapWalk, r)}
+}
+
+// revs damages every pack's reverse index of the copy with damage.
+func revs(damage func(t *testing.T, rev string)) func(t *testing.T, d *damaged) {
+	return func(t *testing.T, d *damaged) {
+		for _, stem := range []string{d.older, d.newer} {
+			damage(t, stem+".rev")
+		}
+	}
+}
+
+// revArms is a reverse index's damage: git builds the index in memory beside
+// it, so every reader answers, and only a pack-objects names it.
+func revArms(format string) []arm {
+	return []arm{
+		on("upload-pack v2", fetchTip, result{rows: rows(format), parts: gitproc.PartPack}),
+		on("rev-list", revList, result{}),
+	}
+}
+
+// deltaCopy replaces the case's copy with one holding a directory of three
+// hundred files and a commit that changes one of them, both root trees in ONE
+// pack written as a push's pack is (--delta-base-offset: receive-pack
+// advertises ofs-delta, so every client sends one), so one tree is stored as
+// an OFS_DELTA on the other. Trees rather than blobs because cat-file -p
+// STREAMS a blob, asking its size first, and a damaged delta then fails in
+// the size's lookup ("delta data unpack-initial failed", which names nothing)
+// before any reader resolves it; a tree is read whole, as every walk reads it.
+func deltaCopy(f *fixture) func(t *testing.T, d *damaged) {
+	return func(t *testing.T, d *damaged) {
+		t.Helper()
+		c := f.client
+		wt := c.Init(t)
+		files := map[string]string{}
+		for i := range 300 {
+			files[fmt.Sprintf("f%03d.txt", i)] = fmt.Sprintf("file %d\n", i)
+		}
+		c.Commit(t, wt, files, "base")
+		base := strings.TrimSpace(c.Run(t, wt, "rev-parse", "HEAD^{tree}"))
+		tip := c.Commit(t, wt, map[string]string{"f150.txt": "changed\n"}, "changed")
+		next := strings.TrimSpace(c.Run(t, wt, "rev-parse", "HEAD^{tree}"))
+		d.dir = gittest.Empty(t)
+		stdout, stderr, err := c.Try(t, wt, strings.NewReader(tip+"\n"), "-c", "pack.writeReverseIndex=true",
+			"pack-objects", "--revs", "--delta-base-offset", "-q", filepath.Join(d.dir, "objects", "pack", "pack"))
+		if err != nil {
+			t.Fatalf("packing the delta's history: %v\n%s", err, stderr)
+		}
+		cs := strings.TrimSpace(stdout)
+		gittest.SetRefs(t, d.dir, map[string]string{"refs/heads/main": tip})
+		d.newer = filepath.Join(d.dir, "objects", "pack", "pack-"+cs)
+		for _, tree := range []string{base, next} {
+			start, _ := gittest.PackEntry(t, d.newer+".idx", tree)
+			if typ := readByte(t, d.newer+".pack", start) >> 4 & 7; typ == 6 {
+				d.deltaTree = tree
+			} else {
+				d.baseTree = tree
+			}
+		}
+		if d.deltaTree == "" || d.baseTree == "" {
+			t.Fatal("neither root tree is stored as an OFS_DELTA on the other")
+		}
+	}
+}
+
+func catDelta(_ *testing.T, d *damaged) gitproc.Cmd {
+	return read(d.dir, "cat-file", "-p", d.deltaTree)
+}
+
+// deltaData is where the compressed data of d's delta begins: past its type
+// and size, and past its base offset, a byte a seven bits more.
+func deltaData(t *testing.T, d *damaged) int64 {
+	t.Helper()
+	_, at := entryHeader(t, d.newer, d.deltaTree)
+	for readByte(t, d.newer+".pack", at)&0x80 != 0 {
+		at++
+	}
+	return at + 1
+}
+
+// deltaRead is what reading a tree git cannot resolve from its delta reports:
+// zlib's own failure and the step of the delta's resolution that met it
+// (row). The reader then dies with "not a tree object", which names no
+// damage. Before 2.56 no "packed object … is corrupt" follows (a blob's read
+// prints it; a tree's does not); from 2.56 it does, through a bare "%s" — a
+// hint naming the pack, beside the rows.
+func deltaRead(row string) func(gitproc.Version) result {
+	return func(running gitproc.Version) result {
+		r := result{rows: rows(`inflate: %s (%s)`, row), kind: gitproc.ErrCorrupt, parts: gitproc.PartPack}
+		if running.AtLeast(v(2, 56)) {
+			r.hints = 1
+		}
+		return r
+	}
+}
+
+// tableRows is the formats of the table among a run's formats, spelled as the
+// table spells them.
+func tableRows(t gitproc.Trace) []string {
+	byCanon := map[string]string{}
+	for f := range gitproc.FormatTable() {
+		byCanon[gitproc.CanonicalFormat(f)] = f
+	}
+	var out []string
+	for _, c := range t.Formats {
+		if f, ok := byCanon[c]; ok {
+			out = append(out, f)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// THE FORMAT TABLE IS WHAT GIT SAYS, BOTH WAYS. Every damage a cache can hold
+// that git names, the commands the engine runs over it, run through the pool
+// on the git gittest.Require finds: the run's kind, its Damage (kind, parts,
+// Derived, Drops), its hints, and the TABLE ROWS its events matched — equal to
+// the rows the case expects on THIS git's version, so a row git stops printing
+// fails as surely as one it starts printing beside the case's own. And every
+// row of the table is expected by some case on every git that prints it, so a
+// row nothing provokes fails too. A crash the case expects (a git before the
+// check that names it) is held as a crash, never skipped.
+//
+// Mutations, each red: a row deleted (its case finds a format the table
+// lacks), a row's kind or part swapped, a row added that no case provokes, a
+// span narrowed or widened, canonicalFormat replaced by the identity (every
+// %lu row), PartChunk dropping only the index (the I5 and F5 drops).
+func TestTheFormatTableIsWhatGitSays(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	p := realPool(t, gitproc.Options{})
+	running := p.Version()
+	expected := map[string]bool{}
+	for _, dc := range formatCases(f) {
+		for _, a := range dc.arms {
+			want := a.want(running)
+			for _, r := range want.rows {
+				expected[r] = true
+				if !spanOf(r).holds(running) {
+					t.Errorf("%s/%s expects %q on git %s, outside the versions the table says print it (%v)",
+						dc.name, a.name, r, running, spanOf(r))
+				}
+			}
+			t.Run(dc.name+"/"+a.name, func(t *testing.T) {
+				d := &damaged{f: f, p: p}
+				d.dir, d.older, d.newer = f.packed(t)
+				if dc.setup != nil {
+					dc.setup(t, d)
+				}
+				if dc.damage != nil {
+					dc.damage(t, d)
+				}
+				c := a.cmd(t, d)
 				res, err := p.Run(t.Context(), c)
+				got := tableRows(res.Trace)
+				wantRows := slices.Sorted(slices.Values(want.rows))
+				if !slices.Equal(got, wantRows) {
+					t.Errorf("git %s's events matched rows %q, want %q (every format: %q; stderr %q)",
+						running, got, wantRows, res.Trace.Formats, res.Stderr)
+				}
 				var exit *gitproc.ExitError
-				if !errors.As(err, &exit) || !errors.Is(err, r.want) {
-					t.Fatalf("%v (stderr %q), want an ExitError of kind %v", err, res.Stderr, r.want)
+				switch {
+				case want.kind == nil && err != nil:
+					t.Errorf("%v (formats %q), want an answer", err, res.Trace.Formats)
+				case want.kind != nil && (!errors.As(err, &exit) || !errors.Is(exit.Kind, want.kind)):
+					t.Errorf("%v (formats %q), want an ExitError of kind %v", err, res.Trace.Formats, want.kind)
 				}
-				if exit.Command != c.Args[0] {
-					t.Errorf("ExitError.Command = %q, want %q", exit.Command, c.Args[0])
+				if want.signal != (res.Exit < 0) {
+					t.Errorf("exit %d, want a signal %v", res.Exit, want.signal)
 				}
-				if last := lastStderrLine(res.Stderr); last == "" || !strings.Contains(err.Error(), last) {
-					t.Errorf("the error %q does not carry git's last line %q", err, last)
+				var dmg *gitproc.Damage
+				switch {
+				case want.parts == 0 && res.Damage != nil:
+					t.Errorf("Result.Damage = %v, want none", res.Damage)
+				case want.parts != 0 && !errors.As(res.Damage, &dmg):
+					t.Errorf("Result.Damage = %v, want damage of %v", res.Damage, want.parts)
+				case want.parts != 0:
+					wantKind := gitproc.ErrCorrupt
+					if want.parts == gitproc.PartObject {
+						wantKind = gitproc.ErrMissingObject
+					}
+					if dmg.Parts != want.parts || !errors.Is(dmg.Kind, wantKind) {
+						t.Errorf("Damage = %v of %v, want %v of %v", dmg.Kind, dmg.Parts, wantKind, want.parts)
+					}
+					if derived := dc.drops != 0; dmg.Derived() != derived || (derived && dmg.Drops() != dc.drops) {
+						t.Errorf("Damage is derived %v dropping %v, want derived %v dropping %v",
+							dmg.Derived(), dmg.Drops(), derived, dc.drops)
+					}
+				}
+				if len(res.Trace.Hints) != want.hints {
+					t.Errorf("hints %v, want %d", res.Trace.Hints, want.hints)
+				}
+				if exit != nil {
+					if last := res.LastLine(); last != "" && !strings.Contains(err.Error(), last) {
+						t.Errorf("the error %q does not carry git's last line %q", err, last)
+					}
+					if dmg != nil && !strings.Contains(err.Error(), "git named: "+dmg.Message[:min(len(dmg.Message), 100)]) {
+						t.Errorf("the error %q does not carry the damage git named, %q", err, dmg.Message)
+					}
 				}
 			})
 		}
+	}
+	for format := range gitproc.FormatTable() {
+		if spanOf(format).holds(running) && !expected[format] {
+			t.Errorf("no case provokes %q on git %s, which prints it: a row nothing provokes is a row nobody "+
+				"checked", format, running)
+		}
+	}
+	for format := range printedOver {
+		if _, ok := gitproc.FormatTable()[format]; !ok {
+			t.Errorf("the spans name %q, which is no row", format)
+		}
+	}
+}
+
+// NO ROW IS A FORMAT A REQUEST WRITES, NOR ONE GIT PRINTS OF A HEALTHY
+// REPOSITORY. Every key is canonical once and unique, has a word of its own
+// outside its conversions, and is none of the formats a request was measured
+// to make upload-pack die with (requestFormats) nor the two a reader racing
+// git's own split or incremental write prints.
+//
+// Mutation: add "%s", `unexpected line: '%s'` or `unable to find all
+// commit-graph files` as a row, and this fails.
+func TestNoRowIsAFormatARequestWrites(t *testing.T) {
+	t.Parallel()
+	forbidden := map[string]bool{
+		gitproc.CanonicalFormat(`unable to find all commit-graph files`):     true,
+		gitproc.CanonicalFormat(`unable to find all multi-pack index files`): true,
+	}
+	for f := range requestFormats {
+		forbidden[gitproc.CanonicalFormat(f)] = true
+	}
+	seen := map[string]string{}
+	for format, row := range gitproc.FormatTable() {
+		c := gitproc.CanonicalFormat(format)
+		if prev, ok := seen[c]; ok {
+			t.Errorf("%q and %q are one canonical format", prev, format)
+		}
+		seen[c] = format
+		if gitproc.CanonicalFormat(c) != c {
+			t.Errorf("%q's canonical form %q is not canonical", format, c)
+		}
+		if forbidden[c] {
+			t.Errorf("%q is a row, and a request or a healthy repository makes git print it", format)
+		}
+		words := strings.FieldsFunc(strings.ReplaceAll(c, "%_", " "), func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z')
+		})
+		if !slices.ContainsFunc(words, func(w string) bool { return len(w) >= 3 }) {
+			t.Errorf("%q has no word of git's own: its argument is all it says", format)
+		}
+		if row.Kind == nil || (row.Part == 0) != errors.Is(row.Kind, gitproc.ErrNotOurRef) {
+			t.Errorf("%q classifies as %v of %v", format, row.Kind, row.Part)
+		}
+	}
+}
+
+// requestFormats is every format a request was measured to make upload-pack
+// die with, against a healthy copy: the planning pass's 74 forms on four gits,
+// which TestARequestCannotNameTheDamage replays — and two the replay found
+// beside them on 2.43 and 2.47, the response-end refusal and the object
+// format's mismatch spelled with the newline 2.43's format carries.
+var requestFormats = map[string]bool{
+	`%s`:                       true,
+	`unexpected line: '%s'`:    true,
+	`invalid shallow line: %s`: true,
+	`Invalid deepen: %s`:       true,
+	`Invalid deepen-since: %s`: true,
+	`git upload-pack: ambiguous deepen-not: %s`:                            true,
+	`git upload-pack: deepen-not is not a ref: %s`:                         true,
+	`git upload-pack: expected SHA1 object, got '%s'`:                      true,
+	`git upload-pack: protocol error, expected to get object ID, not '%s'`: true,
+	`git upload-pack: protocol error, expected to get oid, not '%s'`:       true,
+	`invalid command '%s'`:                                                 true,
+	`unknown capability '%s'`:                                              true,
+	`unknown object format '%s'`:                                           true,
+	`command '%s' requested after already requesting command '%s'`:         true,
+	`expected flush after fetch arguments`:                                 true,
+	`git upload-pack: expected SHA1 list, got '%s'`:                        true,
+	`invalid shallow object %s`:                                            true,
+	"mismatched object format: server %s; client %s\n":                     true,
+	`mismatched object format: server %s; client %s`:                       true,
+	`unexpected response end packet`:                                       true,
+	`no commits selected for shallow requests`:                             true,
+	`protocol error: bad line length character: %.4s`:                      true,
+	`the remote end hung up unexpectedly`:                                  true,
+}
+
+// THE CANONICAL FORM MATCHES EVERY CONVERSION: a platform's PRIuMAX (lu on
+// Linux, ju on macOS, llu elsewhere), a width, a precision, a star — each one
+// conversion — while a doubled percent stays, and the text around them is
+// untouched.
+//
+// Mutation: keep length modifiers in the canonical form, and the %ju arm
+// fails.
+func TestTheCanonicalFormMatchesEveryConversion(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		`at offset %lu`:               `at offset %_`,
+		`at offset %ju`:               `at offset %_`,
+		`at offset %llu`:              `at offset %_`,
+		`signature 0x%08x`:            `signature 0x%_`,
+		`signature %X`:                `signature %_`,
+		`character: %.4s`:             `character: %_`,
+		`%*s`:                         `%_`,
+		`type %i at %d`:               `type %_ at %_`,
+		`100%% done`:                  `100%% done`,
+		`no conversion`:               `no conversion`,
+		`a %% then %s`:                `a %% then %_`,
+		`trailing %`:                  `trailing %`,
+		`%s: invalid sha1 pointer %s`: `%_: invalid sha1 pointer %_`,
+	} {
+		if got := gitproc.CanonicalFormat(in); got != want {
+			t.Errorf("CanonicalFormat(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if gitproc.CanonicalFormat(`index CRC mismatch for object %s from %s at offset %ju`) !=
+		gitproc.CanonicalFormat(`index CRC mismatch for object %s from %s at offset %lu`) {
+		t.Error("macOS's PRIuMAX spelling of a row is not the row")
 	}
 }
 
 // AN ANSWER READ OVER DAMAGE SAYS SO, whatever the exit status: cat-file
 // --batch-check calls the tip of a pack whose index is truncated `missing`
-// and exits 0, only its stderr naming the index, so Result.Damage is what
+// and exits 0, only its report naming the index, so Result.Damage is what
 // tells that answer from an object the repository does not hold — a removed
-// pack, which prints nothing. A failed run carries its kind there too, and a
-// refusal that is no damage (`not our ref`) carries none.
+// pack, which reports nothing. A failed run carries its damage there too, and
+// a refusal that is no damage (`not our ref`) carries none.
+//
+// Mutation: compute Result.Damage only for a failed run, and the first arm
+// fails.
 func TestAResultNamesTheDamageItsProcessRead(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	p := realPool(t, gitproc.Options{})
-	batchCheck := func(dir string) gitproc.Cmd {
-		c := read(dir, "cat-file", "--batch-check")
-		c.Stdin = strings.NewReader(f.tip() + "\n")
-		return c
-	}
 	for _, tc := range []struct {
 		name    string
 		damage  func(t *testing.T, newer string)
@@ -294,15 +1336,11 @@ func TestAResultNamesTheDamageItsProcessRead(t *testing.T) {
 		wantErr error
 	}{
 		{"an index truncated, answered", func(t *testing.T, newer string) { truncate(t, newer+".idx", 100) },
-			batchCheck, f.tip() + " missing\n", gitproc.ErrCorrupt, nil},
-		{"a pack removed, answered", func(t *testing.T, newer string) {
-			for _, ext := range []string{".pack", ".idx", ".rev"} {
-				if err := os.Remove(newer + ext); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}, batchCheck, f.tip() + " missing\n", nil, nil},
-		{"no damage, answered", func(*testing.T, string) {}, batchCheck, f.tip() + " commit ", nil, nil},
+			func(dir string) gitproc.Cmd { return batchCheck(dir, f.tip()) }, f.tip() + " missing\n", gitproc.ErrCorrupt, nil},
+		{"a pack removed, answered", func(t *testing.T, newer string) { removePack(t, newer) },
+			func(dir string) gitproc.Cmd { return batchCheck(dir, f.tip()) }, f.tip() + " missing\n", nil, nil},
+		{"no damage, answered", func(*testing.T, string) {},
+			func(dir string) gitproc.Cmd { return batchCheck(dir, f.tip()) }, f.tip() + " commit ", nil, nil},
 		{"an index truncated, failed", func(t *testing.T, newer string) { truncate(t, newer+".idx", 100) },
 			func(dir string) gitproc.Cmd { return read(dir, "rev-list", "--objects", f.tip()) }, "",
 			gitproc.ErrCorrupt, gitproc.ErrCorrupt},
@@ -313,6 +1351,9 @@ func TestAResultNamesTheDamageItsProcessRead(t *testing.T) {
 				Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
 			}
 		}, "", nil, gitproc.ErrNotOurRef},
+		{"an absent ref, failed", func(*testing.T, string) {}, func(dir string) gitproc.Cmd {
+			return read(dir, "rev-parse", "--verify", "refs/heads/absent")
+		}, "", nil, gitproc.ErrFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, newer := f.bare(t)
@@ -334,14 +1375,9 @@ func TestAResultNamesTheDamageItsProcessRead(t *testing.T) {
 	}
 }
 
-func lastStderrLine(s string) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	return strings.TrimSpace(lines[len(lines)-1])
-}
-
 // A FLIPPED PACK IS SERVED VERBATIM — documented, not a classification: pack
-// reuse copies the damaged bytes and no stderr line says so. The day git
-// starts checking, this goes red and the cache's verify-on-read assumption is
+// reuse copies the damaged bytes and git reports nothing. The day git starts
+// checking, this goes red and the cache's verify-on-read assumption is
 // revisited.
 func TestAFlippedPackIsServedVerbatim(t *testing.T) {
 	t.Parallel()
@@ -353,174 +1389,131 @@ func TestAFlippedPackIsServedVerbatim(t *testing.T) {
 	c := fetchV2(dir, f.tip())
 	c.Stdout = &sent
 	res, err := p.Run(t.Context(), c)
-	if err != nil || res.Exit != 0 || sent.n == 0 {
-		t.Fatalf("a v2 fetch over a flipped pack: exit %d, %d bytes, %v", res.Exit, sent.n, err)
+	if err != nil || res.Exit != 0 || sent.n == 0 || res.Trace.Errors != 0 {
+		t.Fatalf("a v2 fetch over a flipped pack: exit %d, %d bytes, %d error events, %v",
+			res.Exit, sent.n, res.Trace.Errors, err)
 	}
 }
 
-// oid is any 40-hex id, for the example lines.
-const oid = "0123456789abcdef0123456789abcdef01234567"
-
-// examples is every pattern of the table with the line it was taken from:
-// git 2.43's own messages, the ones TestClassifiesWhatRealGitSays provokes
-// among them.
-var examples = []struct {
-	kind    error
-	pattern string
-	line    string
-}{
-	{gitproc.ErrCorrupt, `is corrupt`, "fatal: packed object " + oid + " (stored in /c/objects/pack/pack-1.pack) is corrupt"},
-	{gitproc.ErrCorrupt, `bad packed object`, "error: bad packed object CRC for " + oid},
-	{gitproc.ErrCorrupt, `does not match index`, "error: packfile /c/objects/pack/pack-1.pack does not match index"},
-	{gitproc.ErrCorrupt, `index file .* is too small`, "error: index file /c/objects/pack/pack-1.idx is too small"},
-	{gitproc.ErrCorrupt, `unable to read index`, "fatal: unable to read index"},
-	{gitproc.ErrCorrupt, `inflate`, "fatal: serious inflate inconsistency"},
-	{gitproc.ErrCorrupt, `pack has bad object`, "fatal: pack has bad object at offset 285: inflate returned -5"},
-	{gitproc.ErrCorrupt, `pack has [0-9]+ unresolved delta`, "fatal: pack has 3 unresolved deltas"},
-	{gitproc.ErrCorrupt, `early EOF`, "fatal: early EOF"},
-	{gitproc.ErrCorrupt, `pack checksum mismatch`, "error: /c/objects/pack/pack-1.pack pack checksum mismatch"},
-	{gitproc.ErrCorrupt, `CRC mismatch`, "error: index CRC mismatch for object " + oid + " from /c/objects/pack/pack-1.pack at offset 285"},
-	{gitproc.ErrCorrupt, `cannot unpack`, "error: cannot unpack " + oid + " from /c/objects/pack/pack-1.pack at offset 285"},
-	{gitproc.ErrCorrupt, `^(error|fatal): .*multi-pack-index`, "fatal: multi-pack-index signature 0xdeadbeef does not match signature 0x4d494458"},
-	// git 2.47's and later's — one line, each half a pattern.
-	{gitproc.ErrCorrupt, `MIDX is likely corrupt`, "fatal: invalid MIDX object position, MIDX is likely corrupt"},
-	{gitproc.ErrCorrupt, `invalid MIDX object position`, "fatal: invalid MIDX object position, MIDX is likely corrupt"},
-	{gitproc.ErrCorrupt, `^(error|fatal): .*commit-graph`, "error: commit-graph signature 0 does not match signature 43475048"},
-	{gitproc.ErrMissingObject, `bad object [0-9a-f]{40}`, "fatal: bad object " + oid},
-	{gitproc.ErrMissingObject, `missing (blob|tree|commit|tag) [0-9a-f]{40}`, "missing blob " + oid},
-	{gitproc.ErrMissingObject, `invalid sha1 pointer [0-9a-f]{40}`, "error: refs/heads/main: invalid sha1 pointer " + oid},
-	{gitproc.ErrMissingObject, `broken link from`, "broken link from    tree " + oid},
-	{gitproc.ErrMissingObject, `(unable to|Could not) read [0-9a-f]{40}`, "error: Could not read " + oid},
-	{gitproc.ErrMissingObject, `Not a valid (commit|object) name [0-9a-f]{40}`, "fatal: Not a valid commit name " + oid},
-	{gitproc.ErrMissingObject, `could not get object info`, "fatal: git cat-file: could not get object info"},
-	{gitproc.ErrMissingObject, `Failed to traverse parents of commit [0-9a-f]{40}`, "fatal: Failed to traverse parents of commit " + oid},
-	{gitproc.ErrMissingObject, `did not receive expected object [0-9a-f]{40}`, "fatal: did not receive expected object " + oid},
-	{gitproc.ErrNotOurRef, `not our ref [0-9a-f]{40}`, "fatal: git upload-pack: not our ref " + oid},
-}
-
-// THE TABLE MATCHES ITS OWN LINES: every pattern against the line it was taken
-// from, read through the same compiled table a run classifies with — so a
-// regexp edit that stops matching its example is red before any repository is
-// damaged — and both lists name the same patterns.
-func TestTheTableMatchesItsLines(t *testing.T) {
+// AN EXIT ERROR IS EVERY KIND ITS EVENTS NAMED. A merge-base over an old id
+// this company never held, in a copy whose commit-graph git reads around:
+// its events name the graph's chunk (ErrCorrupt) and the id it could not
+// find (ErrMissingObject). The Kind is the higher, and errors.Is reaches
+// both — so a force check asking "was the old commit missing?" is told yes —
+// and no kind the run did not name.
+//
+// Mutation: Is over Kind alone, and the ErrMissingObject arm is red.
+func TestAnExitErrorIsEveryKindItsEventsNamed(t *testing.T) {
 	t.Parallel()
-	table := gitproc.ClassifyTable()
-	var listed []string
-	for kind, patterns := range table {
-		for _, pattern := range patterns {
-			listed = append(listed, kind.Error()+" "+pattern)
-		}
+	stream := versionLine(1, "2.47.3") + startLine(1, "git", "merge-base", "--is-ancestor") +
+		errorLine(1, `terminating chunk id appears earlier than expected`,
+			`terminating chunk id appears earlier than expected`) +
+		errorLine(1, `Not a valid commit name %s`, "Not a valid commit name "+strings.Repeat("ab", 20)) +
+		exitLine(1, 128)
+	tr, kind, damage := gitproc.ReadTrace("/srv/r.git", []byte(stream), 0)
+	err := error(&gitproc.ExitError{Command: "merge-base", Kind: kind,
+		Result: gitproc.Result{Exit: 128, Damage: damage, Trace: tr}})
+	if !errors.Is(kind, gitproc.ErrCorrupt) {
+		t.Errorf("Kind = %v, want ErrCorrupt, the higher", kind)
 	}
-	var exampled []string
-	for _, e := range examples {
-		exampled = append(exampled, e.kind.Error()+" "+e.pattern)
-		if !regexp.MustCompile(e.pattern).MatchString(e.line) {
-			t.Errorf("%s does not match its own line %q", e.pattern, e.line)
-		}
-		if got := gitproc.ClassifyLine(e.line); !errors.Is(got, e.kind) {
-			t.Errorf("%q classifies as %v, want %v", e.line, got, e.kind)
-		}
-		var w gitproc.Words
-		if w.Add([]byte(e.line)); !errors.Is(w.Kind(), e.kind) || w.Named() != e.line {
-			t.Errorf("%q read as git's words elsewhere is %v named by %q, want %v named by it",
-				e.line, w.Kind(), w.Named(), e.kind)
-		}
-		if strings.Contains(e.pattern, "[0-9a-f]") && !regexp.MustCompile(`\[0-9a-f\]\{40\}`).MatchString(e.pattern) {
-			t.Errorf("%s matches an object id looser than its 40 hex digits", e.pattern)
-		}
-	}
-	slices.Sort(listed)
-	slices.Sort(exampled)
-	if !slices.Equal(listed, exampled) {
-		t.Fatalf("the table and its examples name different patterns:\n table   %q\n example %q", listed, exampled)
-	}
-	if got := gitproc.ClassifyLine("fatal: something else entirely"); !errors.Is(got, gitproc.ErrFailed) {
-		t.Errorf("an unknown line classifies as %v, want ErrFailed", got)
-	}
-}
-
-// A LINE NAMING THE MULTI-PACK-INDEX IS TOLD APART from other corruption:
-// every such line is [gitproc.ErrCorrupt] and names the index, while a pack's
-// or an object's damage is corrupt but names no index — which is what lets the
-// cache repair a damaged index IN PLACE (drop and rewrite it) rather than read
-// the whole repository again. The predicate is bounded to the first MaxLine
-// bytes as the classifier is.
-func TestNamesMultiPackIndex(t *testing.T) {
-	t.Parallel()
-	for _, line := range []string{
-		"fatal: invalid MIDX object position, MIDX is likely corrupt",
-		"fatal: multi-pack-index signature 0xdeadbeef does not match signature 0x4d494458",
-		"error: multi-pack-index file /c/objects/pack/multi-pack-index is too small",
-	} {
-		if !gitproc.NamesMultiPackIndex(line) {
-			t.Errorf("%q names the multi-pack-index, read as not", line)
-		}
-		if got := gitproc.ClassifyLine(line); !errors.Is(got, gitproc.ErrCorrupt) {
-			t.Errorf("%q classifies as %v, want ErrCorrupt", line, got)
-		}
-	}
-	for _, line := range []string{
-		"fatal: packed object " + oid + " (stored in /c/objects/pack/pack-1.pack) is corrupt",
-		"fatal: early EOF",
-		"error: commit-graph signature 0 does not match signature 43475048",
-		"fatal: bad object " + oid,
-	} {
-		if gitproc.NamesMultiPackIndex(line) {
-			t.Errorf("%q does not name the multi-pack-index, read as naming it", line)
-		}
-	}
-	long := strings.Repeat("x", gitproc.MaxLine)
-	if gitproc.NamesMultiPackIndex(long + "MIDX is likely corrupt") {
-		t.Error("damage past the first MaxLine bytes names the index, want bounded out")
-	}
-}
-
-// GIT'S WORDS READ ELSEWHERE THAN ITS STDERR are classified as its stderr is —
-// the highest kind any line names winning, damage outranking the want it
-// explains — and remember the first line that named the winner, which is what
-// a log quotes: upload-pack relays its pack-objects' words in its answer's
-// side band, and a fetch's damage is named nowhere else.
-func TestWordsKeepTheHighestKindAndTheLineThatNamedIt(t *testing.T) {
-	t.Parallel()
-	const (
-		progress = "Enumerating objects: 12, done."
-		midx     = "fatal: invalid MIDX object position, MIDX is likely corrupt"
-		short    = "error: index file /c/objects/pack/pack-1.idx is too small"
-		missing  = "fatal: bad object " + oid
-		notOurs  = "fatal: git upload-pack: not our ref " + oid
-	)
-	past := strings.Repeat("x", gitproc.MaxLine)
 	for _, tc := range []struct {
-		name   string
-		lines  []string
-		kind   error
-		damage bool
-		named  string
+		kind error
+		want bool
 	}{
-		{"nothing read", nil, gitproc.ErrFailed, false, ""},
-		{"progress alone", []string{progress, "Counting objects: 33% (1/3)"}, gitproc.ErrFailed, false, ""},
-		{"a refused want", []string{progress, notOurs}, gitproc.ErrNotOurRef, false, notOurs},
-		{"damage after the want it explains", []string{notOurs, short}, gitproc.ErrCorrupt, true, short},
-		{"damage outranks a missing object", []string{missing, midx, short}, gitproc.ErrCorrupt, true, midx},
-		{"a missing object", []string{progress, missing, missing + " again"}, gitproc.ErrMissingObject, true, missing},
-		{"damage in a line's first MaxLine bytes", []string{midx + past}, gitproc.ErrCorrupt, true,
-			(midx + past)[:gitproc.MaxLine]},
-		{"damage past a line's first MaxLine bytes", []string{past + midx}, gitproc.ErrFailed, false, ""},
+		{gitproc.ErrCorrupt, true},
+		{gitproc.ErrMissingObject, true},
+		{gitproc.ErrNotOurRef, false},
+		{gitproc.ErrFailed, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var w gitproc.Words
-			for _, l := range tc.lines {
-				w.Add([]byte(l))
-			}
-			if !errors.Is(w.Kind(), tc.kind) {
-				t.Errorf("Kind = %v, want %v", w.Kind(), tc.kind)
-			}
-			if got := w.Damage(); (got != nil) != tc.damage || (tc.damage && !errors.Is(got, tc.kind)) {
-				t.Errorf("Damage = %v, want damage %v", got, tc.damage)
-			}
-			if w.Named() != tc.named {
-				t.Errorf("Named = %.80q, want %.80q", w.Named(), tc.named)
-			}
+		if got := errors.Is(err, tc.kind); got != tc.want {
+			t.Errorf("errors.Is(err, %v) = %v, want %v", tc.kind, got, tc.want)
+		}
+	}
+	var dmg *gitproc.Damage
+	if !errors.As(err, &dmg) || dmg.Parts != gitproc.PartChunk || !dmg.Derived() {
+		t.Errorf("the run's damage is %v, want the derived chunk damage its first event named", damage)
+	}
+}
+
+// A NARROWED CHUNK IS THE ONE FILE ITS PROCESS LOADED. A chunk-format report
+// names neither derived file, so a repair of it drops both (Damage.Drops); a
+// caller whose process loads only one of the two says so (Damage.Narrow),
+// and the chunk is then that file's — every other part kept, the damage's
+// kind, format and message unchanged, and the damage it was made from left
+// as it was. A process that may load both, a narrowing that names neither,
+// and a damage naming no chunk are answered as they are.
+//
+// Mutations: narrow to the index whatever the process loads (the graph's arm
+// is red); drop the chunk without adding the file (the narrowed damage drops
+// nothing).
+func TestANarrowedChunkIsTheOneFileItsProcessLoaded(t *testing.T) {
+	t.Parallel()
+	midx, graph := gitproc.PartMultiPackIndex, gitproc.PartCommitGraph
+	for _, tc := range []struct {
+		name         string
+		parts, loads gitproc.Part
+		want         gitproc.Part
+	}{
+		{"a chunk, the index alone loaded", gitproc.PartChunk, midx, midx},
+		{"a chunk, the graph alone loaded", gitproc.PartChunk, graph, graph},
+		{"a chunk, both loaded", gitproc.PartChunk, midx | graph, gitproc.PartChunk},
+		{"a chunk, neither named", gitproc.PartChunk, 0, gitproc.PartChunk},
+		{"a chunk beside a pack", gitproc.PartChunk | gitproc.PartPack, midx, midx | gitproc.PartPack},
+		{"no chunk", graph, midx, graph},
+	} {
+		d := &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: tc.parts, Format: "f", Message: "m"}
+		n := d.Narrow(tc.loads)
+		if n.Parts != tc.want || !errors.Is(n.Kind, gitproc.ErrCorrupt) || n.Format != "f" || n.Message != "m" {
+			t.Errorf("%s: Narrow = %+v, want parts %v and the rest unchanged", tc.name, n, tc.want)
+		}
+		if d.Parts != tc.parts {
+			t.Errorf("%s: Narrow changed the damage it was made from to %v", tc.name, d.Parts)
+		}
+		if tc.want&gitproc.PartChunk == 0 && tc.parts&gitproc.PartChunk != 0 && n.Drops() != tc.loads {
+			t.Errorf("%s: the narrowed damage drops %v, want only %v", tc.name, n.Drops(), tc.loads)
+		}
+	}
+	if (*gitproc.Damage)(nil).Narrow(midx) != nil {
+		t.Error("a nil damage narrowed is not nil")
+	}
+}
+
+// ONLY A PEEL LOADS THE COMMIT-GRAPH: the premise the cache's wants check
+// narrows its chunk reports by (cache.Missing, Damage.Narrow). A cat-file
+// asked about object ids alone reads them through the packs' indexes and the
+// multi-pack-index and parses no commit, so a commit-graph whose table of
+// contents is damaged (I5′) is never read — no event; the same cat-file
+// asked to peel the id ("<id>^{}", as the cache peels its tags) parses the
+// commit and reports the graph's chunk. A git that began loading the graph
+// for an id alone would turn the first arm red, and the wants check's
+// narrowing with it.
+func TestOnlyAPeelLoadsTheCommitGraph(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	p := realPool(t, gitproc.Options{})
+	for _, tc := range []struct {
+		name, input string
+		chunk       bool
+	}{
+		{"an object id alone", f.tip() + "\n", false},
+		{"an object id peeled", f.tip() + "^{}\n", true},
+	} {
+		d := &damaged{f: f, p: p}
+		d.dir, d.older, d.newer = f.packed(t)
+		writeGraph(t, d)
+		overwrite(t, d.graph(), gittest.ChunkRow(gittest.GraphHeader, 0), []byte{0, 0, 0, 0})
+		res, err := p.Run(t.Context(), gitproc.Cmd{
+			Dir: d.dir, Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"}, Config: serveConfig,
+			Stdin: strings.NewReader(tc.input), Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 		})
+		if err != nil || strings.TrimSpace(string(res.Stdout)) != f.tip() {
+			t.Fatalf("%s: cat-file over a damaged graph: %q, %v; want the id answered", tc.name, res.Stdout, err)
+		}
+		var dmg *gitproc.Damage
+		named := errors.As(res.Damage, &dmg) && dmg.Parts == gitproc.PartChunk
+		if named != tc.chunk {
+			t.Errorf("%s: the run named %v (formats %q); want the graph's chunk named %v", tc.name, res.Damage,
+				res.Trace.Formats, tc.chunk)
+		}
 	}
 }

@@ -1151,8 +1151,10 @@ cache on its own disk. What such a node needs from its host:
   that a cache its `pack-objects` finds damaged can be repaired and the fetch
   served, rather than failing it past the first byte. For a client using
   side-band (every git since 1.6) that wait is at most a progress line (about a
-  second) or one upload-pack keepalive (5 s) — pack-objects' first word — and a
-  client that asks for no side-band waits until the raw pack's first byte.
+  second) or one upload-pack keepalive (5 s) — pack-objects' first word, unless
+  that word is an error it reports, which holds the answer until the process
+  ends — and a client that asks for no side-band waits until the raw pack's
+  first byte.
   Either size the idle timeout to the cold sync of your largest repository, or
   route `/git/<name>` by repository — a balancer hashing the path to a node,
   with the next one in line when it is down — so each repository stays warm on

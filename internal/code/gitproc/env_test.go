@@ -20,7 +20,8 @@ import (
 // engine's own environment could carry — its secrets, a trace, an exec path,
 // an alternate object directory, a config of its own, a tree to read
 // attributes from — is absent, and what is present is exactly the pool's
-// table, its base configuration first.
+// table, its base configuration first. The trace2 event stream is the pool's
+// own (fd 3, brief, nesting 1), whatever the engine's environment names.
 func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 	for name, value := range map[string]string{
 		"CREWLET_SECRET_X":                 "leaked",
@@ -33,6 +34,11 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 		"GIT_CONFIG_SYSTEM":                "/tmp/x",
 		"GIT_ATTR_SOURCE":                  "HEAD",
 		"GIT_ATTR_NOSYSTEM":                "0",
+		"GIT_TRACE2":                       "/tmp/normal",
+		"GIT_TRACE2_EVENT":                 "/tmp/event",
+		"GIT_TRACE2_EVENT_NESTING":         "9",
+		"GIT_TRACE2_CONFIG_PARAMS":         "core.*",
+		"GIT_TRACE2_ENV_VARS":              "CREWLET_SECRET_X",
 	} {
 		t.Setenv(name, value)
 	}
@@ -52,6 +58,7 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 		"PATH", "HOME", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_ATTR_NOSYSTEM", "GIT_TERMINAL_PROMPT",
 		"GIT_NO_REPLACE_OBJECTS", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "LC_ALL", "GIT_DIR",
 		"GIT_PROTOCOL", "GIT_CONFIG_COUNT", gitproc.EnvHookToken,
+		"GIT_TRACE2_EVENT", "GIT_TRACE2_EVENT_BRIEF", "GIT_TRACE2_EVENT_NESTING",
 	}
 	for i := range 7 {
 		want = append(want, "GIT_CONFIG_KEY_"+string(rune('0'+i)), "GIT_CONFIG_VALUE_"+string(rune('0'+i)))
@@ -61,18 +68,21 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 		t.Fatalf("the process saw\n  %v\nwant exactly\n  %v", got, want)
 	}
 	for name, value := range map[string]string{
-		"PATH":                   os.Getenv("PATH"),
-		"GIT_CONFIG_NOSYSTEM":    "1",
-		"GIT_CONFIG_GLOBAL":      "/dev/null",
-		"GIT_ATTR_NOSYSTEM":      "1",
-		"GIT_TERMINAL_PROMPT":    "0",
-		"GIT_NO_REPLACE_OBJECTS": "1",
-		"GIT_GRAFT_FILE":         "/dev/null/grafts",
-		"GIT_SHALLOW_FILE":       "/dev/null/shallow",
-		"LC_ALL":                 "C",
-		"GIT_DIR":                bare,
-		"GIT_PROTOCOL":           "version=2",
-		gitproc.EnvHookToken:     "t",
+		"PATH":                     os.Getenv("PATH"),
+		"GIT_CONFIG_NOSYSTEM":      "1",
+		"GIT_CONFIG_GLOBAL":        "/dev/null",
+		"GIT_ATTR_NOSYSTEM":        "1",
+		"GIT_TERMINAL_PROMPT":      "0",
+		"GIT_NO_REPLACE_OBJECTS":   "1",
+		"GIT_GRAFT_FILE":           "/dev/null/grafts",
+		"GIT_SHALLOW_FILE":         "/dev/null/shallow",
+		"LC_ALL":                   "C",
+		"GIT_DIR":                  bare,
+		"GIT_PROTOCOL":             "version=2",
+		gitproc.EnvHookToken:       "t",
+		"GIT_TRACE2_EVENT":         "3",
+		"GIT_TRACE2_EVENT_BRIEF":   "1",
+		"GIT_TRACE2_EVENT_NESTING": "1",
 	} {
 		if env[name] != value {
 			t.Errorf("%s = %q, want %q", name, env[name], value)
@@ -862,4 +872,72 @@ func ptr[T any](v T) *T { return &v }
 // pkt is s as one pkt-line, its length computed rather than written by hand.
 func pkt(s string) string {
 	return fmt.Sprintf("%04x%s", len(s)+4, s)
+}
+
+// NO CONFIGURATION MOVES THE TRACE. git reads its trace2 targets from its
+// system and global configuration as well as the environment, so a HOME that
+// names every trace2 key — the targets moved to files, the event stream made
+// verbose and nested, every configuration value and environment variable
+// listed — would move or bloat the stream the pool classifies from. After
+// the pool is built its HOME gains both files naming them: a run's stream
+// still holds its version event and exactly the events it held before (no
+// def_param, no def_param per variable), and nothing is written at any
+// target. A call site's own configuration naming a trace2 key is refused
+// before git starts.
+//
+// Mutation: drop GIT_CONFIG_GLOBAL=/dev/null from the base environment, and
+// the run's events grow by the def_param lines and the targets fill.
+func TestNoConfigurationMovesTheTrace(t *testing.T) {
+	t.Parallel()
+	home := filepath.Join(t.TempDir(), "home")
+	p := realPool(t, gitproc.Options{Home: home})
+	bare := gittest.Empty(t)
+	run := func() gitproc.Trace {
+		t.Helper()
+		res, err := p.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"rev-parse", "--verify", "refs/heads/absent"},
+			Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+		if !errors.Is(err, gitproc.ErrFailed) {
+			t.Fatalf("rev-parse of an absent ref = %v, want ErrFailed", err)
+		}
+		return res.Trace
+	}
+	before := run()
+	if before.Version == "" || before.Errors != 1 {
+		t.Fatalf("the stream before any planting: version %q, %d error events", before.Version, before.Errors)
+	}
+
+	targets := t.TempDir()
+	planted := "[trace2]\n" +
+		"\teventTarget = " + filepath.Join(targets, "event") + "\n" +
+		"\tnormalTarget = " + filepath.Join(targets, "normal") + "\n" +
+		"\tperfTarget = " + filepath.Join(targets, "perf") + "\n" +
+		"\teventBrief = false\n\teventNesting = 9\n" +
+		"\tconfigParams = *\n\tenvVars = HOME,PATH,GIT_DIR\n" +
+		"\tdestinationDebug = true\n\tmaxFiles = 1\n"
+	for _, rel := range []string{".gitconfig", ".config/git/config"} {
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), hostbox.DirMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(planted), hostbox.FileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after := run()
+	if after.Version != before.Version || after.Events != before.Events || after.Errors != before.Errors ||
+		after.Unread != 0 {
+		t.Errorf("with trace2 keys in HOME the stream holds %d events (%d errors, %d unread, version %q); "+
+			"before, %d (%d, version %q)", after.Events, after.Errors, after.Unread, after.Version,
+			before.Events, before.Errors, before.Version)
+	}
+	if written, _ := os.ReadDir(targets); len(written) != 0 {
+		t.Errorf("git wrote trace files at the planted targets: %v", written)
+	}
+
+	_, err := p.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"rev-parse", "HEAD"},
+		Config: []gitproc.KV{{Key: "trace2.eventTarget", Value: filepath.Join(targets, "event")}},
+		Class:  gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+	if !errors.Is(err, gitproc.ErrConfig) {
+		t.Errorf("a call site naming trace2.eventTarget = %v, want ErrConfig", err)
+	}
 }

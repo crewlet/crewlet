@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -14,11 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// The four kinds a failed git process is classified into, from its own stderr.
+// The four kinds a failed git process is classified into, from the trace2
+// error events of its process tree (trace.go).
 var (
 	// ErrCorrupt: git read a pack, an index, a reverse index, a
-	// multi-pack-index or a commit-graph that is damaged.
-	ErrCorrupt = errors.New("gitproc: git read a pack, index or multi-pack-index that is damaged")
+	// multi-pack-index, a bitmap or a commit-graph that is damaged.
+	ErrCorrupt = errors.New("gitproc: git read a pack, index, multi-pack-index or commit-graph that is damaged")
 
 	// ErrMissingObject: git named an object it could not find.
 	ErrMissingObject = errors.New("gitproc: git named an object it could not find")
@@ -29,18 +29,29 @@ var (
 	// re-downloads any pack whose file is absent anyway.
 	ErrNotOurRef = errors.New("gitproc: upload-pack refused a want this repository does not serve")
 
-	// ErrFailed: git failed for a reason its message does not classify, or
-	// with no message at all.
-	ErrFailed = errors.New("gitproc: git failed for a reason its message does not classify")
+	// ErrFailed: git failed for a reason its reports do not classify, or
+	// with no report at all.
+	ErrFailed = errors.New("gitproc: git failed for a reason its reports do not classify")
 )
 
 // ExitError is a git process that exited with a status that is not one of its
 // command's answers ([Cmd.Answers]). Kind is exactly one of [ErrCorrupt],
-// [ErrMissingObject], [ErrNotOurRef] and [ErrFailed]; errors.Is reaches it.
+// [ErrMissingObject], [ErrNotOurRef] and [ErrFailed] — the HIGHEST the run's
+// reports named — and errors.Is reaches it AND EVERY OTHER KIND THE RUN NAMED
+// ([Trace.Kinds]); errors.As reaches the run's [*Damage] where it named one.
+//
+// EVERY KIND, because a run can name two things at once and a caller asks
+// about one of them. A force check's merge-base over an old id this company
+// never held says "Not a valid commit name" ([ErrMissingObject]: the update
+// is stale) — and over a copy whose multi-pack-index git reads around, it says
+// that first ([ErrCorrupt], the higher). Matched by its Kind alone, the stale
+// update was answered as the engine's own failure. The rank still decides what
+// a caller that asks for the run's ONE kind is told, and every caller that
+// asks several questions asks the highest first, so nothing it decided moves.
 //
 // THE KIND DESCRIBES THE REPOSITORY THE PROCESS READ, and only the caller
 // knows which that was. A receive-pack runs in a scratch and its index-pack
-// reads the CLIENT's pack, so a body that ended short makes it print "early
+// reads the CLIENT's pack, so a body that ended short makes it say "early
 // EOF" — ErrCorrupt, correctly (that pack is damaged), and nothing about the
 // cache. ErrCorrupt and ErrMissingObject are a rebuild trigger only from a
 // process whose Cmd.Dir is a cache.
@@ -50,7 +61,10 @@ type ExitError struct {
 	Kind    error
 }
 
-// Error is "gitproc: git <command> exited <status> — <kind>: <its last line>".
+// Error is "gitproc: git <command> exited <status> — <kind>: <its last line>",
+// and, when the run named damage, "; git named: <its message>": the last line
+// of a fetch that met damage is upload-pack's "aborting due to possible
+// repository corruption", and the useful words are its pack-objects'.
 func (e *ExitError) Error() string {
 	ended := "exited " + strconv.Itoa(e.Result.Exit)
 	if e.Result.Exit < 0 {
@@ -60,11 +74,27 @@ func (e *ExitError) Error() string {
 	if last := e.Result.LastLine(); last != "" {
 		msg += ": " + textcut.Ellipsis(last, 512)
 	}
+	var d *Damage
+	if errors.As(e.Result.Damage, &d) {
+		msg += "; git named: " + textcut.Ellipsis(d.Message, 512)
+	}
 	return msg
 }
 
-// Unwrap is the kind, so errors.Is(err, ErrCorrupt) and its siblings hold.
-func (e *ExitError) Unwrap() error { return e.Kind }
+// Unwrap is the kind and, when the run named damage, the [*Damage], so
+// errors.Is(err, ErrCorrupt) and its siblings hold and errors.As reaches the
+// parts the damage named.
+func (e *ExitError) Unwrap() []error {
+	if e.Result.Damage != nil {
+		return []error{e.Kind, e.Result.Damage}
+	}
+	return []error{e.Kind}
+}
+
+// Is reports whether target is one of the kinds the run named
+// ([Trace.Kinds]), the highest among them its Kind, which Unwrap reaches as
+// well.
+func (e *ExitError) Is(target error) bool { return e.Result.Trace.Kinds.Has(target) }
 
 // LastLine is the last non-empty line of Stderr, trimmed: what a message
 // about the run quotes of git's own words.
@@ -76,176 +106,358 @@ func (r Result) LastLine() string {
 	return strings.TrimSpace(s)
 }
 
-// kinds is the classification table, in rank order: the HIGHEST RANK SEEN ON
-// ANY LINE WINS. Every pattern is a message git prints (its own format
-// strings, and the lines classify_test.go provokes from real damaged
-// repositories), matched against one stderr line under LC_ALL=C — 2.43's
-// messages, and the one a multi-pack-index's object-position check prints
-// from 2.47.
-//
-// Corrupt outranks Missing outranks NotOurRef because damage explains the
-// other two: a truncated .idx makes upload-pack print "index file … is too
-// small" and then "not our ref" for the tip it can no longer find, and that is
-// a damaged cache, not an absent want.
-//
-// THE MULTI-PACK-INDEX'S OBJECT POSITIONS: git from 2.47 checks every
-// position it reads through a multi-pack-index — the reverse index its bitmap
-// is read by among them — and dies "invalid MIDX object position, MIDX is
-// likely corrupt" on one past its objects, naming neither the file nor the
-// word multi-pack-index. A bitmapped walk over a damaged reverse index prints
-// nothing else, and pack-objects under upload-pack prints it on every clone
-// that uses the bitmap, so without it a damaged index was answered as git's
-// own failure on every fetch and never repaired. Both halves are patterns, so
-// a git that rewords one still names the damage by the other. (git before
-// 2.47 has no such check: the same walk dies of a segmentation fault, which
-// says nothing a table can read.)
-var kinds = []struct {
-	kind     error
-	patterns []string
-	re       *regexp.Regexp
-}{
-	{kind: ErrCorrupt, patterns: append([]string{
-		`is corrupt`,
-		`bad packed object`,
-		`does not match index`,
-		`index file .* is too small`,
-		`unable to read index`,
-		`inflate`,
-		`pack has bad object`,
-		`pack has [0-9]+ unresolved delta`,
-		`early EOF`,
-		`pack checksum mismatch`,
-		`CRC mismatch`,
-		`cannot unpack`,
-		`^(error|fatal): .*commit-graph`,
-	}, midxPatterns...)},
-	{kind: ErrMissingObject, patterns: []string{
-		`bad object [0-9a-f]{40}`,
-		`missing (blob|tree|commit|tag) [0-9a-f]{40}`,
-		`invalid sha1 pointer [0-9a-f]{40}`,
-		`broken link from`,
-		`(unable to|Could not) read [0-9a-f]{40}`,
-		`Not a valid (commit|object) name [0-9a-f]{40}`,
-		`could not get object info`,
-		`Failed to traverse parents of commit [0-9a-f]{40}`,
-		`did not receive expected object [0-9a-f]{40}`,
-	}},
-	{kind: ErrNotOurRef, patterns: []string{
-		`not our ref [0-9a-f]{40}`,
-	}},
-}
+// KindSet is the kinds a run's reports named — [ErrCorrupt],
+// [ErrMissingObject] and [ErrNotOurRef], each once however many reports named
+// it. [ErrFailed] is no member: it is what a run that named none is.
+type KindSet uint8
 
-// midxPatterns are the [ErrCorrupt] patterns that name the MULTI-PACK-INDEX —
-// its object-position check (git 2.47+), its signature or any other error git
-// prints about it. They are their own list because the host reads them apart
-// ([NamesMultiPackIndex]): a damaged multi-pack-index is a DERIVED file, so a
-// fetch that meets one is repaired IN PLACE by dropping and rewriting it over
-// the same packs, where other corruption needs the whole repository read
-// again. Each is one line, each half a pattern, so a rewording of either half
-// still names the damage.
-var midxPatterns = []string{
-	`MIDX is likely corrupt`,
-	`invalid MIDX object position`,
-	`^(error|fatal): .*multi-pack-index`,
-}
-
-// midxRe matches a line naming the multi-pack-index, compiled once.
-var midxRe = regexp.MustCompile(strings.Join(midxPatterns, "|"))
-
-// NamesMultiPackIndex reports whether git's line names the multi-pack-index —
-// a derived file the cache drops and rewrites in place rather than reading the
-// whole repository again. The caller has already classified the line as
-// [ErrCorrupt]; this says which kind of corruption it is.
-func NamesMultiPackIndex(line string) bool {
-	if len(line) > MaxLine {
-		line = line[:MaxLine]
-	}
-	return midxRe.MatchString(line)
-}
-
-// Each kind's patterns are ONE alternation compiled once, so a line costs at
-// most three regexp runs whatever the table grows to.
-func init() {
-	for i := range kinds {
-		kinds[i].re = regexp.MustCompile(strings.Join(kinds[i].patterns, "|"))
-	}
-}
-
-// classifyLine is the rank of the highest kind line matches: len(kinds) for
-// the first entry down to 1 for the last, 0 for none.
-func classifyLine(line []byte) int {
-	if len(line) > MaxLine {
-		line = line[:MaxLine]
-	}
-	for i, k := range kinds {
-		if k.re.Match(line) {
-			return len(kinds) - i
+// Has reports whether kind is one the set holds.
+func (s KindSet) Has(kind error) bool {
+	for rank := rankNotOurRef; rank <= rankCorrupt; rank++ {
+		if errors.Is(kind, kindOf(rank)) {
+			return s&kindBit(rank) != 0
 		}
 	}
-	return 0
+	return false
 }
+
+// The ranks of the kinds: the HIGHEST NAMED BY ANY REPORT WINS. Corrupt
+// outranks Missing outranks NotOurRef because damage explains the other two: a
+// truncated .idx makes upload-pack report "index file … is too small" and then
+// "not our ref" for the tip it can no longer find, and that is a damaged cache,
+// not an absent want.
+const (
+	rankNone = iota
+	rankNotOurRef
+	rankMissing
+	rankCorrupt
+)
 
 // kindOf is the error a rank stands for.
 func kindOf(rank int) error {
-	if rank <= 0 {
-		return ErrFailed
+	switch rank {
+	case rankCorrupt:
+		return ErrCorrupt
+	case rankMissing:
+		return ErrMissingObject
+	case rankNotOurRef:
+		return ErrNotOurRef
 	}
-	return kinds[len(kinds)-rank].kind
+	return ErrFailed
 }
 
-// Words classifies git's own words read SOMEWHERE OTHER THAN A PROCESS'S
-// STDERR — the text upload-pack relays from its pack-objects on side band 2
-// and 3 of its answer, which is where a fetch's damage is named, upload-pack's
-// own stderr then saying only that pack-objects died — by the table a run's
-// stderr is read by, the highest kind on any line winning. A run's stderr is
-// read through one too (stderrSink), so there is one reading of what git says,
-// wherever it says it. The zero value has read nothing; it is not safe for
-// concurrent use.
-type Words struct {
-	rank  int
-	named string // the first line read at rank
+// rankOf is the rank of a kind; rankNone for ErrFailed or anything else.
+func rankOf(kind error) int {
+	for rank := rankNotOurRef; rank <= rankCorrupt; rank++ {
+		if errors.Is(kind, kindOf(rank)) {
+			return rank
+		}
+	}
+	return rankNone
 }
 
-// Add classifies one line, without its line ending — a line past MaxLine by
-// its first MaxLine bytes, as a stderr line is.
-func (w *Words) Add(line []byte) {
-	if len(line) > MaxLine {
-		line = line[:MaxLine]
+// kindBit is the member of a KindSet a rank stands for; none for rankNone.
+func kindBit(rank int) KindSet {
+	if rank <= rankNone {
+		return 0
 	}
-	if r := classifyLine(line); r > w.rank {
-		w.rank, w.named = r, string(line)
-	}
+	return 1 << (rank - 1)
 }
 
-// Kind is the highest kind read: [ErrFailed] when no line classified.
-func (w *Words) Kind() error { return kindOf(w.rank) }
+// Part is the file of a repository a damage report named: what a repair must
+// read again or drop. A set — a run can name several.
+type Part uint8
 
-// Damage is [Words.Kind] when it is damage to the repository the words are
-// about — [ErrCorrupt] or [ErrMissingObject] — and nil otherwise.
-func (w *Words) Damage() error {
-	if k := w.Kind(); errors.Is(k, ErrCorrupt) || errors.Is(k, ErrMissingObject) {
-		return k
+const (
+	// PartPack is a pack, its index or its reverse index: the stored bytes
+	// of a push, which only a read of the pack again repairs.
+	PartPack Part = 1 << iota
+	// PartObject is an object git looked for and did not find.
+	PartObject
+	// PartMultiPackIndex is the multi-pack-index, its bitmap and its
+	// reverse index: derived by the node from its packs.
+	PartMultiPackIndex
+	// PartCommitGraph is the commit-graph: derived by the node from its
+	// packs.
+	PartCommitGraph
+	// PartChunk is a chunk-format file whose damage git reports without
+	// naming it: the multi-pack-index OR the commit-graph, both of which are
+	// chunk-format files, and both of which were measured printing these
+	// reports.
+	PartChunk
+)
+
+// derivedParts are the parts a node derives from its packs and so drops in
+// place to repair.
+const derivedParts = PartMultiPackIndex | PartCommitGraph | PartChunk
+
+// String is the parts' names, joined by "+": what a log line says went.
+func (p Part) String() string {
+	var names []string
+	for _, n := range []struct {
+		part Part
+		name string
+	}{{PartPack, "pack"}, {PartObject, "object"}, {PartMultiPackIndex, "multi-pack-index"},
+		{PartCommitGraph, "commit-graph"}, {PartChunk, "chunk-format file"}} {
+		if p&n.part != 0 {
+			names = append(names, n.name)
+		}
 	}
-	return nil
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, "+")
 }
 
-// Named is the first line read of [Words.Kind] — the words that named it —
-// and "" when no line classified.
-func (w *Words) Named() string { return w.named }
+// Damage is what a run's trace2 error events named about the repository it
+// read: the highest kind any event's format classifies as, every part the
+// events of that kind named, and the first such event — its format
+// (canonical) and its message, git's arguments filled in, for errors and logs
+// ONLY: the message is never matched, because a request's text lands there.
+type Damage struct {
+	Kind    error // ErrCorrupt or ErrMissingObject
+	Parts   Part
+	Format  string
+	Message string
+}
+
+// Error is "gitproc: <kind>: <the message, at most 512 bytes>".
+func (d *Damage) Error() string {
+	return strings.TrimSuffix(d.Kind.Error(), ".") + ": " + textcut.Ellipsis(d.Message, 512)
+}
+
+// Unwrap is the kind.
+func (d *Damage) Unwrap() error { return d.Kind }
+
+// Derived reports whether every part d names is one the node derives from
+// its packs and drops in place — [PartMultiPackIndex], [PartCommitGraph] and
+// [PartChunk] — and nothing else.
+func (d *Damage) Derived() bool {
+	return errors.Is(d.Kind, ErrCorrupt) && d.Parts != 0 && d.Parts&^derivedParts == 0
+}
+
+// Drops is the derived files a repair of d drops: the index's for
+// [PartMultiPackIndex], the graph for [PartCommitGraph], and BOTH for
+// [PartChunk] — its message names neither, and both are chunk-format files.
+// Always a subset of PartMultiPackIndex|PartCommitGraph.
+func (d *Damage) Drops() Part {
+	var drops Part
+	if d.Parts&(PartMultiPackIndex|PartChunk) != 0 {
+		drops |= PartMultiPackIndex
+	}
+	if d.Parts&(PartCommitGraph|PartChunk) != 0 {
+		drops |= PartCommitGraph
+	}
+	return drops
+}
+
+// Narrow is d as named by a process that loads, of the two chunk-format
+// files, only those loads names ([PartMultiPackIndex], [PartCommitGraph]): a
+// chunk-format report — which names neither file, and so reads as both
+// ([Damage.Drops]) — is then the one file that process loaded. Its caller
+// says what its process loads, because only the call knows its input: a
+// cat-file asked about object ids alone (the cache's wants check) reads
+// objects through the multi-pack-index and never parses a commit, so it
+// never loads the commit-graph — read as both files', its chunk report had a
+// sound graph dropped beside the index, and every walk of the repository went
+// by commit date until the maintainer wrote it again — while the same
+// cat-file asked to PEEL a tag ("<id>^{}") parses the commit and loads the
+// graph, and its chunk report may be the graph's. d itself when loads names
+// both files or neither, or d names no chunk.
+func (d *Damage) Narrow(loads Part) *Damage {
+	only := loads & (PartMultiPackIndex | PartCommitGraph)
+	if d == nil || d.Parts&PartChunk == 0 || only == 0 || only == PartMultiPackIndex|PartCommitGraph {
+		return d
+	}
+	n := *d
+	n.Parts = d.Parts&^PartChunk | only
+	return &n
+}
+
+// row is what one of git's report formats classifies as.
+type row struct {
+	kind error
+	part Part
+}
+
+// formatTable is every report format git prints about a repository file or
+// object it failed to read, AS GIT SPELLS IT, by what it classifies as —
+// exactly the formats a case of classify_test.go provokes from a real damaged
+// repository (TestTheFormatTableIsWhatGitSays holds the table to what each git
+// version the suite runs says, both ways: a row nothing provokes fails it as
+// surely as a report the table lacks). A range in a comment is the gits that
+// print the format; every other row is printed by every git from the floor.
+//
+// What a row may be (TestNoRowIsAFormatARequestWrites): a format of git's own,
+// with words of its own — never one of conversions and punctuation alone
+// (`%s`), which carries whatever its argument holds, and never one a request
+// makes upload-pack print, or one git prints of a HEALTHY repository: `unable
+// to find all commit-graph files` and `unable to find all multi-pack index
+// files`, which a reader racing git's own split or incremental write prints.
+//
+// Read from git's source and left out, each for its reason:
+//   - `invalid commit position. commit-graph is likely corrupt`: every path a
+//     commit position from a file reaches it by is checked first, and
+//     reported `invalid parent position %u`, which is a row;
+//   - `commit-graph overflow generation data is too small` (2.43 on): it
+//     needs a generation-overflow chunk, which a repository of a test's size
+//     never has, and building one by hand is building the file;
+//   - `unable to read index` (show-index's), `missing %s %s` and `broken link
+//     from` (fsck's findings, written to its stdout, not reported).
+var formatTable = map[row][]string{
+	{ErrCorrupt, PartPack}: {
+		`index file %s is too small`,
+		`packfile %s does not match index`,
+		`inflate: %s (%s)`,
+		`packed object %s (stored in %s) is corrupt`, // 2.40–2.55: 2.56 reports it through "%s" (trace.go's hint)
+		`%s pack checksum mismatch`,
+		`index CRC mismatch for object %s from %s at offset %lu`,
+		`cannot unpack %s from %s at offset %lu`,
+		`pack has bad object at offset %lu: %s`,
+		`early EOF`,
+		`unknown object type %i at offset %lu in %s`,
+		`offset beyond end of packfile (truncated pack?)`,
+		`bad packed object CRC for %s`,
+		`failed to unpack compressed delta at offset %lu from %s`,
+		`failed to read delta base object %s at offset %lu from %s`,
+		`pack has %d unresolved delta`,
+		`pack has %d unresolved deltas`,
+		// A pack's reverse index, which git reads around (it builds one in
+		// memory) and reports.
+		`reverse-index file %s is too small`,
+		`reverse-index file %s is corrupt`,
+		`reverse-index file %s has unknown signature`,
+		`reverse-index file %s has unsupported version %u`,
+		`reverse-index file %s has unsupported hash id %u`,
+	},
+	{ErrCorrupt, PartMultiPackIndex}: {
+		`multi-pack-index signature 0x%08x does not match signature 0x%08x`,
+		`multi-pack-index version %d not recognized`,
+		`multi-pack-index hash version %u does not match version %u`,
+		`multi-pack-index file %s is too small`,
+		`invalid MIDX object position, MIDX is likely corrupt`,                // 2.47 on; before it the same damage is a segmentation fault
+		`multi-pack-index missing required pack-name chunk`,                   // 2.40–2.42
+		`multi-pack-index missing required OID fanout chunk`,                  // 2.40–2.42
+		`multi-pack-index missing required OID lookup chunk`,                  // 2.40–2.42
+		`multi-pack-index missing required object offsets chunk`,              // 2.40–2.42
+		`multi-pack-index required pack-name chunk missing or corrupted`,      // 2.43 on
+		`multi-pack-index required OID fanout chunk missing or corrupted`,     // 2.43 on
+		`multi-pack-index required OID lookup chunk missing or corrupted`,     // 2.43 on
+		`multi-pack-index required object offsets chunk missing or corrupted`, // 2.43 on
+		`multi-pack-index pack names out of order: '%s' before '%s'`,
+		// The index's bitmap, dropped with it.
+		`corrupted bitmap index file (wrong header)`,
+		`corrupted bitmap index (too small)`,
+		`unsupported version '%d' for bitmap index file`,
+	},
+	{ErrCorrupt, PartCommitGraph}: {
+		`commit-graph signature %X does not match signature %X`,
+		`commit-graph file is too small`,
+		`commit-graph version %X does not match version %X`,
+		`commit-graph hash version %X does not match version %X`,
+		`commit-graph is missing the OID Fanout chunk`,                // 2.40–2.43
+		`commit-graph oid fanout chunk is wrong size`,                 // 2.43 on
+		`commit-graph required OID fanout chunk missing or corrupted`, // 2.44 on
+		`invalid parent position %u`,                                  // fatal
+		`commit-graph requires overflow generation data but has none`, // fatal
+	},
+	{ErrCorrupt, PartChunk}: {
+		`final chunk has non-zero id %x`,
+		`terminating chunk id appears earlier than expected`,
+		`improper chunk offset(s) %lx and %lx`,
+		`chunk id %x not %d-byte aligned`, // 2.43 on
+		`duplicate chunk ID %x found`,
+	},
+	{ErrMissingObject, PartObject}: {
+		`bad object %s`,
+		`git cat-file: could not get object info`,
+		`Not a valid commit name %s`,
+		`Not a valid object name %s`,
+		`%s: invalid sha1 pointer %s`,
+		`unable to read %s`,
+		`missing %s object '%s'`,
+		`Could not read %s`,
+		`Failed to traverse parents of commit %s`,
+		`did not receive expected object %s`,
+	},
+	{ErrNotOurRef, 0}: {
+		`git upload-pack: not our ref %s`,
+	},
+}
+
+// formats is formatTable keyed by each format's canonical form
+// (canonicalFormat), which is what an event is looked up by.
+var formats = func() map[string]row {
+	out := map[string]row{}
+	for r, list := range formatTable {
+		for _, f := range list {
+			out[canonicalFormat(f)] = r
+		}
+	}
+	return out
+}()
+
+// canonicalFormat is format with every printf conversion specification — a
+// '%', its flags, width, precision and length, and the conversion — written
+// "%_", and every "%%" kept: so one row matches a format whatever length a
+// platform's PRIuMAX expands to ("%lu" on Linux, "%ju" on macOS), and
+// whatever width a later git gives a hex field.
+func canonicalFormat(format string) string {
+	if strings.IndexByte(format, '%') < 0 {
+		return format
+	}
+	var b strings.Builder
+	b.Grow(len(format))
+	for i := 0; i < len(format); i++ {
+		c := format[i]
+		if c != '%' {
+			b.WriteByte(c)
+			continue
+		}
+		if i+1 < len(format) && format[i+1] == '%' {
+			b.WriteString("%%")
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(format) && strings.IndexByte("-+ #0'", format[j]) >= 0 {
+			j++
+		}
+		for j < len(format) && (format[j] == '*' || ('0' <= format[j] && format[j] <= '9')) {
+			j++
+		}
+		if j < len(format) && format[j] == '.' {
+			j++
+			for j < len(format) && (format[j] == '*' || ('0' <= format[j] && format[j] <= '9')) {
+				j++
+			}
+		}
+		for j < len(format) && strings.IndexByte("hlLqjzt", format[j]) >= 0 {
+			j++
+		}
+		if j < len(format) && strings.IndexByte("diouxXeEfFgGaAcspn", format[j]) >= 0 {
+			b.WriteString("%_")
+			i = j
+			continue
+		}
+		b.WriteByte(c) // a '%' that begins no conversion is git's text
+	}
+	return b.String()
+}
 
 // stderrSink reads git's stderr as it arrives: it counts every byte (the
 // stall watchdog's third term — a receive-pack relaying its hook's keepalives
-// on stderr is moving), classifies every complete line, and keeps the tail a
-// Result carries.
+// on stderr is moving) and keeps the tail a Result carries. It classifies
+// nothing: git's stderr is the human's message, and a request's text lands in
+// it (trace.go says why the classification reads the trace instead).
 //
-// Written only by the stderr copier; kind and tail are read after that copier
-// has finished, so only the counter is shared, and it is atomic.
+// Written only by the stderr copier; the tail is read after that copier has
+// finished, so only the counter is shared, and it is atomic.
 type stderrSink struct {
 	n       atomic.Int64
 	pending []byte
 	tailBuf []byte
 	cut     bool // the tail buffer has dropped bytes from its front
-	words   Words
 }
 
 func (s *stderrSink) Write(p []byte) (int, error) {
@@ -255,9 +467,9 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 		i := bytes.IndexByte(p, '\n')
 		if i < 0 {
 			s.pending = append(s.pending, p...)
-			// A line longer than any git writes is classified as one and
-			// dropped from the buffer, so a process writing without
-			// newlines cannot grow it without bound.
+			// A line longer than any git writes is kept as one and dropped
+			// from the buffer, so a process writing without newlines
+			// cannot grow it without bound.
 			if len(s.pending) > MaxLine {
 				s.line(s.pending)
 				s.pending = s.pending[:0]
@@ -276,10 +488,9 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// line classifies one line and appends it to the tail, kept to at most
-// twice StderrTail so the copy it trims to is amortised.
+// line appends one line to the tail, kept to at most twice StderrTail so the
+// copy it trims to is amortised.
 func (s *stderrSink) line(l []byte) {
-	s.words.Add(l)
 	s.tailBuf = append(s.tailBuf, l...)
 	s.tailBuf = append(s.tailBuf, '\n')
 	if len(s.tailBuf) > 2*StderrTail {
@@ -300,12 +511,6 @@ func (s *stderrSink) finish() {
 		s.pending = nil
 	}
 }
-
-func (s *stderrSink) kind() error { return s.words.Kind() }
-
-// damage is the kind when it is damage to the repository — ErrCorrupt or
-// ErrMissingObject — and nil otherwise (Result.Damage).
-func (s *stderrSink) damage() error { return s.words.Damage() }
 
 // tail is the last StderrTail bytes git wrote, marked where it was cut —
 // including a cut the buffer's own trimming made, which leaves fewer bytes

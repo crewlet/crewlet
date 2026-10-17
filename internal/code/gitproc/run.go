@@ -26,8 +26,8 @@ import (
 // it made is open.
 //
 // A non-zero exit that is not one of c.Answers is an [*ExitError] whose Kind
-// is classified from git's stderr. The Result is returned beside every error
-// once the process started.
+// is classified from its process tree's trace2 error events (trace.go). The
+// Result is returned beside every error once the process started.
 func (p *Pool) Run(ctx context.Context, c Cmd) (Result, error) {
 	prep, err := p.prepare(c)
 	if err != nil {
@@ -94,11 +94,13 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	cmd.Env = prep.env
 	procgroup.Set(cmd)
 
-	// RUN OWNS THE THREE PIPES. Every stdio is an *os.File, so os/exec hands
+	// RUN OWNS THE FOUR PIPES. Every stdio is an *os.File, so os/exec hands
 	// it to the child as it is and starts no copier of its own — and so no
 	// WaitDelay, which would close a pipe a fixed time after the leader
 	// exits and cut the end off a clone whose client is slower than the
-	// timer (see drain).
+	// timer (see drain). The fourth is the trace2 event stream, the child's
+	// fd 3 (ExtraFiles[0], which GIT_TRACE2_EVENT=3 in the base environment
+	// names; a later extra file takes index 1 and up).
 	outR, outW, err := os.Pipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("gitproc: making a pipe for git %s: %w", c.Args[0], err)
@@ -108,24 +110,30 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 		closeAll(outR, outW)
 		return Result{}, fmt.Errorf("gitproc: making a pipe for git %s: %w", c.Args[0], err)
 	}
+	traceR, traceW, err := os.Pipe()
+	if err != nil {
+		closeAll(outR, outW, errR, errW)
+		return Result{}, fmt.Errorf("gitproc: making a pipe for git %s: %w", c.Args[0], err)
+	}
 	var inR, inW *os.File
 	if c.Stdin != nil {
 		if inR, inW, err = os.Pipe(); err != nil {
-			closeAll(outR, outW, errR, errW)
+			closeAll(outR, outW, errR, errW, traceR, traceW)
 			return Result{}, fmt.Errorf("gitproc: making a pipe for git %s: %w", c.Args[0], err)
 		}
 		cmd.Stdin = inR
 	}
 	cmd.Stdout, cmd.Stderr = outW, errW
+	cmd.ExtraFiles = []*os.File{traceW}
 
 	start := time.Now()
 	if err = cmd.Start(); err != nil {
-		closeAll(outR, outW, errR, errW, inR, inW)
+		closeAll(outR, outW, errR, errW, traceR, traceW, inR, inW)
 		return Result{}, fmt.Errorf("gitproc: starting git %s: %w", c.Args[0], err)
 	}
 	// The CHILD's ends close here at once, or no copier would ever see end of
 	// file. os.Pipe sets close-on-exec, so no other child holds them.
-	closeAll(outW, errW, inR)
+	closeAll(outW, errW, traceW, inR)
 
 	leader, err := procgroup.Identify(cmd.Process.Pid)
 	if err != nil {
@@ -135,12 +143,13 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 		_ = procgroup.Kill(cmd.Process.Pid)
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		closeAll(outR, errR, inW)
+		closeAll(outR, errR, traceR, inW)
 		return Result{}, fmt.Errorf("gitproc: reading git %s's process identity: %w — without it no later signal can be checked", c.Args[0], err)
 	}
 	p.track(c.Class, +1)
 
 	errs := &stderrSink{}
+	trace := newTraceSink(c.Dir)
 	var capt *capture
 	dst := c.Stdout
 	if dst == nil {
@@ -149,7 +158,12 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	}
 	out := startCopier("stdout", outR, func(cp *copier) { cp.pump(dst) })
 	errc := startCopier("stderr", errR, func(cp *copier) { cp.pump(errs) })
-	copiers := []*copier{out, errc}
+	// The trace is read to its end and counts toward no stall (moved): it
+	// says what git did, never that a transfer moves, and a pack-objects
+	// writing its region events must not keep a dead client's transfer
+	// alive.
+	tracec := startCopier("trace", traceR, func(cp *copier) { cp.pump(trace) })
+	copiers := []*copier{out, errc, tracec}
 	var in *copier
 	if inW != nil {
 		in = startCopier("stdin", inW, func(cp *copier) { cp.feed(c.Stdin) })
@@ -183,10 +197,12 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	p.track(c.Class, -1)
 	p.drain(c, copiers)
 	errs.finish()
+	trace.finish()
 
 	res := Result{
 		Stderr: errs.tail(),
-		Damage: errs.damage(),
+		Damage: trace.damage(),
+		Trace:  trace.summary(),
 		Exit:   cmd.ProcessState.ExitCode(),
 		Took:   reaped.Sub(start),
 		CPU:    max(cpuOf(cmd.ProcessState)+stragglers, w.spent),
@@ -196,6 +212,11 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	}
 	if p.metrics != nil {
 		p.metrics.Observe(metrics.CodeGitCPU, res.CPU, metrics.Attrs{"class": string(c.Class)})
+	}
+	if res.Trace.Unread > 0 {
+		// A request can cause it — an echoed pkt-line past MaxLine — so it is
+		// never a warning; and no damage event comes near that length.
+		p.log.Debug("code_git_trace_unread", "class", c.Class, "command", c.Args[0], "lines", res.Trace.Unread)
 	}
 
 	// THE ANSWER, in precedence order. A kill wins whatever the exit status:
@@ -216,7 +237,7 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	if res.Exit == 0 || slices.Contains(c.Answers, res.Exit) {
 		return res, nil
 	}
-	return res, &ExitError{Command: c.Args[0], Result: res, Kind: errs.kind()}
+	return res, &ExitError{Command: c.Args[0], Result: res, Kind: trace.kind()}
 }
 
 // cpuOf is the CPU the reap reports for a process: the user and system time

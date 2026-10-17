@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1242,6 +1243,127 @@ esac`)
 	}
 	if res := <-pushed; !res.OK("refs/heads/main") {
 		t.Errorf("the push, its listing released: %s", res)
+	}
+}
+
+// A STALE UPDATE IS STALE BESIDE DAMAGE GIT READS AROUND. The force check
+// asks `merge-base --is-ancestor <old> <new>` in the push's scratch, whose
+// alternate is the cache; an old this company holds no object for makes git
+// say "Not a valid commit name" (gitproc.ErrMissingObject), which is the
+// update's refusal as stale. A multi-pack-index whose header names another
+// hash version is a file git reads around — it says so ("multi-pack-index hash
+// version … does not match", gitproc.ErrCorrupt) and answers from the packs —
+// and git looks for an object it does not hold through every index of the
+// scratch's alternate, so the run names both. The run's kind is the HIGHEST it
+// named, the index's, and a check that asked only for the kind answered the
+// push as the engine's own failure: every kind the run named is reachable
+// through errors.Is, so the stale update is refused as stale, as on a sound
+// copy. (A commit-graph's damaged header is no such case: merge-base never
+// opens the graph for an id no pack holds — measured on git 2.43 and 2.47.)
+//
+// Mutation: make gitproc.ExitError match its Kind alone, and the push is
+// answered as a failure.
+func TestAStaleForcedPushBesideADamagedIndexIsStale(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	// The header's sixth byte is the hash version the index's ids are in.
+	midx := filepath.Join(maintainersBitmap(t, c), "objects", "pack", "multi-pack-index")
+	overwriteFile(t, midx, 5, []byte{7})
+
+	unheld := randomOID()
+	body := pkt(unheld+" "+head+" refs/heads/main\x00report-status\n") + "0000" + emptyPack(t, p.Git(), work)
+	resp, answer := post(t, c, 0, "ceo", "git-receive-pack", "", body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(answer, "ng refs/heads/main stale") {
+		t.Fatalf("a push of main from %s, which the repository never held, beside a damaged multi-pack-index: "+
+			"answered %d %.300q, want it refused stale", unheld, resp.StatusCode, answer)
+	}
+	if got := c.Rows().Refs["refs/heads/main"]; got != head {
+		t.Errorf("main is at %s after the stale push, want %s", got, head)
+	}
+}
+
+// AN OLD COMMIT GIT CANNOT READ IS NO STALE UPDATE. The force check's
+// merge-base over an old commit whose entry in the copy's pack is damaged
+// says what it met (a pack report, gitproc.ErrCorrupt) and then that the old
+// is "Not a valid commit name" (gitproc.ErrMissingObject) — the second only
+// BECAUSE of the first. Stale says the company never held the old, which is
+// false here, and it would hide the damage from the operator; the update is
+// answered as a check the engine could not make, logged code_push_unchecked
+// naming the damage, and the branch does not move. Only damage git reads
+// AROUND — a derived file, beside the missing object
+// (TestAStaleForcedPushBesideADamagedIndexIsStale) — leaves an update stale.
+//
+// A SERVED copy, because that is where a force check runs over damage: the
+// maintainer's commit-graph names the old commit, so receive-pack's own
+// connectivity check takes it from the graph (without one, receive-pack
+// refuses the update itself, "missing necessary objects"). Which damage
+// reaches the check is git's to decide, so there are two arms. A zlib stream
+// damaged in the old's data: 2.43 and 2.47 parse the old for merge-base from
+// its object and meet it, while 2.56 takes it from the graph and needs only
+// the entry's header — the update is then answered from the graph, and
+// lands. An entry's TYPE damaged: every git reads the type and meets it
+// (measured on 2.43, 2.47 and 2.56). No arm may answer stale, and on every
+// git at least one meets the damage in the force check.
+//
+// Mutation: answer stale whenever the run named a missing object, whatever
+// else it named — the arm that meets the damage answers stale.
+func TestAnOldCommitInADamagedPackIsNoStaleUpdate(t *testing.T) {
+	var unchecked atomic.Int32
+	t.Run("arms", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			damage func(t *testing.T, pack string, start, data int64)
+		}{
+			{"its zlib stream", func(t *testing.T, pack string, _, data int64) {
+				overwriteFile(t, pack, data+4, mangled(readAt(t, pack, data+4, 6)))
+			}},
+			{"its type", func(t *testing.T, pack string, start, _ int64) {
+				b := readAt(t, pack, start, 1)[0]
+				overwriteFile(t, pack, start, []byte{b&0x8f | 5<<4}) // type 5 is reserved
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				var l logs
+				c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+				p := codetest.NewPerson(t, c.Fleet, "ceo")
+				work := p.Init()
+				old := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+				c.MustPush(p, work, "main")
+				next := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+				c.MustPush(p, work, "HEAD:refs/heads/side")
+				dir := maintainersBitmap(t, c)
+				eventually(t, "the maintainer's commit-graph", func() bool {
+					_, err := os.Stat(filepath.Join(dir, "objects", "info", "commit-graph"))
+					return err == nil
+				})
+				pack, start, data := entryOf(t, dir, old)
+				tc.damage(t, pack, start, data)
+
+				body := pkt(old+" "+next+" refs/heads/main\x00report-status\n") + "0000" +
+					emptyPack(t, p.Git(), work)
+				resp, answer := post(t, c, 0, "ceo", "git-receive-pack", "", body)
+				if resp.StatusCode != http.StatusOK || strings.Contains(answer, "stale") ||
+					!strings.Contains(answer, "ok refs/heads/main") && !strings.Contains(answer, "ng refs/heads/main") {
+					t.Fatalf("a fast-forward of main from %s, whose pack entry is damaged: answered %d %.300q, "+
+						"want it landed from the graph or refused, never stale", old, resp.StatusCode, answer)
+				}
+				met := l.count("code_push_unchecked", `"level":"WARN"`, "git read a pack")
+				if met > 0 {
+					unchecked.Add(1)
+					if got := c.Rows().Refs["refs/heads/main"]; got != old {
+						t.Errorf("main is at %s after the unchecked push, want %s", got, old)
+					}
+				}
+				t.Logf("answered %q; the force check met the damage: %v", answer, met > 0)
+			})
+		}
+	})
+	if unchecked.Load() == 0 {
+		t.Errorf("no arm's force check met the damage on this git: the case asserts nothing about it")
 	}
 }
 

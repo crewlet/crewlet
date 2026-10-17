@@ -13,17 +13,21 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// EVERY VALUE THE REBUILD COUNTERS CARRY IS IN THEIR REFERENCE TEXT. The
-// operator's reference for crewlet.code.cache.rebuilds and
-// crewlet.code.cache.rebuild.refusals is the list a collector rule is written
+// EVERY VALUE THE REBUILD AND HINT COUNTERS CARRY IS IN THEIR REFERENCE TEXT.
+// The operator's reference for crewlet.code.cache.rebuilds,
+// crewlet.code.cache.rebuild.refusals, crewlet.code.cache.hints and
+// crewlet.code.cache.hint.hashes is the list a collector rule is written
 // from, and each value has its own remedy: every RebuildReason under the
-// first's reason, and under the second's every reason a git process gives
-// (gitReasons) and every rule a rebuild is refused by. `shape` was added to
-// the text by hand once; the next reason or rule added to the code would have
-// been a value no rule had a row for, failing nothing.
+// first's reason, under the second's every reason a git process gives
+// (gitReasons) and every rule a rebuild is refused by, and under the hint
+// counters every hintOutcome the package declares (a hash's every one but
+// `gone`, which is a naming's alone). `shape` was added to the text by hand
+// once; the next reason, rule or outcome added to the code would have been a
+// value no rule had a row for, failing nothing.
 //
-// Mutation: drop `shape` from either text, or declare a third refusalRule,
-// and this fails.
+// Mutation: drop `shape` from either rebuild text or `unknown` from either
+// hint text, or declare a third refusalRule or another hintOutcome, and this
+// fails.
 func TestEveryRebuildValueIsInTheMetricsReference(t *testing.T) {
 	shows := map[string]string{}
 	for _, inst := range metrics.Catalogue() {
@@ -33,9 +37,16 @@ func TestEveryRebuildValueIsInTheMetricsReference(t *testing.T) {
 	if len(rules) == 0 {
 		t.Fatal("found no refusalRule constant — the walk reads nothing")
 	}
+	outcomes := declared(t, "hintOutcome")
+	if !slices.Contains(outcomes, string(hintGone)) {
+		t.Fatalf("found hint outcomes %q, without %q — the walk reads what it should not", outcomes, hintGone)
+	}
 	for name, values := range map[string][]string{
 		metrics.CodeCacheRebuilds:        reasonsOf(RebuildReasons),
 		metrics.CodeCacheRebuildRefusals: append(reasonsOf(gitReasons), rules...),
+		metrics.CodeCacheHints:           outcomes,
+		metrics.CodeCacheHintHashes: slices.DeleteFunc(slices.Clone(outcomes),
+			func(o string) bool { return o == string(hintGone) }),
 	} {
 		text, ok := shows[name]
 		if !ok {

@@ -107,6 +107,17 @@ func (s *Server) forceChecks(ctx context.Context, sc *cache.Scratch, objects int
 // commit-graph yet, a new commit dated before its parent walks every commit,
 // and a read's ten seconds alone refused the push into a repository of more
 // than about two million.
+//
+// STALE ONLY WHERE THE MISSING OBJECT IS ALL GIT MET. git names an old it
+// cannot parse "Not a valid commit name" whether the copy never held it or
+// holds it in a pack it cannot read — there it says "inflate: …" (or another
+// pack report) first, and the missing object is that damage's consequence.
+// Stale tells the client the company never held its old, which is false
+// there, and would hide the damage from the operator, so a run that named
+// damage to anything but a derived file is the check's failure
+// (code_push_unchecked, naming it). Damage to a DERIVED file — a
+// multi-pack-index or commit-graph git reads around, from the scratch's
+// alternate — tells nothing about the old, and leaves the update stale.
 func (s *Server) isForced(ctx context.Context, sc *cache.Scratch, objects int64, old, new string) (
 	forced, stale bool, err error) {
 
@@ -115,12 +126,20 @@ func (s *Server) isForced(ctx context.Context, sc *cache.Scratch, objects int64,
 		Class: gitproc.ClassRead, Answers: []int{1}, Deadline: forceDeadline(objects),
 	})
 	switch {
-	case errors.Is(err, gitproc.ErrMissingObject):
+	case errors.Is(err, gitproc.ErrMissingObject) && !namedStoredDamage(err):
 		return false, true, nil
 	case err != nil:
 		return false, false, fmt.Errorf("host: is %s an ancestor of %s: %w", old, new, err)
 	}
 	return res.Exit == 1, false, nil
+}
+
+// namedStoredDamage reports whether a git run's failure named damage to a
+// file that is not derived — a pack, its index or its reverse index — beside
+// whatever else it named.
+func namedStoredDamage(err error) bool {
+	var d *gitproc.Damage
+	return errors.As(err, &d) && errors.Is(d.Kind, gitproc.ErrCorrupt) && !d.Derived()
 }
 
 // forceDeadline bounds one force check over a repository of objects live

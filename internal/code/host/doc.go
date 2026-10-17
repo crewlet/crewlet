@@ -167,27 +167,31 @@
 // receive-pack in its scratch — that fails before its first byte with damage
 // the cache names (cache.DamageReason; only the shape, cache.ShapeReason, for
 // a process whose directory merely has the cache as its alternate) has the
-// cache REPAIRED — a shape in place, with no download, a pack or an object
-// into the next incarnation — and runs once more over the repaired one
+// cache REPAIRED — a shape, or derived files git could not read (a
+// multi-pack-index, a commit-graph), in place with no download, a pack or an
+// object into the next incarnation — and runs once more over the repaired one
 // (repair.go): the cache is disposable, so damage it can name is its own to
-// repair, never the client's to retry. DAMAGE IS READ ONLY WHERE NO REQUEST
-// WRITES: upload-pack echoes its request on its own stderr when it refuses a
-// line, so for its run the host reads git's words from the answer's side
-// band alone and, beside them, the pool's refusal of the incarnation's shape,
-// made before git starts (fetchDamage) — a request quoting a damage phrase
-// forces no rebuild, and damage upload-pack meets itself before its first
-// byte (an object its negotiation cannot parse) is answered in git's words
-// and repaired by the next request that meets it where no request writes, or
-// by an operator's check. A FETCH'S FIRST BYTE IS ITS PACK'S:
-// upload-pack writes its answer's first line before its pack-objects runs, and
-// pack-objects names the damage it meets — "invalid MIDX object position,
-// MIDX is likely corrupt", over a multi-pack-index bitmap whose reverse index
-// is damaged — only in the side band of that answer, upload-pack's stderr
-// saying just that pack-objects died. So a fetch's answer is held until the
-// pack begins and its side band read by gitproc's own table (band.go,
-// gitproc.Words): a fetch whose pack-objects names damage before its pack is
-// repaired and run again like any other, where it was answered in git's words
-// on every clone of the copy, never repaired. And every failure before the
+// repair, never the client's to retry. DAMAGE IS READ FROM GIT'S FORMAT
+// STRINGS, NEVER ITS WORDS: upload-pack copies its request's text into the
+// messages it dies with ("unexpected line: '<arg>'"), so the pool classifies a
+// run by the format of each trace2 report its process tree makes, which
+// carries none of the request's text (gitproc) — a request quoting a damage
+// sentence forces no rebuild, and damage upload-pack meets itself before its
+// first byte (a want it cannot parse) is repaired under the request that met
+// it, like any other process's. A damage git 2.56 names only through a bare
+// "%s" — a corrupt packed object — is a HINT naming a pack, and repaired only
+// once the cache has held that pack to its row and found it is not
+// (cache.Cache.ConfirmHint). A FETCH'S FIRST BYTE IS ITS PACK'S: upload-pack
+// writes its answer's first line before its pack-objects runs, and
+// pack-objects meets damage after it — "invalid MIDX object position, MIDX is
+// likely corrupt", over a multi-pack-index bitmap whose reverse index is
+// damaged. So a fetch's answer is held until the pack begins (band.go): its
+// first band-1 packet, or a band-2 line that is no report of git's
+// (`fatal: `, `error: `, `warning: `, `BUG: `), which judges only a line's
+// prefix and never what it names — a fetch whose pack-objects dies before its
+// pack has shown the client nothing, and is repaired and run again like any
+// other, where it was answered in git's words on every clone of the copy,
+// never repaired. And every failure before the
 // first byte is answered as what it is (refuse.go), identified by what failed
 // and never by elimination: the code log failing (marked where it is met, so its
 // sentence is never another failure's), the object store (the store's own
@@ -319,6 +323,19 @@
 // linearizable read, 1.7–1.8 ms at the median on one data node and 4.8–5.5 ms
 // at three replicas (internal/statelog's measured section): a thirtieth of a
 // fetch, and a tenth.
+//
+// Those figures predate the trace stream every git process now writes
+// (gitproc), so its cost was measured against the build before it — six
+// counts each alternated between the two trees, medians, git 2.47.3, on four
+// vCPUs of a 2.1 GHz Xeon: a warm fetch (one push, one client) takes
+// 10.5 → 12.0 ms of the node's git CPU (+15%, its four processes) and
+// 49.7 → 52.3 ms at the median (+5%); eight clients at once 10.2 → 11.2 ms
+// a fetch and 69.3 → 66.0 fetches a second (−5%); and a warm full clone of
+// one client (the WARM CLONE below: 1.50 s, 0.87 s of the node's git CPU
+// here) moved by less than its own run-to-run spread (0.81–0.91 s of CPU).
+// Only those arms were re-measured: a process's fixed cost is the largest
+// share of the smallest requests, and the clone shows it vanish in a large
+// one.
 //
 // A COLD CLONE (BenchmarkCloneCold) — the first on a git node that never
 // served the repository, its cold sync, round and first upload-pack in series

@@ -449,7 +449,7 @@ func (in *interleaving) rebuild(repo string) string {
 	s := in.syncAt(repo, linearizable)
 	defer s.Release()
 	reason := []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildMissing}[in.rng.IntN(2)]
-	r, err := in.c.Rebuild(in.t.Context(), s, reason)
+	r, err := in.c.Rebuild(in.t.Context(), s, reason, 0)
 	switch {
 	case err == nil:
 		r.Release()

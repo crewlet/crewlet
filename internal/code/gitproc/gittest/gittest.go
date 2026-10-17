@@ -124,25 +124,137 @@ var NamesMidxPosition = gitproc.Version{Major: 2, Minor: 47}
 // chunk.
 func MidxChunk(t testing.TB, path, id string) (start, end int64) {
 	t.Helper()
+	return chunk(t, path, MidxHeader, id)
+}
+
+// GraphChunk is [MidxChunk] for a commit-graph, whose header is EIGHT bytes
+// (signature, version, hash version, the chunk count at its seventh byte, the
+// base-graph count), so its table begins at byte 8 where a multi-pack-index's
+// begins at 12.
+func GraphChunk(t testing.TB, path, id string) (start, end int64) {
+	t.Helper()
+	return chunk(t, path, GraphHeader, id)
+}
+
+// The header lengths of git's two chunk-format files the cache holds, where
+// each one's table of contents begins.
+const (
+	MidxHeader  = 12
+	GraphHeader = 8
+)
+
+// ChunkRow is where row i of a chunk-format file's table of contents begins —
+// its four-byte id, then its eight-byte offset — under a header of header
+// bytes ([MidxHeader], [GraphHeader]).
+func ChunkRow(header, i int) int64 { return int64(header + 12*i) }
+
+// chunk is where chunk id lies in the chunk-format file at path, read from
+// its table of contents under a header of header bytes.
+func chunk(t testing.TB, path string, header int, id string) (start, end int64) {
+	t.Helper()
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(body) < 12 {
-		t.Fatalf("%s is %d bytes, shorter than a multi-pack-index's header", path, len(body))
+	if len(body) < header {
+		t.Fatalf("%s is %d bytes, shorter than its %d-byte header", path, len(body), header)
 	}
 	chunks := int(body[6])
-	if len(body) < 12+12*(chunks+1) {
+	if len(body) < header+12*(chunks+1) {
 		t.Fatalf("%s is %d bytes, shorter than its table of %d chunks", path, len(body), chunks)
 	}
 	for i := range chunks {
-		row := body[12+12*i:]
+		row := body[header+12*i:]
 		if string(row[:4]) == id {
 			return int64(binary.BigEndian.Uint64(row[4:12])), int64(binary.BigEndian.Uint64(row[16:24]))
 		}
 	}
 	t.Fatalf("%s has no %s chunk", path, id)
 	return 0, 0
+}
+
+// RenameChunk writes to over the id of chunk from in the table of contents of
+// the chunk-format file at path, under a header of header bytes ([MidxHeader],
+// [GraphHeader]) — a chunk git then does not find, for a case that damages a
+// required one — making the file writable first: git writes its files
+// read-only. It fails t on a file with no such chunk.
+func RenameChunk(t testing.TB, path string, header int, from, to string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(from) != 4 || len(to) != 4 {
+		t.Fatalf("a chunk id is four bytes: %q, %q", from, to)
+	}
+	for i := range int(body[6]) {
+		at := ChunkRow(header, i)
+		if string(body[at:at+4]) != from {
+			continue
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteAt([]byte(to), at); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatalf("%s has no %s chunk", path, from)
+}
+
+// PackEntry is where oid's entry begins in the pack the version-2 index at
+// idx describes, and where the next entry (or the pack's trailer) begins: read
+// from the index's own name and offset tables — four-byte magic and version,
+// a 256-entry fanout, the sorted names, their CRCs, their offsets — never
+// assumed. It fails t on an index of another version, an offset in the large
+// table, or an oid the index does not hold.
+func PackEntry(t testing.TB, idx, oid string) (start, end int64) {
+	t.Helper()
+	body, err := os.ReadFile(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) < 8+256*4 || string(body[:4]) != "\xfftOc" || binary.BigEndian.Uint32(body[4:8]) != 2 {
+		t.Fatalf("%s is no version-2 pack index", idx)
+	}
+	n := int(binary.BigEndian.Uint32(body[8+255*4:]))
+	names, offsets := 8+256*4, 8+256*4+n*20+n*4
+	want, err := hex.DecodeString(oid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := -1
+	all := make([]int64, 0, n)
+	for i := range n {
+		off := binary.BigEndian.Uint32(body[offsets+4*i:])
+		if off&0x80000000 != 0 {
+			t.Fatalf("%s has an entry in its large offset table", idx)
+		}
+		all = append(all, int64(off))
+		if string(body[names+20*i:names+20*i+20]) == string(want) {
+			at = i
+		}
+	}
+	if at < 0 {
+		t.Fatalf("%s holds no %s", idx, oid)
+	}
+	pack, err := os.Stat(strings.TrimSuffix(idx, ".idx") + ".pack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, end = all[at], pack.Size()-20
+	for _, off := range all {
+		if off > start && off < end {
+			end = off
+		}
+	}
+	return start, end
 }
 
 // Client is a person's or a fixture's git.
@@ -384,6 +496,20 @@ func TryPack(ctx context.Context, c *Client, bare, worktree string, revs ...stri
 	return strings.TrimSpace(stdout), nil
 }
 
+// PackObjects is [Pack] of exactly the objects named, walking nothing: a
+// pack a case lays out object by object (a blob alone, a commit without its
+// tree).
+func PackObjects(t testing.TB, c *Client, bare, worktree string, oids ...string) string {
+	t.Helper()
+	base := filepath.Join(bare, "objects", "pack", "pack")
+	stdout, stderr, err := c.Try(t, worktree, strings.NewReader(strings.Join(oids, "\n")+"\n"),
+		"-c", "pack.writeReverseIndex=true", "-c", "pack.indexVersion=2", "pack-objects", "-q", base)
+	if err != nil {
+		t.Fatalf("packing %v from %s into %s: %v\n%s", oids, worktree, bare, err, stderr)
+	}
+	return strings.TrimSpace(stdout)
+}
+
 // SetRefs rewrites bare's packed-refs to exactly refs (ref → oid), sorted,
 // under a header that claims only the sort.
 func SetRefs(t testing.TB, bare string, refs map[string]string) {
@@ -457,15 +583,35 @@ func ReadBundle(bare, checksum string) (Bundled, error) {
 }
 
 // Fake is a stand-in git: an executable named git in a fresh directory that
-// prints version (a whole `git version …` line) for `git version` and runs
-// body — POSIX sh, "$@" the arguments after "git" — for anything else. Its
-// path, for gitproc.Options.Path or a PATH a test sets.
+// prints version (a whole `git version …` line) for `git version` — and writes
+// the trace2 version event a real git writes to the descriptor
+// GIT_TRACE2_EVENT names, so a pool built over it passes gitproc.New's check
+// for the event stream — and runs body — POSIX sh, "$@" the arguments after
+// "git" — for anything else. Its path, for gitproc.Options.Path or a PATH a
+// test sets.
 func Fake(t testing.TB, version, body string) string {
+	t.Helper()
+	exe := strings.TrimPrefix(version, "git version ")
+	event := `{"event":"version","sid":"gittest-fake","thread":"main","evt":"4","exe":"` + exe + `"}`
+	return fake(t, version, "case \"${GIT_TRACE2_EVENT-}\" in [2-9]) ev="+quote(event)+
+		"; eval 'printf \"%s\\n\" \"$ev\" >&'\"$GIT_TRACE2_EVENT\" ;; esac\n", body)
+}
+
+// FakeWithoutTrace is [Fake] writing no trace2 event stream: a git built
+// or patched without it, which gitproc.New refuses.
+func FakeWithoutTrace(t testing.TB, version, body string) string {
+	t.Helper()
+	return fake(t, version, "", body)
+}
+
+// fake writes a stand-in that runs onVersion and prints version for `git
+// version`, and runs body for anything else.
+func fake(t testing.TB, version, onVersion, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "git")
 	writeScript(t, path, "#!/bin/sh\n"+
 		"if [ \"${1-}\" = "+probe+" ]; then exit 0; fi\n"+
-		"if [ \"${1-}\" = version ]; then printf '%s\\n' "+quote(version)+"; exit 0; fi\n"+
+		"if [ \"${1-}\" = version ]; then "+onVersion+"printf '%s\\n' "+quote(version)+"; exit 0; fi\n"+
 		body+"\n")
 	return path
 }

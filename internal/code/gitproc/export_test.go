@@ -21,14 +21,54 @@ func SetCaptureMax(p *Pool, n int) { p.captureMax = n }
 // accounting cases.
 func ReadLane(p *Pool) (held, lent int64) { return p.read.counts() }
 
-// ClassifyTable is the classification table's patterns, by kind.
-func ClassifyTable() map[error][]string {
-	out := map[error][]string{}
-	for _, k := range kinds {
-		out[k.kind] = append([]string(nil), k.patterns...)
+// FormatRow is what one of git's report formats classifies as.
+type FormatRow struct {
+	Kind error
+	Part Part
+}
+
+// FormatTable is the classification table: every format as git spells it,
+// by what it classifies as.
+func FormatTable() map[string]FormatRow {
+	out := map[string]FormatRow{}
+	for r, list := range formatTable {
+		for _, f := range list {
+			out[f] = FormatRow{Kind: r.kind, Part: r.part}
+		}
 	}
 	return out
 }
 
-// ClassifyLine is the kind one stderr line is classified as on its own.
-func ClassifyLine(line string) error { return kindOf(classifyLine([]byte(line))) }
+// CanonicalFormat is the form a format is looked up by.
+func CanonicalFormat(format string) string { return canonicalFormat(format) }
+
+// ReadTrace reads stream as the trace sink of a run in dir reads its trace2
+// event stream, written in pieces of at most piece bytes (0: whole): the
+// summary, the kind an ExitError would carry, and the damage.
+func ReadTrace(dir string, stream []byte, piece int) (t Trace, kind, damage error) {
+	s := newTraceSink(dir)
+	if piece <= 0 {
+		piece = len(stream) + 1
+	}
+	for len(stream) > 0 {
+		n := min(piece, len(stream))
+		_, _ = s.Write(stream[:n])
+		stream = stream[n:]
+	}
+	s.finish()
+	return s.summary(), s.kind(), s.damage()
+}
+
+// TraceHeld is the most capacity the line a trace sink holds reached while
+// it read stream in pieces of piece bytes: what it keeps of a line.
+func TraceHeld(stream []byte, piece int) int {
+	s := newTraceSink("")
+	most := 0
+	for len(stream) > 0 {
+		n := min(piece, len(stream))
+		_, _ = s.Write(stream[:n])
+		stream = stream[n:]
+		most = max(most, cap(s.line))
+	}
+	return most
+}

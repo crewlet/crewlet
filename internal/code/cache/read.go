@@ -137,7 +137,7 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 	}
 	restarts, restreamed := 0, false
 	for {
-		snap, err := c.readOnce(ctx, id, since, fresh)
+		snap, err := c.readOnce(ctx, id, since, fresh, false)
 		switch {
 		case errors.Is(err, code.ErrSnapshotMoved):
 			if restarts == MaxSnapshotRestarts {
@@ -175,14 +175,34 @@ func logRead(err error) error {
 	return fmt.Errorf("%w: %w", ErrLogRead, err)
 }
 
-// readOnce reads every page of one snapshot, or answers the first page's
-// failure as it is — the estate's, as ErrLogRead (logRead).
+// readPacks reads the PACK ROWS of a full snapshot of id at fresh — what a
+// hint's confirmation looks a pack up in (hint.go): the snapshot's pages
+// until the first that serves a ref, or its last. A full snapshot serves
+// every pack before any ref (code.Reader.Snapshot's phases), so its packs as
+// of page 1's position are whole there, and a repository of a hundred
+// thousand refs costs it the pages of its packs rather than every ref's. Read
+// again from page 1 when the history moves under it, as read is.
+func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshness) (snapshot, error) {
+	for restarts := 0; ; restarts++ {
+		snap, err := c.readOnce(ctx, id, statelog.Position{}, fresh, true)
+		if !errors.Is(err, code.ErrSnapshotMoved) || restarts == MaxSnapshotRestarts {
+			return snap, err
+		}
+	}
+}
+
+// readOnce reads every page of one snapshot — or, packsOnly, a full one's
+// pages up to the first that serves a ref (readPacks) — or answers the first
+// page's failure as it is: the estate's, as ErrLogRead (logRead).
 func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position,
-	fresh statelog.Freshness) (snapshot, error) {
+	fresh statelog.Freshness, packsOnly bool) (snapshot, error) {
 
 	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh})
 	if err != nil {
 		return snapshot{}, logRead(err)
+	}
+	if packsOnly && !page.Full {
+		return snapshot{}, fmt.Errorf("%w: %s's snapshot from nothing answered a delta", ErrBadSnapshot, id)
 	}
 	snap := snapshot{
 		full: page.Full, position: page.Position, streamCreated: page.StreamCreated,
@@ -193,7 +213,7 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 		if err = snap.add(id, n, page, seen); err != nil {
 			return snapshot{}, err
 		}
-		if page.Next == nil {
+		if page.Next == nil || packsOnly && len(page.Refs) > 0 {
 			break
 		}
 		next := code.StateQuery{RepoID: id, Fresh: fresh, Cursor: page.Next}

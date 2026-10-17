@@ -307,7 +307,7 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	if how.Checking != nil {
 		how.Checking(0)
 	}
-	rebuilt, err := c.rebuild(ctx, s, RebuildVerify, false, whole)
+	rebuilt, err := c.rebuild(ctx, s, RebuildVerify, 0, false, whole)
 	if err != nil {
 		return report, fmt.Errorf("cache: verify %s: a rebuild could not repair it: %w", report.label(), err)
 	}
@@ -345,10 +345,10 @@ type VerifyRun struct {
 }
 
 // CheckBudget bounds one check pass over a copy holding bytes on disk — its
-// packs and packed-refs, and the maintainer's files beside them: the
-// listing's wait for a round of the repository in flight, and the read of its
-// rows, one read attempt (gitproc.ReadDeadline); every bundle hashed at
-// VerifyHashPerMiB; and git's connectivity check at
+// packs and packed-refs, and the maintainer's files beside them: its hash
+// (HashBudget: the listing's wait for a round of the repository in flight and
+// the read of its rows, one read attempt, and every bundle hashed at
+// VerifyHashPerMiB); and git's connectivity check at
 // gitproc.PackWorkDeadline, the deadline its fsck already runs under. A
 // BOUND, never a schedule: BenchmarkVerify measured a whole check at 9.4 ms
 // a mebibyte over 100 MB of a source repository's composition (296 000
@@ -358,8 +358,20 @@ type VerifyRun struct {
 // wedged, and is ended rather than holding its maintenance slot and the
 // operator's sweep.
 func CheckBudget(bytes int64) time.Duration {
+	return HashBudget(bytes) + gitproc.PackWorkDeadline(bytes)
+}
+
+// HashBudget bounds a HASH of bytes of a copy's files held to their rows:
+// the read of the rows, one read attempt (gitproc.ReadDeadline), and the
+// bytes hashed at VerifyHashPerMiB. It is CheckBudget's hash term, so the
+// two cannot drift, and the whole bound of a hint's confirmation (hint.go),
+// which hashes one bundle and runs no fsck: under CheckBudget a bundle of the
+// largest pack a push stores (MaxPackBytes, about 1 300 MiB with its index)
+// was allowed about 24 minutes, the fsck's PackWorkDeadline nine tenths of
+// it, where its hash is allowed about 2.3.
+func HashBudget(bytes int64) time.Duration {
 	mib := max(bytes+objstore.MiB-1, 0) / objstore.MiB
-	return gitproc.ReadDeadline + time.Duration(mib)*VerifyHashPerMiB + gitproc.PackWorkDeadline(bytes)
+	return gitproc.ReadDeadline + time.Duration(mib)*VerifyHashPerMiB
 }
 
 // pass is one check of the incarnation s pins, run under the pass's own bound
@@ -680,7 +692,7 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 		if !sized {
 			continue
 		}
-		sum, err := hashBundle(ctx, filepath.Join(dir, "objects", "pack", "pack-"+row.GitChecksum), buf)
+		sum, err := hashBundle(ctx, filepath.Join(dir, "objects", "pack", "pack-"+row.GitChecksum), buf, nil)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			problems = append(problems, label+" is missing")
@@ -707,21 +719,49 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 
 // hashBundle is the SHA-256 of the pack at stem as the push stored it: its
 // .pack, .idx and .rev back to back. Streamed through buf, ctx checked
-// between reads — an operator's request over files up to code.MaxPackBytes.
-func hashBundle(ctx context.Context, stem string, buf []byte) (objstore.Hash, error) {
+// between reads — over files up to code.MaxPackBytes. hold, when set, is the
+// slot each piece of CheckPieceBytes is hashed in (gitproc.Pool.HoldRead),
+// taken before the piece and given back after it; nil for a caller that
+// holds a slot of its own across the whole hash (a check, in its reserved
+// maintenance slot).
+func hashBundle(ctx context.Context, stem string, buf []byte,
+	hold func(context.Context) (func(), error)) (objstore.Hash, error) {
+
 	sum := sha256.New()
 	for _, ext := range []string{".pack", ".idx", ".rev"} {
-		f, err := os.Open(stem + ext)
-		if err != nil {
-			return "", err
-		}
-		err = copyChecked(ctx, sum, f, buf)
-		_ = f.Close() // read-only: what was read is the answer
-		if err != nil {
+		if err := hashFile(ctx, sum, stem+ext, buf, hold); err != nil {
 			return "", err
 		}
 	}
 	return objstore.Hash(hex.EncodeToString(sum.Sum(nil))), nil
+}
+
+// hashFile adds the bytes of the file at path to sum, a piece of at most
+// CheckPieceBytes at a time, each in a slot hold takes (none when nil) and
+// gives back once the piece is read.
+func hashFile(ctx context.Context, sum io.Writer, path string, buf []byte,
+	hold func(context.Context) (func(), error)) error {
+
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }() // read-only: what was read is the answer
+	for {
+		release := func() {}
+		if hold != nil {
+			if release, err = hold(ctx); err != nil {
+				return err
+			}
+		}
+		piece := &io.LimitedReader{R: f, N: CheckPieceBytes}
+		err = copyChecked(ctx, sum, piece, buf)
+		release()
+		if err != nil || piece.N > 0 {
+			// A failure, or a piece the file ended inside: the file is read.
+			return err
+		}
+	}
 }
 
 // copyChecked copies r to w through buf, checking ctx before every read.

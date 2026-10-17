@@ -87,7 +87,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	}
 	// IN THE INCARNATION, so a damaged one is rebuilt under this request
 	// (repairing).
-	err = s.repairing(ctx, r, adm.name, &synced, cache.DamageReason, out.Started, func(in cache.Synced) error {
+	err = s.repairing(ctx, r, adm.name, &synced, inIncarnation, out.Started, func(in cache.Synced) error {
 		_, gerr := s.runGit(ctx, gitproc.Cmd{
 			Dir:  in.Dir,
 			Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", in.Dir},
@@ -118,7 +118,7 @@ func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *ht
 	synced *cache.Synced, out *sink) {
 
 	out.prefix = serviceLine(receivePackService)
-	err := s.repairing(ctx, r, adm.name, synced, cache.ShapeReason, out.Started, func(in cache.Synced) error {
+	err := s.repairing(ctx, r, adm.name, synced, asAlternate, out.Started, func(in cache.Synced) error {
 		view, err := s.o.Cache.AdvertiseView(ctx, in)
 		if err != nil {
 			return err

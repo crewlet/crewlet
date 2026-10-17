@@ -188,7 +188,7 @@ type incarnation struct {
 	// reread is why its next full round reads it whole again — a log
 	// recreated or gone back under it (Cache.reread), or an in-place repair
 	// (markWhole: a git process the pool refused there for its shape, or one
-	// that named its multi-pack-index damaged) — counted when that round
+	// that named its derived files damaged) — counted when that round
 	// completes; "" for none. The FIRST reason is kept: one whole read
 	// answers every reason it was marked for, and is counted once.
 	reread RebuildReason
@@ -197,15 +197,26 @@ type incarnation struct {
 	// round began, since a round that swept it before the damage a mark
 	// answers did not repair that damage.
 	marks uint64
-	// dropMidx: a git process over it named its multi-pack-index damaged
-	// (markWhole for RebuildMidx), so its next full round DROPS that index
-	// before deciding its own (apply). A mark of its own rather than a
-	// reading of reread, which keeps only the first reason: a copy already
-	// marked to be read whole for its shape, or for a log recreated under
-	// it, would otherwise be read whole with the damaged index kept, and the
-	// fetch that asked for the repair meet the same damage on its retry.
-	// Taken by the round that drops the index.
-	dropMidx bool
+	// drop is the derived files a git process over it named damaged
+	// (markWhole for RebuildDerived: the multi-pack-index's, the
+	// commit-graph, or both), OR-ed by every mark, so its next full round
+	// DROPS them before deciding its own index (apply). A mark of its own
+	// rather than a reading of reread, which keeps only the first reason: a
+	// copy already marked to be read whole for its shape, or for a log
+	// recreated under it, would otherwise be read whole with the damaged
+	// files kept, and the request that asked for the repair meet the same
+	// damage on its retry. Taken by the round that drops them.
+	drop gitproc.Part
+	// packChecks are the hashes of the packs hints named (gitproc.Hint),
+	// by checksum, each in flight or decided (ConfirmHint, hint.go): a hint
+	// about a pack being hashed waits for that hash rather than starting its
+	// own, and one about a pack decided on the files it holds now hashes
+	// nothing. A verdict is kept with the files' identity it was reached on,
+	// so it outlives every write into the directory that leaves that pack's
+	// files alone — an adoption of another pack, the maintainer's index — and
+	// none that replaces them; a hash that decided nothing is replaced by the
+	// next hint's.
+	packChecks map[string]*packCheck
 	// rebuilds is how many rebuild attempts in a row stand behind this
 	// incarnation without having ended the failure that asked for them: none
 	// for one no rebuild made, one more than its predecessor's for a

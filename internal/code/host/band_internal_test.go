@@ -1,7 +1,6 @@
 package host
 
 import (
-	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -25,12 +24,25 @@ func sideband(ch byte, data string) string { return string(pktLine(append([]byte
 // line is a negotiation line as one pkt-line.
 func line(s string) string { return string(pktString(s)) }
 
+// scanned is answer read by an answerScan whole, or a byte at a time.
+func scanned(answer string, whole bool) *answerScan {
+	var s answerScan
+	if whole {
+		s.scan([]byte(answer))
+		return &s
+	}
+	for i := range len(answer) {
+		s.scan([]byte{answer[i]})
+	}
+	return &s
+}
+
 // THE ANSWER BEGINS WITH ITS PACK — its first band-1 packet, a keepalive's
-// included, or a progress line that names no damage — and never with what
+// included, or a band-2 line that is no report of git's — and never with what
 // upload-pack writes before it (the negotiation's lines, a v2 section header,
-// an ERR) nor with a fatal word in band 3; a damage pack-objects names in
-// band 2 holds it, whichever packets its words were cut across. Read whole or a
-// byte at a time, the reading is the same.
+// an ERR) nor with anything in band 3; the line pack-objects dies with in
+// band 2 holds it, whichever packets it was cut across. Read whole or a byte
+// at a time, the reading is the same.
 func TestTheAnswerBeginsWithItsPack(t *testing.T) {
 	t.Parallel()
 	notOurs := "ERR upload-pack: not our ref " + strings.Repeat("a", 40)
@@ -38,73 +50,104 @@ func TestTheAnswerBeginsWithItsPack(t *testing.T) {
 		name   string
 		answer string
 		begun  bool
-		kind   error // the words' kind
-		named  string
 	}{
-		{"a v2 section header alone", line("packfile\n"), false, gitproc.ErrFailed, ""},
-		{"progress", line("packfile\n") + sideband(bandProgress, "Enumerating objects: 3, done.\n"),
-			true, gitproc.ErrFailed, ""},
+		{"a v2 section header alone", line("packfile\n"), false},
+		{"progress", line("packfile\n") + sideband(bandProgress, "Enumerating objects: 3, done.\n"), true},
 		{"progress rewritten in place", line("packfile\n") +
-			sideband(bandProgress, "Counting objects:  33% (1/3)\rCounting objects:  66% (2/3)\r"),
-			true, gitproc.ErrFailed, ""},
-		{"the pack", line("packfile\n") + sideband(bandData, "PACK\x00\x00\x00\x02"), true, gitproc.ErrFailed, ""},
-		{"a keepalive", line("packfile\n") + "0005\x01", true, gitproc.ErrFailed, ""},
-		{"pack-objects naming damage", line("packfile\n") + sideband(bandProgress, midxLine+"\n") +
-			sideband(bandError, abortLine+"\n") + flushPkt, false, gitproc.ErrCorrupt, midxLine},
-		{"damage cut across two packets", line("packfile\n") + sideband(bandProgress, midxLine[:17]) +
-			sideband(bandProgress, midxLine[17:]+"\n") + sideband(bandError, abortLine+"\n"),
-			false, gitproc.ErrCorrupt, midxLine},
-		{"damage with no newline", line("packfile\n") + sideband(bandProgress, midxLine), false,
-			gitproc.ErrCorrupt, midxLine},
-		{"a fatal word in band 3", line("packfile\n") + sideband(bandError, abortLine+"\n"), false,
-			gitproc.ErrFailed, ""},
-		{"a v2 negotiation round", line("acknowledgments\n") + line("NAK\n") + flushPkt, false,
-			gitproc.ErrFailed, ""},
-		{"a v0 negotiation and its progress", line("NAK\n") + sideband(bandProgress, "Total 3 (delta 0)\n"),
-			true, gitproc.ErrFailed, ""},
-		{"a v0 pack with no side band", line("NAK\n") + "PACK\x00\x00\x00\x02", true, gitproc.ErrFailed, ""},
-		{"a want refused", line(notOurs) + flushPkt, false, gitproc.ErrFailed, ""},
-		{"an empty packet", "0004" + line("packfile\n"), false, gitproc.ErrFailed, ""},
-		{"a length no packet has", "0003", true, gitproc.ErrFailed, ""},
+			sideband(bandProgress, "Counting objects:  33% (1/3)\rCounting objects:  66% (2/3)\r"), true},
+		{"the pack", line("packfile\n") + sideband(bandData, "PACK\x00\x00\x00\x02"), true},
+		{"a keepalive", line("packfile\n") + "0005\x01", true},
+		{"pack-objects dying", line("packfile\n") + sideband(bandProgress, midxLine+"\n") +
+			sideband(bandError, abortLine+"\n") + flushPkt, false},
+		{"its death cut across two packets", line("packfile\n") + sideband(bandProgress, midxLine[:3]) +
+			sideband(bandProgress, midxLine[3:]+"\n") + sideband(bandError, abortLine+"\n"), false},
+		{"its death with no newline", line("packfile\n") + sideband(bandProgress, midxLine), false},
+		{"a line in band 3", line("packfile\n") + sideband(bandError, abortLine+"\n"), false},
+		{"a v2 negotiation round", line("acknowledgments\n") + line("NAK\n") + flushPkt, false},
+		{"a v0 negotiation and its progress", line("NAK\n") + sideband(bandProgress, "Total 3 (delta 0)\n"), true},
+		{"a v0 pack with no side band", line("NAK\n") + "PACK\x00\x00\x00\x02", true},
+		{"a want refused", line(notOurs) + flushPkt, false},
+		{"an empty packet", "0004" + line("packfile\n"), false},
+		{"a length no packet has", "0003", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, whole := range []bool{true, false} {
-				var s answerScan
-				if whole {
-					s.scan([]byte(tc.answer))
-				} else {
-					for i := range len(tc.answer) {
-						s.scan([]byte{tc.answer[i]})
-					}
-				}
-				s.finish()
-				if s.begun != tc.begun || !errors.Is(s.words.Kind(), tc.kind) || s.words.Named() != tc.named {
-					t.Errorf("read whole %v: begun %v, words %v named %q; want begun %v, %v named %q",
-						whole, s.begun, s.words.Kind(), s.words.Named(), tc.begun, tc.kind, tc.named)
+				if s := scanned(tc.answer, whole); s.begun != tc.begun {
+					t.Errorf("read whole %v: begun %v, want %v", whole, s.begun, tc.begun)
 				}
 			}
 		})
 	}
 }
 
-// A SIDE BAND'S LINE IS READ AS A STDERR LINE IS, AT MOST gitproc.MaxLine OF
-// IT AT ONCE: a line of git's longer than any git writes is read in MaxLine
-// pieces however long it grows, and damage after it is still named.
-func TestASideBandLineIsReadToMaxLine(t *testing.T) {
+// A REPORT DOES NOT BEGIN THE PACK. A band-2 line beginning with one of
+// git's report prefixes — "fatal: ", "error: ", "warning: ", "BUG: " — keeps
+// the hold, whatever it goes on to say: the rule judges whether a line is a
+// report, and nothing about what it names (the run's trace decides that).
+// Progress begins the pack, a line rewritten in place included, and so does a
+// band-1 keepalive; nothing in band 3 does.
+//
+// Mutation: drop "fatal: " from the prefixes — red here, and in
+// TestADamagedMidxBitmapIsRepaired (E's retry is lost: the answer starts at
+// pack-objects' dying line).
+func TestAReportDoesNotBeginThePack(t *testing.T) {
 	t.Parallel()
-	long := strings.Repeat("x", maxPktPayload-1)
-	var s answerScan
-	s.scan([]byte(line("packfile\n")))
-	for chunk := range 8 {
-		s.scan([]byte(sideband(bandError, long)))
-		if got := len(s.text[bandError-bandProgress]); got > gitproc.MaxLine {
-			t.Fatalf("after %d packets a band-3 line holds %d bytes, past MaxLine", chunk+1, got)
+	for _, tc := range []struct {
+		name  string
+		line  string
+		begun bool
+	}{
+		{"fatal", "fatal: x\n", false},
+		{"error", "error: x\n", false},
+		{"warning", "warning: x\n", false},
+		{"BUG", "BUG: x\n", false},
+		{"a report naming nothing git classifies", "fatal: the remote end hung up unexpectedly\n", false},
+		{"enumerating", "Enumerating objects: 3, done.\n", true},
+		{"counting, rewritten in place", "Counting objects:  50% (1/2)\r", true},
+		{"a word that is no prefix", "fatality\n", true},
+		{"a prefix's word without its colon", "fatal\n", true},
+	} {
+		for _, whole := range []bool{true, false} {
+			s := scanned(line("packfile\n")+sideband(bandProgress, tc.line), whole)
+			if s.begun != tc.begun {
+				t.Errorf("%s (read whole %v): begun %v, want %v", tc.name, whole, s.begun, tc.begun)
+			}
 		}
 	}
-	s.scan([]byte(sideband(bandError, midxLine+"\n")))
-	s.finish()
-	if !errors.Is(s.words.Damage(), gitproc.ErrCorrupt) {
-		t.Errorf("damage after a long line is %v, want ErrCorrupt", s.words.Damage())
+	if s := scanned(line("packfile\n")+"0005\x01", true); !s.begun {
+		t.Error("a band-1 keepalive did not begin the pack")
+	}
+	if s := scanned(line("packfile\n")+sideband(bandError, "Enumerating objects: 3, done.\n"), true); s.begun {
+		t.Error("a line in band 3 began the pack")
+	}
+}
+
+// A REPORT SPLIT ACROSS PACKETS KEEPS THE HOLD: upload-pack relays
+// pack-objects' writes as they come, so a report's prefix may arrive across
+// two packets of its band, and it is judged whole. And the scan keeps no more
+// of a band-2 line than the longest prefix, however long the line grows.
+//
+// Mutation: judge a line at the end of each packet rather than at reportLead
+// bytes or its end, and the split arms begin the pack.
+func TestAReportSplitAcrossPacketsKeepsTheHold(t *testing.T) {
+	t.Parallel()
+	for _, report := range []string{"fatal: x\n", "error: x\n", "warning: x\n", "BUG: x\n", midxLine + "\n"} {
+		for cut := 1; cut < len(report)-1; cut++ {
+			answer := line("packfile\n") + sideband(bandProgress, report[:cut]) +
+				sideband(bandProgress, report[cut:])
+			if s := scanned(answer, true); s.begun {
+				t.Errorf("%q cut after %d bytes began the pack", report, cut)
+			}
+		}
+	}
+	var s answerScan
+	s.scan([]byte(line("packfile\n")))
+	long := strings.Repeat("x", maxPktPayload-1)
+	for range 8 {
+		s.scan([]byte(sideband(bandProgress, long)))
+		if len(s.lead) > reportLead {
+			t.Fatalf("the scan holds %d bytes of a line, past the %d its rule reads", len(s.lead), reportLead)
+		}
 	}
 }
 
@@ -195,47 +238,6 @@ func TestASinkHoldsAFetchsAnswerUntilItsPackBegins(t *testing.T) {
 	})
 }
 
-// A RUN'S FAILURE CARRIES THE DAMAGE ITS ANSWER'S SIDE BAND NAMED — still the
-// process's failure to errors.As, and damage to errors.Is and so to
-// cache.DamageReason — quoting git's words; a process the engine ended is no
-// verdict about what it read, and an answer that started is past judging.
-func TestAFailureCarriesTheDamageItsAnswerNamed(t *testing.T) {
-	t.Parallel()
-	exit := func() error {
-		return &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrFailed,
-			Result: gitproc.Result{Exit: 128, Stderr: "fatal: git upload-pack: " + abortLine + "\n"}}
-	}
-	damaged := line("packfile\n") + sideband(bandProgress, midxLine+"\n") + sideband(bandError, abortLine+"\n")
-	held := func(answer string) *sink {
-		s := newSink(httptest.NewRecorder(), "", time.Now)
-		s.holdPack()
-		_, _ = s.Write([]byte(answer))
-		return s
-	}
-
-	err := held(damaged).judged(exit())
-	var e *gitproc.ExitError
-	if !errors.As(err, &e) || !errors.Is(err, gitproc.ErrCorrupt) || !strings.Contains(err.Error(), midxLine) {
-		t.Errorf("a failure whose answer named damage is %v", err)
-	}
-	if reason, ok := cache.DamageReason(err); !ok || reason != cache.RebuildCorrupt {
-		t.Errorf("the cache reads it as %q, %v; want a rebuild for corrupt", reason, ok)
-	}
-	if err := held(line("packfile\n") + sideband(bandError, abortLine+"\n")).judged(exit()); errors.Is(err,
-		gitproc.ErrCorrupt) {
-		t.Errorf("a failure whose answer named no damage is %v", err)
-	}
-	ended := fmt.Errorf("gitproc: git upload-pack was ended: %w", gitproc.ErrStalled)
-	var folded *bandDamage
-	if err := held(damaged).judged(ended); errors.As(err, &folded) || !errors.Is(err, gitproc.ErrStalled) {
-		t.Errorf("a process the engine ended is judged %v", err)
-	}
-	started := held(damaged + sideband(bandData, "PACK"))
-	if err := started.judged(exit()); errors.Is(err, gitproc.ErrCorrupt) {
-		t.Errorf("an answer already started is judged %v", err)
-	}
-}
-
 // A FETCH'S HELD ANSWER REACHES THE CLIENT ONLY WHEN IT IS GIT'S ANSWER: a
 // run that succeeded or failed by itself, but never one the host found still
 // damaged after its repair, nor a run the node ended, nor the repair's own
@@ -243,6 +245,8 @@ func TestAFailureCarriesTheDamageItsAnswerNamed(t *testing.T) {
 func TestOnlyGitsOwnAnswerIsReleased(t *testing.T) {
 	t.Parallel()
 	exit := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrNotOurRef}
+	damaged := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrCorrupt, Result: gitproc.Result{
+		Exit: 128, Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: gitproc.PartMultiPackIndex}}}
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -250,64 +254,13 @@ func TestOnlyGitsOwnAnswerIsReleased(t *testing.T) {
 	}{
 		{"success", nil, true},
 		{"git's own failure", exit, true},
-		{"damage in band", &bandDamage{err: exit, kind: gitproc.ErrCorrupt, named: midxLine}, true},
+		{"git's own failure naming damage", damaged, true},
 		{"still damaged after its repair", fmt.Errorf("%w: %w", errStillDamaged, exit), false},
 		{"a rebuild refused", cache.ErrRebuildRefused, false},
 		{"ended by the node", fmt.Errorf("gitproc: ended: %w", gitproc.ErrStalled), false},
 	} {
 		if got := gitsAnswer(tc.err); got != tc.want {
 			t.Errorf("%s: gitsAnswer = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-// AN UPLOAD-PACK RUN IS REPAIRED ONLY FOR WHAT ITS REQUEST CANNOT WRITE: the
-// damage its answer's side band named (pack-objects' words), and the pool's
-// refusal of the incarnation's shape before git starts — and never for damage
-// read off upload-pack's own stderr, which echoes the request, so a request
-// quoting " is corrupt" in an argument git refuses forces no rebuild. A run the
-// node ended names no damage.
-//
-// Mutation: read every failure that is no bandDamage as nothing (the shape
-// refusal row fails, and TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest's
-// ls-refs arm with it); read the run's stderr Kind (the echo rows fail, and
-// TestACraftedRequestCannotForceARebuild with them).
-func TestAnUploadPackRunIsRepairedOnlyForWhatItsRequestCannotWrite(t *testing.T) {
-	t.Parallel()
-	exit := func(kind error, stderr string) *gitproc.ExitError {
-		return &gitproc.ExitError{Command: "upload-pack", Kind: kind,
-			Result: gitproc.Result{Exit: 128, Stderr: stderr}}
-	}
-	aborted := exit(gitproc.ErrFailed, "fatal: git upload-pack: "+abortLine+"\n")
-	for _, tc := range []struct {
-		name   string
-		err    error
-		reason cache.RebuildReason // "" for no repair
-	}{
-		{"the side band names the multi-pack-index",
-			&bandDamage{err: aborted, kind: gitproc.ErrCorrupt, named: midxLine}, cache.RebuildMidx},
-		{"the side band names a damaged pack",
-			&bandDamage{err: aborted, kind: gitproc.ErrCorrupt,
-				named: "fatal: packed object 0123 (stored in pack-1.pack) is corrupt"}, cache.RebuildCorrupt},
-		{"the side band names a missing object",
-			&bandDamage{err: aborted, kind: gitproc.ErrMissingObject,
-				named: "fatal: bad object " + strings.Repeat("ab", 20)}, cache.RebuildMissing},
-		{"the pool refuses the incarnation's shape",
-			fmt.Errorf("git upload-pack: %w", &gitproc.ShapeError{Rule: gitproc.ShapeConfig, Dir: "/c/repos/r.1.git"}),
-			cache.RebuildShape},
-		{"upload-pack's stderr echoes an argument naming corruption",
-			exit(gitproc.ErrCorrupt, "fatal: unexpected line: 'x is corrupt'\n"), ""},
-		{"upload-pack's stderr echoes a line naming the multi-pack-index",
-			exit(gitproc.ErrCorrupt, "fatal: unexpected line: 'x\n"+midxLine+"\n'\n"), ""},
-		{"upload-pack's stderr names a missing object",
-			exit(gitproc.ErrMissingObject, "fatal: unexpected line: 'bad object "+strings.Repeat("ab", 20)+"'\n"), ""},
-		{"upload-pack refuses a want", exit(gitproc.ErrNotOurRef, "fatal: git upload-pack: not our ref\n"), ""},
-		{"the node ended git", fmt.Errorf("gitproc: ended: %w", gitproc.ErrStalled), ""},
-		{"no slot was free", gitproc.ErrBusy, ""},
-	} {
-		reason, ok := fetchDamage(tc.err)
-		if ok != (tc.reason != "") || reason != tc.reason {
-			t.Errorf("%s: fetchDamage = %q, %v; want %q", tc.name, reason, ok, tc.reason)
 		}
 	}
 }
