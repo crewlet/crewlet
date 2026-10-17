@@ -495,14 +495,14 @@ func TestUnassignedWorkLandsOnTheProjectsDefaultAssignee(t *testing.T) {
 		t.Errorf("the wake's assignee delta is %+v, want it to name %q", moved, "bo")
 	}
 	woken := false
-	for _, c := range worklet.Candidates(wake, false) {
+	for _, c := range worklet.Candidates(wake) {
 		if c.Handle == "bo" && c.Reason == worklet.ReasonAssignee {
 			woken = true
 		}
 	}
 	if !woken {
 		t.Errorf("the default assignee is not woken as the assignee: %+v",
-			worklet.Candidates(wake, false))
+			worklet.Candidates(wake))
 	}
 
 	// A NAMED ASSIGNEE IS LEFT ALONE.

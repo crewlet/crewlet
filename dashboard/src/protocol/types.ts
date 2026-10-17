@@ -4517,7 +4517,6 @@ export interface WorkActivityRecord {
   excerpt?: string;
   fields?: Record<string, WorkDelta>;
   comment_id?: string;
-  batch_id?: string;
   turn_id?: string;
   /** The question this commit asked or answered, as it stands NOW. */
   ask?: WorkAskView;

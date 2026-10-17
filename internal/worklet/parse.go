@@ -146,11 +146,9 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	}
 
 	base := p.inbound(record)
-	// FROM THE RECORD, exactly as the applier reads it — see
-	// [MutationRecord.Batched]. This used to read a field on the parser
-	// that nothing ever assigned, so the two surfaces agreed only by the
-	// accident that no writer sets a batch id yet.
-	candidates := Candidates(record.Notify, record.Batched())
+	// FROM THE RECORD, exactly as the applier reads it, so the wake and the
+	// notification rows can never disagree about who a change concerns.
+	candidates := Candidates(record.Notify)
 	// THE AUTHOR IS THE ONE NAME TO LEAVE OUT: a person bound to a seat
 	// writes AS that seat (iam.ActorFor), so the handle their own gestures
 	// land on — the watch a create leaves, the watch a comment leaves — is

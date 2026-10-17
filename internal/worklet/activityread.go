@@ -92,7 +92,6 @@ type ActivityRecord struct {
 	Excerpt   string           `json:"excerpt,omitempty"`
 	Fields    map[string]Delta `json:"fields,omitempty"`
 	CommentID string           `json:"comment_id,omitempty"`
-	BatchID   string           `json:"batch_id,omitempty"`
 	TurnID    string           `json:"turn_id,omitempty"`
 
 	// Ask is the question this commit asked or answered, as it stands now
@@ -232,8 +231,6 @@ type ActivityQuery struct {
 	// [ActivityRecord.Notified]. Not to what woke somebody: a change can
 	// be announced and still reach nobody.
 	Notified *bool
-
-	Batch string
 
 	Limit  int
 	Cursor string
@@ -495,7 +492,7 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		SELECT h.id, h.log_seq, h.log_stream, h.log_generation,
 		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
 		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
-		       h.excerpt, h.fields_json, h.comment_id, h.batch_id, h.turn_id,
+		       h.excerpt, h.fields_json, h.comment_id, h.turn_id,
 		       h.notified, h.late,
 		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
 		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
@@ -523,14 +520,13 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var authored, effective int64
 		var kind, actorKind, subjectKind string
 		var fields string
-		var batch, key sql.NullString
+		var key sql.NullString
 		var notified, late, collision int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
 			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
-			&batch, &record.TurnID, &notified, &late, &key,
-			&collision); err != nil {
+			&record.TurnID, &notified, &late, &key, &collision); err != nil {
 			return nil, "", fmt.Errorf("worklet: scan an activity row: %w", err)
 		}
 		record.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -539,7 +535,6 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		record.Kind = ChangeKind(kind)
 		record.ActorKind = AuthorKind(actorKind)
 		record.SubjectKind = ObjectKind(subjectKind)
-		record.BatchID = batch.String
 		record.SubjectKey = key.String
 		record.SubjectKeyCollision = collision == 1
 		record.Notified, record.Late = notified != 0, late != 0
@@ -851,9 +846,6 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 			values = append(values, string(kind))
 		}
 		add("h.actor_kind IN ("+placeholders(len(values))+")", values...)
-	}
-	if batch := strings.TrimSpace(q.Batch); batch != "" {
-		add("h.batch_id = ?", batch)
 	}
 	if assignee := strings.TrimSpace(q.Assignee); assignee != "" {
 		// A JOIN TO THE TASK'S CURRENT ASSIGNEE, which is what a caller

@@ -91,7 +91,7 @@ func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 		if len(notify.Snapshot.Dependents) == 0 {
 			continue
 		}
-		for _, candidate := range worklet.Candidates(notify, false) {
+		for _, candidate := range worklet.Candidates(notify) {
 			if candidate.Handle == "bo" && candidate.Reason == worklet.ReasonBlocking {
 				told = true
 			}

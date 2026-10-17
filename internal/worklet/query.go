@@ -351,7 +351,6 @@ type Query struct {
 
 	LinkedPage string
 	References string
-	Batch      string
 
 	// Any is one level of disjunction, ANDed with the top-level keys.
 	Any []Query
@@ -512,7 +511,7 @@ type Params interface {
 // company's own and cannot be enumerated here — see [Query.parseFields].
 var QueryKeys = []string{
 	"any", "archived", "archived_at", "around", "asked_by", "asked_of", "assignee",
-	"batch", "blocked", "blocking", "checklist_assignee", "closed",
+	"blocked", "blocking", "checklist_assignee", "closed",
 	"closed_since", "collaborator",
 	"container", "created", "cursor", "done", "due", "estimate",
 	"fields", "finished", "flag", "group", "group_by", "group_by2",
@@ -606,7 +605,6 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		// answering two ways depending on which parameter it was
 		// pasted into.
 		References: ProjectKey(p.String("references")),
-		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
 		// THE LIST, not the enum. See [Query.PriorityListOf].
 		PriorityListOf: strings.TrimSpace(p.String("priorities")),
