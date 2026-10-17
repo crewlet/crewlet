@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`
-- **Enforced-by:** `internal/api/operator.TestAnActWriteIsMadeAsItsPrincipal`, `internal/api/operator.TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`, `internal/api/operator.TestAnyResolvedPrincipalMayAct`, `internal/api/operator.TestARetriedActIsOneWrite`, `internal/api/auth.TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns`
+- **Enforced-by:** `internal/api/operator.TestAnActWriteIsMadeAsItsPrincipal`, `internal/api/operator.TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`, `internal/api/operator.TestAnyResolvedPrincipalMayAct`, `internal/api/operator.TestARetriedActIsOneWrite`, `internal/api/auth.TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns`, `internal/api/auth.TestASocketHandshakeIsRefusedForAnotherReaderNamedInItsURL`
 - **Measured:** the largest legal page is 512 KiB of text, and a page of nothing but quotes, backslashes and newlines is 1 MiB once `JSON.stringify` has escaped it — so the act body is capped at twice the page plus 64 KiB for the envelope (`operator.MaxActBody`, 1 114 112 bytes), and a cap at the page's own size refused a page the store accepts.
 - **Cost-when-tried:** the dashboard wrote nothing, on the argument that a browser form would write as "the dashboard", an actor no audit can ask why. Every change was a pre-filled tool call a person copied into an assistant connected to `/operator/mcp` — a gesture of four steps for "mark this read", checked by a test that each call named a real tool and never by anybody pressing it; the Inbox, the priorities list and the board each showed state no control on screen could change.
 - **Tag-status:** unreleased
@@ -47,10 +47,13 @@ the principal id `GET /auth/session` answered it), and the request guard serves
 such a request only to that principal: anybody else is `409 reader_changed`,
 before any handler runs, so nothing is admitted, written, audited or keyed.
 The dashboard hands the tab to whoever the session is on that answer, as a
-sign-in by them in that tab would. A request naming no reader — every script,
-assistant and command — is decided as it always was, and the two the dashboard
-makes to learn or change who the session is (the session read and the token
-exchange) name none.
+sign-in by them in that tab would. The socket's handshake, the one request a
+browser cannot put a header on, names the reader in its URL instead (the
+`reader` parameter, read on an upgrade alone), so a socket that redials under a
+cookie that moved is refused before it draws anybody's company. A request
+naming no reader — every script, assistant and command — is decided as it
+always was, and the two the dashboard makes to learn or change who the session
+is (the session read and the token exchange) name none.
 
 **The request names its operation.** The key travels in the `Idempotency-Key`
 header (`internal/api/opkey`), a UUIDv7 the client mints per gesture and
