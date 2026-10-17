@@ -1091,8 +1091,10 @@ Leaving one out does not strip it; the browser refuses the whole request, or
 hides the header from the page, so a route reading a header a permitted origin
 cannot send is a route that origin can never use. The dashboard's
 `X-Crewlet-Reader` is not offered, since only the dashboard sends it and it is
-same-origin. The [API reference](../reference/api-endpoints.md#routes)
-says which route reads each one. A preflight is cacheable for ten minutes —
+same-origin. The methods are likewise exactly the ones the routes serve —
+`OPTIONS` among them, for `OPTIONS /config`. The
+[API reference](../reference/api-endpoints.md#routes) says which route reads
+each one. A preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
