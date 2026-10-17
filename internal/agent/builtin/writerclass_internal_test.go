@@ -104,7 +104,6 @@ var domainErrors = map[string]map[string]classRow{
 	tracker.Domain{}.Name(): {
 		"ErrAlreadyAnswered":        {err: tracker.ErrAlreadyAnswered, class: tools.RefusalAlreadyAnswered},
 		"ErrBadQuery":               {err: tracker.ErrBadQuery, class: tools.RefusalInvalid},
-		"ErrBulkInFlight":           {err: tracker.ErrBulkInFlight, class: tools.RefusalConflict},
 		"ErrForbidden":              {err: tracker.ErrForbidden, class: tools.RefusalForbidden},
 		"ErrInboxFull":              {err: tracker.ErrInboxFull, class: tools.RefusalInboxFull},
 		"ErrIndexBuilding":          {err: tracker.ErrIndexBuilding, class: tools.RefusalUnavailable},
