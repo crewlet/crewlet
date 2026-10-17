@@ -168,8 +168,10 @@ type Options struct {
 
 	// Org is the company chart, resolved per call because a config apply
 	// replaces it. An operator has no turn to carry one: `search_knowledge`
-	// is scoped against it, and a pause resolves the seat it names through
-	// it. Nil serves neither.
+	// and `answer_knowledge` are scoped against it, and nil serves neither;
+	// `steer_turn` names the seat a reply comes from through it where it
+	// can. A pause resolves the seat it names through [Options.Pauses]' own
+	// Org, which is required.
 	Org func() *org.Organization
 
 	// Authorize decides whether the party behind a call may make it, and
@@ -186,16 +188,25 @@ type Options struct {
 
 	// Pauses is the fleet's record of which seats a person paused
 	// (`pause_seat`, `resume_seat`). Its Actor is set per call. REQUIRED
-	// (its Pauses): see [Options.Steer].
+	// (its Pauses, and the Announce and Org the tools are required with):
+	// see [Options.Steer].
 	Pauses builtin.SeatPauseDeps
 
 	// Steer reaches the node running a turn, so a person can send it a note
-	// (`steer_turn`). Its Actor is set per call. REQUIRED (its Asker), with
-	// [Options.Runs] and [Options.Pauses]: the three are the fleet's own
-	// records, which every node reaches whatever its company runs, so a
-	// surface built without one is a wiring mistake rather than a company
-	// that does not want it — and they are what keep the catalogue from
-	// ever being empty once the company is up.
+	// (`steer_turn`). Its Actor is set per call. REQUIRED (its Asker, and
+	// the Wire the tool is required with), with [Options.Runs] and
+	// [Options.Pauses]: the three are the fleet's own records, which every
+	// node reaches whatever its company runs, so a surface built without one
+	// is a wiring mistake rather than a company that does not want it — and
+	// they are what keep the catalogue from ever being empty once the
+	// company is up.
+	//
+	// EVERY SEAM A CONTROL IS REQUIRED WITH IS REQUIRED HERE TOO, not only
+	// the one that switches the tool on: [builtin.OperatorTools] offers a
+	// control on its record alone, and a control offered without its
+	// announcer, its chart or its signed wire refuses every call as
+	// `unavailable` — listed to an assistant, and failing on each use, which
+	// is the catalogue [builtin.OperatorTools] exists to never show.
 	Steer builtin.SteerDeps
 
 	// Answer answers a person's question from the company's knowledge
@@ -273,8 +284,17 @@ func New(opts Options) (*Server, error) {
 	case opts.Pauses.Pauses == nil:
 		return nil, fmt.Errorf("%w: Options.Pauses.Pauses (pause_seat, resume_seat) is nil",
 			ErrNoSeatControls)
+	case opts.Pauses.Announce == nil:
+		return nil, fmt.Errorf("%w: Options.Pauses.Announce (seat_paused, seat_resumed) is nil",
+			ErrNoSeatControls)
+	case opts.Pauses.Org == nil:
+		return nil, fmt.Errorf("%w: Options.Pauses.Org (the chart a pause names a seat of) is nil",
+			ErrNoSeatControls)
 	case opts.Steer.Asker == nil:
 		return nil, fmt.Errorf("%w: Options.Steer.Asker (steer_turn) is nil", ErrNoSeatControls)
+	case opts.Steer.Wire == nil:
+		return nil, fmt.Errorf("%w: Options.Steer.Wire (steer_turn's signed envelopes) is nil",
+			ErrNoSeatControls)
 	}
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,

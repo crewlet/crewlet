@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -19,6 +20,8 @@ import (
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -111,16 +114,29 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 }
 
 // withSeatControls is opts with the seat controls [operator.New] requires,
-// wired as a node wires them — over the fleet's own record and its queue —
-// here an in-memory fleet and queue nobody else reads.
+// wired as a node wires them — over the fleet's own record and its queue, the
+// company's chart and the fleet's signed steer channel — here an in-memory
+// fleet and queue nobody else reads, a company with no chart, and a channel
+// under a key no node of any case holds.
 func withSeatControls(opts operator.Options) operator.Options {
 	fleet, queue := coordmemory.NewFleet(), queuememory.New()
 	opts.Runs = builtin.RunDeps{Desk: sandbox.AnswerDesk{
 		Pending: sandbox.NewCoordStore(fleet), Queue: queue}}
-	opts.Pauses = builtin.SeatPauseDeps{Pauses: fleet, Announce: queue}
-	opts.Steer = builtin.SteerDeps{Asker: queue}
+	opts.Pauses = builtin.SeatPauseDeps{Pauses: fleet, Announce: queue,
+		Org: func() *org.Organization { return nil }}
+	opts.Steer = builtin.SteerDeps{Asker: queue, Wire: seatControlWire}
 	return opts
 }
+
+// seatControlWire is the steer channel [withSeatControls] signs on.
+var seatControlWire = func() *signedask.Channel[steer.Request, steer.Reply] {
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
+		statelog.OneKey("k1", "the api cases' seat-control key material"))
+	if err != nil {
+		panic(err)
+	}
+	return wire
+}()
 
 // operatorSurface builds an operator surface whose catalogue is the work half
 // a case names beside the seat controls, decided on grants alone and auditing
