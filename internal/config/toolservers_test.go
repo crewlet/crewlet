@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 
 	"gopkg.in/yaml.v3"
@@ -29,6 +30,13 @@ import (
 // built from a page that forgot reads every message and answers none. Nothing
 // in the engine can catch either — it is tool-agnostic by design and never
 // names a server — so the documents are checked where they are written.
+//
+// A PAGE PINS AND AN EXAMPLE DOES NOT. A page states what one release does —
+// its tools, its variables, what it takes to post — so it names that release.
+// A shipped example is a company somebody copies and runs long after it was
+// written, and nothing moves a pin in it, so it fetches the newest of
+// everything, except the server a bundled tool skill triggers on by tool name:
+// there a renamed tool would disarm the skill without a sound.
 
 // pinnedToolServers are EVERY server a document launches, each at the release
 // what the documents say about it was read against. A server missing here
@@ -58,6 +66,21 @@ var pinnedToolServers = []struct {
 }
 
 var exactRelease = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// newest reports whether a package spec runs whatever release is newest when
+// it is fetched: a bare name, or the `@latest` npm and uvx both take.
+func newest(spec string) bool {
+	_, version := splitRelease(spec)
+	return version == "" || version == "latest"
+}
+
+// shippedExample reports whether where — a path from the repository's root, as
+// the documents are reported by — is in the shipped examples, which run the
+// newest release of what they fetch rather than an exact one: see
+// [TestTheShippedExamplesRunTheNewestRelease].
+func shippedExample(where string) bool {
+	return strings.HasPrefix(filepath.ToSlash(where), "examples/")
+}
 
 func isPinnedToolServer(name string) bool {
 	for _, p := range pinnedToolServers {
@@ -759,19 +782,20 @@ func documentedCommands(t *testing.T) []documentedCommand {
 	return found
 }
 
-// EVERY PACKAGE A DOCUMENT FETCHES BY NAME IS AN EXACT RELEASE, AND EVERY
-// SERVER IT LAUNCHES IS ONE WHOSE CLAIMS WERE READ.
+// EVERY PACKAGE A PAGE FETCHES BY NAME IS AN EXACT RELEASE, AND EVERY SERVER A
+// DOCUMENT LAUNCHES IS ONE WHOSE CLAIMS WERE READ.
 //
 // Every launch a configuration spells — an mcp_servers entry in any fenced
-// block of a page, an example or a skill, or an API answer that reports one,
-// and every command it runs through `env` or a shell's -c string — and every
-// runner command spelled anywhere (a troubleshooting step, a setup string, a
-// shell block) names each package it fetches at an exact release, an editable
-// install from a URL included: the examples are what an operator copies and
-// runs, and `@latest` or a bare name is a working run nobody can reproduce.
-// And the server a launch runs — its last command — is one of
-// [pinnedToolServers], so what the documents say about it is tied to the
-// release it was read at.
+// block of a page or a skill, or an API answer that reports one, and every
+// command it runs through `env` or a shell's -c string — and every runner
+// command spelled anywhere (a troubleshooting step, a setup string, a shell
+// block) names each package it fetches at an exact release, an editable
+// install from a URL included: a page says what one release does, and
+// `@latest` or a bare name runs one nobody read. The shipped examples are held
+// the other way round, by [TestTheShippedExamplesRunTheNewestRelease]. And the
+// server a launch runs — its last command — is one of [pinnedToolServers]
+// wherever it is launched, an example included, so what the documents say
+// about it is tied to the release it was read at.
 //
 // Not held: `go install …@latest` of Crewlet itself, whose version is its tag
 // and which nothing in this tree records (RELEASING.md).
@@ -791,7 +815,7 @@ func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 				continue
 			}
 			for _, spec := range inv.packages {
-				if !exact(spec) {
+				if !exact(spec) && !shippedExample(l.where) {
 					t.Errorf("%s: %q launches %q, which names no exact release of %s", l.where, l.name, strings.Join(l.line, " "), spec)
 				}
 			}
@@ -824,7 +848,7 @@ func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 		}
 		commands++
 		for _, spec := range inv.packages {
-			if !exact(spec) {
+			if !exact(spec) && !shippedExample(c.where) {
 				t.Errorf("%s tells somebody to run %q, which fetches %s at no exact release", c.where, c.text, spec)
 			}
 		}
@@ -837,10 +861,13 @@ func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 // ONE RELEASE OF EACH PINNED SERVER, EVERYWHERE IT IS NAMED, AND THE ONE ITS
 // CLAIMS WERE READ AGAINST. Every launch of it, every runner command that
 // fetches it, every place a page names it with a version in either spelling,
-// and a link into its own repository at a tag all name the same release — so a bump that reaches the examples and misses a
-// troubleshooting step, or the reverse, fails here instead of in front of
-// somebody following that step. That each of them names an exact release at
-// all is [TestEveryDocumentedLaunchNamesAnExactRelease]'s.
+// and a link into its own repository at a tag all name the same release — so a
+// bump that reaches the examples and misses a troubleshooting step, or the
+// reverse, fails here instead of in front of somebody following that step.
+// That each of them names an exact release at all is
+// [TestEveryDocumentedLaunchNamesAnExactRelease]'s, and an example running the
+// newest names no release to count: that is
+// [TestTheShippedExamplesRunTheNewestRelease]'s.
 func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 	t.Parallel()
 	// Every command that fetches a package: each a launch runs, wrappers
@@ -879,6 +906,9 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 					if i < launched {
 						entries++
 					}
+					if shippedExample(f.where) && newest(spec) {
+						continue
+					}
 					releases[version] = append(releases[version], f.where)
 				}
 			}
@@ -905,7 +935,7 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 					}
 					rel, _ := filepath.Rel(root, p)
 					for _, m := range mention.FindAllStringSubmatch(string(body), -1) {
-						if m[1] == "" {
+						if m[1] == "" || (shippedExample(rel) && newest(m[0])) {
 							continue
 						}
 						if !exactRelease.MatchString(m[2]) {
@@ -945,6 +975,150 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// bundledSkillTools is every tool a bundled tool skill's trigger names, with
+// the key of a skill naming it: every page under examples/tool-skills/, read
+// by the engine's own parser and walked at every depth of its trigger.
+func bundledSkillTools(t *testing.T) map[string]string {
+	t.Helper()
+	pages, err := filepath.Glob(filepath.Join(sourcetree.Root(t), "examples", "tool-skills", "*.md"))
+	if err != nil {
+		t.Fatalf("list the bundled skills: %v", err)
+	}
+	tools := map[string]string{}
+	var walk func(trigger skills.Trigger, key string)
+	walk = func(trigger skills.Trigger, key string) {
+		if trigger.Tool != "" {
+			tools[trigger.Tool] = key
+		}
+		for _, sub := range append(slices.Clone(trigger.AnyOf), trigger.AllOf...) {
+			walk(sub, key)
+		}
+	}
+	for _, page := range pages {
+		body, err := os.ReadFile(page) //nolint:gosec // a skill this repository ships
+		if err != nil {
+			t.Fatalf("read %s: %v", page, err)
+		}
+		skill, err := skills.Parse(string(body), skills.Source{})
+		if err != nil {
+			t.Fatalf("parse %s: %v", page, err)
+		}
+		walk(skill.Trigger, skill.Key)
+	}
+	if len(tools) == 0 {
+		t.Fatal("no bundled skill triggers on a tool — the examples' one pinned exception was certifying nothing")
+	}
+	return tools
+}
+
+// skillGate is a bundled skill triggering on a tool the entry serves, and the
+// tool — as far as the entry itself says what it serves: a name under its
+// tool_prefix, or a tool its tool_annotations names, in either spelling an
+// override is matched by. Both are empty when no bundled skill names one.
+func skillGate(s MCPServer, tools map[string]string) (skill, tool string) {
+	for _, name := range slices.Sorted(maps.Keys(tools)) {
+		serves := s.ToolPrefix != "" && strings.HasPrefix(name, s.ToolPrefix)
+		for key := range s.ToolAnnotations {
+			serves = serves || name == key || name == s.ToolPrefix+key
+		}
+		if serves {
+			return tools[name], name
+		}
+	}
+	return "", ""
+}
+
+// THE SHIPPED EXAMPLES RUN THE NEWEST RELEASE OF EVERYTHING THEY FETCH, BUT A
+// SERVER A BUNDLED SKILL TRIGGERS ON BY TOOL NAME.
+//
+// An example is a company somebody copies and runs long after it was written,
+// and a pin in it is a release nothing moves — no manifest holds it, so no
+// pull request ever proposes the next one — handing every new reader a
+// release that only gets older. So every package an example fetches by name,
+// through a launch or a command it tells somebody to run, names no release
+// (`@latest` at most) and runs the newest on the day it is copied.
+//
+// The exception is the one way a newer release fails there without a sound: a
+// bundled tool skill (examples/tool-skills/) triggering on a tool the server
+// serves, which a release renaming that tool disarms. Such a server's entry
+// names the exact release the skill was read against — the Mattermost
+// server's does, whose tool names platform_mentions and channel_discovery
+// trigger on — and only while a skill still names one of its tools. Which
+// release that is, is [TestThePinnedToolServersRunOneReleaseEverywhere]'s.
+func TestTheShippedExamplesRunTheNewestRelease(t *testing.T) {
+	t.Parallel()
+	tools := bundledSkillTools(t)
+	entries := map[string]map[string]MCPServer{} // where -> name -> entry
+	for _, block := range documentedBlocks(t) {
+		if !shippedExample(block.where) {
+			continue
+		}
+		for _, s := range block.MCPServers {
+			if entries[block.where] == nil {
+				entries[block.where] = map[string]MCPServer{}
+			}
+			entries[block.where][s.Name] = s
+		}
+	}
+
+	servers := 0
+	for _, l := range documentedLaunches(t) {
+		if !shippedExample(l.where) {
+			continue
+		}
+		var skill, tool string
+		if s, ok := entries[l.where][l.name]; ok {
+			skill, tool = skillGate(s, tools)
+		}
+		commands := commandsOf(l.line)
+		for i, command := range commands {
+			inv, ok := invocationOf(command)
+			if !ok {
+				continue
+			}
+			for _, spec := range inv.packages {
+				server := i == len(commands)-1 && spec == inv.run
+				if server {
+					servers++
+				}
+				switch _, version := splitRelease(spec); {
+				case server && skill != "":
+					if !exactRelease.MatchString(version) {
+						t.Errorf("%s: %q launches %s at no exact release, and the bundled skill %s triggers on "+
+							"its tool %s: a release that renamed it would disarm the skill without a sound, "+
+							"so name the release the skill was read against", l.where, l.name, spec, skill, tool)
+					}
+				case !newest(spec):
+					t.Errorf("%s: %q fetches %s at a fixed release, where an example runs the newest of "+
+						"what it fetches (no version, or @latest) because nothing moves a pin there — only "+
+						"a server a bundled skill triggers on by tool name is pinned, and this is not one",
+						l.where, l.name, spec)
+				}
+			}
+		}
+	}
+	if servers == 0 {
+		t.Fatal("no shipped example launches a server through a package runner — this check was certifying nothing")
+	}
+
+	for _, c := range documentedCommands(t) {
+		if !shippedExample(c.where) {
+			continue
+		}
+		inv, ok := invocationOf(c.line)
+		if !ok {
+			continue
+		}
+		for _, spec := range inv.packages {
+			if !newest(spec) {
+				t.Errorf("%s tells somebody to run %q, which fetches %s at a fixed release, where an "+
+					"example runs the newest of what it fetches (no version, or @latest) because "+
+					"nothing moves a pin there", c.where, c.text, spec)
+			}
+		}
 	}
 }
 

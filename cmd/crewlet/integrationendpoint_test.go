@@ -39,9 +39,9 @@ func TestARegistrationIsJudgedAgainstTheVendorsAddress(t *testing.T) {
 	company.Integrations.Slack = &config.Slack{}
 	e := testEngineWith(t, engine.Options{Company: company})
 
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	const vendors = "https://hooks.example.com"
-	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: freePort(t), ExternalURL: vendors + "/"}
+	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t), ExternalURL: vendors + "/"}
 	if boot.API.ExternalBase() == vendors {
 		t.Fatal("the fixture's two addresses are one, so the case cannot tell them apart")
 	}

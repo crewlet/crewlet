@@ -36,7 +36,7 @@ import (
 // bearer's start and the mint answers 503.
 func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	t.Parallel()
-	port := freePort(t)
+	port := reservePort(t)
 	boot := bootstrapFor(t, port)
 	// OPTIONAL on a loopback address, which is the posture a laptop runs and
 	// the one `crewlet validate` admits without an acknowledgement; the

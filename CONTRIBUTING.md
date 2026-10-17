@@ -654,7 +654,8 @@ that a value in it changes what the engine *does*, not merely that it parses.
 
 Dependabot watches every dependency manifest this repository has, and opens a
 pull request when any of them has a newer release (the tool servers the docs
-launch are not in a manifest, and a test holds them instead — see below):
+and the examples launch are not in a manifest, and a test holds them instead
+— see below):
 
 | Surface | Ecosystem | What it covers |
 |---|---|---|
@@ -671,7 +672,9 @@ from memory, and write it as a literal version (`4.2.4`), never a floating tag:
 `latest` and `@main` leave Dependabot nothing to bump, and a floating tag turns
 a green run into a claim about a build nobody can name afterwards.
 Holding a version back is still fine where there is a reason — put the reason in
-a comment at the pin, as the Compose stack's Postgres image already does.
+a comment at the pin, as the Compose stack's Postgres image already does. The
+one place a version is deliberately left unpinned is what a shipped example
+fetches, which runs its newest release (see below).
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
@@ -771,19 +774,30 @@ Go module itself went the length of the rewrite that way.
 The tool servers the docs, the examples and the skills launch are versions
 Dependabot cannot see: they sit in a page's YAML or a setup step's command
 line, not in a manifest. [`internal/config/toolservers_test.go`](internal/config/toolservers_test.go)
-holds them instead. Every package a document fetches by name — an
+holds them instead. Every package a page or a skill fetches by name — an
 `mcp_servers` entry, a `uvx`, `npx`, `npm exec` or `pip install` it tells
 somebody to run — names an exact release; every server a document launches is
 listed in `pinnedToolServers` with `readAt`, the release what the documents
 say about it (its tool names, its variables) was read against; and every
-document names that one release. So moving one means reading the new release
-first, correcting whatever moved, and setting `readAt` in the same change —
-and since nothing proposes the move, check the registry whenever you touch
-those pages. Reading it includes running the documented launch through
+document that names a release names that one. So moving one means reading the
+new release first, correcting whatever moved, and setting `readAt` in the same
+change — and since nothing proposes the move, check the registry whenever you
+touch those pages. Reading it includes running the documented launch through
 `initialize` and `tools/list`: a runner pins the package it is given and
 resolves every dependency the package leaves unbounded at its newest, so a
 release whose source reads right can still fail to start — `mcp-linear` 0.1.1
 declares `mcp>=0.1.0` and dies at import on mcp 2.
+
+The shipped examples (`examples/`) are held the other way round. An example is
+a company somebody copies and runs long after it was written, and a pin in it
+is a release nothing ever moves, so every package an example fetches names no
+release (`@latest` at most) and runs the newest on the day it is copied. The
+one exception is a server a bundled tool skill (`examples/tool-skills/`)
+triggers on by tool name — `mcp-server-mattermost` today — whose entry names
+`readAt` exactly, because a release that renamed the tool would disarm the
+skill without a sound. The same test derives that exception from the skills'
+own triggers, so a pin that no skill needs any more fails as surely as a skill
+on a server that floats.
 
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by

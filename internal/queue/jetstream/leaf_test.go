@@ -247,7 +247,10 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost = "127.0.0.1"
-	memberCfg.LeafPort = unusedPort(t)
+	// ON [AnyPort], AND ASKED WHICH, as [unusedPort] says a member always
+	// is: started on a port found free a moment earlier, this case lost it
+	// whenever anything else on the machine took it first.
+	memberCfg.LeafPort = AnyPort
 	memberCfg.StoreDir = t.TempDir()
 	member, err := StartServer(t.Context(), memberCfg)
 	if err != nil {
@@ -257,7 +260,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
-	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", memberCfg.LeafPort)}
+	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
 	leaf, err := StartServer(t.Context(), leafCfg)
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)

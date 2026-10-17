@@ -48,7 +48,7 @@ import (
 func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// NOT PARALLEL: the command reads its credential from the environment,
 	// and only there, which is the rule it is exercising.
-	port := freePort(t)
+	port := reservePort(t)
 	boot := bootstrapFor(t, port)
 	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	e := startFreshNode(t, boot)
@@ -145,7 +145,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 // create; let the link be spent twice, and the second spend answers 200.
 func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T) {
 	// NOT PARALLEL, for the first person's case's reason.
-	port := freePort(t)
+	port := reservePort(t)
 	boot := bootstrapFor(t, port)
 	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	e := startFreshNode(t, boot)

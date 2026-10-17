@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -18,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,7 +324,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, nil, bindNothing(t), log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -348,7 +350,7 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Host = "127.0.0.1"
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	boot.Node.Roles = []string{"data", "seats", "workers"}
 
 	surface, err := serveNodeLogged(t, boot, e, log)
@@ -425,7 +427,7 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	port := freePort(t)
+	port := reservePort(t)
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
@@ -483,7 +485,7 @@ func TestANodeRunningNoSeatsServesNoBridge(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	port := freePort(t)
+	port := reservePort(t)
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
@@ -573,7 +575,7 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	// would hold seats and hear nothing.
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
@@ -621,7 +623,7 @@ func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
 	}
 
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
@@ -660,7 +662,7 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	t.Setenv(config.NodeIDEnvVar, name)
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	// THE PERMISSION A BACKUP TAKES. The token carried none and took a
 	// backup all the same, because the route asked only whether somebody
 	// resolved; it takes `admin` now.
@@ -753,7 +755,9 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, log)
+	// ON THE SOCKET THE CASE RESERVED for each port it configured, rather
+	// than a second bind of a port it let go: see [reservePort].
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, bindReserved, log)
 	return surface, reconciler, err
 }
 
@@ -810,15 +814,100 @@ func seedEngineStore(t *testing.T, boot *config.Bootstrap) {
 	}
 }
 
-func freePort(t *testing.T) int {
+// reserved is every listening socket a case of this package holds for a port
+// it is about to configure a node with, by address. An address names at most
+// one socket — holding it is what makes it unique — so cases running in
+// parallel share the map and never an entry.
+var reserved = struct {
+	sync.Mutex
+	held map[string]net.Listener
+}{held: map[string]net.Listener{}}
+
+// reservePort is a loopback port this case HOLDS until a node it serves binds
+// that address, which [bindReserved] hands the very socket; one no node binds
+// is closed when the case ends.
+//
+// HELD RATHER THAN FOUND FREE. A port found free and let go is one anything
+// else on the machine can take before the node binds it, and the rest of the
+// suite opens sockets by the thousand while a node's bind waits behind its
+// dashboard's projection seed, which under the race detector takes seconds.
+// That is how TestReadmittingANodeBelowTheFloorIsRefused failed on main:
+// `bind 127.0.0.1:35497: … address already in use`, on a port another process
+// took in that gap.
+func reservePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reserve a port: %v", err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
+	addr := l.Addr().String()
+	reserved.Lock()
+	reserved.held[addr] = l
+	reserved.Unlock()
+	t.Cleanup(func() {
+		if l := takeReserved(addr); l != nil {
+			_ = l.Close()
+		}
+	})
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// takeReserved removes and returns the socket reserved for addr, or nil.
+func takeReserved(addr string) net.Listener {
+	reserved.Lock()
+	defer reserved.Unlock()
+	l := reserved.held[addr]
+	delete(reserved.held, addr)
+	return l
+}
+
+// bindReserved is the [bindFunc] every node this package serves binds
+// through: an address [reservePort] holds is handed that socket, once, and
+// any other is bound as the binary binds it — so a case holding a port of its
+// own, to see a bind refused, meets the real refusal.
+func bindReserved(ctx context.Context, addr string) (net.Listener, error) {
+	if l := takeReserved(addr); l != nil {
+		return l, nil
+	}
+	return bindTCP(ctx, addr)
+}
+
+// bindNothing is the [bindFunc] for a node that must open no listener at all:
+// a bind it asks for fails the case, naming the address. Every listener a
+// node opens is opened through its bindFunc, so this sees each one, which a
+// probe of one port after the fact could not.
+func bindNothing(t *testing.T) bindFunc {
+	return func(_ context.Context, addr string) (net.Listener, error) {
+		t.Errorf("the node bound %s, and should bind nothing", addr)
+		return nil, fmt.Errorf("bind %s: this node binds nothing", addr)
+	}
+}
+
+// A RESERVED PORT IS NOBODY ELSE'S UNTIL ITS NODE SERVES ON IT. Between the
+// reservation and the bind, any other socket asking for the port is refused,
+// and the node then answers on it; the found-free port this replaced was
+// free in exactly that gap, which is what [reservePort] says it cost.
+func TestAReservedPortIsHeldUntilItsNodeServesOnIt(t *testing.T) {
+	t.Parallel()
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	if l, err := net.Listen("tcp", boot.API.Addr()); err == nil {
+		_ = l.Close()
+		t.Fatalf("%s was free between its reservation and the node's bind, so "+
+			"anything else on the machine could have taken it", boot.API.Addr())
+	}
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI on a reserved port: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if got := surface.server.socket.Addr().String(); got != boot.API.Addr() {
+		t.Errorf("the node serves on %s, want the reserved %s", got, boot.API.Addr())
+	}
+	if status, _ := answer(t, http.MethodGet, "http://"+boot.API.Addr()+"/health"); status != http.StatusOK {
+		t.Errorf("GET /health on the reserved port = %d, want 200", status)
+	}
 }
 
 func getJSON(t *testing.T, url string) map[string]any {

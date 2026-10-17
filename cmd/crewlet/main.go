@@ -179,7 +179,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 		usage(stdout)
 		return flag.ErrHelp
 	case "run":
-		return runEngine(rest, stderr)
+		return runEngine(rest, stderr, bindTCP)
 	case "validate":
 		return validateConfigs(rest, stdout, stderr)
 	case "schema":
@@ -908,7 +908,10 @@ func summaryLine(res validation) string {
 // errSilent asks the caller to exit non-zero without printing anything more.
 var errSilent = errors.New("")
 
-func runEngine(args []string, stderr io.Writer) (err error) {
+// runEngine is `crewlet run`. bind opens every listener the node serves on:
+// [bindTCP] for the binary, and a socket the caller already holds for a test
+// that starts a whole node (see [bindFunc]).
+func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	file, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -1254,7 +1257,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// /ready report honestly that it holds no seats yet, and a webhook that
 	// arrives in the window is retained rather than dropped because the
 	// mailboxes are created before any claiming (see Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, bind, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1651,10 +1654,11 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 	})
 }
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
+// serveAPI binds the HTTP surface through bind, or reports that this node
+// serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
-	configSurface *configapi.Service, dev *auth.DevPrincipal, log *slog.Logger,
+	configSurface *configapi.Service, dev *auth.DevPrincipal, bind bindFunc, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a node with no listener at all. Saying so is the
@@ -1707,7 +1711,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// so a seats node running an agent-mode seat is the only node its box can
 	// reach. See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
-		return serveProbes(ctx, boot, e, reconciler, log)
+		return serveProbes(ctx, boot, e, reconciler, bind, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER (see runEngine).
@@ -2274,7 +2278,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// public bind that fails takes the admin one down with it, through the
 	// one stop every shutdown takes, rather than leaving a node serving its
 	// dashboard while every webhook finds nothing listening.
-	server, addr, err := listenAPI(ctx, boot.API.Addr(), app, log)
+	server, addr, err := listenAPI(ctx, bind, boot.API.Addr(), app, log)
 	if err != nil {
 		// THROUGH THE ONE STOP, with no listener on it yet: the projector
 		// is already running, on a broadcast subscription to the engine's
@@ -2286,7 +2290,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	surface.server = server
 	publicAddr := ""
 	if app.Public() != nil {
-		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(), app.Public(), log)
+		surface.public, publicAddr, err = listenAPI(ctx, bind, boot.API.Public.Addr(), app.Public(), log)
 		if err != nil {
 			surface.stop(context.WithoutCancel(ctx), log)
 			return nil, err
@@ -2355,7 +2359,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // [api.EngineProbeOptions]' decision, the one the end-to-end suite probes
 // through too.
 func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
-	reconciler *engine.Reconciler, log *slog.Logger,
+	reconciler *engine.Reconciler, bind bindFunc, log *slog.Logger,
 ) (*httpSurface, error) {
 	opts, err := api.EngineProbeOptions(boot, e, reconciler)
 	if err != nil {
@@ -2374,14 +2378,14 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	server, addr, err := listenAPI(ctx, boot.API.Addr(), handler, log)
+	server, addr, err := listenAPI(ctx, bind, boot.API.Addr(), handler, log)
 	if err != nil {
 		return nil, err
 	}
 	surface := &httpSurface{server: server}
 	publicAddr := ""
 	if opts.Bridge == nil && bridge != nil {
-		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(),
+		surface.public, publicAddr, err = listenAPI(ctx, bind, boot.API.Public.Addr(),
 			api.BridgeOnly(boot, bridge), log)
 		if err != nil {
 			surface.stop(context.WithoutCancel(ctx), log)
@@ -2401,20 +2405,40 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	return surface, nil
 }
 
-// listenAPI binds addr and serves handler on it, in the background.
+// bindFunc opens the socket one of the node's listeners serves on, at the
+// address the configuration names.
+//
+// The binary's is [bindTCP]. It is a parameter because a test that serves a
+// node has to write the node's port into its configuration before the node
+// binds it, and a port it found free and let go is one anything else on the
+// machine can take in between: the rest of the suite opens sockets by the
+// thousand, and the bind waits for the dashboard's projection to be seeded
+// first, which under load takes seconds. So such a test HOLDS the socket from
+// the moment it picks the port and hands it over here, where every listener
+// the node opens is opened.
+type bindFunc func(ctx context.Context, addr string) (net.Listener, error)
+
+// bindTCP binds addr, which is how a running node opens a listener.
+//
+// Through a ListenConfig so a shutdown signal arriving while the bind is in
+// flight aborts it, rather than leaving a listener nobody will serve from: the
+// bind can block on a DNS lookup for the host.
+func bindTCP(ctx context.Context, addr string) (net.Listener, error) {
+	var listenCfg net.ListenConfig
+	return listenCfg.Listen(ctx, "tcp", addr)
+}
+
+// listenAPI opens addr through bind and serves handler on it, in the
+// background.
 //
 // ONE PATH for every listener a node opens — the whole API, the public
 // listener beside it, the probe surface ([api.Probes]) and the bridge's own —
 // so they cannot drift apart on the timeouts that bound an unauthenticated
 // client or on how a bind failure is reported.
-func listenAPI(ctx context.Context, addr string, handler http.Handler,
+func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Handler,
 	log *slog.Logger,
 ) (*apiListener, string, error) {
-	// Through a ListenConfig so a shutdown signal arriving while the bind
-	// is in flight aborts it, rather than leaving a listener nobody will
-	// serve from: the bind can block on a DNS lookup for the host.
-	var listenCfg net.ListenConfig
-	listener, err := listenCfg.Listen(ctx, "tcp", addr)
+	listener, err := bind(ctx, addr)
 	if err != nil {
 		return nil, "", fmt.Errorf("api: bind %s: %w", addr, err)
 	}

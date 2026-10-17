@@ -37,7 +37,7 @@ func TestAContactIDResolvesThroughTheNodesOwnChain(t *testing.T) {
 	e := testEngineWith(t, engine.Options{Company: company,
 		Environment: config.MapSource{variable: "U0FOUNDER"}})
 
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
