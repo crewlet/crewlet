@@ -308,7 +308,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 
 	kind := channelKind(event, channel)
 	msg := notify.ChatMessage{
-		Channel: channel, Thread: thread, Text: text,
+		Channel: channel, Thread: thread, ID: ts, Text: text,
 		Targeting: targeting(kind, eventType),
 	}
 	reach := notify.Delivery{Deliver: true}
@@ -321,16 +321,6 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 		}
 		if !reach.Deliver {
 			return nil, nil
-		}
-	}
-
-	// A TOP-LEVEL message follows its OWN id, because that id becomes the
-	// thread every reply carries — so a seat named in a channel hears the
-	// answers to what it was asked, without being named again.
-	if p.threads != nil && thread == "" && reach.Reason != "" {
-		if err := p.threads.Follow(ctx, seat.Handle, channel, ts, p.now()); err != nil {
-			log.WarnContext(ctx, "slack_follow_not_recorded",
-				"handle", handle, "thread", ts, "error", err.Error())
 		}
 	}
 

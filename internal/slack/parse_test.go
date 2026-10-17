@@ -386,8 +386,49 @@ func TestBeingNamedInAChannelFollowsTheThreadItStarts(t *testing.T) {
 	if got := route(t, parser(t, store), w); len(got) != 1 {
 		t.Fatalf("a mention did not reach the seat: %+v", got)
 	}
-	if store.reason("swe", "C0ENG", "1700000009.000900") == "" {
-		t.Error("the message's own id was not followed")
+	if got := store.reason("swe", "C0ENG", "1700000009.000900"); got != string(notify.FollowMention) {
+		t.Fatalf("the message's own id is followed as %q, want the mention", got)
+	}
+	// The answer arrives under it, reaches the seat and obliges it: the
+	// thread is one the seat was asked something in.
+	answer := route(t, parser(t, store), event("message", map[string]any{
+		"ts": "1700000010.000100", "thread_ts": "1700000009.000900", "text": "here you go",
+	}))
+	if len(answer) != 1 {
+		t.Fatalf("the answer to a question the seat was asked was dropped: %+v", answer)
+	}
+	if !slack.Prompt().Address.Addressed(answer[0].Metadata) {
+		t.Error("a reply in a thread the seat was named in does not oblige an answer")
+	}
+}
+
+// A BROADCAST'S THREAD IS FOLLOWED AS A BROADCAST. The seat hears the replies
+// under an <!here> — it was in the room — but it owes none of them an answer:
+// recorded as anything stronger, every seat in the channel would be obliged to
+// answer every reply to every broadcast.
+func TestABroadcastsThreadIsFollowedAsABroadcast(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	if got := route(t, p, event("message", map[string]any{
+		"ts": "1700000011.000100", "text": "<!here> standup in five",
+	})); len(got) != 1 {
+		t.Fatalf("a broadcast did not reach the seat: %+v", got)
+	}
+	if got := store.reason("swe", "C0ENG", "1700000011.000100"); got != string(notify.FollowCollective) {
+		t.Fatalf("the broadcast's thread is followed as %q, want collective", got)
+	}
+	reply := route(t, p, event("message", map[string]any{
+		"ts": "1700000012.000100", "thread_ts": "1700000011.000100", "text": "on my way",
+	}))
+	if len(reply) != 1 {
+		t.Fatalf("a reply under a broadcast was dropped: %+v", reply)
+	}
+	if got := reply[0].Metadata[notify.FollowingField]; got != string(notify.FollowCollective) {
+		t.Errorf("the reply rides the follow as %q", got)
+	}
+	if slack.Prompt().Address.Addressed(reply[0].Metadata) {
+		t.Error("a reply under a broadcast obliges every seat in the room to answer it")
 	}
 }
 

@@ -461,7 +461,7 @@ integrations:
 | Mode | Shows the status when… |
 |---|---|
 | `always` *(default)* | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
-| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent is in because it was named there — a thread it merely spoke in does not count |
+| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent is in because it was named there — a thread it merely spoke in, or one a broadcast started, does not count |
 
 > **There is no `off`.** What it bought was a company whose agents think in
 > silence for minutes at a time, which is the state this feature exists to
@@ -470,7 +470,8 @@ integrations:
 > for the deployment.
 
 `addressed` deliberately excludes passive channel traffic, collective
-addresses and the replies in a thread the agent only spoke in. Every bot in a
+addresses, and the replies in a thread the agent only spoke in or that a
+broadcast started. Every bot in a
 channel is woken by a top-level message, and the
 [triage prompt](../concepts/turn-engine.md) tells most of them to stay
 silent — so `always` in a shared channel with five agents lights up five
@@ -533,6 +534,8 @@ By default, agents only receive thread replies in threads they are **following**
 1. **Direct mention** — `<@BOT_USER_ID>` or `app_mention` event
 2. **Collective address** — `<!channel>` or `<!here>`
 3. **Participation** — the agent replies in the thread. Because the reply goes out through the Slack MCP tools rather than the engine, the follow is recorded from Slack's own **echo** of that message: the parser writes it on the way past as it suppresses the seat's own post, which is also what lets a node record a follow for a seat it is not running.
+
+A **top-level** message that mentions the agent, or the room, starts the thread its own `ts` becomes, so the agent hears the answers without being named again — and it follows that thread for the same reason. The reason is what decides whether a reply [obliges an answer](../concepts/turn-engine.md#who-is-waiting-and-how-they-get-an-answer) and raises the [`addressed` indicator](#working-status-is-thinking): a thread the agent was named in does, while one a broadcast started, or one it merely spoke in, only lets it hear what is said there.
 
 Thread tracking state is persisted in the fleet's [coordination store](../concepts/coordination.md), keyed by backend, so it survives engine restarts *and* is visible to whichever node claims the next reply — an inbound message is parsed by one node of the fleet, and a follow only that node could see would make a non-mention reply reach its seat by chance. Bot messages are automatically ignored to prevent loops.
 
