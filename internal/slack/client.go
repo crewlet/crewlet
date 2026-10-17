@@ -370,12 +370,13 @@ const repliesMaxPages = 10
 // the turn. So the window SLIDES: the parent is kept because it is what the
 // thread is about, and the oldest reply is the first thing dropped, which is
 // the same root-plus-newest rule the prompt block above renders by
-// (internal/agent/prefetch keeps the root and the newest thirty).
+// (internal/agent/prefetch keeps the root and the newest messages whole, and
+// condenses the ones between them).
 //
-// A page rather than that thirty, because how many a renderer uses is the
-// renderer's business and this leaves three times the margin for a thread
-// whose newest messages are bookkeeping it skips. What the window drops is
-// COUNTED, not lost: see [Thread.Older].
+// A page, because how many a renderer uses is the renderer's business: the
+// block is bounded by bytes and condenses its middle, so every reply the walk
+// keeps is one it can use, either verbatim or in that condensed account. What
+// the window drops is COUNTED, not lost: see [Thread.Older].
 const repliesKeep = repliesPageLimit
 
 // Reply is one message in a thread, as conversations.replies returns it.
