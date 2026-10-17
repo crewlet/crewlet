@@ -9003,8 +9003,8 @@ brings that carries a design-system rule.
   re-asking it only repeats it — see
   [Honest empty states](#honest-empty-states). There is no retry constant of
   the client's own beyond the engine's health tick, because a flat one is
-  wrong both ways on one fleet — too early for a node grinding through a bulk
-  apply, too late for one that caught up in milliseconds.
+  wrong both ways on one fleet — too early for a node grinding through a long
+  backlog, too late for one that caught up in milliseconds.
 - **A newer peer's frame is ignored and counted.** A push kind this build does
   not dispatch is dropped rather than thrown on or applied by a guess, and the
   store counts it (`unknownPushes`), because the same fall-through is what a

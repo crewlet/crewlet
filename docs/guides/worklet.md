@@ -2355,10 +2355,11 @@ company. `swept` means the change is older than the retention horizon below, so
 the rows may have existed and been cleared — their absence is not evidence.
 `unknown` means the caller stated no horizon, so nothing can date the absence.
 And `quiet` means the commit carried no notification at all, which is most
-field edits and every bulk one. The history row's own `notified` flag cannot
-tell these apart: it says the commit *carried* a notification, never that
-anybody was woken — the applier deliberately holds no roster, because two nodes
-briefly on different epochs would then write different rows for one record.
+field edits and every subtask a merge re-parents. The history row's own
+`notified` flag cannot tell these apart: it says the commit *carried* a
+notification, never that anybody was woken — the applier deliberately holds
+no roster, because two nodes briefly on different epochs would then write
+different rows for one record.
 
 **Inbox rows age out; the history does not.** `tracker.worklet.inbox_retention_days`
 (default 365, 30..3650) is how long an entry lives. A sweep on every data node

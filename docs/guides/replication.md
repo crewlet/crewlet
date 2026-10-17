@@ -286,8 +286,8 @@ sweep leaves, its thirty days. It is the same kind of assumption the trim's
 age term rests on. Keep them synchronised.
 
 `pending` is the outcome an ordinary busy fleet produces most often under load:
-the applier is 16 seconds into a bulk apply and a small write's five-second wait
-for its own record expires. Five seconds is the applier's own stall grace
+the applier is seconds behind a burst and a small write's five-second wait for
+its own record expires. Five seconds is the applier's own stall grace
 divided by twelve — many times an ordinary batch commit and its linger, and
 short enough that a caller holding a request open learns "durable, unresolved
 here" rather than waiting out a node that has stopped applying. The record is
@@ -546,7 +546,7 @@ estate from the other data nodes. What lag does bound is how fresh an answer a
 read can ask for
 ([Read Consistency](consistency.md)).
 
-### The bulk-apply degradation, priced
+### The burst degradation, priced
 
 One applier per domain, one goroutine, one totally ordered log. The measured
 drain is at least 2 000 rows/s and the steady-state load of the reference
@@ -567,14 +567,18 @@ per row; measured on a loaded CI runner under the race detector, closer to
 1.5 times. The floor above is the loaded, contended figure, so a fleet sized
 against it has margin rather than a number it has to hope for.
 
-One maximal bulk update is about 31 800 rows, which is **about 16 seconds of
-applier occupancy on every peer**. For those 16 seconds two things degrade
-fleet-wide without tripping any alarm:
+So a burst is priced by its rows: **every 2 000 rows its records write is about
+a second of applier occupancy on every data node that applies them**. Two bursts
+are ordinary. A cross-project move re-keys a subtree of up to 1 000 tasks one
+record at a time, on every data node; a node back from hours away replays
+everything it missed, on that node alone. While an applier is more than five
+seconds behind a burst, two things degrade on its node without tripping any
+alarm:
 
 - an unrelated single-object write's five-second wait expires and returns
   **`pending`** with its position and its lag — correct, and designed for;
-- a barriered read answers `behind` with a computed `retry_after` of
-  about 16.
+- a barriered read answers `behind` with a computed `retry_after` of the
+  seconds the backlog still holds.
 
 Both are the system working. `crewlet retention status` publishes the longest
 apply transaction and the longest batch actually observed, so this is a
@@ -582,12 +586,12 @@ measured property of your fleet rather than a surprise.
 
 **The occupancy is per domain, not per node.** Every domain's applier writes
 the same replicated database, and a node hands that database's write lock to
-its writers in the order they asked for it. A bulk update commits one
+its writers in the order they asked for it. A burst is applied one
 transaction at a time — at most 4 000 rows, about two seconds at the measured
 drain — and a waiting writer takes the lock as soon as the one in front of it
-commits. So a bulk update in Worklet delays Doclet's
-apply by the transactions already queued ahead of it, at most one per other
-writer on that node, never by the whole 16 seconds.
+commits. So a burst in Worklet delays Doclet's apply by
+the transactions already queued ahead of it, at most one per other writer on
+that node, never by the whole burst.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
@@ -602,12 +606,12 @@ derivation: a busy wait *longer* than the timeout above it turns lock
 contention into a request that fails with nothing to show. What a waiter can
 legitimately queue behind, on the other hand, is roughly one bounded
 transaction per other applier on the node — about two seconds each — so with
-every state-log domain applying and a bulk update in flight, the legitimate
+every state-log domain applying and a burst in flight, the legitimate
 wait is already past five seconds and grows with each domain the engine gains.
 (The usage domain's transactions are a node-day's handful of rows, and weigh
 nothing here outside a replay.)
 
-That is why `store_tx_retry` on a node doing bulk work is a **signal to raise
+That is why `store_tx_retry` on a node applying a burst is a **signal to raise
 the knob, not a fault**: the writer rejoins the line and the work lands, one
 round later. Raise it toward — never past — the query timeout above it, and
 raise it before you widen anything else: a longer per-waiter bound lets one

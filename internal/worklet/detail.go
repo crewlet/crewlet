@@ -433,8 +433,8 @@ type HistoryEntry struct {
 
 	// Quiet marks a commit that ANNOUNCED NOTHING — one that carried no
 	// notification at all. It is a fact about the change rather than
-	// about its importance — a bulk edit is quiet by construction — and
-	// it is what an activity feed renders differently.
+	// about its importance — every subtask a merge re-parents is quiet by
+	// construction — and it is what an activity feed renders differently.
 	//
 	// A LOUD COMMIT MAY STILL HAVE REACHED NOBODY: who was told is
 	// resolved against the live roster at wake time, and every candidate

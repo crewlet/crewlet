@@ -341,7 +341,7 @@ func (t ScopeTerm) named() string {
 //
 // NOT A NEW NUMBER: it is this design's universal fan-out batch — 64
 // descendants per move batch, 64 children per merge batch, 64 dependents, 64
-// watchers, 64 tasks per bulk update. A writer whose
+// watchers, 64 of a caller's own moves per rank order. A writer whose
 // affected set would exceed it emits the smallest COVERING container or family
 // term instead, so the field is bounded by construction rather than by a cap a
 // writer can hit and then have to handle.

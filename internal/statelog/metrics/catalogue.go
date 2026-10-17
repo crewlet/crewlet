@@ -586,30 +586,6 @@ func Catalogue() []Instrument {
 				"waiting, which has no other symptom at all.",
 		},
 
-		// ---- bulk -----------------------------------------------------
-		{
-			Name: TrackerBulkCalls, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"result"},
-			Shows: "How often a bulk edit is issued, by `result`: " +
-				"`admitted` under the fleet's bulk lease, `refused` because " +
-				"another is applying, and `fail_open` — let through with NO " +
-				"lease, because the coordination store did not answer the " +
-				"admission or the mixed-version gate refused it. The refusal " +
-				"arithmetic rested on an assumed ten a day, a number with " +
-				"no counter behind it; this is that number. A `fail_open` " +
-				"is a bulk the fleet-wide bound did not cover, and counted " +
-				"as `admitted` it left no trace: a store that refused every " +
-				"admission looked exactly like a fleet whose bulks never " +
-				"collided.",
-		},
-		{
-			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
-			Attributes: nil,
-			Shows: "Seconds of applier occupancy bulk edits projected, " +
-				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
-				"budget: every second here is a second in which reads are " +
-				"behind and writes are pending on every node.",
-		},
 		// ---- authentication -------------------------------------------
 		{
 			Name: AuthAttemptsFailed, Kind: KindCounter, Unit: UnitCount,

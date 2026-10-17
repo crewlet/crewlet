@@ -193,15 +193,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 		n.writer, err = worklet.NewWriter(worklet.WriterDeps{
 			Publisher: running.publisher,
-			// THE APPLIER'S OWN MEASURED RATE, so a refusal's
-			// `retry_after_seconds` is derived from what this node
-			// actually applies rather than from the one-record-a-second
-			// floor a nil reader falls back to — which reported a node
-			// two thousand records behind as half an hour behind.
-			Drain:  running.runner.Drain,
-			DB:     sl.estate().Reader(),
-			Claims: e.backends.Coord,
-			NodeID: nodeID,
+			DB:        sl.estate().Reader(),
+			Claims:    e.backends.Coord,
+			NodeID:    nodeID,
 			// THE CHART, read PER CALL. A project's lead is the one
 			// fact a wake's fallback recipient needs that the rows
 			// cannot give — `tracker_projects` carries no column for
@@ -230,9 +224,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// housekeeping indistinguishable from somebody's decision.
 			Actor:     nodeID,
 			ActorKind: worklet.AuthorSystem,
-			// The process's one recorder, so every write outcome and
-			// every rejection is counted rather than merely declared.
-			Metrics: e.metrics,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: Worklet writer: %w", err)

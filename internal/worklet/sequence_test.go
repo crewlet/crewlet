@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -124,95 +123,6 @@ func TestARequiredFieldDoesNotBlockASubtask(t *testing.T) {
 		t.Fatalf("a SUBTASK missing the same field was refused: %v — the "+
 			"subtask toggle defaults off precisely so breaking a task down "+
 			"is not blocked by its project's own policy", err)
-	}
-}
-
-// A BULK EDIT IS NOT ATOMIC AND SAYS SO PER TASK.
-//
-// It never was atomic: the caller re-runs the failures, and a result that
-// reported one outcome for the batch would make a caller re-run tasks that
-// changed.
-func TestABulkEditReportsEveryTaskSeparately(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	for _, id := range []string{"t-1", "t-2"} {
-		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
-			t.Fatalf("CreateTask %s: %v", id, err)
-		}
-		r.drain()
-	}
-
-	done := worklet.StatusDone
-	result, err := r.writer.UpdateTasks(t.Context(), "op-bulk",
-		[]string{"t-1", "t-2", "t-missing"}, "ENG",
-		worklet.TaskPatch{Status: &done}, worklet.ChangeStatus, nil)
-	if err != nil {
-		t.Fatalf("UpdateTasks: %v", err)
-	}
-	if len(result.Applied) != 2 {
-		t.Fatalf("the batch applied %v, want the two tasks that exist", result.Applied)
-	}
-	if _, failed := result.Failed["t-missing"]; !failed {
-		t.Fatalf("the batch reported no failure for a task that is not there: "+
-			"%+v — a caller that cannot tell which half landed re-runs the "+
-			"half that did", result.Failed)
-	}
-	r.drain()
-	answer := r.ask(map[string]any{"container": "project:ENG", "show_closed": "true"})
-	closed := 0
-	for _, row := range answer.Rows {
-		if row.Status == worklet.StatusDone {
-			closed++
-		}
-	}
-	if closed != 2 {
-		t.Fatalf("%d of %d tasks are done after a bulk close of two: %+v",
-			closed, len(answer.Rows), answer.Rows)
-	}
-}
-
-// A BULK EDIT OVER ITS OWN CEILING IS REFUSED BEFORE THE FIRST APPEND.
-//
-// A bulk refused halfway is a caller told "failed" about tasks that changed,
-// which is the one refusal that has to come before any of it lands.
-func TestABulkEditIsRefusedBeforeAnythingLands(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	r.drain()
-
-	ids := make([]string, worklet.MaxBulkTasks+1)
-	for i := range ids {
-		ids[i] = "t-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-	}
-	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk", ids, "ENG",
-		worklet.TaskPatch{Title: ptr("x")}, worklet.ChangeFields, nil); err == nil {
-		t.Fatal("a batch over the task ceiling was accepted")
-	}
-
-	// A MAXIMAL PATCH over a full batch: the ceiling is on what the batch
-	// APPLIES, so the same task count with a larger patch is refused where
-	// a small one is not.
-	fields := map[string]json.RawMessage{}
-	for i := range worklet.MaxFieldValues {
-		fields[fmt.Sprintf("f%03d", i)] = json.RawMessage(
-			`"` + strings.Repeat("x", worklet.MaxFieldValueBytes) + `"`)
-	}
-	if _, err := r.writer.UpdateTasks(t.Context(), "op-bytes",
-		ids[:worklet.MaxBulkTasks], "ENG",
-		worklet.TaskPatch{Fields: &fields}, worklet.ChangeFields, nil); err == nil {
-		t.Fatal("a batch over the byte ceiling was accepted")
-	} else if !strings.Contains(err.Error(), "bytes of commits") {
-		t.Fatalf("the refusal is %v and does not say what the ceiling is "+
-			"about — the caller's remedy is fewer tasks per call, which it "+
-			"cannot work out from a bare refusal", err)
-	}
-	r.drain()
-	if answer := r.ask(map[string]any{"container": "project:ENG"}); answer.Rows[0].Title != "a task" {
-		t.Fatalf("a refused batch changed a row: %q — the pre-flight runs "+
-			"before the first append precisely so it cannot", answer.Rows[0].Title)
 	}
 }
 

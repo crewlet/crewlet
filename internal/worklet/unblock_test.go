@@ -258,14 +258,14 @@ func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 //
 // The scan selected `kind = 'status'`, which is the word the WRITER chose for
 // a patch that may have moved several things — not what the row records. The
-// reachable case is a BULK CANCEL: `StatusCancelled` is in the `done` group,
-// whose own description names this path. So the apply stamps each task
-// finished and clears every dependency edge naming it a blocker — the
-// dependents are workable — while the record itself announces whatever else
-// the patch moved.
+// case is a QUIET CANCEL filed under another word: `StatusCancelled` is in the
+// `done` group, whose own description names this path. So the apply stamps
+// each task finished and clears every dependency edge naming it a blocker —
+// the dependents are workable — while the record itself announces whatever
+// else the patch moved.
 //
-// Two things made it permanent rather than merely late. Such a record is quiet
-// by design, and nothing outside [worklet.Writer.TellUnblocked] ever fills
+// Two things made it permanent rather than merely late. Such a record wakes
+// nobody, and nothing outside [worklet.Writer.TellUnblocked] ever fills
 // `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
 // hear. And the horizon was computed
 // from the same predicate, so it advanced past the record on the next status
@@ -293,7 +293,7 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	}
 
 	// THE BLOCKER IS CANCELLED BY A WRITE THAT CALLS ITSELF A FIELD EDIT,
-	// which is exactly the shape a bulk cancel publishes: quiet, a status
+	// which is exactly the shape this scan exists for: quiet, a status
 	// into the `done` group, and a kind that is not `status`.
 	cancelled := worklet.StatusCancelled
 	points := 0.0

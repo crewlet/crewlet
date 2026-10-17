@@ -31,8 +31,9 @@
  * somebody is looking for.
  *
  * The kinds are held apart and LABELLED rather than filtered down to one,
- * because "the engine did this" is as much an answer as "a person did": a bulk
- * edit nobody asked for is the thing an operator opens an audit to find.
+ * because "the engine did this" is as much an answer as "a person did": a
+ * duty's repair nobody asked for is the thing an operator opens an audit to
+ * find.
  *
  * # And THROUGH WHICH CREDENTIAL
  *

@@ -1299,8 +1299,8 @@ store:
                                     #   query timeout. It bounds the wait
                                     #   wherever it happens — in the driver, or
                                     #   in the engine's own FIFO queue for that
-                                    #   lock. Raise it on a node doing bulk
-                                    #   applies, where `store_tx_retry` in the
+                                    #   lock. Raise it on a node applying a
+                                    #   burst, where `store_tx_retry` in the
                                     #   log names it; see guides/replication.md
   # objects:                        # where the company's FILES are kept — see
                                     #   concepts/object-store.md. EVERY node
@@ -1371,8 +1371,8 @@ coordination:
                                     #   sheds healthy seats on ordinary jitter.
                                     #   Seats and presence only: a fleet duty
                                     #   sizes its lease from its own tick and
-                                    #   a tracker move, merge or bulk edit
-                                    #   from its own work.
+                                    #   a tracker move or merge from its own
+                                    #   work.
                                     #   IT IS THE BUCKET'S TTL, set by whichever
                                     #   node created the lease bucket first and
                                     #   ADOPTED by every node after it — a peer

@@ -3320,7 +3320,8 @@ export interface WorkChange {
   turn_id?: string;
   fields?: Record<string, unknown>;
   /** A commit that woke nobody — a fact about the change rather than about
-   *  its importance, since a bulk edit is quiet by construction. */
+   *  its importance, since every subtask a merge re-parents is quiet by
+   *  construction. */
   quiet?: boolean;
   /** The item's hand-off counter AS THIS COMMIT LEFT IT — the "3" of "hand-off
    *  3 of 8" on a row that moved the assignee. Absent on a row the answering

@@ -148,7 +148,7 @@ func trackerClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalInboxFull, true
 	case errors.Is(err, worklet.ErrReassignmentBudget):
 		return tools.RefusalReassignmentBudget, true
-	case errors.Is(err, worklet.ErrNothingToRestore), errors.Is(err, worklet.ErrBulkInFlight):
+	case errors.Is(err, worklet.ErrNothingToRestore):
 		return tools.RefusalConflict, true
 	case errors.Is(err, worklet.ErrUploadStale), errors.Is(err, worklet.ErrIndexBuilding):
 		return tools.RefusalUnavailable, true

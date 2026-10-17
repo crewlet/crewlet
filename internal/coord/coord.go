@@ -26,7 +26,7 @@
 //     not merely idle — it raises everyone else's share.
 //
 // A caller may lease under a class of its own as well — the tracker's walk
-// claims are `move:`, `merge:` and `bulk:` — and every such class is held to
+// claims are `move:` and `merge:` — and every such class is held to
 // the same ceiling a duty is, never to the seat lease TTL: only a seat and a
 // presence lease run on the seat heartbeat ([HeldToSeatTTL]).
 //
@@ -275,7 +275,7 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
 // MaxDutyTTL is the longest TTL any lease outside seats and presence may be
 // claimed with — a fleet duty (a `worker:` resource), a tracker walk's claim,
-// a bulk admission, any class a caller leases under a name of its own — and
+// any class a caller leases under a name of its own — and
 // the TTL every backend must be able to honour for one, whatever TTL it runs
 // its seat leases on. Named for the duty that sizes it.
 //
@@ -287,9 +287,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // tick runs from ten seconds (the scheduler) to an hour (the learning passes),
 // so a duty TTL has to outlive several of its own ticks or it moves to a peer
 // on ordinary jitter. A caller's claim is the same kind of lease: the tracker
-// sizes a walk's claim from the walk's own heartbeat and a bulk admission from
-// the rows it projects, and neither has anything to do with how fast a dead
-// node's seats should move.
+// sizes a walk's claim from the walk's own heartbeat, which has nothing to do
+// with how fast a dead node's seats should move.
 //
 // The embedded KV backend fixes a lease's expiry as its BUCKET's age, so it
 // can only honour TTLs up to the bucket it writes into. For as long as duties
@@ -302,8 +301,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // the duties out fixed exactly the duties: every other class stayed in the
 // seat lease bucket, so the tracker's 60-second walk claim was refused on the
 // same fleets — every cross-project move and every merge failed before its
-// first append, and a large bulk edit's admission failed open — and the twin
-// hid that too, because the ceiling it enforced was the duties' alone.
+// first append — and the twin hid that too, because the ceiling it enforced
+// was the duties' alone.
 //
 // So the ceiling is stated HERE, for every class [HeldToSeatTTL] leaves out,
 // every backend enforces it through [CheckLeaseTTL], and a TTL the embedded KV
@@ -319,11 +318,11 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // "one missed tick must not move the duty" ratio every other duty follows. An
 // engine test asserts that this is exactly the longest duty TTL, so the number
 // cannot drift away from the duty that justifies it; every other lease it
-// bounds is far shorter (the tracker's longest, a bulk admission at its
-// largest, asks for about two minutes). Raising it is safe on a running fleet
-// (the KV backend only ever raises its duty bucket's age); lowering it leaves
-// an existing bucket older than it needs to be, which costs nothing, because
-// no record there is judged by the bucket's age.
+// bounds is far shorter (the tracker's longest, a walk's claim, asks for a
+// minute). Raising it is safe on a running fleet (the KV backend only ever
+// raises its duty bucket's age); lowering it leaves an existing bucket older
+// than it needs to be, which costs nothing, because no record there is judged
+// by the bucket's age.
 //
 // It is also the removal-marker horizon, [MarkerRetention], by definition
 // rather than by coincidence: no operation that read a record before it was

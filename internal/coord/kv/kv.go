@@ -25,7 +25,7 @@
 //
 //   - crewlet_duties, holding every OTHER lease: the `worker:` leases of the
 //     fleet singletons, and every class a caller leases under a name of its
-//     own (the tracker's `move:`, `merge:` and `bulk:` claims). Named for the
+//     own (the tracker's `move:` and `merge:` claims). Named for the
 //     duties, which are why it exists. See "Two lease buckets" below for why
 //     none of them can share the first.
 //
@@ -62,16 +62,15 @@
 // and so is a node's presence. Every other lease is sized from the work it
 // guards: a duty is re-claimed once per tick, and a tick runs from ten seconds
 // to an hour; a tracker walk's claim is renewed on the walk's own heartbeat
-// and lasts a minute; a bulk admission lasts twice the rows it projects. So
-// their TTLs run up to coord.MaxDutyTTL. One bucket cannot serve both. Its age
-// at the seat TTL refused every duty longer than 45 seconds, which is how the
-// retention sweep, the integration reconcile, the learning passes and every
-// integration pass never ran on any fleet — and, once the duties had moved
-// and the rest had not, every tracker walk claim, which is how every
-// cross-project move and merge failed on every fleet. Its age at the longest
-// duty would put a clock read under every seat renew, and a dead node's seats
-// would sit claimable only by deadline arithmetic rather than by the broker
-// reaping them.
+// and lasts a minute. So their TTLs run up to coord.MaxDutyTTL. One bucket
+// cannot serve both. Its age at the seat TTL refused every duty longer than 45
+// seconds, which is how the retention sweep, the integration reconcile, the
+// learning passes and every integration pass never ran on any fleet — and,
+// once the duties had moved and the rest had not, every tracker walk claim,
+// which is how every cross-project move and merge failed on every fleet. Its
+// age at the longest duty would put a clock read under every seat renew, and a
+// dead node's seats would sit claimable only by deadline arithmetic rather
+// than by the broker reaping them.
 //
 // So WHICH BUCKET is decided by the class, and by the one rule coord states
 // for it (coord.HeldToSeatTTL): seats and presence in the seat lease bucket,
