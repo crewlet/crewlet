@@ -28,7 +28,8 @@ export type McpServerState =
 export interface McpStatusNode {
   id: string;
   /** False: the node's last heartbeat carried no status (its status hook
-   *  overran the beat), so its cells are unknown, never zero. */
+   *  did not answer within its share of the beat), so its cells are unknown,
+   *  never zero. */
   reported: boolean;
 }
 

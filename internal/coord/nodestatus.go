@@ -297,11 +297,11 @@ func (s NodeStatus) Meta() map[string]any {
 //
 // # Absent is not zero
 //
-// A node that publishes no status — its status hook overran its budget on
-// that beat, so its heartbeat carried the placement half alone — is not a node
-// with no work in flight. Reporting it as 0 would draw an idle row for a
-// process that is simply not saying, which is the confident-zero mistake the
-// whole surface is written to avoid.
+// A node that publishes no status — its status hook did not answer within its
+// share of that beat, so its heartbeat carried the placement half alone — is
+// not a node with no work in flight. Reporting it as 0 would draw an idle row
+// for a process that is simply not saying, which is the confident-zero mistake
+// the whole surface is written to avoid.
 //
 // A key this build does not know is IGNORED rather than refused: a successor
 // sharing the fleet publishes what it adds beside what this build reads, and a
