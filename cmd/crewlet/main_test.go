@@ -1612,7 +1612,7 @@ func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyYAML, "    handle: cto\n", "    handle: ceo\n", 1) +
-		"units:\n  - name: Platform\n    lead: ghost\n"
+		"units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
@@ -1647,7 +1647,11 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // right for a company its agents run alone and worth knowing for any other.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
+	// THE CHANNEL KEEPS THIS CASE ABOUT THE TWO KINDS. A native-chat
+	// company whose units declare none raises a third advisory of its own,
+	// and a fixture collecting it would assert a warning set rather than
+	// the pair this case names.
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1691,7 +1695,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1736,7 +1740,7 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
