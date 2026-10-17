@@ -369,16 +369,12 @@ func dutyReads() map[string]plannedRead {
 			`SELECT 1 FROM tracker_tasks
 			 WHERE project_key = ? AND rank = ? AND id <> ?`,
 			[]any{"P01", "a000001", "t-00002"}},
-		"the subtree restore": {
-			// THE PARTIAL PREDICATE IS SPELLED OUT. This engine's
-			// planner does not infer `x IS NOT NULL` from `x = ?`,
-			// so a read that omits it cannot use the index its own
-			// comment names — which is a property of the statement
-			// rather than of the schema, and the reason the read is
-			// planned here rather than assumed.
-			`SELECT id FROM tracker_tasks
-			 WHERE removed_with IS NOT NULL AND removed_with = ?`,
-			[]any{"t-00001"}},
+		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
+		// serve a read is a property of the statement rather than of the
+		// schema: this entry was a copy that spelled the index's predicate
+		// out while the restore did not, so the copy sought the index and
+		// the restore read every task.
+		"the subtree restore": {removedWithStatement, []any{"t-00001"}},
 		"the trash": {
 			`SELECT id FROM tracker_tasks WHERE removed_at IS NOT NULL
 			 ORDER BY removed_at DESC LIMIT 51`, nil},
