@@ -46,7 +46,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	moved.Status = tracker.StatusInProgress
 	notify := tracker.Wake{Kind: tracker.ChangeStatus, Before: task,
 		After: moved}.Notify(nil)
-	candidates := tracker.Candidates(notify, false)
+	candidates := tracker.Candidates(notify)
 
 	woken := func(actor string) bool {
 		for _, c := range tracker.Route(candidates, nil, actor) {

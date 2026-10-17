@@ -81,7 +81,7 @@ func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 	task.Assignee = "ana"
 	woken := tracker.Candidates(tracker.Wake{
 		Kind: tracker.ChangeCreated, After: task, Comment: &ask,
-	}.Notify(nil), false)
+	}.Notify(nil))
 	if len(woken) == 0 || woken[0].Handle != "ana" || woken[0].Reason != tracker.ReasonAsked {
 		t.Errorf("the create woke %+v, want ana first, asked", woken)
 	}
