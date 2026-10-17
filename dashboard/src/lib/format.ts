@@ -518,8 +518,8 @@ export function fmtBytes(n: number | null | undefined): string {
 /**
  * A clause as a sentence: its first letter capitalised and a full stop after
  * it. The engine writes a measurement as a clause, so its log line can carry
- * it after a colon ("backup_age: no verified backup has been recorded"); a
- * screen that prints it on its own line prints it as a sentence.
+ * it after a colon ("backup_age: no verified backup of this log has been
+ * recorded"); a screen that prints it on its own line prints it as a sentence.
  */
 export function asSentence(clause: string): string {
   const s = clause.trim();
