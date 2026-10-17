@@ -51,7 +51,7 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 		// reason: a running engine holds its database, so -secret-store
 		// writes through its API — which is also what puts a minted
 		// credential on every node rather than on this one.
-		api: fs.String("api", "",
+		api: nodeAPIFlag(fs,
 			"the running node to record credentials through; default is the "+
 				"api.host:port in -config"),
 	}

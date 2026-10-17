@@ -30,7 +30,7 @@ func runObjects(environ config.Source, args []string, stdout, stderr io.Writer) 
 	case "status":
 		return objectsStatus(environ, rest, stdout, stderr)
 	case "", "help":
-		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-url] [-json]")
+		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-api URL] [-json]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown objects command %q", sub)
@@ -99,7 +99,7 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 	}
 	if len(answer.Objects) == 0 {
 		return errors.New("this node's fleet view carries no object store: it runs " +
-			"none, so ask a node that does with -url")
+			"none, so ask a node that does with -api")
 	}
 	if *asJSON {
 		_, err := fmt.Fprintf(stdout, "%s\n", answer.Objects)
