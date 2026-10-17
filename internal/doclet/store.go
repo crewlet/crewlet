@@ -340,7 +340,8 @@ func inContainer(head Page, container string) error {
 // generation, a barrier) are arbitrated by the same framework, and their
 // refusals stay in its words: translated, two operators contending over one
 // node's gate were told "the page kept changing under this write: <node id>",
-// about an edit nobody was making.
+// about an edit nobody was making. A kind added to [ObjectKinds] is red in
+// this function's test until somebody says whether a person edits it.
 //
 // Separate from the append because the append needs a broker, a store and a
 // log, and the two refusals that reach a person are reachable through none of
