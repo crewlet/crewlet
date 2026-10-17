@@ -287,7 +287,7 @@ func walked(pages, perPage int) []string {
 //
 // conversations.replies pages from the OLDEST end, so a walk that accumulates
 // every page holds the BEGINNING of a long thread — and the renderer above it
-// then keeps the newest thirty OF THAT PREFIX, which on a thread longer than
+// then keeps the newest messages OF THAT PREFIX, which on a thread longer than
 // the walk can reach are not the newest messages at all. The one message that
 // is certainly missing is the one that woke the turn. So the window slides:
 // the parent survives because it is what the thread is about, and the oldest
