@@ -6092,7 +6092,7 @@ they conclude the migration failed — so a copy that has not applied what the
 fleet holds must not be able to say it.
 
 The hint is **derived, not fixed**: how far behind the refusing copy is over
-how fast it is actually draining, so a node grinding through a bulk apply asks
+how fast it is actually draining, so a node grinding through a long backlog asks
 for longer than one that caught up in milliseconds. **Every** refusal by the state
 log is `unavailable` — `503` over REST, the `unavailable` frame on the socket —
 carrying the refusal's code as `refusal` and its own words as `detail`, because

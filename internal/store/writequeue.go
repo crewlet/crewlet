@@ -36,8 +36,8 @@ import (
 //
 // That is not a slow test. Every domain's applier and the tracker's
 // housekeeping share the replicated estate's one file, and the state log's
-// occupancy model — what [statelog] prices a bulk apply's delay to every
-// other domain against — assumes a writer waits for the work in front of it
+// occupancy model — what [statelog] prices a burst's delay to every other
+// domain against — assumes a writer waits for the work in front of it
 // rather than for its polls to line up.
 //
 // # What the queue is, and what it is not

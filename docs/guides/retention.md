@@ -2003,8 +2003,10 @@ Two excursions are designed for and do not alarm on a volume sized for them:
    corpus is the company's whole history — about 17 MB per agent seat per
    year — so a larger or older company sets `stream.tracker_vectors_max_bytes`
    at about twice it: 34 MB per agent seat per year of history.
-2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
-   occupancy on every peer; see [Replication](replication.md).
+2. **A burst.** A cross-project move re-keys a subtree of up to 1 000 tasks,
+   one record each, and every 2 000 rows its records write is about a second
+   of applier occupancy on every data node; see
+   [Replication](replication.md#the-burst-degradation-priced).
 
 ## The recovery-operations profile
 

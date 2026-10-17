@@ -44,9 +44,10 @@ the ask is unreachable. Inside the engine the level is real and used: a write
 waits for its own last write to be applied before it opens the snapshot it
 decides from.
 
-That wait is **per log, not per object**. A node that has just published a bulk
-update waits for it to apply locally before its next write on that log — any
-subject — and may be refused `behind`, naming its own record. That is what
+That wait is **per log, not per object**. A node that has just published a
+burst — a cross-project move re-keying a subtree, one record per task — waits
+for it to apply locally before its next write on that log — any subject — and
+may be refused `behind`, naming its own record. That is what
 read-your-writes means on the write path: the alternative is a write that
 cannot see the write before it. It costs nothing when the node is caught up,
 which is every ordinary write.

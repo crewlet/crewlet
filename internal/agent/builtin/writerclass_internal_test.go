@@ -104,7 +104,6 @@ var domainErrors = map[string]map[string]classRow{
 	worklet.Domain{}.Name(): {
 		"ErrAlreadyAnswered":        {err: worklet.ErrAlreadyAnswered, class: tools.RefusalAlreadyAnswered},
 		"ErrBadQuery":               {err: worklet.ErrBadQuery, class: tools.RefusalInvalid},
-		"ErrBulkInFlight":           {err: worklet.ErrBulkInFlight, class: tools.RefusalConflict},
 		"ErrForbidden":              {err: worklet.ErrForbidden, class: tools.RefusalForbidden},
 		"ErrInboxFull":              {err: worklet.ErrInboxFull, class: tools.RefusalInboxFull},
 		"ErrIndexBuilding":          {err: worklet.ErrIndexBuilding, class: tools.RefusalUnavailable},

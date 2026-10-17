@@ -10,10 +10,6 @@ var (
 	MoveClaim  = moveClaim
 )
 
-// BulkClaim is the name of the one fleet-wide bulk admission, for the cases
-// that read who holds it.
-func BulkClaim() string { return bulkClaim(trackerStream) }
-
 // Hold takes resource as one of w's walks does, for the cases that hold a
 // claim the way a live walk on this very node holds it, and hands back its
 // release.
@@ -23,11 +19,4 @@ func (w *Writer) Hold(ctx context.Context, resource string) (func(), error) {
 		return nil, err
 	}
 	return func() { h.release(ctx) }, nil
-}
-
-// Admit takes the bulk admission one of w's bulk edits takes, for rows rows,
-// and hands back its release.
-func (w *Writer) Admit(ctx context.Context, rows int) (func(), error) {
-	release, _, err := w.admit(ctx, rows)
-	return release, err
 }

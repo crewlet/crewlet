@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -285,18 +284,6 @@ type Writer struct {
 	// [Provenance.Origin] — and what every task it creates states.
 	Origin *Origin
 
-	// metrics is where the counters this package owns are recorded. Nil
-	// records nothing, which is what a writer built for a test gets: the
-	// instruments are the engine's, and a nil check here is cheaper than
-	// a second recorder nobody reads.
-	metrics *metrics.Recorder
-
-	// Drain is the applier's measured rows a second on this node, which
-	// is the divisor of every projection and every retry hint computed
-	// from one. Nil means unmeasured, which the projection reads as its
-	// pessimistic floor rather than as infinity.
-	Drain func() float64
-
 	// Leads resolves a project's or a unit's lead, and it is the ONE
 	// thing this writer needs that the rows cannot give: a project's lead
 	// is chart-owned, `tracker_projects` carries no column for it, and the
@@ -364,8 +351,6 @@ type WriterDeps struct {
 	// field type whose value is a colleague — see [Writer.World].
 	World FieldWorld
 
-	Metrics   *metrics.Recorder
-	Drain     func() float64
 	Actor     string
 	ActorKind AuthorKind
 	Leads     Leads
@@ -560,8 +545,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: d.Actor,
-		ActorKind: d.ActorKind, Drain: d.Drain, Leads: d.Leads, World: d.World,
+		Actor: d.Actor, ActorKind: d.ActorKind, Leads: d.Leads, World: d.World,
 		Now: now, Zone: d.Zone,
 	}, nil
 }
@@ -802,9 +786,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			// see [stillIn]. A re-route is the project's own decision and
 			// the tag set, the scope and every lead check upstream were
 			// formed against it, so a task that moved in between is
-			// another project's write. A bulk edit names one project for
-			// every task in it, which is where a task from elsewhere
-			// arrives.
+			// another project's write.
 			if moved := stillIn(current, project); moved != nil {
 				return statelog.Decision{}, moved
 			}
@@ -1936,15 +1918,4 @@ func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) typ
 		}
 	}
 	return named
-}
-
-// count records one of this package's own counters.
-//
-// NIL RECORDS NOTHING, deliberately: the instruments belong to the engine,
-// which builds one recorder for the whole process, and a writer in a test has
-// no reason to carry a second one whose numbers nobody reads.
-func (w *Writer) count(name string, attrs metrics.Attrs) {
-	if w.metrics != nil {
-		w.metrics.Add(name, 1, attrs)
-	}
 }

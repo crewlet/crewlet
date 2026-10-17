@@ -102,12 +102,13 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		{"a remark that is not the caller's", fmt.Errorf("x: %w", worklet.ErrNotAuthor),
 			tools.RefusalForbidden},
 		// AND THE DOMAIN'S CLASS IS TAKEN BEFORE A CONDITION ITS ERROR
-		// ALSO CARRIES: a bulk edit refused while another applies wraps
-		// the log's unavailable beside its own sentinel, as the tracker
-		// writes it, and is the conflict the refusal vocabulary names for
-		// another bulk gesture holding the object.
-		{"a bulk edit already applying", fmt.Errorf("%w; retry in about 3 seconds: %w",
-			worklet.ErrBulkInFlight, statelog.ErrUnavailable), tools.RefusalConflict},
+		// ALSO CARRIES: a file filed under a project this node does not
+		// hold wraps the log's unavailable beside the domain's own
+		// sentinel, as the tracker writes it, and is the not-found its
+		// sentinel names — the project may be on its way, and the
+		// sentence says so.
+		{"a project not on this node yet", fmt.Errorf("%w: %s (or it is not on this node yet: %w)",
+			worklet.ErrNoProject, "ENG", statelog.ErrUnavailable), tools.RefusalNotFound},
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
 		// written part of what it asked for, so it is never a refusal of
 		// what was asked: it is the class an interrupted call answers,

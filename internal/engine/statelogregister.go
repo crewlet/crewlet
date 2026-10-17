@@ -306,7 +306,6 @@ func register() []registration {
 
 				w, err := worklet.NewWriter(worklet.WriterDeps{
 					Publisher: publisher, DB: s.estate().Reader(), NodeID: s.nodeID,
-					Drain: running.runner.Drain, Metrics: s.metrics,
 					// THE NODE'S OWN IDENTITY, replaced per gesture with
 					// the operator who ran it (see [worklet.Writer.As]).
 					Actor: s.nodeID, ActorKind: worklet.AuthorSystem,

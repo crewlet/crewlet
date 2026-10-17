@@ -225,7 +225,7 @@ func (r *Refused) Unwrap() error { return ErrUnavailable }
 //
 // FROM THE OBSERVED DRAIN, not from a constant. A flat hint is wrong in both
 // directions on the same fleet: it sends a caller back too early on a node
-// grinding through a bulk apply, and holds one waiting on a node that caught
+// grinding through a long backlog, and holds one waiting on a node that caught
 // up in milliseconds. Zero means no hint at all, which is what a refusal
 // waiting cannot clear deserves.
 func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Duration {
