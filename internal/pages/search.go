@@ -76,10 +76,10 @@ type SearcherOptions struct {
 	Peers  search.Peers
 	Roster func(ctx context.Context) ([]string, error)
 
-	// Report is told what every answer covered and what it cost. Nil
-	// counts nothing, which is what an embedded engine with no recorder
-	// gets.
-	Report func(search.Answer, time.Duration)
+	// Report is told what every answer covered and what it cost, beside
+	// the query it answered ([search.FanOut.Report]). Nil counts nothing,
+	// which is what an embedded engine with no recorder gets.
+	Report func(search.FanQuery, search.Answer, time.Duration)
 
 	// Enter is called when a search begins and its return when it ends,
 	// so scans in flight can be counted. Nil counts nothing.
@@ -216,6 +216,7 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 		Containers: scope,
 		Sources:    []string{string(search.SourcePage)},
 		Mode:       q.Mode,
+		Prefetch:   q.Prefetch,
 		// NOT THE CALLER'S LIMIT: what is walked below is the candidates,
 		// each method's top FuseN whatever the limit, and the fused cut
 		// the fan-out also makes is not read here.

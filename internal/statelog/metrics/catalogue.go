@@ -502,13 +502,17 @@ func Catalogue() []Instrument {
 		{
 			Name: TrackerSearchScanDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"path", "rung"},
-			Shows: "One search's scan, split by whether it ran for a turn's " +
-				"prefetch or for somebody's deliberate search, and by the " +
-				"ranking it actually served (`rung`: hybrid, keyword, " +
-				"semantic, or none). Only the prefetch had a published " +
-				"percentile, and the interactive path is the one with a " +
-				"target; a keyword scan is a fraction of a fused one's cost, " +
-				"so reading them as one series hides a slow meaning half.",
+			Shows: "One search's scan, recorded by the node that coordinated " +
+				"it, split by what it ran for (`path`: `prefetch` for a turn's " +
+				"knowledge prefetch, which the turn waits on before its first " +
+				"token, `interactive` for somebody's deliberate search) and by " +
+				"the ranking it actually served (`rung`: hybrid, keyword, " +
+				"semantic, or none). Each path has its own budget — half a " +
+				"second for a prefetch (`prefetch_slow`), a second for an " +
+				"interactive search (`search_slow`) — and read as one series " +
+				"the quicker one hides the other; a keyword scan is a fraction " +
+				"of a fused one's cost, so reading rungs as one series hides a " +
+				"slow meaning half.",
 		},
 		{
 			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,

@@ -54,8 +54,9 @@ var alarmMeaning = map[Kind]string{
 		"nodes.",
 	KindFloorUnknown: "The trim floor has been unreadable for four " +
 		"heartbeats, so every read on this node refuses.",
-	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
-		"turn on this node pays it before its first token.",
+	KindPrefetchSlow: "The knowledge scans this node runs for turns' prefetches " +
+		"are over their budget. Every turn whose prefetch it scans waits for " +
+		"the scan before its first token.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
 		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +

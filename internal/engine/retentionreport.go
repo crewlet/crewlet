@@ -567,14 +567,25 @@ func (r *retention) observed(out *statelog.Reading, ceilings map[string]int64) {
 	for _, snapshot := range reading {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
-			out.BarrierP95 = max(out.BarrierP95, quantileDuration(snapshot, 0.95))
+			out.BarrierP95 = max(out.BarrierP95, p95Duration(snapshot))
 		case metrics.TrackerSearchScanDuration:
-			out.SearchP95 = max(out.SearchP95, quantileDuration(snapshot, 0.95))
+			// BY THE PATH THE SCAN RAN FOR, each against its own budget:
+			// a turn start's prefetch and a deliberate search are two
+			// promises, and read as one series the faster one hides the
+			// other — while a prefetch series read as interactive would
+			// fire `search_slow` for a slow turn start. The worst `rung`
+			// of each, as the worst file is for the pool.
+			switch scanPath(snapshot.Attrs["path"]) {
+			case scanPrefetch:
+				out.PrefetchP95 = max(out.PrefetchP95, p95Duration(snapshot))
+			case scanInteractive:
+				out.SearchP95 = max(out.SearchP95, p95Duration(snapshot))
+			}
 		case metrics.StorePoolWait:
 			// THE WORST FILE, not the sum of them. A caller queues on
 			// ONE pool, and two estates each half-starved is not the
 			// same node as one estate fully starved.
-			out.PoolWaitP95 = max(out.PoolWaitP95, quantileDuration(snapshot, 0.95))
+			out.PoolWaitP95 = max(out.PoolWaitP95, p95Duration(snapshot))
 		case metrics.StatelogRecordsGated:
 			out.RecordsGated += int(snapshot.Total)
 		case metrics.TrackerFeedUnreadable:
@@ -682,10 +693,15 @@ func (r *retention) census(reading []metrics.Snapshot, ceilings map[string]int64
 	}
 }
 
-// quantileDuration reads a histogram's quantile back as the duration its unit
-// says it is.
-func quantileDuration(s metrics.Snapshot, q float64) time.Duration {
-	return time.Duration(s.Quantile(q) * float64(time.Millisecond))
+// p95Duration reads a histogram's 95th percentile back as the duration its
+// unit says it is.
+//
+// THE PERCENTILE IS FIXED HERE rather than an argument, because every budget
+// the reading is held to — the barrier's, the pool wait's and each scan path's
+// — is stated at p95, and a percentile each caller spelled for itself is one a
+// caller could spell differently from the budget it is compared with.
+func p95Duration(s metrics.Snapshot) time.Duration {
+	return time.Duration(s.Quantile(0.95) * float64(time.Millisecond))
 }
 
 // refusalIsOrdinaryLag reports whether a refusal series is one a caller only

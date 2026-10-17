@@ -80,7 +80,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,
 			statelog.Reading{PrefetchP95: time.Second},
-			"context assembly",
+			"the knowledge scans this node ran for turns' prefetches",
 		},
 		"a slow search": {
 			statelog.KindSearchSlow,

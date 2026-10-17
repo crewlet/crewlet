@@ -1351,12 +1351,17 @@ type knowledgeArgs struct {
 	// collapse the second into the first.
 	ExcludeAncestors []string
 	Exclusion        bool
+
+	// Prefetch says the search is a turn's knowledge prefetch: the serving
+	// node coordinates the scan, so it is the node that times it, and the
+	// budget it times it against is the turn start's ([knowledge.Query]).
+	Prefetch bool
 }
 
 // query is the search a request names, against the serving node's own chart:
 // the seat's role and the org whose read scope applies.
 func (a knowledgeArgs) query(b Backend) knowledge.Query {
-	q := knowledge.Query{Text: a.Text, Limit: a.Limit, Mode: a.Mode}
+	q := knowledge.Query{Text: a.Text, Limit: a.Limit, Mode: a.Mode, Prefetch: a.Prefetch}
 	if a.Exclusion {
 		q.ExcludeAncestors = a.ExcludeAncestors
 		if q.ExcludeAncestors == nil {

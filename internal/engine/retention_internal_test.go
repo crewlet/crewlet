@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,9 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -785,12 +788,12 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 
 	// Four answers: one over part of the corpus, one without its semantic
 	// half, two complete.
-	e.reportSearch(search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
-	e.reportSearch(search.Answer{BucketsAnswered: 64}, 12*time.Millisecond)
-	e.reportSearch(search.Answer{
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, 12*time.Millisecond)
+	e.reportSearch(search.FanQuery{}, search.Answer{
 		BucketsAnswered: 32, BucketsMissing: 32, Absent: []string{"node-b"},
 	}, 15*time.Millisecond)
-	e.reportSearch(search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
 		11*time.Millisecond)
 
 	r := &retention{metrics: recorder}
@@ -827,6 +830,99 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 	}
 }
 
+// A SLOW TURN START AND A SLOW SEARCH ARE TWO ALARMS, EACH ON ITS OWN SCANS.
+//
+// A turn's knowledge prefetch is held to statelog.PrefetchScanBudget and a
+// deliberate search to statelog.InteractiveSearchTarget, and both scans land
+// in one histogram split by path. Every scan was recorded `interactive`, so
+// `prefetch_slow` read a p95 nothing produced and could never fire on a running
+// node — and a prefetch series read into SearchP95 would have fired
+// `search_slow` for a slow turn start. Here a node whose prefetch scans run
+// past their budget while its deliberate searches are quick raises
+// `prefetch_slow` alone, and the converse raises `search_slow` alone.
+//
+// Mutation: read every scan into SearchP95 again, or record the prefetch's as
+// interactive, and the first case is silent.
+func TestASlowTurnStartAndASlowSearchAreTwoAlarms(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                 string
+		prefetch, deliberate time.Duration
+		fires, silent        statelog.Kind
+	}{
+		{"prefetch scans past their budget", statelog.PrefetchScanBudget + 100*time.Millisecond,
+			10 * time.Millisecond, statelog.KindPrefetchSlow, statelog.KindSearchSlow},
+		{"deliberate searches past their target", 10 * time.Millisecond,
+			statelog.InteractiveSearchTarget + time.Second, statelog.KindSearchSlow, statelog.KindPrefetchSlow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recorder, err := metrics.New()
+			if err != nil {
+				t.Fatalf("recorder: %v", err)
+			}
+			e := &Engine{metrics: recorder}
+			answer := search.Answer{BucketsAnswered: 64, Served: knowledge.ModeHybrid}
+			for range 20 {
+				e.reportSearch(search.FanQuery{Prefetch: true}, answer, tc.prefetch)
+				e.reportSearch(search.FanQuery{}, answer, tc.deliberate)
+			}
+			var reading statelog.Reading
+			(&retention{metrics: recorder}).observed(&reading, nil)
+			if reading.PrefetchP95 < tc.prefetch/2 || reading.SearchP95 < tc.deliberate/2 ||
+				reading.PrefetchP95 > 2*tc.prefetch || reading.SearchP95 > 2*tc.deliberate {
+				t.Fatalf("prefetch p95 %v and search p95 %v, want about %v and %v: each read off its "+
+					"own path", reading.PrefetchP95, reading.SearchP95, tc.prefetch, tc.deliberate)
+			}
+			fired := statelog.Evaluate(reading)
+			if !firedKind(fired, tc.fires) || firedKind(fired, tc.silent) {
+				t.Fatalf("the alarms are %v, want %s and not %s", fired, tc.fires, tc.silent)
+			}
+		})
+	}
+}
+
+// THE PROSE NAMES THE TWO BUDGETS THE SCANS ARE HELD TO: the metrics catalogue
+// (which cannot import the alarm table) and the search guide state them in
+// words, and the guide says the prefetch's is half the interactive target, so
+// a retune of either constant fails here rather than leaving an operator
+// reading a budget no alarm uses.
+//
+// Mutation: change statelog.PrefetchScanBudget or InteractiveSearchTarget, and
+// the prose no longer says what the alarms fire at.
+func TestTheScanBudgetsAreStatedAsTheAlarmsHoldThem(t *testing.T) {
+	t.Parallel()
+	if statelog.PrefetchScanBudget != 500*time.Millisecond ||
+		statelog.InteractiveSearchTarget != time.Second {
+		t.Fatalf("the prose calls the budgets half a second and a second; they are %v and %v: say "+
+			"there what they are, and here", statelog.PrefetchScanBudget, statelog.InteractiveSearchTarget)
+	}
+	var shows string
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.TrackerSearchScanDuration {
+			shows = in.Shows
+		}
+	}
+	for _, want := range []string{"half a second for a prefetch (`prefetch_slow`)",
+		"a second for an interactive search (`search_slow`)"} {
+		if !strings.Contains(shows, want) {
+			t.Errorf("%s's catalogue entry does not say %q: %s", metrics.TrackerSearchScanDuration, want, shows)
+		}
+	}
+	path := filepath.Join(sourcetree.Root(t), "docs", "guides", "search.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	guide := strings.Join(strings.Fields(string(raw)), " ")
+	for _, want := range []string{"over their one-second p95 target", "over their half-second p95 budget",
+		"held to half of what a person searching on purpose waits"} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("%s does not say %q", path, want)
+		}
+	}
+}
+
 // A LEXICAL-ONLY COMPANY IS NOT A DEGRADED ONE.
 //
 // A company that has configured no embeddings provider runs every search
@@ -841,7 +937,7 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 	}
 	e := &Engine{metrics: recorder}
 	for range 5 {
-		e.reportSearch(search.Answer{BucketsAnswered: 64}, time.Millisecond)
+		e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, time.Millisecond)
 	}
 	var reading statelog.Reading
 	(&retention{metrics: recorder}).observed(&reading, nil)
@@ -974,10 +1070,10 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	r := &retention{metrics: recorder}
 
 	// One degraded search, and three good ones, all in one hour.
-	e.reportSearch(search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
 		11*time.Millisecond)
 	for range 3 {
-		e.reportSearch(search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
+		e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
 	}
 
 	var lit statelog.Reading

@@ -912,6 +912,26 @@ func TestTheSearchHidesUnreviewedDrafts(t *testing.T) {
 	}
 }
 
+// THE TURN START'S SEARCH SAYS IT IS ONE. Its scan is held to the turn
+// start's budget (statelog.PrefetchScanBudget, `prefetch_slow`) and a
+// deliberate search's to the interactive target, and the query is the one
+// thing the node timing the scan is handed: unmarked, every prefetch scan was
+// counted as somebody's deliberate search, and the turn-start alarm had no
+// input at all.
+//
+// Mutation: drop Prefetch from the prefetch's query, and this fails.
+func TestTheTurnStartsKnowledgeSearchIsMarkedAsAPrefetch(t *testing.T) {
+	t.Parallel()
+	pages := &searcher{}
+	fetch(t, prefetch.Sources{
+		Knowledge: pages, Models: models{provider: &aux{answers: []string{"q"}}},
+	}, request(t))
+
+	if asked := pages.asked(); len(asked) != 1 || !asked[0].Prefetch {
+		t.Fatalf("the turn start searched %+v, want one search marked as the prefetch's", asked)
+	}
+}
+
 func TestASearchThatFindsNothingSaysToLookAgain(t *testing.T) {
 	t.Parallel()
 	got := fetch(t, prefetch.Sources{

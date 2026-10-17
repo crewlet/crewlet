@@ -2568,24 +2568,54 @@ func (e *Engine) LiveNodes(ctx context.Context) (int, error) {
 	return len(nodes), nil
 }
 
-// reportSearch counts what one answer covered.
+// reportSearch counts what one answer covered, and what its scan cost on the
+// path it was run for.
 //
-// THE ONLY THING THAT MAKES THREE ALARMS ABLE TO FIRE. `search_slow`,
-// `search_degraded` and `search_scoped` are each a property of the answers a
-// node gave, and an alarm whose input nobody records is permanently silent —
-// which looks exactly like a system with nothing wrong.
-func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
+// THE ONLY THING THAT MAKES FOUR ALARMS ABLE TO FIRE. `search_slow`,
+// `prefetch_slow`, `search_degraded` and `search_scoped` are each a property
+// of the answers a node gave, and an alarm whose input nobody records is
+// permanently silent — which looks exactly like a system with nothing wrong.
+//
+// THE PATH IS THE QUERY'S OWN ([search.FanQuery.Prefetch]), so a turn's
+// knowledge prefetch and somebody's deliberate search are two series held to
+// two budgets. Every scan was recorded `interactive` once, the prefetch series
+// had no producer, and `prefetch_slow` read a percentile of nothing.
+func (e *Engine) reportSearch(q search.FanQuery, answer search.Answer, took time.Duration) {
 	if e.metrics == nil {
 		return
 	}
 	e.metrics.Observe(metrics.TrackerSearchScanDuration, took,
-		metrics.Attrs{"path": "interactive", "rung": searchRung(answer)})
+		metrics.Attrs{"path": string(scanPathOf(q)), "rung": searchRung(answer)})
 	coverage := "complete"
 	if answer.Partial() {
 		coverage = "scoped"
 	}
 	e.metrics.Add(metrics.TrackerSearchAnswers, 1,
 		metrics.Attrs{"coverage": coverage, "semantic": semanticState(answer)})
+}
+
+// scanPath is what a search was run for, as the scan-duration histogram's
+// `path` attribute names it — and the one name the alarm reading splits the
+// histogram by ([retention.observed]), so the label and the budget it is held
+// to are one value rather than two strings that must agree.
+type scanPath string
+
+const (
+	// scanInteractive is somebody's deliberate search — a seat's tool, a
+	// person's — held to statelog.InteractiveSearchTarget (`search_slow`).
+	scanInteractive scanPath = "interactive"
+	// scanPrefetch is a turn's knowledge prefetch, which the turn waits on
+	// before its first token, held to statelog.PrefetchScanBudget
+	// (`prefetch_slow`).
+	scanPrefetch scanPath = "prefetch"
+)
+
+// scanPathOf is the path q was run for.
+func scanPathOf(q search.FanQuery) scanPath {
+	if q.Prefetch {
+		return scanPrefetch
+	}
+	return scanInteractive
 }
 
 // searchRung is the ranking a scan actually ran, for the duration histogram.

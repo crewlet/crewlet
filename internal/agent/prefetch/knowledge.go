@@ -193,6 +193,10 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
+		// THE TURN START'S SEARCH, so its scan is held to the turn
+		// start's budget rather than counted among the deliberate
+		// searches the interactive target is read from.
+		Prefetch: true,
 	})
 	hits := answer.Hits
 	if len(hits) == 0 {
