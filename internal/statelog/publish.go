@@ -1615,30 +1615,131 @@ const (
 
 // unresolved is the answer for a durable append this call could not resolve
 // on this node — its apply wait ended first, on the budget or because the
-// caller stopped waiting, or a read past the wait failed — and it says exactly
-// what is known about the record at `at`.
+// caller stopped waiting, a read past the wait failed, or the caller asked for
+// no wait at all ([Request.NoWait]) — and it says exactly what is known about
+// the record at `at`. waited is whether a wait was attempted ([Result.Waited]).
 //
-// PENDING AT `at` where the record there is THIS operation's: the broker's
-// word when it acknowledged this call's own append or collapsed it onto a
-// copy, and otherwise the record's own operation id, read off the log — which
-// answers whatever this node has applied. UNKNOWN, WITH NO POSITION, where the
-// ambiguous path FOUND the record newest on the subject and nobody here could
-// read it as this operation's: it may be anybody's, and pending there would
+// PENDING AT `at` only where the record there is THIS operation's AND every
+// other node will apply it, which is what pending promises ([OutcomePending]).
+// The broker's word settles the first half for this call's own acknowledged
+// append, and that append is this node's, which fence 0 cleared a moment ago —
+// so it is pending without a read. Every other record is READ: one whose
+// operation id is not this one's may be anybody's, and pending there would
 // tell the caller "your write is durable here" about another writer's record
-// ([Result.Position]). A caller that has stopped waiting is not read for: the
-// read would fail on its context, and the same operation id retried is
-// answered from the ledger once this node has applied that far.
+// ([Result.Position]). A copy of this operation that THIS node wrote, on an
+// earlier attempt, is this node's own. A copy ANOTHER node wrote is pending
+// only where its writer still stands at the copy's position ([Publisher.copyStands]):
+// a node evicted while that write was in flight left it on the log, holding
+// the operation id in the broker's duplicate window and applying nowhere, and
+// answering pending there told the caller a write had succeeded that no node
+// will ever apply. Anything this call cannot establish is UNKNOWN WITH NO
+// POSITION, and the same operation id retried meets the copy's writer's gate
+// once this node has applied that far — so the common case, a router failing
+// over onto a healthy peer's copy, stays pending, and only a copy nobody can
+// vouch for costs the caller a retry.
 //
-// ours is whether the call already knows the record is this operation's.
-func (p *Publisher) unresolved(ctx context.Context, req Request, at Position, ours bool) Result {
-	if !ours && ctx.Err() == nil {
-		env, _, found, err := p.recordAt(ctx, at)
-		ours = err == nil && found && env.OpID == req.OpID
+// A caller that has stopped waiting is not read for: the read would fail on its
+// context. Its own append is still pending; anything else is unknown.
+func (p *Publisher) unresolved(ctx context.Context, req Request, at Position,
+	landed landing, waited bool) Result {
+
+	pending := Result{Outcome: OutcomePending, Position: at, OpID: req.OpID, Waited: waited}
+	unknown := Result{Outcome: OutcomeUnknown, OpID: req.OpID, Waited: waited}
+	if landed == landedOwn {
+		return pending
 	}
-	if !ours {
-		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Waited: true}
+	if ctx.Err() != nil {
+		return unknown
 	}
-	return Result{Outcome: OutcomePending, Position: at, OpID: req.OpID, Waited: true}
+	env, body, found, err := p.recordAt(ctx, at)
+	if err != nil || !found || env.OpID != req.OpID {
+		return unknown
+	}
+	if env.Writer == p.nodeID {
+		return pending
+	}
+	stands, why, err := p.copyStands(ctx, req, at, env, body)
+	if err != nil || !stands {
+		if err != nil {
+			why = err.Error()
+		}
+		p.logger.WarnContext(ctx, "statelog_resolve_copy_unvouched",
+			"domain", p.domain.Name(), "subject", req.Subject.String(),
+			"op_id", req.OpID, "position", at.String(), "writer", env.Writer,
+			"why", why)
+		return unknown
+	}
+	return pending
+}
+
+// copyStands reports whether another node's copy of this operation at `at`
+// applies on every node as far as this node can tell — whether its writer
+// still stands on this log at the copy's position — and, when it does not,
+// why.
+//
+// # The applier's own gates, and then the log past them
+//
+// FIRST THE GATES the applier asks of the record, through the same reader the
+// resolution asks them through ([Publisher.voided]): the framework's rules for
+// the copy's own generation, then the domain's, about the copy's writer. They
+// answer from this node's rows, which is what the applier will drop the
+// record from when it reaches `at`.
+//
+// A NODE WHOSE ROWS HAVE REACHED `at` HAS ITS WHOLE ANSWER THERE, which is the
+// one way a read past a wait this node cleared lands here: the gates answer at
+// the copy's position, and every standing below it is in rows at or past it —
+// so whatever the writer's standing became above the copy says nothing about
+// the copy. The checkpoint is read BEFORE the rows, so a commit between the two
+// reads cannot place a record the rows hold behind it.
+//
+// THEN THE LOG, where nothing waited or the wait ran out, because then this
+// node has not reached `at` and the rows say nothing about a standing written
+// above their own checkpoint. The last record on the writer's eviction subject
+// is its standing now ([lastStanding]). Where the rows already hold it — at or
+// below that checkpoint — the rows' answer was complete. Where it is above the
+// rows and below `at`, nothing else on that subject can lie between it and the
+// copy, so it is the writer's standing at the copy: an eviction holds the
+// copy, a readmission does not. Where it is above `at` too, the subject may
+// hold records between the rows and the copy that no read here can name, and
+// the copy is not vouched for.
+func (p *Publisher) copyStands(ctx context.Context, req Request, at Position,
+	env Envelope, body []byte) (bool, string, error) {
+
+	committed := p.waiter.Committed()
+	reason, gated, err := p.voided(ctx, req, at, true, env.Writer, env.Gen, body)
+	if err != nil {
+		return false, "", err
+	}
+	if gated {
+		return false, fmt.Sprintf("this node's rows hold the copy under the %s gate", reason), nil
+	}
+	probe, probed := p.domain.(EvictionProbe)
+	if !probed {
+		return true, "", nil
+	}
+	if committed.Stream == at.Stream && committed.Generation == at.Generation &&
+		committed.Seq >= at.Seq {
+		return true, "", nil
+	}
+	seq, evicts, found, err := lastStanding(ctx, probe, p.prefix, p.stream,
+		standing{VerifiedReader: p.records, last: p.log}, env.Writer)
+	switch {
+	case err != nil:
+		return false, "", err
+	case !found:
+		return true, "", nil
+	case committed.Stream == at.Stream && committed.Generation == at.Generation &&
+		seq <= committed.Seq:
+		return true, "", nil
+	case seq < at.Seq && !evicts:
+		return true, "", nil
+	case seq < at.Seq:
+		return false, fmt.Sprintf("the log evicts %s at sequence %d, below the copy",
+			env.Writer, seq), nil
+	}
+	return false, fmt.Sprintf("%s's last standing, at sequence %d, is above both "+
+		"this node's rows and the copy, so what held at the copy cannot be read",
+		env.Writer, seq), nil
 }
 
 // resolve answers what a durable record at p actually produced, and it is
@@ -1723,8 +1824,11 @@ func (p *Publisher) unresolved(ctx context.Context, req Request, at Position, ou
 // it is [Request.NoWait]'s: the acknowledgement already establishes that the
 // operation is durable at `at` when the broker put THIS operation there — this
 // call's own append, or the copy it collapsed onto — so that is answered
-// pending without asking. A record the ambiguous path FOUND is not known to be
-// this operation's ([Result.Position]), so that one is resolved like any other.
+// without waiting, by what is known of the record there ([Publisher.unresolved]):
+// pending for this call's own append, and for a copy only once its writer's
+// standing says every node will apply it. A record the ambiguous path FOUND is
+// not known to be this operation's ([Result.Position]), so that one is
+// resolved like any other.
 //
 // # And a resolution that cannot finish is still an answer about the record
 //
@@ -1745,10 +1849,10 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// THE ANSWER THE ACKNOWLEDGEMENT ALREADY ESTABLISHES. Durable at
 		// `at`, unresolved here because nothing asked — which is the
 		// same OUTCOME a wait that timed out produces and a different
-		// FACT, carried by [Result.Waited]. See [Request.NoWait].
-		return Result{
-			Outcome: OutcomePending, Position: at, OpID: req.OpID,
-		}, nil
+		// FACT, carried by [Result.Waited]. See [Request.NoWait]. A
+		// copy is still asked whose it is, since pending promises every
+		// other node will apply it.
+		return p.unresolved(ctx, req, at, landed, false), nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, p.budget(ctx))
 	defer cancel()
@@ -1763,23 +1867,21 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// WAITED, unlike the [Request.NoWait] arm above, and this is the
 		// pending that says something about the NODE: it was asked and
 		// did not arrive inside the time it was given.
-		return p.unresolved(ctx, req, at, landed != landedFound), nil
+		return p.unresolved(ctx, req, at, landed, true), nil
 	}
 	// unread is a read past the wait that failed, answered by what is known
 	// of the record at `at` rather than by the failure — whatever failed it.
 	// The caller stopping is the common cause and an ordinary one; a store
 	// that was busy, or closed while this node adopts a snapshot, is the
 	// other, and it fails the read and not the write, which is durable all
-	// the same. known is whether the record at `at` is this operation's, as
-	// far as this call has established it.
-	known := landed != landedFound
+	// the same.
 	unread := func(err error) (Result, error) {
 		if ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "statelog_resolve_incomplete",
 				"domain", p.domain.Name(), "subject", req.Subject.String(),
 				"op_id", req.OpID, "position", at.String(), "err", err.Error())
 		}
-		return p.unresolved(ctx, req, at, known), nil
+		return p.unresolved(ctx, req, at, landed, true), nil
 	}
 
 	// THE LEDGER IS ONLY ASKED WHERE THERE IS ONE. A ledgerless domain's
@@ -1836,7 +1938,6 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Waited: true}, nil
 		}
 		ours = env.OpID == req.OpID
-		known = known || ours
 		switch {
 		case ours:
 			// THIS OPERATION'S COPY, so its body is the record the gates
