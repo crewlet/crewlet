@@ -88,16 +88,21 @@ type firing struct {
 //
 // THE LOGS AN ALARM LISTS ARE ITS INSTANCES, with no second check of the kind:
 // only a per-log kind lists any, which the report's own test holds in both
-// directions, so a check here would be a second opinion about one fact.
+// directions, so a check here would be a second opinion about one fact. An
+// entry that names several logs — one measurement taken identically on each
+// ([AlarmDomain.Domains]) — is an instance per log it names, so carrying a
+// measurement once changes nothing about which log lines are written.
 func instancesOf(a Alarm) ([]instance, []string) {
 	if len(a.Domains) == 0 {
 		return []instance{{kind: a.Kind}}, []string{a.Detail}
 	}
-	keys := make([]instance, 0, len(a.Domains))
-	details := make([]string, 0, len(a.Domains))
+	var keys []instance
+	var details []string
 	for _, d := range a.Domains {
-		keys = append(keys, instance{kind: a.Kind, domain: d.Domain})
-		details = append(details, d.Detail)
+		for _, domain := range d.Domains {
+			keys = append(keys, instance{kind: a.Kind, domain: domain})
+			details = append(details, d.Detail)
+		}
 	}
 	return keys, details
 }

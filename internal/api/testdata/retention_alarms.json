@@ -7,49 +7,65 @@
         "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
-            "domain": "tracker",
+            "domains": [
+              "tracker"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1200 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "vectors",
+            "domains": [
+              "vectors"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "pages",
+            "domains": [
+              "pages"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 300 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "iam",
+            "domains": [
+              "iam"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 150 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "usage",
+            "domains": [
+              "usage"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 75 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "artifacts",
+            "domains": [
+              "artifacts"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 37 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "artifactdata",
+            "domains": [
+              "artifactdata"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 18 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "assistant",
+            "domains": [
+              "assistant"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 9 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
@@ -64,43 +80,57 @@
         "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
-            "domain": "tracker",
+            "domains": [
+              "tracker"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1200 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "vectors",
+            "domains": [
+              "vectors"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "iam",
+            "domains": [
+              "iam"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 150 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "usage",
+            "domains": [
+              "usage"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 75 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "artifacts",
+            "domains": [
+              "artifacts"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 37 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "artifactdata",
+            "domains": [
+              "artifactdata"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 18 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
           {
-            "domain": "assistant",
+            "domains": [
+              "assistant"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 9 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
@@ -113,7 +143,9 @@
         "remedy": "The term holding each log names what to fix, and `crewlet retention status` prints it with what it has and what it wants. Until it is fixed the log grows toward its ceiling by a day of records every day.",
         "domains": [
           {
-            "domain": "pages",
+            "domains": [
+              "pages"
+            ],
             "detail": "the trim has not advanced for 46h, and the log is keeping up to 300 record(s) older than its 24h replay window",
             "term": "applied",
             "since": "2031-03-31T05:14:00Z"
@@ -128,7 +160,9 @@
         "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
-            "domain": "tracker",
+            "domains": [
+              "tracker"
+            ],
             "detail": "the newest verified backup of this log is 30h old, and the policy asks for 24h"
           }
         ]
@@ -141,35 +175,16 @@
         "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
-            "domain": "tracker",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "vectors",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "pages",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "iam",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "usage",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "artifacts",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "artifactdata",
-            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
-          },
-          {
-            "domain": "assistant",
+            "domains": [
+              "tracker",
+              "vectors",
+              "pages",
+              "iam",
+              "usage",
+              "artifacts",
+              "artifactdata",
+              "assistant"
+            ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
           }
         ]

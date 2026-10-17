@@ -68,7 +68,7 @@ export interface AlarmLogMeasure {
 
 /**
  * One line of the logs an alarm stands on: the logs one trim term is holding,
- * or one log and its own measurement.
+ * or one measurement and the logs it was taken on.
  */
 export interface AlarmLogLine {
   /** The trim term holding these logs, where the alarm is about their trim. */
@@ -77,7 +77,7 @@ export interface AlarmLogLine {
   domains: string[];
   /** The earliest instant any of them stopped advancing. */
   since?: string;
-  /** The log's own measurement, on a line that is one log's. */
+  /** The logs' measurement, on a line no term holds. */
   detail?: string;
   /**
    * Every log the term holds with its own measurement, in the report's
@@ -95,29 +95,27 @@ export interface AlarmLogLine {
  * grouping must not lose is each held log's OWN measurement: a log is listed
  * under a held trim only once it keeps records past its replay window, and how
  * many is a fact about that log that the earliest `since` cannot carry, so
- * every log rides on the line in `logs` with its own sentence. A log with a
- * measurement of its own and no term (a log nearing its ceiling) is a line of
- * its own, carrying that measurement.
+ * every log rides on the line in `logs` with its own sentence. A measurement
+ * no term holds (a log nearing its ceiling, a young fleet's missing backup) is
+ * a line of its own, naming the logs the engine took it on: the engine carries
+ * a sentence measured alike on several logs once, so this draws what it is
+ * given rather than folding repeats of its own.
  */
 export function alarmLogLines(alarm: Pick<RetentionAlarm, "domains">): AlarmLogLine[] {
   const lines: AlarmLogLine[] = [];
   for (const d of alarm.domains ?? []) {
     if (!d.term) {
-      lines.push({ domains: [d.domain], detail: d.detail });
+      lines.push({ domains: [...d.domains], detail: d.detail });
       continue;
     }
+    const measured = d.domains.map((domain) => ({ domain, detail: d.detail }));
     const line = lines.find((l) => l.term === d.term);
     if (!line) {
-      lines.push({
-        term: d.term,
-        domains: [d.domain],
-        since: d.since,
-        logs: [{ domain: d.domain, detail: d.detail }],
-      });
+      lines.push({ term: d.term, domains: [...d.domains], since: d.since, logs: measured });
       continue;
     }
-    line.domains.push(d.domain);
-    (line.logs ??= []).push({ domain: d.domain, detail: d.detail });
+    line.domains.push(...d.domains);
+    (line.logs ??= []).push(...measured);
     if (d.since && (!line.since || Date.parse(d.since) < Date.parse(line.since))) {
       line.since = d.since;
     }
