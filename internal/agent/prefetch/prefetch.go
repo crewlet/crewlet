@@ -159,9 +159,10 @@ type Blocks struct {
 	// that woke the turn included.
 	//
 	// Its own fact for the reason [Blocks.ThreadContextRead] is: the count
-	// says thirty messages either way, and a read that stopped short is
-	// exactly the turn an operator is looking at when a seat answers
-	// something nobody asked it. See [notify.Transcript.StoppedShort].
+	// says how many messages the block holds, never whether the newest were
+	// among them, and a read that stopped short is exactly the turn an
+	// operator is looking at when a seat answers something nobody asked it.
+	// See [notify.Transcript.StoppedShort].
 	ThreadContextStoppedShort bool
 
 	// ThreadContextAnswered are the messages — by the backend's own ids
