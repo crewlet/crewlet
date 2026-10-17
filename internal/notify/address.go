@@ -59,8 +59,8 @@ type AddressRule struct {
 	// STATED RATHER THAN INHERITED, because the reason a seat is in a
 	// conversation belongs to the BACKEND: a first-party backend
 	// routes on reasons this package has never heard of, and a rule that
-	// silently fell back to these four would read every one of them as
-	// "does not address".
+	// silently fell back to this package's reasons would read every one of
+	// them as "does not address".
 	Follows []FollowReason
 }
 
