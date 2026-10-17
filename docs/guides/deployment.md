@@ -1633,7 +1633,7 @@ The load-bearing tables:
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
 - **`agent_onboarding_markers`** — onboarding bookkeeping, one row per agent.
-- **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it.
+- **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it. Every row names the node that published it (`node`), which on a data node keeping a stateless node's events in [custody](#custody-the-rows-of-a-node-without-data) is not the node holding it.
 - **`crewlet_event_parties`** — which agents each event involves, one row per pair. It is an *index* of the table above rather than state of its own: the dashboard's per-seat activity filter matches on it, and it exists because the engine's planner does no OR-optimization, so the same predicate spread across five columns would scan the log instead of seeking. Swept on the same horizon as the events it points at.
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`company_config`** — the revision payloads this node has met, and its own three facts about them: the revision it boots on (`is_active`: the last one its engine applied, or an offline command's choice, with the activation it applied, `served_at`), the fleet's revision as it last saw it (`is_fleets`), and an offline change not yet published, with what it was built on (`offered`, `offered_over`, `offered_unconfirmed`, `offered_at`). Every row keeps the fleet's latest activation of its revision that this node knows of (`activated_at`). Which one is the *company* is the fleet's business — the activation pointer, in coordination — and every config read answers that; see [A node's own store keeps three facts apart](../concepts/control-plane.md#a-nodes-own-store-keeps-three-facts-apart).
@@ -1711,13 +1711,20 @@ one** of them keeps each one:
    the same way at its next boot.
 
 That last step is what keeps every figure derived from a node's own log
-honest: the `usage` domain sums each node's day, so a batch two data nodes
+honest: the `usage` domain sums each data node's day, so a batch two data nodes
 kept would bill a stateless node's spend twice. And a node's day counts only
 what it keeps: a batch it has written and not settled counts in none of its
 days, and one it settles as kept is counted from then on — on the day its
 rows fall, which the node publishes again however far back that is, within
 the event log's 30-day read floor
 ([Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day)).
+
+**A kept row still says where it happened.** Every row of the event log names
+the node that *published* it, in its `node` column and as `node` on every
+event the API returns — the envelope's own origin, not the data node holding
+the row. So a turn's page names the agent host it ran on rather than the data
+node that happens to keep its events, and an operator reading that host's logs
+finds the turn there.
 
 Until the node that lost the claim has settled its copy — at once when its
 claim is answered, and otherwise at its next pass, a minute later or as soon
