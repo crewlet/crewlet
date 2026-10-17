@@ -1121,7 +1121,9 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 	for _, alarm := range report.Alarms {
 		if alarm.Kind == statelog.KindCensusDrift {
 			for _, d := range alarm.Domains {
-				got[d.Domain] = d.Detail
+				for _, domain := range d.Domains {
+					got[domain] = d.Detail
+				}
 			}
 		}
 	}
@@ -1407,7 +1409,9 @@ func backupAlarms(t *testing.T, report statelog.Report) map[string]string {
 			t.Fatalf("backup_age reads %q and names no log", a.Detail)
 		}
 		for _, d := range a.Domains {
-			out[d.Domain] = d.Detail
+			for _, domain := range d.Domains {
+				out[domain] = d.Detail
+			}
 		}
 	}
 	return out

@@ -12,7 +12,8 @@
  * the screen whatever the engine sends. A suite drawing an alarm reads it here.
  *
  *  - `young`: no backup at all, minutes after the first boot. Every log is
- *    named, none of them held past its window, so no entry carries a term.
+ *    named, none of them held past its window, so no entry carries a term —
+ *    and all of them in ONE entry, since each measured the same sentence.
  *  - `held`: no backup at all, and every log's trim held by the backup term
  *    past its window, each keeping a count of its own past it.
  *  - `held_beside_a_blocked_trim`: as `held`, but the pages log is backed up

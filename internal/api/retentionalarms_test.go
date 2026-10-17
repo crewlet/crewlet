@@ -66,7 +66,9 @@ func counted(seq uint64) []statelog.NodePosition {
 // register gains is in every one of them.
 //
 //   - `young`: a deployment minutes old with no backup at all. Every log is
-//     named, none is held past its window, so no entry carries a term.
+//     named, none is held past its window, so no entry carries a term — and
+//     every log measured the missing backup in the same words, so they are
+//     one entry naming them all.
 //   - `held`: no backup at all, and every log's trim held by the backup term
 //     for longer than the window while keeping a count of its own past it.
 //     Each entry carries the term, the instant and its hold's measurement
@@ -194,15 +196,17 @@ func TestEachRetentionAlarmScenarioIsTheStateItIsNamedFor(t *testing.T) {
 	t.Parallel()
 	logs := len(engine.Domains())
 	scenarios := retentionAlarmsScenarios()
-	// kinds is each alarm's logs, and how many of them carry `term`.
-	type raised struct{ logs, termed int }
+	// kinds is each alarm's entries, the logs they name, and how many of
+	// those logs carry `term`.
+	type raised struct{ entries, logs, termed int }
 	kinds := func(name string) map[statelog.Kind]raised {
 		out := map[statelog.Kind]raised{}
 		for _, a := range scenarios[name].Alarms {
-			r := raised{logs: len(a.Domains)}
+			r := raised{entries: len(a.Domains)}
 			for _, d := range a.Domains {
+				r.logs += len(d.Domains)
 				if d.Term != "" {
-					r.termed++
+					r.termed += len(d.Domains)
 				}
 			}
 			out[a.Kind] = r
@@ -210,13 +214,15 @@ func TestEachRetentionAlarmScenarioIsTheStateItIsNamedFor(t *testing.T) {
 		return out
 	}
 	for name, want := range map[string]map[statelog.Kind]raised{
-		"young": {statelog.KindBackupAge: {logs: logs}},
-		"held":  {statelog.KindBackupAge: {logs: logs, termed: logs}},
+		// ONE ENTRY NAMING EVERY LOG: each measured the missing backup in
+		// the same words, and no term holds any of them.
+		"young": {statelog.KindBackupAge: {entries: 1, logs: logs}},
+		"held":  {statelog.KindBackupAge: {entries: logs, logs: logs, termed: logs}},
 		"held_beside_a_blocked_trim": {
-			statelog.KindBackupAge:   {logs: logs - 1, termed: logs - 1},
-			statelog.KindTrimBlocked: {logs: 1, termed: 1},
+			statelog.KindBackupAge:   {entries: logs - 1, logs: logs - 1, termed: logs - 1},
+			statelog.KindTrimBlocked: {entries: 1, logs: 1, termed: 1},
 		},
-		"stale": {statelog.KindBackupAge: {logs: 1}},
+		"stale": {statelog.KindBackupAge: {entries: 1, logs: 1}},
 	} {
 		got := kinds(name)
 		if len(got) != len(want) {

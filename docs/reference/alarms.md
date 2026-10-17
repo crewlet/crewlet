@@ -24,10 +24,13 @@ rather than the node:
 
 `log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`.
 
-Each of those names every log it stands on in its `domains` list, with that
-log's own measurement, and leads with the most pressing log's, so the health
-count and the gauge (one series per kind, reading 1 while any log's stands)
-agree about how many problems there are. Their log lines are written per log:
+Each of those names every log it stands on in its `domains` list, each
+entry a measurement and the logs it was taken on — one log where a trim term
+holds it, and every log measured in the same words otherwise, so a fleet with
+no backup yet is one entry naming every log — and leads with the most pressing
+log's, so the health count and the gauge (one series per kind, reading 1 while
+any log's stands) agree about how many problems there are. Their log lines are
+written per log:
 each log the alarm comes to stand on writes its own `alarm_raised`, and each
 log it stops standing on its own `alarm_cleared`, carrying the log as
 `domain`, so a second log joining an alarm that is already up, and the first
