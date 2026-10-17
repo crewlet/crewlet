@@ -49,13 +49,6 @@ func (m *memFollows) Following(_ context.Context, backend, handle, channel, thre
 	return r, ok, nil
 }
 
-func (m *memFollows) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
-	k := key(backend, handle, channel, thread)
-	_, ok := m.rows[k]
-	delete(m.rows, k)
-	return ok, nil
-}
-
 func threads(t *testing.T, store notify.FollowStore) *notify.ThreadTracker {
 	t.Helper()
 	tr, err := notify.NewThreadTracker(literal, store)
@@ -309,31 +302,6 @@ func TestATopLevelTriggerFollowsItsOwnThreadForItsReason(t *testing.T) {
 	}
 	if store.writes != 0 {
 		t.Fatalf("%d follows were written for messages that start no followed thread", store.writes)
-	}
-}
-
-func TestAnUnfollowedThreadStopsDelivering(t *testing.T) {
-	store := newFollows()
-	tr := threads(t, store)
-
-	tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "@agent-swe look"), t0)
-	got, _ := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "plain"), t0)
-	if !got.Deliver {
-		t.Fatalf("a followed thread's reply produced %+v", got)
-	}
-
-	// A seat told to stop watching must actually stop — waiting out the
-	// retention horizon is not stopping.
-	dropped, err := tr.Unfollow(t.Context(), "swe", "C1", "T1")
-	if err != nil || !dropped {
-		t.Fatalf("Unfollow = %v, %v", dropped, err)
-	}
-	got, _ = tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "plain"), t0)
-	if got.Deliver {
-		t.Fatal("an unfollowed thread still delivers")
-	}
-	if again, _ := tr.Unfollow(t.Context(), "swe", "C1", "T1"); again {
-		t.Fatal("unfollowing twice reported a second removal")
 	}
 }
 

@@ -18,9 +18,7 @@
 // bucket was created with, and a bucket here is adopted as it already exists
 // ([openBucket]), so its history is not this build's to assume. A listing
 // never returns the marker either way ([visitLive]), and [sweepMarkers]
-// removes it once it is older than [coord.MarkerRetention]. The follows are
-// the deliberate exception in the other direction — a bucket with an age,
-// whose markers leave with it (see [FleetStore.Unfollow]).
+// removes it once it is older than [coord.MarkerRetention].
 //
 // # A create asks the LEADER, and survives the sweep
 //
