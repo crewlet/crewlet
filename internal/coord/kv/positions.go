@@ -66,18 +66,6 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 	return out, err
 }
 
-// ForgetPositions removes a node's row.
-//
-// PURGED, on this estate's standing rule (markers.go, "Every removal is a
-// purge").
-func (f *FleetStore) ForgetPositions(ctx context.Context, nodeID string) error {
-	if err := f.positions.Purge(ctx, coord.PositionKey(nodeID)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("forget a node's log positions", err)
-	}
-	return nil
-}
-
 // PutHold writes or renews a trim hold.
 //
 // IN THE POSITIONS BUCKET, under its own key class. That is a retention
@@ -180,18 +168,6 @@ func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
 			return nil
 		})
 	return out, err
-}
-
-// ForgetFloor removes one domain's row.
-//
-// PURGED, on this estate's standing rule (markers.go, "Every removal is a
-// purge").
-func (f *FleetStore) ForgetFloor(ctx context.Context, domain string) error {
-	if err := f.positions.Purge(ctx, coord.FloorKey(domain)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("forget a domain's trim floor", err)
-	}
-	return nil
 }
 
 // PutBackupPoint writes one node's newest backup, or the operator's newest
