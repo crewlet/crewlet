@@ -174,12 +174,12 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	if wake == nil || wake.Snapshot.CommentAsk != "pm" {
 		t.Fatalf("the wake carries no ask, so `asked` routes to nobody: %+v", wake)
 	}
-	if !slices.ContainsFunc(tracker.Candidates(wake, false),
+	if !slices.ContainsFunc(tracker.Candidates(wake),
 		func(c tracker.Candidate) bool {
 			return c.Handle == "pm" && c.Reason == tracker.ReasonAsked && c.Addressed
 		}) {
 		t.Errorf("the asked party is not an ADDRESSED candidate: %+v",
-			tracker.Candidates(wake, false))
+			tracker.Candidates(wake))
 	}
 	// AND AN UNKNOWN HANDLE IS REFUSED, because an ask addressed to a
 	// spelling wakes nobody and leaves a question open on the board for

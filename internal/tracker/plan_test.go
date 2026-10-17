@@ -158,7 +158,6 @@ func registeredQueries() map[string]map[string]any {
 		"by spend":          {"container": "project:P01", "sort": "-spend_tokens"},
 		"by estimate":       {"container": "project:P01", "estimate": "gt:30"},
 		"by points":         {"container": "project:P01", "points": "gt:1"},
-		"one batch":         {"batch": "b-1"},
 		"a unit's filing":   {"unit": "eng"},
 		"a lead's queue":    {"routing_unit": "eng"},
 		"by type":           {"container": "project:P01", "type": "bug"},
@@ -405,7 +404,7 @@ func taskRow(i int) []any {
 		[]string{"todo", "in_progress", "done"}[i%3],
 		[]string{"not_started", "active", "done"}[i%3],
 		fmt.Sprintf("a%06d", i), fmt.Sprintf("h-%d", i%200),
-		fmt.Sprintf("b-%d", i%97), i % 480, float64(i % 13), i * 100,
+		i % 480, float64(i % 13), i * 100,
 		// SKEWED, because selectivity is the whole question: a
 		// tenth of the corpus has a due date and a fiftieth is
 		// finished, which is what a company's board looks like
@@ -421,12 +420,12 @@ const insertTask = `
 	INSERT INTO tracker_tasks
 		(id, key, project_key, filed_unit, routing_unit,
 		 root_id, type, title, status, status_group,
-		 rank, assignee, batch_id, estimate_min, points,
+		 rank, assignee, estimate_min, points,
 		 spend_tokens, due_at, start_at, finished_at,
 		 created_at, updated_at, version, document)
 	VALUES`
 
-const taskValues = `(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+const taskValues = `(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // seedTaskCorpus is the twenty thousand tasks the task query set is planned
 // against, and the tags, dependencies and field values every fifth one
