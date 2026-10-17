@@ -397,8 +397,8 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 
 // founderSeat is a human seat somebody can be reached at: what a fixture
 // counting warnings declares, so the count is its subject's alone — a company
-// with no human seat is advised that nobody can join it, and a human seat with
-// no contact identity that nobody can be mentioned at.
+// with no human seat is advised that nobody can join it, and on a vendor chat
+// surface a human seat with no account there that nobody can be mentioned at.
 func founderSeat() config.Role {
 	return config.Role{Name: "Founder", Handle: "founder", Kind: org.KindHuman,
 		Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}}
