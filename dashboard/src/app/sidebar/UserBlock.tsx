@@ -28,6 +28,17 @@
  * (it never does for a socket the engine refused): that arm said "Signed in"
  * while the session it read named the reader's seat.
  *
+ * A CREDENTIAL THAT IS NOT A PERSON BUT ACTS AS A SEAT is called by the SEAT,
+ * because it has no name of its own and the seat is who it acts as: a Tier A
+ * token bound to Miles's seat is "Miles", "via API token review" under it.
+ * It was "token:review" over "Miles", the credential's spelling as the name
+ * and the place it acts for as the aside. Its badge is the seat's own face,
+ * the initials, wearing a key on its corner (the kit's `Avatar` `mark`), so
+ * the face says who and the corner says how. Which credential it is comes
+ * from the login's grammar (`lib/login.ts`), never the session's `kind`: a
+ * bound token's session is answered as a person's. A credential bound to no
+ * seat has no face to keep, so it stays its login with a key for a face.
+ *
  * AND A READ THAT FAILED IS NOT NOBODY. Where the frame's `GET /auth/session`
  * failed — a 503, the network — rather than being refused, the browser may
  * well hold a session, so the block says it could not tell who this is and
@@ -84,10 +95,12 @@
  * Mode, density and theme: none of them is the company's, and all of them are
  * about the person at this browser, so they sit behind the one control beside
  * that person's name. Settings › Appearance offers the same three with room
- * to show every theme. The mode also has a one-press flip beside the name,
- * the kit's `ThemeToggle`, because it is the preference a reader changes
- * most; "match the system" is a choice in the popover's `ThemeSwitcher`,
- * where there is room to name it.
+ * to show every theme, and the command palette sets them too.
+ *
+ * ONE CONTROL ON THE ROW. The mode had a one-press flip beside the name as
+ * well, and the foot then carried the link's chevron and two glyph buttons
+ * beside a name already cut short by the rail's width. The mode is the
+ * popover's first row, one press away.
  *
  * EVERY CONTROL IS CONTROLLED by `lib/prefs.ts`. The kit's controls can keep
  * their own copy under a storage key, and a second copy is a second opinion
@@ -108,7 +121,6 @@ import {
   Popover,
   Select,
   ThemeSwitcher,
-  ThemeToggle,
   Text,
   useToast,
 } from "@crewlethq/ui";
@@ -125,6 +137,7 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { readerName, type ViewerState } from "~/lib/viewer.ts";
 import { accessLine } from "~/lib/access.ts";
+import { loginKind, tierATokenOf } from "~/lib/login.ts";
 import type { SessionAnswer } from "~/protocol/index.ts";
 import { WORKSPACES, workspaceOf, workspaceRow } from "../nav.ts";
 import { preload } from "../lazyScreen.ts";
@@ -159,9 +172,14 @@ export function whoLine(
 ): { name: string; detail: string; grants: string } {
   if (viewer.loading) {
     if (session) {
+      const grants = grantsLine(session.grants ?? []);
+      // A CREDENTIAL ACTING AS A SEAT is the seat: the chart is unread
+      // under a viewer that has not answered, so the handle stands in.
+      const via = viaLine(session.login);
+      if (via && session.seat) return { name: `@${session.seat}`, detail: via, grants };
       return {
         ...said(readerName(session), session.login, session.seat ? `@${session.seat}` : null),
-        grants: grantsLine(session.grants ?? []),
+        grants,
       };
     }
     if (failed) {
@@ -187,7 +205,24 @@ export function whoLine(
   // refuses one that is not (`seat_unavailable`), so "human seat" would say
   // what the block already shows.
   const seat = seatName || viewer.name || (viewer.handle ? `@${viewer.handle}` : "");
+  // A CREDENTIAL ACTING AS A SEAT is called by the seat, and the line under
+  // it says how it is signed in (see the file's doc).
+  const via = viaLine(viewer.login);
+  if (via && seat) return { name: seat, detail: via, grants };
   return { ...said(name, viewer.login, seat), grants };
+}
+
+/**
+ * How a credential that is not a person is signed in, as the line under the
+ * seat it acts as: "via API token review", "via service account ci:deploy".
+ * Empty for a person's login, which is never said this way. Decided by the
+ * login's grammar (`lib/login.ts`), because a seat-bound token's session is
+ * answered with a person's `kind`.
+ */
+export function viaLine(login: string): string {
+  const token = tierATokenOf(login);
+  if (token) return `via API token ${token}`;
+  return loginKind(login) === "machine" ? `via service account ${login}` : "";
 }
 
 /**
@@ -211,7 +246,6 @@ export function UserBlock({
   /** The name of the seat this principal is bound to, from the org chart. */
   seatName: string;
 }) {
-  const prefs = useViewerPrefs();
   const route = useRoute();
   const [everywhere, setEverywhere] = useState(false);
   // THE FRAME'S ONE READ, asked again when the tab comes back: for the people
@@ -233,10 +267,14 @@ export function UserBlock({
   const here = workspaceOf(route.path) === ACCOUNT.key;
 
   // A PRINCIPAL THAT IS NOT A PERSON (an API token's session, a service
-  // account) wears a KEY for a face: the initials of `token:reader` drew "TO",
-  // as if it were somebody.
-  const machine =
-    session !== null ? session.kind === "machine" : answered && viewer.unbound === true;
+  // account) is told by its login, never by the session's `kind`, which is a
+  // person's for a token bound to a seat. ACTING AS A SEAT it keeps the seat's
+  // face, the initials, and wears a key on its corner; BOUND TO NONE it has no
+  // face to keep, so the key IS its face: the initials of `token:reader` drew
+  // "TO", as if it were somebody.
+  const login = answered ? viewer.login : (session?.login ?? "");
+  const bound = answered ? !viewer.unbound : Boolean(session?.seat);
+  const credential = resolved && viaLine(login) !== "";
 
   return (
     <>
@@ -247,13 +285,16 @@ export function UserBlock({
           // one badge IS the reader, which is the single use `ring="brand"`
           // exists for (`docs/reference/dashboard-design.md`). A badge
           // standing in for nobody, or for an answer still out, is not the
-          // reader and is not ringed.
+          // reader and is not ringed. A badge wearing a mark draws no ring
+          // either: the kit cuts the mark's notch from the outline a ring
+          // would follow.
           <SeatAvatar
             name={resolved ? who.name || "?" : "?"}
             size="sm"
             kind="human"
             ring={resolved ? "brand" : undefined}
-            icon={resolved && machine ? <KeyGlyph size="sm" /> : undefined}
+            icon={credential && !bound ? <KeyGlyph size="sm" /> : undefined}
+            mark={credential && bound ? <KeyGlyph size="xs" /> : undefined}
             decorative
           />
         }
@@ -266,7 +307,6 @@ export function UserBlock({
         title={ACCOUNT.hint}
         actions={
           <>
-            <ThemeToggle size="sm" value={prefs.theme} onChange={prefs.setTheme} />
             {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger sits at the sidebar's
                 inner edge, a couple of hundred pixels from the left of the window, so an
                 end-aligned panel would have to be slid back across the window edge to fit at all.

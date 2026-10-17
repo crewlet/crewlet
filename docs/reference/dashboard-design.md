@@ -917,7 +917,17 @@ engine refused, it draws the seat the session names). The seat's name is the cha
 place and often a role: a person with no name of their own was "Founder" in
 the block and greeted "Good afternoon, Founder" on Home, while their Account
 said they had no name. Home's greeting takes their own name alone, and a person
-with none is greeted without one. The name of anybody resolved
+with none is greeted without one. **A credential that is not a person but acts
+as a seat is called by the seat**: a Tier A token bound to Miles's human seat
+is "Miles", with "via API token review" under it ("via service account
+ci:deploy" for a service account), because it has no name of its own and the
+seat is who it acts as. It read "token:review" over "Miles", the credential's
+spelling as the name and the place it acts for as the aside. Its badge is the
+seat's own initials wearing a key on its corner (the kit's `Avatar` `mark`), so
+the face says who and the corner says how; a credential bound to no seat keeps
+the key as its whole face. Which credential it is comes from the login's
+grammar (`lib/login.ts`), never the session's `kind`, which the engine answers
+`person` for a token acting as a seat. The name of anybody resolved
 **opens their own [Account](#account-the-readers-own-page)**, where the
 password, the second factor and the sessions are. It linked to the seat, which
 is the company's page about a place in the chart and has none of them: a
@@ -936,8 +946,10 @@ on its own page — raised, with the hairline, no hue. **A session read that
 failed is not nobody**: where `GET /auth/session` failed (a 503, the network)
 rather than being refused, the browser may hold a session, so the block says
 it could not tell who this is and still offers the Account — whose page says
-what its own read finds — and the sign-out of this browser. It sits beside the mode flip and
-the **preferences**: the mode (light, match the system, dark), the density and
+what its own read finds — and the sign-out of this browser. It sits beside one
+control, the **preferences** (the row had a one-press mode flip too, which with
+the link's chevron left a name already cut short by the rail's width two glyph
+buttons to share it with): the mode (light, match the system, dark), the density and
 the theme. The two switchers draw one box of three equal cells each, so a row
 of glyphs and a row of letters read as the same control; the theme is a select
 whose options carry each theme's two halves as a chip, its name and its tag,
@@ -1818,7 +1830,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar ([The sidebar](#the-sidebar)), with the engine panel and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. The name of anybody resolved is a link to the reader's own [Account](#account-the-readers-own-page) — never the seat, which holds none of what a person looks for there — named ", your account", titled with the Account row's hint, wearing a chevron at rest, and marked current on `#/account`, where it stands in for the row the Account does not have. Its popover holds the same link (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token review" under it, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. The name of anybody resolved is a link to the reader's own [Account](#account-the-readers-own-page) — never the seat, which holds none of what a person looks for there — named ", your account", titled with the Account row's hint, wearing a chevron at rest, and marked current on `#/account`, where it stands in for the row the Account does not have. Its popover holds the same link (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and an arrow on a cross-link. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a knowledge page, whose More carries it, and Knowledge's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -8490,7 +8502,8 @@ to.
    same engineer was "FE" on the board and an identical generic robot on
    Search and on a project's Lead panel. `ring="brand"` — the accent drawn as a
    ring round the neutral badge, meaning *selected* — is for the one badge that
-   IS the reader, in the sidebar's own account row, and for nothing else in
+   IS the reader, in the sidebar's own account row (unless it wears a `mark`,
+   whose notch is cut from the outline the ring would follow), and for nothing else in
    the dashboard (the kit's `CharacterPicker` wears it on the chosen
    character, which is the same word: selected). What a seat is DOING is its
    `status` (`statusOf`), the kit's corner glyph, never a ring and never a
