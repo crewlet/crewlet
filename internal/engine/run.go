@@ -3272,7 +3272,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // node reporting work it finished a minute ago, and the whole value of
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
-func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
+//
+// AN ERROR MEANS IT DID NOT ANSWER, and the beat then publishes nothing —
+// see [seat.Config].Status. The decision is made here, where the reads are,
+// rather than by the beat's clock after this returns: only this frame knows
+// which of its reads a dead context could have cut short.
+func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	// The MCP rows are this process's own record of what it started, read
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
@@ -3299,6 +3304,15 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.AppliersReady++
 		}
 	}
+	// A DOMAIN READ THE BUDGET CUT SHORT counts its domain as not ready, so
+	// a count taken past the deadline understates a healthy node — and the
+	// count cannot say which of its rows the deadline reached. Checked once
+	// the reads are done, which may refuse a count that finished right at
+	// the deadline and never publishes one that did not.
+	if err := ctx.Err(); err != nil {
+		return coord.NodeStatus{}, fmt.Errorf("node status: the beat's budget ended "+
+			"while the replication positions were being read: %w", err)
+	}
 	if fn := e.posture.Load(); fn != nil {
 		posture := (*fn)(ctx)
 		// A posture read that ran out of the beat's budget did not
@@ -3310,7 +3324,7 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.Posture = posture
 		}
 	}
-	return status
+	return status, nil
 }
 
 // StartedAt is when this engine was built, which is when the node started.

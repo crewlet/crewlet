@@ -218,6 +218,18 @@ func TestParkAndPauseRefuseAnUnroutableSeat(t *testing.T) {
 
 // --- what this node advertises about itself -------------------------------
 
+// statusOf is [Engine.nodeStatus] for a case that expects an answer: one that
+// did not answer fails here, by name, rather than as a zero status a later
+// assertion misreads.
+func statusOf(ctx context.Context, t *testing.T, e *Engine) coord.NodeStatus {
+	t.Helper()
+	status, err := e.nodeStatus(ctx)
+	if err != nil {
+		t.Fatalf("the node status did not answer: %v", err)
+	}
+	return status
+}
+
 // A POSTURE READ THAT RAN OUT OF THE BEAT'S BUDGET DID NOT ANSWER.
 //
 // [Reconciler.Posture] fails OPEN — a control plane it cannot read reports
@@ -235,8 +247,23 @@ func TestATimedOutPostureReadPublishesNoPosture(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
 	defer cancel()
-	if got := e.nodeStatus(ctx).Posture; got != "" {
-		t.Errorf("posture = %q, want none published", got)
+	// Either outcome is honest — no answer at all, or an answer without a
+	// posture — and the one thing it may not do is carry the fail-open one.
+	if status, err := e.nodeStatus(ctx); err == nil && status.Posture != "" {
+		t.Errorf("posture = %q, want none published", status.Posture)
+	}
+}
+
+// A BEAT WHOSE BUDGET IS SPENT GETS NO ANSWER, rather than a replication
+// count its dead context made: an unreadable position counts its domain as
+// not ready, so that count would understate a healthy node to every peer.
+func TestAStatusReadOnASpentBudgetDoesNotAnswer(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if status, err := e.nodeStatus(ctx); err == nil {
+		t.Errorf("a status read on a dead context answered %+v", status)
 	}
 }
 
@@ -245,7 +272,7 @@ func TestAnAnsweredPostureReachesTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	e.SetPosture(func(context.Context) string { return "shed" })
-	if got := e.nodeStatus(t.Context()).Posture; got != "shed" {
+	if got := statusOf(t.Context(), t, e).Posture; got != "shed" {
 		t.Errorf("posture = %q, want shed", got)
 	}
 }
@@ -255,7 +282,7 @@ func TestAnAnsweredPostureReachesTheHeartbeat(t *testing.T) {
 func TestANodeWithNoPostureReporterPublishesNone(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	status := e.nodeStatus(t.Context())
+	status := statusOf(t.Context(), t, e)
 	if status.Posture != "" {
 		t.Errorf("posture = %q", status.Posture)
 	}
@@ -270,7 +297,7 @@ func TestANodeWithNoPostureReporterPublishesNone(t *testing.T) {
 func TestTheAdvertisedStartIsTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	e := &Engine{startedAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)}
-	if got := e.nodeStatus(t.Context()).StartedAt; !got.Equal(e.StartedAt()) {
+	if got := statusOf(t.Context(), t, e).StartedAt; !got.Equal(e.StartedAt()) {
 		t.Errorf("started_at = %v, want %v", got, e.StartedAt())
 	}
 }
@@ -294,13 +321,13 @@ func TestADrainingNodeAdvertisesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := &Engine{node: n}
-	if e.nodeStatus(t.Context()).Draining {
+	if statusOf(t.Context(), t, e).Draining {
 		t.Fatal("a fresh node reported itself draining")
 	}
 
 	n.Host().BeginDrain(t.Context())
 
-	if !e.nodeStatus(t.Context()).Draining {
+	if !statusOf(t.Context(), t, e).Draining {
 		t.Error("a draining node did not say so")
 	}
 }
@@ -318,7 +345,7 @@ func TestTheAdvertisedInFlightCountIsTheBrokerClients(t *testing.T) {
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 
 	e := &Engine{backends: &Backends{Queue: q}}
-	if got := e.nodeStatus(t.Context()).InFlight; got != 0 {
+	if got := statusOf(t.Context(), t, e).InFlight; got != 0 {
 		t.Fatalf("in flight = %d on an idle node", got)
 	}
 
@@ -341,7 +368,7 @@ func TestTheAdvertisedInFlightCountIsTheBrokerClients(t *testing.T) {
 	}()
 	<-entered
 
-	got := e.nodeStatus(t.Context()).InFlight
+	got := statusOf(t.Context(), t, e).InFlight
 	close(release)
 	if err := <-delivered; err != nil {
 		t.Fatal(err)

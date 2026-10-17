@@ -130,10 +130,19 @@ type Config struct {
 	//
 	// It takes a context because answering may mean reading a store, and
 	// this runs on the path that renews presence: the beat bounds it to
-	// [StatusBudgetRatio] of an interval and publishes nothing if it
-	// overruns, so a slow control plane costs a column rather than the
-	// node's seats.
-	Status func(context.Context) coord.NodeStatus
+	// [StatusBudgetRatio] of an interval, so a slow control plane costs a
+	// column rather than the node's seats.
+	//
+	// THE ERROR IS THE HOOK'S OWN ANSWER to "did I answer?", and the beat
+	// publishes nothing when it is not nil — a hook whose context ended
+	// before its reads finished returns that context's error. The beat
+	// used to infer it instead, from its own clock after the hook had
+	// returned, and a clock read after the fact cannot tell a hook that
+	// was cut short from one that finished and was then descheduled past
+	// the deadline: a complete answer was discarded whenever the
+	// goroutine lost the CPU at the wrong moment, which a short budget on
+	// a loaded machine made routine.
+	Status func(context.Context) (coord.NodeStatus, error)
 
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
@@ -217,7 +226,7 @@ type Host struct {
 	// serviceable is Config.Serviceable — whether held seats may stay.
 	serviceable func(ctx context.Context) (bool, string)
 	profile     placement.NodeProfile
-	status      func(context.Context) coord.NodeStatus
+	status      func(context.Context) (coord.NodeStatus, error)
 	hooks       Hooks
 	clock       func() time.Time
 	protocol    int
