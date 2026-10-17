@@ -51,16 +51,22 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 
 	write := func(id, kind, turn string, at time.Time) {
 		t.Helper()
-		log := onA
-		if id == "c" || id == "d" {
-			log = onB
+		// EACH ROW NAMES THE NODE THAT PUBLISHED IT: node-a's and node-b's
+		// own, except t-2's, which ran on agent-1 — a node without `data`
+		// whose events node-b keeps in custody.
+		log, origin := onA, "node-a"
+		switch id {
+		case "c":
+			log, origin = onB, "node-b"
+		case "d":
+			log, origin = onB, "agent-1"
 		}
 		payload, err := json.Marshal(map[string]any{"turn_id": turn, "phase": "plan"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: kind, Time: at, Category: "lifecycle", Actor: "PM",
+			ID: id, Type: kind, Time: at, Category: "lifecycle", Actor: "PM", Node: origin,
 			Tags: map[string]string{"turn_id": turn, "agent_role": "PM"},
 			// The tag is what promotes the column; the payload is what a
 			// reader renders.
@@ -97,16 +103,17 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	if got["turn_id"] != "t-1" {
 		t.Errorf("answer does not name its turn: %v", got)
 	}
-	// WHERE IT RAN: both nodes' stores hold part of it, and a stored row
-	// carries no node of its own, so the answer is the only thing that can
-	// say so.
+	// WHERE IT RAN: both nodes published part of it, and the answer says so
+	// off the rows.
 	if nodes, _ := got["nodes"].([]any); len(nodes) != 2 || nodes[0] != "node-a" || nodes[1] != "node-b" {
-		t.Errorf("nodes = %#v; want both nodes that hold part of the turn", got["nodes"])
+		t.Errorf("nodes = %#v; want both nodes that published part of the turn", got["nodes"])
 	}
-	// AND ONLY THOSE: t-2 lives on node-b alone.
+	// AND ONLY THOSE, and never the node that merely HOLDS a turn: t-2 is in
+	// node-b's store alone, and it ran on agent-1.
 	other := asMap(t, answer(t, queries.Sources{Events: fleet}, "turn", map[string]any{"turn_id": "t-2"}))
-	if nodes, _ := other["nodes"].([]any); len(nodes) != 1 || nodes[0] != "node-b" {
-		t.Errorf("nodes for t-2 = %#v; want node-b alone", other["nodes"])
+	if nodes, _ := other["nodes"].([]any); len(nodes) != 1 || nodes[0] != "agent-1" {
+		t.Errorf("nodes for t-2 = %#v; want agent-1, the node that ran it, not node-b, which keeps it",
+			other["nodes"])
 	}
 	// A SHORT TURN IS NOT A CUT ONE. The flag has to be present and false,
 	// or a client cannot tell "read to the end" from an answer that failed
