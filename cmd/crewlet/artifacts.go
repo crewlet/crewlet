@@ -131,11 +131,9 @@ func artifactID(raw string) (artifacts.ID, error) {
 	return id, nil
 }
 
-// operationFlag registers -op-id, the retry of an unknown outcome.
-func operationFlag(fs *flag.FlagSet) *string {
-	return fs.String("op-id", "", "retry an `unknown` outcome with the id it printed, so the "+
-		"retry is the same operation; empty starts a new one")
-}
+// artifactsOpIDUsage is what -op-id says on every artifacts write.
+const artifactsOpIDUsage = "retry an `unknown` outcome with the id it printed, so the " +
+	"retry is the same operation; empty starts a new one"
 
 // operation is the id a write is sent under: the one the operator brought,
 // held to the node's rule before anything is sent, or a fresh one.
@@ -206,7 +204,7 @@ func gesture(environ config.Source, args []string, stdout, stderr io.Writer, nam
 	}
 	var opID *string
 	client, err := nodeClientFor(environ, rest, "artifacts "+name, stderr, func(fs *flag.FlagSet) {
-		opID = operationFlag(fs)
+		opID = opIDFlag(fs, artifactsOpIDUsage)
 		if extra != nil {
 			extra(fs)
 		}
@@ -986,7 +984,7 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 			capabilityNames()+"; none declares none (default: the head's, none for a new artifact)")
 		item = fs.String("work-item", "", "the work item this is made for, which lists it there")
 		force = fs.Bool("force", false, "publish over a head that moved since it was read")
-		opID = operationFlag(fs)
+		opID = opIDFlag(fs, artifactsOpIDUsage)
 	})
 	if err != nil {
 		return err
