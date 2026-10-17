@@ -42,6 +42,13 @@ const (
 	// OutcomePending says the record is DURABLE at its position and what
 	// it produced is unresolved HERE. Every other node will apply it.
 	//
+	// WHICH IS WHY A COPY IS JUDGED BEFORE IT IS ANSWERED PENDING. A write
+	// the broker collapsed onto another node's copy of its operation is
+	// durable at that copy, and the copy applies nowhere if its writer was
+	// evicted while it was in flight — so it is pending only where that
+	// writer still stands at the copy's position, and unknown otherwise
+	// ([Publisher.unresolved]).
+	//
 	// NEVER a failure and never "applied": a caller told this has a
 	// position to resolve with later, which is a different thing to do
 	// than retry.
