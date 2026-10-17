@@ -583,17 +583,22 @@ When a turn only discovers it needs a human at review, the reviewer
 returns `self_iterate` with a note, and the executor's next round makes
 the mention. Once the mention has gone out the reviewer ends the turn
 `done` instead — the human's reply is what re-triggers the agent, so no
-further round of that turn can produce it. If the agent genuinely **can't reach the human** (it has no
-chat tool, or the human has no contact ID), that surfaces as a gap to
-close: give the agent the tool, or route the work through a colleague who
-has it. A human with no contact ID at all is the legitimate case of a
-person who works only through the dashboard, which the configuration warns
-about at the seat's `contact`: the roster tells a lead to hand them work by assigning
-it in the tracker, and a contact identity is what to add the day they join a
-surface the company runs. The engine never manufactures a sender to bridge
-the gap: there is no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
-colleague-tool use, so a report reaches a human exactly the way it reaches
-an agent.
+further round of that turn can produce it. If the agent genuinely **can't
+reach the human** (it has no chat tool, or the human has no contact ID on
+the vendor surface it would mention them on — the engine's own chat needs
+none), that surfaces as a gap to close: give the agent the tool, or route
+the work through a colleague who has it. A human with no contact ID at all
+is the legitimate case of a person who works only through the dashboard.
+On a company that talks on Mattermost or Slack the configuration warns
+about it at the seat's `contact` — and about a seat whose only ids are for
+other surfaces, since a GitHub login reaches nobody in a chat room: the
+roster tells a lead to hand them work by assigning it in the tracker, and
+an id on that workspace is what to add the day they join it. On the
+engine's own chat there is nothing to warn about, because the person reads
+the rooms on the dashboard as their seat. The engine never manufactures a
+sender to bridge the gap: there is no "Crewlet" DM and no engine-side
+fallback. Escalation is ordinary colleague-tool use, so a report reaches a
+human exactly the way it reaches an agent.
 
 ---
 

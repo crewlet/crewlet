@@ -654,8 +654,8 @@ type Role struct {
 	// seat, and OPTIONAL on a human one: a person reached only through the
 	// dashboard is bound to the seat in the identity directory and has no
 	// chat account to name here. A human seat with none is a legitimate
-	// seat nobody can @-mention, which the company's warnings report rather
-	// than validation refusing it.
+	// seat nobody can @-mention on a vendor chat surface, which the
+	// company's warnings report there rather than validation refusing it.
 	Contact *HumanContact `yaml:"contact,omitempty" json:"contact,omitempty"`
 
 	// Availability is a free-text note for a human seat, rendered into
