@@ -141,9 +141,10 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 
 // dedupeRelations keeps the FIRST of each (Kind, Other), order preserved.
 //
-// Deterministically, because every node stores what this record says: two
-// spellings of one edge inside a `set` would otherwise be two rows on the node
-// that applied the record and one on the node that re-derived the document.
+// Deterministically, because every data node stores what this record says:
+// two spellings of one edge inside a `set` would otherwise be two rows on the
+// node that applied the record and one on the node that re-derived the
+// document.
 func dedupeRelations(in []Relation) []Relation {
 	type edge struct {
 		kind  RelationKind
