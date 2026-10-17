@@ -717,8 +717,16 @@ func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error)
 // with a PARENT is no root at all but where a cycle's walk stopped, which is
 // the `cycle` flag's to report and no move's to repair. Selected anyway, each
 // would hold the gate open on every tick for work this job refuses.
+//
+// DRIVEN FROM THE FLAGGED ROWS, which CROSS JOIN fixes: the index holds the
+// few tasks the gate is asking about, and each one's root is then one
+// primary-key read. Joined plainly, the gate has no term on `t.root_id` to
+// seek by, and the planner — with no statistics, as on every node — drove it
+// from the ROOTS instead: a walk of every live task in the company through
+// `tracker_tasks_type_idx`, probing the index once for each, on every tick of
+// the duty.
 const strandedFrom = `
-	FROM tracker_tasks t JOIN tracker_tasks r ON r.id = t.root_id
+	FROM tracker_tasks t CROSS JOIN tracker_tasks r ON r.id = t.root_id
 	WHERE t.inconsistent_project = 1 AND t.removed_at IS NULL
 	  AND r.removed_at IS NULL AND r.moving = 0
 	  AND (r.parent_id IS NULL OR r.parent_id = '')`

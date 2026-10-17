@@ -139,13 +139,21 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// they are run here rather than exempted by a list: an index whose
 	// only justification is "a duty uses it" is one nobody has checked,
 	// and a duty's own statement is as much a reader as a board is.
-	for name, statement := range dutyReads() {
+	//
+	// EACH HELD TO THE INDEX IT NAMES, as the history reads below are and
+	// for their reason: a read that loses its index walks another one,
+	// which is no heap scan and which the inventory cannot see while a
+	// neighbour still reaches the index. Measured: the straggler gate,
+	// whose comment promises one probe of its partial index, walked every
+	// live task as a root through `tracker_tasks_type_idx` on every tick.
+	for name, read := range dutyReads() {
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, statement.sql, statement.args)
+			plan := explain(t, db, read.sql, read.args)
 			for _, index := range indexesIn(plan) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
+			holdToIndex(t, plan, read, covered)
 		})
 	}
 
@@ -168,41 +176,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
-			shown := strings.Join(plan, "\n")
-			// AND IT WALKS NOTHING IT DOES NOT NAME. A walk is every row
-			// of its table in its index's order, which is a heap scan by
-			// another route, and the one walk a read may make is the one
-			// its own order is for. Measured: the unblocked repair's
-			// dependents, written as a three-way join, walked every live
-			// task through `tracker_tasks_type_idx` on every tick and
-			// sought the history only per task — reaching the subject
-			// index it then named, and passing.
-			for _, line := range plan {
-				for _, table := range covered {
-					walked := indexesIn([]string{line})
-					if !strings.HasPrefix(line, "SCAN "+table+" ") || len(walked) == 0 ||
-						(read.walk && walked[0] == read.index) {
-						continue
-					}
-					t.Errorf("this read walks %s through %s, which it does not "+
-						"name — every row of that table, in that index's "+
-						"order:\n%s", table, walked[0], shown)
-				}
-			}
-			switch {
-			case !read.walk && !seeks(plan, read.index):
-				t.Errorf("this read does not SEEK %s:\n%s", read.index, shown)
-			case read.walk && !walks(plan, read.index):
-				t.Errorf("this read does not walk %s in its order:\n%s",
-					read.index, shown)
-			case read.walk && sorts(plan):
-				// A WALK IS RIGHT ONLY WHILE ITS ORDER IS THE ANSWER'S,
-				// because then the LIMIT stops it after a page; sorted,
-				// it reads every row it selects first.
-				t.Errorf("this read walks %s and then sorts what it read, so "+
-					"the walk is every row it selects rather than a page:\n%s",
-					read.index, shown)
-			}
+			holdToIndex(t, plan, read, covered)
 		})
 	}
 
@@ -323,7 +297,8 @@ func registeredQueries() map[string]map[string]any {
 }
 
 // dutyReads is every statement outside the query grammar that this schema's
-// indexes claim a reader for — the duty selections and the apply-path probes.
+// indexes claim a reader for — the duty selections and the apply-path probes —
+// each with the index its plan must reach ([indexedRead]).
 //
 // THEY ARE PLANNED, NOT DECLARED. An index kept because "a duty uses it" is an
 // index nobody has checked: the duty's statement is as much a reader as a
@@ -335,37 +310,59 @@ func registeredQueries() map[string]map[string]any {
 // a column the applier only ever wrote a zero into — and it kept an index on
 // that column certified for a selection nothing ran, while the selection the
 // duty does run was certified by nothing. The search package exports its own.
-func dutyReads() map[string]plannedRead {
+func dutyReads() map[string]indexedRead {
+	const (
+		key      = "sqlite_autoindex_tracker_tasks_1"
+		keys     = "tracker_tasks_key_idx"
+		live     = "tracker_tasks_type_idx"
+		recent   = "tracker_tasks_updated_idx"
+		respread = "tracker_tasks_respread_idx"
+		merging  = "tracker_tasks_merging_idx"
+		moving   = "tracker_tasks_moving_idx"
+		stranded = "tracker_tasks_stranded_idx"
+		ranks    = "tracker_tasks_rank_idx"
+	)
+	seek := func(index, sql string, args ...any) indexedRead {
+		return indexedRead{plannedRead{sql, args}, index, false}
+	}
+	// A WALK HERE IS A GATE'S EXISTS, which stops at the first row; a
+	// page whose order is the index's, which its LIMIT stops; or the
+	// coverage count, which is every live task by definition.
+	walk := func(index, sql string, args ...any) indexedRead {
+		return indexedRead{plannedRead{sql, args}, index, true}
+	}
+	// The search package's statements come with their arguments.
 	read := func(sql string, args []any) plannedRead { return plannedRead{sql, args} }
-	return map[string]plannedRead{
-		"the embed duty's selection":    read(search.TaskSelection("m", 8, 1024)),
-		"the embed duty's opening read": read(search.TaskOpeningRead("t-00001")),
-		"the embed duty's withdrawals":  read(search.TaskWithdrawals(1024)),
-		"the embed duty's coverage":     read(search.TaskCoverageCount("m", 8)),
-		"the re-spread walk":            {respreadRowsStatement, []any{"P01"}},
-		"the re-spread hand-off":        {respreadPendingStatement, []any{"P01", "P01"}},
-		"the abandoned merge gate":      {mergePendingStatement, nil},
-		"the abandoned merge walk":      {mergingAfterStatement, []any{"", WalkBatch}},
-		"the abandoned move gate":       {movePendingStatement, nil},
-		"the abandoned move walk":       {movingStatement, []any{WalkBatch}},
-		"the move stragglers gate":      {strandedPendingStatement, nil},
-		"the move stragglers walk":      {strandedAfterStatement, []any{"", WalkBatch}},
-		"the apply's duplicate probe": {rankDuplicateStatement,
-			[]any{"P01", "P01", "a000001", "t-00002"}},
+	return map[string]indexedRead{
+		"the embed duty's selection":    {read(search.TaskSelection("m", 8, 1024)), recent, true},
+		"the embed duty's opening read": {read(search.TaskOpeningRead("t-00001")), key, false},
+		"the embed duty's withdrawals":  {read(search.TaskWithdrawals(1024)), key, false},
+		"the embed duty's coverage":     {read(search.TaskCoverageCount("m", 8)), live, true},
+		"the re-spread walk":            seek(respread, respreadRowsStatement, "P01"),
+		"the re-spread hand-off":        seek(respread, respreadPendingStatement, "P01", "P01"),
+		"the abandoned merge gate":      walk(merging, mergePendingStatement),
+		"the abandoned merge walk":      seek(merging, mergingAfterStatement, "", WalkBatch),
+		"the abandoned move gate":       walk(moving, movePendingStatement),
+		"the abandoned move walk":       walk(moving, movingStatement, WalkBatch),
+		"the move stragglers gate":      walk(stranded, strandedPendingStatement),
+		"the move stragglers walk":      seek(stranded, strandedAfterStatement, "", WalkBatch),
+		"the apply's duplicate probe": seek(ranks, rankDuplicateStatement,
+			"P01", "P01", "a000001", "t-00002"),
 		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
 		// serve a read is a property of the statement rather than of the
 		// schema: this entry was a copy that spelled the index's predicate
 		// out while the restore did not, so the copy sought the index and
 		// the restore read every task.
-		"the subtree restore": {removedWithStatement, []any{"t-00001"}},
-		"the trash": {
+		"the subtree restore": seek("tracker_tasks_removed_with_idx",
+			removedWithStatement, "t-00001"),
+		"the trash": walk("tracker_tasks_removed_idx",
 			`SELECT id FROM tracker_tasks WHERE removed_at IS NOT NULL
-			 ORDER BY removed_at DESC LIMIT 51`, nil},
-		"key resolution":       {resolveTaskStatement, []any{"ENG-1", "ENG-1", "ENG-1"}},
-		"a point read's scope": {taskReadScopeStatement, []any{"ENG-1", "ENG-1", "ENG-1"}},
-		"one tag's tasks": {
+			 ORDER BY removed_at DESC LIMIT 51`),
+		"key resolution":       seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
+		"a point read's scope": seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
+		"one tag's tasks": seek("tracker_task_tags_slug_idx",
 			`SELECT task_id FROM tracker_task_tags
-			 WHERE project_key = ? AND slug = ?`, []any{"P01", "tag-1"}},
+			 WHERE project_key = ? AND slug = ?`, "P01", "tag-1"),
 	}
 }
 
@@ -376,14 +373,53 @@ type plannedRead struct {
 	args []any
 }
 
-// historyRead is one statement that finds history rows, and the history index
-// its plan must reach: by a SEEK on the index's leading columns, or — for a
-// read whose point is the index's own order, which its LIMIT stops after a page
-// — by a WALK of it.
-type historyRead struct {
+// indexedRead is one statement and the index its plan must reach: by a SEEK on
+// the index's leading columns, or — for a read whose point is the index's own
+// order, which its LIMIT or its EXISTS stops after a page — by a WALK of it.
+type indexedRead struct {
 	plannedRead
 	index string
 	walk  bool
+}
+
+// holdToIndex fails a plan that does not reach read's index the way read
+// declares, or that walks an index of a covered table it does not name.
+func holdToIndex(t *testing.T, plan []string, read indexedRead, covered []string) {
+	t.Helper()
+	shown := strings.Join(plan, "\n")
+	// AND IT WALKS NOTHING IT DOES NOT NAME. A walk is every row of its
+	// table in its index's order, which is a heap scan by another route,
+	// and the one walk a read may make is the one its own order is for.
+	// Measured: the unblocked repair's dependents, written as a three-way
+	// join, walked every live task through `tracker_tasks_type_idx` on
+	// every tick and sought the history only per task — reaching the
+	// subject index it then named, and passing.
+	for _, line := range plan {
+		for _, table := range covered {
+			walked := indexesIn([]string{line})
+			if !strings.HasPrefix(line, "SCAN "+table+" ") || len(walked) == 0 ||
+				(read.walk && walked[0] == read.index) {
+				continue
+			}
+			t.Errorf("this read walks %s through %s, which it does not "+
+				"name — every row of that table, in that index's "+
+				"order:\n%s", table, walked[0], shown)
+		}
+	}
+	switch {
+	case !read.walk && !seeks(plan, read.index):
+		t.Errorf("this read does not SEEK %s:\n%s", read.index, shown)
+	case read.walk && !walks(plan, read.index):
+		t.Errorf("this read does not walk %s in its order:\n%s",
+			read.index, shown)
+	case read.walk && sorts(plan):
+		// A WALK IS RIGHT ONLY WHILE ITS ORDER IS THE ANSWER'S, because
+		// then the LIMIT stops it after a page; sorted, it reads every
+		// row it selects first.
+		t.Errorf("this read walks %s and then sorts what it read, so "+
+			"the walk is every row it selects rather than a page:\n%s",
+			read.index, shown)
+	}
 }
 
 // historyKey is the history's primary key as this engine's planner names it:
@@ -408,7 +444,7 @@ const historyKey = "sqlite_autoindex_tracker_history_1"
 //
 // db is the history fixture: the activity feed resolves a task the way its
 // reader does, inside a transaction, before it has a statement to explain.
-func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRead {
+func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRead {
 	t.Helper()
 	const (
 		subject = "tracker_history_subject_idx"
@@ -418,8 +454,8 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRea
 		status  = "tracker_history_status_seq_idx"
 		moves   = "tracker_history_moves_idx"
 	)
-	seek := func(index, sql string, args ...any) historyRead {
-		return historyRead{plannedRead{sql, args}, index, false}
+	seek := func(index, sql string, args ...any) indexedRead {
+		return indexedRead{plannedRead{sql, args}, index, false}
 	}
 	at := func(n uint64) int64 {
 		return statelog.Position{Stream: historyStream, Generation: 1, Seq: n}.Packed()
@@ -428,7 +464,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRea
 	instant := store.EncodeTime(planNow)
 	const task, purged, record = "t-0007", "t-0050", "h-00007"
 	kind := string(KindTask)
-	reads := map[string]historyRead{
+	reads := map[string]indexedRead{
 		"a task's own history": seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
 		"a purged task's rows": seek(subject, purgedHistoryStatement, purged),
 		"one change's routing": seek(historyKey, routingRecordStatement, record),
@@ -466,7 +502,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRea
 	for name, read := range companyWideReads() {
 		// AN UNBOUNDED PAGE WALKS the index newest first and stops after
 		// it; a bounded one seeks its range.
-		reads[name] = historyRead{read.plannedRead, moves, !read.bounded}
+		reads[name] = indexedRead{read.plannedRead, moves, !read.bounded}
 	}
 
 	// THE ACTIVITY FEED, one case per filter family the reader accepts,
@@ -518,7 +554,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRea
 			if err != nil {
 				return err
 			}
-			reads["the activity feed: "+name] = historyRead{plannedRead{
+			reads["the activity feed: "+name] = indexedRead{plannedRead{
 				activityStatement(where), append(args, MaxActivityRows+1)},
 				c.index, c.walk}
 			return nil
