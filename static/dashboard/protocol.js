@@ -2746,7 +2746,17 @@ var SessionKeepAlive = class {
 *    tool's own schema, and every property the schema REQUIRES is here;
 *  - `domain` — the log the write lands in, whose position raises this tab's
 *    read floor for that domain (`protocol/session.ts`), or `null` for a
-*    write that lands in no log a question reads;
+*    write that lands in no log a question reads. A wrong one is SILENT: a
+*    write filed under `null` raises no floor, so the screen's next read may
+*    come from before the press;
+*  - `apps` — the apps ANY ONE of which the change needs, in the engine's
+*    order: its app for an app's change, every app for one that draws on
+*    whichever the caller holds (`answer_knowledge`), and none for a change
+*    no app holds (pausing a seat, answering a coding run). What a control
+*    the engine does not offer is held with — "needs Tracker access" — so a
+*    reader is told what to ask an admin for (`lib/useWriteAccess.ts`). It is
+*    the authority table's, stated per row rather than guessed from the
+*    domain: a change can need an app and land in no log;
 *  - `refreshes` — questions OUTSIDE that domain's session set
 *    (`contract/domains.ts`) that the write also moves, asked again without a
 *    floor because they cannot take one;
@@ -2759,8 +2769,9 @@ var SessionKeepAlive = class {
 * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
 * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
 * served by the act transport and is not a read, every argument is one its
-* schema takes, every required one is present, and every scope is the one its
-* authority class gives it. A renamed argument in Go is a red build here
+* schema takes, every required one is present, every domain is the log its
+* tool writes, and every scope and app set is the one its authority row
+* gives it. A renamed argument in Go is a red build here
 * rather than a button the tools' own gate refuses `invalid_body` — an
 * argument the tool does not declare — the first time somebody presses it.
 */
@@ -2780,12 +2791,18 @@ var ACTIONS = {
 			"labels"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: ["work_search"],
 		scope: "person"
 	},
 	answer_knowledge: {
 		args: ["q"],
 		domain: null,
+		apps: [
+			"tracker",
+			"knowledge",
+			"artifacts"
+		],
 		refreshes: [],
 		scope: "person"
 	},
@@ -2811,24 +2828,28 @@ var ACTIONS = {
 			"watch"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: ["work_search"],
 		scope: "person"
 	},
 	restore_work_item: {
 		args: ["item"],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: ["work_search"],
 		scope: "person"
 	},
 	write_project: {
 		args: ["project", "target_date"],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: [],
 		scope: "company"
 	},
 	set_pins: {
 		args: ["views", "favorites"],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -2839,6 +2860,7 @@ var ACTIONS = {
 			"if_match"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -2853,12 +2875,14 @@ var ACTIONS = {
 			"decision"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: [],
 		scope: "person"
 	},
 	answer_run: {
 		args: ["turn_id", "answer"],
 		domain: null,
+		apps: [],
 		refreshes: ["sandbox_runs", "decisions"],
 		scope: "person"
 	},
@@ -2869,18 +2893,21 @@ var ACTIONS = {
 			"stop_running"
 		],
 		domain: null,
+		apps: [],
 		refreshes: [],
 		scope: "person"
 	},
 	resume_seat: {
 		args: ["handle"],
 		domain: null,
+		apps: [],
 		refreshes: [],
 		scope: "person"
 	},
 	steer_turn: {
 		args: ["turn_id", "note"],
 		domain: null,
+		apps: [],
 		refreshes: ["turn"],
 		scope: "person"
 	},
@@ -2894,6 +2921,7 @@ var ACTIONS = {
 			"status"
 		],
 		domain: "pages",
+		apps: ["knowledge"],
 		refreshes: ["knowledge"],
 		scope: "person"
 	},
@@ -2906,6 +2934,7 @@ var ACTIONS = {
 			"watch"
 		],
 		domain: "pages",
+		apps: ["knowledge"],
 		refreshes: ["knowledge"],
 		scope: "person"
 	},
@@ -2916,6 +2945,7 @@ var ACTIONS = {
 			"reply_to"
 		],
 		domain: "pages",
+		apps: ["knowledge"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -2928,6 +2958,7 @@ var ACTIONS = {
 			"if_match"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: ["work_search"],
 		scope: "person"
 	},
@@ -2940,6 +2971,7 @@ var ACTIONS = {
 			"personal"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -2952,6 +2984,7 @@ var ACTIONS = {
 			"read_through"
 		],
 		domain: "tracker",
+		apps: ["tracker"],
 		refreshes: [],
 		scope: "person"
 	}
