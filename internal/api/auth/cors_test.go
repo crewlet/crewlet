@@ -3,10 +3,12 @@ package auth_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -134,6 +136,39 @@ func TestAPreflightIsAnsweredWithoutACredential(t *testing.T) {
 		if got := rec.Header().Get(header); got == "" || !strings.Contains(got, want) {
 			t.Errorf("%s = %q, want it to carry %q", header, got, want)
 		}
+	}
+}
+
+// A PERMITTED ORIGIN MAY SEND THE OPERATION KEY, AND NO HEADER BEYOND ITS SET.
+//
+// A permitted origin may write, and the act route refuses a request with no
+// `Idempotency-Key` while every other write reads it to make a retry the same
+// write: a preflight that did not allow it made the browser refuse the whole
+// request, so such an origin could never act at all. The reader header is the
+// same-origin dashboard's alone and is not offered.
+//
+// Mutation: drop opkey.Header from the set and the first row fails; echo the
+// browser's request back and the second does.
+func TestAPermittedOriginMaySendTheOperationKeyAndNothingBeyondItsSet(t *testing.T) {
+	t.Parallel()
+	allowed := func(asked string) []string {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodOptions, "/operator/act/create_work_item", nil)
+		r.Header.Set("Origin", "https://ops.example.com")
+		r.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		r.Header.Set("Access-Control-Request-Headers", asked)
+		rec, _ := serveCORS(t, corsFor("https://ops.example.com"), r)
+		return strings.Split(rec.Header().Get("Access-Control-Allow-Headers"), ", ")
+	}
+	want := []string{"Authorization", "Content-Type", opkey.Header}
+	if got := allowed("authorization, content-type, idempotency-key"); !slices.Equal(got, want) {
+		t.Errorf("a permitted origin may send %v, want %v", got, want)
+	}
+	if got := allowed("x-crewlet-reader, x-invented"); slices.ContainsFunc(got, func(h string) bool {
+		return strings.EqualFold(h, auth.ReaderHeader) || strings.EqualFold(h, "x-invented")
+	}) {
+		t.Errorf("a permitted origin may send %v: the set is closed, and the reader is the "+
+			"same-origin dashboard's", got)
 	}
 }
 
