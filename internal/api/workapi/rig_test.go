@@ -18,10 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -508,6 +511,9 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 // one engine's halves and one chart value — auditing into the rig's log.
 func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *operator.Server {
 	r.t.Helper()
+	// THE SEAT CONTROLS operator.New requires, over an in-memory fleet and
+	// queue nobody else reads: no case here calls one.
+	fleet, queue := coordmemory.NewFleet(), queuememory.New()
 	s, err := operator.New(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			h, up := halves()
@@ -515,6 +521,10 @@ func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *ope
 		},
 		Authorize: builtin.Decide(c),
 		Audit:     r.audit,
+		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
+			Pending: sandbox.NewCoordStore(fleet), Queue: queue}},
+		Pauses: builtin.SeatPauseDeps{Pauses: fleet, Announce: queue},
+		Steer:  builtin.SteerDeps{Asker: queue},
 	})
 	if err != nil {
 		r.t.Fatalf("operator.New: %v", err)
