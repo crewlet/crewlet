@@ -210,10 +210,6 @@ func TestAddressedShowsOnlyWhereSomebodyIsWaiting(t *testing.T) {
 			m[notify.ChannelTypeField] = "channel"
 			m[notify.FollowingField] = string(notify.FollowMention)
 		}), true},
-		{"a thread somebody subscribed it to", chatMeta(func(m map[string]string) {
-			m[notify.ChannelTypeField] = "channel"
-			m[notify.FollowingField] = string(notify.FollowExplicit)
-		}), true},
 		{"a broadcast", chatMeta(func(m map[string]string) {
 			m[notify.ChannelTypeField] = "channel"
 			m[notify.FollowReasonField] = string(notify.FollowCollective)

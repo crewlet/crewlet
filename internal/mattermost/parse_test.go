@@ -290,15 +290,20 @@ func TestBeingNamedAtTopLevelFollowsTheAnswers(t *testing.T) {
 	})); !ok {
 		t.Fatal("a named seat did not hear a top-level message")
 	}
-	if store.rows[key("mattermost", "swe", "C1", "p1")] == "" {
-		t.Fatal("being named at top level did not follow the answers")
+	if got := store.rows[key("mattermost", "swe", "C1", "p1")]; got != string(notify.FollowMention) {
+		t.Fatalf("being named at top level followed the answers as %q, want the mention", got)
 	}
 
-	// The answer arrives as a reply under that post and reaches the seat.
-	if _, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+	// The answer arrives as a reply under that post, reaches the seat and
+	// obliges it: the thread is one the seat was asked something in.
+	answer, ok := parseOne(t, p, post(func(_, pp map[string]any) {
 		pp["root_id"], pp["id"], pp["message"] = "p1", "p2", "here you go"
-	})); !ok {
+	}))
+	if !ok {
 		t.Fatal("the answer to a question the seat was asked was dropped")
+	}
+	if !mattermost.Prompt().Address.Addressed(answer.Metadata) {
+		t.Error("a reply in a thread the seat was named in does not oblige an answer")
 	}
 
 	// A message that names NOBODY follows nothing: a channel this bot
@@ -309,6 +314,34 @@ func TestBeingNamedAtTopLevelFollowsTheAnswers(t *testing.T) {
 	}
 	if len(store2.rows) != 0 {
 		t.Fatalf("a passive message recorded %v", store2.rows)
+	}
+}
+
+// A BROADCAST'S THREAD IS FOLLOWED AS A BROADCAST. The seat hears the replies
+// under an @channel — it was in the room — but it owes none of them an answer:
+// recorded as anything stronger, every seat in the channel would be obliged to
+// answer every reply to every broadcast.
+func TestABroadcastsThreadIsFollowedAsABroadcast(t *testing.T) {
+	p, store := parser(t, newFollows())
+	if _, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["message"] = "@channel standup in five"
+	})); !ok {
+		t.Fatal("a broadcast did not reach the seat")
+	}
+	if got := store.rows[key("mattermost", "swe", "C1", "p1")]; got != string(notify.FollowCollective) {
+		t.Fatalf("the broadcast's thread is followed as %q, want collective", got)
+	}
+	reply, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "p1", "p2", "on my way"
+	}))
+	if !ok {
+		t.Fatal("a reply under a broadcast was dropped")
+	}
+	if got := reply.Metadata[notify.FollowingField]; got != string(notify.FollowCollective) {
+		t.Errorf("the reply rides the follow as %q", got)
+	}
+	if mattermost.Prompt().Address.Addressed(reply.Metadata) {
+		t.Error("a reply under a broadcast obliges every seat in the room to answer it")
 	}
 }
 
