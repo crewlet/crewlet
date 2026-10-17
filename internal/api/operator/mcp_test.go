@@ -30,10 +30,12 @@ import (
 // A SURFACE MISSING WHAT IT CANNOT SERVE WITHOUT IS NOT BUILT, and each
 // refusal names the field. A surface with nothing to read its catalogue from,
 // one wired with no authority decision, one that would write to the company
-// and record nothing about who called it, and one without a seat control are
-// each a wiring mistake that would otherwise look exactly like a surface that
-// worked — the last a company told it cannot pause a seat that every node
-// could pause.
+// and record nothing about who called it, and one without a seat control — or
+// without any seam a control is required with, its announcer, its chart, its
+// signed wire — are each a wiring mistake that would otherwise look exactly
+// like a surface that worked: the last two a company told it cannot pause a
+// seat that every node could pause, or offered a control that refuses every
+// call as unavailable.
 //
 // Mutation: drop any one of New's refusals and its row is built.
 func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
@@ -42,9 +44,10 @@ func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 	decide := builtin.Decide(authz.NoChart{})
 	audit := &auditLog{}
 	whole := operator.Options{Halves: halves, Authorize: decide, Audit: audit,
-		Runs:   builtin.RunDeps{Desk: nowhere{}},
-		Pauses: builtin.SeatPauseDeps{Pauses: nowhere{}},
-		Steer:  builtin.SteerDeps{Asker: nowhere{}}}
+		Runs: builtin.RunDeps{Desk: nowhere{}},
+		Pauses: builtin.SeatPauseDeps{Pauses: nowhere{}, Announce: nowhere{},
+			Org: nowhereChart},
+		Steer: builtin.SteerDeps{Asker: nowhere{}, Wire: nowhereWire}}
 	without := func(drop func(*operator.Options)) operator.Options {
 		opts := whole
 		drop(&opts)
@@ -65,8 +68,14 @@ func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 			operator.ErrNoSeatControls, "Options.Runs.Desk"},
 		"no pause record": {without(func(o *operator.Options) { o.Pauses.Pauses = nil }),
 			operator.ErrNoSeatControls, "Options.Pauses.Pauses"},
+		"no pause announcer": {without(func(o *operator.Options) { o.Pauses.Announce = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Announce"},
+		"no pause chart": {without(func(o *operator.Options) { o.Pauses.Org = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Org"},
 		"no fleet asker": {without(func(o *operator.Options) { o.Steer.Asker = nil }),
 			operator.ErrNoSeatControls, "Options.Steer.Asker"},
+		"no steer wire": {without(func(o *operator.Options) { o.Steer.Wire = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Wire"},
 	} {
 		s, err := operator.New(tc.opts)
 		if !errors.Is(err, tc.want) || s != nil {
