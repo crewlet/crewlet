@@ -70,7 +70,7 @@ func ShardOf(source, id string) int {
 // ChatShardOf is a chat message's bucket.
 //
 // ONE RULE FOR BOTH ESTATES that file a message: the chat applier stamps it on
-// the replicated row, and the chat keyword index will stamp it on its own
+// the replicated row, and the chat keyword index ([ChatIndexer]) on its own
 // document. Two copies of the namespace beside two calls to [ShardOf] are two
 // answers that agree only while nobody edits one of them, and a fan-out that
 // assigned a node the range [16, 32) over two estates that disagreed would read

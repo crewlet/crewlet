@@ -271,11 +271,15 @@ const snippetBytes = 200
 // A partial selection rather than a full sort: a broad query touches every
 // document holding a common term, and sorting the whole map to take ten is
 // work proportional to the corpus on every search.
+//
+// SIZED BY WHAT IT CAN HOLD, never by the limit alone: a limit is the caller's
+// number, and one sized straight into an allocation made a search asked for a
+// billion hits over three matches allocate gigabytes before it ranked any.
 func topN(scores map[string]float64, limit int) []string {
 	if limit <= 0 || len(scores) == 0 {
 		return nil
 	}
-	out := make([]string, 0, limit)
+	out := make([]string, 0, min(limit, len(scores)))
 	for id := range scores {
 		out = insertRanked(out, scores, id, limit)
 	}
