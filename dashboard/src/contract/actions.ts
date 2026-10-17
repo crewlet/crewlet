@@ -23,7 +23,17 @@
  *    tool's own schema, and every property the schema REQUIRES is here;
  *  - `domain` — the log the write lands in, whose position raises this tab's
  *    read floor for that domain (`protocol/session.ts`), or `null` for a
- *    write that lands in no log a question reads;
+ *    write that lands in no log a question reads. A wrong one is SILENT: a
+ *    write filed under `null` raises no floor, so the screen's next read may
+ *    come from before the press;
+ *  - `apps` — the apps ANY ONE of which the change needs, in the engine's
+ *    order: its app for an app's change, every app for one that draws on
+ *    whichever the caller holds (`answer_knowledge`), and none for a change
+ *    no app holds (pausing a seat, answering a coding run). What a control
+ *    the engine does not offer is held with — "needs Worklet access" — so a
+ *    reader is told what to ask an admin for (`lib/useWriteAccess.ts`). It is
+ *    the authority table's, stated per row rather than guessed from the
+ *    domain: a change can need an app and land in no log;
  *  - `refreshes` — questions OUTSIDE that domain's session set
  *    (`contract/domains.ts`) that the write also moves, asked again without a
  *    floor because they cannot take one;
@@ -36,8 +46,9 @@
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
  * served by the act transport and is not a read, every argument is one its
- * schema takes, every required one is present, and every scope is the one its
- * authority class gives it. A renamed argument in Go is a red build here
+ * schema takes, every required one is present, every domain is the log its
+ * tool writes, and every scope and app set is the one its authority row
+ * gives it. A renamed argument in Go is a red build here
  * rather than a button the tools' own gate refuses `invalid_body` — an
  * argument the tool does not declare — the first time somebody presses it.
  */
@@ -68,6 +79,7 @@ export const ACTIONS = {
       "labels",
     ],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
@@ -77,6 +89,7 @@ export const ACTIONS = {
     // reconnect. It lands in no log, so it raises no floor.
     args: ["q"],
     domain: null,
+    apps: ["worklet", "doclet", "artifacts"],
     refreshes: [],
     scope: "person",
   },
@@ -109,12 +122,14 @@ export const ACTIONS = {
       "watch",
     ],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
   restore_work_item: {
     args: ["item"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
@@ -125,12 +140,14 @@ export const ACTIONS = {
     // who may make it: the project's lead, or an admin.
     args: ["project", "target_date"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "company",
   },
   set_pins: {
     args: ["views", "favorites"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
@@ -143,6 +160,7 @@ export const ACTIONS = {
     // `handle` is whose queue: the reader's own, or a report's for a lead.
     args: ["handle", "items", "if_match"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
@@ -158,6 +176,7 @@ export const ACTIONS = {
     // optionally with the options it is to choose between (`decision`).
     args: ["item", "answers", "choice", "body", "reply_to", "ask", "decision"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
@@ -170,6 +189,7 @@ export const ACTIONS = {
     // (`choice`), words (`answer`), or both: a choice with a note.
     args: ["turn_id", "choice", "answer"],
     domain: null,
+    apps: [],
     refreshes: ["sandbox_runs", "decisions"],
     scope: "person",
   },
@@ -182,6 +202,7 @@ export const ACTIONS = {
     // moves on the agents push, which every node sends when its watch lands.
     args: ["handle", "reason", "stop_running"],
     domain: null,
+    apps: [],
     refreshes: [],
     scope: "person",
   },
@@ -189,6 +210,7 @@ export const ACTIONS = {
     // AND RESUMES IT: the mail that waited is delivered first, in order.
     args: ["handle"],
     domain: null,
+    apps: [],
     refreshes: [],
     scope: "person",
   },
@@ -201,6 +223,7 @@ export const ACTIONS = {
     // `agent_turn_steered`, which the trace re-reads.
     args: ["turn_id", "note"],
     domain: null,
+    apps: [],
     refreshes: ["turn"],
     scope: "person",
   },
@@ -216,6 +239,7 @@ export const ACTIONS = {
     // the same write with an empty body: a page that only groups pages.
     args: ["title", "body", "container", "parent", "labels", "status"],
     domain: "pages",
+    apps: ["doclet"],
     refreshes: ["knowledge"],
     scope: "person",
   },
@@ -229,6 +253,7 @@ export const ACTIONS = {
     // follows the page as the person or stops following it.
     args: ["page", "base_version", "body", "message", "watch"],
     domain: "pages",
+    apps: ["doclet"],
     refreshes: ["knowledge"],
     scope: "person",
   },
@@ -236,6 +261,7 @@ export const ACTIONS = {
     // A PAGE'S THREAD: a remark, or a reply to one (`reply_to`).
     args: ["page", "body", "reply_to"],
     domain: "pages",
+    apps: ["doclet"],
     refreshes: [],
     scope: "person",
   },
@@ -245,6 +271,7 @@ export const ACTIONS = {
     // the place between the neighbours as the board stands when it lands.
     args: ["item", "before", "after", "status", "if_match"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
@@ -255,12 +282,14 @@ export const ACTIONS = {
     // screen sends.
     args: ["container", "name", "type", "params", "personal"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
   mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
