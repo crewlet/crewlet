@@ -10,12 +10,14 @@ import (
 //
 // A key must match [-/_=.A-Za-z0-9]+ because it becomes a subject token path
 // under $KV.<bucket>, and the names this engine keys on carry bytes that are
-// not in that set — a colon in a resource, a pipe in a ledger key, a space or
-// a non-ASCII letter in a page title. So a name is escaped on the way in and
-// unescaped on the way out, by [coord.DocumentKey] and [coord.DocumentSegments]
-// — the ONE grammar, shared with the fleet buckets, rather than a second copy
-// of the same rule here. It was a second copy once, byte-identical to the
-// first, which is the arrangement that ends with the two disagreeing.
+// not in that set — a colon in a resource, a pipe in a ledger key — and dots,
+// which are in it but would split one name into two tokens: a node id may
+// carry one, and a Slack thread's id always does. So a name is escaped on the
+// way in and unescaped on the way out, by [coord.DocumentKey] and
+// [coord.DocumentSegments] — the ONE grammar, shared with the fleet buckets,
+// rather than a second copy of the same rule here. It was a second copy once,
+// byte-identical to the first, which is the arrangement that ends with the two
+// disagreeing.
 //
 // The two shapes differ only in how many segments the name has:
 //
@@ -43,7 +45,7 @@ func encodeKey(name string) string { return coord.DocumentKey(name) }
 // belongs to another bucket.
 //
 // A malformed key is skipped rather than guessed at: a listing that invented
-// a name would put a record nobody wrote into a projection.
+// a name would hand its caller a record nobody wrote under that name.
 func decodeKey(key string) (string, bool) {
 	segments, ok := coord.DocumentSegments(key)
 	if !ok || len(segments) != 1 {
