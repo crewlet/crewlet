@@ -345,6 +345,16 @@ func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
 	})
 }
 
+// respreadPendingStatement is the re-spread hand-off [Applier.applyRankOrder]
+// sets and clears. Named for the plan test, and a variable because [longRank]
+// spells its threshold.
+var respreadPendingStatement = `
+		UPDATE tracker_projects SET rank_respread_pending = EXISTS (
+			SELECT 1 FROM tracker_tasks t INDEXED BY tracker_tasks_respread_idx
+			WHERE t.project_key = ? AND t.removed_at IS NULL
+			  AND ` + longRank("t.rank") + `)
+		WHERE key = ?`
+
 // applyRankOrder writes a project's manual order.
 //
 // THE OBJECT IS THE ORDER, so the version lands on the order's own row and
@@ -420,14 +430,9 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	// own rows still justify.
 	//
 	// One indexed probe on the partial index over long keys, which is a
-	// fraction of the project rather than a scan of it.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_projects SET rank_respread_pending = EXISTS (
-			SELECT 1 FROM tracker_tasks t
-			WHERE t.project_key = ? AND t.removed_at IS NULL
-			  AND length(t.rank) > ?)
-		WHERE key = ?`,
-		order.Project, RankRenormaliseAt, order.Project); err != nil {
+	// fraction of the project rather than a scan of it ([longRank]).
+	if _, err := tx.ExecContext(ctx, respreadPendingStatement,
+		order.Project, order.Project); err != nil {
 		return 0, fmt.Errorf("worklet: set %s's re-spread hand-off: %w",
 			order.Project, err)
 	}
