@@ -1032,7 +1032,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	t.Parallel()
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)

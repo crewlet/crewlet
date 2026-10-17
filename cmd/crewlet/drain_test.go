@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,7 +37,8 @@ import (
 // real SIGTERM to a real process, with a real turn in flight. A signal handler
 // cannot be exercised from inside the process that installed it without
 // taking the test binary with it, so the node runs in a CHILD: the test binary
-// re-executes itself, the child calls [run], and the parent signals it and
+// re-executes itself, the child calls [runEngine] — on the socket the parent
+// reserved for its port ([drainProbeSocketFD]) — and the parent signals it and
 // watches from outside.
 //
 // The turn is held in flight by the model it is waiting on, which answers
@@ -92,6 +94,17 @@ const (
 // read below returns EOF.
 const parentDeathFD = 3
 
+// drainProbeSocketFD is the listening socket the parent reserved for the
+// node's api.port, inherited by the child as its second extra descriptor.
+//
+// HANDED OVER rather than found free and bound again, for [reservePort]'s
+// reason — and this child is where that matters most: it boots a whole node
+// before its bind, which takes seconds, and a port the parent had let go is
+// one the rest of the suite can take in that time. The parent closes its own
+// copy once the child has started, so the socket is the node's alone and
+// closes when the node closes it.
+const drainProbeSocketFD = 4
+
 // exitWithTheParent ends this process the moment the parent's pipe closes.
 func exitWithTheParent() {
 	pipe := os.NewFile(parentDeathFD, "parent-death")
@@ -121,7 +134,29 @@ func runDrainProbe() {
 		fmt.Fprintln(os.Stderr, "probe: args:", err)
 		os.Exit(3)
 	}
-	if err := run(append([]string{"run"}, args...), os.Stdout, os.Stderr); err != nil {
+	inherited := os.NewFile(drainProbeSocketFD, "api-socket")
+	socket, err := net.FileListener(inherited)
+	// The listener holds a copy of its own, and this descriptor left open
+	// would keep the socket listening after the node's stop closed it.
+	_ = inherited.Close()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "probe: no api socket on fd", drainProbeSocketFD, err)
+		os.Exit(8)
+	}
+	// THE ONE BIND THE NODE MAKES THERE is handed the inherited socket; any
+	// other address is bound as the binary binds it.
+	var once sync.Once
+	bind := func(ctx context.Context, addr string) (net.Listener, error) {
+		handed := false
+		if addr == socket.Addr().String() {
+			once.Do(func() { handed = true })
+		}
+		if handed {
+			return socket, nil
+		}
+		return bindTCP(ctx, addr)
+	}
+	if err := runEngine(args, os.Stderr, bind); err != nil {
 		fmt.Fprintln(os.Stderr, "probe: run:", err)
 		os.Exit(4)
 	}
@@ -135,7 +170,21 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	client := drainProbeClient(t)
 	model := newHeldModel(t)
 	forge := newAccountForge(t)
-	port := freePort(t)
+	// THE NODE'S PORT, HELD: see [drainProbeSocketFD].
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve the node's port: %v", err)
+	}
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	port := held.Addr().(*net.TCPAddr).Port
+	//nolint:errcheck // Listen on "tcp" always yields a *TCPListener.
+	socket, err := held.(*net.TCPListener).File()
+	// The copy is the socket now; this listener's descriptor is not needed.
+	_ = held.Close()
+	if err != nil {
+		t.Fatalf("the reserved socket's descriptor: %v", err)
+	}
+	t.Cleanup(func() { _ = socket.Close() })
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
 	dir := t.TempDir()
@@ -211,7 +260,8 @@ turn_engine:
 	if err != nil {
 		t.Fatalf("parent-death pipe: %v", err)
 	}
-	child.ExtraFiles = []*os.File{death}
+	// fd 3 and fd 4 in the child: [parentDeathFD], [drainProbeSocketFD].
+	child.ExtraFiles = []*os.File{death, socket}
 	// A BOUND ON Wait, so a grandchild holding the inherited output pipe
 	// cannot make the reaping goroutine block for ever.
 	child.WaitDelay = 5 * time.Second
@@ -224,6 +274,10 @@ turn_engine:
 	// this process lives, which is the whole mechanism.
 	_ = death.Close()
 	t.Cleanup(func() { _ = hold.Close() })
+	// AND SO IS THE SOCKET, which must close when the node closes it: a
+	// copy left open here would keep accepting connections nobody serves
+	// once the node has gone, where its stop leaves them refused.
+	_ = socket.Close()
 	exited := make(chan struct{})
 	var waitErr error
 	go func() {

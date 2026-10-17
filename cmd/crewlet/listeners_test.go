@@ -67,8 +67,8 @@ func TestANodeWithAPublicListenerBindsTwoSockets(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	e := testEngine(t)
-	boot := bootstrapFor(t, freePort(t))
-	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: freePort(t)}
+	boot := bootstrapFor(t, reservePort(t))
+	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t)}
 	surface, err := serveNodeLogged(t, boot, e, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
@@ -119,7 +119,7 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	t.Cleanup(func() { _ = taken.Close() })
 
 	e := testEngine(t)
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: taken.Addr().(*net.TCPAddr).Port}
 	surface, err := serveNode(t, boot, e)
 	if err == nil {
@@ -168,13 +168,13 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	publicPort := freePort(t)
+	publicPort := reservePort(t)
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"),
 		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
 	})
 	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"seats"}
 
@@ -216,7 +216,7 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 // a second process on the host keeps that port for the ingress node.
 func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	t.Parallel()
-	publicPort := freePort(t)
+	publicPort := reservePort(t)
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"),
 		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
@@ -226,16 +226,16 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"data", "seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, logging.Get("test"))
+	// NOTHING BOUND AT ALL, asked of the one path every listener is opened
+	// through rather than of the public port after the fact — which this
+	// case holds itself, so nothing else can be listening there either.
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, bindNothing(t), logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	if surface != nil {
 		surface.stop(context.Background(), logging.Get("test"))
 		t.Fatal("a node with api.port 0 bound a listener")
-	}
-	if bound(publicPort) {
-		t.Error("api.public.port is bound on a node whose api.port is 0")
 	}
 }
 
@@ -251,7 +251,7 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 
 	held := make(chan struct{})
 	release := make(chan struct{})
-	publicServer, publicAddr, err := listenAPI(ctx, "127.0.0.1:0", http.HandlerFunc(
+	publicServer, publicAddr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) {
 			close(held)
 			<-release
@@ -260,7 +260,7 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminServer, adminAddr, err := listenAPI(ctx, "127.0.0.1:0", http.HandlerFunc(
+	adminServer, adminAddr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), log)
 	if err != nil {
 		t.Fatal(err)

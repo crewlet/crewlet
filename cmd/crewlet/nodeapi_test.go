@@ -46,7 +46,7 @@ func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 	ctx := t.Context()
 	e := bootedEngineAt(t, peopleCompanyYAML, time.Time{})
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serve the node's API: %v", err)

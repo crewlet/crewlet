@@ -46,7 +46,7 @@ type healthSample struct {
 // the epoch is swapped and before the outcome is recorded, every time.
 func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 	t.Parallel()
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	seedEngineStore(t, boot)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot})
 	if err != nil {
