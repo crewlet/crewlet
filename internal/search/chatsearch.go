@@ -52,7 +52,7 @@ type ChatHit struct {
 
 	// Snippet is what the message says, cut from the transcript row when
 	// the hit was read, its whitespace collapsed: the whole message when it
-	// fits [chatSnippetBytes], otherwise the window around the first query
+	// fits [ChatSnippetBytes], otherwise the window around the first query
 	// term it carries, marked where it was cut.
 	Snippet string
 
@@ -70,14 +70,40 @@ type ChatHit struct {
 // that FORGOT to resolve its viewer must not be handed one.
 var ErrNoViewer = errors.New("search: a chat search needs the viewer's visible channels")
 
-// chatSearchLimit is how many hits a chat query returns when it says nothing.
+// The bounds on how many hits one chat search answers.
 //
-// Twenty, against the knowledge search's ten, because a chat hit is one
-// sentence where a knowledge hit is a document: the same screen holds twice as
-// many of them before a person has to page.
-const chatSearchLimit = 20
+// ChatSearchLimit is what a query that names no limit is answered with:
+// twenty, against the knowledge search's ten, because a chat hit is one
+// sentence where a knowledge hit is a document, so the same screen holds twice
+// as many of them before a person has to page.
+//
+// MaxChatSearchLimit is the most any query is answered with, whatever it
+// asked for — and a caller's number reaches here as it was typed, a seat's
+// `limit` argument included. FIFTY, because one answer is ONE TOOL RESULT for
+// a seat and its ceiling is 64 KiB (the builtin's ToolAnswerBytes): a hit is
+// at most [ChatSnippetBytes] of message plus three ids, a handle, an instant
+// and a score, about a kilobyte rendered as prose, so fifty still renders as
+// one answer rather than a refusal to answer at all — 48 KiB of prose, 58 KiB
+// with a quoted character in every snippet, and sixty would not — and fifty is
+// a screen, the chat reader's own default page. Without it a query asked for a
+// million hits was ranked and returned whole, and the surface that asked
+// refused to hand it over.
+//
+// AS PROSE, and the qualifier is the ceiling's to keep: a snippet dense with
+// what a tool answer's JSON writes as six bytes (`<`, `>`, `&`) is four times
+// that, and a page of them is refused by that ceiling naming `limit` — its
+// job, since a smaller page is the remedy — rather than handed over cut.
+const (
+	ChatSearchLimit    = 20
+	MaxChatSearchLimit = 50
+)
 
-// chatSnippetBytes bounds a hit's snippet.
+// ChatSnippetBytes bounds a hit's snippet — beside the marks a cut leaves at
+// either end of it.
+//
+// EXPORTED because a surface sizes its answers by it: a page of hits at
+// [MaxChatSearchLimit] is one tool answer, and both bounds together are what
+// keep that answer under its ceiling.
 //
 // SIX HUNDRED, which holds the whole of most messages — a chat hit IS the
 // message, where a knowledge hit points at a page to open — and cuts only a
@@ -85,7 +111,7 @@ const chatSearchLimit = 20
 // answer carries whatever a room holds: a message may be tens of kilobytes,
 // and twenty of them whole would be most of a megabyte handed to a seat as a
 // tool result.
-const chatSnippetBytes = 600
+const ChatSnippetBytes = 600
 
 // chatScanBinds is how many parameters the posting scan binds besides its
 // rooms: the term, the speaker and the scan budget.
@@ -148,8 +174,9 @@ func (x *ChatIndexer) SearchMessages(ctx context.Context, q ChatQuery) ([]ChatHi
 	}
 	limit := q.Limit
 	if limit <= 0 {
-		limit = chatSearchLimit
+		limit = ChatSearchLimit
 	}
+	limit = min(limit, MaxChatSearchLimit)
 	// DEDUPLICATED, so a room named twice is not summed twice into the
 	// statistics, and SORTED, so one set binds identically whatever order
 	// it arrived in.
@@ -391,7 +418,7 @@ func hydrateChunk(ctx context.Context, tx *sql.Tx, ids, terms []string,
 			continue
 		}
 		hit.CreatedAt = store.DecodeTime(createdAt)
-		hit.Snippet = textindex.Snippet(body, terms, chatSnippetBytes)
+		hit.Snippet = textindex.Snippet(body, terms, ChatSnippetBytes)
 		found[hit.MessageID] = hit
 	}
 	return rows.Err()
