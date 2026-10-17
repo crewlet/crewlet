@@ -1498,15 +1498,15 @@ func (n *Notify) Validate() error {
 // # Why this is at the publish boundary and not at each builder
 //
 // Because the record is what the cost lives on. A snapshot is COPIED onto the
-// log, replicated to every node, held for the stream's whole retention window
-// and read back by every applier — so a collection that grew without a bound
-// is not one screen rendering badly, it is bytes every member of the fleet
-// stores for a year. The design's own arithmetic sums these eleven caps to
-// about 19 KiB worst and sizes [MaxCommitBytes] from it, and until this
-// existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING
-// on the snapshot: the caps that held were incidental properties of whichever
-// builder happened to read a bounded table, and the ones that did not hold
-// were invisible.
+// log, held by each of the stream's replicas for its whole retention window,
+// and applied into every data node's rows — so a collection that grew without
+// a bound is not one screen rendering badly, it is bytes every replica and
+// every data node stores for a year. The design's own arithmetic sums these
+// eleven caps to about 19 KiB worst and sizes [MaxCommitBytes] from it, and
+// until this existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and
+// NOTHING on the snapshot: the caps that held were incidental properties of
+// whichever builder happened to read a bounded table, and the ones that did
+// not hold were invisible.
 //
 // # And it is a REFUSAL rather than a trim
 //
@@ -1533,9 +1533,10 @@ func (n *Notify) checkSnapshot() error {
 		if c.size > c.max {
 			return invalid("a notification names %d %s and the "+
 				"maximum is %d — a routing snapshot is copied onto the log, "+
-				"replicated to every node and held for the stream's whole "+
-				"retention window, so an unbounded one is bytes the fleet "+
-				"stores for a year", c.size, c.field, c.max)
+				"held by each of the stream's replicas for its whole "+
+				"retention window and applied into every data node's rows, "+
+				"so an unbounded one is bytes the fleet stores for a year",
+				c.size, c.field, c.max)
 		}
 	}
 	return nil
