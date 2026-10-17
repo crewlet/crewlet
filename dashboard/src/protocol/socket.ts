@@ -52,7 +52,7 @@ import { api } from "./api.ts";
 import { auth } from "./auth.ts";
 import { RestError, retryHintOf, whenRequestsSettle } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
-import { needSession } from "./signin.ts";
+import { needSession, READER_CHANGED, readerHeaders, readerMoved } from "./signin.ts";
 import type { Store } from "./store.ts";
 import type {
   ArtifactChangedPush,
@@ -874,12 +874,23 @@ export class LiveSocket {
   private async probeRefusal(): Promise<void> {
     if (this.isClosed) return;
     try {
-      const res = await fetch(PATH, { credentials: "same-origin", cache: "no-store" });
+      // NAMING THE TAB'S READER, which the handshake itself cannot: a
+      // browser sets no header on a WebSocket. A dial refused while the
+      // browser is somebody else's is then told so here, and the tab handed
+      // to them, rather than re-asked as them.
+      const res = await fetch(PATH, {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: readerHeaders(),
+      });
       // Not `!res.ok`: 426 is the healthy answer here, and every other failure
       // is the network or a proxy, neither of which the reader fixes by
       // signing in.
       if (res.status === 401) this.authRejected();
-      else if (res.status === 503) await this.redialWhenSaid(res);
+      else if (res.status === 409) {
+        const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        if (body?.error === READER_CHANGED) readerMoved();
+      } else if (res.status === 503) await this.redialWhenSaid(res);
       else if (res.status === 403) {
         const body = (await res.json().catch(() => null)) as {
           error?: string;

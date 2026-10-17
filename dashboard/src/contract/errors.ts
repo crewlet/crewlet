@@ -59,6 +59,8 @@ export const ACT_ERRORS = {
   identity_unavailable: "Couldn’t confirm who you are. Try again.",
   seat_unavailable: "Your seat was removed. Ask an admin to move you.",
   second_factor_enrolment_required: "Set up two-step verification first.",
+  reader_changed:
+    "Someone else is signed in here now, so nothing changed. Reload to continue as them.",
   csrf_origin:
     "The engine refused a change sent from another site. Make it from this page's own address.",
   // The authority table's, through the one refusal mapping.

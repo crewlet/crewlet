@@ -1949,6 +1949,12 @@ person's company in the tab's memory for whoever sits down next. A session
 that ended with nobody signing out routes the tab to the sign-in instead, so a
 sign-in there by anybody other than the person the tab was read by hands it
 over the same way; the same person signing back in carries on where they were.
+And every request a tab makes names the person it was read by
+(`X-Crewlet-Reader`): when somebody signs in as somebody else in another tab of
+the browser, the cookie every tab shares is theirs, and a request from a tab
+still drawn for the last person is refused `409 reader_changed` before it runs
+— so it makes no change as the new person — and that tab is handed over the
+same way.
 [Dashboard Design](../reference/dashboard-design.md#signing-in-is-a-screen-outside-the-frame)
 has the whole of it.
 

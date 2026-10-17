@@ -69,6 +69,13 @@
 // [CORS] decides who may read an answer. They are separate because they answer
 // different questions: same-origin policy stops an attacker's page READING a
 // response, which on a write is the part they do not need.
+//
+// # And a request may say who it is for
+//
+// A browser's tabs share one cookie and each draws one person's screen, so a
+// request can name the principal it is made for ([ReaderHeader]), and the
+// guard then serves it only to that principal — `409 reader_changed` for
+// anybody else, before any handler runs. It refuses; it never admits.
 package auth
 
 import (
@@ -655,6 +662,18 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// both uses below as new contexts.
 		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
+		if how == iam.Resolved && readerMoved(r, principal) {
+			// MADE FOR SOMEBODY ELSE — see [ReaderHeader] — and decided
+			// before the refusals below, because a tab that is somebody
+			// else's is the first thing to put right: whatever this
+			// credential's own refusal is, it is whoever the tab is handed
+			// to who meets it. Logged at info, as a resolved refusal is: a
+			// browser that changed hands is an ordinary afternoon.
+			log.Info("api_auth_reader_moved", "route", path,
+				"remote", g.Client(r))
+			refuseMovedReader(w)
+			return
+		}
 		if refusal != nil && refusal.Applies(r) {
 			// RESOLVED AND STILL REFUSED, on a route the refusal does
 			// not leave them — see [Refusal.Applies]. Logged at info

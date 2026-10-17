@@ -49,9 +49,10 @@ import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
 import { bootTheme } from "./lib/prefs.ts";
-import { takeSession } from "./lib/session.ts";
+import { currentReader } from "./lib/reader.ts";
+import { sessionMoved, takeSession } from "./lib/session.ts";
 import { forgetRetiredKeys } from "./lib/storage.ts";
-import { LiveSocket, SessionKeepAlive, Store } from "./protocol/index.ts";
+import { LiveSocket, SessionKeepAlive, setTabReader, Store } from "./protocol/index.ts";
 
 // OURS, AFTER ALL OF THEIRS. There is no alias layer between the two: every
 // stylesheet here reads the design system's tokens under their own names, so
@@ -76,6 +77,11 @@ trackFocusModality();
 // A key no module reads any more leaves the reader's profile here, once per
 // boot — see `lib/storage.ts`.
 forgetRetiredKeys(() => localStorage);
+
+// EVERY REQUEST NAMES WHO THIS TAB IS READ BY, and one the engine says was
+// made for somebody else hands the tab to whoever holds the browser now —
+// installed before anything can send one (`protocol/signin.ts`).
+setTabReader({ current: currentReader, moved: () => void sessionMoved() });
 
 const store = new Store();
 // A RE-DIAL AFTER A SESSION ENDED IS FOR THIS TAB'S OWN READER ONLY: anybody

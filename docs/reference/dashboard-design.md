@@ -2603,13 +2603,35 @@ builder's kept draft. That draft is stamped with the reader it was kept for, and
 one kept for anybody else is discarded unoffered.
 
 **And so does a session somebody else left in the browser.** Signing in as
-somebody else in one tab ends the session every other tab of the browser was
-opened with (each socket closes `4401`) and moves the cookie they share, so the
-next `GET /auth/session` — the socket's before it dials again, the frame's on
-its next read — answers for them. A tab read by anybody else is handed over
-exactly as a sign-in by them would hand it — emptied, its new reader recorded,
-reloaded where it was — and the socket dials nothing for them first
-(`lib/session.ts`'s `takeSession`, which `main.tsx` hands the socket).
+somebody else in one tab moves the cookie every other tab of the browser
+shares, and tries to end the session those tabs were opened with — best effort,
+since a sign-in is never refused over the close of somebody's other session.
+Where the close lands, each socket closes `4401`, and the socket's
+`GET /auth/session` before it dials again answers for the new person; the
+frame's own read answers for them too when the tab next becomes visible. Where
+it does not, nothing on the socket says so, and a window left open beside the
+one that signed in would go on drawing the last person's screen with every
+request it sent going out as the new one. So every request a tab makes for its
+reader names them (`X-Crewlet-Reader`, `protocol/signin.ts`): a REST read or
+change, an act and its Retry, a download, the degraded-mode snapshot, the
+socket's refusal probe, and the session keepalive (`protocol/keepalive.ts`),
+which reads the session every five minutes while the socket is open unless the
+engine answered something else in the last five. The engine refuses one whose
+cookie is anybody else's `409 reader_changed` before it runs, so a press in
+that window makes no change as the new person and a Retry of the last person's
+change sends their operation as nobody's. The two requests that name nobody
+are the session read itself, which is how a tab learns who to be handed to, and
+the token exchange, which signs somebody in. On any of these signals a tab read
+by anybody else is handed over exactly as a sign-in by them would hand it —
+emptied, its new reader recorded, reloaded where it was — and the socket dials
+nothing for them first (`lib/session.ts`'s `takeSession`, which `main.tsx`
+hands the socket, and `sessionMoved`, which it installs for the refusal). A
+socket that dropped for another reason and dialled again under the new cookie
+draws the new person's company until the tab's next request or keepalive is
+refused, because the handshake is the one request a browser cannot put a header
+on. That is under ten minutes, two keepalive intervals rather than one: a tick
+passes over a tab the engine answered less than five minutes before, and that
+answer may have come just before the sign-in.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
@@ -4452,8 +4474,12 @@ one, beside its class). The dashboard never retries on its own. When you press
 Retry it sends the **same operation key** it sent the first time, from which the
 engine derives the same operations; a new press is a new key. Each Retry is
 bound to the press it reports — press twice and the first toast's Retry still
-sends the first press, never the second. A refusal a busy, draining or
-starting node caused offers "Try again" on the same terms; one the request caused does not,
+sends the first press, never the second — and to the person it was pressed
+for: it names the tab's reader as every request does, so a Retry from a tab
+whose browser somebody else has signed in to since is refused
+`reader_changed` unrun, and the tab handed to them, rather than made as their
+write. A refusal a busy, draining or starting node caused offers "Try again"
+on the same terms; one the request caused does not,
 because the same request would be refused again. A control reused across
 objects — the Inbox's Mark read as you move between notices — belongs to the
 object it is drawn for, so one notice's refusal never appears under another's.

@@ -1,8 +1,9 @@
 /**
  * The identity directory's closed sets that People offers back to the
  * engine — the permissions a person, an invitation or a token may carry, the
- * login grammars, the kinds of finding the directory reports — and the shapes
- * of the answers the seat surfaces and the reset screen read.
+ * login grammars, the kinds of finding the directory reports — the shapes of
+ * the answers the seat surfaces and the reset screen read, and the header a
+ * tab names who it is read by in.
  *
  * EXACTLY THE ENGINE'S — each held by the gate its doc names. A permission the
  * engine grew that this lacks is one no administrator can confer from the
@@ -201,3 +202,18 @@ export interface ResetView {
   /** The person holds no password yet: this link sets their first one. */
   first?: boolean;
 }
+
+/**
+ * The header every request a tab makes FOR ITS READER carries that reader in —
+ * the principal id the tab recorded (`lib/reader.ts`) — beside the session
+ * cookie: `auth.ReaderHeader`, held by
+ * `internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader`.
+ *
+ * The engine serves such a request only to that principal and refuses anybody
+ * else `409 reader_changed` before it runs, so a window left open on the last
+ * person's screen after somebody signed in as somebody else in another tab
+ * makes no change as the new person, and is handed to them
+ * (`protocol/signin.ts`). Spelled differently here, every request would name
+ * nobody, be served to whoever the cookie is, and nothing would go red.
+ */
+export const READER_HEADER = "X-Crewlet-Reader";

@@ -17,7 +17,7 @@
  */
 
 import { retryHintOf } from "./rest.ts";
-import { needSession } from "./signin.ts";
+import { needSession, READER_CHANGED, readerHeaders, readerMoved } from "./signin.ts";
 import type { Snapshot } from "./types.ts";
 
 /**
@@ -58,6 +58,9 @@ export const api = {
       const response = await fetch(location.origin + "/stream/snapshot", {
         credentials: "same-origin",
         cache: "no-store",
+        // MADE FOR THE TAB'S READER, as every request `rest.ts` makes is: a
+        // snapshot of somebody else's company is not one to draw here.
+        headers: readerHeaders(),
       });
       if (!response.ok) {
         // A 401 is nobody signed in, which the sign-in screen repairs — the
@@ -65,6 +68,13 @@ export const api = {
         if (response.status === 401) {
           needSession("sign_in");
           return { state: "nobody" };
+        }
+        // AND A 409 `reader_changed` IS THE BROWSER IN SOMEBODY ELSE'S HANDS,
+        // which hands the tab to them — `rest.ts`'s reading again.
+        if (response.status === 409) {
+          const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+          if (body?.error === READER_CHANGED) readerMoved();
+          return { state: "unread", retryAfter: null };
         }
         // WHOSE REFUSAL, read by the rule every other read takes: only a 503
         // carrying the engine's own error code carries its hint.
