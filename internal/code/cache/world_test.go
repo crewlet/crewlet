@@ -40,6 +40,10 @@ type world struct {
 	// maintenance lane is ONE slot — the lane a case holds whole by holding
 	// one process.
 	processes int
+	// transfers is every boot's pool's MaxTransfers, an operator's
+	// git.max_transfers; 0 is the pool's own default, sized to its
+	// processes and its memory.
+	transfers int
 	// memory is every boot's pool's node memory; 0 is a tebibyte, so every
 	// case's lanes and maintenance budget are its own, never whatever the
 	// machine running the suite has left after its pool's lanes — which,
@@ -77,7 +81,7 @@ func (w *world) prepare(t testing.TB, dir string) {
 	if w.machineMemory {
 		memory = 0
 	}
-	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes, memory)
+	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes, w.transfers, memory)
 }
 
 // reboot prepares w's directory again: the boot's Prepare.
@@ -85,19 +89,21 @@ func (w *world) reboot(t testing.TB) { w.prepare(t, w.layout.Dir) }
 
 // newPool is a real pool over layout's HOME.
 func newPool(t testing.TB, layout cache.Layout) *gitproc.Pool {
-	return newPoolOf(t, layout, "", 0, 1<<40)
+	return newPoolOf(t, layout, "", 0, 0, 1<<40)
 }
 
 // newPoolOf is a pool over layout's HOME running the git at path ("" is the
-// one on PATH) with processes slots (0 is two), on a node of memory bytes (0
-// is the machine's own, read as a node's is).
-func newPoolOf(t testing.TB, layout cache.Layout, path string, processes int, memory int64) *gitproc.Pool {
+// one on PATH) with processes slots (0 is two) and transfers transfer slots (0
+// is the pool's default), on a node of memory bytes (0 is the machine's own,
+// read as a node's is).
+func newPoolOf(t testing.TB, layout cache.Layout, path string, processes, transfers int,
+	memory int64) *gitproc.Pool {
 	t.Helper()
 	if processes == 0 {
 		processes = 2
 	}
 	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes,
-		Memory: memory})
+		MaxTransfers: transfers, Memory: memory})
 	if err != nil {
 		t.Fatalf("gitproc.New over %s: %v", layout.Home, err)
 	}

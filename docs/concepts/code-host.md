@@ -588,8 +588,15 @@ about 3.3 million); 16 GiB on four cores leaves 9 GiB: bitmaps of up to about
 7.7 million objects, indexes of up to about 30 million. Give the node the
 memory: it reads it again every ten seconds, so a container resized in place
 is held to its new limit at once (`code_cache_memory_changed`), while the git
-lanes keep the sizes they took at boot until a restart. A node whose memory
-cannot be read at all refuses to serve git rather than guess it.
+lanes keep the sizes they took at boot until a restart. An operator's
+`git.max_transfers` is kept as written rather than sized to the memory, so a
+figure set by hand can leave the background work nothing: once its
+transfers' 224 MiB each reach the memory less the 896 MiB of each core it
+backs — as little as 56% of the transfers the memory holds at 224 MiB each,
+where the node has a core for every 2 GiB or more. Lowering or unsetting
+it, or memory past what the node keeps, gives the budget back; a restart
+alone does not. A node whose memory cannot be read at all refuses to serve
+git rather than guess it.
 
 The budget bounds the background work and keeps room for one clone beside
 each of its steps; it does not bound the clones themselves, which take the
@@ -1152,7 +1159,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead. The disk refusing a hard link. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |
-| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory. |
+| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
 | `code_cache_round_index_held` | `INFO` | A cold sync of a repository with many packs answered without writing its index first, because the background work in flight left the node's memory no room for it (`estimate` against the `budget`). Slower, never wrong; the background index follows. |
 | `code_cache_round_index_skipped` | `WARN` | A cold sync of a repository with many packs answered without writing its index first: the node's git reads were all busy, or the write failed. Slower, never wrong; the background index follows. |
 | `code_cache_trash_failed` | `WARN` | Something the cache had finished with could not be moved aside or removed. It stays on the disk until a later pass or the next boot removes it; recurring, the disk is refusing work. |
