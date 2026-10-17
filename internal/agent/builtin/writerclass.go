@@ -41,8 +41,12 @@ type nativeDomain struct {
 // added beside the two would have been a 500 for every content refusal its
 // tool-less verbs met. A gate holds this table to every domain the estate
 // router carries a write for ([TestEveryRoutedDomainIsDeclaredToTheSurfaces]),
-// and each domain's classes to every sentinel and error type the domain
-// declares ([TestEveryDomainRefusalIsClassed]).
+// each domain's classes to every sentinel and error type the domain declares
+// ([TestEveryDomainRefusalIsClassed]), and its objects to the catalogue's
+// tools in both directions: every one is an argument some tool takes, and
+// every write takes one of them (builtin_test's
+// TestEveryObjectArgumentIsOneAToolTakes and
+// TestEveryWriteNamesTheObjectItWrites).
 var nativeDomains = map[string]nativeDomain{
 	artifactsdomain.Domain{}.Name(): {
 		class: artifactClass,
@@ -63,8 +67,13 @@ var nativeDomains = map[string]nativeDomain{
 		objects: []string{"item", "project", "handle"},
 	},
 	doclet.Domain{}.Name(): {
-		class:   pageClass,
-		objects: []string{"page"},
+		class: pageClass,
+		// A new page has no id to name yet: write_page addresses it by its
+		// `container` and its title, so the container is the object a
+		// failed create points at. The title is not declared, because a
+		// surface names these by argument name across every tool, and on
+		// the tracker's tools `title` is a work item's text, not an object.
+		objects: []string{"container", "page"},
 	},
 }
 

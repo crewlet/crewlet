@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/modelnote"
@@ -842,6 +844,48 @@ func (p *positionedPages) Comment(ctx context.Context, actor doclet.Actor, id st
 		Outcome:  statelog.OutcomePending,
 		Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 2, Seq: 88},
 	}}, err
+}
+
+// A PAGE CREATE NOBODY ANSWERED NAMES WHERE TO LOOK.
+//
+// A new page has no id to name: write_page addresses it by its container and
+// its title, so the answer to a create whose outcome nobody can establish names
+// the container beside the tool — the object to read to see whether the page
+// landed. It named the tool alone, because no declared object argument covered
+// a page that does not exist yet.
+//
+// Mutation: drop `container` from the pages domain's objects (builtin's
+// writerclass.go) and the answer names no container.
+func TestAPageCreateNobodyAnsweredNamesItsContainer(t *testing.T) {
+	t.Parallel()
+	kb := &unansweredPages{}
+	s := newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{Pages: builtin.PageDeps{Reader: kb, Writer: kb}}),
+		Org:    company,
+	})
+	body := `{"args":{"container":"ENG","title":"Rollback runbook","body":"step one"}}`
+	status, answer := act(t, guarded(s), "founder", builtin.WritePageTool,
+		"application/json", body, newKey())
+	if status != http.StatusServiceUnavailable ||
+		answer["outcome"] != string(statelog.OutcomeUnknown) {
+
+		t.Fatalf("a create nobody answered answered %d %v, want 503 with outcome "+
+			"unknown", status, answer)
+	}
+	if answer["tool"] != builtin.WritePageTool || answer["container"] != "ENG" {
+		t.Errorf("the answer names tool %v and container %v, want %s in ENG — "+
+			"nothing else in it says where the page would be", answer["tool"],
+			answer["container"], builtin.WritePageTool)
+	}
+}
+
+// unansweredPages is a knowledge base whose create was sent to a data node
+// that never answered.
+type unansweredPages struct{ recordingPages }
+
+func (*unansweredPages) Create(context.Context, doclet.Actor, doclet.NewPage) (doclet.Written, error) {
+	return doclet.Written{}, fmt.Errorf("%w (pages.create, asked of data-b)",
+		estate.ErrOutcomeUnknown)
 }
 
 // AN INTERRUPTED CALL SAYS, IN A FIELD, THAT NOBODY KNOWS WHETHER IT LANDED.

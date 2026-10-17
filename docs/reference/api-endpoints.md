@@ -5801,18 +5801,19 @@ outcome and position — because the earlier change is on every node and "not
 made" would send a person to redo it.
 
 A refusal is the engine's envelope, `{error, message}` with `tool` and the
-object the arguments named (`item`, `page`, `project`, `handle`) beside them,
-so a refusal or an unknown outcome says which object to read. **Every sentence
-on it is written for a person** (ADR-0060). `message` is the code's own
-sentence. `detail`, where present, is the refusal in a person's words, naming
-what to change or whom to ask; a refusal nobody has worded for a person yet
-carries **no** `detail`, and its `message` stands alone. The sentence the same
-tool answers a model with (naming the tool, its arguments and what to call
-next) is never on this answer. The authority table's refusal adds the rule's
-`reason` and the `grants` that would have admitted the caller; an argument the
-tool does not read is named in `fields`; and the route's own refusals below
-carry the code and `tool` alone. **The status is read from the refusal's
-CLASS, never from its sentence**, through the one mapping the [human write
+object the arguments named (`item`, `page`, `container` for a page not written
+yet, `project`, `handle`) beside them, so a refusal or an unknown outcome says
+which object to read. **Every sentence on it is written for a person**
+(ADR-0060). `message` is the code's own sentence. `detail`, where present, is
+the refusal in a person's words, naming what to change or whom to ask; a
+refusal nobody has worded for a person yet carries **no** `detail`, and its
+`message` stands alone. The sentence the same tool answers a model with
+(naming the tool, its arguments and what to call next) is never on this
+answer. The authority table's refusal adds the rule's `reason` and the
+`grants` that would have admitted the caller; an argument the tool does not
+read is named in `fields`; and the route's own refusals below carry the code
+and `tool` alone. **The status is read from the refusal's CLASS, never from
+its sentence**, through the one mapping the [human write
 surface](#the-human-write-surface) answers with too. The transport's own codes:
 
 | `error` | Status | When |
