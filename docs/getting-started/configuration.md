@@ -2011,17 +2011,17 @@ tools: it holds up every seat behind it, for the life of the process.
 Both deadlines therefore always apply.
 
 - **`startup_timeout_seconds`** (default `120`) bounds launching the
-  process (or opening the HTTP session), the protocol handshake, and the
-  first `tools/list`. The default suits a `uvx` / `npx` server whose
-  package is not yet in the local cache — the slow case for a *healthy*
-  server. Lower it for a server you launch from a local checkout.
-- **`request_timeout_seconds`** (default `300`) bounds one tool call. It
-  matches the MCP SDK's own SSE-friendly HTTP read default, so a tool
-  behaves the same over stdio and over HTTP. Raise it for a server whose
-  tools genuinely run long (a large code search, a slow report); lower it
-  for one that should always answer quickly, so a wedged call reaches the
-  agent as a failed tool result it can react to instead of a turn that
-  never ends.
+  process (or opening the HTTP session) and the protocol handshake, and
+  separately the first `tools/list`, so a start can take up to twice it
+  before the server is given up on. The default suits a `uvx` / `npx`
+  server whose package is not yet in the local cache — the slow case for a
+  *healthy* server. Lower it for a server you launch from a local checkout.
+- **`request_timeout_seconds`** (default `300`) bounds one tool call. It is
+  one ceiling whatever the transport, so a tool behaves the same over stdio
+  and over HTTP. Raise it for a server whose tools genuinely run long (a
+  large code search, a slow report); lower it for one that should always
+  answer quickly, so a wedged call reaches the agent as a failed tool result
+  it can react to instead of a turn that never ends.
 
 A server that exceeds either deadline is logged and skipped; the rest of
 the company still starts.

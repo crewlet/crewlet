@@ -127,7 +127,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 		c.reportStartFailure(err)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			return nil, fmt.Errorf(
-				"mcp: server %q did not connect within %s: %w. Raise startup_timeout on the server if it legitimately takes longer to start",
+				"mcp: server %q did not connect within %s: %w. Raise startup_timeout_seconds on the server if it legitimately takes longer to start",
 				spec.Name, spec.startupTimeout(), err)
 		}
 		return nil, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err)
@@ -269,7 +269,8 @@ func (c *client) listTools(ctx context.Context) ([]toolDef, error) {
 		res, err := session.ListTools(listCtx, params)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-				return nil, fmt.Errorf("mcp: server %q did not answer tool discovery within %s: %w",
+				return nil, fmt.Errorf("mcp: server %q did not answer tool discovery within %s: %w. "+
+					"Raise startup_timeout_seconds on the server if it legitimately takes longer to list its tools",
 					c.name, c.spec.startupTimeout(), err)
 			}
 			return nil, fmt.Errorf("mcp: server %q tool discovery: %w", c.name, err)

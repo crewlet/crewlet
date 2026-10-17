@@ -163,6 +163,11 @@ func TestStartupDeadlineOnAMuteServer(t *testing.T) {
 	if !strings.Contains(err.Error(), "did not connect within") {
 		t.Fatalf("error %q does not name the startup deadline", err)
 	}
+	// And it names the setting to raise as an operator writes it: it said
+	// startup_timeout, a key the configuration does not have.
+	if !strings.Contains(err.Error(), "startup_timeout_seconds") {
+		t.Errorf("error %q does not name startup_timeout_seconds, the setting to raise", err)
+	}
 	// Two bounds, because only the pair says the deadline is what ended it.
 	// Too fast and something else failed the connect; too slow and the
 	// deadline is not bounding anything. The upper bound is the transport's

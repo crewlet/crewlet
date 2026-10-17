@@ -3,7 +3,6 @@ package config
 import (
 	"slices"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -102,14 +101,15 @@ type MCPServer struct {
 	ToolAnnotations map[string]ToolAnnotations `yaml:"tool_annotations,omitempty" json:"tool_annotations,omitempty" desc:"Per-tool behavioural-hint overrides, keyed by bare tool name."`
 
 	// StartupTimeoutSeconds bounds launching the process (or opening the
-	// session), the handshake, and the first tool listing.
+	// session) and the handshake, and separately the first tool listing, so
+	// a start can take up to twice it before the server is given up on.
 	//
 	// A server that never speaks is the failure this bounds: nothing
 	// raises, so without a deadline the per-server error handling never
 	// runs and one silent server holds up every seat behind it. The
 	// default suits a package manager fetching a server that is not yet
 	// cached, which is the slow case for a HEALTHY server.
-	StartupTimeoutSeconds float64 `yaml:"startup_timeout_seconds,omitempty" json:"startup_timeout_seconds,omitempty" js:"min=0" desc:"Connect, handshake and first tool listing budget."`
+	StartupTimeoutSeconds float64 `yaml:"startup_timeout_seconds,omitempty" json:"startup_timeout_seconds,omitempty" js:"min=0" desc:"Bounds connect and handshake, and separately the first tool listing. 0 is the engine's default."`
 
 	// RequestTimeoutSeconds bounds any one tool call.
 	//
@@ -123,15 +123,6 @@ type MCPServer struct {
 // IdentityKey is the server's name — the key seats declare credentials under,
 // so its own `env` belongs to it rather than to its slot.
 func (m MCPServer) IdentityKey() string { return m.Name }
-
-// MCP timeout defaults. Startup is generous because a cold package fetch is
-// the slow case for a healthy server; the request default matches the
-// protocol SDK's own read timeout, so a stdio server and an http one have
-// one ceiling rather than one per transport.
-const (
-	defaultMCPStartupSeconds = 60.0
-	defaultMCPRequestSeconds = 300.0
-)
 
 // IsShared reports whether one instance serves the company, applying the
 // true default.
@@ -167,22 +158,6 @@ func (m *MCPServer) Kind() MCPTransport {
 		return TransportStdio
 	}
 	return m.Transport
-}
-
-// StartupTimeout is the connect budget, applying the default.
-func (m *MCPServer) StartupTimeout() time.Duration {
-	if m.StartupTimeoutSeconds <= 0 {
-		return time.Duration(defaultMCPStartupSeconds * float64(time.Second))
-	}
-	return time.Duration(m.StartupTimeoutSeconds * float64(time.Second))
-}
-
-// RequestTimeout is the per-call budget, applying the default.
-func (m *MCPServer) RequestTimeout() time.Duration {
-	if m.RequestTimeoutSeconds <= 0 {
-		return time.Duration(defaultMCPRequestSeconds * float64(time.Second))
-	}
-	return time.Duration(m.RequestTimeoutSeconds * float64(time.Second))
 }
 
 func (m *MCPServer) validate(path Path) error {
@@ -233,15 +208,17 @@ func (m *MCPServer) validate(path Path) error {
 		}
 	}
 
+	// NO NUMBER IN EITHER MESSAGE. The defaults are the MCP client's
+	// (mcp.DefaultStartupTimeout, mcp.DefaultRequestTimeout), applied where
+	// a zero reaches it, and this package sits below that one; a copy kept
+	// here to quote had already drifted to half the real startup default.
 	if m.StartupTimeoutSeconds < 0 {
 		p.add(at(path, "startup_timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultMCPStartupSeconds, m.StartupTimeoutSeconds)
+			"must be 0 (the default) or positive, got %v", m.StartupTimeoutSeconds)
 	}
 	if m.RequestTimeoutSeconds < 0 {
 		p.add(at(path, "request_timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultMCPRequestSeconds, m.RequestTimeoutSeconds)
+			"must be 0 (the default) or positive, got %v", m.RequestTimeoutSeconds)
 	}
 	return p.err()
 }

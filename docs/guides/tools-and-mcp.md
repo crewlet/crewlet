@@ -580,9 +580,10 @@ its credentials stop acting at the vendor as soon as the company stops
 declaring the agent. The apply refiles each held seat's catalogue
 against the new revision and returns, and each seat then restarts or starts
 its own children in the background and refiles its catalogue again when it is
-done. A start can take a whole `startup_timeout_seconds` (two minutes by
-default) when a vendor is down or a package fetch hangs, and an apply that
-waited would hold up everything after it with the new revision already
+done. A start can take up to twice `startup_timeout_seconds` (two minutes by
+default), once to connect and once to list its tools, when a vendor is down
+or a package fetch hangs, and an apply that waited would hold up everything
+after it with the new revision already
 current, a role it adds among them, whose inbox drops mail until it exists. A
 restart stops the old child before it starts the new one, so a turn that starts
 in between still lists the old child's tools, and a call to one is refused,
