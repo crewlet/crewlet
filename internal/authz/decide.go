@@ -220,9 +220,10 @@ var relationClasses = []Class{
 // never succeed, on every retry, for ever. The reason is a closed value a
 // caller can branch on; that is what it is for.
 //
-// THEN THE HUMAN-ONLY AND SEAT-ONLY BARS, which are facts about the VERB and
-// therefore decided before any class reads any relation — see
-// [rule.humanOnly] and [rule.seatOnly] — and the PERSON-PRESENT bar where it
+// THEN THE HUMAN-ONLY, SEAT-ONLY AND SEATED BARS, which are facts about the
+// VERB and therefore decided before any class reads any relation — see
+// [rule.humanOnly], [rule.seatOnly] and [rule.seated] — and the PERSON-PRESENT
+// bar where it
 // covers every arm, for the same reason: a machine token is refused a verb
 // that needs somebody at a keyboard before any class weighs what it carries
 // ([rule.presence]). Where the bar spares the self arm it is asked once the
@@ -265,6 +266,12 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	// [rule.seatOnly].
 	if r.seatOnly && p.Kind != iam.KindSeat {
 		return Decision{Reason: ReasonSeatOnly}
+	}
+	// AND A VERB MADE AS A SEAT IS NOT A CREDENTIAL'S ACTING AS ITSELF,
+	// whatever it holds: no permission gives it a seat to be answered or
+	// attributed as. See [rule.seated].
+	if r.seated && !seated(p) {
+		return Decision{Reason: ReasonUnseated}
 	}
 	_, throughToken := p.MachineToken()
 	if throughToken && r.presence == PresenceRequired {
@@ -724,6 +731,22 @@ func leadsByKind(ctx context.Context, chart Chart, actor string, o Object) Decis
 		return leadsContainer(ctx, chart, actor, o.Container)
 	}
 	return leadsProject(ctx, chart, actor, o.Container)
+}
+
+// seated reports whether p acts AS A SEAT — the one question [rule.seated]
+// asks.
+//
+// [iam.ActorFor]'s ANSWER, never a field read here: a principal is seated
+// exactly when the one attribution function names it by a seat — an agent by
+// its own, a person by the human seat the identity directory binds them to —
+// so the bar refuses exactly the principals whose writes would be attributed
+// to a credential rather than a seat, and nobody else.
+func seated(p iam.Principal) bool {
+	switch iam.ActorFor(p).Kind {
+	case iam.ActorAgent, iam.ActorHuman:
+		return true
+	}
+	return false
 }
 
 // actorOf is the handle the CHART knows this principal by.
