@@ -59,12 +59,12 @@ import (
 // caller), a node that could not decide, a wiring that decided nothing.
 
 // About is what a call's failure answer names beside its own fields: the tool,
-// and the object its arguments named — the item, the page, the project, the
-// person — so a refusal or an unknown outcome says which object to read to see
-// what became of it. A failed tool answers a sentence and no receipt, and a 503
-// that dropped what it was about left a client holding a key and nothing
-// saying where to look whether it landed. The `about` every transport hands
-// [Fail].
+// and the object its arguments named — the item, the page (or, for a page not
+// written yet, the container it is written in), the project, the person — so
+// a refusal or an unknown outcome says which object to read to see what became
+// of it. A failed tool answers a sentence and no receipt, and a 503 that
+// dropped what it was about left a client holding a key and nothing saying
+// where to look whether it landed. The `about` every transport hands [Fail].
 //
 // THE ARGUMENTS ARE EVERY NATIVE DOMAIN'S OWN ([builtin.ObjectArgs]), declared
 // once beside the domain's refusal classes, rather than a list here: a list
