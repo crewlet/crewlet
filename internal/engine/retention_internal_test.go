@@ -1051,6 +1051,38 @@ func TestAnEvictedNodesBackupIsForgottenOnceNoLogCountsIt(t *testing.T) {
 	}
 }
 
+// THE RETENTION DUTY READS ONE CLOCK, ITS ALARMS' AGES INCLUDED.
+//
+// Every report, evaluation and tick of the duty reads [retention.clock], and
+// the alarm tracker it feeds was built on the wall clock: an alarm's age is the
+// tracker's clock less the instant it was raised, so on a duty whose clock a
+// case moves — and a fence window or a log's first days are only reachable
+// that way — the evaluations said one thing and the ages another. Built on the
+// duty's clock, an alarm up while the duty's clock moves five hours is five
+// hours older.
+//
+// Mutation: build the tracker on the wall clock again, and the age moves by
+// the milliseconds the case takes.
+func TestTheRetentionDutysAlarmAgesAreOnItsOwnClock(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	r := quietRetention(t, e)
+	at := time.Date(2041, 3, 9, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return at }
+	r.beat(t.Context())
+	before, up := r.alarms.Firing()[statelog.KindBackupAge]
+	if !up {
+		t.Fatalf("a node that has never backed up raised no %s, so there is no "+
+			"alarm to age: %v", statelog.KindBackupAge, r.alarms.Firing())
+	}
+	r.now = func() time.Time { return at.Add(5 * time.Hour) }
+	after := r.alarms.Firing()[statelog.KindBackupAge]
+	if got := after - before; got != 5*time.Hour {
+		t.Errorf("five hours on the duty's clock aged %s by %s, want five hours — "+
+			"the tracker reads another clock", statelog.KindBackupAge, got)
+	}
+}
+
 // A LOG PAST ITS CENSUS NAMES ITS OWN CEILING FIELD — every log a read
 // appends a barrier to, the field read from the register's own declaration.
 //
