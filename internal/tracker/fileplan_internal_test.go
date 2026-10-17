@@ -147,9 +147,12 @@ func fileRow(i int) []any {
 // alias (`SCAN tracker_history AS h …`), so a match on `SEARCH <table>` finds
 // no seek in any statement that joins. An index belongs to exactly one table,
 // so its name already says which table is being sought.
+//
+// AN INTERSECTION SEEKS EVERY INDEX IT NAMES (`MULTI-INDEX AND h (a, b)`):
+// each is looked up by its own equality before the row ids are joined.
 func seeks(plan []string, index string) bool {
 	for _, line := range plan {
-		if strings.HasPrefix(line, "SEARCH ") &&
+		if (strings.HasPrefix(line, "SEARCH ") || strings.HasPrefix(line, "MULTI-INDEX AND ")) &&
 			slices.Contains(indexesIn([]string{line}), index) {
 			return true
 		}
