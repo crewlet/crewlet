@@ -560,7 +560,78 @@ var UNAVAILABLE_RETRY_MS = 5e3;
 */
 var RETRY_AFTER_MAX_MS = 3e4;
 //#endregion
+//#region src/contract/identity.ts
+/**
+* The header every request a tab makes FOR ITS READER carries that reader in —
+* the principal id the tab recorded (`lib/reader.ts`) — beside the session
+* cookie: `auth.ReaderHeader`, held by
+* `internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader`.
+*
+* The engine serves such a request only to that principal and refuses anybody
+* else `409 reader_changed` before it runs, so a window left open on the last
+* person's screen after somebody signed in as somebody else in another tab
+* makes no change as the new person, and is handed to them
+* (`protocol/signin.ts`). Spelled differently here, every request would name
+* nobody, be served to whoever the cookie is, and nothing would go red.
+*/
+var READER_HEADER = "X-Crewlet-Reader";
+//#endregion
 //#region src/protocol/signin.ts
+/**
+* What this browser's sign-in needs from the person, as the transports learn
+* it.
+*
+* # Why this is a module and not a prop
+*
+* The code that DISCOVERS a session problem is the transport: a REST answer
+* of `401`, a socket handshake the refusal probe reads as one, a `403` that
+* says the session may only enrol a second factor. The code that REPAIRS it is
+* the application: a route to the sign-in screen, or to the screen that
+* enrols the factor. Neither may reach into the other — a transport that draws a
+* dialog cannot be tested without a browser, and a screen that inspects every
+* status itself is a screen that forgets one — so the fact travels here,
+* beside neither.
+*
+* Not `session.ts`, which is the READ FLOORS a tab's own writes raise: a
+* sign-in session and a read session are two different things, and one module
+* name for both was a reader opening the wrong file.
+*
+* # A need is a STATE, not an event
+*
+* The socket is started before React mounts, so its refusal probe can answer
+* before anything has subscribed to hear it. An event fired into nobody is a
+* browser that never learns it is signed out, so what is kept is the latest
+* need, read by whoever subscribes when they subscribe. It is cleared by the
+* one thing that answers it: a sign-in that ends holding a whole session.
+*
+* # And a step-up is a QUESTION, asked once however many requests need it
+*
+* A guarded write refused `403 step_up_required` is not a mistake the person
+* made: they are signed in, and the engine wants a fresher proof of who they
+* are before this particular gesture. The repair is to ask for the password
+* again and send the SAME request — so nothing typed into a form is lost —
+* and it is asked once however many requests were refused at the same
+* moment: a screen that saves three things together must not stack three
+* password dialogs. The transport asks here; the application answers.
+*
+* # And every request says who the tab is read by
+*
+* The tabs of one browser share ONE session cookie and each draws one person's
+* company, so a sign-in as somebody else in another tab moves the cookie under
+* every other tab. What hands those tabs over — the engine closing the
+* sockets of the session it ended, `4401` — rides a close the sign-in makes
+* best effort, and a window left open beside it may hear nothing: it would go
+* on drawing the last person's screen while every request it sent went out as
+* the new one, a retried change of theirs included. So every request a tab
+* makes FOR ITS READER names them ([readerHeaders], `READER_HEADER`), and the
+* engine refuses one whose credential resolves to anybody else `409
+* reader_changed` before it runs. The transport reads the reader here and
+* reports that refusal here ([readerMoved]); the application, which records
+* who the tab is read by (`lib/reader.ts`) and knows how a tab is handed over
+* (`lib/session.ts`), answers both. With nothing installed — the e2e replay,
+* a suite that installs none — a request names nobody and is served as the
+* cookie is.
+*/
 var need = null;
 var listeners = /* @__PURE__ */ new Set();
 function announce() {
@@ -665,6 +736,32 @@ function confirmStepUp() {
 	}
 	return confirming;
 }
+var tabReader = null;
+/**
+* Install who the tab is read by. Returns the uninstall, which leaves a later
+* installation in place — the step-up confirmer's rule, for its reason: one
+* tab, one reader.
+*/
+function setTabReader(reader) {
+	tabReader = reader;
+	return () => {
+		if (tabReader === reader) tabReader = null;
+	};
+}
+/**
+* The header naming this tab's reader, for a request made on their behalf —
+* or none, where nothing is installed or the tab has learned nobody: a
+* request that names nobody is served as the cookie is, which is all a tab
+* that does not know its reader can ask for.
+*/
+function readerHeaders() {
+	const reader = tabReader?.current() ?? null;
+	return reader === null ? {} : { [READER_HEADER]: reader };
+}
+/** A request named this tab's reader and the engine said the session is somebody else's. */
+function readerMoved() {
+	tabReader?.moved();
+}
 //#endregion
 //#region src/contract/remedies.ts
 /**
@@ -740,6 +837,13 @@ function remedyOf(raw) {
 * take instead. A call that must present something else — the API token
 * exchange at `POST /auth/token` — sets its own `Authorization` header for
 * that one request, and nothing keeps it.
+*
+* AND EVERY REQUEST SAYS WHO IT IS FOR — the tab's reader, in the header
+* `signin.ts` reads it into — unless it is one of the two whose point is to
+* learn or change who the session is ([RequestOptions.forReader]). The cookie
+* is the browser's and the screen is the tab's, and a request the engine
+* would serve to somebody the tab was not drawn for is refused `409
+* reader_changed` before it runs, which hands the tab over ([noteSession]).
 */
 /**
 * What the engine said when it refused.
@@ -898,12 +1002,15 @@ var TYPED_REFUSALS = /* @__PURE__ */ new Set(["sign_in_refused", "second_factor_
 * A `401` that is not an answer about typed details is a browser signed in as
 * nobody the engine accepts: never signed in, its session ended, expired or
 * revoked. A `403 second_factor_enrolment_required` is a session that may do
-* nothing but enrol the second factor the deployment requires. Every other
-* refusal is about the REQUEST, and the session is fine.
+* nothing but enrol the second factor the deployment requires. A `409
+* reader_changed` is a session that is somebody else's than the tab that
+* sent the request — whoever signed in in another tab — and the tab is handed
+* to them. Every other refusal is about the REQUEST, and the session is fine.
 */
 function noteSession(refusal) {
 	if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
 	if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") needSession("second_factor");
+	if (refusal.status === 409 && refusal.code === "reader_changed") readerMoved();
 }
 /**
 * A `Retry-After` header value as whole seconds from `now`, or null for a
@@ -1100,7 +1207,7 @@ async function counted(method, path, options) {
 }
 /** One round trip — see [request] for what surrounds it. */
 async function attempt(method, path, options) {
-	const { body, headers = {}, query, signal, read = "json", timeoutMs = REQUEST_TIMEOUT_MS } = options;
+	const { body, headers = {}, query, signal, read = "json", timeoutMs = REQUEST_TIMEOUT_MS, forReader = true } = options;
 	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
 	let encoded;
 	if (body !== void 0) {
@@ -1116,7 +1223,8 @@ async function attempt(method, path, options) {
 		credentials: "same-origin",
 		headers: {
 			...contentType ? { "Content-Type": contentType } : {},
-			...headers
+			...headers,
+			...forReader ? readerHeaders() : {}
 		},
 		...encoded === void 0 ? {} : { body: encoded }
 	};
@@ -1233,6 +1341,7 @@ async function blob(path, signal) {
 				method: "GET",
 				cache: "no-store",
 				credentials: "same-origin",
+				headers: readerHeaders(),
 				signal: controller.signal
 			});
 		} catch (err) {
@@ -1265,7 +1374,10 @@ async function blob(path, signal) {
 * turn stream (`assistant.ts`), whose bytes are server-sent events.
 *
 * THE SAME CREDENTIAL AND THE SAME REFUSALS as every request here: the
-* session cookie and nothing else, no browser cache in front of it, and a
+* session cookie and nothing else, the tab's reader named last
+* ([readerHeaders], so a browser that changed hands is refused
+* `reader_changed` and the tab handed over), no browser cache in front of it,
+* and a
 * refusal read as the engine's JSON ([RestError]), a `401` reaching
 * [noteSession] exactly as a request's does. Only the STATUS LINE has a
 * deadline ([REQUEST_TIMEOUT_MS]); the body runs for as long as the engine
@@ -1302,7 +1414,8 @@ async function stream(path, options = {}) {
 			credentials: "same-origin",
 			headers: {
 				Accept: "text/event-stream",
-				...headers
+				...headers,
+				...readerHeaders()
 			},
 			signal: controller.signal
 		});
@@ -1435,12 +1548,20 @@ async snapshot() {
 	try {
 		const response = await fetch(location.origin + "/stream/snapshot", {
 			credentials: "same-origin",
-			cache: "no-store"
+			cache: "no-store",
+			headers: readerHeaders()
 		});
 		if (!response.ok) {
 			if (response.status === 401) {
 				needSession("sign_in");
 				return { state: "nobody" };
+			}
+			if (response.status === 409) {
+				if ((await response.json().catch(() => null))?.error === "reader_changed") readerMoved();
+				return {
+					state: "unread",
+					retryAfter: null
+				};
 			}
 			return {
 				state: "unread",
@@ -1493,8 +1614,16 @@ var auth = {
 	* THE TOKEN IS THE BEARER OF THIS ONE REQUEST and nothing else: it goes in
 	* the `Authorization` header, which is how the engine takes it, and the
 	* session that comes back is a cookie. Nothing here holds it afterwards.
+	*
+	* MADE FOR NOBODY ([RequestOptions.forReader]): it signs somebody in, who
+	* may be anybody but the person this tab was read by, and the screen that
+	* made it hands the tab to them on the answer (`lib/session.ts`).
 	*/
-	exchangeToken: async (token) => await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` }),
+	exchangeToken: async (token) => (await rest.request("POST", "/auth/token", {
+		body: {},
+		headers: { Authorization: `Bearer ${token}` },
+		forReader: false
+	})).body,
 	/** Render an invitation without spending it. */
 	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
 	/** Redeem an invitation, which creates the person and signs them in. */
@@ -1537,8 +1666,25 @@ var auth = {
 	/**
 	* Who this browser is signed in as — ended by `signal` where the caller
 	* passes one, for a read a newer one has superseded.
+	*
+	* MADE FOR NOBODY ([RequestOptions.forReader]), because it is how a tab
+	* LEARNS who the session is: the frame's read and the hand-over a
+	* `reader_changed` asks for both take its answer (`lib/session.ts`), and a
+	* read refused for naming the last reader would leave the tab nothing to be
+	* handed over with.
 	*/
-	session: async (signal) => await rest.get("/auth/session", signal),
+	session: async (signal) => (await rest.request("GET", "/auth/session", {
+		signal,
+		forReader: false
+	})).body,
+	/**
+	* The same read, made FOR THE TAB'S READER — what the keepalive asks
+	* (`keepalive.ts`). It re-issues the cookie exactly as [session] does, and
+	* it is how a tab nobody is using learns that the browser changed hands
+	* under it: refused `reader_changed`, it is handed to whoever the session
+	* is now, within two keepalive intervals of the sign-in that moved it.
+	*/
+	keepAlive: async () => await rest.get("/auth/session"),
 	/**
 	* End this browser's session. The engine clears the cookie whatever its
 	* own write did, so an answer at all means this browser holds no session.
@@ -2291,10 +2437,13 @@ var LiveSocket = class {
 		try {
 			const res = await fetch(PATH, {
 				credentials: "same-origin",
-				cache: "no-store"
+				cache: "no-store",
+				headers: readerHeaders()
 			});
 			if (res.status === 401) this.authRejected();
-			else if (res.status === 503) await this.redialWhenSaid(res);
+			else if (res.status === 409) {
+				if ((await res.json().catch(() => null))?.error === "reader_changed") readerMoved();
+			} else if (res.status === 503) await this.redialWhenSaid(res);
 			else if (res.status === 403) {
 				const body = await res.json().catch(() => null);
 				if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
@@ -2725,6 +2874,16 @@ var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 * view is somebody using the dashboard, and the session's absolute deadline
 * still bounds how long that can last. A 401 is read where every other is
 * (`rest.ts`): a session that ended needs a sign-in.
+*
+* THE READ IS MADE FOR THE TAB'S READER (`auth.keepAlive`), unlike the frame's
+* read of who the session is, so it is also how a tab that only listens learns
+* the browser changed hands under it: somebody signed in as somebody else in
+* another tab and the close of this tab's session never reached its socket.
+* The engine refuses the read `reader_changed`, and the tab is handed over
+* within TWO intervals — under ten minutes of the sign-in — rather than
+* drawing the last person's company for as long as it stays open. Two, not
+* one: a tick passes over a tab the engine answered less than an interval
+* ago, and that answer may have come just before the sign-in.
 */
 /**
 * How often an open tab makes sure the engine has heard from it, in ms:
@@ -2751,7 +2910,7 @@ var SessionKeepAlive = class {
 	tick(now = Date.now()) {
 		if (!this.socket.connected) return;
 		if (now - lastAnsweredAt() < 3e5) return;
-		auth.session().catch(() => void 0);
+		auth.keepAlive().catch(() => void 0);
 	}
 };
 //#endregion
@@ -3211,6 +3370,7 @@ var ACT_ERRORS = {
 	identity_unavailable: "Couldn’t confirm who you are. Try again.",
 	seat_unavailable: "Your seat was removed. Ask an admin to move you.",
 	second_factor_enrolment_required: "Set up two-step verification first.",
+	reader_changed: "Someone else is signed in here now, so nothing changed. Reload to continue as them.",
 	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
 	unauthorized: "You don’t have access to this.",
 	step_up_required: "Confirm it’s you first.",
@@ -3403,6 +3563,9 @@ function writeFailed(err) {
 * session that needs a sign-in, and a `403 step_up_required` is confirmed and
 * the SAME request replayed there — so a press refused for a stale proof is
 * made once the person has confirmed who they are, under the same operation.
+* And every press names the tab's reader there, so a press — or a Retry —
+* from a tab whose browser somebody else has signed in to since is refused
+* `reader_changed` unrun rather than made as them, and the tab is handed over.
 *
 * # What an answer can be, and what each tells a person
 *
@@ -3510,4 +3673,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

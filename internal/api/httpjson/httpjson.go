@@ -555,6 +555,19 @@ const (
 	// is a leaf and cannot import that one to share the constant.
 	CodeSeatUnavailable Code = "seat_unavailable"
 
+	// CodeReaderChanged is a request that names the principal it was made
+	// FOR — a dashboard tab's reader, in internal/api/auth's ReaderHeader —
+	// while the credential it carries resolves to somebody else: the
+	// browser's session changed hands under the tab that sent it.
+	//
+	// A 409 AND NEVER A 401 OR A 403, because nothing is wrong with the
+	// credential or with what it may do: it is somebody else's than the
+	// request says, and the remedy is the CLIENT's — hand the tab to whoever
+	// the session is now — rather than a sign-in or a grant. Answered before
+	// any handler runs, so nothing was done, and a retry under the same
+	// operation key names no operation of the new principal's.
+	CodeReaderChanged Code = "reader_changed"
+
 	// CodeForbidden is a write the DOMAIN forbade this caller on a rule of
 	// its own, beside the authority table's: an agent re-ordering a
 	// colleague's queue, an edit of somebody else's remark, a write into a
@@ -1129,6 +1142,8 @@ var codes = map[Code]string{
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeSeatUnavailable: "Your seat is no longer in the org chart. Ask an " +
 		"admin to move you to another seat.",
+	CodeReaderChanged: "Someone else is signed in on this browser now, so " +
+		"nothing changed. Reload the page to continue as them.",
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",

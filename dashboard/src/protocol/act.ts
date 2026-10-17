@@ -18,6 +18,9 @@
  * session that needs a sign-in, and a `403 step_up_required` is confirmed and
  * the SAME request replayed there — so a press refused for a stale proof is
  * made once the person has confirmed who they are, under the same operation.
+ * And every press names the tab's reader there, so a press — or a Retry —
+ * from a tab whose browser somebody else has signed in to since is refused
+ * `reader_changed` unrun rather than made as them, and the tab is handed over.
  *
  * # What an answer can be, and what each tells a person
  *

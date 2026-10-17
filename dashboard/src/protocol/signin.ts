@@ -34,7 +34,30 @@
  * and it is asked once however many requests were refused at the same
  * moment: a screen that saves three things together must not stack three
  * password dialogs. The transport asks here; the application answers.
+ *
+ * # And every request says who the tab is read by
+ *
+ * The tabs of one browser share ONE session cookie and each draws one person's
+ * company, so a sign-in as somebody else in another tab moves the cookie under
+ * every other tab. What hands those tabs over — the engine closing the
+ * sockets of the session it ended, `4401` — rides a close the sign-in makes
+ * best effort, and a window left open beside it may hear nothing: it would go
+ * on drawing the last person's screen while every request it sent went out as
+ * the new one, a retried change of theirs included. So every request a tab
+ * makes FOR ITS READER names them ([readerHeaders], `READER_HEADER`), and the
+ * engine refuses one whose credential resolves to anybody else `409
+ * reader_changed` before it runs. The transport reads the reader here and
+ * reports that refusal here ([readerMoved]); the application, which records
+ * who the tab is read by (`lib/reader.ts`) and knows how a tab is handed over
+ * (`lib/session.ts`), answers both. With nothing installed — the e2e replay,
+ * a suite that installs none — a request names nobody and is served as the
+ * cookie is.
  */
+
+// RELATIVE, like every contract import in this directory: it is also built
+// alone as `protocol.js`, where the `~` alias does not exist.
+import { READER_HEADER } from "../contract/identity.ts";
+import type { ACT_ERRORS } from "../contract/errors.ts";
 
 /**
  * What the session lacks: a credential the engine accepts at all, or a second
@@ -169,4 +192,54 @@ export function confirmStepUp(): Promise<boolean> {
     toldAsking();
   }
   return confirming;
+}
+
+/** Who the tab is read by, as the application knows it — see the module doc. */
+export interface TabReader {
+  /** The principal this tab is read by, or null where it has learned none. */
+  current(): string | null;
+  /**
+   * The engine refused a request this tab made for `current()`: the browser's
+   * session is somebody else's. Hand the tab to whoever it is now.
+   */
+  moved(): void;
+}
+
+let tabReader: TabReader | null = null;
+
+/**
+ * Install who the tab is read by. Returns the uninstall, which leaves a later
+ * installation in place — the step-up confirmer's rule, for its reason: one
+ * tab, one reader.
+ */
+export function setTabReader(reader: TabReader): () => void {
+  tabReader = reader;
+  return () => {
+    if (tabReader === reader) tabReader = null;
+  };
+}
+
+/**
+ * The header naming this tab's reader, for a request made on their behalf —
+ * or none, where nothing is installed or the tab has learned nobody: a
+ * request that names nobody is served as the cookie is, which is all a tab
+ * that does not know its reader can ask for.
+ */
+export function readerHeaders(): Record<string, string> {
+  const reader = tabReader?.current() ?? null;
+  return reader === null ? {} : { [READER_HEADER]: reader };
+}
+
+/**
+ * The `error` the engine refuses a request made for somebody else with.
+ *
+ * ONE OF `ACT_ERRORS`' KEYS, checked by the compiler: the engine gate holds
+ * that table to the act transport's codes, so a renamed code there is a red
+ * build here rather than a refusal no tab is ever handed over on.
+ */
+export const READER_CHANGED = "reader_changed" satisfies keyof typeof ACT_ERRORS;
+
+/** A request named this tab's reader and the engine said the session is somebody else's. */
+export function readerMoved(): void {
+  tabReader?.moved();
 }

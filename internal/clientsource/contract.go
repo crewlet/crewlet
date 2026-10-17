@@ -247,6 +247,7 @@ var contract = []Entry{
 	{"SeatInvitation", ReadInterface,
 		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
 	{"ResetView", ReadInterface, "internal/api/authapi.TestTheResetScreenReadsWhatTheResetViewSends"},
+	{"READER_HEADER", ReadScalar, "internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader"},
 
 	// services.ts
 	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},

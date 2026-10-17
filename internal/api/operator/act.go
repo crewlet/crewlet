@@ -85,9 +85,10 @@ const MaxActBody = 2*doclet.MaxBody + 64<<10
 var ActTransportCodes = []httpjson.Code{
 	// The request guard's: nobody, an identity this node could not read, a
 	// seat the chart no longer holds, a session that may only enrol a
-	// second factor.
+	// second factor, and a request made for a reader the credential is not.
 	httpjson.CodeInvalidToken, httpjson.CodeIdentityUnavailable,
 	httpjson.CodeSeatUnavailable, httpjson.CodeSecondFactorEnrolmentRequired,
+	httpjson.CodeReaderChanged,
 	// The cross-site write gate's.
 	httpjson.CodeCSRFOrigin,
 	// The authority table's, through the one refusal mapping.

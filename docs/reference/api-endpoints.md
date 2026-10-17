@@ -506,6 +506,26 @@ node means nothing was done.
 > attacker controls. See
 > [Identity and Access § A cross-site write is refused by its Origin](../concepts/identity-and-access.md#a-cross-site-write-is-refused-by-its-origin).
 >
+> **A request that says who it is for is served only to them.**
+> `X-Crewlet-Reader: <principal id>` — the `person` `GET /auth/session`
+> answers — names the principal a request is made FOR, and the dashboard sends
+> it on every request a tab makes for the person it was read by. A guarded
+> route serves such a request only when its credential resolves to that
+> principal; anybody else is `409 reader_changed`, written by the guard before
+> any handler runs, so nothing is read, written or audited and no
+> `Idempotency-Key` is scoped. It is what keeps a window left open beside a
+> sign-in as somebody else — whose cookie moved under it, and whose socket the
+> sign-in's best-effort close of its session never reached — from making the
+> last person's change, or retrying it, as the new one; the dashboard hands
+> that tab to the new person on the answer. It holds under `/auth/*` too, so a
+> **Sign out everywhere** pressed on the last person's Account ends nobody's
+> sessions, and an unguarded route never reads it. A request that names no
+> reader is decided exactly as before — scripts, assistants and the command
+> line send none — and so are nobody (`401`) and a node that cannot tell
+> (`503`): there is no principal to hold the name against. The value is
+> compared as an id, and one that is not an id names nobody the credential
+> is. It is not a credential and widens nothing.
+>
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
 > token because each verifies its provider's signature instead — so a route
 > whose secret is not configured has nothing to verify with, and answers `503`
@@ -5829,6 +5849,7 @@ surface](#the-human-write-surface) answers with too. The transport's own codes:
 | `invalid_token` | `401` | Nobody presented a credential (the guard's own refusal) |
 | `identity_unavailable` | `503` | This node cannot read its identity estate, with a `Retry-After` |
 | `seat_unavailable`, `second_factor_enrolment_required` | `403` | The guard's refusals of somebody it resolved — see [Auth](#routes) |
+| `reader_changed` | `409` | The request names, in `X-Crewlet-Reader`, a principal the credential is not — see [Auth](#routes); nothing ran, so a retry under the same key is no write of the new principal's |
 | `csrf_origin` | `403` | A cross-site write |
 | `unauthorized` | `403` | The authority table refused: `reason` and `grants` say why and what would admit the caller |
 | `step_up_required` | `403` | The verb needs a fresher proof of who you are; names the window |
@@ -6002,6 +6023,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
 | `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
+| `409` | `reader_changed` | The request names, in `X-Crewlet-Reader`, a principal its credential is not, and the guard refused it before it ran | nothing; ask `GET /auth/session` who the credential is — see [Auth](#routes) |
 | `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
 | `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |
 | `503` | `unavailable`, `no_active_revision`, `identity_unavailable` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
