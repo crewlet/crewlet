@@ -181,6 +181,11 @@ type NodePositions struct {
 // judgement about a node that has never reported anything. A removal verb
 // stood here with no caller, and a register that offers one invites wiring it
 // into the eviction.
+//
+// What bounds the register is the set of node ids a deployment has ever
+// configured: one row per id, replaced wholesale by that node's own
+// heartbeat, so a machine rebuilt under its old id writes over its old row
+// and only an id that is retired for good leaves one behind.
 type PositionRegister interface {
 	// PutPositions writes this node's row, replacing it wholesale.
 	//

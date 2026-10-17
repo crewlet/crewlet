@@ -751,9 +751,14 @@ evicted node's row — and any trim floor it published — counts toward neither
 the generation the fleet is on nor a reanchor's guards, which is how a fleet
 stranded by a node that re-anchored and then vanished is released ([a node a
 peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself
-stays: a readmission is judged by it. Its **backup** does not: once the
-eviction has taken effect on every log that counts nodes, the trim's next tick
-forgets the node's newest backup point, so under `backup_floor: engine` no log
+stays, for the life of the deployment: a readmission is judged by it, and a
+node id can be readmitted whenever it is evicted, so nothing removes it. The
+register therefore holds one row per node id the deployment has ever
+configured — a machine rebuilt under its old id writes over its old row, and
+only an id retired for good leaves one behind. The node's **backup** does not
+stay: once the eviction has taken effect on every log that counts nodes, the
+trim's next tick forgets the node's newest backup point, so under
+`backup_floor: engine` no log
 is trimmed against a copy on a host the fleet has let go, and
 [`GET /backups`](../reference/api-endpoints.md#get-backups) stops listing it.
 A log that copy alone covered blocks on the `backup_floor` term, and raises
