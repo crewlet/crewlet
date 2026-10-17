@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // A VOUCH STATES BOTH FACTS, and Resolve reads the same two.
@@ -30,13 +29,8 @@ func TestAVouchIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	rig := newWriteRig(t)
 	someone := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, someone)
-	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, rig.db, rig.waiter)
-	if err != nil {
-		t.Fatalf("build the read authority: %v", err)
-	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: rig.db.Reader(), Log: log,
+		DB:  rig.db.Reader(),
 		Lag: func() time.Duration { return 90 * time.Second },
 	})
 	if err != nil {

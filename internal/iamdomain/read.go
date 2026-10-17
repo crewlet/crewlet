@@ -45,11 +45,22 @@ import (
 // below returns the sealed bytes and leaves opening them to a surface that has
 // a reason to — so a value is opened only where somebody is shown it, and a
 // read that decides who may do what never touches one.
+//
+// # And nothing here reads at a level
+//
+// Every answer is THIS NODE'S ROWS, with how far behind the log they are
+// beside them ([Vouch], [Reader.At]): a read here decides whether somebody may
+// act, on every request, and the framework's levels would put a barrier on
+// the identity log for each one. The one read that must not be served from
+// before a position — a request carrying a session this node has not applied
+// yet — waits for the position the bearer itself states
+// ([Reader.AwaitApplied]), which is the applier's own wait and appends
+// nothing. So no read of this estate takes a barrier, and that is the read
+// model the identity log is sized by (internal/engine's register).
 
 // Reader answers questions about this node's copy of the identity estate.
 type Reader struct {
-	db  store.ReplicatedReader
-	log *statelog.Reader
+	db store.ReplicatedReader
 
 	committed func() statelog.Position
 	lag       func() time.Duration
@@ -60,11 +71,6 @@ type Reader struct {
 type ReaderOptions struct {
 	// DB is the replicated estate. REQUIRED.
 	DB store.ReplicatedReader
-
-	// Log is this domain's read authority. REQUIRED: without it every read
-	// level is a label rather than a guarantee, and a degradation invisible
-	// in the answer is worse than a refusal.
-	Log *statelog.Reader
 
 	// Committed is this node's applied position and Lag how far behind the
 	// log it is. Each is nil-safe and answers the zero value, which is what
@@ -94,13 +100,7 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 	if opts.DB.IsZero() {
 		return nil, errors.New("iamdomain: a reader needs the replicated estate")
 	}
-	if opts.Log == nil {
-		return nil, errors.New("iamdomain: a reader needs its domain's read " +
-			"authority — without it every read level is a label rather than a " +
-			"guarantee, and an identity answer that silently degraded is one " +
-			"nobody can tell from a correct refusal")
-	}
-	r := &Reader{db: opts.DB, log: opts.Log,
+	r := &Reader{db: opts.DB,
 		committed: opts.Committed, lag: opts.Lag, await: opts.Await}
 	if r.committed == nil {
 		r.committed = func() statelog.Position { return statelog.Position{} }

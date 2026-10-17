@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // THE READER IS WHAT VALIDATES A BEARER, asserted at compile time.
@@ -25,30 +24,19 @@ import (
 // request carrying a cookie.
 var _ session.Directory = (*iamdomain.Reader)(nil)
 
-// A READER REFUSES A MISSING HALF BY NAME.
+// A READER REFUSES A MISSING ESTATE.
 //
-// The read authority is the load-bearing one: without the framework's own
-// reader every read level is a LABEL rather than a guarantee, so a node behind
-// the log would report `session` while serving whatever it happened to hold —
-// and an identity answer that silently degraded is one nobody can tell from a
-// correct refusal.
-func TestAReaderRefusesAMissingHalfByName(t *testing.T) {
+// Every answer is this node's rows, so a reader with no estate to read them
+// from has nothing to answer with — and one built anyway would fail on its
+// first request rather than at boot, where the missing wiring is named.
+func TestAReaderRefusesAMissingEstate(t *testing.T) {
 	t.Parallel()
-	rig := newWriteRig(t)
-	for name, opts := range map[string]iamdomain.ReaderOptions{
-		"no estate at all":  {},
-		"no read authority": {DB: rig.db.Reader()},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			reader, err := iamdomain.NewReader(opts)
-			if err == nil {
-				t.Fatal("a reader was built with a missing half")
-			}
-			if reader != nil {
-				t.Error("a refused reader was returned anyway")
-			}
-		})
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{})
+	if err == nil {
+		t.Fatal("a reader was built with no estate")
+	}
+	if reader != nil {
+		t.Error("a refused reader was returned anyway")
 	}
 }
 
@@ -402,15 +390,10 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, rig.db, rig.waiter)
-	if err != nil {
-		t.Fatalf("build the read authority: %v", err)
-	}
 	stream := iamdomain.Domain{}.Stream().Name
 	var asked []statelog.Position
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: rig.db.Reader(), Log: log,
+		DB:        rig.db.Reader(),
 		Committed: func() statelog.Position { return statelog.Position{} },
 		Await: func(_ context.Context, p statelog.Position) error {
 			asked = append(asked, p)
@@ -428,7 +411,7 @@ func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
 		t.Errorf("the applier was asked to wait for %v, want %v", asked, want)
 	}
 
-	bare, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: rig.db.Reader(), Log: log})
+	bare, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: rig.db.Reader()})
 	if err != nil {
 		t.Fatalf("build a reader with no runner: %v", err)
 	}
