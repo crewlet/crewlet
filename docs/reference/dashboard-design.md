@@ -2504,7 +2504,11 @@ every sign-in path to a quiet console.
 **An invitation is read, never spent, by opening it.** The link carries the
 whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
-the view, the body on the redemption — never in a request URL. The view names
+the view, the body on the redemption — never in a request URL. Both link
+headers are declared in `contract/identity.ts` (`INVITE_SECRET_HEADER`,
+`RESET_SECRET_HEADER`) and held to the views' own spellings by an engine test,
+because a header renamed on one side alone presents no secret and every link
+opens as the `410` an id nobody issued answers. The view names
 who it is for, who sent it — when a person did: one a Tier A token or a service
 account issued, the company's first person's above all, names no sender, since
 `token:founder` is nothing its reader would recognise — and the seat it binds.

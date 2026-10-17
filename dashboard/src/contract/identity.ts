@@ -204,6 +204,27 @@ export interface ResetView {
 }
 
 /**
+ * The header an invitation's secret travels in to its view:
+ * `authapi.InviteSecretHeader`, held by
+ * `internal/api/authapi.TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads`.
+ *
+ * A HEADER, because the view is a GET and a GET has no body — and never the
+ * query string, which every access log between the browser and the engine
+ * records. The link carries the secret in its FRAGMENT precisely so that no
+ * server sees it on the way to this page. Spelled differently here, the screen
+ * would present no secret and every invitation it opened would be the one
+ * `410` an id nobody issued answers.
+ */
+export const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+
+/**
+ * The header a password reset link's secret travels in to its view, for
+ * `INVITE_SECRET_HEADER`'s reason: `authapi.ResetSecretHeader`, held by the
+ * same gate.
+ */
+export const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
+
+/**
  * The header every request a tab makes FOR ITS READER carries that reader in —
  * the principal id the tab recorded (`lib/reader.ts`) — beside the session
  * cookie: `auth.ReaderHeader`, held by
