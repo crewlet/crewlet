@@ -9,7 +9,10 @@ import (
 
 var chatPrompt = notify.ChatPrompt{
 	Backend: "chat", Label: "Chat",
-	DirectKinds: []string{"D", "G"},
+	Address: notify.AddressRule{
+		DirectKinds: []string{"D", "G"},
+		Follows:     notify.AddressingFollows(),
+	},
 	Collectives: "`@all` / `@channel` / `@here`",
 	SelfReference: func(m map[string]string) string {
 		if n := m["bot_username"]; n != "" {
@@ -376,24 +379,24 @@ func TestEveryChatConstituentIsKept(t *testing.T) {
 
 func TestADirectConversationIsRecognised(t *testing.T) {
 	for _, kind := range []string{"D", "G"} {
-		if !chatPrompt.IsDirect(map[string]string{"channel_type": kind}) {
+		if !chatPrompt.Address.IsDirect(map[string]string{notify.ChannelTypeField: kind}) {
 			t.Errorf("%q is not read as direct", kind)
 		}
 	}
 	for _, kind := range []string{"O", "P", ""} {
-		if chatPrompt.IsDirect(map[string]string{"channel_type": kind}) {
+		if chatPrompt.Address.IsDirect(map[string]string{notify.ChannelTypeField: kind}) {
 			t.Errorf("%q is read as direct", kind)
 		}
 	}
 	// A backend WITH a meaningful prefix uses it as the fallback.
 	prefixed := chatPrompt
-	prefixed.DMPrefix = "D"
-	if !prefixed.IsDirect(map[string]string{"channel": "D0123"}) {
+	prefixed.Address.DMPrefix = "D"
+	if !prefixed.Address.IsDirect(map[string]string{notify.ChannelField: "D0123"}) {
 		t.Fatal("the prefix fallback did not fire")
 	}
 	// And a backend with opaque ids must not: it would mark arbitrary
 	// public channels as direct messages.
-	if chatPrompt.IsDirect(map[string]string{"channel": "D0123"}) {
+	if chatPrompt.Address.IsDirect(map[string]string{notify.ChannelField: "D0123"}) {
 		t.Fatal("a prefix-less backend used a prefix anyway")
 	}
 }
@@ -423,17 +426,21 @@ func TestTheChatPromptSatisfiesTheInterface(t *testing.T) {
 func TestTheChatPromptAddressesTheSameMessagesTheIndicatorDoes(t *testing.T) {
 	t.Parallel()
 	for name, mutate := range map[string]func(map[string]string){
-		"a direct message":     func(m map[string]string) { m["channel_type"] = "D" },
-		"a group DM":           func(m map[string]string) { m["channel_type"] = "G" },
-		"a mention it follows": func(m map[string]string) { m["thread_follow_reason"] = "mention" },
-		"a thread it follows":  func(m map[string]string) { m["thread_following"] = "yes" },
+		"a direct message": func(m map[string]string) { m[notify.ChannelTypeField] = "D" },
+		"a group DM":       func(m map[string]string) { m[notify.ChannelTypeField] = "G" },
+		"a message naming it": func(m map[string]string) {
+			m[notify.FollowReasonField] = string(notify.FollowMention)
+		},
+		"a thread it is in because it was named": func(m map[string]string) {
+			m[notify.FollowingField] = string(notify.FollowMention)
+		},
 	} {
 		n := chatNote(mutate)
 		if !chatPrompt.Addressed(n) {
 			t.Errorf("%s does not address the seat", name)
 		}
 		// The two answers are the SAME rule, read through both doors.
-		if got := notify.Addressed(n.Metadata, chatPrompt.DMPrefix); !got {
+		if !chatPrompt.Address.Addressed(n.Metadata) {
 			t.Errorf("%s: the indicator and the prompt disagree", name)
 		}
 	}
@@ -442,5 +449,15 @@ func TestTheChatPromptAddressesTheSameMessagesTheIndicatorDoes(t *testing.T) {
 	// replies to traffic nobody addressed to any of them.
 	if chatPrompt.Addressed(chatNote(nil)) {
 		t.Error("a passive channel message addresses the seat")
+	}
+	// And a STANDING FOLLOW is not an ask: a seat that spoke in a thread
+	// once does not owe every later message in it an answer.
+	spoke := chatNote(func(m map[string]string) {
+		m[notify.ThreadField] = "p0"
+		m[notify.FollowingField] = string(notify.FollowParticipated)
+		m[notify.FollowReasonField] = string(notify.FollowParticipated)
+	})
+	if chatPrompt.Addressed(spoke) {
+		t.Error("a reply in a thread the seat merely spoke in addresses it")
 	}
 }
