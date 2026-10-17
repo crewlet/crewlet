@@ -3112,7 +3112,15 @@ at a time — `work_activity` for what changed, `work_comments` for what was
 said, `work_item_turns` for the agent turns charged to the task — and merged
 only down to the newest point any of them with more pages stopped at, so a
 stretch it draws is complete in all three; **Earlier activity** reads the
-history that stopped there. All | Comments | Agent turns | Changes narrows it.
+history that stopped there. Each history stays whole while its newest page
+moves under a reader who paged back (`lib/usePaged.ts`, which a seat's Turns
+tab pages through too): an arrival at the top pushes the newest page's oldest
+entry off its foot, so before the list moves the range between the newest page
+and the pages held is read and spliced in, and until it has been the list stays
+as it was drawn. A gap longer than everything the reader paged back through,
+or one a read failed on, drops the older pages instead, so the reader pages
+back again from a list with no hole in it.
+All | Comments | Agent turns | Changes narrows it.
 A change is a sentence about the task ("Jane Founder filed this in ENG",
 "CTO assigned it to SWE: “owns the provisioner”", "Jane Founder ticked 1 on
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
