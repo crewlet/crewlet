@@ -235,6 +235,13 @@ func (a *Applier) stampProjectChange(ctx context.Context, tx *sql.Tx,
 	return affected(res)
 }
 
+// raiseHistoryStatement is [Applier.raiseSuccessors]' statement over the
+// history rows, named for the plan test: an UPDATE finds its rows by its WHERE
+// exactly as a SELECT does, on every late record.
+const raiseHistoryStatement = `
+		UPDATE tracker_history SET effective_at = MAX(effective_at, ?)
+		WHERE subject_id = ? AND log_seq > ? AND effective_at < ?`
+
 // raiseSuccessors re-derives the effective instant of every row ABOVE this
 // one.
 //
@@ -257,8 +264,7 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 	broker := store.EncodeTime(c.brokerAt)
 	var rows int
 	for _, statement := range []struct{ sql, column string }{
-		{`UPDATE tracker_history SET effective_at = MAX(effective_at, ?)
-		  WHERE subject_id = ? AND log_seq > ? AND effective_at < ?`, "history"},
+		{raiseHistoryStatement, "history"},
 		{`UPDATE tracker_turns SET effective_at = MAX(effective_at, ?)
 		  WHERE task_id = ? AND log_seq > ? AND effective_at < ?`, "turns"},
 	} {
@@ -275,6 +281,16 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 	}
 	return rows, nil
 }
+
+// newestStatusStatement is [Applier.stampStatusEntered]'s read, named for the
+// plan test.
+const newestStatusStatement = `
+		SELECT h.effective_at
+		FROM tracker_history h
+		WHERE h.subject_id = ?
+		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		ORDER BY h.log_seq DESC
+		LIMIT 1`
 
 // stampStatusEntered rewrites a task's `status_entered_at` from its history.
 //
@@ -310,13 +326,7 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 // actually last made.
 func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
 	var at int64
-	switch err := tx.QueryRowContext(ctx, `
-		SELECT h.effective_at
-		FROM tracker_history h
-		WHERE h.subject_id = ?
-		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
-		ORDER BY h.log_seq DESC
-		LIMIT 1`, taskID).Scan(&at); {
+	switch err := tx.QueryRowContext(ctx, newestStatusStatement, taskID).Scan(&at); {
 	case errors.Is(err, sql.ErrNoRows):
 		// NO STATUS CHANGE IN THE HISTORY AT ALL, which is not an error:
 		// a task whose every applied record was quiet about its status
