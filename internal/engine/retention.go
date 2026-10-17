@@ -183,6 +183,11 @@ type retention struct {
 	// reads as nothing to report.
 	objects func(now time.Time, out *statelog.Reading)
 
+	// code fills the code host's half of a reading — what this node's git
+	// cache refused for memory ([Engine.codeReading]). Nil reads as nothing
+	// to report, which is also what it fills on a node holding no cache.
+	code func(out *statelog.Reading)
+
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
 	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
@@ -263,6 +268,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,
 		objects:     e.objectsReading,
+		code:        e.codeReading,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},

@@ -8,13 +8,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
@@ -223,35 +226,7 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	h, ok := e.CodeHost()
-	if !ok {
-		t.Fatal("the node built no code host")
-	}
-	seam, ok := engine.OperatorCode(e)
-	if !ok {
-		t.Fatal("the node serves no code operations")
-	}
-	waitFor(t, "the declared repository to exist", func() bool {
-		answer, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
-			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
-		if err != nil {
-			return false
-		}
-		for _, r := range answer.Repos {
-			if r.Name == "web" {
-				return true
-			}
-		}
-		return false
-	})
-
-	mux := http.NewServeMux()
-	mux.Handle(host.PatternInfoRefs, h.InfoRefs())
-	mux.Handle(host.PatternUploadPack, h.UploadPack())
-	mux.Handle(host.PatternReceivePack, h.ReceivePack())
-	srv := httptest.NewServer(auth.New(b).Middleware(mux))
-	t.Cleanup(srv.Close)
-	url := srv.URL + "/git/web.git"
+	url := serveWeb(t, b, e)
 
 	founder := codetest.PersonWithToken(t, opsToken)
 	dir := founder.Clone(url)
@@ -285,4 +260,133 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 		acted.Repo != "web" || acted.OperatorID != "ops" {
 		t.Fatalf("the push was audited as %+v, want the founder's applied git_push to web", acted)
 	}
+}
+
+// A GIT NODE'S OWN ALARMS NAME A BITMAP ITS CACHE REFUSED FOR MEMORY. The
+// cache judges every repository it holds against what the node's memory can
+// give its background work, and a bitmap past that is refused — logged,
+// counted, gauged — and stands as code_maintenance_refused on the node whose
+// cache refused it, since an alarm describes one node. Nothing filled the
+// reading's code half from the cache, so the alarm could never fire on a
+// running node.
+//
+// The node here is one whose transfer lane takes all its memory, by
+// arithmetic rather than by the machine running the case: its git pool is
+// told the node has 8 GiB (engine.WithGitMemory, gitproc.Options.Memory) and
+// its operator set git.max_transfers to one transfer more than 8 GiB holds at
+// gitproc.TransferMemory each — 37 at 224 MiB, 8 288 MiB kept — so whatever
+// the machine's cores add for serving, the background work's budget is
+// nothing and the bitmap of every repository the node holds a pack of is
+// refused. Its cache budget is explicit so the case is not decided by the
+// machine's free disk either: those 37 transfers' request spools take
+// 37 × 64 MiB = 2 368 MiB (host.SpoolAllowance) out of the room a derived
+// budget is a share of. Before the node holds a pack its alarms are silent —
+// the alarm follows the refusal, never the configuration — and once the
+// founder's push lands the node's own evaluation, the one its gauge, its log
+// and its health envelope are fed, names it within a maintainer pass and an
+// evaluation.
+//
+// Mutation: drop r.code from the reading's assembly (retentionreport.go), or
+// fill nothing from the cache in codeReading, and the alarm never fires.
+func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
+	t.Parallel()
+	gittest.Require(t)
+	const memory = int64(8) << 30
+	b := gitNodeBootstrap(t, nil)
+	b.Git.MaxTransfers = int(memory/gitproc.TransferMemory) + 1
+	b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
+	if kept := int64(b.Git.MaxTransfers) * gitproc.TransferMemory; kept <= memory {
+		t.Fatalf("%d transfers keep %d bytes of a %d-byte node, which leaves its background work a "+
+			"budget", b.Git.MaxTransfers, kept, memory)
+	}
+	e, err := engine.New(t.Context(), engine.WithGitMemory(engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, gitCompany),
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		GitHook:     codetest.HookCommand(t),
+	}, memory))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
+	url := serveWeb(t, b, e)
+	waitFor(t, "the node's first alarm evaluation", func() bool {
+		_, evaluated := e.Alarms()
+		return evaluated
+	})
+	if kinds, _ := e.Alarms(); slices.Contains(kinds, statelog.KindCodeMaintenanceRefused) {
+		t.Fatalf("%s fires on a node holding no pack: %v", statelog.KindCodeMaintenanceRefused, kinds)
+	}
+
+	founder := codetest.PersonWithToken(t, opsToken)
+	dir := founder.Clone(url)
+	founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
+	if pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
+		t.Fatalf("the founder's push did not land:\n%s", pushed)
+	}
+
+	// A MAINTAINER PASS AND AN EVALUATION: the cache judges what it holds on
+	// its maintainer's tick, and the node evaluates its table on its own.
+	// The minute is room for a loaded machine, never the expected wait.
+	deadline := time.Now().Add(cache.MidxDebounce + engine.AlarmInterval + time.Minute)
+	for {
+		kinds, _ := e.Alarms()
+		if slices.Contains(kinds, statelog.KindCodeMaintenanceRefused) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the node's alarms are %v with the bitmap of the repository it holds refused for "+
+				"memory, want %s", kinds, statelog.KindCodeMaintenanceRefused)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	report, ok := e.RetentionReport(t.Context())
+	if !ok {
+		t.Fatal("a node evaluating alarms has no retention report")
+	}
+	var detail string
+	for _, a := range report.Alarms {
+		if a.Kind == statelog.KindCodeMaintenanceRefused {
+			detail = a.Detail
+		}
+	}
+	if !strings.HasPrefix(detail, "1 repository(ies)") {
+		t.Errorf("the report's %s says %q, want the one repository the node holds", statelog.KindCodeMaintenanceRefused,
+			detail)
+	}
+}
+
+// serveWeb waits for gitCompany's declared repository to exist on e, and
+// serves e's own code host behind b's guard, as the API mounts it: the URL a
+// person's git clones and pushes `web` at.
+func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
+	t.Helper()
+	h, ok := e.CodeHost()
+	if !ok {
+		t.Fatal("the node built no code host")
+	}
+	seam, ok := engine.OperatorCode(e)
+	if !ok {
+		t.Fatal("the node serves no code operations")
+	}
+	waitFor(t, "the declared repository to exist", func() bool {
+		answer, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			return false
+		}
+		for _, r := range answer.Repos {
+			if r.Name == "web" {
+				return true
+			}
+		}
+		return false
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle(host.PatternInfoRefs, h.InfoRefs())
+	mux.Handle(host.PatternUploadPack, h.UploadPack())
+	mux.Handle(host.PatternReceivePack, h.ReceivePack())
+	srv := httptest.NewServer(auth.New(b).Middleware(mux))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/git/web.git"
 }

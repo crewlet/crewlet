@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -158,10 +159,16 @@ type native struct {
 	// [Engine.CodeHost], never captured.
 	codeHost *host.Server
 
-	// codeCache is how this node sized its code cache when it built the host
-	// — what [Engine.warnTiers] compares with each applied epoch's
-	// repository limit. Zero where there is no host.
-	codeCache codeCacheSize
+	// gitCache is the cache codeHost serves from, built and stopped with it
+	// and nil where it is: held only to be READ, at each alarm evaluation
+	// ([Engine.codeReading]) — what a node's maintenance refused is no
+	// request's question, so no route reaches it through the host.
+	gitCache *cache.Cache
+
+	// gitCacheSize is how this node sized gitCache when it built the host —
+	// what [Engine.warnTiers] compares with each applied epoch's repository
+	// limit. Zero where there is no host.
+	gitCacheSize codeCacheSize
 
 	// codeHostStop is the one bounded stop the teardown and the shutdown
 	// share ([native.stopCodeHost]).
@@ -416,9 +423,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// every other surface. Inside this function's failure path, whose
 		// shutdown stops it first.
 		if e.hostsGit(built) {
-			if n.codeHost, n.codeCache, err = e.buildCodeHost(ctx, n, boot); err != nil {
+			var parts codeHostParts
+			if parts, err = e.buildCodeHost(ctx, n, boot); err != nil {
 				return err
 			}
+			n.codeHost, n.gitCache, n.gitCacheSize = parts.host, parts.cache, parts.size
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER

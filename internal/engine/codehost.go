@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE CODE HOST ON A GIT NODE: the cache of the company's repositories this
@@ -197,39 +198,40 @@ func (e *Engine) gitHook() ([]string, error) {
 
 // buildCodeHost builds this node's code host for the runtime being started —
 // the cache's directory, the git pool, the cache's budget, the cache and the
-// host, in the order each needs the last — and starts it, answering the budget
-// it sized the cache to beside it. Called by startNative only where
-// [Engine.hostsGit]. An error fails the boot, or the apply that reached
-// [Engine.startNativeFor], which is retried like every start of the runtime: a
-// company that asked for native code on a node that serves git cannot be
-// served by it.
+// host, in the order each needs the last — and starts it, answering the host,
+// the cache it serves from and the budget it sized that cache to. Called by
+// startNative only where [Engine.hostsGit]. An error fails the boot, or the
+// apply that reached [Engine.startNativeFor], which is retried like every
+// start of the runtime: a company that asked for native code on a node that
+// serves git cannot be served by it.
 //
 // A FAILURE GIVES THE DIRECTORY BACK. Prepare claims the cache's directory for
 // this process, so a retried apply in the same process would otherwise find it
 // held by its own failed attempt: before Open the layout is released, after it
 // the cache is stopped.
-func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Bootstrap) (*host.Server, codeCacheSize, error) {
+func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Bootstrap) (codeHostParts, error) {
 	// 1. THE DIRECTORY, prepared BEFORE git's HOME exists, since it names it.
 	// Absolute: a store path written relative resolves against the working
 	// directory the store itself is opened from.
 	dir, err := filepath.Abs(boot.Git.CacheDirFor(boot.Store.Path))
 	if err != nil {
-		return nil, codeCacheSize{}, fmt.Errorf("engine: git.cache_dir: %w", err)
+		return codeHostParts{}, fmt.Errorf("engine: git.cache_dir: %w", err)
 	}
 	layout, err := cache.Prepare(ctx, dir)
 	if err != nil {
-		return nil, codeCacheSize{}, fmt.Errorf("engine: git.cache_dir %s: %w", dir, err)
+		return codeHostParts{}, fmt.Errorf("engine: git.cache_dir %s: %w", dir, err)
 	}
 	defer layout.Release()
 
 	// 2. GIT, the node's own, its lanes resolved once by the pool — which
-	// logs what it found (code_git_ready).
+	// logs what it found (code_git_ready) — sized by the memory it reads of
+	// the node, [Options.gitMemory] in its place in this package's tests.
 	pool, err := gitproc.New(ctx, gitproc.Options{
 		MaxProcesses: boot.Git.MaxProcesses, MaxTransfers: boot.Git.MaxTransfers,
-		Home: layout.Home, Metrics: e.metrics,
+		Memory: e.gitMemory, Home: layout.Home, Metrics: e.metrics,
 	})
 	if err != nil {
-		return nil, codeCacheSize{}, fmt.Errorf("engine: this node has the %q role and the "+
+		return codeHostParts{}, fmt.Errorf("engine: this node has the %q role and the "+
 			"company sets code.native, so it serves git: %w", placement.RoleGit, err)
 	}
 
@@ -238,21 +240,21 @@ func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Boot
 	// outside its budget.
 	size, err := codeCacheBudget(boot, layout, pool.Slots(gitproc.ClassTransfer), e.cacheVolume())
 	if err != nil {
-		return nil, codeCacheSize{}, err
+		return codeHostParts{}, err
 	}
 	size.log(ctx, layout.Dir)
 
 	// 4. THE OBJECTS a push's pack bundle is stored in and a sync reads.
 	objects := e.Objects()
 	if objects == nil {
-		return nil, codeCacheSize{}, fmt.Errorf("engine: code.native needs the object store " +
+		return codeHostParts{}, fmt.Errorf("engine: code.native needs the object store " +
 			"(store.objects): this node has none")
 	}
 
 	// 5. THE HOOK every push's receive-pack execs.
 	hook, err := e.gitHook()
 	if err != nil {
-		return nil, codeCacheSize{}, err
+		return codeHostParts{}, err
 	}
 
 	// 6. THE CACHE, which takes over the layout's claim.
@@ -262,7 +264,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Boot
 		Limits: e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
 	})
 	if err != nil {
-		return nil, codeCacheSize{}, fmt.Errorf("engine: open the code cache at %s: %w", layout.Dir, err)
+		return codeHostParts{}, fmt.Errorf("engine: open the code cache at %s: %w", layout.Dir, err)
 	}
 
 	// 7. THE HOST, over the engine's own seams: the router for the rows and
@@ -276,15 +278,53 @@ func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Boot
 	})
 	if err != nil {
 		c.Stop(context.WithoutCancel(ctx))
-		return nil, codeCacheSize{}, fmt.Errorf("engine: build the code host: %w", err)
+		return codeHostParts{}, fmt.Errorf("engine: build the code host: %w", err)
 	}
 	// ITS OWN LIFETIME from here: the relay and the cache's background work
 	// run until the host is stopped, however long this call's caller lives.
 	if err := h.Start(ctx); err != nil {
 		h.Stop(context.WithoutCancel(ctx))
-		return nil, codeCacheSize{}, fmt.Errorf("engine: start the code host: %w", err)
+		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
 	}
-	return h, size, nil
+	return codeHostParts{host: h, cache: c, size: size}, nil
+}
+
+// codeHostParts is what [Engine.buildCodeHost] built: the host, the cache it
+// serves from — which the host stops with itself, and which the engine holds
+// only to READ, for what no request asks (the alarm reading's code half,
+// [Engine.codeReading]) — and the budget it sized that cache to.
+type codeHostParts struct {
+	host  *host.Server
+	cache *cache.Cache
+	size  codeCacheSize
+}
+
+// codeReading fills the reading's code half from this node's git cache: how
+// many repositories its maintainer cannot write a bitmap of for memory, the
+// largest of those charges and the budget they are past
+// ([cache.Cache.AlarmReading]), which raise code_maintenance_refused.
+//
+// THE CACHE JUDGED, LOGGED, COUNTED AND GAUGED EVERY REFUSAL, AND NOTHING READ
+// IT INTO A READING, so the alarm the cache's docs, the alarm reference and
+// the concept page all promised could never fire on a running node: a node
+// with a repository past its memory said so on a line and a gauge, and its
+// alarm table — the one surface that reaches the log, the collector and the
+// health envelope at once — stayed silent. Filled on EVERY node's evaluation,
+// as every half is (an alarm describes one node), so a git node's refusals
+// fire on that git node; a node without the git role, or one whose company
+// hosts no code, holds no cache and leaves the fields zero, which the table
+// reads as nothing wrong here.
+//
+// Read from the PUBLISHED runtime at each evaluation, never captured, as every
+// surface asks for the code host ([Engine.CodeHost]); a reading taken after
+// the host stopped reads the cache's last pass, which is the truth about the
+// node until it exits.
+func (e *Engine) codeReading(out *statelog.Reading) {
+	n := e.native.Load()
+	if n == nil || n.gitCache == nil {
+		return
+	}
+	n.gitCache.AlarmReading(out)
 }
 
 // cacheVolume is what sizing the code cache reads of this node's disk: the

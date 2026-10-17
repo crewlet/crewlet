@@ -43,7 +43,7 @@ func warnTiers(ctx context.Context, logger *slog.Logger, boot *config.Bootstrap,
 // it may have just built is published.
 func (e *Engine) codeCacheBudget() config.CacheBudget {
 	if n := e.native.Load(); n != nil && n.codeHost != nil {
-		return n.codeCache.cacheBudget()
+		return n.gitCacheSize.cacheBudget()
 	}
 	return config.CacheBudget{}
 }
