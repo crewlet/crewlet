@@ -77,38 +77,6 @@ func TestThePositionRegisterSurvivesASweepThatExpiresEverythingElse(t *testing.T
 	}
 }
 
-// AND A ROW IS FORGOTTEN ONLY WHEN A NODE IS, which is the other half: the
-// register has no TTL, so the only thing that removes a row is the eviction
-// that removes the node — and a row nothing removes is a node the trim waits
-// for for ever.
-func TestForgettingANodeRemovesItsRow(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := openFleetWithTTL(t, embeddedNATS(t), time.Minute)
-
-	for _, id := range []string{"node-a", "node-b"} {
-		if err := s.PutPositions(ctx, coord.NodePositions{
-			NodeID:  id,
-			Domains: map[string]coord.DomainPosition{"tracker": {Seq: 10}},
-		}); err != nil {
-			t.Fatalf("PutPositions(%s): %v", id, err)
-		}
-	}
-	if err := s.ForgetPositions(ctx, "node-a"); err != nil {
-		t.Fatalf("ForgetPositions: %v", err)
-	}
-	rows, err := s.Positions(ctx)
-	if err != nil {
-		t.Fatalf("Positions: %v", err)
-	}
-	if _, found := rowFor(rows, "node-a"); found {
-		t.Error("the evicted node's row survived, so the trim still waits for it")
-	}
-	if _, found := rowFor(rows, "node-b"); !found {
-		t.Error("forgetting one node removed another's row")
-	}
-}
-
 // rowFor picks one node's row out of the register's listing.
 func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool) {
 	for _, row := range rows {
