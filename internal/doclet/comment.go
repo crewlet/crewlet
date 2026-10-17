@@ -117,10 +117,11 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	if result.Collapsed {
 		// THE REMARK AN EARLIER COPY POSTED, as the rows hold it: its
 		// author and its instant are that copy's, and only the id, the
-		// page and the body are pinned by the operation this call shares
-		// with it — see [Store.commentOpID].
+		// page, the body and the remark it answers are pinned by the
+		// operation this call shares with it — see [Store.commentOpID].
 		comment, err = s.landedComment(ctx, Comment{
 			V: DocumentVersion, ID: opID, PageID: pageID, Body: body,
+			ReplyTo: comment.ReplyTo,
 		}, opID)
 		return comment, written, err
 	}
@@ -382,17 +383,37 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // carrying the key's instant rather than this call's is argued — the gesture
 // a person is most likely to press twice is a comment, and a request retried
 // after an `unknown` must post once.
+//
+// OVER WHAT THE COMMENT ASKS ([commentAsk]), not its words alone: bound to the
+// body, the same key sent with the same words in another thread was the first
+// comment's operation — answered from the ledger as posted, with nothing
+// posted where it was asked to go.
 func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) (string, error) {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
 		return s.newSeqID(), nil
 	}
-	id, err := statelog.KeyedObjectOpID(key, "comment", pageID,
-		strings.TrimSpace(in.Body))
+	id, err := statelog.KeyedObjectOpID(key, "comment", pageID, commentAsk{
+		Body: strings.TrimSpace(in.Body), ReplyTo: strings.TrimSpace(in.ReplyTo),
+		Quiet: in.Quiet,
+	})
 	if err != nil {
 		return "", fmt.Errorf("doclet: %w", err)
 	}
 	return id, nil
+}
+
+// commentAsk is what a comment SAYS, which its operation is bound to
+// ([Store.commentOpID]): its words, the remark it answers and whether it is
+// quiet — [renameAsk]'s terms for a remark.
+//
+// NOT ITS MENTIONS ([NewComment.Mentions]), which a seat's tool reads off the
+// words against the roster: a roster that moved between a call and its retry
+// would make the retry a second comment, and the words already decide them.
+type commentAsk struct {
+	Body    string
+	ReplyTo string
+	Quiet   bool
 }
 
 // Thread is one page's comments, oldest first.
