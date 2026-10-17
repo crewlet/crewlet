@@ -31,7 +31,7 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 	edge := at.Add(-store.EventHistory).Add(time.Minute)
 	if err := log.Append(t.Context(), store.EventRecord{
 		ID: "edge", Type: "agent_phase_completed", Category: "agent", Time: edge,
-		TraceID: "tr-edge", Actor: "PM",
+		TraceID: "tr-edge", Actor: "PM", Node: "node-a",
 		Tags:    map[string]string{"turn_id": "tn-edge", "agent_id": "id-pm", "agent_role": "PM"},
 		Payload: []byte(`{}`),
 	}); err != nil {
@@ -94,6 +94,10 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 		{"TurnTraces", func(at time.Time) (int, error) {
 			traces, err := log.TurnTraces(ctx, "tn-edge", at)
 			return len(traces), err
+		}},
+		{"TurnNodes", func(at time.Time) (int, error) {
+			nodes, err := log.TurnNodes(ctx, "tn-edge", at)
+			return len(nodes), err
 		}},
 		{"ByID", func(at time.Time) (int, error) {
 			_, err := log.ByID(ctx, "edge", at)
