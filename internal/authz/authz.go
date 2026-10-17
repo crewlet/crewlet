@@ -127,7 +127,8 @@
 //
 // The vocabulary is three names ([iam.Grant]): `admin`, which runs the company
 // and the engine, and one permission per APP — `tracker` and `knowledge` —
-// which uses it. Every row names at most one app ([rule.app]), and that
+// which uses it. Every row names at most one app ([rule.app]) — the one
+// gesture drawing on several names its set instead ([rule.anyOf]) — and that
 // decides three things at once: a [ClassApp] row admits whoever holds the app;
 // a RELATION row — a person's own record, a container's lead, a comment's
 // author — admits its relation only beside the app, so a lead who does not use
@@ -366,13 +367,14 @@ type Decision struct {
 	// smallest thing to ask for. An app row names its app and never "the
 	// app or admin"; a relation refused names admin, its admin path; a lead
 	// who lacks the row's app is told the app; [ClassAnyApp] names every
-	// app. Empty where no permission could have changed the answer: the
-	// self rule, which has no admin path, an object missing the field its
-	// rule reads before it consults any permission, and the refusals that
-	// are not about permission at all — an enrolment stage, a seat taking
-	// a human-only verb, a person taking a seat-only one, a principal
-	// acting as no seat taking a verb made as one, a machine token taking a
-	// verb that needs a person present, a verb with no rule.
+	// app of its row's set ([rule.anyOf]). Empty where no permission could
+	// have changed the answer: the self rule, which has no admin path, an
+	// object missing the field its rule reads before it consults any
+	// permission, and the refusals that are not about permission at all —
+	// an enrolment stage, a seat taking a human-only verb, a person taking
+	// a seat-only one, a principal acting as no seat taking a verb made as
+	// one, a machine token taking a verb that needs a person present, a
+	// verb with no rule.
 	//
 	// ON THE DECISION rather than looked up beside it, because a refusal
 	// that names what would have admitted the caller has to name what the
