@@ -120,10 +120,19 @@ func deriveHandOffs(ctx context.Context, tx *sql.Tx, taskID string, from int64) 
 
 // rederiveHandOffsStatement is [rederiveHandOffs]' walk of the whole task
 // history, named for the plan test.
+//
+// IN THE SUBJECT INDEX'S OWN ORDER, read backwards. The walk needs each task's
+// rows together and in log order, and nothing about the order of the tasks
+// themselves, so `subject_id DESC, log_seq` is exactly the reverse of
+// `tracker_history_subject_idx (subject_id, log_seq DESC)` and the planner
+// walks it. Ordered `subject_id, log_seq`, which no index holds, the plan was
+// a scan of the table into a SORTER: every task history row of the company,
+// each with its whole record document, held before the first was returned,
+// inside the one transaction a re-derivation runs in.
 const rederiveHandOffsStatement = `
 		SELECT subject_id, id, document, reassignments FROM tracker_history
 		WHERE subject_kind = ?
-		ORDER BY subject_id, log_seq`
+		ORDER BY subject_id DESC, log_seq`
 
 // rederiveHandOffs is every task history row's hand-off count recomputed from
 // the whole history, for [Applier.Rederive].

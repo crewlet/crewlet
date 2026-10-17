@@ -211,10 +211,19 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// derivation rules change — so a scan of the heap is the honest plan
 	// rather than a missing index, and an index one reaches is not one it
 	// needs: a pass is never the reason an index is kept.
+	//
+	// BUT A PASS DOES NOT SORT. A sorter holds every row it selects before
+	// it returns the first, and a pass selects the company's whole task
+	// history — with the record documents, for the hand-off walk — inside
+	// the one transaction a re-derivation runs in. Measured: the hand-off
+	// walk ordered `subject_id, log_seq` sorted all of it.
 	passes := historyPasses()
 	for name, statement := range passes {
 		t.Run(name, func(t *testing.T) {
-			explain(t, history, statement.sql, statement.args)
+			if plan := explain(t, history, statement.sql, statement.args); sorts(plan) {
+				t.Errorf("this pass sorts the history it reads, holding every "+
+					"row before the first is used:\n%s", strings.Join(plan, "\n"))
+			}
 		})
 	}
 
