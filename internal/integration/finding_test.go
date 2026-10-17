@@ -31,6 +31,8 @@ var knownKinds = []FindingKind{
 	FindingGrantPending,
 	FindingUnknownTier,
 	FindingGrantShort,
+	FindingContactUnknown,
+	FindingContactMoved,
 	FindingGrantExcess,
 	FindingRegistrationOrphaned,
 	FindingCoveragePartial,
@@ -117,6 +119,16 @@ func TestUnknownKindOutranksOnlyTheAdvisory(t *testing.T) {
 	}
 }
 
+// A kind no build defines reads as unknown, whatever it is spelled as — the
+// empty kind a decoder produces from a row without one included.
+func TestAKindThisBuildDoesNotDefineIsNotKnown(t *testing.T) {
+	for _, kind := range []FindingKind{"", "a kind a newer build found", "Unknown_Tier"} {
+		if kind.Known() {
+			t.Errorf("%q reads as a kind this build defines", kind)
+		}
+	}
+}
+
 // The ranking is a STRICT total order over the known kinds. Two kinds sharing
 // a rank would make Classify's answer depend on slice order, which is how a
 // report starts changing between two passes that found the same things.
@@ -156,7 +168,7 @@ func TestSeverityIsAStrictOrder(t *testing.T) {
 // kind is allowed to share a verdict with the default (an unknown tier is
 // genuinely degraded and genuinely the operator's, which is what the default
 // says too). The rank is what proves the switch has a case for it: the
-// default's rank sits between the short grant and the advisory, and no known
+// default's rank sits between the last real problem and the advisory, and no known
 // kind may land there.
 func TestEveryKnownKindIsRankedAndJudged(t *testing.T) {
 	unknownRank := FindingKind("a kind a newer build found").severity()
@@ -164,6 +176,12 @@ func TestEveryKnownKindIsRankedAndJudged(t *testing.T) {
 		if kind.severity() == unknownRank {
 			t.Errorf("%s falls through to the unknown-kind rank %d, so nothing "+
 				"here decides how severe it is", kind, unknownRank)
+		}
+		// AND THE EXPORTED ANSWER AGREES, which is what the vendor
+		// conformance suite asks: it once compared verdicts instead and
+		// had to name every kind sharing the default's by hand.
+		if !kind.Known() {
+			t.Errorf("%s is defined here and reads as unknown to Known", kind)
 		}
 		phase, actor := kind.Verdict()
 		if !phase.Valid() {
@@ -213,6 +231,12 @@ func TestClassifyFallsBackToASentence(t *testing.T) {
 		}
 		if !strings.Contains(got.Detail, "api-gateway") {
 			t.Errorf("%s: detail %q does not name its subject", kind, got.Detail)
+		}
+		// A KIND THIS BUILD DEFINES HAS A SENTENCE OF ITS OWN. The default
+		// is for a kind a newer peer wrote, and it can only repeat the
+		// kind's name back.
+		if strings.Contains(got.Detail, string(kind)) {
+			t.Errorf("%s falls back to the unknown kind's sentence: %q", kind, got.Detail)
 		}
 	}
 }
@@ -332,6 +356,14 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		FindingGrantPending,
 		FindingUnknownTier,
 		FindingGrantShort,
+		// A PERSON THE COMPANY NAMES BY AN ACCOUNT NOBODY HOLDS, after every
+		// problem with an agent: each agent still works whole, and what is
+		// lost is one person's name on what they write.
+		FindingContactUnknown,
+		// AND ONE WHOSE NAME NOW HOLDS ANOTHER ACCOUNT, last of the real
+		// problems: the name still attributes what is written, and what is
+		// in question is whose account it now is.
+		FindingContactMoved,
 		// THE ADVISORIES, the expiring credential first because it is the
 		// only note with a deadline on it.
 		FindingCredentialExpiring,
@@ -355,9 +387,10 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 	// report a healthy company as broken; ranked below the advisory, one
 	// spare permission would hide a finding this binary cannot read.
 	unknown := FindingKind("a-kind-from-a-newer-build").severity()
-	if unknown <= FindingGrantShort.severity() || unknown >= FindingCredentialExpiring.severity() {
-		t.Errorf("an unknown kind ranks %d, want between %s (%d) and the first advisory %s (%d)",
-			unknown, FindingGrantShort, FindingGrantShort.severity(),
+	if unknown <= FindingContactMoved.severity() || unknown >= FindingCredentialExpiring.severity() {
+		t.Errorf("an unknown kind ranks %d, want between the last real problem %s (%d) "+
+			"and the first advisory %s (%d)",
+			unknown, FindingContactMoved, FindingContactMoved.severity(),
 			FindingCredentialExpiring, FindingCredentialExpiring.severity())
 	}
 }

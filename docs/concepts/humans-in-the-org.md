@@ -50,7 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | no | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | no | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case |
+| `contact.mattermost_user_id` | no | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case. A post names its author by that ID instead, so the engine asks the server which account holds the name — at connect, on every apply and every minute — and attributes that account's posts to the seat, with its authority: whoever holds the name is the person. A name that holds no account of the person's own, or comes to hold another account, is reported (see [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised)) |
 | `contact.atlassian_account_id` | no | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | no | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | no | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
@@ -78,11 +78,14 @@ warning clears.
 **And no two seats may claim one identity.** Each of these fields is an
 external account, and an account belongs to one person. A duplicate is
 rejected at validation because it does not fail loudly on its own: inbound
-routing keys a map on the identity, so the *last* seat in the document takes it,
-while every walk of the org chart answers the *first*. One of the two people
-silently stops receiving their own mail, with both entries looking perfectly
-ordinary — an inbound message resolves to one seat while the same person's
-wakes go to the other. Surrounding whitespace is never part of an identity, so
+routing registers an identity two seats declare for *neither* of them, while
+every walk of the org chart answers the *first*. Both people stop being
+recognised by it on what they write, with both entries looking perfectly
+ordinary. Validation compares the values as written, a `${VAR}` reference as
+its own text, so two *different* references that resolve to one value pass
+it: that collision is caught when the contacts are registered, which
+registers the identity for neither seat and logs `human_contact_id_shared`
+naming both. Surrounding whitespace is never part of an identity, so
 the comparison ignores it on every field. Case is ignored exactly where the
 platform ignores it: a GitHub login, a GitLab username and a Mattermost
 username name one account however they are capitalised, so those three are
@@ -674,6 +677,12 @@ account unbound, and an invitation cancelled. The change is then applied like an
 - Contact and availability edits take effect with the next **published
   company** — the apply of the revision that carried them: every publish
   builds a new party registry and reconciles the human contact IDs into it.
+  A Mattermost username is the exception that needs the server: the new
+  registry gets the account the name last resolved to at once, and a new or
+  changed name is asked about straight after the publish. The publish also
+  anchors each name to the account it holds, so a name later found holding
+  another account is reported as moved (`contact_moved`) until the next
+  publish; a registry rebuilt because the directory moved is not one.
 - **Who holds the seat, and at what stage, takes effect with the next
   identity apply**, with no configuration change at all: suspending the
   person bound to a seat withdraws its contact IDs, and reinstating them
@@ -708,7 +717,26 @@ holds two kinds of entry:
   registered and the current organization no longer declares (a contact
   edit, a removed seat, a kind flip) is withdrawn, and an ID already held by
   a different seat is never taken over: the conflict is logged as
-  `human_contact_id_conflict` naming both seats.
+  `human_contact_id_conflict` naming both seats. An ID two human seats
+  resolve to — two `${VAR}` references naming one value, which validation
+  cannot see — is registered for neither, and logged as
+  `human_contact_id_shared` naming both.
+- **Human chat accounts named by NAME** are the one contact the reconcile
+  leaves alone (`org.Transport.AddressedByName`): a Mattermost username is
+  what an agent mentions a person by, while every post carries the person's
+  user ID, so the name registered as written matched no post and every
+  person on Mattermost read as a stranger. The Mattermost transport asks
+  the server which account holds each name and registers that account's
+  user ID — at connect, on every apply and every minute. A name that holds
+  no account of the person's own (nobody's, an agent's or a bot's, or one
+  another human seat's name holds too) is registered for nobody, logged
+  (`mattermost_person_unknown`) and reported on the integration's status as
+  `contact_unknown`; a name that comes to hold another account moves the
+  seat with it and is reported as `contact_moved`. A seat the directory
+  withholds
+  ([below](#a-suspended-holder-is-withdrawn-with-no-configuration-change))
+  gets no account there either, and is not reported. See
+  [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised).
 - **Agent identities** are registered by the integrations: the code host's
   and the tracker's are derived from each seat's credentials, and are re-resolved and rebuilt on every published company — the
   lookups are keyed on the credential and cached, so a company whose
@@ -788,6 +816,8 @@ hand-off to it and a work item assigned to it all still name it.
 
 External-ID resolution is plain index lookups, because it runs on every
 inbound notification for sender attribution. On each surface it consults
-two namespaces, the surface's own (a human's member ID under `slack`) and
-the companion bot namespace (an agent's bot user under `slack_bot`), so
-agent and human senders are annotated alike.
+two namespaces, the surface's own (a human's member ID under `slack`, a
+human's user ID under `mattermost`) and the companion bot namespace (an
+agent's bot user under `slack_bot` or `mattermost_bot`), so agent and human
+senders are annotated alike. Both hold the ID an event names its sender by,
+and nothing else: a lookup is never handed a username.

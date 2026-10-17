@@ -12,9 +12,11 @@ import (
 // converge seven different surfaces, but what they can find is the same short
 // list every time: nothing to authenticate with, an app nobody installed, a
 // delivery path that goes nowhere, a seat with no account, a grant the third-party app
-// has not applied, a grant that is too small, a grant that is too large. A
+// has not applied, a grant that is too small, a person named by an account the
+// third-party app does not have, a person whose name has come to hold another
+// account, a grant that is too large. A
 // third-party app contributes WHICH of these it found and about what; it does not get
-// to invent an eighth, and it does not get to decide what any of them means.
+// to invent a tenth, and it does not get to decide what any of them means.
 type FindingKind string
 
 const (
@@ -87,6 +89,46 @@ const (
 	// FindingGrantShort is a seat holding LESS than its tier asks for, in a
 	// way only a person at the third-party app can widen.
 	FindingGrantShort FindingKind = "grant_short"
+
+	// FindingContactUnknown is a HUMAN seat whose contact names an account
+	// the third-party app does not have: a name nobody holds there, or one
+	// the person has since renamed.
+	//
+	// ITS OWN KIND, because none of the identity kinds is about a person.
+	// Those are the engine's agents — an account it creates, or failed to
+	// — while nothing here creates a person: they join the surface
+	// themselves, and the chart only says who they are there. What is lost
+	// is attribution. The person goes on posting and every agent reads it
+	// as a stranger's, their manager's word with no authority behind it,
+	// and an agent asked to reach them addresses a name that renders as
+	// plain text.
+	//
+	// The OPERATOR's, like an unknown tier: the fix is the company's own
+	// document — the name the person's profile actually shows — unless
+	// they have not joined yet, and either way nothing at the third-party
+	// app is misconfigured.
+	FindingContactUnknown FindingKind = "contact_unknown"
+
+	// FindingContactMoved is a HUMAN seat whose contact is a NAME that has
+	// come to hold another account than it held when the company was last
+	// applied: the person renamed themselves and somebody took the name, or
+	// the account was deleted and made again.
+	//
+	// ITS OWN KIND, because it is the opposite of an unknown contact: the
+	// third-party app has an account by that name, and the engine follows
+	// it, since the chart names the NAME and every node asks the same
+	// server. What it cannot know is whether the account now holding the
+	// name is the person, and what it would be giving away if it is not is
+	// the person's word — every post from that account reaching the agents
+	// as theirs, with their authority.
+	//
+	// DEGRADED and the OPERATOR's: agents are working and somebody has to
+	// say whether that account is the person. An apply is that answer — the
+	// company stated again with the name — and clears it; a corrected name
+	// clears it too. So does an apply nobody meant as the answer, the
+	// re-activation a provisioning pass makes after sealing what it minted:
+	// the producer's log line is the record that outlasts this.
+	FindingContactMoved FindingKind = "contact_moved"
 
 	// FindingGrantExcess is a seat holding MORE than its tier asks for.
 	//
@@ -201,6 +243,16 @@ func (f FindingKind) severity() int {
 		return 8
 	case FindingGrantShort:
 		return 9
+	case FindingContactUnknown:
+		// Every agent on the surface works whole: what is lost is one
+		// person's name on what they write, which is less of the
+		// integration than an agent short of the access its role needs.
+		return 10
+	case FindingContactMoved:
+		// THE LAST REAL PROBLEM, below the unknown contact: here the
+		// person's name still attributes what is written, and what is in
+		// question is only whether the account now holding it is theirs.
+		return 11
 	case FindingCredentialExpiring:
 		// THE FIRST ADVISORY, and the reason is the whole comment above:
 		// its verdict is ready, so anything it outranks is a problem it
@@ -208,22 +260,22 @@ func (f FindingKind) severity() int {
 		// a kind this build cannot read. First among the notes because it
 		// is the only one with a date on it: the others are loose ends,
 		// and this one becomes an outage if nobody reads it.
-		return 11
+		return 13
 	case FindingGrantExcess:
 		// Beneath the expiring credential: a spare permission is a note
 		// that stays a note.
-		return 12
+		return 14
 	case FindingRegistrationOrphaned:
 		// Beneath the excess grant. Both report ready; this one is the
 		// more purely informational of the two, because what it names is
 		// still working.
-		return 13
+		return 15
 	case FindingCoveragePartial:
 		// LAST OF ALL, because it is the only one naming nothing wrong.
 		// The two above it are loose ends somebody may want to tidy; this
 		// is a decision already taken, reported so a reader does not have
 		// to infer it from silence. Anything else present outranks it.
-		return 14
+		return 16
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -231,9 +283,22 @@ func (f FindingKind) severity() int {
 		// ranking it worst would let an older node report a healthy
 		// company as broken, and ranking it below the advisory would let
 		// one spare permission hide a finding this binary cannot read.
-		return 10
+		return 12
 	}
 }
+
+// Known reports whether this build defines the kind: whether a case of its own
+// ranks and judges it, rather than the default for a kind a newer peer wrote.
+//
+// Asked of the RANK, which only the default holds, and never of the verdict:
+// an unknown tier and an unknown contact are both genuinely degraded and the
+// operator's, which is exactly what the default says too, so a check on the
+// verdict calls them strangers and has to name each as an exception.
+func (f FindingKind) Known() bool { return f.severity() != unknownKind.severity() }
+
+// unknownKind is a kind no build defines, for [FindingKind.Known] to read the
+// default's rank from.
+const unknownKind FindingKind = ""
 
 // Verdict is the phase and actor a kind implies. Fixed per kind: a third-party app
 // says what it found, never what it means.
@@ -268,6 +333,17 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		return PhaseDegraded, ActorOperator
 	case FindingGrantShort:
 		return PhaseDegraded, ActorAdmin
+	case FindingContactUnknown:
+		// DEGRADED, because a person the company names is a stranger to
+		// every agent there, and the OPERATOR's, because what has to
+		// change is the name the company document gives them.
+		return PhaseDegraded, ActorOperator
+	case FindingContactMoved:
+		// DEGRADED, because whether an account speaks with a person's
+		// authority waits on somebody saying it is theirs, and the
+		// OPERATOR's, because the answer is the company document: applied
+		// again, or with the name corrected.
+		return PhaseDegraded, ActorOperator
 	case FindingGrantExcess:
 		// READY, not degraded. It is a note on a working integration.
 		return PhaseReady, ActorAdmin
@@ -329,10 +405,16 @@ func (f FindingKind) sentence(subject string) string {
 		return "the company names an access tier this third-party app does not have" + about
 	case FindingGrantShort:
 		return "an agent holds less access than its role asks for" + about
+	case FindingContactUnknown:
+		return "the company names a person by an account this third-party app does not have" + about
+	case FindingContactMoved:
+		return "a person's name holds another account than it did when the company was last applied" + about
 	case FindingGrantExcess:
 		return "an agent holds more access than its role asks for" + about
 	case FindingRegistrationOrphaned:
 		return "this engine registered something that it no longer manages" + about
+	case FindingCoveragePartial:
+		return "this integration covers less than it could reach, as it was asked to" + about
 	default:
 		return "this integration reported " + string(f) + about
 	}
