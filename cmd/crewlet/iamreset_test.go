@@ -86,7 +86,7 @@ func TestTheInvitationAndResetCommandsReachTheirRoutes(t *testing.T) {
 
 	for _, refused := range [][]string{
 		{"people", "-all"},
-		{"reset-password", person, "-idempotency-key",
+		{"reset-password", person, "-op-id",
 			statelog.NewOpID(time.Now(), "x")},
 	} {
 		if _, err := cli(refused...); err == nil {

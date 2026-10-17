@@ -1004,7 +1004,7 @@ Until it is spent nobody can sign in as them.
 - **Its retry hands back the same link.** The person is derived from the
   create's operation key and the link from the person, under the company's
   own key, so the retry an unknown answer asks for — the same request under the
-  same `Idempotency-Key`, or `crewlet iam create -idempotency-key <op>` — answers
+  same `Idempotency-Key`, or `crewlet iam create -op-id <op>` — answers
   the link the first attempt issued, with the expiry it stored. A retry that
   finds the link no longer opens — spent, revoked, ended or aged out — answers
   without one and says so; the remedy then is a reset link.

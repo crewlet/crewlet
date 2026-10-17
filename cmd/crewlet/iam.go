@@ -103,8 +103,7 @@ Flags:
   -api URL       The running node's API; default is its own api.host:port
   -json          Print the raw answer rather than a table
   -reason TEXT   Saved with the change for the audit trail
-  -idempotency-key OP
-                 Retry a write whose outcome was unknown, as the same operation
+  -op-id OP      Retry a write whose outcome was unknown, as the same operation
   -grants G,...  On invite, create, grant and token:
                  %[2]s, comma-separated, or none
                  (overview only). admin includes every app. Defaults:
@@ -118,17 +117,16 @@ Flags:
 
 Every write prints its outcome: "applied" (this node has it) or "pending"
 (saved, not here yet). If the outcome is unknown, run the same command again
-with -idempotency-key <op id> from the error. Don't start fresh, or it runs
-twice. If the node can't confirm it, retry through another node with -api.
+with -op-id <op id> from the error. Don't start fresh, or it runs twice. If
+the node can't confirm it, retry through another node with -api.
 
 A person always holds one human seat. They're invited or created onto a
 vacant one, "iam bind" moves them, and "iam remove" frees it. "iam unbind" is
 only for service accounts, which can hold one seat or none.
 
 "iam create" prints a password link, shown once and good for a week. The
-person uses it to set their first password. Retry with -idempotency-key
-<op id> to see the same link, or use "iam reset-password" if it stopped
-working.
+person uses it to set their first password. Retry with -op-id <op id> to see
+the same link, or use "iam reset-password" if it stopped working.
 
 Set CREWLET_API_TOKEN to authenticate. Every iam command needs it, reads
 included.
@@ -201,7 +199,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	after := fs.String("after", "", "start the next page after this id")
 	before := fs.Uint64("before", 0, "end the next page before this POSITION")
 	at := fs.String("at", "", "an RFC 3339 instant, resolved to a position once")
-	key := fs.String("idempotency-key", "",
+	key := opIDFlag(fs,
 		"retry a write whose outcome was unknown: the op id its answer named")
 	seat := fs.String("seat", "",
 		"the vacant human seat to put them on (required on invite "+
@@ -233,7 +231,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	// command's flag rather than a header it composed.
 	if *key != "" {
 		if err := statelog.CheckCallerOpID(*key); err != nil {
-			return fmt.Errorf("-idempotency-key: %w", err)
+			return fmt.Errorf("-op-id: %w", err)
 		}
 	}
 	// -seat IS invite's AND create's — the seat somebody new takes — and
@@ -569,19 +567,19 @@ var iamKeyed = map[string]bool{
 	"invalidate-all": true, "cancel-invite": true,
 }
 
-// iamUnkeyed refuses -idempotency-key on a subcommand whose route reads none,
+// iamUnkeyed refuses -op-id on a subcommand whose route reads none,
 // saying what to do instead: sent anyway, the key would be ignored and the
 // operator told nothing, which is the one outcome worse than the refusal.
 func iamUnkeyed(sub string) error {
 	switch sub {
 	case "token":
-		return errors.New("token doesn't take -idempotency-key. Just run it " +
+		return errors.New("token doesn't take -op-id. Just run it " +
 			"again")
 	case "reset-password":
-		return errors.New("reset-password doesn't take -idempotency-key. Run " +
+		return errors.New("reset-password doesn't take -op-id. Run " +
 			"it again, and the new link replaces the old one")
 	}
-	return fmt.Errorf("-idempotency-key is for retrying writes, and `iam %s` "+
+	return fmt.Errorf("-op-id is for retrying writes, and `iam %s` "+
 		"doesn't write anything", sub)
 }
 
@@ -781,7 +779,7 @@ type iamClient struct {
 
 	// keyed is whether the route this command writes to reads a key at all
 	// ([iamKeyed]). Only where it does is a refusal's retry spelled as
-	// -idempotency-key: a mint reads none, and was told to retry with a
+	// -op-id: a mint reads none, and was told to retry with a
 	// flag this command refuses on it.
 	keyed bool
 }
@@ -953,7 +951,7 @@ const iamMaxAnswer = 8 << 20
 //
 // keyed is whether the command's route reads a key. One that does not — a
 // mint — is retried as a new write, which the node's own sentence says, so
-// the op id is named for the trail and no -idempotency-key is prescribed.
+// the op id is named for the trail and no -op-id is prescribed.
 //
 // contentType is the answer's, for a body that carries no engine code: what
 // stood in front of the node is read through [foreignAnswer], as the other
@@ -1003,13 +1001,13 @@ func iamRefusal(status int, contentType string, answer map[string]any, raw []byt
 			// to prescribe, here again, was a loop.
 			said += "\nthis node can't confirm it yet. Check whether it saved, " +
 				"or retry on another node with -api <that node> " +
-				"-idempotency-key " + op + ". Don't use a new key"
+				"-op-id " + op + ". Don't use a new id"
 		default:
 			// THE SAME OPERATION, whichever 503 this is: an outcome
 			// nobody could establish is answered from whatever of it
 			// landed, and a refusal that wrote nothing runs under the
 			// same key as it would have under a fresh one.
-			said += "\nretry with -idempotency-key " + op + ". A new key " +
+			said += "\nretry with -op-id " + op + ". A new id " +
 				"would make it a second change"
 		}
 	}
@@ -1543,7 +1541,7 @@ func (p *iamPrinter) outcome(answer map[string]any) {
 // opens on every node that has applied it — this one within moments.
 //
 // THE NODE'S SENTENCE BESIDE THE LINK IS NOT PRINTED, because it names the
-// retry as a header: the one this command sends is -idempotency-key, and a
+// retry as a header: the flag this command takes is -op-id, and a
 // create retried under it hands back this same link. Where the link no longer
 // opens — a retry after it was spent, revoked or aged out — the node says so
 // and this names the command that issues another.
@@ -1568,7 +1566,7 @@ func (p *iamPrinter) created(answer map[string]any, err error) error {
 		fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
 		fmt.Fprintf(p.w, "This link is shown once. Send it to them yourself "+
 			"(Crewlet doesn't send email). Run this again with "+
-			"-idempotency-key %s to show the same link.\n",
+			"-op-id %s to show the same link.\n",
 			dash(str(answer["op_id"])))
 	case iam.Kind(str(answer["kind"])) == iam.KindMachine:
 		fmt.Fprintf(p.w, "create its access token with `crewlet iam token -person %s`\n", id)

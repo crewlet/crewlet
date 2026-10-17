@@ -65,6 +65,26 @@ func nodeAPIFlag(fs *flag.FlagSet, usage string) *string {
 	return fs.String(nodeAPIFlagName, "", usage)
 }
 
+// opIDFlagName is the flag every command whose write can come back unknown
+// takes the retry's operation id by, registered only through [opIDFlag].
+const opIDFlagName = "op-id"
+
+// opIDFlag registers -op-id on fs: the operation id an unknown answer named,
+// sent back with the retry — as the Idempotency-Key header, or as the op_id a
+// retention gesture's route reads from its query — so the retry is that
+// operation rather than a second one. usage says what a retry of this command
+// finishes.
+//
+// ONE SPELLING, for [nodeAPIFlag]'s reason: `iam` took the same id as
+// `-idempotency-key` while `seats`, `work purge` and the retention gestures
+// took `-op-id`, so one operator retrying two unknown writes typed two flags
+// for one thing. `-op-id` is the name kept, because more commands took it and
+// it names what goes in it — the op id every one of those answers prints —
+// where the other named the HTTP header it travels in.
+func opIDFlag(fs *flag.FlagSet, usage string) *string {
+	return fs.String(opIDFlagName, "", usage)
+}
+
 // nodeBaseURL is the API address of the node a Tier A file describes, or the
 // override if one was given.
 //

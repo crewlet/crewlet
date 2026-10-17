@@ -160,7 +160,7 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 		t.Fatalf("iam create on a seat: %v\n%s", err, errs.String())
 	}
 	for _, want := range []string{"login jane.founder, on seat founder",
-		"password link for", "-idempotency-key"} {
+		"password link for", "-op-id"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the create printed no %q:\n%s", want, out.String())
 		}
