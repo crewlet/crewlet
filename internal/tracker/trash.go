@@ -380,10 +380,9 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 // exists: a task in another project would be written under a container it is
 // not in, so a deferral on its real project would not hold this write back and
 // one on the named project would hold back a write that never touches it. A
-// bulk edit names one project for every task in it, which is where a task
-// from elsewhere arrives, and a subtree's descendants are named by a read
-// outside the snapshot, so a removal or a restore of one moved since is
-// refused here and the walk stops where a re-run resolves it again.
+// subtree's descendants are named by a read outside the snapshot, so a removal
+// or a restore of one moved since is refused here and the walk stops where a
+// re-run resolves it again.
 //
 // So the project argument is a PRECONDITION, not a label, and it is checked
 // here — the one place the framework guarantees a single consistent read —
