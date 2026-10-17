@@ -5314,13 +5314,14 @@ outcome and position — because the earlier change is on every node and "not
 made" would send a person to redo it.
 
 A refusal is the engine's envelope — `{error, detail}` with `tool` and the
-object the arguments named (`item`, `page`, `project`, `handle`) beside them,
-so a refusal or an unknown outcome says which object to read. A tool's refusal
-is its own sentence, which names the argument it refused, and the authority
-table's adds the rule's `reason` and the `grants` that would have admitted the
-caller. **The status is read from the refusal's CLASS, never from its
-sentence**, through the one mapping the [human write
-surface](#the-human-write-surface) answers with too. The transport's own codes:
+object the arguments named (`item`, `page`, `container` for a page not written
+yet, `project`, `handle`) beside them, so a refusal or an unknown outcome says
+which object to read. A tool's refusal is its own sentence, which names the
+argument it refused, and the authority table's adds the rule's `reason` and
+the `grants` that would have admitted the caller. **The status is read from
+the refusal's CLASS, never from its sentence**, through the one mapping the
+[human write surface](#the-human-write-surface) answers with too. The
+transport's own codes:
 
 | `error` | Status | When |
 |---|---|---|
