@@ -2,9 +2,7 @@ package doclet
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -499,55 +497,31 @@ type Actor struct {
 	// AN OPERATION ID THE ENGINE MINTED, held to [statelog.CheckCallerOpID]
 	// by every surface that takes one and by every write here, which refuses
 	// an actor carrying any other: the ids derived from it carry its instant
-	// — see [Store.operation].
+	// — see [statelog.KeyedOpID].
 	OpKey string
 }
 
 // operation is the id one write is published under: derived from the actor's
-// [Actor.OpKey] when there is one, and freshly minted when there is not.
+// [Actor.OpKey] when there is one, by [statelog.KeyedOpID] — which states why
+// the verb, the object, what the write says and the key's own instant are
+// each in it — and freshly minted when there is not.
 //
-// THE VERB AND THE OBJECT ARE PART OF THE DERIVATION, so one key covers every
-// record one gesture writes — a save and the rename that follows it are two
-// records, and one id for both would have the ledger collapse the second as a
-// redelivery of the first. The verb is also the id's NAME, which is what a
-// reader of the ledger finds it by, so it never holds a dot: in the grammar a
-// dot begins a gesture's STEP ([statelog.StepOpID]), and `comment.edit` would
-// read as the edit step of an operation called `comment`.
-//
-// AND WHAT THE WRITE SAYS IS PART OF IT: content is the write's own input —
-// the new page, the save, the title, the reason — digested whole. The ledger
-// answers an operation it already holds BEFORE the write is decided
-// ([statelog.Result.Collapsed]), so derived from the key, the verb and the
-// object alone, the same key sent with another body, another title or another
-// reason was the first write's operation: answered from the ledger, with
-// nothing of the second written — a change reported as made and silently
-// dropped. The human write surface bound its key to the request for exactly
-// that reason before handing it here; bound here, every caller that brings a
-// key is held to it, and a retry — which resends the same input — is still the
-// same operation.
-//
-// AND IT CARRIES THE KEY'S OWN INSTANT. The key is an operation id the engine
-// minted — every surface that takes one holds it to
-// [statelog.CheckCallerOpID] — and the ledger vouches for a retry by the
-// instant its id carries ([statelog.OpMintedAt]), so a derivation that
-// dropped it (a name-based uuid over the key) would be read as minted before
-// every loss the ledger ever had, and once it had swept anything such a write
-// was answered `unknown` without being published, on every attempt.
-//
-// An error is an input that will not encode, which is a type this package
-// declared wrongly rather than anything a caller sent.
+// The content is the write's own input — the new page, the save, the title,
+// the reason. Bound here rather than by each surface that brings a key, every
+// caller that brings one is held to it: the human write surface bound its key
+// to the request for that reason before handing it here. And the verbs are
+// spelled with a hyphen, `comment-edit`, because `comment.edit` would read as
+// the edit step of an operation called `comment`.
 func (s *Store) operation(actor Actor, verb, object string, content any) (string, error) {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
 		return s.newSeqID(), nil
 	}
-	said, err := json.Marshal(content)
+	id, err := statelog.KeyedOpID(key, verb, object, content)
 	if err != nil {
-		return "", fmt.Errorf("doclet: digest what a %s says: %w", verb, err)
+		return "", fmt.Errorf("doclet: %w", err)
 	}
-	sum := sha256.Sum256(said)
-	at, _ := statelog.OpMintedAt(key)
-	return statelog.DeriveOpID(at, verb, key, object, hex.EncodeToString(sum[:])), nil
+	return id, nil
 }
 
 // pageIDOf is the id a create gives its page: a FUNCTION OF THE OPERATION, so
@@ -757,12 +731,14 @@ func (a Actor) validate() error {
 		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
 	}
 	// A KEY IS AN OPERATION ID THE ENGINE MINTED, or no key. Every id a
-	// write derives from it carries the key's own instant ([Store.operation]),
-	// and a key outside the grammar carries none — read as minted at the
-	// epoch, which is before every loss the ledger will ever have, so once it
-	// had swept anything each such write would be answered `unknown` without
-	// being published, on every attempt, for ever. Refused here, at the one
-	// boundary every write passes, rather than trusted to every surface.
+	// write derives from it carries the key's own instant
+	// ([statelog.KeyedOpID]), and a key outside the grammar carries none —
+	// read as minted at the epoch, which is before every loss the ledger
+	// will ever have, so once it had swept anything each such write would be
+	// answered `unknown` without being published, on every attempt, for ever.
+	// Refused here, at the one boundary every write passes, with the
+	// sentence a caller can act on — the derivation refuses one too, as the
+	// backstop, but in its own words.
 	if key := strings.TrimSpace(a.OpKey); key != "" {
 		if err := statelog.CheckCallerOpID(key); err != nil {
 			return invalid("actor.op_key", "%v", err)
