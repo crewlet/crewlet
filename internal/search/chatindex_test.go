@@ -750,6 +750,45 @@ func TestASearchAskedForMoreHitsThanExistAnswersThem(t *testing.T) {
 	}
 }
 
+// A SEARCH IS ANSWERED WITH AT MOST [search.MaxChatSearchLimit] HITS, whatever
+// it asked for, and with [search.ChatSearchLimit] when it asked for nothing.
+//
+// The limit is the caller's number, typed by a seat, and an answer past the
+// ceiling is one the seat's own surface refuses to hand over — so a query for
+// every hit in a busy company ranked the lot and was answered with nothing.
+//
+// Mutation: drop the min() in SearchMessages and the unbounded query answers
+// every one of the messages.
+func TestAChatSearchIsHeldToTheMostOneAnswerCarries(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ctx := t.Context()
+	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
+	writeMessages(t, db, 0, search.MaxChatSearchLimit+5, "c1", "the quarterly numbers")
+	sweepAll(ctx, t, indexer)
+
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{"unbounded", math.MaxInt, search.MaxChatSearchLimit},
+		{"one past the ceiling", search.MaxChatSearchLimit + 1, search.MaxChatSearchLimit},
+		{"none", 0, search.ChatSearchLimit},
+		{"under the ceiling", 7, 7},
+	} {
+		hits, err := indexer.SearchMessages(ctx, search.ChatQuery{Text: "quarterly",
+			Channels: []string{"c1"}, Limit: tc.limit})
+		if err != nil {
+			t.Fatalf("%s: SearchMessages: %v", tc.name, err)
+		}
+		if len(hits) != tc.want {
+			t.Errorf("%s: a search for %d hits answered %d, want %d", tc.name,
+				tc.limit, len(hits), tc.want)
+		}
+	}
+}
+
 // A CHAT QUERY PAST THE BOUND EVERY RANKED SEARCH SHARES IS REFUSED BEFORE IT
 // RUNS, on the node that ranks it, whichever surface or peer asked — and before
 // the viewer check, so a caller that forgot both learns the one it can fix by
