@@ -124,6 +124,16 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		"SetUsageWatermark": func(t *testing.T) {
 			wantErrNoEstate(t, d.SetUsageWatermark(ctx, time.Now()))
 		},
+		"UsageRepublished": func(t *testing.T) {
+			_, ok, err := d.UsageRepublished(ctx)
+			wantErrNoEstate(t, err)
+			if ok {
+				t.Error("a handle that is not open answered the generations it last republished under")
+			}
+		},
+		"SetUsageRepublished": func(t *testing.T) {
+			wantErrNoEstate(t, d.SetUsageRepublished(ctx, "node-a@1"))
+		},
 		"UsageDayWindow": func(t *testing.T) {
 			_, ok, err := d.UsageDayWindow(ctx, "2026-09-23")
 			wantErrNoEstate(t, err)

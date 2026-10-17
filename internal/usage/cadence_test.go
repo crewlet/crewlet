@@ -26,6 +26,7 @@ func TestARunningPublisherPublishesWhatArrivesAfterItsFirstFlush(t *testing.T) {
 	log := &loopback{t: t, into: own, node: "node-a"}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: marks, Log: log, Estate: own.Replicated(), NodeID: "node-a", Caught: caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return santiago },
 		Now:         func() time.Time { return at },
 		Every:       20 * time.Millisecond,
@@ -61,6 +62,7 @@ func TestANegativeCadenceIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: &countedMarks{}, Log: &loopback{t: t}, Estate: store.ReplicatedReader{}, NodeID: "node-a", Caught: caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return santiago },
 		Every:       -time.Second,
 		FireHistory: fireHistory,
