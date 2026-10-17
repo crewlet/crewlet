@@ -119,10 +119,8 @@ func TestABackendsOwnChannelTypeIsDirectToEveryReader(t *testing.T) {
 // may not end in silence.
 func TestAStandingFollowIsNotAnAsk(t *testing.T) {
 	t.Parallel()
-	for _, reason := range []notify.FollowReason{notify.FollowMention, notify.FollowExplicit} {
-		if !reason.Addresses() {
-			t.Errorf("%q does not address the seat", reason)
-		}
+	if !notify.FollowMention.Addresses() {
+		t.Errorf("%q does not address the seat", notify.FollowMention)
 	}
 	for _, reason := range []notify.FollowReason{notify.FollowCollective, notify.FollowParticipated} {
 		if reason.Addresses() {
@@ -144,8 +142,8 @@ func TestAStandingFollowIsNotAnAsk(t *testing.T) {
 			t.Errorf("AddressingFollows offers %q, which does not address", reason)
 		}
 	}
-	if got := len(notify.AddressingFollows()); got != 2 {
-		t.Fatalf("AddressingFollows has %d reasons, want mention and explicit", got)
+	if got := notify.AddressingFollows(); !slices.Equal(got, []notify.FollowReason{notify.FollowMention}) {
+		t.Fatalf("AddressingFollows = %v, want the mention alone", got)
 	}
 }
 

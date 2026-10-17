@@ -1678,9 +1678,8 @@ type Follows interface {
 
 	// Unfollow drops a follow, reporting whether one was there.
 	//
-	// The counterpart of an explicit subscription: a seat told to stop
-	// watching a thread must actually stop, and waiting out the retention
-	// horizon is not stopping.
+	// A seat told to stop watching a thread must actually stop, and
+	// waiting out the retention horizon is not stopping.
 	//
 	// SERIALIZABLE, which is the property both backends have to reach by
 	// different means: `true` is reported exactly when this call removed
