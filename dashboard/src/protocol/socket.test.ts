@@ -14,8 +14,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { READER_HEADER } from "../contract/identity.ts";
 import { rest } from "./rest.ts";
-import { currentSessionNeed, sessionRestored } from "./signin.ts";
+import { currentSessionNeed, sessionRestored, setTabReader } from "./signin.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
 
@@ -366,6 +367,41 @@ describe("the engine's close codes", () => {
     // The enrolment ends by re-dialling with the whole session it opened.
     socket.reconnect();
     expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
+  });
+
+  // A REFUSED DIAL WHILE THE BROWSER IS SOMEBODY ELSE'S IS NOT READ AS THEIRS.
+  //
+  // Somebody signed in as somebody else in another tab, and their session may
+  // only enrol a second factor. The handshake carries no header — a browser
+  // sets none on a WebSocket — so it is refused for THEIR session, and a probe
+  // that named nobody would read that refusal and route this tab, still the
+  // last person's, into the new person's enrolment. The probe names the tab's
+  // reader, the engine answers `reader_changed`, and the tab is handed to them
+  // instead. Mutation: send the probe without `readerHeaders()` and this tab
+  // is asked for an enrolment.
+  test("a refused dial for somebody else's session hands the tab to them", async () => {
+    let moved = 0;
+    const uninstall = setTabReader({ current: () => "p-0", moved: () => moved++ });
+    const engine = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!String(input).endsWith("/ws/stream")) return engine(input, init);
+      const named = new Headers(init?.headers).get(READER_HEADER);
+      return named !== null && named !== "p-1"
+        ? new Response(JSON.stringify({ error: "reader_changed" }), { status: 409 })
+        : new Response(JSON.stringify({ error: "second_factor_enrolment_required" }), {
+            status: 403,
+          });
+    });
+    try {
+      const { store } = started();
+      dial(0).closeWith(1006);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(moved).toBe(1);
+      expect(currentSessionNeed()).toBeNull();
+      expect(store.state.accessRefused).toBeNull();
+    } finally {
+      uninstall();
+    }
   });
 
   test("a refusal that lands while a dial is in flight is not undone by that dial's close", async () => {
