@@ -90,33 +90,57 @@ func TestARefusalThisPackageHasNoWordForTravelsUnchanged(t *testing.T) {
 // title and a container are what a person edits, and only their refusals are
 // a person's.
 //
-// Mutation: translate whatever the subject's kind and the eviction rows go red.
+// EVERY KIND THE DOMAIN DECLARES IS CLASSED HERE, read from [ObjectKinds]: a
+// kind added without a row is red until somebody says whether a person edits
+// it, because [refusal] translates only the kinds it names and a new kind a
+// person does edit would otherwise answer every lost race in the framework's
+// words, which the tool surface does not branch on.
+//
+// Mutation: translate whatever the subject's kind and the log's own rows go
+// red; translate nothing and the edited rows do; declare a seventh kind and
+// it is named.
 func TestARefusalOnTheLogsOwnSubjectsIsTheFrameworks(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []ObjectKind{KindEviction, KindGeneration, KindBarrier} {
-		subject := statelog.Subject{Kind: string(kind), ID: "data-b"}
-		for _, in := range []error{fmt.Errorf("append: %w", statelog.ErrConflict),
-			fmt.Errorf("append: %w", statelog.ErrExists)} {
-			got := refusal(in, subject)
-			// THE SAME ERROR IN THE SAME WORDS: wrapped in this package's,
-			// it would still answer errors.Is and read as a page edit.
-			if !errors.Is(got, in) || got.Error() != in.Error() {
-				t.Errorf("refusal(%v) on a %s subject = %v, want the framework's own", in,
-					kind, got)
-			}
-			for _, mistaken := range []error{ErrConflict, ErrTitleTaken} {
-				if errors.Is(got, mistaken) {
-					t.Errorf("a %s refusal reads as %v", kind, mistaken)
-				}
-			}
+	// edited is whether a person edits a kind's objects, for every kind.
+	edited := map[ObjectKind]bool{
+		KindContainer: true, KindPage: true, KindTitle: true,
+		KindEviction: false, KindGeneration: false, KindBarrier: false,
+	}
+	for kind := range edited {
+		if !kind.Valid() {
+			t.Errorf("%s has a row here and the domain declares no such kind", kind)
 		}
 	}
-	// THE CONTROL: the subjects a person edits are translated.
-	for _, kind := range []ObjectKind{KindPage, KindTitle, KindContainer} {
-		got := refusal(fmt.Errorf("append: %w", statelog.ErrConflict),
-			statelog.Subject{Kind: string(kind), ID: "ENG.runbook"})
-		if !errors.Is(got, ErrConflict) {
-			t.Errorf("a lost race on a %s subject = %v, want ErrConflict", kind, got)
+	for _, kind := range ObjectKinds {
+		person, classed := edited[kind]
+		if !classed {
+			t.Errorf("%s is a kind the domain declares and this table does not class: "+
+				"say whether a person edits it, and translate its refusals in "+
+				"refusal() if one does", kind)
+			continue
+		}
+		subject := statelog.Subject{Kind: string(kind), ID: "ENG.runbook"}
+		for _, c := range []struct{ in, translated error }{
+			{fmt.Errorf("append: %w", statelog.ErrConflict), ErrConflict},
+			{fmt.Errorf("append: %w", statelog.ErrExists), ErrTitleTaken},
+		} {
+			got := refusal(c.in, subject)
+			if person {
+				if !errors.Is(got, c.translated) {
+					t.Errorf("refusal(%v) on a %s subject = %v, want %v", c.in, kind,
+						got, c.translated)
+				}
+				continue
+			}
+			// THE SAME ERROR IN THE SAME WORDS: wrapped in this package's,
+			// it would still answer errors.Is and read as a page edit.
+			if !errors.Is(got, c.in) || got.Error() != c.in.Error() {
+				t.Errorf("refusal(%v) on a %s subject = %v, want the framework's own",
+					c.in, kind, got)
+			}
+			if errors.Is(got, c.translated) {
+				t.Errorf("a %s refusal reads as %v", kind, c.translated)
+			}
 		}
 	}
 }
