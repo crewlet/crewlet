@@ -115,6 +115,26 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	return reopens + active + handOffs + updated, nil
 }
 
+// restampStatement is [restampUpdated]'s read for one task, or for every task
+// when id is empty — named for the plan test.
+//
+// The one task's filter sits INSIDE the aggregate, so a late record reads its
+// own history rows through the subject index rather than grouping the
+// company's whole history to keep one group of it.
+func restampStatement(id string) (string, []any) {
+	scope, args := "", []any{string(KindTask)}
+	if id != "" {
+		scope, args = " AND subject_id = ?", append(args, id)
+	}
+	return `
+		SELECT t.id, t.document, h.newest
+		FROM tracker_tasks t
+		JOIN (SELECT subject_id, MAX(effective_at) AS newest
+		        FROM tracker_history WHERE subject_kind = ?` + scope + `
+		       GROUP BY subject_id) h ON h.subject_id = t.id
+		WHERE h.newest > 0 AND t.updated_at <> h.newest`, args
+}
+
 // restampUpdated is every task's `updated_at` recomputed as the newest
 // `effective_at` among its own history rows — every task's when id is empty,
 // and the one task's otherwise.
@@ -138,20 +158,7 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 // changed" instants for one task — so both are rewritten, in Go, because the
 // document's instant is RFC 3339 text and the column's is the store's integer.
 func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
-	// The one task's filter sits INSIDE the aggregate, so a late record
-	// reads its own history rows through the subject index rather than
-	// grouping the company's whole history to keep one group of it.
-	scope, args := "", []any{string(KindTask)}
-	if id != "" {
-		scope, args = " AND subject_id = ?", append(args, id)
-	}
-	query := `
-		SELECT t.id, t.document, h.newest
-		FROM tracker_tasks t
-		JOIN (SELECT subject_id, MAX(effective_at) AS newest
-		        FROM tracker_history WHERE subject_kind = ?` + scope + `
-		       GROUP BY subject_id) h ON h.subject_id = t.id
-		WHERE h.newest > 0 AND t.updated_at <> h.newest`
+	query, args := restampStatement(id)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: read the tasks whose last change moved: %w", err)
@@ -272,13 +279,16 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	return max(cleared, written), nil
 }
 
-// reopensFromHistory counts each task's reopens over its history rows.
-func reopensFromHistory(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
-	rows, err := tx.QueryContext(ctx, `
+// reopensStatement is [reopensFromHistory]' walk of every task status row,
+// named for the plan test.
+const reopensStatement = `
 		SELECT subject_id, json_extract(fields_json, '$.status')
 		FROM tracker_history
-		WHERE subject_kind = ? AND json_extract(fields_json, '$.status') IS NOT NULL`,
-		string(KindTask))
+		WHERE subject_kind = ? AND json_extract(fields_json, '$.status') IS NOT NULL`
+
+// reopensFromHistory counts each task's reopens over its history rows.
+func reopensFromHistory(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
+	rows, err := tx.QueryContext(ctx, reopensStatement, string(KindTask))
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the status history to re-derive reopens: %w", err)
 	}

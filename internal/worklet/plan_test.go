@@ -4,8 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,18 +43,30 @@ import (
 // grammar's own compiler, and going through the public reader would be
 // asserting the plan of whatever SQL a caller happened to produce rather than
 // of the queries this package registers.
+//
+// # And the history, whose readers are statements rather than a grammar
+//
+// `tracker_history` is one row per applied commit and nothing sweeps it, so it
+// is the table where a read with no index costs the most and grows for ever —
+// and until it was covered here most of its indexes were held by their
+// comments alone. One of them, `tracker_history_comment_idx`, had lost its only
+// reader with the column that reader read (`actor_seat`, replicated 0041) and
+// was maintained on every commit for nobody until replicated 0054 dropped it.
+// The table's readers are every statement this package runs that finds
+// history rows ([historyReads]), each planned over a company's history, and
+// the set is held COMPLETE: every statement in this package's source that
+// reads the table is one of them.
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
+	history := historyPlanStore(t)
 
 	// THE TABLES THIS TEST CAN HONESTLY SPEAK FOR: the ones the task
-	// query set reads. Every other tracker table's readers are the
-	// activity feed, the reports and the knowledge search, which arrive
-	// with their own steps and bring their own queries — an index there
-	// is claimed by its comment and not by a plan, and pretending
-	// otherwise would make this test pass by not looking.
+	// query set reads, and the history. Every other tracker table's
+	// indexes are claimed by their comments and not by a plan, and
+	// pretending otherwise would make this test pass by not looking.
 	covered := []string{"tracker_tasks", "tracker_task_tags",
-		"tracker_task_deps", "tracker_field_values"}
+		"tracker_task_deps", "tracker_field_values", "tracker_history"}
 
 	// NO REGISTERED READER READS A COVERED TABLE WITH NO INDEX AT ALL —
 	// at any scope, a query's own subqueries and a duty's statement
@@ -129,6 +147,79 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			}
 			refuseHeapScans(t, plan)
 		})
+	}
+
+	// EVERY STATEMENT THAT FINDS HISTORY ROWS, planned over a company's
+	// history rather than over the task corpus, because the history is
+	// the table each of them is about — and each held to the index it
+	// names, which is what makes a dropped index fail here: without it a
+	// read falls back to walking another index in that index's order,
+	// which is not a heap scan and which the inventory, no longer listing
+	// the dropped one, cannot see either. Measured: with the project, the
+	// author-kind or the repair's index dropped, every read that needed it
+	// fell back to `tracker_history_seq_idx` — the company's whole history
+	// walked newest first, or all of it past a position, filtered row by
+	// row — and passed.
+	reads := historyReads(t, history)
+	for name, read := range reads {
+		t.Run(name, func(t *testing.T) {
+			plan := explain(t, history, read.sql, read.args)
+			for _, index := range indexesIn(plan) {
+				used[index] = true
+			}
+			refuseHeapScans(t, plan)
+			shown := strings.Join(plan, "\n")
+			switch {
+			case !read.walk && !seeks(plan, read.index):
+				t.Errorf("this read does not SEEK %s:\n%s", read.index, shown)
+			case read.walk && !walks(plan, read.index):
+				t.Errorf("this read does not walk %s in its order:\n%s",
+					read.index, shown)
+			case read.walk && sorts(plan):
+				// A WALK IS RIGHT ONLY WHILE ITS ORDER IS THE ANSWER'S,
+				// because then the LIMIT stops it after a page; sorted,
+				// it reads every row it selects first.
+				t.Errorf("this read walks %s and then sorts what it read, so "+
+					"the walk is every row it selects rather than a page:\n%s",
+					read.index, shown)
+			}
+		})
+	}
+
+	// THE WHOLE-HISTORY PASSES ARE PLANNED AND JUSTIFY NOTHING. Each
+	// reads every task history row by definition, once, when a node's
+	// derivation rules change — so a scan of the heap is the honest plan
+	// rather than a missing index, and an index one reaches is not one it
+	// needs: a pass is never the reason an index is kept.
+	passes := historyPasses()
+	for name, statement := range passes {
+		t.Run(name, func(t *testing.T) {
+			explain(t, history, statement.sql, statement.args)
+		})
+	}
+
+	// AND THE SET IS COMPLETE. A statement that reads the history and is
+	// in neither list is a reader this test cannot see, and an index kept
+	// for it — or a scan it makes — would pass here unread. Every literal
+	// of this package's source that names the table as a source of rows
+	// has to be part of a registered statement. An INSERT finds no rows,
+	// which is why the history's own is not among them.
+	registered := make([]string, 0, len(reads)+len(passes))
+	for _, read := range reads {
+		registered = append(registered, read.sql)
+	}
+	for _, statement := range passes {
+		registered = append(registered, statement.sql)
+	}
+	for _, literal := range historyLiterals(t) {
+		if !slices.ContainsFunc(registered, func(statement string) bool {
+			return strings.Contains(statement, literal)
+		}) {
+			t.Errorf("this statement reads tracker_history and is registered in "+
+				"neither historyReads nor historyPasses, so no plan of it is "+
+				"taken — name it, as every other is named, and register it:\n%s",
+				literal)
+		}
 	}
 
 	for _, index := range indexesOn(t, db, covered) {
@@ -214,23 +305,9 @@ func registeredQueries() map[string]map[string]any {
 // a column the applier only ever wrote a zero into — and it kept an index on
 // that column certified for a selection nothing ran, while the selection the
 // duty does run was certified by nothing. The search package exports its own.
-func dutyReads() map[string]struct {
-	sql  string
-	args []any
-} {
-	read := func(sql string, args []any) struct {
-		sql  string
-		args []any
-	} {
-		return struct {
-			sql  string
-			args []any
-		}{sql, args}
-	}
-	return map[string]struct {
-		sql  string
-		args []any
-	}{
+func dutyReads() map[string]plannedRead {
+	read := func(sql string, args []any) plannedRead { return plannedRead{sql, args} }
+	return map[string]plannedRead{
 		"the embed duty's selection":    read(search.TaskSelection("m", 8, 1024)),
 		"the embed duty's opening read": read(search.TaskOpeningRead("t-00001")),
 		"the embed duty's withdrawals":  read(search.TaskWithdrawals(1024)),
@@ -278,9 +355,6 @@ func dutyReads() map[string]struct {
 			 ORDER BY removed_at DESC LIMIT 51`, nil},
 		"key resolution": {
 			`SELECT id FROM tracker_tasks WHERE key = ?`, []any{"ENG-1"}},
-		"the unblocked repair": {
-			`SELECT MAX(cleared_at) FROM tracker_task_deps
-			 WHERE task_id = ? AND cleared_at IS NOT NULL`, []any{"t-00001"}},
 		"one task's blockers": {
 			`SELECT blocker_id FROM tracker_task_deps
 			 WHERE task_id = ? AND blocker_open = 0`, []any{"t-00001"}},
@@ -288,6 +362,220 @@ func dutyReads() map[string]struct {
 			`SELECT task_id FROM tracker_task_tags
 			 WHERE project_key = ? AND slug = ?`, []any{"P01", "tag-1"}},
 	}
+}
+
+// plannedRead is one statement the gate explains, with arguments of the
+// shape its reader binds.
+type plannedRead struct {
+	sql  string
+	args []any
+}
+
+// historyRead is one statement that finds history rows, and the history index
+// its plan must reach: by a SEEK on the index's leading columns, or — for a
+// read whose point is the index's own order, which its LIMIT stops after a page
+// — by a WALK of it.
+type historyRead struct {
+	plannedRead
+	index string
+	walk  bool
+}
+
+// historyKey is the history's primary key as this engine's planner names it:
+// a read by a row's own id seeks it.
+const historyKey = "sqlite_autoindex_tracker_history_1"
+
+// historyReads is every statement this package runs that finds rows of
+// `tracker_history` by what it asks — the activity feed in each of its filter
+// families, a task's own history, the company-wide flow and feed, the inbox's
+// join, an asker's next record after an ask closed, the unblocked repair, and
+// the applier's own probes and rewrites — each with arguments of the shape its
+// reader binds and the index it reaches. The ones that read the whole table
+// are [historyPasses].
+//
+// THE STATEMENTS ARE THE READERS' OWN, never a copy: each is a named value of
+// this package, and the gate's completeness walk ([historyLiterals]) is what
+// stops one being written inline where no plan of it is taken.
+//
+// AN UPDATE OR A DELETE IS A READER TOO. It finds its rows by its WHERE exactly
+// as a SELECT does, and the late record's raise and the purge's rewrites run
+// against a table that grows for the life of the company.
+//
+// db is the history fixture: the activity feed resolves a task the way its
+// reader does, inside a transaction, before it has a statement to explain.
+func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRead {
+	t.Helper()
+	const (
+		subject = "tracker_history_subject_idx"
+		project = "tracker_history_project_idx"
+		seq     = "tracker_history_seq_idx"
+		writers = "tracker_history_actor_kind_seq_idx"
+		status  = "tracker_history_status_seq_idx"
+		moves   = "tracker_history_moves_idx"
+	)
+	seek := func(index, sql string, args ...any) historyRead {
+		return historyRead{plannedRead{sql, args}, index, false}
+	}
+	at := func(n uint64) int64 {
+		return statelog.Position{Stream: historyStream, Generation: 1, Seq: n}.Packed()
+	}
+	position := statelog.Position{Stream: historyStream, Generation: 1, Seq: 9_000}
+	instant := store.EncodeTime(planNow)
+	const task, purged, record = "t-0007", "t-0050", "h-00007"
+	kind := string(KindTask)
+	reads := map[string]historyRead{
+		"a task's own history": seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
+		"a purged task's rows": seek(subject, purgedHistoryStatement, purged),
+		"one change's routing": seek(historyKey, routingRecordStatement, record),
+		"where a change sits":  seek(historyKey, recordPositionStatement, record),
+		"a person's inbox": seek(historyKey, inboxStatement([]string{"n.recipient = ?"}),
+			"ana", 51),
+		"the repair's horizon": seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
+		"the repair's dependents": seek(subject, unblockedDependentsStatement,
+			at(9_000), at(9_500), 64),
+		"a subject's effective instant": seek(subject, effectiveAtStatement,
+			task, at(9_000), task, at(9_000), instant),
+		"a late record raises its successors": seek(subject, raiseHistoryStatement,
+			instant, task, at(9_000), instant),
+		"a task's newest status": seek(subject, newestStatusStatement, task),
+		"an asker's next record after an ask closed": seek(subject, followUpStatement,
+			task, "ana", record),
+		"the hand-offs before a commit": seek(subject, handOffsBeforeStatement,
+			task, kind, at(9_000)),
+		"a task's hand-offs from a commit on": seek(subject, handOffsFromStatement,
+			task, kind, at(9_000)),
+		"a hand-off count written": seek(historyKey, writeHandOffStatement, 1, record),
+		"a purge reads whose inbox it empties": seek(subject, forgottenNoticesStatement,
+			purged, kind, record),
+		"a purge empties those inboxes": seek(subject, forgetNoticesStatement,
+			purged, kind, record),
+		"a purge reads what the census keeps": seek(subject, censusRowsStatement,
+			purged, kind, record),
+		"a purge deletes what the census does not walk": seek(subject, forgetHistoryStatement,
+			purged, kind, record),
+		"a purge empties a kept row": seek(historyKey, forgetSkeletonStatement,
+			[]byte(`{}`), `{}`, record),
+	}
+	one, oneArgs := restampStatement(task)
+	reads["one task's last change"] = seek(subject, one, oneArgs...)
+	for name, read := range companyWideReads() {
+		// AN UNBOUNDED PAGE WALKS the index newest first and stops after
+		// it; a bounded one seeks its range.
+		reads[name] = historyRead{read.plannedRead, moves, !read.bounded}
+	}
+
+	// THE ACTIVITY FEED, one case per filter family the reader accepts,
+	// spelled as its surfaces spell an [ActivityQuery] and compiled by its
+	// own compiler. A CASE THE READER WOULD REFUSE IS NOT A READER, so each
+	// passes the reader's own checks first. A filter no history index leads
+	// with — a change kind, a writer, an assignee, the announcement flag, a
+	// wall-clock window — is a residual on the walk of the feed's own order.
+	yes := true
+	window := planNow.AddDate(0, 0, -7)
+	activity := map[string]struct {
+		q     ActivityQuery
+		index string
+		walk  bool
+	}{
+		"one task's activity":                {ActivityQuery{Task: task}, subject, false},
+		"one task's activity in its project": {ActivityQuery{Task: task, Project: "P07"}, subject, false},
+		"a project's activity":               {ActivityQuery{Project: "P01"}, project, false},
+		"a project's activity since":         {ActivityQuery{Project: "P01", Since: position}, project, false},
+		"one kind in a project": {ActivityQuery{Project: "P01",
+			Kinds: []ChangeKind{ChangeAssignee}}, project, false},
+		"a project's text": {ActivityQuery{Project: "P01", Q: "login", SinceAt: window},
+			project, false},
+		"a task's text":                {ActivityQuery{Task: task, Q: "login"}, subject, false},
+		"the company's activity":       {ActivityQuery{Workspace: true}, seq, true},
+		"the company's activity since": {ActivityQuery{Workspace: true, Since: position}, seq, false},
+		"a later page of the company's": {ActivityQuery{Workspace: true,
+			Cursor: position.String()}, seq, false},
+		"the audit": {ActivityQuery{Workspace: true, From: window, To: planNow,
+			ActorKinds: []AuthorKind{AuthorOperator, AuthorHuman}}, writers, false},
+		"one author kind": {ActivityQuery{Workspace: true,
+			ActorKinds: []AuthorKind{AuthorAgent}}, writers, false},
+		"one change kind": {ActivityQuery{Workspace: true,
+			Kinds: []ChangeKind{ChangeStatus}}, seq, true},
+		"one writer":          {ActivityQuery{Workspace: true, Actor: "h-7"}, seq, true},
+		"the work one holds":  {ActivityQuery{Workspace: true, Assignee: "h-7"}, seq, true},
+		"what was announced":  {ActivityQuery{Workspace: true, Notified: &yes}, seq, true},
+		"a wall-clock window": {ActivityQuery{Workspace: true, From: window, To: planNow}, seq, true},
+	}
+	for name, c := range activity {
+		if err := activityFilters(c.q); err != nil {
+			t.Fatalf("%s: the reader refuses this case: %v", name, err)
+		}
+		if err := gateActivityQuery(c.q, planNow); err != nil {
+			t.Fatalf("%s: the reader refuses this case: %v", name, err)
+		}
+		if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+			where, args, err := compileActivity(t.Context(), tx, c.q)
+			if err != nil {
+				return err
+			}
+			reads["the activity feed: "+name] = historyRead{plannedRead{
+				activityStatement(where), append(args, MaxActivityRows+1)},
+				c.index, c.walk}
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: compile: %v", name, err)
+		}
+	}
+	return reads
+}
+
+// historyPasses is every statement that reads the WHOLE task history: the
+// re-derivations [Applier.Rederive] runs when a node's derivation rules
+// differ from this build's, each a function of every row by definition.
+func historyPasses() map[string]plannedRead {
+	every, args := restampStatement("")
+	return map[string]plannedRead{
+		"the hand-off re-derivation": {rederiveHandOffsStatement, []any{string(KindTask)}},
+		"the reopen re-derivation":   {reopensStatement, []any{string(KindTask)}},
+		"every task's last change":   {every, args},
+	}
+}
+
+// historyLiterals is every string literal of this package's own source that
+// names `tracker_history` as a source of rows — after FROM, JOIN or UPDATE —
+// which is every statement fragment that reads it.
+//
+// THE SOURCE RATHER THAN A LIST, for the reason [dutyReads] gives against a
+// copy: a list beside the readers is one a new reader is added to by memory.
+// A literal is matched whole, so a statement assembled from several literals
+// is held by each of them.
+func historyLiterals(t *testing.T) []string {
+	t.Helper()
+	reads := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE)\s+tracker_history\b`)
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read this package's directory: %v", err)
+	}
+	fset := token.NewFileSet()
+	var out []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil && reads.MatchString(value) {
+					out = append(out, value)
+				}
+			}
+			return true
+		})
+	}
+	if len(out) == 0 {
+		t.Fatal("no literal of this package reads tracker_history, so this walk " +
+			"is reading nothing")
+	}
+	return out
 }
 
 var planNow = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
@@ -488,10 +776,20 @@ func seedTaskCorpus(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 	return nil
 }
 
+// explain is the planner's account of one statement.
+//
+// A WRITE IS PLANNED IN A WRITE TRANSACTION, because the read path runs
+// query_only, which refuses even the EXPLAIN of one. Nothing is executed
+// either way.
 func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
 	t.Helper()
+	in := db.Read
+	if words := strings.Fields(statement); len(words) > 0 &&
+		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE")) {
+		in = db.Tx
+	}
 	var plan []string
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+	if err := in(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			"EXPLAIN QUERY PLAN "+statement, args...)
 		if err != nil {
@@ -514,9 +812,21 @@ func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []a
 }
 
 // indexesIn reads the index names out of a plan.
+//
+// AN INTERSECTION NAMES SEVERAL: this engine plans two equality terms on two
+// indexes as `MULTI-INDEX AND h (a, b)`, a seek on each and the row ids they
+// share, so both are read.
 func indexesIn(plan []string) []string {
 	var found []string
 	for _, line := range plan {
+		if _, tail, ok := strings.Cut(line, "MULTI-INDEX AND "); ok {
+			_, list, _ := strings.Cut(tail, "(")
+			list, _, _ = strings.Cut(list, ")")
+			for _, name := range strings.Split(list, ",") {
+				found = append(found, strings.TrimSpace(name))
+			}
+			continue
+		}
 		_, tail, ok := strings.Cut(line, "USING INDEX ")
 		if !ok {
 			_, tail, ok = strings.Cut(line, "USING COVERING INDEX ")
@@ -528,6 +838,18 @@ func indexesIn(plan []string) []string {
 		found = append(found, strings.TrimSpace(name))
 	}
 	return found
+}
+
+// walks reports a plan that reads through index in the index's own order —
+// `SCAN … USING INDEX` — with no term on its leading columns to seek.
+func walks(plan []string, index string) bool {
+	for _, line := range plan {
+		if strings.HasPrefix(line, "SCAN ") &&
+			slices.Contains(indexesIn([]string{line}), index) {
+			return true
+		}
+	}
+	return false
 }
 
 // scansHeap reports a plan line that reads a whole table with no index.
@@ -703,38 +1025,7 @@ func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	t.Parallel()
 	db := historyPlanStore(t)
 	const moves = "tracker_history_moves_idx"
-	// THE WIDEST WINDOW THE FLOW WALKS — [MaxFlowPoints] days back — and a
-	// feed page a month down, both inside the history the fixture spans.
-	from := planNow.AddDate(0, 0, -MaxFlowPoints)
-	before := &FeedCursor{At: planNow.AddDate(0, -1, 0), Seq: 9}
-	type read struct {
-		sql  string
-		args []any
-		// bounded is whether the read bounds effective_at, the index's
-		// leading column, and so has a range to seek.
-		bounded bool
-	}
-	reads := map[string]read{
-		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(from)}, true},
-	}
-	for name, c := range map[string]struct {
-		q       FeedQuery
-		bounded bool
-	}{
-		"the newest feed page": {FeedQuery{Limit: 20}, false},
-		"a later feed page":    {FeedQuery{Limit: 20, Before: before}, true},
-		"one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
-			Kinds: []FeedKind{FeedHandoff}}, false},
-		"a later page of one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
-			Kinds: []FeedKind{FeedHandoff}, Before: before}, true},
-	} {
-		kinds := c.q.Kinds
-		if len(kinds) == 0 {
-			kinds = FeedKinds
-		}
-		sql, args := companyFeedStatement(c.q, kinds)
-		reads[name] = read{sql, args, c.bounded}
-	}
+	reads := companyWideReads()
 	for name, r := range reads {
 		t.Run(name, func(t *testing.T) {
 			plan := explain(t, db, r.sql, r.args)
@@ -756,6 +1047,46 @@ func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 			}
 		})
 	}
+}
+
+// companyWideRead is one of the company-wide history reads, and whether it
+// bounds `effective_at`, the moves index's leading column, and so has a range
+// to seek.
+type companyWideRead struct {
+	plannedRead
+	bounded bool
+}
+
+// companyWideReads is `work_flow`'s walk and `company_feed`'s tracker page in
+// the shapes the feed is read in: the widest window the flow walks —
+// [MaxFlowPoints] days back — and a feed page a month down, both inside the
+// history [historyPlanStore] spans.
+func companyWideReads() map[string]companyWideRead {
+	from := planNow.AddDate(0, 0, -MaxFlowPoints)
+	before := &FeedCursor{At: planNow.AddDate(0, -1, 0), Seq: 9}
+	reads := map[string]companyWideRead{
+		"the flow's walk": {plannedRead{flowRowsStatement,
+			[]any{store.EncodeTime(from)}}, true},
+	}
+	for name, c := range map[string]struct {
+		q       FeedQuery
+		bounded bool
+	}{
+		"the newest feed page": {FeedQuery{Limit: 20}, false},
+		"a later feed page":    {FeedQuery{Limit: 20, Before: before}, true},
+		"one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
+			Kinds: []FeedKind{FeedHandoff}}, false},
+		"a later page of one writer's hand-offs": {FeedQuery{Limit: 20, Actor: "h-7",
+			Kinds: []FeedKind{FeedHandoff}, Before: before}, true},
+	} {
+		kinds := c.q.Kinds
+		if len(kinds) == 0 {
+			kinds = FeedKinds
+		}
+		sql, args := companyFeedStatement(c.q, kinds)
+		reads[name] = companyWideRead{plannedRead{sql, args}, c.bounded}
+	}
+	return reads
 }
 
 // The history the company-wide reads are planned against.

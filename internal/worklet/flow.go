@@ -457,6 +457,12 @@ func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (flowState, error)
 		project: project}, nil
 }
 
+// purgedHistoryStatement is [stateBeforePurge]'s one statement — a purged
+// task's own rows, oldest first — named for the plan test.
+const purgedHistoryStatement = `
+		SELECT kind, fields_json FROM tracker_history
+		WHERE subject_id = ? ORDER BY log_seq`
+
 // stateBeforePurge is a purged task as it stood just before its purge: the
 // forward replay of its own rows below the purge row.
 //
@@ -464,9 +470,7 @@ func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (flowState, error)
 // the only account left of where it stood — whether it was still counted (a
 // purge does not require a removal first) and in which group.
 func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT kind, fields_json FROM tracker_history
-		WHERE subject_id = ? ORDER BY log_seq`, id)
+	rows, err := tx.QueryContext(ctx, purgedHistoryStatement, id)
 	if err != nil {
 		return flowState{}, fmt.Errorf("worklet: read purged task %s's history: %w", id, err)
 	}

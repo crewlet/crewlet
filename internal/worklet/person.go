@@ -631,6 +631,10 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 	return nil
 }
 
+// recordPositionStatement is where one change sits in the log, read by
+// [inboxPositions] and named for the plan test.
+const recordPositionStatement = `SELECT log_seq FROM tracker_history WHERE id = ?`
+
 // inboxPositions finds the log position of every notice a gesture names.
 //
 // FROM THE HISTORY ROW, INSIDE THE DECIDE. A mark has to carry the position
@@ -654,8 +658,7 @@ func inboxPositions(ctx context.Context, tx *sql.Tx,
 	out := make(map[string]uint64, len(ids))
 	for _, id := range ids {
 		var packed int64
-		switch err := tx.QueryRowContext(ctx,
-			`SELECT log_seq FROM tracker_history WHERE id = ?`, id).
+		switch err := tx.QueryRowContext(ctx, recordPositionStatement, id).
 			Scan(&packed); {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, invalid("record %s is not a change this "+
