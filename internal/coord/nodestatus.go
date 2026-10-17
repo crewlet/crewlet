@@ -65,6 +65,11 @@ type NodeStatus struct {
 	// see WHY a node left rotation: /ready reports a bare 503 either way,
 	// and "draining" and "cannot apply epoch 41" call for opposite
 	// responses.
+	//
+	// EMPTY when the node could not read its control plane, beside a status
+	// that is otherwise whole: the reader's fail-open answer there is serve,
+	// which is right for the node's own readiness probe and a confident lie
+	// on a peer's screen.
 	Posture string
 
 	// StartedAt is when the node's ENGINE was built, which is when the node
