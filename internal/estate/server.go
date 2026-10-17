@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -204,17 +205,16 @@ func encodeResult(result any) ([]byte, error) {
 	return json.Marshal(result)
 }
 
-// ready is the two gates a data node's copy puts in front of an operation —
-// the copy answering requests, and the asker's floors on the log of the
+// ready is the two gates a data node puts in front of an operation — no
+// better node left to ask, and the asker's floors on the log of the
 // operation's own domain reached ([opSpec.floorStream]) — and the same two
-// whether the asker is another node or this one's own router. reason is empty
-// when the operation may run; obsolete is every floor on a generation the log
-// has abandoned, which the asker stops carrying.
+// whether the asker is another node or this one's own router. reason is empty when the
+// operation may run; obsolete is every floor on a generation the log has
+// abandoned, which the asker stops carrying.
 //
 // THE FIRST GATE IS A PREFERENCE, and acceptLagging is the asker saying it has
-// no better node to ask: a copy that lags its logs is a worse choice than one
-// that does not, never a wrong one — the floors below and the read's own level
-// hold what it answers to what the caller must see. See [Router.route].
+// no better node to ask: a node that is a worse choice than another is never a
+// wrong one ([worse]). See [Router.route].
 //
 // A FLOOR ON ANOTHER DOMAIN'S LOG IS NOT WAITED FOR, though the estate carries
 // every domain's log: no operation reads another domain's rows at a position —
@@ -236,11 +236,10 @@ func encodeResult(result any) ([]byte, error) {
 func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []statelog.Position,
 	acceptLagging bool, spent statelog.Spent) (reason unservedReason, detail string, obsolete []statelog.Position) {
 
-	if !spec.ungated && !acceptLagging && b.Answers != nil && !b.Answers(ctx) {
-		return unservedLagging, fmt.Sprintf("%s's copy of %s lags its log — it has "+
-			"not drained it since it started, or has fallen past the snapshot slack "+
-			"of its end — so it answers only when no data node whose copy does not "+
-			"lag takes the request", self, spec.domain), nil
+	if !spec.ungated && !acceptLagging {
+		if reason, why := worse(ctx, self, spec, b); reason != "" {
+			return reason, why, nil
+		}
 	}
 	if spec.floorStream == "" || b.Committed == nil {
 		return "", "", nil
@@ -266,6 +265,56 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 		}
 	}
 	return "", "", obsolete
+}
+
+// worse is why this node is a WORSE NODE TO ASK for spec than another data
+// node, or empty where it is not: the node is confirmed behind the company's
+// configuration ([Backend.Current], [unservedBehindConfig]), or its copy of
+// the operation's domain lags its log ([Backend.Answers], [unservedLagging]) —
+// each said, where both hold.
+//
+// Both are preferences rather than refusals, and for one reason: what the
+// node answers is sound, only worse than another's. A copy that lags is held
+// to what the caller must see by the floors and the read's own level; a node
+// behind the configuration answers from the chart, the units, the scope and
+// the limits the fleet replaced, a stale value every reader of one already
+// meets when a revision changes it. So each sends the walk to every other data
+// node first, and is asked again, told to answer anyway, when none of them
+// takes the request — never refused, which on a fleet whose only data node
+// lags or failed an apply would refuse every call its seats make.
+//
+// TWO REASON CODES, because the asker does one thing with either answer — asks
+// the node last — and two more with the second: it asks it after every node
+// whose copy only lags, which answers under the current configuration
+// ([Router.lastResort]), and it REMEMBERS it, since a node stays behind its
+// configuration until an apply succeeds where a lag closes as the applier
+// catches up ([unservedBehindConfig]). Where both hold the answer is the one
+// that lasts and ranks last, so the asker remembers it.
+func worse(ctx context.Context, self string, spec *opSpec, b Backend) (unservedReason, string) {
+	var (
+		reason unservedReason
+		why    []string
+	)
+	if b.Current != nil && !b.Current() {
+		reason = unservedBehindConfig
+		why = append(why, fmt.Sprintf("%s is behind the company's configuration — the "+
+			"control plane has confirmed it behind the revision the fleet activated, so "+
+			"the chart, the units and the limits it would answer by are the ones the "+
+			"fleet replaced", self))
+	}
+	if b.Answers != nil && !b.Answers(ctx) {
+		if reason == "" {
+			reason = unservedLagging
+		}
+		why = append(why, fmt.Sprintf("%s's copy of %s lags its log — it has not drained "+
+			"it since it started, or has fallen past the snapshot slack of its end", self,
+			spec.domain))
+	}
+	if reason == "" {
+		return "", ""
+	}
+	return reason, strings.Join(why, "; and ") + " — so it answers only when no data " +
+		"node that is a better one to ask takes the request"
 }
 
 // waitFloor waits for this node to apply one floor, within the read budget —

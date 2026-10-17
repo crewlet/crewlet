@@ -308,12 +308,12 @@ flowchart TD
     op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node whose copy of the<br/>operation's log is in service?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
     local -- no --> order[Ask the live data nodes in order:<br/>last to answer that log, rendezvous,<br/>out of service for that log, silent ones last]
-    own -- behind its floor, lagging its logs,<br/>or refusing a read about itself --> order
+    own -- behind its floor, lagging its logs,<br/>behind the company's configuration,<br/>or refusing a read about itself --> order
     order --> reply{The data node's answer}
     reply -- ran it --> done[The answer]
     reply -- ran nothing --> order
-    order -- nobody left --> lagging{Did a copy decline<br/>only for lagging?}
-    lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors]
+    order -- nobody left --> lagging{Did a node decline only for lagging<br/>its logs, or for being behind<br/>the configuration?}
+    lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors: every copy<br/>that only lags before every node<br/>behind the configuration]
     last -- ran it --> done
     lagging -- no --> unserved[Refused: no data node served it]
     last -- nobody ran it --> unserved
@@ -387,7 +387,22 @@ flowchart TD
   is bounded on every committer.
 - **A node that ran nothing is passed over, whatever the operation**: one whose
   copy of the operation's log is out of service (`out_of_service`), whose copy
-  of it lags that log (asked again last), or that is behind the caller's floor.
+  of it lags that log or that is behind the company's configuration (each
+  asked again last — behind the configuration is a node the control plane
+  has confirmed `shed` or `stuck`, never one merely mid-rollout, whose chart,
+  units and limits are the revision the fleet replaced; see
+  [Control Plane](control-plane.md#where-the-gate-sits)), or that is behind
+  the caller's floor. Being behind the configuration lasts — until the node's
+  apply succeeds, or a person acts — so it answers `behind_config` and the
+  asking node remembers that for thirty seconds: meanwhile it skips the node,
+  asking it once, told to take the request, only when no other data node
+  runs the operation, and asks a repository's runner-up for its pushes. An
+  asker spends one refusal on such a node every thirty seconds rather than
+  one on every request. Where both kinds are left, a copy that only lags is
+  asked before a node behind the configuration, because its answer is held
+  to the current configuration — in that order whether or not the asking
+  node has heard the refusal yet, so every asker sends a repository's pushes
+  to the same node.
   So is one that refuses a *read* for a reason about itself — its applier did
   not reach the barrier a linearizable read appended in time (`behind`), it
   stalled, it holds a record it cannot decode, it was evicted, or it lost its

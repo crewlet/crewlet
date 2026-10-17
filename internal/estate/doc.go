@@ -107,8 +107,8 @@
 // depend on every asker keeping it.
 //
 // A node that answers "I did not run it" — its copy of the operation's domain
-// is out of service, it runs no native backend, that copy lags its log, or it
-// could not reach the
+// is out of service, it runs no native backend, that copy lags its log, the
+// node is behind the company's configuration, or it could not reach the
 // caller's floor in time — did not execute anything, so every class moves on
 // from it. So does a READ a copy refuses for a reason about ITSELF
 // ([statelog.ReadRefusal.Elsewhere]): its applier did not reach the barrier a
@@ -168,6 +168,59 @@
 // the snapshot slack would otherwise refuse its own seats until it caught up,
 // and a fleet the same burst put behind together would refuse everybody's.
 //
+// # A node behind the company's configuration is a worse node too
+//
+// A data node the control plane has CONFIRMED behind the epoch the fleet
+// activated — shed or stuck, never on lag alone, which every rollout produces
+// ([Backend.Current]) — gives up its seats, its schedules and its inbound work,
+// and goes on serving the estate: its copy is sound. What it supplies from its
+// own epoch (below) is not: the chart a tracker write resolves a people field
+// and a lead by, the unit a read renders, a search's scope, the limits a push
+// is decided under are the configuration the fleet replaced. Each is a VALUE
+// whose stale reading every reader already meets when a revision changes one,
+// so the node is a worse node to ask, as a lagging copy is — passed over for
+// every data node that is neither, and asked again, told to answer anyway,
+// when none of them runs the operation ([worse]). It is the WORSE of the two:
+// a copy that only lags answers held to the caller's floors and under the
+// current configuration, so the last resort asks every such copy first and
+// the nodes behind the configuration after them, each in the order the walk
+// reached it ([Router.lastResort]) — an order of the REASONS, the same on the
+// request that learns a node is behind as on every one after. Asked in the
+// order the walk met the refusals, the request that learned a committer was
+// behind sent it the push while every later one sent the lagging runner-up
+// its pushes, two nodes committing one repository in every window.
+//
+// Refused instead, a fleet whose only data node failed an apply — a
+// stateless node beside one data node applies what the data node could not —
+// would answer none of its tracker, pages or usage operations. It covers
+// EVERY operation rather than the ones that read the chart, because a list of
+// which operation reads which seam is a second list to keep in step with the
+// decides, and one left off it would serve a stale chart first.
+//
+// It answers in a reason of its own, `behind_config` ([unservedBehindConfig]),
+// because unlike a lag it LASTS — until the node's apply succeeds, and for a
+// stuck node until a person acts — so the asker REMEMBERS it for thirty
+// seconds ([Router.markBehindConfig]) and meanwhile does not ask the node at
+// all: it comes to it only as the last resort, told at once to answer anyway,
+// and a keyed operation asks the repository's runner-up instead. So each
+// asker pays one refusal per data node behind the configuration every thirty
+// seconds — the one that tells it, or tells it again once the window ends —
+// and nothing else: an operation a current data node runs never reaches the
+// node behind, and one only the node behind can run is one ask. Forgotten
+// between requests, as a lag is, every operation of every asker paid one
+// refusal per data node behind for as long as they stayed behind — on a
+// stateless node beside one stuck data node every estate call was two
+// requests — and every push to a repository such a node commits for sent it
+// the whole proposal before the runner-up was asked.
+//
+// A GRANT judged from the chart would
+// be different — answered anyway by the last resort, it would be decided by
+// the revision that may have revoked it — and no serving decide judges one:
+// the engine's TestEveryEpochSeamAServingDecideReadsIsClassified holds every
+// seam a serving decide reads to a class. Admission's ping is held back by
+// neither preference, nor by an asker's memory of the second ([op.ungated]):
+// it asks the copy's own seat admission and routes no later operation.
+//
 // # Which data nodes to ask is answered from memory
 //
 // Every request asks the [Placement] who holds the estate, so the placement
@@ -220,7 +273,9 @@
 // org a knowledge search is scoped by — is supplied by the SERVING node from
 // its own current epoch ([ServerSeams]). Every node reads the same activation,
 // so the two differ only for the instant an apply is landing, which is the same
-// window every surface already has. The gate in wire_test.go walks every type
+// window every surface already has — and on a node confirmed behind the
+// company's configuration, which is asked last for that reason (above). The
+// gate in wire_test.go walks every type
 // an operation carries and fails on any field that would silently not arrive,
 // unless it is named, with its reason, in [carriedByServer].
 //

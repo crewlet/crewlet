@@ -257,6 +257,12 @@ func (t Timing) refusal() error {
 // one demotion of its own, since no sticky node moves it off a node that
 // refused: a node that ran nothing for it is asked last for that operation
 // ([Router.markDeclined]).
+//
+// A node that said inside [suspectFor] that it is BEHIND THE COMPANY'S
+// CONFIGURATION is not asked in either order at all: it is asked only as the
+// walk's last resort, after every copy that only lags, told at once to answer
+// anyway ([Router.markBehindConfig]), for every operation but admission's
+// ungated ping.
 type Router struct {
 	self      string
 	queue     Asker
@@ -283,6 +289,12 @@ type Router struct {
 	// declined is when each node that ran nothing for a KEYED operation —
 	// answered `no_backend` — may be asked ahead of the rest for it again.
 	declined map[nodeOp]time.Time
+	// behindConfig is when each node that answered `behind_config` may be
+	// asked an operation the preference holds back ahead of the last resort
+	// again ([Router.markBehindConfig]). Per NODE, because the answer is:
+	// whether a node serves the company's configuration is the node's
+	// posture, the same for every copy it holds and every operation.
+	behindConfig map[string]time.Time
 	// admitted caches a REMOTE node's answer to the admission question —
 	// see [Router.Serves] — nil until one has been asked.
 	admitted *admission
@@ -328,6 +340,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		timing: opts.Timing,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
 		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
+		behindConfig: map[string]time.Time{},
 	}, nil
 }
 
@@ -391,6 +404,14 @@ const writeAttempt = 60 * time.Second
 // IT ([Router.markDeclined]), for the same reason again: what makes a
 // committer refuse — a maintenance window, a stop, an eviction, a log it is
 // behind — lasts minutes, not one request.
+//
+// AND HOW LONG A NODE BEHIND THE COMPANY'S CONFIGURATION IS ASKED ONLY AS THE
+// LAST RESORT ([Router.markBehindConfig]). That lasts longer still — the
+// control plane moves a node back only at its next posture decision after an
+// apply succeeds, and a stuck node stays until a person acts — so the window
+// is how long a router goes on asking a node that has since become current
+// last, and once a window, the refusal's round trip a router pays to learn
+// that the node is still behind.
 const suspectFor = 30 * time.Second
 
 // admissionTrust is how long a remote data node's answer to the admission
@@ -559,8 +580,8 @@ type held struct {
 }
 
 // walk is one request's account of the nodes it asked: why each ran nothing,
-// the answer it keeps while it asks the next, and the copies it passed over
-// for LAGGING their logs, which it comes back to last.
+// the answer it keeps while it asks the next, and the nodes it passed over as
+// WORSE ones to ask ([worse]), which it comes back to last.
 type walk struct {
 	reasons  []string
 	fallback *held
@@ -570,13 +591,25 @@ type walk struct {
 	// node ([ErrUnserved.Silent]).
 	silent bool
 
-	// lagging is every node whose copy answered [unservedLagging], in the
-	// order the walk asked them — this node among them, by its own id,
-	// where its own copy did — so the last resort asks them in that order
-	// too: this node first for an operation any copy answers equally, and
-	// the key's order for a keyed one, whose committer the last resort
-	// must not jump either.
-	lagging []string
+	// lagging is every node that answered that its copy ONLY lags its logs
+	// ([unservedLagging]), and behindConfig every node behind the company's
+	// configuration — it answered so ([unservedBehindConfig]), or the router
+	// remembers it did and did not ask it ([Router.remembersBehind]) — each
+	// in the order the walk reached them, this node among them by its own id
+	// where its own copy answered so.
+	//
+	// TWO LISTS, because the last resort asks the first before the second
+	// ([Router.lastResort]): a copy that only lags answers under the current
+	// configuration, a node behind it under the one the fleet replaced. One
+	// list in the order the walk reached the refusals made that preference a
+	// matter of WHEN the router learned of them — the request that learned
+	// a node was behind asked it first wherever rendezvous ranked it first,
+	// and every request the router remembered it for asked it last — so a
+	// repository's pushes went to two committers in every window. Within each
+	// list the walk's order stands: this node first for an operation any copy
+	// answers equally, and the key's order for a keyed one, whose committer
+	// the last resort must not jump among nodes of the same standing.
+	lagging, behindConfig []string
 
 	// spent is what the request has already paid for on the nodes it asked
 	// — the read index one node's barrier established, every position one
@@ -608,8 +641,9 @@ func (w *walk) note(format string, args ...any) {
 }
 
 // route runs one operation — this node first where its copy serves, then the
-// other data nodes in order, and LAST the copies that answered that they lag
-// their logs.
+// other data nodes in order, and LAST the nodes that answered that they are a
+// worse one to ask: a copy that lags its logs, or a node behind the company's
+// configuration ([worse]).
 //
 // # A copy that lags is a worse node to ask, never no node
 //
@@ -625,6 +659,21 @@ func (w *walk) note(format string, args ...any) {
 // data node whose applier a burst put a thousand records behind refused every
 // call its own seats made until it caught up; a fleet the same burst put
 // behind together refused every node's.
+//
+// A node confirmed behind the company's configuration is asked last by the
+// same walk, and for the same reason: what it answers is sound — it supplies
+// the configuration the fleet replaced, a value every reader meets anyway
+// when a revision changes it — only worse than a current node's answer; and
+// refused, a fleet whose only data node failed an apply would answer nothing.
+// Unlike a lag, which the router forgets, its answer is REMEMBERED for
+// [suspectFor], because it lasts: until the window ends the walk does not ask
+// the node at all, and comes to it only as the last resort, told at once to
+// answer anyway ([Router.markBehindConfig]) — one ask where every better node
+// runs nothing, and none where one runs it. And it is the WORSE of the two:
+// the last resort asks every copy that only lags first, whose answer is held
+// to the current configuration, and a node behind the configuration after
+// them ([walk.lagging]) — on the request that learns it as on every one
+// after.
 //
 // # A keyed operation asks in its key's order
 //
@@ -684,6 +733,16 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 			}
 			continue
 		}
+		if r.remembersBehind(spec, node) {
+			// IT WOULD REFUSE AN ORDINARY ASK, as it did inside the
+			// window, so it is sent none: the last resort asks it, told
+			// to answer anyway, once every other node has run nothing.
+			w.behindConfig = append(w.behindConfig, node)
+			w.note("%s: said within %v that it is behind the company's configuration, "+
+				"so it is asked only when no other data node takes the request", node,
+				suspectFor)
+			continue
+		}
 		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false, w.spent)
 		if err != nil {
 			return nil, err
@@ -707,16 +766,23 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; "), NodeSilent: w.silent}
 }
 
-// lastResort asks the copies the walk passed over for lagging their logs, in
-// the order it asked them ([walk.lagging]) — this node's own in-process —
-// telling each to take the request anyway. final is set when one of them gives
-// the answer.
+// lastResort asks the nodes the walk passed over as worse ones to ask, telling
+// each to take the request anyway — this node's own in-process: every copy
+// that only lags its logs FIRST, then every node behind the company's
+// configuration, each in the order the walk reached it ([walk.lagging]). The
+// order is the REASONS', so it is the same on every request whatever the
+// router has heard: a copy that lags answers held to the caller's floors and
+// under the current configuration, a node behind it under the configuration
+// the fleet replaced. final is set when one of them gives the answer.
 func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
 	budget time.Duration, w *walk) (value any, final bool, err error) {
 
-	lagging := w.lagging
-	w.lagging = nil
-	for _, node := range lagging {
+	// TAKEN AND CLEARED before anything is asked: a node that answers the
+	// last resort with the same refusal again — one that does not honour
+	// the say-so — is added back to a list nothing reads, never asked twice.
+	worse := slices.Concat(w.lagging, w.behindConfig)
+	w.lagging, w.behindConfig = nil, nil
+	for _, node := range worse {
 		if node == r.self {
 			if value, final, ranErr := r.tryLocal(ctx, spec, x, true, w); final {
 				return value, true, ranErr
@@ -761,9 +827,16 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	value, refusal, why, ran := r.runLocal(ctx, spec, b, x, acceptLagging, w.spent)
 	switch {
 	case why != "":
+		// IN-PROCESS, so nothing is remembered: asking this node's own
+		// copy again costs no round trip. It still waits its turn by its
+		// REASON — a copy of its own behind the configuration is asked after
+		// a peer's that only lags, because in-process saves a round trip and
+		// never makes a decide under the replaced configuration sound.
 		switch refusal {
 		case unservedLagging:
 			w.lagging = append(w.lagging, r.self)
+		case unservedBehindConfig:
+			w.behindConfig = append(w.behindConfig, r.self)
 		case unservedBehind:
 			w.waitedOut(r.floorsFor(spec))
 		}
@@ -857,6 +930,14 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 		switch rep.Unserved {
 		case unservedLagging:
 			w.lagging = append(w.lagging, node)
+		case unservedBehindConfig:
+			// ASKED LAST, after every copy that only lags — and
+			// remembered, because unlike a lag it lasts: forgotten, every
+			// later request, keyed or not, sent the node a refusal's round
+			// trip first — a push its whole proposal — for as long as it
+			// stayed behind.
+			w.behindConfig = append(w.behindConfig, node)
+			r.markBehindConfig(node)
 		case unservedBehind:
 			w.waitedOut(r.floorsFor(spec))
 		case unservedOutOfService:
@@ -1033,13 +1114,16 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 	return rep, true, nil
 }
 
-// order is the order the data nodes are asked in for an operation reading
-// copies ([opSpec.copies] — its own domain's, and any other's it also reads):
-// the STICKY node for those copies first, then the rest, then every node that
-// answered `out_of_service` for them inside [suspectFor], and every
-// SUSPECT node last — [rendezvous.Order] on this node's own id within each
-// class, kept by a STABLE sort, so the classes only move nodes between them —
-// and never this node, which the router asks in-process or not at all.
+// order is the order the data nodes are asked in for spec, an operation any
+// copy answers equally, reading [opSpec.copies] — its own domain's, and any
+// other's it also reads: the STICKY node for those copies first, then the
+// rest, then every node that answered `out_of_service` for them inside
+// [suspectFor], and every SUSPECT node last — [rendezvous.Order] on this
+// node's own id within each class, kept by a STABLE sort, so the classes only
+// move nodes between them — and never this node, which the router asks
+// in-process or not at all. A node the router remembers behind the company's
+// configuration ([Router.markBehindConfig]) keeps its place, from which the
+// walk hands it to the last resort unasked ([Router.classes]).
 //
 // # Per domain, because the appliers are
 //
@@ -1053,13 +1137,13 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 // second, was answered by the first and made it sticky back — every call paid
 // a round trip that ran nothing, and a third node serving both was never asked
 // first at all.
-func (r *Router) order(copies string, nodes []string) []string {
+func (r *Router) order(spec *opSpec, nodes []string) []string {
 	// rendezvous.Order hands back a slice of its own, so the placement's
 	// listing is never the one trimmed or sorted here; and removing members
 	// from its answer leaves the rest in rendezvous order.
 	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
 		func(n string) bool { return n == r.self || n == "" })
-	class := r.classes(copies, "", true)
+	class := r.classes(spec, false)
 	slices.SortStableFunc(nodes, func(a, b string) int { return class(a) - class(b) })
 	return nodes
 }
@@ -1070,18 +1154,21 @@ func (r *Router) order(copies string, nodes []string) []string {
 // one.
 func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 	if key == "" {
-		return r.order(spec.copies, nodes)
+		return r.order(spec, nodes)
 	}
-	return r.keyedOrder(spec.copies, spec.name, key, nodes)
+	return r.keyedOrder(spec, key, nodes)
 }
 
-// keyedOrder is the order a KEYED operation, op, asks the data nodes in:
+// keyedOrder is the order a KEYED operation, spec, asks the data nodes in:
 // [rendezvous.Order] on the KEY over every data node — THIS ONE INCLUDED where
 // it holds the estate, since the node the key prefers may be this one, and an
 // empty id never — with every node that answered `out_of_service` for the
-// operation's copies or ran nothing for op inside [suspectFor] after the rest
+// operation's copies or ran nothing for it inside [suspectFor] after the rest
 // and every node that went silent inside it last, the key's order kept within
-// each by a STABLE sort.
+// each by a STABLE sort. A node the router remembers behind the company's
+// configuration keeps its place in the key's order, from which the walk hands
+// it to the last resort unasked, so every asker's last resort meets the nodes
+// behind the configuration in the key's order ([Router.classes]).
 //
 // NO STICKY NODE: which node answered last says nothing about where a
 // repository's pushes should meet, and every node computing the same order
@@ -1089,7 +1176,7 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // whole burst commits it in a few records, where two committers each holding
 // part of it contend on its one subject and each round one loses costs it a
 // re-decide and a re-append of its whole batch.
-func (r *Router) keyedOrder(copies, op, key string, nodes []string) []string {
+func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string) []string {
 	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
 		return n == "" || n == r.self
 	})
@@ -1099,25 +1186,34 @@ func (r *Router) keyedOrder(copies, op, key string, nodes []string) []string {
 	// rendezvous.Order keeps duplicates, adjacent: a placement listing a
 	// node twice names it once here.
 	ordered := slices.Compact(rendezvous.Order(key, candidates))
-	class := r.classes(copies, op, false)
+	class := r.classes(spec, true)
 	slices.SortStableFunc(ordered, func(a, b string) int { return class(a) - class(b) })
 	return ordered
 }
 
-// classes is how the router's memory ranks each node for an operation reading
-// copies, lowest asked first: the STICKY node for those copies (where stay is
-// set — never for a keyed order), then every other node, then every node that
-// answered `out_of_service` for them — or, for a keyed operation op, ran
-// nothing for it — inside [suspectFor], then every SUSPECT node. It sweeps out
-// every window that has lapsed. ONE reading of the memory for both orders, so
-// a node demoted for the unkeyed walk is demoted alike for the keyed one; op
-// is empty for an unkeyed order, which no decline is remembered for.
-func (r *Router) classes(copies, op string, stay bool) func(node string) int {
+// classes is how the router's memory ranks each node for spec, lowest asked
+// first: the STICKY node for its copies (never for a keyed order), then every
+// other node, then every node that answered `out_of_service` for its copies —
+// or, for a keyed operation, ran nothing for it — inside [suspectFor], then
+// every SUSPECT node. It sweeps out every window that has lapsed. ONE reading
+// of the memory for both orders, so a node demoted for the unkeyed walk is
+// demoted alike for the keyed one.
+//
+// A node remembered behind the company's configuration HAS NO CLASS of its
+// own: the walk never asks it from its place — it hands it straight to the
+// last resort ([Router.remembersBehind]) — so its place decides only where it
+// stands among the other nodes behind the configuration there, and that must
+// be the place a router that has heard of none of them gives it. Demoted, a
+// router that remembered one node behind and had not yet heard another asked
+// the unheard one first; a router that had heard neither asked them in the
+// key's order, and the two sent one repository's pushes to two committers.
+// The memory is swept here with the rest.
+func (r *Router) classes(spec *opSpec, keyed bool) func(node string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sticky := ""
-	if stay {
-		sticky = r.sticky[copies]
+	if !keyed {
+		sticky = r.sticky[spec.copies]
 	}
 	now := r.now()
 	suspect := map[string]bool{}
@@ -1133,7 +1229,7 @@ func (r *Router) classes(copies, op string, stay bool) func(node string) int {
 		switch {
 		case !now.Before(until):
 			delete(r.passedOver, c)
-		case c.copies == copies:
+		case c.copies == spec.copies:
 			passedOver[c.node] = true
 		}
 	}
@@ -1141,8 +1237,13 @@ func (r *Router) classes(copies, op string, stay bool) func(node string) int {
 		switch {
 		case !now.Before(until):
 			delete(r.declined, d)
-		case d.op == op:
+		case keyed && d.op == spec.name:
 			passedOver[d.node] = true
+		}
+	}
+	for n, until := range r.behindConfig {
+		if !now.Before(until) {
+			delete(r.behindConfig, n)
 		}
 	}
 	return func(n string) int {
@@ -1212,6 +1313,47 @@ func (r *Router) markDeclined(node, op string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.declined[nodeOp{node: node, op: op}] = r.now().Add(suspectFor)
+}
+
+// markBehindConfig remembers for [suspectFor] that node answered
+// `behind_config`: until the window ends, every operation the preference holds
+// back — every one but an ungated one — asks it only as the walk's last
+// resort, after every copy that only lags, told at once to answer anyway
+// ([Router.remembersBehind]), and a keyed one asks its runner-up instead.
+//
+// THE NODE, not a copy or an operation: whether it serves the company's
+// configuration is its posture, the same for everything it holds, so one
+// refusal tells the router about every domain and every repository it
+// commits for.
+//
+// NOTHING BUT THE WINDOW ENDS IT. The one answer that could — the node running
+// a held-back operation from an ordinary ask — is one the router does not
+// send it while it remembers; the last resort's answer was given because it
+// was told to answer anyway, and the ungated ping's skips the preference, so
+// neither says the node is current again. A node current again is asked last
+// until the window ends; one still behind costs a router one refusal a window.
+// Its sticky places stay: while it is remembered the walk passes it to the
+// last resort wherever it ranks, and once the window ends the node asked first
+// is the one that learns whether it is still behind.
+func (r *Router) markBehindConfig(node string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.behindConfig[node] = r.now().Add(suspectFor)
+}
+
+// remembersBehind reports whether the walk hands node straight to its last
+// resort for spec rather than ask it: it answered `behind_config` inside
+// [suspectFor] ([Router.markBehindConfig]), and spec is one the preference
+// holds back at all — an ungated operation, admission's ping, is not, on the
+// node that answers it or here.
+func (r *Router) remembersBehind(spec *opSpec, node string) bool {
+	if spec.ungated {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	until, ok := r.behindConfig[node]
+	return ok && r.now().Before(until)
 }
 
 // markAnswered makes node the one asked first for the operations that read
