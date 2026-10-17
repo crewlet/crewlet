@@ -107,17 +107,17 @@ type UnblockScan struct {
 // change that moved the status and something else is filed under the something
 // else and was invisible here.
 //
-// The reachable case is a BULK CANCEL — `StatusCancelled` is in the `done`
-// group, whose own description names this path — so the apply stamps each task
-// finished and clears every edge naming it as a blocker, and its dependents
-// become workable. Such a record is quiet by design, and nothing outside
-// [Writer.TellUnblocked] ever fills `Snapshot.Unblocked`, so this scan is the
-// ONLY path by which those people hear. Filed under whatever else the patch
-// moved, the join never reached them — and the horizon below, computed from
-// the same predicate, then advanced past the record on the next status row
-// anywhere in the log, so it was never reconsidered. "A gap of any length is
-// caught up on the next tick" does not hold for a row the predicate cannot
-// name.
+// The case it exists for is a QUIET CANCEL filed under another word —
+// `StatusCancelled` is in the `done` group, whose own description names this
+// path — so the apply stamps each task finished and clears every edge naming
+// it as a blocker, and its dependents become workable. A quiet record wakes
+// nobody, and nothing outside [Writer.TellUnblocked] ever fills
+// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
+// hear. Filed under whatever else the patch moved, the join never reached them
+// — and the horizon below, computed from the same predicate, then advanced
+// past the record on the next status row anywhere in the log, so it was never
+// reconsidered. "A gap of any length is caught up on the next tick" does not
+// hold for a row the predicate cannot name.
 //
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a

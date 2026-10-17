@@ -55,7 +55,6 @@ var sentinels = []sentinel{
 
 	{"tracker.ErrAlreadyAnswered", tracker.ErrAlreadyAnswered},
 	{"tracker.ErrBadQuery", tracker.ErrBadQuery},
-	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
 	{"tracker.ErrForbidden", tracker.ErrForbidden},
 	{"tracker.ErrInboxFull", tracker.ErrInboxFull},
 	{"tracker.ErrInvalid", tracker.ErrInvalid},

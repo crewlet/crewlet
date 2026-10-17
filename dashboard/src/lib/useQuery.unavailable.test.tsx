@@ -91,7 +91,7 @@ test("an unavailable answer is asked again after the engine's wait, and fills in
   expect(text()).toBe("answered");
 });
 
-// A LONGER WAIT IS HONOURED TOO: a node grinding through a bulk apply that
+// A LONGER WAIT IS HONOURED TOO: a node grinding through a long backlog that
 // asks for twelve seconds is not asked at five.
 test("a long hint is waited out", async () => {
   const { asked } = mount([refuse("unavailable", 12), answer]);

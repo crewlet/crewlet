@@ -15,8 +15,8 @@ import (
 // THE SCOPE INDEX IS THE SAME ROWS AT EVERY CHUNK WIDTH.
 //
 // [tables.retain] writes one row per term of a record's scope, and a record's
-// scope is data-driven: the paths NEST, so a bulk edit over a project states
-// the project and every task under it. It was one statement per path until
+// scope is data-driven: the paths NEST, and a write that names a task's keys
+// states the task and every key beside it. It was one statement per path until
 // [store.InsertRows] existed.
 //
 // The hazard chunking introduces is not the count, it is COLLISION INSIDE ONE

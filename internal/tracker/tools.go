@@ -85,7 +85,7 @@ const (
 	// TaskActivityTool is what HAPPENED, which no board can answer: a
 	// board is about what is there now, and every question about a change
 	// — who moved this, when did it stop being blocked, what did that
-	// bulk edit do — is about the ordered log instead.
+	// merge do — is about the ordered log instead.
 	TaskActivityTool = "task_activity"
 
 	// MyWorkTool is the one call a turn opens with. Seven lists in one
