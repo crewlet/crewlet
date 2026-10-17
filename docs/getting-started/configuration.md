@@ -751,7 +751,7 @@ field and the same shape:
 | OpenRouter | `reasoning` and `reasoning_details` (text with a signature, summaries, encrypted payloads) | The details' sequence must match what the model produced; `reasoning_content` is accepted as an alias |
 | Groq, vLLM, Ollama, Together's other models | `reasoning` | Accepted on input (vLLM's interleaved thinking relies on it) |
 | A LiteLLM proxy in front of Claude | `thinking_blocks`, signed | Required beside a tool call, or Anthropic answers **400** |
-| Gemini 3 on Google's OpenAI-compatible endpoint | a thought signature on each tool call (`extra_content`; LiteLLM's `provider_specific_fields`) | Required on the calls of the current step, or **400** |
+| Gemini 3 on Google's OpenAI-compatible endpoint | a thought signature on each tool call (`extra_content`; LiteLLM's `provider_specific_fields`) | Required on the first call of every step of the current turn, or **400**; for a call Gemini did not generate, Google documents `skip_thought_signature_validator` in its place |
 | Mistral reasoning models | `content` as a list of chunks, the thinking in a `thinking` chunk | Send the whole message back, thinking chunk included |
 | OpenAI | nothing | — |
 
@@ -767,14 +767,14 @@ visible text is its `text` chunks rather than the list's JSON.
 
 **An empty reasoning is still sent.** A round that reasoned nothing goes back
 with the empty value its host sent (`"reasoning_content": ""`); only a `null`
-counts as no field. And once any turn of a request carries
-`reasoning_content`, every assistant turn of it does — the empty string for a
-round whose stream never named the field, and for a turn another endpoint or
-backend wrote, whose reasoning this host cannot read — because Moonshot
-refuses an assistant tool-call message whose `reasoning_content` is missing
-while thinking is on, and DeepSeek wants every earlier turn's. No other field
-is filled in: an empty `reasoning_details` block would be a sequence the model
-never produced.
+counts as no field. And once any turn of a request carries `reasoning_content`
+— on DeepSeek's and Moonshot's own APIs, from the first request — every
+assistant turn of it does: the empty string for a round whose stream never
+named the field, and for a turn another endpoint or backend wrote, whose
+reasoning this host cannot read — because Moonshot refuses an assistant
+tool-call message whose `reasoning_content` is missing while thinking is on,
+and DeepSeek wants every earlier turn's. No other field is filled in: an empty
+`reasoning_details` block would be a sequence the model never produced.
 
 **Within one tool loop, and across a suspension.** Every assistant turn in a
 request belongs to the phase that is still running: a new turn starts from
@@ -788,12 +788,57 @@ When a chain moves a running loop to a member on a different `base_url`, the
 turns the first member wrote go to the second without their reasoning. Once the
 second member has written a turn of that loop carrying `reasoning_content`, the
 first member's turns go to it with an empty one, which is what Moonshot and
-DeepSeek check for. Before that, and on a host that checks more than the
-field's presence (Gemini 3's thought signatures within a step, a LiteLLM
-proxy's signed thinking blocks), the request may be refused, and the turn then
-fails on that member as it would on any 400. A chain whose members serve such a
-model should keep them on one endpoint: two `providers.llm` entries on the same
-`base_url` with different keys or models share their reasoning.
+DeepSeek check for — and on their own APIs, which the `base_url` names
+(`api.deepseek.com`; `api.moonshot.ai` and `api.moonshot.cn`), from the first
+request after the fallback, since that request is the one either would refuse.
+Before that on another host speaking the field (Together's Kimi K3, whose host
+serves other models beside it), and on a host whose rule needs a value only its
+own model can write (a LiteLLM proxy's signed thinking blocks), the request may
+be refused, and the turn then fails on that member as it would on any 400. A
+chain whose members serve such a model should keep them on one endpoint: two
+`providers.llm` entries on the same `base_url` with different keys or models
+share their reasoning.
+
+**Gemini 3 is given what it checks from the first request.** Google refuses a
+tool-call step that has no thought signature, and a fallback onto Gemini hands
+it steps it never signed: the other members' rounds, a round Google's *other*
+endpoint signed (whose signature, like all reasoning, goes back only to the
+endpoint that wrote it), and a round an older Gemini wrote on the same
+`base_url` without one (a round that endpoint wrote goes back with whatever it
+kept, whatever the model). Each such step goes with
+`skip_thought_signature_validator` as the thought signature of its first call,
+beside whatever else that call carries — the value Google documents for
+"functionCall parts that were not generated by the API" — and a step that
+carries a signature of its own keeps it. This applies to:
+
+- **Google's own endpoints**, known from the `base_url`'s host: the Gemini API
+  (`generativelanguage`) or Vertex AI (`aiplatform`) under any of the names
+  [Google gives a service's endpoints](https://docs.cloud.google.com/docs/security/compliance/endpoints)
+  — global (`aiplatform.googleapis.com`), locational
+  (`us-central1-aiplatform.googleapis.com`), regional or multi-regional
+  (`aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com`,
+  Vertex AI's jurisdictional endpoints, which serve only Gemini 3 and later),
+  the private name of a regional one (`aiplatform.us.p.rep.googleapis.com`),
+  and a Private Service Connect endpoint's
+  (`aiplatform-<endpoint>.p.googleapis.com`) — with a model whose id names a
+  Gemini (`gemini-…`, or `google/gemini-…`);
+- **any other `base_url` that has passed Google's signature through** — a
+  gateway forwarding Google's own fields — once it has written a signed step in
+  the loop.
+
+A Gemini from before generation 3 (`gemini-2.5-…` and older), which Google
+does not hold to this rule, is sent none; an id that names no generation
+(`gemini-flash-latest`) is taken as the current one. Every unsigned step of the
+loop carries it, not only those of the turn Google validates, because how
+Google counts a turn across a user message after tool results (a person's note
+to a running turn, an extension's nudge) is not documented; a step outside
+that turn is not checked, and the stand-in carries no reasoning, as the step
+without it carried none. Google calls the stand-in a last resort that "will
+negatively impact model performance" — and a step written elsewhere has no
+signature of Gemini's to offer instead. A gateway that carries the signature
+in a field of its own (LiteLLM, OpenRouter) is sent nothing extra: it
+translates its field into Google's, and what it sends for a step it holds no
+signature for is its own decision (LiteLLM sends Google's stand-in).
 
 ## Tier A
 
