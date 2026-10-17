@@ -6117,10 +6117,12 @@ that makes a retry safe and a retried create would file the item twice.
 
 Every operation is bound to what its write SAYS as well as to the key: the
 same key sent with another request — a page saved with another body, renamed
-to another title, a remark rewritten again — is another operation and lands
-as asked, rather than being answered from the ledger as the first one with
-nothing of it written. The same request again is the same operation, which is
-what makes it a retry.
+to another title, the same words posted in another comment thread, a remark
+rewritten again — is another operation and lands as asked, rather than being
+answered from the ledger as the first one with nothing of it written. The same
+request again is the same operation, which is what makes it a retry; what the
+engine reads off the words for you, such as who a comment mentions, is not
+part of it.
 
 ### A purge
 
