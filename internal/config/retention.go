@@ -93,6 +93,30 @@ const (
 	PagesLogMaxBytesFloor   int64 = 1 << 30
 	PagesLogMaxBytesCeiling int64 = 256 << 30
 
+	// ChatLogMaxBytesFloor and ChatLogMaxBytesCeiling bound the chat log's.
+	//
+	// THE FLOOR IS THE GIBIBYTE every corpus-sized log takes, because this
+	// is one: it grows with what the company says, as the mutation log
+	// grows with what it files, and below a gibibyte it is a window that
+	// refuses a message somebody typed within a month of a blocked trim at
+	// the declared census. Not the identity and usage logs' 64 MiB, which
+	// size a headcount and a census of objects a small company has few of.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a sizing: at the supported
+	// fifty thousand messages a day (about 75 MB of log a day at a
+	// kibibyte and a half a record) 256 GiB is about a decade of a
+	// COMPLETELY BLOCKED trim, which no backup gap or donor outage a
+	// retention gate tolerates comes near, and far above anything an unset
+	// value asks for.
+	//
+	// THE SAME NUMBER AS THE KNOWLEDGE BASE'S, NOT FOR ITS REASON. That one
+	// is a quarter of the mutation log's for the corpus ratio
+	// DerivedPagesLogDivisor states; this one follows from the census and a
+	// window, so the two are separate constants and either may move without
+	// the other.
+	ChatLogMaxBytesFloor   int64 = 1 << 30
+	ChatLogMaxBytesCeiling int64 = 256 << 30
+
 	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
 	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
 	//
@@ -210,6 +234,37 @@ const (
 	// the tracker's ceiling a blocked trim fills both in the same time.
 	DerivedPagesLogDivisor = 4
 
+	// DerivedChatLogDivisor caps an unset ChatLogMaxBytes on a small
+	// volume: the chat log asks for its domain's excursion budget
+	// (`chat.ChatLogMaxBytes`, 8 GiB), but never for more than this
+	// fraction of what an unset mutation log derives from the same volume
+	// ([DerivedLogMaxBytes]) — a sixteenth of the free space, so the whole
+	// ask from 128 GiB free and 4 GiB on a 64 GiB volume.
+	//
+	// FOUR, MEASURED rather than borrowed from the knowledge base's ratio,
+	// although it is the same number. Every derived ask is scaled into one
+	// budget in proportion, so what the chat log asks for comes out of the
+	// vector changelog's room for a model change — the excursion that log
+	// is sized for, and one designed not to alarm. On a 64 GiB first boot
+	// under an embedded broker the logs share 24 GiB; the reference
+	// company's fifth-year model change puts 7.9 GiB in the changelog, and
+	// `log_headroom` fires below a tenth of headroom, so the changelog has
+	// to be created at 8.8 GiB or more. With chat's ask capped at a quarter
+	// it is created at 9.0 GiB (about 12 % headroom at the peak); at a
+	// third, 8.7 (about 9.5 %, under the alarm); uncapped at 8 GiB, 8.2
+	// (about 4 %). Of the three, only the quarter keeps that boot clear of
+	// the alarm. A first boot clears it from about 62 GiB free, against 57
+	// before the chat log joined the budget and 68 uncapped.
+	//
+	// WHAT IT COSTS the chat log, stated: its horizon under a completely
+	// blocked trim on a small volume. Created at 2.25 GiB on that 64 GiB
+	// first boot, rather than 4.1 uncapped, it refuses ordinary writes after
+	// about 75 days of a fully blocked trim at the declared census rather
+	// than 137, and after about 30 at the supported 50 000 messages a day
+	// rather than 55. The log_headroom alarm names the log a tenth of the
+	// way before either, and from 128 GiB free the cap no longer binds.
+	DerivedChatLogDivisor = 4
+
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
 	// DerivedLogMaxBytesCeiling clamp the result.
@@ -248,9 +303,10 @@ const (
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
-	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
-	// knowledge base), so anything past it is a unit mistake rather than a
-	// deployment.
+	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB each of
+	// knowledge base and chat, 64 GiB of usage and 16 GiB of identity —
+	// about 3.6 TiB together), so anything past it is a unit mistake rather
+	// than a deployment.
 	StoreMaxBytesFloor   int64 = 6 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
