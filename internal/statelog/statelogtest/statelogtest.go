@@ -61,6 +61,15 @@
 // has no control domain of its own, so it bends the candidate's own reader and
 // domain each way either could break its rule and requires every bend to be
 // reported.
+//
+// [RunEvictionGates] is that family for a domain whose ONLY apply-nowhere gate
+// is the eviction window — no deletion marker on any object — and it holds the
+// window half of the same rule on the same terms, plus the node-gate answer to
+// every other gate the domain installs. Two entry points rather than one with
+// a hook a domain may leave nil, because a hook a domain may omit is one a
+// domain that has a marker can forget with nothing failing. This package's own
+// tests run it over a control whose one gate is the window, which is what says
+// its cases can come back clean.
 package statelogtest
 
 import (
