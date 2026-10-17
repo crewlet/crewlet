@@ -3,8 +3,9 @@ package authz
 import "github.com/crewlet/crewlet/internal/iam"
 
 // AppFor is the app a kind of object belongs to: a task, a project and a saved
-// view are the tracker's, a page and a page container the knowledge base's,
-// and every other kind — a person, a unit, the company — belongs to no app.
+// view are the tracker's, a page and a page container the knowledge base's, a
+// chat room and a message the chat's, and every other kind — a person, a unit,
+// the company — belongs to no app.
 //
 // THE ONE PER-APP HELPER, beside [Shows]. A cross-app answer — the company
 // feed, the decisions a person is waiting on, a page's links back to the work
@@ -19,6 +20,8 @@ func AppFor(k ObjectKind) iam.Grant {
 		return iam.GrantTracker
 	case KindPage, KindContainer:
 		return iam.GrantKnowledge
+	case KindChannel, KindMessage:
+		return iam.GrantChat
 	}
 	return ""
 }

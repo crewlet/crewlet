@@ -1193,7 +1193,7 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 					"naming grants", got.status, got.body)
 			}
 			if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-				"admin, tracker, knowledge") {
+				"admin, tracker, knowledge, chat") {
 				t.Errorf("the refusal reads %q, want the permissions named", detail)
 			}
 			if len(r.writer.calls) != 0 {
@@ -1325,7 +1325,7 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 			}
 			if tc.status != http.StatusOK {
 				if !strings.Contains(fmt.Sprint(got.body["detail"]), `"payroll"`) ||
-					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, tracker, knowledge") {
+					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, tracker, knowledge, chat") {
 					t.Errorf("the refusal reads %v, want the name and the set", got.body)
 				}
 				if len(r.writer.calls) != 0 {

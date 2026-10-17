@@ -38,6 +38,7 @@ const JANE: ViewerState = {
   admin: true,
   tracker: true,
   knowledge: true,
+  chat: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

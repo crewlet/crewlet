@@ -289,7 +289,7 @@
       "additionalProperties": false,
       "properties": {
         "grants": {
-          "description": "What this credential may do: admin, tracker, knowledge. Required and non-empty.",
+          "description": "What this credential may do: admin, tracker, knowledge, chat. Required and non-empty.",
           "items": {
             "type": [
               "string",

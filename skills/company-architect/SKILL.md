@@ -449,14 +449,14 @@ crewlet run crewlet.yaml -company company.yaml
 5. How they join it. Nobody holds a password until they are put on a
    seat, and the API token is what puts the first person on theirs — so
    its `grants` must list `admin` (`grants: [admin]`), which runs the
-   company and includes both apps, and the node's `api.auth.admin` must be
+   company and includes every app, and the node's `api.auth.admin` must be
    `serve`. Sign in at the dashboard with the API token, open **Agents › Org
    chart**, open the founder's seat (drawn **Vacant**) and press
    **Invite**, then open the link it shows once and choose a login and a
    password — or, from a shell, `crewlet iam invite <address> -seat
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
-   way, by an administrator — with both apps (Tracker, Knowledge) ticked by
+   way, by an administrator — with every app (Tracker, Knowledge, Chat) ticked by
    default, and Admin only for the people who run the company. See [How the first person
    exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 

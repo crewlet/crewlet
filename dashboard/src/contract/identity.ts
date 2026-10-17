@@ -17,14 +17,14 @@
  * runs the company and includes every app, then one per app. The wire field is
  * still `grants`; the dashboard calls the concept "Access".
  */
-export const GRANTS = ["admin", "tracker", "knowledge"] as const;
+export const GRANTS = ["admin", "tracker", "knowledge", "chat"] as const;
 
 /**
  * The apps (`iam.Apps`) — the one place the engine declares one. Admin
  * includes every one of them, so the access picker ticks and locks these when
  * Admin is ticked, and an invitation or a create offers them all by default.
  */
-export const APPS = ["tracker", "knowledge"] as const;
+export const APPS = ["tracker", "knowledge", "chat"] as const;
 
 /**
  * The two login grammars, as the engine holds them (`iam.ValidLoginFor`):

@@ -856,9 +856,9 @@ What that means in practice:
   job host access. What it cannot do through a token is what needs a person
   present: reveal a secret, change who may do anything, or end everybody's
   sessions ([two locks](identity-and-access.md#some-gestures-ask-how-recently-you-proved-who-you-are)).
-- Everything a company does *with* its apps — filing work, writing pages —
-  needs no admin: that is `tracker` and `knowledge`, which is what most people
-  hold.
+- Everything a company does *with* its apps — filing work, writing pages,
+  talking in its own chat — needs no admin: that is `tracker`, `knowledge` and
+  `chat`, which is what most people hold.
 
 The org chart inside this document is also written by its **leads**, who need
 no permission for it: a person who leads a unit may change the seats and units

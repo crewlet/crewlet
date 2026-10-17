@@ -167,7 +167,7 @@ func TestAnExchangedTierATokenIsASessionThatWorks(t *testing.T) {
 	// this request: the token lists admin, this node serves it, and admin
 	// includes every app — composed by the one function the bearer is.
 	got, _ := json.Marshal(who["grants"])
-	if string(got) != `["admin","tracker","knowledge"]` {
+	if want, _ := json.Marshal(iam.AllGrants); string(got) != string(want) {
 		t.Errorf("the session carries grants %s, want the entry's admin and "+
 			"every app it includes", got)
 	}
