@@ -9,29 +9,6 @@ import (
 	"time"
 )
 
-// bins are the histogram's boundaries, in milliseconds.
-//
-// TWENTY-ONE POWER-OF-TWO BUCKETS from 64 µs to 64 s, which resolves a
-// percentile to within a factor of two at every scale this engine measures —
-// from a 40 µs index probe to a 16 s bulk apply. Fixed rather than
-// configurable: a boundary set that differs between nodes cannot be merged,
-// and merging across a fleet is most of what these are for.
-//
-// The alternative — exact quantiles — needs either unbounded memory or a
-// sketch with its own error bounds, for an answer nobody acts on more
-// precisely than "is this an order of magnitude worse than yesterday".
-var bins = func() []float64 {
-	out := make([]float64, 0, 21)
-	for v := 0.0625; len(out) < 21; v *= 2 {
-		out = append(out, v)
-	}
-	return out
-}()
-
-// Bins exposes the histogram boundaries, so an exporter registers the same
-// ones the recorder counts into.
-func Bins() []float64 { return append([]float64(nil), bins...) }
-
 // Recorder is the one place a measurement is written.
 //
 // It holds counters, gauges and fixed-bin histograms keyed by instrument name
@@ -82,7 +59,8 @@ type Recorder struct {
 type series struct {
 	inst   Instrument
 	attrs  map[string]string
-	counts []uint64 // histogram bins, one past the last boundary
+	bounds []float64 // a histogram's boundaries, its unit's ([Bounds])
+	counts []uint64  // histogram bins, one past the last boundary
 	sum    float64
 	n      uint64
 	value  float64 // gauge
@@ -232,8 +210,8 @@ func (r *Recorder) record(name string, kind Kind, v float64, attrs Attrs) {
 		s.value = v
 		r.window.Max(key, v)
 	case KindHistogram:
-		r.window.Observe(key, v)
-		s.counts[binFor(v)]++
+		r.window.Observe(key, s.bounds, v)
+		s.counts[binFor(s.bounds, v)]++
 		s.sum += v
 		s.n++
 		if sink := r.sinks[name]; sink != nil {
@@ -263,7 +241,11 @@ func (r *Recorder) seriesFor(inst Instrument, attrs Attrs) *series {
 			kept[a] = v
 		}
 	}
-	s := &series{inst: inst, attrs: kept, counts: make([]uint64, len(bins)+1)}
+	s := &series{inst: inst, attrs: kept}
+	if inst.Kind == KindHistogram {
+		s.bounds = boundsOf(inst.Unit)
+		s.counts = make([]uint64, len(s.bounds)+1)
+	}
 	r.series[key] = s
 	return s
 }
@@ -281,15 +263,6 @@ func seriesKey(name string, declared []string, attrs Attrs) string {
 	return b.String()
 }
 
-// binFor is the index of the bucket a value falls in.
-func binFor(v float64) int {
-	i := sort.SearchFloat64s(bins, v)
-	if i > len(bins) {
-		i = len(bins)
-	}
-	return i
-}
-
 // Snapshot is one series as a reader sees it.
 type Snapshot struct {
 	Name  string
@@ -301,11 +274,14 @@ type Snapshot struct {
 	Total uint64
 	Value float64
 
-	// Count, Sum and Counts describe a histogram: how many observations,
-	// their total, and the per-bin counts against [Bins].
+	// Count, Sum, Counts and Bounds describe a histogram: how many
+	// observations, their total, and the per-bin counts against Bounds —
+	// its unit's boundaries ([Bounds]) — one count past the last boundary
+	// for the overflow.
 	Count  uint64
 	Sum    float64
 	Counts []uint64
+	Bounds []float64
 }
 
 // Quantile estimates the qth quantile of a histogram, in the instrument's own
@@ -313,9 +289,11 @@ type Snapshot struct {
 //
 // AN ESTIMATE, and the doc says so where a caller reads it: the answer is the
 // UPPER boundary of the bucket the qth observation falls in, so it is accurate
-// to within one bucket — a factor of two — and never understates. A p95 that
-// reads 4 ms means "at most 4 ms", which is the direction a budget check wants
-// to be wrong in.
+// to within one bucket — a factor of two and a half — and never understates. A
+// p95 that reads 5 ms means "over 2 ms and at most 5 ms". A budget check
+// against it is EXACT where the budget is a boundary, since the quantile is
+// past the budget exactly when its bucket is — which is why every budget an
+// alarm holds a percentile to is one ([Bounds]).
 func (s Snapshot) Quantile(q float64) float64 {
 	if s.Count == 0 || q <= 0 || q > 1 {
 		return 0
@@ -325,10 +303,10 @@ func (s Snapshot) Quantile(q float64) float64 {
 	for i, c := range s.Counts {
 		seen += c
 		if seen >= want {
-			if i >= len(bins) {
+			if i >= len(s.Bounds) {
 				return math.Inf(1)
 			}
-			return bins[i]
+			return s.Bounds[i]
 		}
 	}
 	return math.Inf(1)
@@ -363,7 +341,8 @@ func (r *Recorder) ReadWindow() []Snapshot {
 			// with no second implementation. A max substituted here
 			// would fire every p95 alarm on the single worst
 			// observation in the window.
-			snap.Counts, snap.Count, snap.Sum = r.window.Bins(key)
+			snap.Bounds = s.bounds
+			snap.Counts, snap.Count, snap.Sum = r.window.Bins(key, s.bounds)
 		}
 		out = append(out, snap)
 	}
@@ -383,6 +362,7 @@ func (r *Recorder) Read() []Snapshot {
 			Attrs: cloneAttrs(s.attrs),
 			Total: s.total, Value: s.value,
 			Count: s.n, Sum: s.sum, Counts: append([]uint64(nil), s.counts...),
+			Bounds: s.bounds,
 		})
 	}
 	sortSnapshots(out)

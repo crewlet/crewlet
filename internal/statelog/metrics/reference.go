@@ -51,11 +51,16 @@ func sectionBlurb(k Kind) string {
 	switch k {
 	case KindHistogram:
 		return "A distribution, exported with the engine's own bucket " +
-			"boundaries: twenty-one powers of two from 64 µs to 64 s, which " +
-			"resolves a percentile to within a factor of two at every scale " +
-			"here — from a 40 µs index probe to a 16-second bulk apply. The " +
-			"SDK's default boundaries stop at 10 s, so a slow apply would " +
-			"land in an overflow bucket and read as \"at least 10 s\" for ever.\n"
+			"boundaries, which are its unit's: in `ms`, 1, 2 and 5 times every " +
+			"power of ten from 10 µs to 5·10⁷ ms (nearly fourteen hours), so " +
+			"every budget an alarm holds a percentile to is a boundary and the " +
+			"alarm fires exactly past it; in `1`, the same series from 1 to " +
+			"500 000; in `By`, every power of two from 1 KiB to 2 GiB. Each " +
+			"resolves a percentile to within a factor of two and a half at " +
+			"every scale its unit is recorded at, from a 40 µs index probe to " +
+			"a backup of hours and a push's bundle of a gibibyte. The SDK's " +
+			"default boundaries stop at 10 s, so a slow apply would land in " +
+			"an overflow bucket and read as \"at least 10 s\" for ever.\n"
 	case KindGauge:
 		return "A value that goes both ways, sampled at each export.\n"
 	default:

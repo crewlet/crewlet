@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"math"
 	"sort"
 	"sync"
 	"time"
@@ -144,15 +143,18 @@ func (w *Window) Max(key string, v float64) {
 // different questions and the alarms need the second: "the worst barrier in a
 // day" is a fact about one request, and "the p95 barrier over a day" is a fact
 // about the service.
-func (w *Window) Observe(key string, v float64) {
+//
+// bounds are the series' own ([Bounds] of its unit), the boundaries the
+// recorder's cumulative copy counts into.
+func (w *Window) Observe(key string, bounds []float64, v float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	b := w.bucket()
 	cur := b[key]
 	if cur.counts == nil {
-		cur.counts = make([]uint64, len(bins)+1)
+		cur.counts = make([]uint64, len(bounds)+1)
 	}
-	cur.counts[binFor(v)]++
+	cur.counts[binFor(bounds, v)]++
 	cur.n++
 	cur.sum += v
 	if v > cur.max {
@@ -161,51 +163,18 @@ func (w *Window) Observe(key string, v float64) {
 	b[key] = cur
 }
 
-// Quantile is the qth quantile of one series over the window.
-//
-// The same upper-boundary reading as [Snapshot.Quantile], for the same reason:
-// accurate to within one bucket and never understating, which is the direction
-// a budget check wants to be wrong in.
-func (w *Window) Quantile(key string, q float64) float64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	var total uint64
-	merged := make([]uint64, len(bins)+1)
-	for _, b := range w.live() {
-		v := b[key]
-		total += v.n
-		for i, c := range v.counts {
-			merged[i] += c
-		}
-	}
-	if total == 0 || q <= 0 || q > 1 {
-		return 0
-	}
-	want := uint64(math.Ceil(q * float64(total)))
-	var seen uint64
-	for i, c := range merged {
-		seen += c
-		if seen >= want {
-			if i >= len(bins) {
-				return math.Inf(1)
-			}
-			return bins[i]
-		}
-	}
-	return math.Inf(1)
-}
-
 // Bins is one distribution's merged histogram over the window: its bin counts,
 // how many observations they hold and their sum.
 //
 // RETURNED TOGETHER because a [Snapshot] carries all three and a caller that
 // took them in three calls could take them across an hour boundary, pairing
 // counts from one window with a total from another.
-func (w *Window) Bins(key string) (counts []uint64, n uint64, sum float64) {
+//
+// bounds are the series' own, the ones it was observed against.
+func (w *Window) Bins(key string, bounds []float64) (counts []uint64, n uint64, sum float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	counts = make([]uint64, len(bins)+1)
+	counts = make([]uint64, len(bounds)+1)
 	for _, b := range w.live() {
 		v := b[key]
 		n += v.n

@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -216,6 +217,77 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("a measured zero raised %v, want both fraction alarms", kindsOf(got))
 	}
+}
+
+// EVERY PERCENTILE ALARM IS DECIDED AT A HISTOGRAM BOUNDARY.
+//
+// A percentile in the reading is read off a histogram (the engine's
+// retention.observed), and a histogram's quantile is the upper boundary of the
+// bucket the percentile falls in ([metrics.Snapshot.Quantile]) — a boundary
+// and nothing else. So an alarm that fires on a percentile past its budget is
+// exact only where the budget is a boundary: "the percentile is past the
+// budget" and "the boundary above it is" are then one statement. A budget
+// between two boundaries is decided at the one above it — under twenty-one
+// powers of two, `prefetch_slow`'s 500 ms fired for any p95 past 256 ms and
+// said the p95 was 512 ms.
+//
+// The budgets are FOUND rather than listed: each duration field named for a
+// percentile (…P95) is set alone, and the largest duration at which the table
+// raises nothing is bisected out of the table itself — so a percentile alarm
+// added later, or a budget retuned, is held without a line here, and a
+// percentile no alarm reads fails as one.
+//
+// Mutation: set a budget between two boundaries — PoolWaitAlarm to 150 ms —
+// or take a budget's boundary out of the millisecond scale, and this fails.
+func TestEveryPercentileAlarmIsDecidedAtABoundary(t *testing.T) {
+	t.Parallel()
+	bounds, ok := metrics.Bounds(metrics.UnitMilliseconds)
+	if !ok {
+		t.Fatalf("no histogram boundaries for %q, the unit every percentile here is read in",
+			metrics.UnitMilliseconds)
+	}
+	reading := reflect.TypeFor[statelog.Reading]()
+	var held []string
+	for i := range reading.NumField() {
+		field := reading.Field(i)
+		if !strings.HasSuffix(field.Name, "P95") {
+			continue
+		}
+		if field.Type != reflect.TypeFor[time.Duration]() {
+			t.Errorf("Reading.%s is a %s, want a time.Duration read off a millisecond histogram", field.Name,
+				field.Type)
+			continue
+		}
+		raises := func(d time.Duration) bool {
+			var r statelog.Reading
+			reflect.ValueOf(&r).Elem().Field(i).SetInt(int64(d))
+			return len(statelog.Evaluate(r)) > 0
+		}
+		quiet, loud := time.Duration(0), 24*time.Hour
+		if raises(quiet) || !raises(loud) {
+			t.Errorf("Reading.%s raises %v at zero and %v at %v: a percentile no alarm holds to a budget",
+				field.Name, raises(quiet), raises(loud), loud)
+			continue
+		}
+		for loud-quiet > 1 {
+			if mid := quiet + (loud-quiet)/2; raises(mid) {
+				loud = mid
+			} else {
+				quiet = mid
+			}
+		}
+		budget := float64(quiet) / float64(time.Millisecond)
+		if !slices.Contains(bounds, budget) {
+			t.Errorf("Reading.%s's alarm fires past %v, which is no boundary of the %s histograms it is read "+
+				"from (%v): it fires at the boundary above, for a percentile up to that much under its budget",
+				field.Name, quiet, metrics.UnitMilliseconds, bounds)
+		}
+		held = append(held, field.Name)
+	}
+	if len(held) == 0 {
+		t.Fatal("no percentile field in statelog.Reading: the gate's subject moved")
+	}
+	t.Logf("held %v to the %s boundaries", held, metrics.UnitMilliseconds)
 }
 
 // THE INDEX RECALL ALARM FIRES AT THE EVALUATION'S FLOOR, NOT BELOW A NUMBER OF
