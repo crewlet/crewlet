@@ -1926,11 +1926,23 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	writer, ours := p.nodeID, true
 	if landed != landedOwn {
 		env, read, found, err := p.recordAt(ctx, at)
+		if (err != nil || !found) && landed == landedCopy {
+			// THIS OPERATION'S RECORD BY THE BROKER'S WORD, so this is a
+			// read past the acknowledgement like any other, answered by
+			// what is known of the record rather than by the failure
+			// ([Publisher.unresolved]) — which reads it again, and names
+			// its writer when that read answers.
+			if err == nil {
+				err = fmt.Errorf("statelog: the log no longer holds the record at %s "+
+					"its acknowledgement named", at)
+			}
+			return unread(err)
+		}
 		if err != nil || !found {
 			// NOBODY HERE CAN NAME ITS WRITER, so nothing here can say
 			// whether a gate dropped it — and NO POSITION, for the
-			// reason [Result.Position] gives: the record at `at` is not
-			// known to be this operation's.
+			// reason [Result.Position] gives: the record the ambiguous
+			// path found at `at` is not known to be this operation's.
 			p.logger.WarnContext(ctx, "statelog_resolve_unread",
 				"domain", p.domain.Name(), "subject", req.Subject.String(),
 				"op_id", req.OpID, "position", at.String(), "found", found,

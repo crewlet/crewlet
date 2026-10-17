@@ -292,3 +292,38 @@ func TestTheReplicationGuideSaysWhatTheUnvouchedCopyLineCarries(t *testing.T) {
 		}
 	}
 }
+
+// A FAILED READ OF A COLLAPSED COPY IS A READ PAST THE ACKNOWLEDGEMENT.
+//
+// The broker said the record at the position carries this operation, so a
+// read of it that fails after the wait is a read past the acknowledgement like
+// every other one, and is answered by what is known of the record — which reads
+// it again and, when that read answers, judges the copy's writer — rather than
+// by the failure. It answered `unknown` with no position on the spot, the one
+// post-acknowledgement read that did, so a fault that had already cleared
+// turned a write every node applies into one its caller had to retry.
+//
+// On a domain with no ledger, where a copy this node applied with no gate
+// dropping it is the whole answer, a transient fault on that read now leaves
+// the copy pending at its position.
+//
+// Mutation: answer the failed read on the spot, as the found record's is, and
+// the copy is unknown.
+func TestAFailedReadOfACollapsedCopyIsAnsweredByTheCopy(t *testing.T) {
+	t.Parallel()
+	h := newHarnessFor(t, ledgerless{})
+	at := peerCopy(t, h, "node-b", "op-copied")
+	h.records.failOnce(errors.New("no response from stream"))
+
+	res, err := h.write(probeSubject("a"), "op-copied", "mine")
+	if err != nil {
+		t.Fatalf("a write collapsed onto node-b's copy, whose read failed once = %v, "+
+			"want an outcome", err)
+	}
+	if res.Outcome != statelog.OutcomePending || res.Position != at || !res.Waited {
+		t.Fatalf("a write collapsed onto node-b's healthy copy at %s, whose first "+
+			"read failed = %+v, want pending there after the wait — the broker said "+
+			"the record is this operation's, and the read after the fault names "+
+			"its writer", at, res)
+	}
+}
