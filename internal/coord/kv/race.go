@@ -28,9 +28,11 @@ import (
 // record has writers nothing bounds: the token counter, the hottest key the
 // fleet has, where counter.go measures what sixteen cost. The rest race
 // writers something does bound — the two ends of a channel, the messages that
-// assert a follow and the person who ends it, a create that finds the key
-// removed between its refusal and its read — and lose for a whole patience
-// only on a store this engine does not produce; on those the rule costs
+// assert one follow, a create that finds the key
+// removed
+// between its refusal and its read — and lose for a whole patience
+// only on a
+// store this engine does not produce; on those the rule costs
 // nothing.
 //
 // The patience is the JetStream client's own request timeout. Every request
