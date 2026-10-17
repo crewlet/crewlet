@@ -45,8 +45,9 @@ which segments were already summed — which is the per-segment id this uses
 instead.
 
 **Summing the turn's completion events into the task at read time** puts a
-scan of the event log behind every board sort by spend, and every node's event
-log holds only what that node ran.
+scan of the event log behind every board sort by spend, and no one node's event
+log holds the company's turns: each data node's holds what it ran and what it
+keeps in custody for nodes without `data` (ADR-0025).
 
 ## Amendment — a segment pays for its auxiliary calls
 
