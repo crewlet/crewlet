@@ -41,13 +41,6 @@ func (f *follows) Following(_ context.Context, b, h, c, th string) (string, bool
 	return r, ok, nil
 }
 
-func (f *follows) Unfollow(_ context.Context, b, h, c, th string) (bool, error) {
-	k := key(b, h, c, th)
-	_, ok := f.rows[k]
-	delete(f.rows, k)
-	return ok, nil
-}
-
 var seat = mattermost.Seat{Handle: "swe", Username: "agent-swe", UserID: "bot-1"}
 
 func seats(s ...mattermost.Seat) mattermost.Seats {
