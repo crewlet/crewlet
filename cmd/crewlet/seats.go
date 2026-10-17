@@ -73,7 +73,7 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 					"also end the turn the seat is on at its next round; it is not run again")
 				reason = fs.String("reason", "", "why, in a line; shown on the seat and in the feed")
 			}
-			opID = fs.String("op-id", "",
+			opID = opIDFlag(fs,
 				"retry an `unknown` outcome with the id it printed, so the retry is "+
 					"the same operation; empty starts a new one")
 		})
