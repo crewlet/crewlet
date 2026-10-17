@@ -25,13 +25,14 @@ import (
 // single segment that happened to spell it — see internal/coord/keys.go for
 // what a raw segment does to a filtered watch.
 //
-// # Why there is no purge
+// # Why there is no purge, and no delete
 //
 // The bucket's own age is the retention, which is the rule for every aged slot
 // here. Every re-assert — a mention, a collective address, the seat posting
 // into the thread — rewrites the record, so the age is a true last-activity
 // stamp rather than a creation date, and the broker expires what has gone
-// quiet. A sweep would have nothing to delete.
+// quiet. A sweep would have nothing to delete, and nothing else removes a
+// follow ([coord.Follows]), so this bucket never holds a removal marker.
 
 // followsClass is the key class, so a follow cannot collide with anything else
 // that might one day share this bucket.
@@ -59,15 +60,14 @@ func followKey(backend, handle, channel, thread string) string {
 // writing the reason choose answers for the record it read — see
 // [coord.Follows] for the contract.
 //
-// A WRITE BOUND TO THE REVISION IT READ, which is [FleetStore.Unfollow]'s rule
-// on the other verb: the reason is decided from a read, and an unconditional
-// Put after it lands over whatever another node wrote between the two. That
-// was this method's shape, and the record went to whichever writer was LAST
-// rather than to the reason the caller would have kept — a mention a peer
-// recorded in the window was overwritten by a broadcast decided before it
-// existed. Each pass now reads the leader, asks choose, and writes at exactly
-// that revision; a pass that loses re-reads, so the record converges on a
-// choice made against what it holds.
+// A WRITE BOUND TO THE REVISION IT READ: the reason is decided from a read,
+// and an unconditional Put after it lands over whatever another node wrote
+// between the two. That was this method's shape, and the record went to
+// whichever writer was LAST rather than to the reason the caller would have
+// kept — a mention a peer recorded in the window was overwritten by a
+// broadcast decided before it existed. Each pass now reads the leader, asks
+// choose, and writes at exactly that revision; a pass that loses re-reads, so
+// the record converges on a choice made against what it holds.
 //
 // STILL A WRITE ON EVERY CALL, and that is the retention working as designed:
 // rewriting the record is what moves the bucket's age forward, so a follow the
@@ -143,8 +143,10 @@ func (f *FleetStore) readFollow(ctx context.Context, key string) (string, bool, 
 // whether it did.
 //
 // THE RULE [FleetStore.Follow] IS BUILT FROM, in a unit that can be driven
-// directly, for [FleetStore.deleteFollowAt]'s reason: the interleaving it
-// exists for opens between that method's read and its write.
+// directly: the interleaving it exists for opens INSIDE that method, between
+// its read and its write, and cannot be staged from outside it. A test that
+// reached past this to the KV client would be asserting what JetStream does
+// rather than what this package does.
 //
 // `false` with no error is a LOST RACE — another writer moved the key, or
 // created it, under the read — and never a failure.
@@ -152,8 +154,8 @@ func (f *FleetStore) writeFollowAt(ctx context.Context, key string, revision uin
 	var err error
 	if revision == 0 {
 		// Through the package's one create, which conditions on what the
-		// LEADER holds: a key an unfollow left a marker on, or one the
-		// bucket's age removed, is written over rather than reported held.
+		// LEADER holds: a key the bucket's age removed is written over
+		// rather than reported held.
 		_, err = f.create(ctx, f.follows, key, raw)
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return false, nil
@@ -191,112 +193,4 @@ func (f *FleetStore) Following(ctx context.Context, backend, handle, channel, th
 			backend, thread, handle, err)
 	}
 	return rec.Reason, true, nil
-}
-
-// Unfollow drops a follow, reporting whether one was there.
-//
-// # Why the delete is bound to the revision the read returned
-//
-// The report has to come from a READ, because a KV delete is idempotent and
-// says nothing about what was there. That leaves a window between the two, and
-// an UNCONDITIONAL delete in it reports on what the read saw while acting on
-// whatever is there now. The two come apart where it matters: a peer that
-// removed the key first leaves the read holding a record and the delete
-// no-oping, and the caller is told `true` about a removal somebody else made.
-//
-// [internal/coord/memory.Fleet.Unfollow] holds one mutex across its lookup and
-// its delete, so that answer is unreachable there — it reports `true` exactly
-// when it removed something. One suite certifies both backends, and a twin
-// that agrees only with itself proves nothing, so this one has to reach the
-// same answer without a mutex it cannot have: each pass reads a revision,
-// removes exactly that revision, and a pass that loses re-reads.
-//
-// # Why it retries rather than giving up
-//
-// Giving up on a mismatch is the tempting shape and it is wrong, measured
-// rather than argued: against a live re-assert it answers `(false, nil)` while
-// leaving the follow in place — a seat told to stop watching a thread that
-// did not stop — in roughly half of a raced sample, where the twin does it in
-// none. That is not a smaller divergence than the one being fixed, it is the
-// same defect pointing the other way, and it contradicts the first sentence of
-// this contract.
-//
-// The loop converges on the current record instead, which is what the twin's
-// mutex buys for free and is SERIALIZABLE: every outcome it produces is one
-// some sequential order of the concurrent calls would have produced. A follow
-// re-asserted inside the window is therefore removed, exactly as it is when the
-// re-assert loses the twin's mutex by a nanosecond. The next mention re-follows
-// through the ordinary path, which is what makes that the cheap direction.
-//
-// DELETE RATHER THAN PURGE, which is the opposite of what a bucket with no TTL
-// takes (see [FleetStore.DeleteIntegrationStatus] for that reasoning): a delete
-// leaves a tombstone revision, and tombstones only accumulate for ever where
-// nothing ages them out. This bucket HAS an age — `FollowRetention` — so the
-// broker expires the tombstone with everything else, and a purge would roll up
-// the subject for no gain.
-func (f *FleetStore) Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, nil
-	}
-	key := followKey(backend, handle, channel, thread)
-	// Losing for the fleet store's whole patience ([FleetStore.retryRaces])
-	// means this key is being rewritten as fast as it is being read, which is
-	// not a state this engine produces: a follow is written by an inbound
-	// message and unfollowed by a person. Reported rather than answered — an
-	// invented answer would tell somebody they had stopped watching a thread
-	// they are still watching.
-	var removed bool
-	err := f.retryRaces(ctx, "unfollow", fmt.Sprintf("%s thread %s for %s", backend, thread, handle),
-		func() (bool, error) {
-			entry, err := f.get(ctx, f.follows, key)
-			switch {
-			case errors.Is(err, jetstream.ErrKeyNotFound):
-				return false, nil
-			case err != nil:
-				return false, unavailable(
-					fmt.Sprintf("read the follow on %s thread %s for %s", backend, thread, handle), err)
-			}
-			gone, err := f.deleteFollowAt(ctx, key, entry.Revision())
-			if err != nil {
-				return false, unavailable(
-					fmt.Sprintf("unfollow %s thread %s for %s", backend, thread, handle), err)
-			}
-			removed = gone
-			return !gone, nil
-		})
-	if err != nil {
-		return false, err
-	}
-	return removed, nil
-}
-
-// deleteFollowAt removes a follow only if it is still at the revision the
-// caller read, reporting whether it did.
-//
-// THE RULE [FleetStore.Unfollow] IS BUILT FROM, in a unit that can be driven
-// directly: the interleaving it exists for opens INSIDE that method, between
-// its read and its write, and cannot be staged from outside it. A test that
-// reached past this to the KV client would be asserting what JetStream does
-// rather than what this package does.
-//
-// `false` with no error is a LOST RACE, not a failure — the key moved or went
-// away under the read — and both are ordinary states this engine produces.
-//
-// TODAY'S CLIENT REPORTS BOTH SHAPES AS A MISMATCH: jetstream's Delete maps
-// every expected-last-subject-sequence refusal through one path and has no
-// key-not-found arm at all, so a key a peer already removed arrives here as a
-// mismatch against an empty subject. The second arm is kept anyway, matching
-// [lostUpdateRace] — the mapping is the client's to change and not ours to
-// depend on.
-func (f *FleetStore) deleteFollowAt(ctx context.Context, key string, revision uint64) (bool, error) {
-	err := f.follows.Delete(ctx, key, jetstream.LastRevision(revision))
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, jetstream.ErrKeyRevisionMismatch),
-		errors.Is(err, jetstream.ErrKeyNotFound):
-		return false, nil
-	default:
-		return false, err
-	}
 }

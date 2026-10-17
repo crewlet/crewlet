@@ -959,21 +959,6 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 	return entry.reason, true, nil
 }
 
-// Unfollow drops a follow, reporting whether one was there.
-func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, nil
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := followKey(backend, handle, channel, thread)
-	if _, ok := f.follows[key]; !ok {
-		return false, nil
-	}
-	delete(f.follows, key)
-	return true, nil
-}
-
 // SweepMarkers removes nothing, because the twin keeps no markers: a delete
 // here removes the entry from its map, so the state a KV backend reaches only
 // after its sweep is the state this one is always in. That is the contract's

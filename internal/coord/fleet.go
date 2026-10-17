@@ -1759,11 +1759,14 @@ type TrashReaps interface {
 // reasons is the stronger is internal/notify's vocabulary, so the caller
 // chooses and this store makes the choice safe against a concurrent one.
 //
-// # Three methods, and no purge
+// # Two methods, and nothing removes a follow
 //
 // Retention here is the BUCKET's age, like every other aged slot: every
 // re-assert rewrites the record, so the age is a true last-activity stamp and
-// the broker expires what has gone quiet. A sweep would have nothing to delete.
+// the broker expires what has gone quiet. A sweep would have nothing to
+// delete, and there is no unfollow either: no surface offers a person or a
+// seat a way to stop following a thread, so the age is the only thing that
+// ends a follow.
 type Follows interface {
 	// Follow records that a seat follows a thread, or refreshes the follow
 	// it has, and answers the reason the record holds afterwards.
@@ -1794,18 +1797,4 @@ type Follows interface {
 	// reply is quiet and self-healing where a spurious wake is a burst of
 	// turns that cannot be taken back.
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
-
-	// Unfollow drops a follow, reporting whether one was there.
-	//
-	// A seat told to stop watching a thread must actually stop, and
-	// waiting out the retention horizon is not stopping.
-	//
-	// SERIALIZABLE, which is the property both backends have to reach by
-	// different means: `true` is reported exactly when this call removed
-	// something, and every outcome is one some sequential order of the
-	// concurrent calls would have produced. A follow re-asserted while an
-	// unfollow is in flight is therefore removed, exactly as it is when the
-	// re-assert loses by a nanosecond — and the next mention re-follows
-	// through the ordinary path.
-	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }

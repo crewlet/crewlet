@@ -73,7 +73,7 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 // THE FLEET STORE'S OTHER RACES OUTLAST MORE LOSSES THAN SIXTEEN.
 //
 // Each lost race is a store that answered, so none of these is an outage
-// until the store's patience says it is: a channel's count, a follow and an unfollow,
+// until the store's patience says it is: a channel's count and a follow,
 // each made to lose twenty in a row. The custody claim and the object backend's record lose a
 // race only to a key removed between a refused create and the leader's read
 // of it, which no bucket in front of the leader can stage; they take the same
@@ -102,21 +102,6 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 			ch, found, err := f.CountChannelMessage(t.Context(), "ch-1", time.Now())
 			if err != nil || !found || ch.Messages != 1 {
 				t.Fatalf("CountChannelMessage = (%+v, %v, %v), want one message counted", ch, found, err)
-			}
-		},
-	}, {
-		name:   "an unfollow",
-		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.follows },
-		key:    followKey("slack", "ceo", "C1", "T1"),
-		setup: func(t *testing.T, f *FleetStore) {
-			if _, err := f.Follow(t.Context(), "slack", "ceo", "C1", "T1", time.Now(), overwrite("mention")); err != nil {
-				t.Fatalf("Follow: %v", err)
-			}
-		},
-		run: func(t *testing.T, f *FleetStore) {
-			removed, err := f.Unfollow(t.Context(), "slack", "ceo", "C1", "T1")
-			if err != nil || !removed {
-				t.Fatalf("Unfollow = (%v, %v), want the follow removed", removed, err)
 			}
 		},
 	}, {
@@ -291,8 +276,8 @@ func (k *peerIncrements) Update(ctx context.Context, key string, value []byte, r
 }
 
 // loseWrites is a bucket on which writes to one key lose their race and write
-// nothing — an update or a delete refused at the revision it was made at. It
-// loses the next `remaining`, or every one when forever is set.
+// nothing — an update refused at the revision it was made at. It loses the
+// next `remaining`, or every one when forever is set.
 type loseWrites struct {
 	jetstream.KeyValue
 	key       string
@@ -314,11 +299,4 @@ func (k *loseWrites) Update(ctx context.Context, key string, value []byte, revis
 		return k.KeyValue.Update(ctx, key, value, revision)
 	}
 	return 0, jetstream.ErrKeyRevisionMismatch
-}
-
-func (k *loseWrites) Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
-	if k.loses(key) {
-		return jetstream.ErrKeyRevisionMismatch
-	}
-	return k.KeyValue.Delete(ctx, key, opts...)
 }
