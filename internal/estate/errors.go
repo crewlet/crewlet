@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -85,6 +86,16 @@ var sentinels = []sentinel{
 	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
+
+	{"chat.ErrArchived", chat.ErrArchived},
+	{"chat.ErrConflict", chat.ErrConflict},
+	{"chat.ErrForbidden", chat.ErrForbidden},
+	{"chat.ErrInvalid", chat.ErrInvalid},
+	{"chat.ErrNameTaken", chat.ErrNameTaken},
+	{"chat.ErrNoActivation", chat.ErrNoActivation},
+	{"chat.ErrNotFound", chat.ErrNotFound},
+	{"chat.ErrRoomExists", chat.ErrRoomExists},
+	{"chat.ErrUnknownKind", chat.ErrUnknownKind},
 
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
@@ -167,6 +178,10 @@ var typedKinds = []typedKind{
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
 	{"pages.InvalidError", reflect.TypeFor[*pages.InvalidError]()},
+
+	{"chat.ErrFutureVersion", reflect.TypeFor[*chat.ErrFutureVersion]()},
+	{"chat.ErrUnknownVersion", reflect.TypeFor[chat.ErrUnknownVersion]()},
+	{"chat.InvalidError", reflect.TypeFor[*chat.InvalidError]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},

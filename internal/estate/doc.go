@@ -9,17 +9,18 @@
 //
 // A node WITHOUT the `data` role keeps nothing that has to outlive it: its
 // store is scratch, its broker is a leaf with JetStream off, and it holds no
-// copy of the tracker's, the knowledge base's or the identity directory's rows.
-// Its seats still read and write the first two, constantly — every board, every
-// task, every page a tool touches — and ask the third whose record a login names
-// and who holds each human seat, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
+// copy of the tracker's, the knowledge base's, chat's or the identity
+// directory's rows. Its seats still read and write the first two, constantly —
+// every board, every task, every page a tool touches — read the rooms of the
+// third, and ask the fourth whose record a login names and who holds each human
+// seat, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
 // and SERVES it over the broker ([Serve]), and every node's tools are handed
 // facades of one [Router], which answers in-process where this node's copy
-// serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker and knowledge-base routes and the operator's own MCP —
-// for the reason a data node's own seats are: read straight off the node's
-// copy, a node whose copy was out of service answered its operator from the
-// very copy it had stopped serving its seats from.
+// serves and asks another data node otherwise. So are the operator's surfaces —
+// the API's tracker and knowledge-base routes and the operator's own MCP — for
+// the reason a data node's own seats are: read straight off the node's copy, a
+// node whose copy was out of service answered its operator from the very copy
+// it had stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //
@@ -111,26 +112,35 @@
 // rows, so that applier's lag is not one the operation should wait out
 // ([ready]).
 //
-// The searches carry no floor at all: they read an index each node's own walk
-// maintains behind its applier, which no log position describes.
+// The tracker's and the knowledge base's searches carry no floor at all: they
+// read an index each node's own walk maintains behind its applier, which no log
+// position describes. CHAT'S SEARCH DOES, on the chat log, because the rooms it
+// may search are read from membership rows a seat's own join may just have
+// written — through whichever data node took it — and a search that missed
+// them would answer "nobody said that" about a room the seat is in. Its index
+// carries none, as the others' do not, and says on its answer when it has not
+// caught up ([ChatSearchAnswer.Building]).
 //
 // # Every envelope is signed, and bound to its question
 //
 // A data node runs a tracker write AS THE ACTOR ITS REQUEST NAMES, so an
 // unsigned request was ADR-0031's unsigned record one hop earlier: anyone who
 // could reach the broker could write as any seat, and the log would carry it
-// signed by the data node that obeyed. So every request and every reply is
-// framed and signed under the fleet keyring, by the state log's own
-// [statelog.Signer] under domains of the estate's own, and read with its
-// verdicts ([Envelopes]) — the rule internal/signedask keeps for every channel
-// a node carries a request out on, this one, the fleet broker's membership and
-// a note to a running turn alike: a request that does not verify is never
-// dispatched, the actor a write runs as is the one inside the signed body, and
-// a key a node does not hold is "did not run" — the router moves on to a node
-// that holds it. A request carries an id and a deadline under the signature, so a
-// data node refuses a replay of one; a reply names the request it answers, so
-// an asker believes no answer to somebody else's question. A reply it cannot
-// believe is no answer — never "did not run" — so a once-write met with one is
+// signed by the data node that obeyed. And it answers a chat read FOR THE
+// VIEWER IT NAMES, whose private rooms and direct conversations are what that
+// seat may see — so an unsigned read was any private room read as anybody. So
+// every request and every reply is framed and signed under the fleet keyring,
+// by the state log's own [statelog.Signer] under domains of the estate's own,
+// and read with its verdicts ([Envelopes]) — the rule internal/signedask keeps
+// for every channel a node carries a request out on, this one, the fleet
+// broker's membership and a note to a running turn alike: a request that does
+// not verify is never dispatched, the actor a write runs as and the viewer a
+// read answers for are the ones inside the signed body, and a key a node does
+// not hold is "did not run" — the router moves on to a node that holds it. A
+// request carries an id and a deadline under the signature, so a data node
+// refuses a replay of one; a reply names the request it answers, so an asker
+// believes no answer to somebody else's question. A reply it cannot believe is
+// no answer — never "did not run" — so a once-write met with one is
 // [ErrOutcomeUnknown].
 //
 // # What does not cross the wire, and who supplies it
@@ -152,6 +162,14 @@
 // a binding crosses NARROWED ([Binding]): the row's credential verifiers and
 // grants never reach the broker, since the asker decides nothing on either.
 //
+// CHAT'S VIEWER IS THE MIDDLE CASE. The asking node decides who the viewer is —
+// the seat its caller acts as — and whether that caller may use chat at all;
+// the SERVING node decides which rooms that viewer may read, because membership
+// is a replicated row judged inside the read's own snapshot there. A visible
+// set resolved on one node and handed to another node's index would be an
+// authorization fact crossing the wire, which is why [ChatQuery] has no field
+// for it.
+//
 // # Errors keep their identity
 //
 // A tool decides what to tell a model by asking errors.Is and errors.As — "no
@@ -160,9 +178,9 @@
 // registered sentinel it matches and every registered type it carries (see
 // errors.go), and the far side rebuilds an error that answers the same
 // questions. A sentinel or an error type added to the packages whose errors
-// cross — this one's, the tracker's, the knowledge base's, the state log's and
-// the identity estate's with the vocabulary its answers are judged in — is a
-// build failure until it is registered. An operation answered in-process
+// cross — this one's, the tracker's, the knowledge base's, chat's, the state
+// log's and the identity estate's with the vocabulary its answers are judged in
+// — is a build failure until it is registered. An operation answered in-process
 // returns its own error, which answers every question without the wire's help.
 //
 // AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side

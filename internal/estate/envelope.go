@@ -23,9 +23,13 @@ import (
 // `crewlet.estate.<node>` was therefore exactly the instruction ADR-0031 exists
 // to refuse, one hop earlier: anyone who could reach the broker could file a
 // task, edit a remark or purge one as any seat in the company, and the log
-// would carry it signed. The reply is the other half: an asker that believed
-// any bytes arriving on its reply inbox could be told a write landed that never
-// ran, or handed somebody else's answer.
+// would carry it signed. And it answers a chat read FOR THE VIEWER THE REQUEST
+// NAMES: which private rooms and direct conversations the answer covers is that
+// seat's membership, so a read here is not a question a node answers about
+// itself — unsigned, it was any private room read as anybody. The reply is the
+// other half: an asker that believed any bytes arriving on its reply inbox
+// could be told a write landed that never ran, or handed somebody else's
+// answer.
 //
 // # One rule, internal/signedask's
 //
@@ -37,7 +41,8 @@ import (
 // whose silent drift is a write as anybody. What the estate states for itself
 // is what each disposition MEANS on its subject:
 //
-//   - ADMITTED: dispatched, as the actor inside the verified body.
+//   - ADMITTED: dispatched, as the actor — or for the viewer — inside the
+//     verified body.
 //   - TAMPERED: answered [unservedUnauthenticated], bound to no request,
 //     logged at error, never dispatched.
 //   - KEY UNKNOWN: answered [unservedUnauthenticated], bound to the id the
