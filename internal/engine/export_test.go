@@ -14,6 +14,11 @@ import (
 // outside the package that drives an engine through its public surface.
 func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
 
+// ItemRanker is the ranker the tracker's item search is built with, so the
+// serving-seams audit outside the package reflects over the fields it reads
+// rather than over a description of them a new field would leave behind.
+type ItemRanker = itemRanker
+
 // LearningDutyName is the duty every background learning pass claims, so a
 // test outside the package reads the key the engine claims rather than a copy
 // of it a rename would leave behind.

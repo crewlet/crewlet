@@ -154,10 +154,11 @@ type request struct {
 	// From is the asking node, for the serving node's log.
 	From string `json:"from,omitempty"`
 
-	// AcceptLagging is the asker's LAST RESORT: every data node whose copy
-	// does not lag its logs has run nothing, so this one runs the operation
-	// although its copy does ([unservedLagging]) — held to the floors above
-	// and to the read's own level, which are what make its answer sound.
+	// AcceptLagging is the asker's LAST RESORT: every data node that is not a
+	// worse one to ask has run nothing, so this one runs the operation
+	// although its copy lags its logs or the node is behind the company's
+	// configuration ([unservedLagging]) — held to the floors above and to the
+	// read's own level, which are what make its answer sound.
 	AcceptLagging bool `json:"accept_lagging,omitempty"`
 
 	// Spent is what the request already paid for on the nodes the asker
@@ -190,11 +191,29 @@ const (
 	unservedNotEstablished unservedReason = "not_established"
 
 	// unservedLagging: this node's copy lags its logs ([Backend.Answers]
-	// false) — not drained since its appliers started, or past the snapshot
-	// slack of their ends. A worse node to ask rather than none: the asker
-	// comes back to it with [request.AcceptLagging] when no data node whose
-	// copy does not lag runs the operation.
+	// false: not drained since its appliers started, or past the snapshot
+	// slack of their ends) — a WORSE NODE TO ASK ([worse]) rather than none:
+	// the asker comes back to it with [request.AcceptLagging] when no data
+	// node that is a better one runs the operation.
 	unservedLagging unservedReason = "lagging"
+
+	// unservedBehindConfig: this node is confirmed behind the company's
+	// configuration ([Backend.Current] false) — a worse node to ask as a
+	// lagging copy is, and asked again the same way, told to answer anyway,
+	// when no better node runs the operation: after every copy that only
+	// lags, whose answer is held to the current configuration where this
+	// node's is decided under the one the fleet replaced
+	// ([Router.lastResort]). The Detail names the configuration, and the
+	// copy's lag too where both hold.
+	//
+	// A REASON OF ITS OWN BECAUSE IT LASTS. A lag closes as the applier
+	// catches up; a node stays behind its configuration until its apply
+	// succeeds — a stuck one until a person acts — so the asker REMEMBERS
+	// this answer ([Router.markBehindConfig]) and asks the node only as the
+	// last resort meanwhile. Folded into `lagging`, which nobody remembers,
+	// every request any router made sent it a refusal's round trip first —
+	// a push its whole proposal — for as long as it stayed behind.
+	unservedBehindConfig unservedReason = "behind_config"
 
 	// unservedBehind: this node could not reach the caller's floor within
 	// the read budget.
@@ -285,8 +304,8 @@ type opSpec struct {
 	// then has to name.
 	actor bool
 
-	// ungated operations run on a node whose copy lags its logs: they ask
-	// the copy's own gate themselves ([opPing]).
+	// ungated operations run on a node that is a worse one to ask ([worse]):
+	// they ask the copy's own gate themselves ([opPing]).
 	ungated bool
 
 	// lane is the registration a serving node answers the operation on —

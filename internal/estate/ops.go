@@ -234,6 +234,32 @@ type Backend struct {
 	// ([Router.Serves]). Only admission's ping reads it.
 	Admits func(ctx context.Context) bool
 
+	// Current is whether this node serves the company's configuration —
+	// false exactly while the control plane has CONFIRMED it behind the
+	// epoch the fleet activated (shed or stuck), never on lag alone, which
+	// every rollout produces on every node but the first to apply. Nil is
+	// current.
+	//
+	// A node behind it is a WORSE NODE TO ASK, never no node, as a copy
+	// that lags its log is ([ready]): what it supplies from its own epoch
+	// — the chart a tracker write resolves a person and a lead by, a
+	// unit a read renders, a search's scope, the code limits a push is
+	// decided under — is the configuration the fleet replaced, so every
+	// other data node is asked first and this one answers when none of
+	// them does; and since that lasts, an asker that has heard it once
+	// remembers it ([unservedBehindConfig], [Router.markBehindConfig])
+	// rather than send the node a refusal's round trip on every request.
+	// Refused instead, a fleet whose only data node failed an
+	// apply would answer none of its tracker, pages or usage operations,
+	// although the stale answer is one that arises anyway: every reader of
+	// a handle, a lead or a unit already meets one a revision has changed.
+	//
+	// THE CONFIRMATION IS THE CONTROL PLANE'S, and its bound is about a
+	// minute: confirmed configplane.LagGrace after the node first reads the
+	// new pointer — or sooner, where its own apply fails while a peer has
+	// applied — and moved at the node's next posture decision.
+	Current func() bool
+
 	// ServerSeams are the node's own: the dispatcher sets them on every
 	// backend it hands an operation.
 	ServerSeams

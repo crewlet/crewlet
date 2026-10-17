@@ -120,6 +120,45 @@ func TestTheLocalEstateServesItsCopyWithWhatItRuns(t *testing.T) {
 	}
 }
 
+// EVERY COPY THIS NODE SERVES CARRIES ITS CONFIGURATION POSTURE, read when the
+// operation runs: the estate asks a node the control plane has confirmed behind
+// the company's configuration last ([estate.Backend.Current]), and the engine's
+// one gate for that is the one its seats, its schedules and its inbound work
+// are given up by ([Engine.SetAdmits]). A backend that carried none would serve
+// a shed node's stale chart first; one that carried the value it was built
+// with would go on preferring a node the reconcile loop has since moved, until
+// the next copy verdict happened to rebuild it. The copy with no runtime is
+// served too — its usage reads — so it carries the gate as well.
+func TestEveryCopyThisNodeServesCarriesItsConfigurationPosture(t *testing.T) {
+	t.Parallel()
+	e := &Engine{backends: &Backends{}}
+	l := localWith(e, time.Now, sound)
+
+	current := func(label string, b estate.Backend, want bool) {
+		t.Helper()
+		if b.Current == nil {
+			t.Fatalf("%s: the backend carries no configuration gate", label)
+		}
+		if got := b.Current(); got != want {
+			t.Errorf("%s: current = %v, want %v", label, got, want)
+		}
+	}
+
+	bare, _ := l.For(t.Context(), trackerName)
+	current("no runtime, no posture yet", bare, true)
+	e.SetAdmits(func() bool { return false })
+	current("no runtime, shed", bare, false)
+
+	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	built, ok := judged(t.Context(), l, trackerName)
+	if !ok {
+		t.Fatal("a sound copy with a runtime was not served")
+	}
+	current("a runtime, shed", built, false)
+	e.SetAdmits(func() bool { return true })
+	current("a runtime, converged again", built, true)
+}
+
 // A DOMAIN'S COPY THAT IS WRONG GOES OUT OF SERVICE ALONE, AND THE NODE KEEPS
 // ITS SEATS.
 //

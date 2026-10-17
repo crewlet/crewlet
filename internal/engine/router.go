@@ -384,8 +384,18 @@ func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}
 // it took on anybody's behalf would be the publish the mode exists to rule
 // out — so its writers are absent ([Engine.writeSide] hands none out) and
 // every write is answered "not here".
+//
+// EVERY BACKEND CARRIES THE NODE'S CONFIGURATION POSTURE ([estate.Backend.
+// Current]), the runtime-less one included, through the one gate this node's
+// trigger admission, scheduler, inbound consumer and integration reconcile
+// already read ([Engine.admits], which the reconciler fills): a node
+// confirmed behind the company's configuration is asked last for every estate
+// operation, so what it supplies from its own epoch — the chart, the units,
+// the scope, the code limits — answers only where no current data node does.
+// The gate is read when an operation runs, never when the backend is built,
+// since a backend outlives the posture it was built under.
 func (e *Engine) estateBackend(n *native) estate.Backend {
-	b := estate.Backend{Usage: usage.Reader{Estate: e.usageEstate()}}
+	b := estate.Backend{Usage: usage.Reader{Estate: e.usageEstate()}, Current: e.admits}
 	if n == nil {
 		return b
 	}

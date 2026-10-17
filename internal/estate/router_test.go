@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -48,6 +49,7 @@ type fakeNode struct {
 	floors    []statelog.Position
 	actors    []Actor
 	opIDs     []string
+	created   []tracker.Task
 	patches   []tracker.TaskPatch
 	turns     []tracker.TurnRecord
 	keys      []pages.CallKey
@@ -71,6 +73,10 @@ type fakeNode struct {
 
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
+
+	// behindConfig is a node the control plane has confirmed behind the
+	// company's configuration — shed or stuck ([Backend.Current] false).
+	behindConfig bool
 
 	// spend is the usage spend this node pages out, 64 rows a page at any
 	// budget and every row at none, where it is set; spendAfters is every
@@ -108,8 +114,11 @@ type fakeNode struct {
 	hang chan struct{}
 
 	// requests is every request that reached this node over the broker,
-	// whatever it answered — run, refused or silent.
+	// whatever it answered — run, refused or silent — and anyway is how
+	// many of them its asker sent as the last resort, told to answer
+	// anyway ([request.AcceptLagging]).
 	requests int
+	anyway   int
 
 	// indexBuilding is a node whose index has not finished its first lap.
 	indexBuilding bool
@@ -178,6 +187,7 @@ func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
 	f.note("create")
 	f.mu.Lock()
 	f.opIDs = append(f.opIDs, opID)
+	f.created = append(f.created, task)
 	unvouched, refusal := f.unvouched, f.refusal
 	f.mu.Unlock()
 	if refusal != nil {
@@ -352,6 +362,11 @@ func (f *fakeNode) backend() Backend {
 			f.asked = append(f.asked, "admits")
 			return !f.notAdmitting
 		},
+		Current: func() bool {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return !f.behindConfig
+		},
 	}
 }
 
@@ -501,8 +516,13 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 	h queue.AnswerFunc) (queue.Unsubscribe, error) {
 
 	return s.q.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
+		var req request
+		_ = json.Unmarshal(raw, &req)
 		s.node.mu.Lock()
 		s.node.requests++
+		if req.AcceptLagging {
+			s.node.anyway++
+		}
 		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
 		s.node.mu.Unlock()
 		if refusesLagging {
@@ -536,7 +556,7 @@ func chartOf(string) tracker.Units { return &namedChart{} }
 func (f *fleet) first(t *testing.T, r *Router) (string, *fakeNode) {
 	t.Helper()
 	nodes, _ := f.placement.Holders()
-	ordered := r.order(trackerDomain, nodes)
+	ordered := r.order(opTasks.spec, nodes)
 	if len(ordered) == 0 {
 		t.Fatalf("no node to ask among %v", nodes)
 	}
@@ -1543,6 +1563,452 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 }
 
+// A NODE BEHIND THE COMPANY'S CONFIGURATION IS ASKED LAST, NEVER REFUSED.
+//
+// A data node the control plane has confirmed behind the epoch the fleet
+// activated — shed or stuck, never merely mid-rollout — gives up its seats, its
+// schedules and its inbound work, and goes on serving the estate. What it
+// supplies to an operation from its own epoch is the configuration the fleet
+// replaced: the chart a tracker write resolves a people field by, the leads a
+// wake falls back to, the unit a read renders. So it is a worse node to ask,
+// exactly as a copy that lags its log is: every other data node is asked first,
+// and this one is asked again, told to answer anyway, when none of them runs
+// the operation — so a fleet whose only data node failed an apply keeps its
+// tracker rather than losing it to a refusal. Asked first, a shed node decided
+// a create's people field against the chart the fleet had replaced while a
+// current peer could have decided it.
+func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	assigned := tracker.Task{Project: "ENG",
+		Fields: map[string]json.RawMessage{"owner": json.RawMessage(`"swe"`)}}
+	decided := func(n *fakeNode) bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return slices.ContainsFunc(n.created, func(task tracker.Task) bool {
+			return string(task.Fields["owner"]) == `"swe"`
+		})
+	}
+
+	// ASKED FIRST BY ANOTHER NODE, the node behind runs nothing and the
+	// current one decides — a write and a read alike. Each through a
+	// router that has asked nobody yet, whose first node is the one behind:
+	// a router that had would stay on whichever node answered it
+	// ([Router.markAnswered]), and the preference would never be what
+	// moved it off the node behind.
+	for _, tc := range []struct {
+		name, op string
+		run      func(*Router) error
+		ran      func(*fakeNode) bool
+	}{{
+		name: "a write", op: "create",
+		run: func(r *Router) error {
+			_, err := r.WriterAs(swe).CreateTask(ctx, "op-first", assigned, nil)
+			return err
+		},
+		ran: decided,
+	}, {
+		name: "a read", op: "tasks",
+		run: func(r *Router) error {
+			_, err := r.Work().Tasks(ctx, tracker.Query{}, time.Now())
+			return err
+		},
+		ran: func(n *fakeNode) bool { return n.askedFor("tasks") },
+	}} {
+		f := newFleet(t, "data-a", "data-b")
+		_, behind := f.first(t, f.client)
+		current := f.other(behind)
+		behind.set(func(n *fakeNode) { n.behindConfig = true })
+		if err := tc.run(f.client); err != nil {
+			t.Fatalf("%s with one data node behind the configuration: %v", tc.name, err)
+		}
+		if behind.askedFor(tc.op) || !tc.ran(current) {
+			t.Fatalf("%s: the node behind, asked first, ran %v and the current one ran it %v: "+
+				"want it run by the current node, and nothing run behind", tc.name,
+				behind.asked, tc.ran(current))
+		}
+	}
+
+	// AND IT SAYS WHY, naming the configuration rather than its log, which
+	// is level — in a reason of its own, which the asker remembers: an
+	// operator reading a walk's account must be sent to the control plane,
+	// not to the applier.
+	f := newFleet(t, "data-a", "data-b")
+	_, behind := f.first(t, f.client)
+	behind.set(func(n *fakeNode) { n.behindConfig = true })
+	direct := f.start(t)
+	ask := func() reply {
+		t.Helper()
+		raw, err := json.Marshal(request{Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replies, err := direct.Ask(ctx, Subject(behind.name), raw, 1)
+		if err != nil || len(replies) != 1 {
+			t.Fatalf("ask %s = (%d replies, %v)", behind.name, len(replies), err)
+		}
+		var rep reply
+		if err := json.Unmarshal(replies[0], &rep); err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	if rep := ask(); rep.Unserved != unservedBehindConfig ||
+		!strings.Contains(rep.Detail, "configuration") || strings.Contains(rep.Detail, "lags its log") {
+		t.Fatalf("the node behind answered %q: %q, want %q, naming the configuration and not "+
+			"its log", rep.Unserved, rep.Detail, unservedBehindConfig)
+	}
+	// A NODE THAT IS BOTH answers the reason that lasts, so its asker
+	// remembers it, and names both.
+	behind.set(func(n *fakeNode) { n.notReady = true })
+	if rep := ask(); rep.Unserved != unservedBehindConfig ||
+		!strings.Contains(rep.Detail, "configuration") || !strings.Contains(rep.Detail, "lags its log") {
+		t.Fatalf("the node behind and lagging answered %q: %q, want %q naming both",
+			rep.Unserved, rep.Detail, unservedBehindConfig)
+	}
+	behind.set(func(n *fakeNode) { n.notReady = false })
+
+	// WITH THE CURRENT NODE GONE, THE NODE BEHIND DECIDES IT: never refused,
+	// or a fleet whose only data node failed an apply would answer none of
+	// its tracker.
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{behind.name} })
+	if _, err := f.client.WriterAs(swe).CreateTask(ctx, "op-alone", assigned, nil); err != nil {
+		t.Fatalf("the only data node, behind the configuration, refused a create: %v", err)
+	}
+	if !decided(behind) {
+		t.Fatal("the only data node, behind the configuration, did not decide the create")
+	}
+
+	// THIS NODE'S OWN ROUTER asks a current peer before its own copy, and
+	// its own copy when it is the only data node — in-process, as a remote
+	// asker is answered.
+	peered := newFleet(t, "data-b")
+	own := &fakeNode{name: "data-a", units: chartOf("a"), behindConfig: true}
+	if _, err := peered.router(t, "data-a", own).WriterAs(swe).CreateTask(ctx, "op-own",
+		assigned, nil); err != nil {
+		t.Fatalf("a create through a node behind the configuration: %v", err)
+	}
+	if own.askedFor("create") || !decided(peered.nodes["data-b"]) {
+		t.Fatal("this node's own copy, behind the configuration, decided the create ahead " +
+			"of a current peer")
+	}
+	alone := &fakeNode{name: "data-a", units: chartOf("a"), behindConfig: true}
+	if _, err := newFleet(t).router(t, "data-a", alone).WriterAs(swe).CreateTask(ctx,
+		"op-own-alone", assigned, nil); err != nil {
+		t.Fatalf("this node's own copy, behind the configuration and the only one, refused "+
+			"its own seat's create: %v", err)
+	}
+	if !decided(alone) {
+		t.Fatal("this node's own copy, the only one, did not decide its own seat's create")
+	}
+
+	// ADMISSION'S PING IS NOT HELD BACK: it asks the copy's own seat
+	// admission and routes no later operation, so a node behind the
+	// configuration is asked it in turn like any other.
+	pinged := newFleet(t, "data-a", "data-b")
+	_, first := pinged.first(t, pinged.client)
+	second := pinged.other(first)
+	first.set(func(n *fakeNode) { n.behindConfig = true })
+	second.set(func(n *fakeNode) { n.notAdmitting = true })
+	if served, _, err := pinged.client.Serves(ctx); err != nil || !served {
+		t.Fatalf("admission through a node behind the configuration = (%v, %v), want "+
+			"admitted", served, err)
+	}
+	if second.askedFor("admits") {
+		t.Fatal("admission's ping passed over a node behind the configuration")
+	}
+}
+
+// A NODE BEHIND THE COMPANY'S CONFIGURATION IS REMEMBERED, SO A REQUEST ASKS
+// IT ONCE RATHER THAN TWICE.
+//
+// Behind the configuration is no passing state, as a copy's lag is: a node
+// stays there until its apply succeeds — a stuck one until a person acts — and
+// says so to every request. Forgotten between requests, it cost every
+// operation a refusal's round trip before the walk moved on, for as long as it
+// stayed: on a stateless node beside one stuck data node every estate call was
+// two requests and the data node served twice the traffic; with every data node
+// behind, every call asked each of them twice; and a repository whose committer
+// was behind sent it every push's whole proposal — encoded, decoded and refused
+// — before the runner-up was asked. So the router remembers the answer for
+// [suspectFor] and asks a remembered node only as the last resort, told at once
+// to answer anyway: one ask a request once the router has heard the refusal,
+// and none at all where a current node answers first. Nothing but the window
+// ends the memory — the last resort's answer, given because it was told to
+// answer anyway, says nothing about the node's configuration — and admission's
+// ping, which the preference never holds back, is not held back by the memory
+// either.
+func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	behindConfig := func(n *fakeNode) { n.behindConfig = true }
+	read := func(t *testing.T, r *Router) {
+		t.Helper()
+		if _, err := r.Work().Tasks(ctx, tracker.Query{}, time.Now()); err != nil {
+			t.Fatalf("a read with the data nodes behind the configuration: %v", err)
+		}
+	}
+	asked := func(nodes ...*fakeNode) (requests, anyway int) {
+		for _, n := range nodes {
+			n.mu.Lock()
+			requests, anyway = requests+n.requests, anyway+n.anyway
+			n.mu.Unlock()
+		}
+		return requests, anyway
+	}
+	const later = 4
+
+	for _, tc := range []struct {
+		name  string
+		nodes []string
+		// first is what the first read costs: a refusal from each data
+		// node, all of them behind, and the last resort's answer.
+		first int
+	}{
+		{name: "one data node", nodes: []string{"data-a"}, first: 2},
+		{name: "every data node", nodes: []string{"data-a", "data-b"}, first: 3},
+	} {
+		f := newFleet(t, tc.nodes...)
+		nodes := slices.Collect(maps.Values(f.nodes))
+		for _, n := range nodes {
+			n.set(behindConfig)
+		}
+		read(t, f.client)
+		if requests, _ := asked(nodes...); requests != tc.first {
+			t.Fatalf("%s behind: the first read asked %d times, want %d — each node's "+
+				"refusal, then the last resort", tc.name, requests, tc.first)
+		}
+		for range later {
+			read(t, f.client)
+		}
+		if requests, anyway := asked(nodes...); requests != tc.first+later || anyway != 1+later {
+			t.Fatalf("%s behind: %d more reads asked %d times, %d of them told to answer "+
+				"anyway — want one ask a read, the last resort's, once the router has "+
+				"heard the refusal", tc.name, later, requests-tc.first, anyway-1)
+		}
+	}
+
+	// A KEYED WRITE asks the runner-up instead of a committer behind: only
+	// the first push is proposed to it.
+	holders := []string{"data-a", "data-b", "data-c"}
+	f := newFleet(t, holders...)
+	const repo = "repo-behind"
+	o := rendezvous.Order(repo, holders)
+	f.nodes[o[0]].set(behindConfig)
+	for i := range 1 + later {
+		got, err := f.client.Code().Propose(ctx, proposalTo(repo, fmt.Sprintf("push-%d", i)))
+		if err != nil || got.OpID != o[1] {
+			t.Fatalf("push %d with the committer %s behind = (%+v, %v), want the runner-up "+
+				"%s's answer", i, o[0], got, err, o[1])
+		}
+	}
+	if requests, _ := asked(f.nodes[o[0]]); requests != 1 {
+		t.Fatalf("the committer behind the configuration was sent %d of %d pushes, want only "+
+			"the first", requests, 1+later)
+	}
+
+	// THE WINDOW ENDS IT: past it the node is asked as any other again —
+	// refusing again while it is still behind, and answering at once once it
+	// is current.
+	alone := newFleet(t, "data-a")
+	n := alone.nodes["data-a"]
+	n.set(behindConfig)
+	read(t, alone.client)
+	alone.client.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
+	before, beforeAnyway := asked(n)
+	read(t, alone.client)
+	if requests, anyway := asked(n); requests-before != 2 || anyway-beforeAnyway != 1 {
+		t.Fatalf("past the window, a read of a node still behind asked %d times, %d told to "+
+			"answer anyway, want it refused once and answered by the last resort",
+			requests-before, anyway-beforeAnyway)
+	}
+	n.set(func(n *fakeNode) { n.behindConfig = false })
+	alone.client.now = func() time.Time { return time.Now().Add(4 * suspectFor) }
+	before, beforeAnyway = asked(n)
+	read(t, alone.client)
+	if requests, anyway := asked(n); requests-before != 1 || anyway != beforeAnyway {
+		t.Fatalf("past the window, a read of a node current again asked %d times, %d told "+
+			"to answer anyway, want one ordinary ask", requests-before, anyway-beforeAnyway)
+	}
+
+	// ADMISSION'S PING IS NOT HELD BACK BY THE MEMORY EITHER: a router that
+	// has heard the node is behind still asks it the ping in its turn.
+	pinged := newFleet(t, "data-a", "data-b")
+	_, first := pinged.first(t, pinged.client)
+	second := pinged.other(first)
+	first.set(behindConfig)
+	read(t, pinged.client)
+	second.set(func(n *fakeNode) { n.notAdmitting, n.asked = true, nil })
+	if served, _, err := pinged.client.Serves(ctx); err != nil || !served {
+		t.Fatalf("admission through a node the router remembers behind = (%v, %v), want "+
+			"admitted", served, err)
+	}
+	if second.askedFor("admits") {
+		t.Fatal("admission's ping passed over a node the router remembers behind the " +
+			"configuration")
+	}
+}
+
+// THE LAST RESORT ASKS A COPY THAT ONLY LAGS BEFORE A NODE BEHIND THE
+// CONFIGURATION, AND ITS ORDER IS THE REASONS' — never when the router learned
+// them.
+//
+// Both are worse nodes to ask, and they are not equally worse: a copy that
+// only lags answers held to the caller's floors and to the CURRENT
+// configuration, while a node behind the configuration decides under the
+// revision the fleet replaced. So where no node in better standing runs an
+// operation, the last resort asks every copy that only lags first and every
+// node behind the configuration after them, each in the order the walk reached
+// it. The order is the same on the request that learns a node is behind as on
+// every one the router remembers it for, and the same in every asker: when the
+// last resort asked in the order the walk REACHED the refusals, the request
+// that learned a node was behind asked it first wherever rendezvous ranked it
+// first — the read it answered was decided under the replaced chart, and a
+// repository's pushes went to its committer behind the configuration on that
+// request and to the lagging runner-up on every one after, two nodes
+// committing one repository and contending on its one subject in every window.
+// And a router that remembered one node behind and had not yet heard another
+// asked them in another order than a router that had heard neither, so two
+// askers sent one repository's pushes to two committers.
+func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	behindConfig := func(n *fakeNode) { n.behindConfig = true }
+	lagging := func(n *fakeNode) { n.notReady = true }
+	ran := func(n *fakeNode, op string) int {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		count := 0
+		for _, asked := range n.asked {
+			if asked == op {
+				count++
+			}
+		}
+		return count
+	}
+	read := func(t *testing.T, r *Router) {
+		t.Helper()
+		if _, err := r.Work().Tasks(ctx, tracker.Query{}, time.Now()); err != nil {
+			t.Fatalf("a read with no data node in good standing: %v", err)
+		}
+	}
+	// pastTheWindow moves r's clock past the memory of every refusal it
+	// heard, each time it is called.
+	pastTheWindow := func(r *Router) func() {
+		windows := 0
+		return func() {
+			windows++
+			offset := time.Duration(windows) * 2 * suspectFor
+			r.now = func() time.Time { return time.Now().Add(offset) }
+		}
+	}
+	const requests, window = 6, 3
+
+	// AN OPERATION ANY COPY ANSWERS EQUALLY, through a router whose first
+	// node is the one behind: the read that learns it is behind and every
+	// read after — across a window's end — is answered by the copy that
+	// only lags.
+	f := newFleet(t, "data-a", "data-b")
+	_, behind := f.first(t, f.client)
+	lags := f.other(behind)
+	behind.set(behindConfig)
+	lags.set(lagging)
+	next := pastTheWindow(f.client)
+	for i := range requests {
+		if i == window {
+			next()
+		}
+		read(t, f.client)
+		if got, want := ran(lags, "tasks"), i+1; got != want || ran(behind, "tasks") != 0 {
+			t.Fatalf("read %d: the copy that only lags ran %d reads and the node behind the "+
+				"configuration %d, want %d and none", i, got, ran(behind, "tasks"), want)
+		}
+	}
+
+	// THIS NODE'S OWN COPY behind the configuration is asked after a peer
+	// whose copy only lags, as a remote one is — in-process saves a round
+	// trip, never a decide under the replaced configuration.
+	peered := newFleet(t, "data-b")
+	peered.nodes["data-b"].set(lagging)
+	own := &fakeNode{name: "data-a", units: chartOf("a"), behindConfig: true}
+	ownRouter := peered.router(t, "data-a", own)
+	for i := range window {
+		read(t, ownRouter)
+		if got := ran(peered.nodes["data-b"], "tasks"); got != i+1 || own.askedFor("tasks") {
+			t.Fatalf("read %d: the peer whose copy only lags ran %d reads and this node's own "+
+				"copy behind the configuration ran %v, want %d and none", i, got,
+				own.askedFor("tasks"), i+1)
+		}
+	}
+
+	// A KEYED OPERATION: a committer behind the configuration and a runner-up
+	// that only lags — every push across a window's end is committed by the
+	// runner-up, the push that learns the committer is behind included, so a
+	// repository's pushes meet at one node.
+	holders := []string{"data-a", "data-b"}
+	keyed := newFleet(t, holders...)
+	const repo = "repo-worse"
+	o := rendezvous.Order(repo, holders)
+	keyed.nodes[o[0]].set(behindConfig)
+	keyed.nodes[o[1]].set(lagging)
+	next = pastTheWindow(keyed.client)
+	for i := range requests {
+		if i == window {
+			next()
+		}
+		got, err := keyed.client.Code().Propose(ctx, proposalTo(repo, fmt.Sprintf("push-%d", i)))
+		if err != nil || got.OpID != o[1] {
+			t.Fatalf("push %d with the committer %s behind the configuration and the runner-up "+
+				"%s lagging = (%+v, %v), want the runner-up's answer", i, o[0], o[1], got, err)
+		}
+	}
+	if n := len(keyed.nodes[o[0]].proposalsTo(repo)); n != 0 {
+		t.Fatalf("the committer behind the configuration decided %d pushes ahead of a runner-up "+
+			"that only lags", n)
+	}
+
+	// THIS NODE AS THE COMMITTER, its own copy behind the configuration: the
+	// runner-up that only lags commits the push, as it would for any asker.
+	alone := newFleet(t, o[1])
+	alone.nodes[o[1]].set(lagging)
+	ownCommitter := &fakeNode{name: o[0], units: chartOf(o[0]), behindConfig: true}
+	committerRouter := alone.router(t, o[0], ownCommitter)
+	for i := range window {
+		got, err := committerRouter.Code().Propose(ctx, proposalTo(repo, fmt.Sprintf("own-%d", i)))
+		if err != nil || got.OpID != o[1] {
+			t.Fatalf("push %d through the committer %s, its own copy behind the configuration, "+
+				"with the runner-up %s lagging = (%+v, %v), want the runner-up's answer", i,
+				o[0], o[1], got, err)
+		}
+	}
+	if n := len(ownCommitter.proposalsTo(repo)); n != 0 {
+		t.Fatalf("this node's own copy behind the configuration decided %d pushes ahead of a "+
+			"runner-up that only lags", n)
+	}
+
+	// EVERY NODE BEHIND, ONE OF THEM REMEMBERED: the last resort asks them in
+	// the key's order, as a router that has heard neither does — never the
+	// one it has not heard yet first because the other is remembered.
+	both := newFleet(t, holders...)
+	both.nodes[o[0]].set(behindConfig)
+	if got, err := both.client.Code().Propose(ctx, proposalTo(repo, "learn")); err != nil ||
+		got.OpID != o[1] {
+		t.Fatalf("a push with only the committer %s behind = (%+v, %v), want the current "+
+			"runner-up %s's answer", o[0], got, err, o[1])
+	}
+	both.nodes[o[1]].set(behindConfig)
+	fresh := both.router(t, "agent-2", nil)
+	for _, r := range []*Router{both.client, fresh} {
+		for i := range window {
+			got, err := r.Code().Propose(ctx, proposalTo(repo, fmt.Sprintf("both-%d", i)))
+			if err != nil || got.OpID != o[0] {
+				t.Fatalf("push %d with every node behind the configuration = (%+v, %v), want "+
+					"the committer %s's answer from every asker", i, got, err, o[0])
+			}
+		}
+	}
+}
+
 // A SEARCH THAT REACHED NOTHING STILL SAYS SO: its only data node gone, a
 // knowledge search is answered with no hits, as the seam requires — and with
 // NO MODE SERVED and none of the corpus covered, so the turn-start block and
@@ -1721,7 +2187,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	listed := slices.Clone(held)
 	want := rendezvous.Order("agent-2", []string{"data-a", "data-b", "data-c", "data-d"})
 
-	if got := r.order(trackerDomain, held); !slices.Equal(got, want) {
+	if got := r.order(opTasks.spec, held); !slices.Equal(got, want) {
 		t.Fatalf("agent-2 asks %q, want the rendezvous order of its own id %q", got, want)
 	}
 	if !slices.Equal(held, listed) {
@@ -1730,7 +2196,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 
 	r.markAnswered(want[3], trackerDomain, "")
 	r.markSuspect(want[0])
-	if got, w := r.order(trackerDomain, held), []string{want[3], want[1], want[2], want[0]}; !slices.Equal(got, w) {
+	if got, w := r.order(opTasks.spec, held), []string{want[3], want[1], want[2], want[0]}; !slices.Equal(got, w) {
 		t.Fatalf("with %s answered last and %s silent, agent-2 asks %q, want %q", want[3],
 			want[0], got, w)
 	}
@@ -1739,17 +2205,17 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	// base, and a node whose copy of the tracker said it is out of service
 	// goes after every other live node — for the tracker alone.
 	r.markOutOfService(want[1], trackerDomain)
-	if got, w := r.order(trackerDomain, held), []string{want[3], want[2], want[1], want[0]}; !slices.Equal(got, w) {
+	if got, w := r.order(opTasks.spec, held), []string{want[3], want[2], want[1], want[0]}; !slices.Equal(got, w) {
 		t.Fatalf("with %s's tracker copy out of service, agent-2 asks %q for the tracker, "+
 			"want %q", want[1], got, w)
 	}
-	if got, w := r.order(pagesDomain, held), []string{want[1], want[2], want[3], want[0]}; !slices.Equal(got, w) {
+	if got, w := r.order(opListPages.spec, held), []string{want[1], want[2], want[3], want[0]}; !slices.Equal(got, w) {
 		t.Fatalf("agent-2 asks %q for the knowledge base, want %q — the tracker's sticky "+
 			"node and its copy out of service moved the knowledge base's order", got, w)
 	}
 	// AND THE PASS LAPSES: after the window the node is back in its place.
 	r.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
-	if got, w := r.order(trackerDomain, held), []string{want[3], want[0], want[1], want[2]}; !slices.Equal(got, w) {
+	if got, w := r.order(opTasks.spec, held), []string{want[3], want[0], want[1], want[2]}; !slices.Equal(got, w) {
 		t.Fatalf("after the window agent-2 asks %q for the tracker, want %q", got, w)
 	}
 }
@@ -2506,7 +2972,7 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 	if _, err := r.Code().Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	sticky := r.order(codeDomain, holders)[0]
+	sticky := r.order(opCodeRead.spec, holders)[0]
 	var repo string
 	for i := 0; repo == ""; i++ {
 		if candidate := fmt.Sprintf("repo-sticky-%d", i); rendezvous.Order(candidate, holders)[0] != sticky {
@@ -2684,7 +3150,7 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 	}
 	// ONLY FOR THE OPERATION IT DECLINED: its copy of the code log is not
 	// out of service, so nothing moves it for a read.
-	if class := r.classes(codeDomain, "", true)(o[0]); class != 1 {
+	if class := r.classes(opCodeRead.spec, false)(o[0]); class != 1 {
 		t.Fatalf("a read ranks %s in class %d, want 1 — declining a push says nothing "+
 			"about its reads", o[0], class)
 	}
@@ -2706,12 +3172,12 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 		got.OpID != o[0] {
 		t.Fatalf("with only %s committing = (%+v, %v), want its answer", o[0], got, err)
 	}
-	if class := r.classes(codeDomain, opCodePropose.spec.name, false)(o[0]); class != 1 {
+	if class := r.classes(opCodePropose.spec, true)(o[0]); class != 1 {
 		t.Fatalf("after %s committed a push it ranks in class %d for pushes, want 1 — "+
 			"the decline it answered before is over", o[0], class)
 	}
 	for _, refused := range o[1:] {
-		if class := r.classes(codeDomain, opCodePropose.spec.name, false)(refused); class != 2 {
+		if class := r.classes(opCodePropose.spec, true)(refused); class != 2 {
 			t.Fatalf("%s, which ran nothing for the push, ranks in class %d, want 2",
 				refused, class)
 		}
