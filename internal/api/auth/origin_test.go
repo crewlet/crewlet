@@ -88,6 +88,51 @@ func TestTheDeploymentsOwnOriginIsPermitted(t *testing.T) {
 	}
 }
 
+// AN ADDRESS IS COMPARED AS A BROWSER SPELLS IT, so a deployment configured
+// with a host in upper case, or with its scheme's default port written out,
+// still permits the origin every browser sends for it: the scheme and host in
+// lower case, an IP address in its canonical form, and no default port. Kept
+// as written, the first two refused every write from the deployment's own
+// address as cross-site.
+//
+// Mutation: compare parsed.Scheme + "://" + parsed.Host again in Origin and
+// every permitted case fails; drop the default-port rule and the two default
+// ports (`:443`, `:80`) do; compare the port as text and the two with a
+// leading zero do; stop putting the request's Origin in the same spelling and
+// the IPv4-mapped one does, whose two sides name one address two ways.
+func TestAnAddressIsComparedAsABrowserSpellsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, external, origin string
+		permitted              bool
+	}{
+		{"a host in upper case", "https://Crewlet.Example.com/app", "https://crewlet.example.com", true},
+		{"the scheme's default port", "https://crewlet.example.com:443", "https://crewlet.example.com", true},
+		{"plain http's default port", "http://LOCALHOST:80", "http://localhost", true},
+		{"an IPv6 address written out", "http://[0:0:0:0:0:0:0:1]:8080", "http://[::1]:8080", true},
+		{"the default port with a leading zero", "https://crewlet.example.com:0443", "https://crewlet.example.com", true},
+		{"another port with a leading zero", "https://crewlet.example.com:08443", "https://crewlet.example.com:8443", true},
+		// A browser writes an IPv4-mapped address in hex; netip in dotted form.
+		{"an IPv4-mapped address", "http://[::ffff:127.0.0.1]:8080", "http://[::ffff:7f00:1]:8080", true},
+		{"another port", "https://crewlet.example.com:8443", "https://crewlet.example.com", false},
+		{"another scheme", "https://crewlet.example.com", "http://crewlet.example.com", false},
+		{"another host", "https://Crewlet.Example.com", "https://crewlet.example.org", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := config.DefaultBootstrap()
+			b.API.Port = config.DefaultAPIPort
+			b.API.ExternalURL = tc.external
+			c := auth.NewCSRF(&b)
+			status, ran := send(t, c, http.MethodPost, "/config", map[string]string{"Origin": tc.origin})
+			if got := status == http.StatusOK && ran; got != tc.permitted {
+				t.Errorf("external %s, Origin %s: status %d (ran %v), want permitted %v",
+					tc.external, tc.origin, status, ran, tc.permitted)
+			}
+		})
+	}
+}
+
 // A CLIENT THAT IS NOT A BROWSER SENDS NO ORIGIN, and refusing it would refuse
 // the callers this API mostly has: curl, the operator CLI, a CI pipeline.
 //

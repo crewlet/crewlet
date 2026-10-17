@@ -234,6 +234,8 @@ func TestAPublicAddressThatCannotBeOneIsRefused(t *testing.T) {
 			"api.public.external_url", ErrShape},
 		"no listener": {"    external_url: https://hooks.example.com\n",
 			"api.public.port", ErrMissing},
+		"a port out of range": {"    port: 8443\n    external_url: \"https://hooks.example.com:99999\"\n",
+			"api.public.external_url", ErrShape},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -242,5 +244,12 @@ func TestAPublicAddressThatCannotBeOneIsRefused(t *testing.T) {
 				t.Fatalf("want %v, got %v", tc.kind, err)
 			}
 		})
+	}
+	// AND NOT TO A BROWSER'S: no origin is compared against this address, so
+	// a host a browser would rewrite before it sent it is refused only on the
+	// person's address and on the allowances.
+	doc := Served("api:\n  port: 8080\n  public:\n    port: 8443\n    external_url: https://hooks.bücher.example\n")
+	if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
+		t.Errorf("a public address outside ASCII was refused, though no browser compares it: %v", err)
 	}
 }

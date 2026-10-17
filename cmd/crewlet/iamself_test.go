@@ -259,3 +259,24 @@ func TestATokenNamesExactlyOneOwner(t *testing.T) {
 		}
 	}
 }
+
+// THE COMMAND LINE STATES THE ORIGIN A BROWSER WOULD, by the one rule the
+// server compares origins by (auth.Origin), rather than a copy of its own
+// that kept the host's case and a default port as written.
+//
+// Mutation: build the origin from the parsed scheme and host again and the
+// first case keeps `Crewlet.Example.com:443`.
+func TestTheCommandLineStatesTheOriginABrowserWould(t *testing.T) {
+	t.Parallel()
+	const dialled = "http://127.0.0.1:8080"
+	for _, tc := range []struct{ external, want string }{
+		{"https://Crewlet.Example.com:443/app", "https://crewlet.example.com"},
+		{"", dialled},
+	} {
+		boot := config.DefaultBootstrap()
+		boot.API.ExternalURL = tc.external
+		if got := reachedAt(&boot, dialled); got != tc.want {
+			t.Errorf("reachedAt with api.external_url %q = %q, want %q", tc.external, got, tc.want)
+		}
+	}
+}

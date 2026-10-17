@@ -54,6 +54,31 @@ func TestAPermittedOriginIsAllowed(t *testing.T) {
 	}
 }
 
+// AN ENTRY IS COMPARED AS A BROWSER SPELLS IT: written with its host in upper
+// case and its scheme's default port, it permits the origin a browser sends
+// for it, and the answer names the origin as the browser sent it, which is
+// the one value the browser matches it against.
+//
+// Mutation: compare the request's Origin with the entries as written again
+// and the first case fails; echo the Origin in this engine's spelling rather
+// than the browser's and the second does, where a browser writes an
+// IPv4-mapped address in hex and the canonical form is dotted.
+func TestAnEntryIsComparedAsABrowserSpellsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ entry, origin string }{
+		{"https://Ops.Example.com:443", "https://ops.example.com"},
+		{"http://[::ffff:127.0.0.1]:8080", "http://[::ffff:7f00:1]:8080"},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/work", nil)
+		r.Header.Set("Origin", tc.origin)
+		rec, _ := serveCORS(t, corsFor(tc.entry), r)
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != tc.origin {
+			t.Errorf("entry %s: Access-Control-Allow-Origin = %q, want %q, the origin the browser sent",
+				tc.entry, got, tc.origin)
+		}
+	}
+}
+
 // AND ONE THAT IS NOT IS NOT REFUSED — it is answered with no permission, and
 // the browser blocks it. Refusing with a status would break the default: a
 // same-origin POST carries an Origin too, and a company with an empty

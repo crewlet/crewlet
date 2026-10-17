@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -289,12 +288,12 @@ func mintOwnToken(ctx context.Context, boot *config.Bootstrap, apiURL,
 }
 
 // reachedAt is the origin a browser would state for this deployment:
-// `api.external_url`'s, or the dialled base where none is set.
+// `api.external_url`'s, or the dialled base where none is set, spelled by the
+// rule the server compares origins by ([auth.Origin]).
 func reachedAt(boot *config.Bootstrap, base string) string {
 	for _, candidate := range []string{boot.API.ExternalBase(), base} {
-		parsed, err := url.Parse(strings.TrimSpace(candidate))
-		if err == nil && parsed.Scheme != "" && parsed.Host != "" {
-			return parsed.Scheme + "://" + parsed.Host
+		if origin := auth.Origin(candidate); origin != "" {
+			return origin
 		}
 	}
 	return base
