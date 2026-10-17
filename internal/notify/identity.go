@@ -243,12 +243,20 @@ type Reconciliation struct {
 // that happens to collide is left exactly where it is: a human must never
 // silently take over an agent's mapping, or the reverse.
 //
-// # Human ids need no integration
+// # Human ids need no integration — except a NAME
 //
 // Unlike agent identities, which each transport resolves against the
 // third-party app at connect, a human's ids are declared in config.
 // Registration is therefore synchronous and runs at boot and on every org
 // swap, with no network and nothing to await.
+//
+// The exception is a contact the chart declares as the name a person is
+// addressed by on a surface whose events carry an account id instead
+// ([org.Transport.AddressedByName] — Mattermost's username). That name is
+// skipped here, because registered as written it is a key no event looks up:
+// every post its owner wrote reached the agents from a stranger. The
+// surface's transport resolves it against its server and registers the id it
+// is answered with, into this same registry.
 //
 // lookup resolves ${VAR} references; nil reads the process environment. An
 // identity whose reference does not resolve is skipped and counted, never
@@ -293,6 +301,13 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 				continue
 			}
 			for _, id := range resolved {
+				if id.Transport.AddressedByName() {
+					// The transport's to register: see "except a
+					// NAME" above. Still counted as declared and
+					// resolved, because an unset ${VAR} behind it
+					// is this function's to report either way.
+					continue
+				}
 				desired[identityKey{string(id.Transport), id.ExternalID}] = handle
 			}
 		}

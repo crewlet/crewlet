@@ -555,3 +555,20 @@ func TestASeatsCeilingIsOneTokenOrMoreUnderAWindow(t *testing.T) {
 		t.Errorf("a human seat's 0 ceiling = %v, want the human-seat conflict alone", err)
 	}
 }
+
+// A MATTERMOST CONTACT IS A NAME, AND THE ONLY ONE. Every other contact field
+// is the id that surface's events carry and registers as written; this one is
+// the username a mention is written with while a post carries the user id, so
+// registered as written it matched no post at all. Whatever reads the answer
+// leaves the name to the transport that can ask the server what it holds.
+func TestOnlyTheMattermostContactIsAName(t *testing.T) {
+	t.Parallel()
+	for _, entry := range contactTransports {
+		if got, want := entry.transport.AddressedByName(), entry.transport == TransportMattermost; got != want {
+			t.Errorf("%s: AddressedByName = %v, want %v", entry.transport, got, want)
+		}
+	}
+	if Transport("a surface this build does not have").AddressedByName() {
+		t.Error("an unknown transport reads as addressed by name")
+	}
+}

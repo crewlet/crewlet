@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -441,6 +442,68 @@ func TestTheEndpointsAskForWhatTheyName(t *testing.T) {
 		if i >= len(got) || got[i] != w {
 			t.Errorf("call %d was %q, want %q", i, got[i], w)
 		}
+	}
+}
+
+// THE PEOPLE ARE ASKED ABOUT IN ONE REQUEST, IN THE CASE THE SERVER STORES.
+// It matches the names exactly against the lowercase ones it saved, so a name
+// copied out of a profile ("Jane") or a mention ("@jane") would find nobody;
+// and a name the caller listed twice is asked about once.
+func TestThePeopleAreAskedAboutOnceInTheServersCase(t *testing.T) {
+	s := newServer(t)
+	var body []string
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		json.NewDecoder(r.Body).Decode(&body)
+		w.Write([]byte(`[{"id":"u-jane","username":"jane"}]`))
+		return true
+	})
+	c := client(t, s)
+
+	got, err := c.UsersByUsernames(t.Context(), []string{" Jane ", "@jane", "Ola.N", ""})
+	if err != nil {
+		t.Fatalf("UsersByUsernames: %v", err)
+	}
+	if calls := s.seen(); !slices.Equal(calls, []string{"POST /api/v4/users/usernames"}) {
+		t.Fatalf("calls = %q", calls)
+	}
+	if !slices.Equal(body, []string{"jane", "ola.n"}) {
+		t.Fatalf("the server was asked about %q", body)
+	}
+	if len(got) != 1 || got[0].ID != "u-jane" {
+		t.Fatalf("answered %+v", got)
+	}
+
+	// NOBODY TO ASK ABOUT IS NO REQUEST, rather than the empty list the
+	// server refuses as an invalid parameter.
+	if got, err := c.UsersByUsernames(t.Context(), []string{" ", "@"}); err != nil || got != nil {
+		t.Fatalf("an empty ask answered %+v, %v", got, err)
+	}
+	if calls := len(s.seen()); calls != 1 {
+		t.Fatalf("an empty ask reached the network: %d calls", calls)
+	}
+}
+
+// IT READS, SO A LOST ANSWER IS ASKED AGAIN. A POST is not retried on a
+// gateway's failure unless the caller vouches that repeating it repeats
+// nothing — and this one, a read spelled as a POST, must be, or one proxy
+// hiccup at connect left every person a stranger until the next refresh.
+func TestThePeopleAskIsRetriedLikeTheRead(t *testing.T) {
+	s := newServer(t)
+	var calls atomic.Int32
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return true
+		}
+		w.Write([]byte(`[]`))
+		return true
+	})
+	c := client(t, s)
+	if _, err := c.UsersByUsernames(t.Context(), []string{"jane"}); err != nil {
+		t.Fatalf("a read lost to a gateway was not asked again: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("the read was made %d times", calls.Load())
 	}
 }
 

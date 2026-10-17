@@ -43,6 +43,13 @@ type Config struct {
 
 	// Seats are the bots, one per agent handle.
 	Seats []SeatConfig
+
+	// People are the human seats' usernames, which the transport resolves
+	// to the user ids their posts carry (see people.go). An apply replaces
+	// them through [Transport.Reregister] rather than through a rebuild:
+	// they are not what a socket is built from, so naming a new person
+	// reconnects nobody.
+	People []Person
 }
 
 // SeatConfig is one agent's bot, as configured.
@@ -98,6 +105,16 @@ type TransportOptions struct {
 	Backoff  []time.Duration
 	Backfill time.Duration
 
+	// PeopleRefresh is how often the people's usernames are asked about
+	// again; zero takes [PeopleRefresh].
+	PeopleRefresh time.Duration
+
+	// OnPeople is called when an answer changes which people the server
+	// holds no account for — what [Transport.PeopleFindings] reports — so
+	// the integration status can be read again rather than waiting out its
+	// cadence. Nil is valid.
+	OnPeople func()
+
 	Now func() time.Time
 }
 
@@ -120,6 +137,27 @@ type Transport struct {
 	// The server ENFORCES it — sending faster is rejected, not merely
 	// wasteful — so it is read rather than assumed.
 	throttle time.Duration
+
+	// people is what is known about the human seats; see people.go.
+	people people
+
+	// registering serialises [Transport.registerPeople] whole, from the
+	// read of what is known to the last write into the registry. An apply
+	// and an answer both register, and each reads before it writes: let
+	// one read, the other read newer facts and write them, and the first
+	// then write what it read, and the registry ends on the older answer.
+	// Held across the writes, the later caller always reads last and
+	// writes last.
+	registering sync.Mutex
+
+	// peopleEvery, peoplePoke, peopleStop and peopleDone are the people's
+	// refresh loop: its cadence, the ask an apply makes for an answer now,
+	// and its lifetime. onPeople is [TransportOptions.OnPeople].
+	peopleEvery time.Duration
+	peoplePoke  chan struct{}
+	peopleStop  context.CancelFunc
+	peopleDone  chan struct{}
+	onPeople    func()
 }
 
 type runningSeat struct {
@@ -136,14 +174,21 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 		return nil, fmt.Errorf("mattermost: the transport needs a publisher")
 	}
 	t := &Transport{
-		cfg:      opts.Config,
-		registry: opts.Registry,
-		now:      opts.Now,
-		seats:    map[string]runningSeat{},
-		throttle: DefaultTypingThrottle,
+		cfg:         opts.Config,
+		registry:    opts.Registry,
+		now:         opts.Now,
+		seats:       map[string]runningSeat{},
+		throttle:    DefaultTypingThrottle,
+		people:      people{want: slices.Clone(opts.Config.People)},
+		peopleEvery: opts.PeopleRefresh,
+		peoplePoke:  make(chan struct{}, 1),
+		onPeople:    opts.OnPeople,
 	}
 	if t.now == nil {
 		t.now = time.Now
+	}
+	if t.peopleEvery <= 0 {
+		t.peopleEvery = PeopleRefresh
 	}
 
 	fleet, err := NewFleet(FleetOptions{
@@ -248,6 +293,22 @@ func (t *Transport) Start(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
+	// THE PEOPLE ARE ASKED ABOUT BEFORE ANY SOCKET ATTACHES, for the
+	// reason the instance is read first: the first post a socket hears may
+	// be a person's, and asked afterwards it would reach its seat from a
+	// stranger. One request, on a token the server has just accepted.
+	// None when every seat failed, which the end of this function reports
+	// as the one problem it is — asked anyway, it would add a second line
+	// blaming the people for it.
+	if len(resolved) > 0 {
+		clients := make([]*Client, 0, len(resolved))
+		for _, seat := range slices.SortedFunc(slices.Values(resolved), func(a, b identifiedSeat) int {
+			return strings.Compare(a.seat.Handle, b.seat.Handle)
+		}) {
+			clients = append(clients, seat.client)
+		}
+		t.resolvePeople(ctx, clients)
+	}
 	// THE SOCKETS ATTACH ONLY ONCE THE INSTANCE IS READ, because the first
 	// post a socket hears can raise a typing indicator, and that indicator
 	// must run at the cadence the server enforces ([Transport.StatusRefresh])
@@ -271,6 +332,10 @@ func (t *Transport) Start(ctx context.Context) error {
 		// sends an operator somewhere useful.
 		return fmt.Errorf("mattermost: no seat could connect to %s", t.cfg.URL)
 	}
+	// AND ONLY A TRANSPORT THAT RUNS KEEPS ASKING. One whose every seat
+	// failed holds no token to ask with, and is dropped by its caller
+	// without a Stop — a loop started for it would outlive it.
+	t.startPeople(ctx)
 	return nil
 }
 
@@ -317,14 +382,21 @@ func (t *Transport) attach(ctx context.Context, s identifiedSeat) error {
 	return t.fleet.Add(ctx, s.seat, s.client)
 }
 
-// register puts this seat's identities into the party registry.
+// register puts this seat's bot into the party registry.
 //
-// BOTH NAMESPACES, because the two halves of the system see different
-// identifiers: an inbound payload names a poster by user id, while a person
-// typing a mention and an MCP tool addressing a colleague both use the
-// username. Registering one only means a fellow agent's message resolves to
-// nobody and gets annotated as a stranger, while a human's identical message
-// is annotated as a colleague.
+// BY USER ID, IN THE BOT NAMESPACE, because the user id is what every payload
+// names a poster by — a post's author, a mention list — and the bot namespace
+// is where a fellow agent's id lives beside the people's ([notify.BotNamespace]),
+// so a fellow agent's message is annotated exactly the way a person's is.
+//
+// NOT THE USERNAME. It was registered in the transport's own namespace too,
+// on the reasoning that a person typing a mention uses it — but no lookup in
+// the engine is ever handed a username: a mention reaches a seat through the
+// server's own `mentions` list, which carries user ids, and an agent finds a
+// colleague through the org. What that namespace holds now is the PEOPLE's
+// user ids (see people.go), and a username beside them would be a second kind
+// of key in one map, one that Mattermost's own rules let a bot be named so as
+// to collide with: a 26-character lowercase username is a valid one.
 func (t *Transport) register(seat Seat) {
 	t.mu.Lock()
 	lookup := t.registry
@@ -342,22 +414,25 @@ func (t *Transport) register(seat Seat) {
 				"user_id", seat.UserID, "error", err.Error())
 		}
 	}
-	if seat.Username != "" {
-		if err := reg.Register(Backend, seat.Username, seat.Handle); err != nil {
-			log.Warn("mattermost_username_not_registered", "handle", seat.Handle,
-				"username", seat.Username, "error", err.Error())
-		}
-	}
 }
 
-// Reregister puts every running seat's identities into a NEW registry.
+// Reregister puts every running seat's identities, and the new org's people,
+// into a NEW registry.
 //
 // An apply builds a fresh registry from the new org, and these identities
 // are facts about the SERVER rather than about the config — resolved once at
 // connect, against a live instance. Losing them on an apply would make every
 // agent's own message annotate as a stranger until something reconnected,
 // which is a thing nothing here would ever do on its own.
-func (t *Transport) Reregister(reg *notify.Registry) {
+//
+// THE PEOPLE ARE THE ORG'S, and what the server last said about their names
+// fills the new registry at once, with no request — so a person recognised a
+// moment ago is not a stranger while the names are asked about again, which
+// the refresh loop is told to do now: an apply is what names a new person or
+// corrects a name. A registry the identity directory rebuilds for the same
+// org — a suspension, a reinstatement — comes through here too, and what it
+// withholds gets no account (people.go).
+func (t *Transport) Reregister(reg *notify.Registry, people []Person) {
 	if reg == nil {
 		return
 	}
@@ -366,14 +441,15 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 	for _, s := range t.seats {
 		seats = append(seats, s.seat)
 	}
-	previous := t.registry
 	t.registry = func() *notify.Registry { return reg }
+	t.people.want = slices.Clone(people)
 	t.mu.Unlock()
-	_ = previous
 
 	for _, seat := range seats {
 		t.register(seat)
 	}
+	t.registerPeople()
+	t.pokePeople()
 }
 
 // readInstance reads the facts that belong to the server rather than to a
@@ -443,6 +519,7 @@ func refusesToken(err error) bool {
 
 // Stop disconnects everything.
 func (t *Transport) Stop(ctx context.Context) {
+	t.stopPeople()
 	t.status.Stop(ctx)
 	t.fleet.Stop()
 	t.mu.Lock()

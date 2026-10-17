@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -350,7 +351,14 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	// a seat it connects meanwhile registers into the one about to be
 	// published.
 	if chat != nil {
-		chat.Reregister(reg)
+		// WITH THE ORG'S PEOPLE, which the transport resolves to the
+		// account ids their posts carry: a person is declared by name
+		// there, and only the transport can ask the server what it names.
+		// Which of them it may register is reg's own reading of the
+		// directory, judged by the transport against the registry it
+		// writes into rather than filtered here. Their names resolve
+		// through the one snapshot above, as every other contact id does.
+		chat.Reregister(reg, mattermost.PeopleFrom(c.Org, lookup))
 	}
 	if hosted != nil {
 		hosted.Reregister(reg)
@@ -727,7 +735,15 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 			URL: url, Team: team,
 			Status: notify.StatusMode(cfg.Status()),
 			Seats:  seats,
+			People: mattermost.PeopleFrom(c.Org, env.LookupOK),
 		},
+		// A PERSON NAMED BY AN ACCOUNT NOBODY HOLDS is a finding of the
+		// integration's status, which the reconcile loop otherwise reads
+		// again only on its own cadence — an hour, for a fix owed by the
+		// operator. Brought forward on the node whose loop holds the duty;
+		// on any other node it marks the surface for a pass that node is
+		// not running.
+		OnPeople:  func() { e.Integrations().Refresh(integration.KindMattermost) },
 		Publisher: e.backends.Queue,
 		// THE FLEET'S, as the change feed's and the webhook edge's are:
 		// a claim only this process could see would leave a post woken

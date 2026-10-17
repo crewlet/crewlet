@@ -1056,14 +1056,21 @@ func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if cfg == nil || !cfg.Enabled {
 		return nil, integration.ErrNotConfigured
 	}
+	// THE PEOPLE, as the running transport last found them — on every
+	// return below that reports, because whether a person's name holds an
+	// account is no part of provisioning: a company whose bots were made by
+	// hand, with no administrator token here, still has people the agents
+	// may not recognise. See [mattermost.Transport.PeopleFindings] for why it
+	// is the transport's answer rather than this pass's own ask.
+	people := p.engine.Mattermost().PeopleFindings()
 	env := p.engine.resolver()
 	admin := mattermostAdminToken(cfg, env, in.Operator)
 	if admin == "" {
-		return []integration.Finding{{
+		return append([]integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "no administrator token resolved, and the bots' own tokens " +
 				"are what this pass mints, so it cannot bootstrap itself from them",
-		}}, nil
+		}}, people...), nil
 	}
 	plan, err := mattermost.PlanFor(company.Org, cfg)
 	if err != nil {
@@ -1086,7 +1093,7 @@ func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
-	return res.Findings(), nil
+	return append(res.Findings(), people...), nil
 }
 
 // githubPass adapts github.Reconcile to the pass contract.
