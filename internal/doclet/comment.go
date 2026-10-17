@@ -2,9 +2,7 @@ package doclet
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,7 +57,10 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	mentions := cleanList(in.Mentions)
 
 	at := s.now()
-	opID := s.commentOpID(actor, pageID, in)
+	opID, opErr := s.commentOpID(actor, pageID, in)
+	if opErr != nil {
+		return Comment{}, Written{}, opErr
+	}
 	subject := PageSubject(pageID)
 	comment := Comment{
 		V: DocumentVersion, ID: opID, PageID: pageID,
@@ -375,27 +376,24 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // the same value: one comment is one operation here, and two identifiers for
 // one thing is two places for a retry to disagree with itself.
 //
-// AND IT CARRIES THE INSTANT THE KEY WAS MINTED, never this call's: the state
-// log refuses to decide again an operation minted before its ledger's
-// watermark whose row it no longer holds, and a call's own clock is always
-// after it — while a request retried after an `unknown` must post once, and a
-// comment is the gesture a person is most likely to press twice.
-func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) string {
+// It is [statelog.KeyedObjectOpID], the derivation every keyed write takes,
+// UNNAMED because this is the comment's own id as well and a reader addresses
+// it: the page and the call it came from are on the row. That is also where
+// carrying the key's instant rather than this call's is argued — the gesture
+// a person is most likely to press twice is a comment, and a request retried
+// after an `unknown` must post once.
+func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) (string, error) {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
-		return s.newSeqID()
+		return s.newSeqID(), nil
 	}
-	at, _ := statelog.OpMintedAt(key)
-	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	// UNNAMED, because this is the comment's own id as well and a reader
-	// addresses it: the page and the call it came from are on the row.
-	return statelog.DeriveOpID(at, "", commentNamespace, pageID, key,
-		hex.EncodeToString(sum[:]))
+	id, err := statelog.KeyedObjectOpID(key, "comment", pageID,
+		strings.TrimSpace(in.Body))
+	if err != nil {
+		return "", fmt.Errorf("doclet: %w", err)
+	}
+	return id, nil
 }
-
-// commentNamespace scopes the derived operation ids. FIXED for the life of the
-// deployment: a new one would make every re-run turn post a duplicate.
-const commentNamespace = "crewlet.pages.comment"
 
 // Thread is one page's comments, oldest first.
 //
