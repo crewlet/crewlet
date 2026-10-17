@@ -56,7 +56,7 @@
 
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
-import { READER_HEADER } from "../contract/identity.ts";
+import { READER_HEADER, READER_PARAM } from "../contract/identity.ts";
 import type { ACT_ERRORS } from "../contract/errors.ts";
 
 /**
@@ -228,6 +228,19 @@ export function setTabReader(reader: TabReader): () => void {
 export function readerHeaders(): Record<string, string> {
   const reader = tabReader?.current() ?? null;
   return reader === null ? {} : { [READER_HEADER]: reader };
+}
+
+/**
+ * The socket's handshake URL query naming this tab's reader (`READER_PARAM`),
+ * or "" where nothing is installed or the tab has learned nobody.
+ *
+ * A browser sets no header on a WebSocket, so the handshake is the one request
+ * [readerHeaders] cannot reach; the engine reads this parameter on an upgrade
+ * instead, and refuses a dial made for anybody but the cookie's principal.
+ */
+export function readerQuery(): string {
+  const reader = tabReader?.current() ?? null;
+  return reader === null ? "" : `?${READER_PARAM}=${encodeURIComponent(reader)}`;
 }
 
 /**
