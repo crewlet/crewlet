@@ -200,8 +200,8 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		Outcome: segmentOutcome(res, err), Phases: spend.Phases, Spend: total,
 		// WHAT THE SEGMENT DID, WHOLE until the write: the writer refuses
 		// a text past [worklet.MaxTurnSummary] rather than cut it, since
-		// every node stores it, and [Engine.recordTurnSpend] fits it to
-		// the card there — rewritten, never cut. The same summary the
+		// every data node stores it, and [Engine.recordTurnSpend] fits it
+		// to the card there — rewritten, never cut. The same summary the
 		// turn's completion event carries, so the task's card and the
 		// trace agree.
 		Summary: planSummary(res),

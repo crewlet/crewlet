@@ -24,9 +24,9 @@ func handlesOf(n int) []string {
 //
 // [worklet.Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING on
 // the snapshot, so ten collections went onto the log unbounded. That is not a
-// screen rendering badly: a snapshot is copied onto the log, replicated to
-// every node, held for the stream's whole retention window and read back by
-// every applier — and the design's own arithmetic sums these caps to about
+// screen rendering badly: a snapshot is copied onto the log, held by each of
+// the stream's replicas for its whole retention window and applied into every
+// data node's rows — and the design's own arithmetic sums these caps to about
 // 19 KiB worst and sizes MaxCommitBytes from it. The caps that held were
 // incidental properties of whichever builder happened to read a bounded table.
 //
