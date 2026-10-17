@@ -24,18 +24,22 @@ import (
 
 // ONE CONCEPT, ONE FLAG, REGISTERED IN ONE PLACE.
 //
-// The running node a command reaches had two names because each flag set
-// registered its own: `-api` on four of them, `-url` on the one every
-// [nodeClientFor] command shares. So the name is registered by one helper and
-// every flag set calls it, and this reads the package's source for a
-// registration of that name anywhere else — the second site is where a second
-// spelling starts, since it can be typed differently from the first.
+// The running node a command reaches, and a retry's operation id, each had
+// two names in this CLI, because each flag set registered its own and two of
+// them spelt it differently ([nodeAPIFlag] and [opIDFlag] say which). So each
+// name is registered by one helper that every flag set calls, and this reads
+// the package's source for a registration of either name anywhere else — a
+// second site is where a second spelling starts, since it can be typed
+// differently from the first.
 //
-// Mutation: register `fs.String("api", ...)` directly in secrets.go, or move
-// the name into a literal outside the helper, and this fails naming the line.
+// Mutation: register `fs.String("api", ...)` directly in secrets.go, or
+// `fs.String("op-id", ...)` in seats.go, and this fails naming the line.
 func TestEachConceptsFlagIsRegisteredByOneHelper(t *testing.T) {
 	t.Parallel()
-	helpers := map[string]string{nodeAPIFlagName: "nodeAPIFlag"}
+	helpers := map[string]string{
+		nodeAPIFlagName: "nodeAPIFlag",
+		opIDFlagName:    "opIDFlag",
+	}
 
 	files, err := filepath.Glob("*.go")
 	if err != nil {
