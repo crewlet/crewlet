@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -189,7 +190,7 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("X-Crewlet-Reset-Secret", secret)
+	req.Header.Set(authapi.ResetSecretHeader, secret)
 	res, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("open the link: %v", err)
