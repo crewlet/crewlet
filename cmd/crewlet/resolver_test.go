@@ -70,10 +70,11 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 // from the store.
 //
 // A GitLab admin PAT carries `api` scope over the whole group, and the store
-// is replicated to every node holding the keyring. Crewlet never persists
-// one; reading one back would imply it may be kept there — which is how the
-// most powerful credential in the deployment ends up in the shared table
-// beside the seat tokens it exists to mint.
+// is held on the coordination KV, which every node reads and every node's
+// keyring opens. Crewlet never persists one; reading one back would imply it
+// may be kept there — which is how the most powerful credential in the
+// deployment ends up in the shared store beside the seat tokens it exists to
+// mint.
 func TestAnOperatorCredentialIsNotReadFromTheStore(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_ADMIN_TOKEN",
