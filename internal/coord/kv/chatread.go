@@ -57,9 +57,34 @@ import (
 // anything else that might one day share this bucket.
 const chatReadClass = "chatread"
 
-// chatReadKey composes one person's key.
+// chatReadKey composes one seat's key.
 func chatReadKey(handle string) string {
 	return coord.DocumentKey(chatReadClass, handle)
+}
+
+// chatReadHandle recovers the seat's handle from a key of the read class,
+// reporting false for a key of any other shape — one this build does not
+// write, which names no seat it should judge or push.
+func chatReadHandle(key string) (string, bool) {
+	segments, ok := coord.DocumentSegments(key)
+	if !ok || len(segments) != 2 || segments[0] != chatReadClass || segments[1] == "" {
+		return "", false
+	}
+	return segments[1], true
+}
+
+// decodeChatRead reads a stored record back at the revision it was read at.
+func decodeChatRead(handle string, raw []byte, revision uint64) (coord.ChatReadState, error) {
+	var state coord.ChatReadState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return coord.ChatReadState{}, fmt.Errorf(
+			"coord/kv: decode the chat read state for %s: %w", handle, err)
+	}
+	// THE ENTRY'S OWN REVISION, which is the stream sequence the record was
+	// written at: strictly increasing across every write to the bucket and
+	// never reused, so it outlives a purge — see [coord.ChatReadState.Revision].
+	state.Revision = revision
+	return state, nil
 }
 
 // ChatRead reports one person's read state.
@@ -91,15 +116,10 @@ func (f *FleetStore) chatReadAt(ctx context.Context, handle string) (coord.ChatR
 		return coord.ChatReadState{}, 0, unavailable(
 			fmt.Sprintf("read the chat read state for %s", handle), err)
 	}
-	var state coord.ChatReadState
-	if err := json.Unmarshal(entry.Value(), &state); err != nil {
-		return coord.ChatReadState{}, 0, fmt.Errorf(
-			"coord/kv: decode the chat read state for %s: %w", handle, err)
+	state, err := decodeChatRead(handle, entry.Value(), entry.Revision())
+	if err != nil {
+		return coord.ChatReadState{}, 0, err
 	}
-	// THE ENTRY'S OWN REVISION, which is the stream sequence the record was
-	// written at: strictly increasing across every write to the bucket and
-	// never reused, so it outlives a purge — see [coord.ChatReadState.Revision].
-	state.Revision = entry.Revision()
 	return state, entry.Revision(), nil
 }
 
@@ -392,8 +412,8 @@ func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error
 	err := f.eachUnder(ctx, f.chatReads, coord.DocumentFilter(chatReadClass),
 		"the chat read state",
 		func(entry jetstream.KeyValueEntry) error {
-			segments, ok := coord.DocumentSegments(entry.Key())
-			if !ok || len(segments) != 2 || segments[0] != chatReadClass {
+			handle, ok := chatReadHandle(entry.Key())
+			if !ok {
 				// A KEY THIS CLASS DID NOT WRITE. Skipped rather than
 				// raised: the filter already narrowed to the class, so
 				// anything left is a shape this build does not write, and
@@ -401,13 +421,12 @@ func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error
 				// seat nobody named.
 				return nil
 			}
-			var stored coord.ChatReadState
-			if err := json.Unmarshal(entry.Value(), &stored); err != nil {
-				return fmt.Errorf("coord/kv: decode the chat read state for %s: %w",
-					segments[1], err)
+			stored, err := decodeChatRead(handle, entry.Value(), entry.Revision())
+			if err != nil {
+				return err
 			}
 			readers = append(readers, coord.ChatReader{
-				Handle: segments[1], AbsentSince: stored.AbsentSince,
+				Handle: handle, AbsentSince: stored.AbsentSince,
 			})
 			return nil
 		})
@@ -418,4 +437,50 @@ func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error
 		return cmp.Compare(a.Handle, b.Handle)
 	})
 	return readers, nil
+}
+
+// WatchChatReads streams every seat's read state, the marker, then every
+// change.
+//
+// A KV watcher over the class filter, and [watchRecords]': the first answer
+// certified against the bucket's key index, so a consumer re-syncing from it
+// after watching again is never handed a record short, and a change the
+// consumer delivers late filtered by revision, so a lagging replica cannot put
+// an older state in front of a tab that has a newer one. A purge is a forget,
+// delivered as one: a record whose seat has left the company, whose sockets
+// are closed by then.
+//
+// The lag a replica's consumer can add is carried rather than closed with a
+// leader read per change: what it costs is a badge a moment stale on another
+// tab, which the tab's own next read replaces, and a read per change on every
+// node is a leader read per flush per node — the busiest record the fleet
+// writes, multiplied by the fleet.
+func (f *FleetStore) WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error) {
+	return watchRecords(ctx, f, f.chatReads, coord.DocumentFilter(chatReadClass),
+		recordWatch[coord.ChatReadUpdate]{
+			what: "the chat read state",
+			ours: func(key string) bool {
+				_, ok := chatReadHandle(key)
+				return ok
+			},
+			update: func(kve jetstream.KeyValueEntry) (coord.ChatReadUpdate, error) {
+				handle, _ := chatReadHandle(kve.Key())
+				u := coord.ChatReadUpdate{Handle: handle}
+				if removed(kve) {
+					return u, nil
+				}
+				state, err := decodeChatRead(handle, kve.Value(), kve.Revision())
+				if err != nil {
+					return coord.ChatReadUpdate{}, err
+				}
+				u.State = &state
+				return u, nil
+			},
+			undecodable: func(ctx context.Context, kve jetstream.KeyValueEntry, err error) {
+				handle, _ := chatReadHandle(kve.Key())
+				log.WarnContext(ctx, "chat_read_undecodable", "handle", handle,
+					"error", err.Error())
+			},
+			current: coord.ChatReadUpdate{Current: true},
+		})
 }

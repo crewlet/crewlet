@@ -527,3 +527,106 @@ func (k *inFlightForever) Update(context.Context, string, []byte, uint64) (uint6
 	k.answered.Add(1)
 	return 0, refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
 }
+
+// A READ-STATE WATCH'S FIRST ANSWER IS CERTIFIED, AND AN OLDER REVISION AFTER
+// IT IS NOT A CHANGE.
+//
+// The answer is what a node's hub re-syncs every connected tab from after it
+// watches again, so a record missing from it is a tab left on a state its
+// person has moved past. The client ends its initial values on a count guess,
+// and here the pass ends before delivering either of two records, as such a
+// guess can: the answer must still hold both, each as the leader holds it —
+// the one flushed again with its newer cursor.
+//
+// The consumer then delivers what a pass behind the leader would: the record
+// as it stood BEFORE that flush. That is not a change, and sent as one it
+// would push an older state onto every tab of that seat. A flush made after
+// the answer is one, and is the next update.
+func TestAChatReadWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*passIdle)
+	defer cancel()
+	f, _ := chatReadFleet(t, "founder")
+	if _, err := f.AdvanceChatRead(ctx, "designer", coord.ChatReadDelta{
+		Cursors: map[string]int64{"room-a": 1}, At: chatReadAt0,
+	}); err != nil {
+		t.Fatalf("AdvanceChatRead: %v", err)
+	}
+	var stale jetstream.KeyValueEntry
+	for _, kve := range recordPass(ctx, t, f.chatReads) {
+		if kve.Key() == chatReadKey("founder") {
+			stale = kve
+		}
+	}
+	if stale == nil {
+		t.Fatal("setup: the recorded pass holds no record for founder")
+	}
+	newer, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
+		Cursors: map[string]int64{"room-a": 8}, At: chatReadAt0,
+	})
+	if err != nil {
+		t.Fatalf("AdvanceChatRead: %v", err)
+	}
+
+	script := make(chan jetstream.KeyValueEntry, 3)
+	script <- nil // the end of the initial values, before either record
+	f.chatReads = scriptedKV{KeyValue: f.chatReads, script: script}
+	updates, err := f.WatchChatReads(ctx)
+	if err != nil {
+		t.Fatalf("WatchChatReads: %v", err)
+	}
+	answer := map[string]coord.ChatReadState{}
+	for {
+		u := nextChatReadUpdate(ctx, t, updates)
+		if u.Current {
+			break
+		}
+		if u.State == nil {
+			t.Fatalf("the first answer held %s with no record", u.Handle)
+		}
+		answer[u.Handle] = *u.State
+	}
+	if len(answer) != 2 {
+		t.Fatalf("the first answer held %v, want founder and designer: the client's "+
+			"marker came before either record, and an answer that trusted it holds "+
+			"neither", answer)
+	}
+	if got := answer["founder"]; got.Cursors["room-a"] != 8 || got.Revision != newer.Revision {
+		t.Errorf("founder answered as %+v, want the newer flush at revision %d", got, newer.Revision)
+	}
+
+	flushed, err := f.AdvanceChatRead(ctx, "ops", coord.ChatReadDelta{
+		Cursors: map[string]int64{"room-b": 2}, At: chatReadAt0,
+	})
+	if err != nil {
+		t.Fatalf("AdvanceChatRead: %v", err)
+	}
+	fresh, err := getLatest(ctx, f.js, f.chatReads, chatReadKey("ops"))
+	if err != nil {
+		t.Fatalf("read ops's record: %v", err)
+	}
+	script <- stale
+	script <- fresh
+	u := nextChatReadUpdate(ctx, t, updates)
+	if u.Handle != "ops" || u.State == nil || u.State.Revision != flushed.Revision {
+		t.Fatalf("the update after an older revision of founder and ops's new record "+
+			"= %+v, want ops's record: founder's older revision is not a change, and "+
+			"sent as one it pushes a state founder's tabs have moved past", u)
+	}
+}
+
+// nextChatReadUpdate reads one update, failing the case when the watch closes
+// or ctx ends first.
+func nextChatReadUpdate(ctx context.Context, t *testing.T, updates <-chan coord.ChatReadUpdate) coord.ChatReadUpdate {
+	t.Helper()
+	select {
+	case u, ok := <-updates:
+		if !ok {
+			t.Fatal("the read-state watch closed while the store was healthy")
+		}
+		return u
+	case <-ctx.Done():
+		t.Fatalf("the read-state watch delivered nothing before its caller gave up: %v", ctx.Err())
+	}
+	return coord.ChatReadUpdate{}
+}
