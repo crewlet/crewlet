@@ -246,8 +246,11 @@ type request struct {
 // The credential is the session cookie a signed-in browser sends on its own —
 // a browser cannot set a header on a WebSocket constructor, so the cookie is
 // the whole of what the dashboard presents — or an Authorization bearer from
-// any other client. Nothing is read off the URL: a query string is written
-// into every proxy's access log ([auth.Guard.Credential]).
+// any other client. No credential is read off the URL: a query string is
+// written into every proxy's access log ([auth.Guard.Credential]). What the
+// dashboard's handshake does put there is the tab's READER, which is no
+// credential, and the guard has refused a handshake made for anybody else
+// before this handler runs ([auth.ReaderParam]).
 //
 // # Who is calling is the GUARD's answer, read once
 //
@@ -344,7 +347,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 		// a handshake's: see [auth.CSRF.RefuseCrossSite] for why the
 		// library's own check is switched off below, and why the plain
 		// GET the dashboard re-asks this path with is not judged.
-		if upgrading(r) && origins.RefuseCrossSite(w, r) {
+		if auth.WebSocketUpgrade(r) && origins.RefuseCrossSite(w, r) {
 			return
 		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -369,20 +372,6 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 // reached.
 type CrossSite interface {
 	RefuseCrossSite(w http.ResponseWriter, r *http.Request) bool
-}
-
-// upgrading reports whether a request asks to become a WebSocket, which is
-// what a browser's handshake carries and the dashboard's plain re-ask of this
-// path does not.
-func upgrading(r *http.Request) bool {
-	for _, value := range r.Header.Values("Upgrade") {
-		for _, token := range strings.Split(value, ",") {
-			if strings.EqualFold(strings.TrimSpace(token), "websocket") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // resolved is the request carrying the guard's answer, and the guard's

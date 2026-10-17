@@ -217,3 +217,20 @@ export interface ResetView {
  * nobody, be served to whoever the cookie is, and nothing would go red.
  */
 export const READER_HEADER = "X-Crewlet-Reader";
+
+/**
+ * The query parameter the socket's HANDSHAKE names the tab's reader in:
+ * `auth.ReaderParam`, held by
+ * `internal/api/auth.TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter`.
+ *
+ * A browser sets no header on a WebSocket, so the handshake is the one request
+ * that cannot carry `READER_HEADER`. The engine reads this parameter on an
+ * upgrade that carries no header, and refuses a dial made for anybody but the
+ * cookie's principal `409 reader_changed` before the stream is served — which
+ * the browser reports as 1006, and the socket's refusal probe reads and hands
+ * the tab over on (`protocol/socket.ts`). The id is not a secret, but it is in
+ * the socket's URL, so a proxy's access log of that path records it. Spelled
+ * differently here, every handshake would name nobody and be served to
+ * whoever the cookie is, until the tab's next request was refused.
+ */
+export const READER_PARAM = "reader";

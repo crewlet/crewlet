@@ -2616,22 +2616,27 @@ reader names them (`X-Crewlet-Reader`, `protocol/signin.ts`): a REST read or
 change, an act and its Retry, a download, the degraded-mode snapshot, the
 socket's refusal probe, and the session keepalive (`protocol/keepalive.ts`),
 which reads the session every five minutes while the socket is open unless the
-engine answered something else in the last five. The engine refuses one whose
-cookie is anybody else's `409 reader_changed` before it runs, so a press in
-that window makes no change as the new person and a Retry of the last person's
-change sends their operation as nobody's. The two requests that name nobody
-are the session read itself, which is how a tab learns who to be handed to, and
-the token exchange, which signs somebody in. On any of these signals a tab read
-by anybody else is handed over exactly as a sign-in by them would hand it —
-emptied, its new reader recorded, reloaded where it was — and the socket dials
-nothing for them first (`lib/session.ts`'s `takeSession`, which `main.tsx`
-hands the socket, and `sessionMoved`, which it installs for the refusal). A
-socket that dropped for another reason and dialled again under the new cookie
-draws the new person's company until the tab's next request or keepalive is
-refused, because the handshake is the one request a browser cannot put a header
-on. That is under ten minutes, two keepalive intervals rather than one: a tick
-passes over a tab the engine answered less than five minutes before, and that
-answer may have come just before the sign-in.
+engine answered something else in the last five. The socket's handshake is the
+one request a browser cannot put a header on, so it names the reader in its URL
+instead (`/ws/stream?reader=`, `READER_PARAM`), which the engine reads on an
+upgrade alone. The engine refuses one whose cookie is anybody else's `409
+reader_changed` before it runs, so a press in that window makes no change as
+the new person, a Retry of the last person's change sends their operation as
+nobody's, and a socket that dropped for another reason and dialled again under
+the new cookie draws nothing of the new person's company: its refused handshake
+reaches the page as a bare 1006, and the refusal probe reads the `409`. The two
+requests that name nobody are the session read itself, which is how a tab
+learns who to be handed to, and the token exchange, which signs somebody in. On
+any of these signals a tab read by anybody else is handed over exactly as a
+sign-in by them would hand it — emptied, its new reader recorded, reloaded
+where it was — and the socket dials nothing for them first (`lib/session.ts`'s
+`takeSession`, which `main.tsx` hands the socket, and `sessionMoved`, which it
+installs for the refusal). The reader's id is no secret, but it is in the
+socket's URL, so a proxy's access log of `/ws/stream` records it. A window
+whose socket stays open and that sends nothing of its own is handed over by
+the keepalive in under ten minutes, two keepalive intervals rather than one: a
+tick passes over a tab the engine answered less than five minutes before, and
+that answer may have come just before the sign-in.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it

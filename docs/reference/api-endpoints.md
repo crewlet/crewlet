@@ -470,7 +470,9 @@ node means nothing was done.
 > to its sign-in screen on the first. Without it a reader whose session ended
 > sees "retrying" for ever. The same re-ask reads a `503 identity_unavailable`
 > — a node that cannot read its identity estate yet — and dials again when its
-> `Retry-After` says rather than on its own backoff.
+> `Retry-After` says rather than on its own backoff, and a `409
+> reader_changed` — a handshake made for a reader the browser's cookie is no
+> longer — and hands the tab to whoever it is.
 >
 > **`api.auth.admin` clamps a person exactly as it clamps a token.** On a node
 > whose posture is `refuse`, every principal composed there loses `admin` and
@@ -525,6 +527,20 @@ node means nothing was done.
 > (`503`): there is no principal to hold the name against. The value is
 > compared as an id, and one that is not an id names nobody the credential
 > is. It is not a credential and widens nothing.
+>
+> **A socket's handshake names its reader in its URL**, because a browser sets
+> no header on a WebSocket: `/ws/stream?reader=<principal id>`. The guard reads
+> the `reader` parameter on a WebSocket upgrade only, and only where the
+> request carries no `X-Crewlet-Reader` — on any other request a URL is never a
+> second way to say who it is for — and holds it to the credential exactly as
+> it holds the header, so a handshake made for somebody else is `409
+> reader_changed` before the stream is served and draws nothing of the new
+> person's company. A browser reports that refused handshake as a bare 1006,
+> so the dashboard reads the `409` off its plain-HTTP re-ask of the path
+> (above), which names the reader in the header, and hands the tab over. The
+> principal id is not a secret — every `GET /auth/session` answer carries it —
+> but it is in the socket's URL, so a proxy's or a balancer's access log of
+> `/ws/stream` records it; the engine's own logs name the path alone.
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
 > token because each verifies its provider's signature instead — so a route
