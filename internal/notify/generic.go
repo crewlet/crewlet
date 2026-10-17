@@ -16,7 +16,7 @@ import (
 //     nothing about, the body is all the context there is.
 //   - It therefore reports no recon needed: the trigger IS the context, so
 //     the turn-start filters have something real to filter against.
-//   - It derives no conversation key, so its events are never merged. Merging
+//   - It derives no partition key, so its events are never merged. Merging
 //     two triggers the spine cannot tell apart loses one of them.
 //   - It supersedes nothing, because it has no idea which of this
 //     third-party app's bodies are state and which are messages.

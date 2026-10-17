@@ -42,10 +42,10 @@ type wire struct {
 	clearDeadline bool
 }
 
-func (w *wire) StatusBackend() string        { return "chat" }
-func (w *wire) SupportsStatusText() bool     { return w.text }
-func (w *wire) StatusRefresh() time.Duration { return w.refresh }
-func (w *wire) DMChannelPrefix() string      { return "" }
+func (w *wire) StatusBackend() string           { return "chat" }
+func (w *wire) SupportsStatusText() bool        { return w.text }
+func (w *wire) StatusRefresh() time.Duration    { return w.refresh }
+func (w *wire) AddressRule() notify.AddressRule { return notify.AddressRule{} }
 
 func (w *wire) SetStatus(ctx context.Context, _, _, _, _ string) bool {
 	if w.hang {
