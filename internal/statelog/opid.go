@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -57,7 +59,9 @@ import (
 //   - [NewOpID] for an operation minted NOW, by the call that publishes it;
 //   - [DeriveOpID] for an id a retry must REPRODUCE — a turn's writes, which
 //     a re-run must collapse into the first run's — whose instant is the
-//     start of the unit of work it is derived from, never the call's;
+//     start of the unit of work it is derived from, never the call's; a
+//     write made under a caller's own key derives through [KeyedOpID], which
+//     is this over the key at the key's instant;
 //   - [StepOpID] for one append of a gesture, which inherits the gesture's.
 //
 // A derived id is a UUIDv7 whose non-time bits are a digest of what makes the
@@ -153,6 +157,88 @@ func DeriveOpID(at time.Time, name string, identity ...string) string {
 	var tail [10]byte
 	copy(tail[:], h.Sum(nil))
 	return named(layout(at, tail), name)
+}
+
+// KeyedOpID is the operation id of one write made under a caller's own
+// operation KEY — the value a retry of the same gesture reproduces: a turn's
+// call key, or the Idempotency-Key a person's request carried. It is
+// [DeriveOpID] over the key, the verb, the object the write is about and a
+// digest of what it says, at the key's own instant, and NAMED by the verb.
+//
+// ONE RULE FOR EVERY DOMAIN THAT TAKES A KEY, because what makes two keyed
+// writes one operation is a rule, and two copies of a rule are two answers to
+// it. Each clause buys a failure:
+//
+//   - THE VERB AND THE OBJECT ARE IN THE IDENTITY, so one key covers every
+//     record one gesture writes — a save and the rename that follows it are
+//     two records, and one id for both would have the ledger collapse the
+//     second as a redelivery of the first. The verb is the id's NAME too,
+//     which is what a reader of the ledger finds it by, so it never holds a
+//     dot: in the grammar a dot begins a gesture's STEP ([StepOpID]).
+//   - WHAT THE WRITE SAYS IS IN IT: content is the write's own input, digested
+//     whole through its JSON encoding, which writes a struct's fields in one
+//     order and a map's keys sorted. The ledger answers an operation it
+//     already holds BEFORE the write is decided ([Result.Collapsed]), so an id
+//     derived from the key, the verb and the object alone made the same key
+//     sent with another body, title or reason the first write's operation:
+//     answered from the ledger with nothing of the second written — a change
+//     reported as made and silently dropped. A retry resends the same input,
+//     so it is still the same operation.
+//   - IT CARRIES THE KEY'S OWN INSTANT ([OpMintedAt]). The ledger vouches for
+//     a retry by the instant its id carries, so a derivation that dropped it
+//     would be read as minted before every loss the ledger ever had, and once
+//     it had swept anything such a write was answered `unknown` without being
+//     published, on every attempt. A key that carries no instant is therefore
+//     REFUSED here rather than derived from: every surface that takes one
+//     holds it to [CheckCallerOpID], and this is the promise that check
+//     exists for.
+//
+// The parts are what the caller ASKED for, never anything read from rows: a
+// retry arrives after its first attempt may have moved them, and a value read
+// at call time would differ between a request and its own retry.
+//
+// A write with no key has nothing to derive from and mints a fresh id the way
+// its store mints any other ([NewOpID]); that choice is the store's, so an
+// empty key is refused here like any other key without an instant. An error
+// otherwise is a verb that is not a name, or content that will not encode —
+// a type its domain declared wrongly rather than anything a caller sent.
+func KeyedOpID(key, verb, object string, content any) (string, error) {
+	return keyedOpID(key, verb, verb, object, content)
+}
+
+// KeyedObjectOpID is [KeyedOpID] for a write whose operation id is ALSO the id
+// of the object it makes — a page's comment, a chat message — and so is
+// UNNAMED: a reader addresses the object by it, and the gesture and the call
+// it came from are on the object's row. One object is one operation there, and
+// two identifiers for one thing are two places for a retry to disagree with
+// itself.
+//
+// THE SAME DERIVATION, the verb still in the identity, so an object id and a
+// named operation id under one key, verb, object and content are two ids.
+func KeyedObjectOpID(key, verb, object string, content any) (string, error) {
+	return keyedOpID(key, "", verb, object, content)
+}
+
+// keyedOpID is the one derivation behind [KeyedOpID] and [KeyedObjectOpID],
+// under name.
+func keyedOpID(key, name, verb, object string, content any) (string, error) {
+	if verb == "" || strings.Contains(verb, opStepSeparator) {
+		return "", fmt.Errorf("statelog: a keyed write's verb is a name, and %q "+
+			"is empty or holds %q, which begins a gesture's step", verb, opStepSeparator)
+	}
+	at, minted := OpMintedAt(key)
+	if !minted {
+		return "", fmt.Errorf("statelog: the %s's key %q carries no instant, so "+
+			"an id derived from it would read as minted before every loss the "+
+			"ledger has had — a key is an operation id this engine minted "+
+			"(CheckCallerOpID)", verb, key)
+	}
+	said, err := json.Marshal(content)
+	if err != nil {
+		return "", fmt.Errorf("statelog: digest what a %s says: %w", verb, err)
+	}
+	sum := sha256.Sum256(said)
+	return DeriveOpID(at, name, verb, key, object, hex.EncodeToString(sum[:])), nil
 }
 
 // named appends a name to an id, or leaves an unnamed one bare.
