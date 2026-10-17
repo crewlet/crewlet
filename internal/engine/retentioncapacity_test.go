@@ -2,12 +2,17 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -656,5 +661,94 @@ func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 		t.Errorf("the collector pins %d times a day, and a collection every %v and an "+
 			"audit every %v is %d", collect.PinsPerDay, collect.CollectInterval,
 			collect.AuditInterval, perDay)
+	}
+}
+
+// THE BACKUP GAUGE IS THIS NODE'S OWN MANIFESTS, AGED ON THE DUTY'S CLOCK.
+//
+// `crewlet.backup.age` reads the directories of the points THIS node announced
+// — the only ones whose disk this process can see — and nothing else: another
+// node's fresher point and the operator's acknowledgement name directories on
+// other hosts. A node whose own manifest is gone publishes no series rather
+// than an age, since zero is the freshest backup imaginable. And the age is
+// taken against the duty's clock, which every report beside it reads, so a
+// manifest from a host whose clock runs ahead is zero rather than negative.
+//
+// Mutation: drop the owner check, and the gauge ages node-b's fresher copy;
+// read the wall clock instead of [retention.clock], and a manifest finished in
+// 2041 is in the wall clock's future and reads zero; set the gauge where no
+// manifest was found, and the absent case reads a value.
+func TestTheBackupGaugeAgesThisNodesOwnManifestsOnTheDutysClock(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	// FAR FROM ANY WALL CLOCK a test machine has, so an age read off the
+	// wall clock cannot pass for one read off the duty's.
+	at := time.Date(2041, 3, 9, 12, 0, 0, 0, time.UTC)
+	manifest := func(t *testing.T, finished time.Time) string {
+		t.Helper()
+		dir := t.TempDir()
+		body, err := json.Marshal(backup.Manifest{
+			TakenAt: finished.Add(-time.Minute), FinishedAt: finished,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, backup.ManifestName), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	gauge := func(recorder *metrics.Recorder) (float64, bool) {
+		for _, snapshot := range recorder.Read() {
+			if snapshot.Name == metrics.BackupAge {
+				return snapshot.Value, true
+			}
+		}
+		return 0, false
+	}
+	point := func(owner, dir string) coord.BackupPoint {
+		return coord.BackupPoint{Owner: owner, At: at.Add(-time.Hour), Dir: dir,
+			Verified: true, Streams: map[string]coord.Position{
+				"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Seq: 1}}}
+	}
+	measure := func(t *testing.T, points ...coord.BackupPoint) (float64, bool) {
+		t.Helper()
+		fleet := coordmem.NewFleet()
+		for _, p := range points {
+			if err := fleet.PutBackupPoint(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		recorder, err := metrics.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &retention{fleet: fleet, nodeID: "node-a", metrics: recorder,
+			now: func() time.Time { return at }}
+		r.backupGauges(ctx)
+		return gauge(recorder)
+	}
+
+	own := manifest(t, at.Add(-6*time.Hour))
+	theirs := manifest(t, at.Add(-time.Minute))
+	operator := manifest(t, at.Add(-2*time.Minute))
+	age, ok := measure(t, point("node-a", own), point("node-b", theirs),
+		point(coord.OperatorBackupOwner, operator))
+	if !ok || age != (6*time.Hour).Seconds() {
+		t.Fatalf("the gauge reads %v (published: %v), want %v — this node's "+
+			"own manifest, six hours old on the duty's clock",
+			age, ok, (6 * time.Hour).Seconds())
+	}
+
+	if age, ok := measure(t, point("node-a", manifest(t, at.Add(time.Hour)))); !ok || age != 0 {
+		t.Errorf("a manifest an hour in the duty's future reads %v (published: "+
+			"%v), want zero — a negative age compares below every threshold",
+			age, ok)
+	}
+
+	if age, ok := measure(t, point("node-a", t.TempDir()), point("node-b", theirs)); ok {
+		t.Errorf("a node whose own directory holds no manifest published %v, "+
+			"want no series: zero is the freshest backup imaginable and "+
+			"another node's copy is on a disk this node cannot see", age)
 	}
 }

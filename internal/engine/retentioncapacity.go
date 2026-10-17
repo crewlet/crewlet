@@ -99,24 +99,30 @@ func (r *retention) backupGauges(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	newest, found := time.Time{}, false
+	// ONE INSTANT for every directory, and the duty's own: the age is a
+	// difference of two clocks, and reading the wall clock here put this
+	// gauge on a different clock from every report and evaluation beside it.
+	now := r.clock()
+	youngest, found := time.Duration(0), false
 	for _, point := range points {
 		if point.Owner != r.nodeID || point.Dir == "" {
 			continue
 		}
-		at, ok, err := backup.Newest(point.Dir)
+		// THROUGH [backup.Age], which states the clamp once: a manifest
+		// written on a host whose clock runs ahead is age zero rather than
+		// a negative age below every threshold.
+		age, ok, err := backup.Age(point.Dir, now)
 		if err != nil {
 			log.WarnContext(ctx, "backup_age_unreadable", "dir", point.Dir,
 				"err", err)
 			continue
 		}
-		if ok && at.After(newest) {
-			newest, found = at, true
+		if ok && (!found || age < youngest) {
+			youngest, found = age, true
 		}
 	}
 	if found {
-		r.metrics.Set(metrics.BackupAge,
-			max(time.Since(newest).Seconds(), 0), nil)
+		r.metrics.Set(metrics.BackupAge, youngest.Seconds(), nil)
 	}
 }
 
