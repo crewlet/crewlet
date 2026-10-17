@@ -139,17 +139,20 @@ func TestAPreflightIsAnsweredWithoutACredential(t *testing.T) {
 	}
 }
 
-// A PERMITTED ORIGIN MAY SEND THE OPERATION KEY, AND NO HEADER BEYOND ITS SET.
+// A PERMITTED ORIGIN MAY SEND WHAT THE ROUTES READ, AND NO HEADER BEYOND IT.
 //
 // A permitted origin may write, and the act route refuses a request with no
-// `Idempotency-Key` while every other write reads it to make a retry the same
-// write: a preflight that did not allow it made the browser refuse the whole
-// request, so such an origin could never act at all. The reader header is the
-// same-origin dashboard's alone and is not offered.
+// `Idempotency-Key`, a `/config` write needs its `X-Summary` and its
+// precondition, and a link's view takes its secret in a header: a preflight
+// that did not allow one made the browser refuse the whole request, so such an
+// origin could never make it at all. The reader header is the same-origin
+// dashboard's alone and is not offered. Which headers the routes read is held
+// by TestTheCORSListsAreTheHeadersTheRoutesReadAndSet; this holds the
+// preflight to answering that list rather than the browser's question.
 //
-// Mutation: drop opkey.Header from the set and the first row fails; echo the
-// browser's request back and the second does.
-func TestAPermittedOriginMaySendTheOperationKeyAndNothingBeyondItsSet(t *testing.T) {
+// Mutation: drop opkey.Header or X-Summary from the set and the first row
+// fails; echo the browser's request back and the second does.
+func TestAPermittedOriginMaySendWhatTheRoutesReadAndNothingBeyondIt(t *testing.T) {
 	t.Parallel()
 	allowed := func(asked string) []string {
 		t.Helper()
@@ -160,7 +163,9 @@ func TestAPermittedOriginMaySendTheOperationKeyAndNothingBeyondItsSet(t *testing
 		rec, _ := serveCORS(t, corsFor("https://ops.example.com"), r)
 		return strings.Split(rec.Header().Get("Access-Control-Allow-Headers"), ", ")
 	}
-	want := []string{"Authorization", "Content-Type", opkey.Header}
+	want := []string{"Authorization", "Content-Type", opkey.Header,
+		"If-Match", "If-None-Match", "X-Summary",
+		"X-Crewlet-Invite-Secret", "X-Crewlet-Reset-Secret"}
 	if got := allowed("authorization, content-type, idempotency-key"); !slices.Equal(got, want) {
 		t.Errorf("a permitted origin may send %v, want %v", got, want)
 	}
@@ -169,6 +174,48 @@ func TestAPermittedOriginMaySendTheOperationKeyAndNothingBeyondItsSet(t *testing
 	}) {
 		t.Errorf("a permitted origin may send %v: the set is closed, and the reader is the "+
 			"same-origin dashboard's", got)
+	}
+}
+
+// A PERMITTED ORIGIN'S SCRIPT MAY READ WHAT A CLIENT ACTS ON.
+//
+// A browser hides from a cross-origin page every response header that is not
+// CORS-safelisted unless the answer exposes it, so a page on an allowed origin
+// could read a `/config` document and never its `ETag` — the tag its next
+// write's `If-Match` must carry — nor the `Retry-After` of a `503`. The
+// exposure rides the ANSWER, which is where the browser reads it; a preflight
+// and an origin the allow-list does not name carry none.
+//
+// Mutation: drop the exposure from the answer and the first check fails; set
+// it on the preflight and the second does.
+func TestAPermittedOriginsScriptMayReadWhatAClientActsOn(t *testing.T) {
+	t.Parallel()
+	exposed := func(method, origin string, preflight bool, allowed ...string) []string {
+		t.Helper()
+		r := httptest.NewRequest(method, "/config", nil)
+		r.Header.Set("Origin", origin)
+		if preflight {
+			r.Header.Set("Access-Control-Request-Method", http.MethodPut)
+		}
+		rec, _ := serveCORS(t, corsFor(allowed...), r)
+		got := rec.Header().Get("Access-Control-Expose-Headers")
+		if got == "" {
+			return nil
+		}
+		return strings.Split(got, ", ")
+	}
+	want := []string{"ETag", "Retry-After", "Accept-Patch", "Allow", "Content-Disposition"}
+	if got := exposed(http.MethodGet, "https://ops.example.com", false,
+		"https://ops.example.com"); !slices.Equal(got, want) {
+		t.Errorf("a permitted origin's answer exposes %v, want %v", got, want)
+	}
+	if got := exposed(http.MethodOptions, "https://ops.example.com", true,
+		"https://ops.example.com"); got != nil {
+		t.Errorf("a preflight exposes %v: the browser reads the exposure off the answer", got)
+	}
+	if got := exposed(http.MethodGet, "https://evil.example.com", false,
+		"https://ops.example.com"); got != nil {
+		t.Errorf("an origin the allow-list does not name was exposed %v", got)
 	}
 }
 
