@@ -14,24 +14,31 @@ import (
 // contract is pinned against both real drivers in the store suite.
 type memFollows struct {
 	rows      map[string]string
+	at        map[string]time.Time
 	failRead  error
 	failWrite error
 	writes    int
 }
 
-func newFollows() *memFollows { return &memFollows{rows: map[string]string{}} }
+func newFollows() *memFollows {
+	return &memFollows{rows: map[string]string{}, at: map[string]time.Time{}}
+}
 
 func key(backend, handle, channel, thread string) string {
 	return backend + "|" + handle + "|" + channel + "|" + thread
 }
 
-func (m *memFollows) Follow(_ context.Context, backend, handle, channel, thread, reason string, _ time.Time) error {
+func (m *memFollows) Follow(_ context.Context, backend, handle, channel, thread string, at time.Time,
+	choose func(string, bool) string) (string, error) {
 	if m.failWrite != nil {
-		return m.failWrite
+		return "", m.failWrite
 	}
 	m.writes++
-	m.rows[key(backend, handle, channel, thread)] = reason
-	return nil
+	k := key(backend, handle, channel, thread)
+	held, ok := m.rows[k]
+	reason := choose(held, ok)
+	m.rows[k], m.at[k] = reason, at
+	return reason, nil
 }
 
 func (m *memFollows) Following(_ context.Context, backend, handle, channel, thread string) (string, bool, error) {
@@ -148,6 +155,61 @@ func TestAMentionUpgradesACollectiveFollow(t *testing.T) {
 	}
 }
 
+// A BROADCAST NEVER DOWNGRADES A NAMED FOLLOW. The reason decides whether a
+// reply obliges an answer, so an @here in a thread the seat was named in
+// must leave it there because it was named — the message itself reaches it
+// as the broadcast it is, and the thread stays the seat's.
+func TestABroadcastDoesNotDowngradeANamedFollow(t *testing.T) {
+	store := newFollows()
+	tr := threads(t, store)
+
+	tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "@agent-swe over to you"), t0)
+	got, err := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "@here status?"), t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Reaches: %v", err)
+	}
+	if got.Reason != notify.FollowCollective {
+		t.Errorf("the broadcast reached the seat as %q, want what it was", got.Reason)
+	}
+	if got.Following != notify.FollowMention {
+		t.Errorf("after the broadcast the seat is in the thread for %q, want the mention", got.Following)
+	}
+	if held := store.rows[key("mattermost", "swe", "C1", "T1")]; held != string(notify.FollowMention) {
+		t.Fatalf("the broadcast rewrote the follow as %q", held)
+	}
+	// It still refreshed it: the broadcast is activity in the thread.
+	if at := store.at[key("mattermost", "swe", "C1", "T1")]; !at.Equal(t0.Add(time.Minute)) {
+		t.Errorf("the follow was last stamped %v, want the broadcast's instant", at)
+	}
+	reply, _ := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "anyone?"), t0)
+	if reply.Reason != notify.FollowMention || !reply.Reason.Addresses() {
+		t.Fatalf("the next reply rides the follow as %q", reply.Reason)
+	}
+}
+
+// A REASON THIS BUILD DOES NOT KNOW IS KEPT. A newer build wrote it, and
+// nothing here can say whether a mention outranks it — so overwriting it
+// could be the very downgrade the rule exists to prevent. It is refreshed all
+// the same.
+func TestAReasonThisBuildDoesNotKnowIsKept(t *testing.T) {
+	store := newFollows()
+	k := key("mattermost", "swe", "C1", "T1")
+	store.rows[k] = "authored"
+	tr := threads(t, store)
+
+	got, err := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "@agent-swe look"), t0)
+	if err != nil {
+		t.Fatalf("Reaches: %v", err)
+	}
+	if got.Reason != notify.FollowMention || got.Following != "authored" {
+		t.Fatalf("a mention over an unknown reason produced %+v", got)
+	}
+	if store.rows[k] != "authored" || !store.at[k].Equal(t0) {
+		t.Fatalf("the follow holds %q stamped %v, want the unknown reason kept and refreshed",
+			store.rows[k], store.at[k])
+	}
+}
+
 // Posting in a thread auto-follows it, mirroring what every chat client does
 // when a person replies.
 func TestParticipationFollowsTheThread(t *testing.T) {
@@ -170,6 +232,19 @@ func TestParticipationFollowsTheThread(t *testing.T) {
 	got, _ = tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T2", "plain"), t0)
 	if got.Reason != notify.FollowMention {
 		t.Fatalf("participation downgraded the reason to %q", got.Reason)
+	}
+	// AND IT REFRESHES IT. The record is the follow's activity stamp, and a
+	// thread the seat keeps answering must not expire ninety days after it
+	// was last named there.
+	posted := t0.Add(89 * 24 * time.Hour)
+	if err := tr.Participated(t.Context(), "swe", "C1", "T2", posted); err != nil {
+		t.Fatalf("Participated: %v", err)
+	}
+	if at := store.at[key("mattermost", "swe", "C1", "T2")]; !at.Equal(posted) {
+		t.Fatalf("the follow was last stamped %v after the seat posted at %v", at, posted)
+	}
+	if held := store.rows[key("mattermost", "swe", "C1", "T2")]; held != string(notify.FollowMention) {
+		t.Fatalf("the refresh rewrote the reason as %q", held)
 	}
 	// A message with no thread is not a thread to follow.
 	before := store.writes

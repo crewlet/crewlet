@@ -74,7 +74,7 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 //
 // Each lost race is a store that answered, so none of these is an outage
 // until the store's patience says it is: a credential's cooldown behind a
-// burst of refusals, a channel's count and an unfollow, each made to lose
+// burst of refusals, a channel's count, a follow and an unfollow, each made to lose
 // twenty in a row. The custody claim and the object backend's record lose a
 // race only to a key removed between a refused create and the leader's read
 // of it, which no bucket in front of the leader can stage; they take the same
@@ -131,7 +131,7 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.follows },
 		key:    followKey("slack", "ceo", "C1", "T1"),
 		setup: func(t *testing.T, f *FleetStore) {
-			if err := f.Follow(t.Context(), "slack", "ceo", "C1", "T1", "mention", time.Now()); err != nil {
+			if _, err := f.Follow(t.Context(), "slack", "ceo", "C1", "T1", time.Now(), overwrite("mention")); err != nil {
 				t.Fatalf("Follow: %v", err)
 			}
 		},
@@ -139,6 +139,23 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 			removed, err := f.Unfollow(t.Context(), "slack", "ceo", "C1", "T1")
 			if err != nil || !removed {
 				t.Fatalf("Unfollow = (%v, %v), want the follow removed", removed, err)
+			}
+		},
+	}, {
+		// A follow already recorded, so every re-assert is a write at the
+		// revision it read.
+		name:   "a follow",
+		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.follows },
+		key:    followKey("slack", "ceo", "C1", "T2"),
+		setup: func(t *testing.T, f *FleetStore) {
+			if _, err := f.Follow(t.Context(), "slack", "ceo", "C1", "T2", time.Now(), overwrite("collective")); err != nil {
+				t.Fatalf("Follow: %v", err)
+			}
+		},
+		run: func(t *testing.T, f *FleetStore) {
+			got, err := f.Follow(t.Context(), "slack", "ceo", "C1", "T2", time.Now(), overwrite("mention"))
+			if err != nil || got != "mention" {
+				t.Fatalf("Follow = (%q, %v), want the mention written", got, err)
 			}
 		},
 	}} {
