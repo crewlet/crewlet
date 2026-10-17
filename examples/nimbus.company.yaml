@@ -570,18 +570,21 @@ mcp_servers:
     command: glab
     args: ["mcp", "serve"]
   - name: tavily
-    # Pinned like the Mattermost server above, for the same reason: a
-    # floating tag makes a working run a claim about a build nobody can
-    # name afterwards.
+    # The newest release: a file somebody copies is run long after it was
+    # written and nothing moves a pin in it, so an example fetches
+    # everything at its newest — except a server a bundled skill triggers
+    # on by tool name, like the Mattermost one above.  No skill names one
+    # of these tools.
     command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
+    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
     shared: true
-    # 0.2.22 advertises no annotation on any of its five tools, and each
-    # only reads the web.  Unannotated, every one counts as a possible
-    # delivery, so a turn that only searched could pass the delivery
-    # check; these say what the server does not.
+    # The server advertises no annotation on any of its tools — read at
+    # 0.2.22, which lists these five — and each only reads the web.
+    # Unannotated, every one counts as a possible delivery, so a turn that
+    # only searched could pass the delivery check; these say what the
+    # server does not.
     tool_annotations:
       tavily_search:   { read_only: true, open_world: true }
       tavily_extract:  { read_only: true, open_world: true }
@@ -1184,7 +1187,7 @@ units:
                   # coding agent fast env + dependency management without
                   # touching the box's system Python.
                   commands:
-                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv==0.13.0"
+                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv"
                   brief: >-
                     Python workspace: you own the Phase-2 framework repo
                     (gitlab.com/nimbus-hq/nimbusflow once created). uv is

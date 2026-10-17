@@ -683,9 +683,10 @@ mcp_servers:
     # post lands as that agent.  One shared server would hand every seat
     # whichever bot started first.
     #
-    # Pinned to an exact version, like every other dependency surface in
-    # this repo: a floating tag makes a working run a claim about a build
-    # nobody can name afterwards.
+    # Pinned, where everything else an example fetches runs its newest
+    # release: the bundled tool skills trigger on this server's tool names
+    # (`mattermost_post_message` among them), and a release that renamed
+    # one would disarm them without a sound.
     shared: false
     command: uvx
     args: ["mcp-server-mattermost==0.6.1"]
