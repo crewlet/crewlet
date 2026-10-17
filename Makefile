@@ -230,7 +230,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -765,6 +765,18 @@ objects-answer: ## regenerate internal/api/testdata/objects_answer.json from the
 broker-answer: ## regenerate internal/api/testdata/fleet_broker_answer.json from the engine's broker view
 	CREWLET_REGENERATE_BROKER_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheBrokerAnswerFixtureIsTheEnginesOwn
+
+# internal/api/testdata/retention_alarms.json is the retention report's alarms
+# in each state the backup alarm takes — no backup on a young fleet, none on a
+# fleet whose trims it holds, one beside a trim another term holds, one log's
+# copy gone stale — evaluated by the report /query/retention answers with, over
+# every log this build registers. The retention, backups and engine-panel
+# suites load the SAME file, for `gate-answer`'s reason: the backup alarm went
+# per log while those suites went on drawing the node-wide one they had typed.
+# Read the diff before committing it.
+retention-alarms: ## regenerate internal/api/testdata/retention_alarms.json from the retention report
+	CREWLET_REGENERATE_RETENTION_ALARMS=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheRetentionAlarmsMatchTheirGoldenFile
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.
