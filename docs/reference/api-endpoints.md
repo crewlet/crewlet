@@ -5584,11 +5584,11 @@ follow the one rule.
 Each tool appears only where the company runs its half, Worklet or Doclet: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on
 neither gets only the verbs about the fleet's own records — `answer_run`,
-`pause_seat`, `resume_seat` and `steer_turn` — answering `404 no_route` only when
-it would serve nothing at all. The catalogue is read per request, so a node
-that has not been handed a company yet answers `503 no_active_revision` with a
-15-second `Retry-After`, and serves the tools its first revision brings up with
-no restart. `search_knowledge` and `answer_knowledge` are the exception and
+`pause_seat`, `resume_seat` and `steer_turn` — which every node serves whatever
+the company runs, so the catalogue is never empty. It is read per request, so
+a node that has not been handed a company yet answers `503 no_active_revision`
+with a 15-second `Retry-After`, and serves the tools its first revision brings
+up with no restart. `search_knowledge` and `answer_knowledge` are the exception and
 are offered against **any** knowledge backend, Confluence included — a ranked
 search over the company's own wiki, or an answer drawn from it, is exactly as
 useful to an assistant there.
