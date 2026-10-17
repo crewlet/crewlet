@@ -17,13 +17,13 @@ import (
 // A data node's events are in its own store and nowhere else — its own, and
 // the custody batches of nodes without `data` it keeps, whose stores are
 // scratch — so a data node that stopped answering would be a gap in every
-// history screen of the company. That
-// includes a node in maintenance: it publishes nothing, but it still holds
-// everything it published, and the window an operator is investigating is
-// exactly the one it must not go dark for. Answering is not publishing — the
-// scatter rides the broker's ephemeral request and reply, which write no
-// stream and no record — so the maintenance gate, which stops every publisher,
-// has nothing here to stop.
+// history screen of the company. That includes a node in maintenance: it
+// publishes nothing, but its store still holds everything it published and
+// every batch it keeps, and the window an operator is investigating is exactly
+// the one it must not go dark for. Answering is not publishing — the scatter
+// rides the broker's ephemeral request and reply, which write no stream and no
+// record — so the maintenance gate, which stops every publisher, has nothing
+// here to stop.
 
 // historyPartial and historyComplete are the two values of the history
 // counter's `coverage` attribute — a closed set, spelled once for the writer
