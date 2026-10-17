@@ -30,17 +30,6 @@ import (
 // nothing and repairs nothing, which is what makes this idempotent at a
 // position without a version to compare.
 
-// chatShardSource is the namespace a message's search bucket is hashed under.
-//
-// IT MUST EQUAL `internal/search`'s own `chatShardSource`, which is a local
-// constant there: the chat indexer buckets the same message into `chat_docs`
-// with it, and a fan-out that assigned a node the range [16,32) would scan two
-// corpora that disagreed about which sixty-fourth a message is in — a search
-// returning one fewer hit, which looks exactly like a corpus with one fewer
-// document. The right shape is one exported constant; until that export
-// exists, this is the copy and this comment is what holds them together.
-const chatShardSource = "message"
-
 // applyMessage writes one record on a room's message stream.
 //
 // FOUR OPS, AND THE SWITCH IS EXHAUSTIVE. The erase and the prune are NOT here
@@ -150,7 +139,7 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		string(message.AuthorKind), message.Body, links, seq,
 		store.EncodeTime(at.brokerAt),
 		at.position.Stream, at.position.Generation, int64(at.position.Seq),
-		at.packed, search.ShardOf(chatShardSource, message.ID), document)
+		at.packed, search.ChatShardOf(message.ID), document)
 	if err != nil {
 		return 0, fmt.Errorf("chatlet: write message %s at %s: %w",
 			message.ID, at.position, err)
