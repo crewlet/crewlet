@@ -167,8 +167,24 @@ type NodePositions struct {
 // decide what records every node has finished with, so a key that expired
 // would read as a node that has applied NOTHING — which pins the trim for
 // ever, or, read the other way round, lets it delete records that node still
-// needs. An absent node is removed by an operator's audited gesture, never by
-// a clock.
+// needs. An absent node stops being counted by an operator's audited
+// eviction, never by a clock.
+//
+// # And nothing removes a row, an eviction included
+//
+// A node's row is kept for the life of the deployment. What stops the trim
+// waiting for an evicted node is its TOMBSTONE, which the counted set
+// subtracts from these keys; the row itself is what a READMISSION is judged by
+// — the node's last position against the floor — so a register that forgot it
+// would turn every later readmission of a machine that is still switched off
+// into a judgement about a node that has never reported anything. A node id
+// can be readmitted whenever it is evicted, so there is no point at which its
+// row has stopped being that evidence, and no verb here removes one.
+//
+// What bounds the register is the set of node ids a deployment has ever
+// configured: one row per id, replaced wholesale by that node's own
+// heartbeat, so a machine rebuilt under its old id writes over its old row
+// and only an id that is retired for good leaves one behind.
 type PositionRegister interface {
 	// PutPositions writes this node's row, replacing it wholesale.
 	//
@@ -185,18 +201,6 @@ type PositionRegister interface {
 	// donor search picks the newest snapshot. A per-node read would be N
 	// round trips for one answer.
 	Positions(ctx context.Context) ([]NodePositions, error)
-
-	// ForgetPositions removes a node's row, and it is the only way a row
-	// leaves.
-	//
-	// AN EVICTION DOES NOT CALL IT, and must not. What stops the trim
-	// waiting for an evicted node is its TOMBSTONE, which the counted set
-	// subtracts from these keys; the row itself is what a READMISSION is
-	// judged by — the node's last position against the floor — so an
-	// eviction that forgot it would turn every later readmission of a
-	// machine that is still switched off into a judgement about a node
-	// that has never reported anything.
-	ForgetPositions(ctx context.Context, nodeID string) error
 }
 
 // PositionKey is a node's key in the register.
