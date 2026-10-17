@@ -189,11 +189,11 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 // Deliberately NOT through [companyResolver], which every company value goes
 // through. This is the operator's credential rather than the company's, and
 // the difference is not bookkeeping: a GitLab admin PAT carries `api` scope
-// over the whole group, and the secret store is replicated to every node
-// that holds the keyring. Crewlet never persists one, and reading one back
-// from the store would imply it may be kept there — which is how the most
-// powerful credential in the deployment ends up in the shared table beside
-// the seat tokens it exists to mint.
+// over the whole group, and the secret store is held on the coordination KV,
+// which every node reads and every node's keyring opens. Crewlet never
+// persists one, and reading one back from the store would imply it may be
+// kept there — which is how the most powerful credential in the deployment
+// ends up in the shared store beside the seat tokens it exists to mint.
 func operatorCredential(name string) string {
 	return strings.TrimSpace(config.EnvOnly().Lookup(name))
 }
