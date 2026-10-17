@@ -155,7 +155,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	}
 
 	msg := notify.ChatMessage{
-		Channel: channel, Thread: root, Text: text,
+		Channel: channel, Thread: root, ID: postID, Text: text,
 		Targeting: targeting(w.Body, channelKind, seat.UserID),
 	}
 	reach := notify.Delivery{Deliver: true}
@@ -168,16 +168,6 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 		}
 		if !reach.Deliver {
 			return nil, nil
-		}
-	}
-
-	// A TOP-LEVEL message follows its own id, because that id becomes the
-	// thread every reply carries — so a seat named in a channel hears the
-	// answers to what it was asked, without being named again.
-	if p.threads != nil && root == "" && reach.Reason != "" {
-		if err := p.threads.Follow(ctx, seat.Handle, channel, postID, p.now()); err != nil {
-			log.WarnContext(ctx, "mattermost_follow_not_recorded",
-				"handle", handle, "thread", postID, "error", err.Error())
 		}
 	}
 

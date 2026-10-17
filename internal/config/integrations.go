@@ -501,7 +501,8 @@ type WorkingStatus string
 const (
 	// StatusAddressed shows it only when a human is plausibly waiting on
 	// this seat: a DM, a direct mention, or a thread it is in because it
-	// was named there — a thread it merely spoke in does not count.
+	// was named there — a thread it merely spoke in, or one a broadcast
+	// started, does not count.
 	StatusAddressed WorkingStatus = "addressed"
 	// StatusAlways shows it on every chat-triggered turn, including
 	// passive channel messages and broadcasts. It is the DEFAULT: a turn
