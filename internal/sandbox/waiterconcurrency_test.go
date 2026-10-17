@@ -174,17 +174,21 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 // own TTL. A pass returns once its walk has started: the next one comes on
 // schedule, passes the held box over and polls the rest.
 //
-// Counted by EVENTS, never by a rate: what is asserted is how many times the
-// healthy box is polled while the held box's FIRST poll is still in flight, so
-// a loaded machine that runs every pass late changes the count, not the
-// verdict. The hold is a second against a 20 ms interval — some fifty passes
-// on an idle machine, and three is asked for.
+// Counted by EVENTS, and ended by them: the held box's first poll is released
+// once the healthy box has been polled three times while it runs. What is left
+// of a rate is three passes inside the poll's ten-second bound, five hundred
+// intervals, which a loop that keeps the cadence misses only when the machine
+// stalls for seconds. A hold ended by its bound at one second asked for three
+// passes inside that second — some fifty on an idle machine — and a loaded run
+// of the whole suite under the race detector gave it two.
 //
 // Mutation: wait for the pass's tasks in the loop, and the neighbour is polled
 // at most once while the held box's first poll runs — by the pass that started
-// it — so the case goes red however fast the machine is.
+// it — so the hold runs to its bound and the case goes red however fast the
+// machine is.
 func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	t.Parallel()
+	const want = 3
 	rig := newWaiterRig(t)
 	stuck := rig.launch("t-1-stuck")
 	rig.launch("t-2-healthy")
@@ -195,7 +199,10 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiter.pollBound = time.Second
+	// The backstop: five hundred intervals. A loop that ties the healthy box
+	// to the held one always reaches it; one that keeps the cadence reaches
+	// it only when the machine stalls for seconds.
+	waiter.pollBound = 10 * time.Second
 
 	var (
 		duringHold     atomic.Int32
@@ -204,13 +211,15 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 		stuckPollCount atomic.Int32
 		firstHeld      = make(chan struct{})
 		firstEnded     = make(chan struct{})
+		released       = make(chan struct{})
+		release        sync.Once
 	)
 	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (bool, error) {
 		if box.ID() != stuck.SandboxID {
 			// Counted only inside the held box's first poll: its count is
 			// one while that poll runs, and two or more once it has ended.
-			if stuckPollCount.Load() == 1 && stuckInFlight.Load() == 1 {
-				duringHold.Add(1)
+			if stuckPollCount.Load() == 1 && stuckInFlight.Load() == 1 && duringHold.Add(1) == want {
+				release.Do(func() { close(released) })
 			}
 			return false, nil
 		}
@@ -227,8 +236,12 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 				close(firstEnded)
 			}
 		}()
-		<-ctx.Done()
-		return false, ctx.Err()
+		select {
+		case <-released:
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
 	waiter.Start(t.Context())
 	defer waiter.Stop()
@@ -244,9 +257,10 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	}
 	waiter.Stop()
 
-	if n := duringHold.Load(); n < 3 {
-		t.Errorf("the healthy box was polled %d times while its neighbour's first poll "+
-			"was held for a second at a 20 ms interval; want its cadence kept", n)
+	if n := duringHold.Load(); n < want {
+		t.Errorf("the healthy box was polled %d times while its neighbour's first poll was held, which "+
+			"its %s bound then ended; want %d, which a loop that keeps every box's cadence reaches "+
+			"in a few 20 ms intervals unless the machine stalled for seconds", n, waiter.pollBound, want)
 	}
 	if n := stuckOverlaps.Load(); n != 0 {
 		t.Errorf("the held box was polled by two polls at once %d times; want one at a time", n)
