@@ -10,6 +10,7 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -46,6 +47,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
 		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
 			topics.IamLogWildcard},
+		chat.Domain{}.Name(): {topics.ChatLogStream, topics.ChatLogPrefix,
+			topics.ChatLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

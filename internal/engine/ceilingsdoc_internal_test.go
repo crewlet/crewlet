@@ -89,7 +89,7 @@ func TestThePagesStateTheVolumeArithmeticTheEngineSizesBy(t *testing.T) {
 	// the free space whose three quarters that is.
 	smallest := sum(created(0))
 	reserve := gibWords(t, smallest)
-	firstBoot := gibWords(t, smallest*embeddedBrokerGrantDen/embeddedBrokerGrantNum)
+	firstBoot := gibFractionWords(t, smallest*embeddedBrokerGrantDen, embeddedBrokerGrantNum)
 
 	// THE FULL ASK: what the logs ask for together once every derived ask
 	// has reached its clamp — which is a plateau, and the sum at twice the
@@ -187,6 +187,37 @@ func gibWords(t *testing.T, bytes int64) string {
 	}
 	t.Fatalf("%d bytes is no whole or half GiB; teach gibWords and the pages "+
 		"the figure the arithmetic now leaves", bytes)
+	return ""
+}
+
+// gibFractionWords renders num/den bytes in GiB as the pages write it: what
+// [gibWords] writes where the value is a whole or half GiB, and a whole number
+// and a third otherwise — the fraction the broker's grant of three quarters
+// leaves on a reservation of whole and half gibibytes, which the first boot's
+// free space is whenever the logs reserve a number of half gibibytes that is
+// not a multiple of three. Any other fraction fails rather than being rounded,
+// because a page would have to round it too.
+func gibFractionWords(t *testing.T, num, den int64) string {
+	t.Helper()
+	const half = gib / 2
+	if num%half != 0 || den <= 0 {
+		t.Fatalf("%d/%d bytes is no fraction of half GiB; teach gibFractionWords "+
+			"and the pages the figure the arithmetic now leaves", num, den)
+	}
+	halves, over := num/half, 2*den
+	for d := int64(2); d <= over; d++ {
+		for halves%d == 0 && over%d == 0 {
+			halves, over = halves/d, over/d
+		}
+	}
+	switch over {
+	case 1, 2:
+		return gibWords(t, halves*gib/over)
+	case 3:
+		return fmt.Sprintf("%d%s GiB", halves/3, []string{"", "⅓", "⅔"}[halves%3])
+	}
+	t.Fatalf("%d/%d GiB has no rendering here; teach gibFractionWords and the "+
+		"pages the fraction the arithmetic now leaves", halves, over)
 	return ""
 }
 

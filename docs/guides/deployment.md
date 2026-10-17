@@ -77,8 +77,8 @@ has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base, vector index, identity estate and
-usage history each keep an ordered log on the stream — five logs —
+The engine's own tracker, knowledge base, vector index, identity estate,
+usage history and chat each keep an ordered log on the stream — six logs —
 and each log's byte ceiling is **reserved** on the volume holding
 `stream.store_dir` when its stream is created: the embedded broker grants a
 ceiling in full, up front, or refuses to create the stream at all. Its limit
@@ -89,11 +89,11 @@ from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
 and a log whose own default is smaller than that is held at what it asked
 for — so:
 
-- **A first boot needs at least 6 GiB free on that volume.** Three
-  quarters of it — 4.5 GiB — is what the five logs reserve at their smallest:
-  1 GiB each for the mutation log, the vector changelog and the knowledge
-  base's log, the usage log's flat 1 GiB default, and the identity estate's
-  flat 512 MiB default. Below that the node refuses
+- **A first boot needs at least 7⅓ GiB free on that volume.** Three
+  quarters of it — 5.5 GiB — is what the six logs reserve at their smallest:
+  1 GiB each for the mutation log, the vector changelog, the knowledge
+  base's log and the chat log, the usage log's flat 1 GiB default, and the
+  identity estate's flat 512 MiB default. Below that the node refuses
   to boot with an error naming the log it could not reserve, the bytes it
   needed, the bytes the broker had left, and the Tier A field that sets the
   ceiling.
@@ -105,20 +105,26 @@ for — so:
   space a node needs before it can start, for a log that will not fill it.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
-  the knowledge base's log for a quarter of the mutation log's, the identity
-  estate's log for a flat 512 MiB and the usage log for a flat 1 GiB — neither
-  of the last two is derived from the disk at all, because the identity log
-  grows with headcount and the usage log's size is a count of node-days rather
-  than a rate, so more disk buys either nothing. They are scaled down together
+  the knowledge base's log for a quarter of the mutation log's, the chat log
+  for 8 GiB, capped at a sixteenth of the free space (so the whole of it is
+  asked from 128 GiB free), the identity estate's log for a flat 512 MiB and
+  the usage log for a flat 1 GiB — neither of the last two is derived from
+  the disk at all, because the identity log grows with headcount and the
+  usage log's size is a count of node-days rather than a rate, so more disk
+  buys either nothing. The chat log's ask does not follow the mutation log's
+  as the knowledge base's does, so if you set `stream.tracker_log_max_bytes`
+  for a long blocked trim, set `stream.chat_log_max_bytes` for the same
+  horizon (about 32 MB a day at the declared census) or the chat log fills
+  first. They are scaled down together
   whenever they ask for more than that half — half of three quarters, so three
   eighths of the free space — which on a first boot is every volume with less
-  than about 388 GiB free (at their clamps the five ask for 145.5 GiB, three
-  eighths of 388); from there up each log gets what it asked for.
+  than about 409 GiB free (at their clamps the six ask for 153.5 GiB, three
+  eighths of 409); from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-  `stream.iam_log_max_bytes` or
-  `stream.usage_log_max_bytes` later, changes nothing about streams that
+  `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes` or
+  `stream.chat_log_max_bytes` later, changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
   version adds — is sized from what the existing logs' ceilings leave of that
@@ -554,9 +560,9 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the five state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the six state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CHAT_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -671,8 +677,8 @@ metadata group, so a member stalled against a group that has not settled
 waits there, where nothing used to report it at all. The read of each state
 log's ceiling that sizes the logs before any of them is created is the same
 kind of lookup and says so the same way (`statelog_ceiling_read_slow`); the
-five are asked at once, so a broker that answers none of them costs one
-lookup ceiling rather than five in a row. The object store's
+six are asked at once, so a broker that answers none of them costs one
+lookup ceiling rather than six in a row. The object store's
 bucket is looked up and created as one step, and writes one line over the two
 (`natsobj_bucket_slow`). A probe that went unanswered is named as such
 (`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
@@ -687,7 +693,7 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The five state logs reserve their
+**And it needs room for the state logs.** The six state logs reserve their
 byte ceilings against the account's JetStream storage limit when their streams
 are created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three

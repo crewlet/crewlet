@@ -892,7 +892,7 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB — the 4.5 GiB the five
+                                    #   7 GiB..64 TiB — the 5.5 GiB the six
                                     #   state logs reserve at their smallest,
                                     #   and about 1.5 GiB for every stream
                                     #   that reserves nothing — and it must not
@@ -1172,7 +1172,7 @@ stream:
                                     #   creates it at about 2.25 GiB. It does
                                     #   NOT follow the mutation log's ceiling as
                                     #   the knowledge base's does: chat grows
-                                    #   faster (~30 MB a day against ~22), so
+                                    #   faster (~32 MB a day against ~22), so
                                     #   following it would make chat the largest
                                     #   ask in the one budget, and on a 64 GiB
                                     #   volume the vector changelog would be
@@ -1182,13 +1182,14 @@ stream:
                                     #   same horizon, or chat refuses first. WHY
                                     #   8 GiB: at the declared census of 20 000
                                     #   messages a day and a mean record near
-                                    #   1.5 KiB the log grows ~30 MB a day, so a
-                                    #   healthy fleet holds ~210 MB — one
-                                    #   min_age window, not a year. This ceiling
+                                    #   1.5 KiB, plus its read barriers, the log
+                                    #   grows ~32 MB a day, so a healthy fleet
+                                    #   holds ~225 MB — one min_age window,
+                                    #   not a year. This ceiling
                                     #   is what a COMPLETELY BLOCKED trim may
-                                    #   spend first: ~9 months at that census,
+                                    #   spend first: ~8 months at that census,
                                     #   ~3½ at the supported 50 000/day (on
-                                    #   64 GiB free, capped and scaled: ~2½ and
+                                    #   64 GiB free, capped and scaled: ~2⅓ and
                                     #   ~1). Crossing it refuses the append,
                                     #   which for a transcript is the only
                                     #   acceptable direction — old messages go
