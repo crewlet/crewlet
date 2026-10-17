@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // bundleProvider is a cli-agent provider with a credential directory of its
@@ -355,5 +357,84 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	err = runLLM([]string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// THE DOCTOR READS THE BRIDGE URL AS THE ENGINE DOES, through the one grammar
+// of a URL a box dials (sandbox.ParseBoxURL). It printed the variable as it
+// was, so a value with no scheme — which every box would have been handed, and
+// which the engine now refuses its boot on — read as a working bridge, and a
+// deploy script gating on doctor passed a node the next boot refuses.
+//
+// NOT PARALLEL: the variable is the process's own, the one the doctor reads.
+func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
+	t.Setenv(mcpbridge.BaseURLVar, "engine.example.com:8000")
+	dir := t.TempDir()
+	// The claude-code profile over a binary no host has, so the report
+	// runs nothing on the machine the suite runs on.
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n"+
+		"  sandbox: {fake: true}\n  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n"+
+		"      cli:\n        agent: claude-code\n        mode: agent\n"+
+		"        state_dir: "+filepath.Join(dir, "sub")+"\n"+
+		"        overrides: {binary: crewlet-no-such-cli-binary}\n"+
+		"roles:\n  - name: CEO\n    handle: ceo\n    llm: sub\n")
+	var out, notes bytes.Buffer
+	err := runLLM([]string{"doctor", "sub", "-no-smoke", "-company", company,
+		"-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
+	if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
+		t.Fatalf("err = %v\n%s", err, out.String())
+	}
+	report := out.String()
+	if !strings.Contains(report, "tool bridge: refused — "+mcpbridge.BaseURLVar) {
+		t.Errorf("the bridge line does not carry the refusal:\n%s", report)
+	}
+	if !strings.Contains(report, "The engine refuses to boot on this value") {
+		t.Errorf("no problem says the engine refuses to boot on it:\n%s", report)
+	}
+	if strings.Contains(report, "engine.example.com:8000") {
+		t.Errorf("the report prints the refused value as the bridge:\n%s", report)
+	}
+}
+
+// A BOX URL THE ENGINE REFUSES ITS BOOT ON FAILS THE DOCTOR, WHATEVER MODE THE
+// COMPANY'S ENTRIES RUN IN. The doctor read the bridge's URL only for an
+// agent-mode entry and the receiver's never, so a company of text-mode and
+// anthropic entries — this one — got a clean report and a zero exit beside a
+// value the next boot refuses, and a deploy script gating on doctor passed a
+// node that then ran no seat at all. Both URLs a box dials back to the engine
+// are the NODE's, so the refusal is reported as the node's, ahead of the
+// entries, and never repeats the value.
+//
+// NOT PARALLEL: the variables are the process's own, the ones the doctor reads.
+func TestTheLLMDoctorRefusesABoxURLTheBootRefuses(t *testing.T) {
+	_, url := serveClaude(t, true)
+	for _, variable := range []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar} {
+		t.Run(variable, func(t *testing.T) {
+			t.Setenv(variable, "https://ops:hunter2@engine.example.com")
+			var out, notes bytes.Buffer
+			err := runLLM(append([]string{"doctor", "-no-smoke"},
+				doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
+			report := out.String()
+			if err == nil || !strings.Contains(err.Error(), "the engine refuses to boot on 1 of this node's box URLs") {
+				t.Fatalf("err = %v, want the node's refusal\n%s", err, report)
+			}
+			if strings.Contains(err.Error(), "providers have problems") {
+				t.Errorf("the refusal is counted against a provider: %v", err)
+			}
+			for _, want := range []string{
+				"node          : this process's environment, as `crewlet run` reads it at boot\n" +
+					"problems:\n  - " + variable + " carries user information",
+				"The engine refuses to boot on this value",
+				"provider      : claude\n",
+				"problems      : none\n",
+			} {
+				if !strings.Contains(report, want) {
+					t.Errorf("report lacks %q:\n%s", want, report)
+				}
+			}
+			if strings.Contains(report, "hunter2") || strings.Contains(err.Error(), "hunter2") {
+				t.Errorf("the doctor repeats the URL's password:\n%s", report)
+			}
+		})
 	}
 }

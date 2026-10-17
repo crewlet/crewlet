@@ -132,9 +132,19 @@ type DiagnoseOptions struct {
 	// agent-mode entry naming a CLI outside them cannot run at all.
 	AgentRunners []string
 
-	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means agent mode is refused at launch.
+	// BridgeURL is CREWLET_MCP_BRIDGE_URL as the engine would read it:
+	// parsed by the one grammar every URL a box dials shares
+	// (sandbox.ParseBoxURL), never the raw variable. Empty means unset, and
+	// agent mode is refused at launch.
 	BridgeURL string
+
+	// BridgeRefused is that grammar's refusal of a value that is set and
+	// unusable, which names the variable and never the value. Non-empty, it
+	// is what the report says about the bridge, whatever BridgeURL holds:
+	// the engine refuses to BOOT on such a value, so a report that printed
+	// it as the bridge would tell a deploy script the opposite of what the
+	// next boot does.
+	BridgeRefused string
 }
 
 // Diagnose measures one provider end to end.
@@ -275,9 +285,17 @@ func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string)
 				"providers.llm.%s, or point it at a CLI that has one",
 			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
 	}
-	if strings.TrimSpace(opts.BridgeURL) != "" {
+	switch {
+	case opts.BridgeRefused != "":
+		lines = append(lines, "tool bridge: refused — "+opts.BridgeRefused)
+		problems = append(problems, fmt.Sprintf(
+			"%s. The engine refuses to boot on this value, so no seat runs at "+
+				"all, in agent mode or any other: set it to a URL a sandbox can "+
+				"reach, or unset it",
+			opts.BridgeRefused))
+	case strings.TrimSpace(opts.BridgeURL) != "":
 		lines = append(lines, "tool bridge: "+opts.BridgeURL)
-	} else {
+	default:
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
 			"agent mode hands the seat's tools to the box over an MCP bridge and "+

@@ -1,0 +1,128 @@
+package engine_test
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+// A BOX URL THAT IS SET AND UNUSABLE REFUSES THE BOOT, naming the variable,
+// before anything is opened.
+//
+// Both URLs a box dials back to the engine were handed on as they were: a
+// telemetry receiver URL with no scheme minted every run an endpoint its
+// exporter could not use, and a bridge URL with none mounted a bridge whose
+// every minted endpoint failed, so every agent-mode run's tool calls failed —
+// each silently, inside a box the engine never hears from again. And the
+// refusal never repeats the value: its user information is a credential.
+//
+// THE CONTROL holds the other half of the grammar: plain http to a host that
+// is not loopback — the box's own host, or a name on the network — boots
+// exactly as https does, and every endpoint minted for a run starts with the
+// value as the operator wrote it, its trailing '/' trimmed. The docs
+// (code-sandbox.md, "Security model") promise that a box URL's scheme is the
+// operator's call and say what plain http costs; a refusal added later would
+// break that promise here rather than silently.
+func TestABadBoxURLRefusesTheBoot(t *testing.T) {
+	t.Parallel()
+	variables := []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar}
+	// ONE LIST: what this test boots on is what ReadBoxURLs reads, which is
+	// also what `crewlet llm doctor` reports — so a box URL the boot refuses
+	// is never one the doctor passes.
+	var listed []string
+	for _, url := range engine.ReadBoxURLs(func(string) string { return "" }).All() {
+		listed = append(listed, url.Variable)
+	}
+	if !slices.Equal(listed, variables) {
+		t.Errorf("ReadBoxURLs reads %v, want the box URLs this test boots on, %v", listed, variables)
+	}
+	for _, variable := range variables {
+		for _, tc := range []struct{ name, value string }{
+			{"no scheme", "engine.example.com:80"},
+			{"user information", "https://ops:hunter2@engine.example.com"},
+		} {
+			t.Run(variable+" with "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				// UNSEEDED: that nothing is at the store's path
+				// afterwards is half the assertion.
+				boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
+					b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+				})
+				e, err := engine.New(t.Context(), engine.Options{
+					Bootstrap:   boot,
+					Company:     parsedCompany(t, companyDoc),
+					Environment: config.MapSource{variable: tc.value},
+				})
+				if err == nil {
+					e.Stop(context.Background())
+					t.Fatalf("%s=%s booted: every box would be handed an endpoint it "+
+						"cannot use", variable, tc.value)
+				}
+				if !strings.Contains(err.Error(), variable) {
+					t.Errorf("the refusal does not name %s: %v", variable, err)
+				}
+				if strings.Contains(err.Error(), "hunter2") {
+					t.Errorf("the refusal repeats the URL's password: %v", err)
+				}
+				for _, path := range []string{boot.Store.Path, boot.Stream.StoreDir} {
+					if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+						t.Errorf("%s exists after the refusal (%v): the engine opened "+
+							"something before it read the box URLs", path, statErr)
+					}
+				}
+			})
+		}
+	}
+
+	for _, tc := range []struct{ name, value string }{
+		{"https", "https://engine.example.com"},
+		{"plain http to a name on the network", "http://engine.example.com"},
+		{"plain http to the box's host, with a path", "http://172.17.0.1:8080/base/"},
+	} {
+		t.Run("the control: "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEngine(t, engine.Options{Environment: config.MapSource{
+				sandbox.OtelReceiverURLVar: tc.value,
+				mcpbridge.BaseURLVar:       tc.value,
+			}})
+			want := strings.TrimRight(tc.value, "/")
+
+			receiver := e.OtelReceiver()
+			if receiver == nil {
+				t.Fatalf("%s=%s built no receiver", sandbox.OtelReceiverURLVar, tc.value)
+			}
+			if got := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", time.Minute); !strings.HasPrefix(got, want+"/otlp/") {
+				t.Errorf("a run's OTLP endpoint is %q, want it under %q", got, want+"/otlp/")
+			}
+
+			bridge := e.Bridge()
+			if bridge == nil {
+				t.Fatalf("%s=%s built no bridge", mcpbridge.BaseURLVar, tc.value)
+			}
+			// Mounted, as the API this process serves would: a bridge
+			// with no listener mints nothing.
+			bridge.Handler()
+			endpoint := bridge.Open(&mcpbridge.Session{
+				RunID: "run-1", Handle: "dev", Role: "Dev",
+				Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+			})
+			t.Cleanup(func() { bridge.Close("run-1") })
+			if !strings.HasPrefix(endpoint, want+mcpbridge.PathPrefix) {
+				t.Errorf("a run's bridge endpoint is %q, want it under %q",
+					endpoint, want+mcpbridge.PathPrefix)
+			}
+		})
+	}
+}

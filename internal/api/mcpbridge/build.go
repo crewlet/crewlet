@@ -1,8 +1,6 @@
 package mcpbridge
 
 import (
-	"strings"
-
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -21,6 +19,10 @@ const KeyDomain = "crewlet.mcp.v1"
 // of the company document, so it is Tier A environment rather than Tier B
 // config. An engine behind a load balancer, in a private network, or on a
 // laptop all answer this differently with the same company running.
+//
+// ONE GRAMMAR WITH THE RECEIVER'S, too: the engine reads it through
+// sandbox.ParseBoxURL, which refuses the boot on a value that is set and that
+// no box could dial, and hands [Build] what that returns.
 const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 
 // Build is THE construction path, called by the engine.
@@ -34,15 +36,21 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // and log that the bridge URL addresses the wrong node rather than that the
 // route is under attack. See [runtoken.KeyFrom] and [Bridge.resolve].
 //
+// base is [BaseURLVar] as the caller PARSED it — an absolute http or https URL
+// with a host, its trailing '/' trimmed — never the raw variable. Every
+// endpoint this bridge mints is base plus a path, handed to a CLI inside a box
+// that never reports back, so a base no client can dial fails every tool call
+// of every agent-mode run, each rescued as incomplete with no sign of why;
+// that is refused at boot, by the engine, before anything opens. The parse is
+// the caller's rather than this package's because its grammar is the one every
+// URL a box dials shares (sandbox.ParseBoxURL), and the API's bridge has no
+// other reason to depend on the sandbox runtime.
+//
 // An unset base URL builds NOTHING, and that is a real configuration rather
 // than an error: most deployments run no agent mode. The route is then absent,
 // and a seat that asks for agent mode is refused with the variable named —
 // which is a better failure than a run that starts and cannot call a tool.
-func Build(env func(string) string, keyMaterial []string) *Bridge {
-	if env == nil {
-		return nil
-	}
-	base := strings.TrimSpace(env(BaseURLVar))
+func Build(base string, keyMaterial []string) *Bridge {
 	if base == "" {
 		return nil
 	}

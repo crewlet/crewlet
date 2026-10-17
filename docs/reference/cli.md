@@ -1976,7 +1976,12 @@ call to that tool came back. The Models API read bills nothing, so it runs
 under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
 and an entry that does not build at all (a `${VAR}` model that resolved to
 nothing, a dial its resolved model refuses) is reported as one beside the
-others. `openai` entries are not examined.
+others. It also reads the URLs a box dials back to the engine
+(`CREWLET_MCP_BRIDGE_URL`, `CREWLET_SANDBOX_OTEL_RECEIVER_URL`) exactly as
+`crewlet run` reads them at boot: one the engine would refuse to boot on is
+reported first, as the node's, and fails the run whatever modes the entries
+run in, since a node that does not boot runs no seat. `openai` entries are not
+examined.
 
 **`login`** has four shapes because the vendors do:
 

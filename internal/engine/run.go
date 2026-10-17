@@ -709,7 +709,8 @@ type Options struct {
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a seat's tools to a coding agent. Nil builds one from
-	// the environment; see [mcpbridge.Build].
+	// the environment: [mcpbridge.BaseURLVar] as [ReadBoxURLs] reads it,
+	// then [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
 	// Backends may be supplied by a caller that already opened them and
@@ -763,8 +764,10 @@ type Options struct {
 
 	// Environment is what a company's `${VAR}` references fall back to
 	// behind the secret store, and what the per-run endpoints' settings are
-	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
-	// the process environment, which is what `crewlet run` leaves it.
+	// read from ([ReadBoxURLs], whose refusals refuse the boot whether or
+	// not a receiver or bridge is supplied above, and
+	// [sandbox.BuildOtelReceiver]). Nil is the process environment, which
+	// is what `crewlet run` leaves it.
 	//
 	// A SOURCE RATHER THAN THE PROCESS'S OWN for the reason the org model
 	// takes a lookup ([org.HumanContact.ResolvedIdentities]): the
@@ -872,15 +875,24 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if environ == nil {
 		environ = config.EnvSource{}
 	}
+	// EVERY URL A BOX DIALS BACK TO THE ENGINE, read once and refused
+	// together ([ReadBoxURLs] — the reading `crewlet llm doctor` reports
+	// too). One that is set and unusable is a deployment that asked for the
+	// feature and would get none, so it is refused rather than dropped: a
+	// receiver URL minted every run an endpoint its exporter could not use,
+	// and a bridge URL mounted a bridge whose every minted endpoint failed,
+	// so every agent-mode run's tool calls failed and the run was rescued as
+	// incomplete — each silently, inside a box the engine never hears from
+	// again.
+	boxURLs := ReadBoxURLs(getenv(environ))
+	if err := boxURLs.Refusal(); err != nil {
+		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)
+	}
 	otel := opts.OtelReceiver
 	if otel == nil {
 		built, err := sandbox.BuildOtelReceiver(getenv(environ),
 			keyMaterial(opts.Bootstrap))
 		if err != nil {
-			// A receiver URL that is set and unusable is a deployment
-			// that asked for in-box telemetry and would get none, so it
-			// is refused rather than dropped: the alternative is a
-			// config that looks complete and exports nothing.
 			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
 		otel = built
@@ -888,10 +900,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
 	// receiver above is built here: a fleet mints on one node and may
 	// verify on another, so every node derives its key from the fleet's
-	// keyring rather than from a per-process random.
+	// keyring rather than from a per-process random. Its base is the
+	// bridge URL as [ReadBoxURLs] read it above.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(getenv(environ), keyMaterial(opts.Bootstrap))
+		bridge = mcpbridge.Build(boxURLs.Bridge.URL, keyMaterial(opts.Bootstrap))
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
