@@ -14,6 +14,7 @@
  */
 
 import type { EngineHealth } from "../contract/health.ts";
+import { INVITE_SECRET_HEADER, RESET_SECRET_HEADER } from "../contract/identity.ts";
 import type { ResetView } from "../contract/identity.ts";
 import { rest } from "./rest.ts";
 import type {
@@ -27,20 +28,6 @@ import type {
   SessionAnswer,
   SignedIn,
 } from "./types.ts";
-
-/**
- * The header an invitation's secret travels in to the view.
- *
- * A HEADER, because the view is a GET and a GET has no body — and never the
- * query string, which every access log between the browser and the engine
- * records. The link carries the secret in its FRAGMENT precisely so that no
- * server sees it on the way to this page.
- */
-const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
-
-/** The header a password reset link's secret travels in to its view, for
- *  [INVITE_SECRET_HEADER]'s reason. */
-const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 
 export const auth = {
   /**

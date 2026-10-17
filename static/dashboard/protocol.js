@@ -562,6 +562,25 @@ var RETRY_AFTER_MAX_MS = 3e4;
 //#endregion
 //#region src/contract/identity.ts
 /**
+* The header an invitation's secret travels in to its view:
+* `authapi.InviteSecretHeader`, held by
+* `internal/api/authapi.TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads`.
+*
+* A HEADER, because the view is a GET and a GET has no body — and never the
+* query string, which every access log between the browser and the engine
+* records. The link carries the secret in its FRAGMENT precisely so that no
+* server sees it on the way to this page. Spelled differently here, the screen
+* would present no secret and every invitation it opened would be the one
+* `410` an id nobody issued answers.
+*/
+var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+/**
+* The header a password reset link's secret travels in to its view, for
+* `INVITE_SECRET_HEADER`'s reason: `authapi.ResetSecretHeader`, held by the
+* same gate.
+*/
+var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
+/**
 * The header every request a tab makes FOR ITS READER carries that reader in —
 * the principal id the tab recorded (`lib/reader.ts`) — beside the session
 * cookie: `auth.ReaderHeader`, held by
@@ -1609,18 +1628,6 @@ async snapshot() {
 } };
 //#endregion
 //#region src/protocol/auth.ts
-/**
-* The header an invitation's secret travels in to the view.
-*
-* A HEADER, because the view is a GET and a GET has no body — and never the
-* query string, which every access log between the browser and the engine
-* records. The link carries the secret in its FRAGMENT precisely so that no
-* server sees it on the way to this page.
-*/
-var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
-/** The header a password reset link's secret travels in to its view, for
-*  [INVITE_SECRET_HEADER]'s reason. */
-var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 var auth = {
 	/**
 	* Whether the company has its first person — `/health`'s `identity`:
