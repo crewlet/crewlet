@@ -1362,8 +1362,8 @@ type drainer interface {
 // shape, and so is the public server unless the bridge has one.
 type httpSurface struct {
 	app       *api.App
-	server    *http.Server
-	public    *http.Server
+	server    *apiListener
+	public    *apiListener
 	projector *observe.Projector
 	runs      *observe.SandboxReconciler
 	// operators is the operator surface, nil on a node without the ingress
@@ -1396,10 +1396,10 @@ func (s *httpSurface) finishGit(ctx context.Context) {
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if s.public != nil {
-		shutdownListener(ctx, s.public, "public", log)
+		s.public.stop(ctx, "public", log)
 	}
 	if s.server != nil {
-		shutdownListener(ctx, s.server, "api", log)
+		s.server.stop(ctx, "api", log)
 	}
 	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
@@ -1425,22 +1425,60 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	log.InfoContext(ctx, "api_stopped")
 }
 
-// shutdownListener closes one listener, waiting at most [apiShutdownGrace] for
-// the requests it is serving.
-func shutdownListener(ctx context.Context, server *http.Server, listener string, log *slog.Logger) {
+// apiListener is one socket a node serves HTTP on: its server, and the
+// goroutine [listenAPI] started to serve the socket, held together because
+// stopping the server does not always end that goroutine (see
+// [apiListener.stop]).
+type apiListener struct {
+	server *http.Server
+	// addr is the address the socket is bound to, a port of 0 resolved.
+	addr string
+	// served is closed once Serve has returned, and Serve closes the socket
+	// as it returns ([http.Server.Serve]'s own contract), so a closed served
+	// is a closed socket.
+	served <-chan struct{}
+}
+
+// stop closes the listener, waiting at most [apiShutdownGrace] for the
+// requests it is serving, and returns only once the goroutine serving it has
+// ended — and with it the socket. name is the listener as the log names it.
+//
+// THE SERVER'S OWN SHUTDOWN IS NOT ENOUGH. [http.Server.Shutdown] and
+// [http.Server.Close] close only the listeners Serve has already registered,
+// and wait only for the Serve calls that registered one, and [listenAPI]
+// starts Serve on a goroutine — so a stop that won that race (a public bind
+// that failed, tearing api.port down a moment after it was bound, is exactly
+// that stop) returned with the goroutine still to run and the socket still
+// listening until it did: the kernel completed connections for a node that
+// had already reported its failed start and would never answer them. How
+// often follows the scheduler: on 4 cores 42–61% of stops made straight after
+// the start left the socket accepting, 20–37% at GOMAXPROCS=2, and under 0.1%
+// at GOMAXPROCS=1, where the dialler seldom runs before Serve has closed the
+// socket (Go 1.27.2, with and without the race detector, measured).
+//
+// So stop waits for the goroutine, AFTER the shutdown (or the cut): by then
+// the server is marked stopping, so a Serve that registered has returned —
+// the shutdown waited for it — and one still to start registers nothing and
+// returns [http.ErrServerClosed] the moment it is scheduled, closing the
+// socket either way. That is also why the wait has no bound of its own, and
+// why it cannot come first: a registered Serve runs until the server is told
+// to stop. Nothing here closes the socket besides, because Serve has: a close
+// after the wait could only ever be told it was closed already.
+func (l *apiListener) stop(ctx context.Context, name string, log *slog.Logger) {
 	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
-	if err := server.Shutdown(grace); err != nil {
+	if err := l.server.Shutdown(grace); err != nil {
 		// The grace is over and a request is still running. It is CUT,
 		// which cancels its context, rather than left to run on into
 		// the teardown that is about to close the store and the broker
 		// it is reading.
-		log.WarnContext(ctx, "api_shutdown_failed", "listener", listener, "error", err,
+		log.WarnContext(ctx, "api_shutdown_failed", "listener", name, "error", err,
 			"detail", "requests still running after the shutdown grace were cut")
-		if closeErr := server.Close(); closeErr != nil {
-			log.WarnContext(ctx, "api_close_failed", "listener", listener, "error", closeErr)
+		if closeErr := l.server.Close(); closeErr != nil {
+			log.WarnContext(ctx, "api_close_failed", "listener", name, "error", closeErr)
 		}
 	}
+	<-l.served
 }
 
 // apiShutdownGrace bounds how long a listener waits for in-flight REQUESTS,
@@ -2027,7 +2065,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// public bind that fails takes the admin one down with it, through the
 	// one stop every shutdown takes, rather than leaving a node serving its
 	// dashboard while every webhook finds nothing listening.
-	server, addr, err := listenAPI(ctx, boot.API.Addr(), app, log)
+	admin, err := listenAPI(ctx, boot.API.Addr(), app, log)
 	if err != nil {
 		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
 		// already running, on a broadcast subscription to the engine's
@@ -2038,24 +2076,25 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		operators.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
-	surface.server = server
+	surface.server = admin
 	// AN ASSISTANT'S LISTENING STREAM ENDS AS THIS LISTENER SHUTS DOWN. It is
 	// one request held open (operator.MCPPattern), so the graceful shutdown
 	// waited for every assistant listening until apiShutdownGrace ran out and
 	// then cut them, logging api_shutdown_failed — on every stop of a node an
 	// assistant was connected to, burying the warning that means a request
 	// was stuck. Only api.port: the operator routes are never public.
-	server.RegisterOnShutdown(operators.EndListens)
+	admin.server.RegisterOnShutdown(operators.EndListens)
 	publicAddr := ""
 	if app.Public() != nil {
-		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(), app.Public(), log)
+		surface.public, err = listenAPI(ctx, boot.API.Public.Addr(), app.Public(), log)
 		if err != nil {
 			surface.stop(context.WithoutCancel(ctx), log)
 			return nil, err
 		}
+		publicAddr = surface.public.addr
 	}
 
-	log.InfoContext(ctx, "api_listening", "addr", addr,
+	log.InfoContext(ctx, "api_listening", "addr", admin.addr,
 		// WHERE THE ROUTES OUTSIDE PARTIES CALL ARE SERVED: empty is
 		// api.port itself, which is every deployment without api.public.
 		"public_addr", publicAddr,
@@ -2133,21 +2172,22 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	server, addr, err := listenAPI(ctx, boot.API.Addr(), handler, log)
+	admin, err := listenAPI(ctx, boot.API.Addr(), handler, log)
 	if err != nil {
 		return nil, err
 	}
-	surface := &httpSurface{server: server}
+	surface := &httpSurface{server: admin}
 	publicAddr := ""
 	if opts.Bridge == nil && bridge != nil {
-		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(),
+		surface.public, err = listenAPI(ctx, boot.API.Public.Addr(),
 			api.BridgeOnly(boot, bridge), log)
 		if err != nil {
 			surface.stop(context.WithoutCancel(ctx), log)
 			return nil, err
 		}
+		publicAddr = surface.public.addr
 	}
-	log.InfoContext(ctx, "api_probes_listening", "addr", addr, "node", opts.NodeID,
+	log.InfoContext(ctx, "api_probes_listening", "addr", admin.addr, "node", opts.NodeID,
 		"roles", opts.Roles, "tool_bridge", bridge != nil,
 		// Empty unless the bridge has a listener of its own on api.public.
 		"public_addr", publicAddr,
@@ -2160,22 +2200,24 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	return surface, nil
 }
 
-// listenAPI binds addr and serves handler on it, in the background.
+// listenAPI binds addr and serves handler on it, in the background, and
+// returns the listener, which [apiListener.stop] ends.
 //
 // ONE PATH for every listener a node opens — the whole API, the public
 // listener beside it, the probe surface ([api.Probes]) and the bridge's own —
 // so they cannot drift apart on the timeouts that bound an unauthenticated
-// client or on how a bind failure is reported.
+// client, on how a bind failure is reported, or on how a stop ends the
+// goroutine serving the socket and the socket with it.
 func listenAPI(ctx context.Context, addr string, handler http.Handler,
 	log *slog.Logger,
-) (*http.Server, string, error) {
+) (*apiListener, error) {
 	// Through a ListenConfig so a shutdown signal arriving while the bind
 	// is in flight aborts it, rather than leaving a listener nobody will
 	// serve from: the bind can block on a DNS lookup for the host.
 	var listenCfg net.ListenConfig
 	listener, err := listenCfg.Listen(ctx, "tcp", addr)
 	if err != nil {
-		return nil, "", fmt.Errorf("api: bind %s: %w", addr, err)
+		return nil, fmt.Errorf("api: bind %s: %w", addr, err)
 	}
 	server := &http.Server{
 		Handler: handler,
@@ -2186,12 +2228,15 @@ func listenAPI(ctx context.Context, addr string, handler http.Handler,
 		IdleTimeout:       apiIdleTimeout,
 		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}
+	// The goroutine belongs to the listener's stop, which waits for it.
+	served := make(chan struct{})
 	go func() {
+		defer close(served)
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.ErrorContext(ctx, "api_serve_failed", "error", err)
 		}
 	}()
-	return server, listener.Addr().String(), nil
+	return &apiListener{server: server, addr: listener.Addr().String(), served: served}, nil
 }
 
 // apiReadHeaderTimeout bounds how long a client may take to send its request

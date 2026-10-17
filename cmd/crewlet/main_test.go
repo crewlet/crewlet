@@ -524,11 +524,7 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 
-	base := "http://" + surface.server.Addr
-	if base == "http://" {
-		base = "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
-	}
-	body := getJSON(t, base+"/health")
+	body := getJSON(t, "http://"+surface.server.addr+"/health")
 
 	// The engine's own answers, which only the process running it has.
 	if _, present := body["in_flight"]; !present {
