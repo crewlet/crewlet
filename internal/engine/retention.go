@@ -405,8 +405,8 @@ func (r *retention) tick(ctx context.Context) {
 //
 // # Why the point goes, when the node's position row stays
 //
-// The position row is what a READMISSION is judged by, so an eviction keeps it
-// ([coord.PositionRegister.ForgetPositions]). A backup point is judged by
+// The position row is what a READMISSION is judged by, so an eviction keeps it,
+// and so does everything else ([coord.PositionRegister]). A backup point is judged by
 // nothing: it is a claim that a verified copy of the logs exists in a directory
 // on that node, and eviction is the operator's word that the node is not
 // coming back. Left standing, it was listed on `/backups` for the life of the

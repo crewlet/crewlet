@@ -170,18 +170,6 @@ func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
 	return out, err
 }
 
-// ForgetFloor removes one domain's row.
-//
-// PURGED, on this estate's standing rule (markers.go, "Every removal is a
-// purge").
-func (f *FleetStore) ForgetFloor(ctx context.Context, domain string) error {
-	if err := f.positions.Purge(ctx, coord.FloorKey(domain)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("forget a domain's trim floor", err)
-	}
-	return nil
-}
-
 // PutBackupPoint writes one node's newest backup, or the operator's newest
 // acknowledgement of one log, at the point's own key ([coord.BackupPointKey]).
 //
