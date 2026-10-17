@@ -254,6 +254,11 @@ type Engine struct {
 	// node is on ([Engine.cacheVolume]).
 	cacheDisk *cacheVolume
 
+	// gitMemory is Options.gitMemory, kept for the same reason: zero — every
+	// engine New builds outside this package's tests — has the git pool read
+	// the node's own memory ([Engine.buildCodeHost]).
+	gitMemory int64
+
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
 	// prepared — by its own acquisition, or by the apply that brought the
@@ -794,6 +799,15 @@ type Options struct {
 	// knob exists only so a case whose subject is the budget a disk derives
 	// is not decided by the free space of whatever machine runs it.
 	cacheDisk *cacheVolume
+
+	// gitMemory is the memory, in bytes, the git pool sizes its lanes by and
+	// the code cache budgets its background work from in place of the
+	// node's own ([gitproc.Options.Memory]), zero for the node's own.
+	// UNEXPORTED for cacheDisk's reason (export_test.go): a running node has
+	// only the memory it is given, and the knob exists only so a case whose
+	// subject is what a node's memory leaves its git cache is not decided by
+	// the memory of whatever machine runs it.
+	gitMemory int64
 }
 
 // New assembles an engine.
@@ -960,6 +974,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		sandboxPollInterval: opts.SandboxPollInterval,
 		gitHookArgv:         slices.Clone(opts.GitHook),
 		cacheDisk:           opts.cacheDisk,
+		gitMemory:           opts.gitMemory,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,

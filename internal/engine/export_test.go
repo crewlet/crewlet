@@ -57,6 +57,16 @@ func WithCacheDisk(opts Options, free, broker int64) Options {
 	return opts
 }
 
+// WithGitMemory is opts with the git pool sizing its lanes, and the code cache
+// budgeting its background work, from a node of memory bytes rather than from
+// the memory of the machine running the case ([gitproc.Options.Memory]), for a
+// case outside the package whose subject is what a node's memory leaves its
+// git cache.
+func WithGitMemory(opts Options, memory int64) Options {
+	opts.gitMemory = memory
+	return opts
+}
+
 // TestGitTransfers is the transfer lane [PinGitLanes] gives a case's node:
 // four, 256 MiB of request spool.
 const TestGitTransfers = 4

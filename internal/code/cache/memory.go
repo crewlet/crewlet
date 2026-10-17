@@ -287,7 +287,10 @@ const refusedForMemory = "memory"
 //
 // It is the cache's whole part of a node's reading: the fields stay zero, and
 // the alarm silent, on a reading nothing filled from a cache — a node that
-// serves no git has none.
+// serves no git has none. The engine fills every evaluation of a git node's
+// alarm table from it, so a refusal is raised on the node whose cache made it;
+// nothing but a reading reaches the alarm, so a cache whose node never asked
+// would log, count and gauge every refusal while its alarm stayed silent.
 func (c *Cache) AlarmReading(out *statelog.Reading) {
 	c.refusals.mu.Lock()
 	out.CodeMaintenanceRefused = c.refusals.repos
