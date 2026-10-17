@@ -309,6 +309,10 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 	return placements, nil
 }
 
+// mergePendingStatement is [duty.pendingMerges]' probe, named for the plan
+// test.
+const mergePendingStatement = `SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`
+
 // pendingMerges reads whether any task is mid-merge.
 //
 // A REMOVED ONE COUNTS. A tombstoned task is frozen, so nothing can finish its
@@ -319,9 +323,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`).
-			Scan(&found)
+		return tx.QueryRowContext(ctx, mergePendingStatement).Scan(&found)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: read whether a merge is mid-walk: %w", err)
@@ -494,14 +496,17 @@ var mergeWaits = []struct {
 			"clears the mark"},
 }
 
+// mergingAfterStatement is [duty.markedAfter]'s page, named for the plan test.
+const mergingAfterStatement = `
+		SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
+		ORDER BY id LIMIT ?`
+
 // markedAfter is one page of the tasks marked mid-merge, in id order, after a
 // cursor — the partial index's own order, so each page is a seek.
 func (d *duty) markedAfter(ctx context.Context, after string) ([]string, error) {
 	var ids []string
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
-			 ORDER BY id LIMIT ?`, after, WalkBatch)
+		rows, err := tx.QueryContext(ctx, mergingAfterStatement, after, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read the abandoned merges: %w", err)
 		}
@@ -615,6 +620,11 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 	return true, nil
 }
 
+// movePendingStatement is [duty.pendingMoves]' probe, named for the plan test.
+const movePendingStatement = `
+		SELECT EXISTS (SELECT 1 FROM tracker_tasks
+		               WHERE moving = 1 AND removed_at IS NULL)`
+
 // pendingMoves reads whether any root is marked mid-move. ONE PROBE on the
 // partial index the schema ships for exactly this predicate, so a company
 // where nothing is mid-move pays it and nothing else.
@@ -624,16 +634,19 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM tracker_tasks
-			               WHERE moving = 1 AND removed_at IS NULL)`).
-			Scan(&found)
+		return tx.QueryRowContext(ctx, movePendingStatement).Scan(&found)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: read whether a move is mid-walk: %w", err)
 	}
 	return found == 1, nil
 }
+
+// movingStatement is [duty.finishMoves]' selection of the marked roots, named
+// for the plan test.
+const movingStatement = `
+		SELECT id FROM tracker_tasks
+		WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`
 
 // finishMoves completes every cross-project move whose walk stopped with its
 // root marked mid-move.
@@ -652,10 +665,7 @@ func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error) {
 	var marked []string
 	if err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id FROM tracker_tasks
-			WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
-			WalkBatch)
+		rows, err := tx.QueryContext(ctx, movingStatement, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read the abandoned moves: %w", err)
 		}
@@ -713,14 +723,22 @@ const strandedFrom = `
 	  AND r.removed_at IS NULL AND r.moving = 0
 	  AND (r.parent_id IS NULL OR r.parent_id = '')`
 
+// strandedPendingStatement is [duty.pendingStragglers]' probe and
+// strandedAfterStatement [duty.strandedAfter]'s page, over the predicate they
+// share — named for the plan test.
+const (
+	strandedPendingStatement = `SELECT EXISTS (SELECT 1 ` + strandedFrom + `)`
+	strandedAfterStatement   = `SELECT DISTINCT t.root_id ` + strandedFrom +
+		` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`
+)
+
 // pendingStragglers reads whether any live task sits in another project than
 // its root with nothing walking that root — see [duty.carryStragglers]. ONE
 // PROBE on the partial index replicated migration 0041 ships for it.
 func (d *duty) pendingStragglers(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 `+strandedFrom+`)`).Scan(&found)
+		return tx.QueryRowContext(ctx, strandedPendingStatement).Scan(&found)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: read whether a task was filed "+
@@ -808,9 +826,7 @@ func (d *duty) carryStragglers(ctx context.Context, now, _ time.Time) (int64, er
 func (d *duty) strandedAfter(ctx context.Context, after string) ([]string, error) {
 	var roots []string
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.root_id `+
-			strandedFrom+` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
-			after, WalkBatch)
+		rows, err := tx.QueryContext(ctx, strandedAfterStatement, after, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read the tasks filed behind a move: %w", err)
 		}
