@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -378,6 +379,31 @@ func TestARecordThatArbitratedOneAddressAndClaimsAnotherIsRefused(t *testing.T) 
 	}
 	if got := h.count("chat_channels"); got != 0 {
 		t.Errorf("%d rooms were written anyway", got)
+	}
+}
+
+// A POSTED MESSAGE IS FILED IN THE BUCKET THE SEARCH PACKAGE FILES IT IN.
+//
+// The replicated row carries a search bucket, and the chat keyword index files
+// the same message under one of its own. A bucket stamped here by a rule of
+// this package's would agree with the index's only while nobody edited either,
+// and a fan-out over the two would read the message in one bucket and look for
+// it in another — so the applier stamps [search.ChatShardOf] and nothing else.
+func TestAPostIsFiledInTheBucketSearchFilesItIn(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, id := range []string{"msg-1", "msg-2", "msg-3", "msg-4"} {
+		if _, _, err := h.apply(applyPostRecord("room-1", id, "we ship friday", "")); err != nil {
+			t.Fatalf("post %s: %v", id, err)
+		}
+		got := h.number(`SELECT shard FROM chat_messages WHERE id = ?`, id)
+		if want := int64(search.ChatShardOf(id)); got != want {
+			t.Errorf("%s was stored in bucket %d and search files it in %d — "+
+				"the two estates disagree about where the message is", id, got, want)
+		}
 	}
 }
 
