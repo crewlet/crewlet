@@ -1,7 +1,9 @@
 package coordtest
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -579,6 +581,148 @@ var chatReadCases = []fleetCase{
 			h.t.Fatalf("a caller's edit of its own copy reached the store: %+v", second)
 		}
 	}},
+}
+
+// The watch the live channel is derived from: every node serving sockets
+// pushes a seat's record to that seat's tabs from it, so it must say which
+// records already existed and where they end, then deliver every flush, stamp
+// and forget as the change it is, each with the revision a screen orders two
+// states by.
+var chatReadWatchCases = []fleetCase{
+	{"a read-state watch sees what exists, then every flush, stamp and forget", func(h *fleetHarness) {
+		before := h.advanceChatRead("founder", "eng", 7)
+
+		ctx, cancel := context.WithCancel(h.ctx)
+		defer cancel()
+		updates, err := h.f.WatchChatReads(ctx)
+		if err != nil {
+			h.t.Fatalf("WatchChatReads: %v", err)
+		}
+		u := h.nextChatReadUpdate(updates)
+		if u.Handle != "founder" || u.State == nil || u.Current ||
+			u.State.Cursors["eng"] != 7 || u.State.Revision != before.Revision {
+			h.t.Fatalf("first update = %s, want founder's record as the flush "+
+				"before the watch left it, at revision %d", describeChatRead(u), before.Revision)
+		}
+		if u = h.nextChatReadUpdate(updates); !u.Current {
+			h.t.Fatalf("second update = %s, want the marker ending the records "+
+				"that existed — without it a consumer cannot tell \"nobody has "+
+				"read anything\" from \"nothing has arrived yet\"", describeChatRead(u))
+		}
+
+		// A FLUSH AFTER THE MARKER IS A CHANGE, carrying the whole record
+		// and the revision the flush itself answered, so the push and the
+		// flush's own answer order alike on the screen that sees both.
+		flushed := h.advanceChatRead("designer", "design", 3)
+		u = h.nextChatReadUpdate(updates)
+		if u.Handle != "designer" || u.State == nil || u.State.Cursors["design"] != 3 ||
+			u.State.Revision != flushed.Revision {
+			h.t.Fatalf("update after a flush = %s, want designer's record at "+
+				"revision %d", describeChatRead(u), flushed.Revision)
+		}
+
+		// A STAMP MOVES THE RECORD, and is delivered as its new state.
+		at := h.now()
+		if _, err := h.f.SetChatReadAbsence(h.ctx, "founder", at); err != nil {
+			h.t.Fatalf("SetChatReadAbsence: %v", err)
+		}
+		u = h.nextChatReadUpdate(updates)
+		if u.Handle != "founder" || u.State == nil || !u.State.AbsentSince.Equal(at) ||
+			u.State.Cursors["eng"] != 7 || u.State.Revision <= before.Revision {
+			h.t.Fatalf("update after an absence stamp = %s, want founder's record "+
+				"absent since %v, past revision %d", describeChatRead(u), at, before.Revision)
+		}
+
+		// A FORGET IS DELIVERED, as a seat with no record: a consumer that
+		// missed it would keep pushing a state the store no longer holds.
+		h.forgetChatRead("founder", at, true)
+		u = h.nextChatReadUpdate(updates)
+		if u.Handle != "founder" || u.State != nil || u.Current {
+			h.t.Fatalf("update after a forget = %s, want founder with no record",
+				describeChatRead(u))
+		}
+
+		// Ending the watch closes the channel: a consumer can tell a
+		// watch that stopped from one that is merely quiet.
+		cancel()
+		deadline := time.After(stallBudget)
+		for {
+			select {
+			case _, ok := <-updates:
+				if !ok {
+					return
+				}
+			case <-deadline:
+				h.t.Fatal("a cancelled read-state watch never closed its channel")
+			}
+		}
+	}},
+
+	{"a state one watcher keeps does not reach another", func(h *fleetHarness) {
+		// Two nodes' hubs hold what their watches delivered; a real backend
+		// decodes each delivery afresh, and a twin that handed both the
+		// same map would let one consumer's edit reach the other's push —
+		// a property only the twin has, which is what a shared suite is for.
+		ctx, cancel := context.WithCancel(h.ctx)
+		defer cancel()
+		first, err := h.f.WatchChatReads(ctx)
+		if err != nil {
+			h.t.Fatalf("WatchChatReads: %v", err)
+		}
+		second, err := h.f.WatchChatReads(ctx)
+		if err != nil {
+			h.t.Fatalf("WatchChatReads: %v", err)
+		}
+		for _, updates := range []<-chan coord.ChatReadUpdate{first, second} {
+			if u := h.nextChatReadUpdate(updates); !u.Current {
+				h.t.Fatalf("an empty store's first update = %s, want the marker",
+					describeChatRead(u))
+			}
+		}
+		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
+			Cursors: map[string]int64{"eng": 5}, Mute: []string{"noisy"}, At: h.now(),
+		}); err != nil {
+			h.t.Fatalf("AdvanceChatRead: %v", err)
+		}
+		kept := h.nextChatReadUpdate(first)
+		if kept.State == nil {
+			h.t.Fatalf("the first watch delivered %s, want founder's record", describeChatRead(kept))
+		}
+		kept.State.Cursors["eng"] = 999
+		kept.State.Muted[0] = "tampered"
+		other := h.nextChatReadUpdate(second)
+		if other.State == nil || other.State.Cursors["eng"] != 5 || other.State.Muted[0] != "noisy" {
+			h.t.Fatalf("one watcher's edit of its own copy reached another's: %s",
+				describeChatRead(other))
+		}
+		if got := h.chatRead("founder"); got.Cursors["eng"] != 5 || got.Muted[0] != "noisy" {
+			h.t.Fatalf("a watcher's edit of its own copy reached the store: %+v", got)
+		}
+	}},
+}
+
+// nextChatReadUpdate reads one update, failing the case if none arrives.
+func (h *fleetHarness) nextChatReadUpdate(updates <-chan coord.ChatReadUpdate) coord.ChatReadUpdate {
+	h.t.Helper()
+	select {
+	case u, ok := <-updates:
+		if !ok {
+			h.t.Fatal("the read-state watch closed while the store was healthy")
+		}
+		return u
+	case <-time.After(stallBudget):
+		h.t.Fatal("the read-state watch delivered nothing")
+	}
+	return coord.ChatReadUpdate{}
+}
+
+// describeChatRead renders an update for a failure message, its state's
+// pointer followed.
+func describeChatRead(u coord.ChatReadUpdate) string {
+	if u.State == nil {
+		return fmt.Sprintf("{handle:%q current:%v state:none}", u.Handle, u.Current)
+	}
+	return fmt.Sprintf("{handle:%q current:%v state:%+v}", u.Handle, u.Current, *u.State)
 }
 
 func (h *fleetHarness) advanceChatRead(handle, room string, cursor int64) coord.ChatReadState {
