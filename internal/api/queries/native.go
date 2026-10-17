@@ -1052,7 +1052,6 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		Actor:    strings.TrimSpace(p.String("actor")),
 		Assignee: strings.TrimSpace(p.String("assignee")),
 		Q:        strings.TrimSpace(p.String("q")),
-		Batch:    strings.TrimSpace(p.String("batch")),
 		Limit:    p.Int("limit", 0),
 		Cursor:   strings.TrimSpace(p.String("cursor")),
 	}

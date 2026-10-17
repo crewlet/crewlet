@@ -92,14 +92,14 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_history
 			(id, subject_kind, subject_id, project_key, kind, actor, actor_kind,
-			 operator_id, comment_id, batch_id, excerpt, fields_json, turn_id,
+			 operator_id, comment_id, excerpt, fields_json, turn_id,
 			 notified, late, log_seq, log_stream, log_generation, created_at,
 			 broker_at, effective_at, skew_ms, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
 		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
 		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
-		commentID, batchOf(c.record), excerpt, fields, c.record.TurnID,
+		commentID, excerpt, fields, c.record.TurnID,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
 		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation))
@@ -426,7 +426,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			return 0, nil
 		}
 	}
-	candidates := Candidates(notify, c.record.Batched())
+	candidates := Candidates(notify)
 	// THE TASK THE NOTICE IS ABOUT, beside the subject it was written on.
 	// For a task commit they are one task; for a lead's priorities write
 	// the subject is the PERSON and the key stored beside it is the TASK's,
@@ -536,13 +536,4 @@ func statedDeltas(c applyContext) map[string]Delta {
 		return nil
 	}
 	return c.record.Notify.Fields
-}
-
-// batchOf answers the batch id or nil, so the column distinguishes "not part
-// of a batch" from "part of a batch with an empty name".
-func batchOf(rec MutationRecord) any {
-	if rec.BatchID == nil {
-		return nil
-	}
-	return *rec.BatchID
 }

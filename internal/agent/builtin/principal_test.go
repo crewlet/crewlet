@@ -46,7 +46,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	moved.Status = worklet.StatusInProgress
 	notify := worklet.Wake{Kind: worklet.ChangeStatus, Before: task,
 		After: moved}.Notify(nil)
-	candidates := worklet.Candidates(notify, false)
+	candidates := worklet.Candidates(notify)
 
 	woken := func(actor string) bool {
 		for _, c := range worklet.Route(candidates, nil, actor) {

@@ -134,11 +134,11 @@ func TestEveryRoutingFieldHasAProducer(t *testing.T) {
 			// blocker's assignee, and the generic assignee arm ran
 			// before it, so the reason looked implemented from every
 			// angle except the one that counts.
-			if !slices.ContainsFunc(worklet.Candidates(notify, false),
+			if !slices.ContainsFunc(worklet.Candidates(notify),
 				func(got worklet.Candidate) bool { return got.Reason == c.reason }) {
 				t.Errorf("Snapshot.%s is filled and no candidate came back "+
 					"under %q: %+v", c.field, c.reason,
-					worklet.Candidates(notify, false))
+					worklet.Candidates(notify))
 			}
 		})
 	}
@@ -353,7 +353,7 @@ func TestNoReasonIsShadowedByAnEarlierArm(t *testing.T) {
 			ProjectLead:        one,
 		},
 	}
-	got := worklet.Candidates(notify, false)
+	got := worklet.Candidates(notify)
 	if len(got) == 0 {
 		t.Fatal("one handle in every field routed to nobody")
 	}
@@ -375,7 +375,7 @@ func TestNoReasonIsShadowedByAnEarlierArm(t *testing.T) {
 		if alone == nil {
 			continue
 		}
-		if !slices.ContainsFunc(worklet.Candidates(alone, false),
+		if !slices.ContainsFunc(worklet.Candidates(alone),
 			func(c worklet.Candidate) bool { return c.Reason == reason }) {
 			t.Errorf("%q cannot name anybody even on a notification built for "+
 				"it alone — an earlier arm claims its handle", reason)
