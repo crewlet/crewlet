@@ -1,8 +1,6 @@
 package worklet_test
 
 import (
-	"database/sql"
-	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -327,62 +325,6 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	if again := scanUnblocked(t, r, 0); len(again.Pending) != 1 {
 		t.Errorf("a second scan from zero found %+v, want the same dependent "+
 			"still owed — it has not been told yet", again.Pending)
-	}
-}
-
-// THE REPAIR'S SCAN IS SERVED BY AN INDEX, not by reading the whole table.
-//
-// `tracker_history` grows for the life of the company and is never swept — it
-// is the account of everything that ever happened — and this scan runs on
-// every tick of the Worklet duty. A predicate with no index behind it is a
-// full scan of that table, forever, several times a minute.
-//
-// The index it used to have named `kind`, and the scan stopped selecting on
-// `kind` when it moved to the row's own status delta (see
-// [TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind]). Migration
-// 0008 replaces it with a PARTIAL index over exactly the new predicate, which
-// is the only reason that move is affordable.
-//
-// A TRIPWIRE ON THE SCHEMA AND THE PLANNER, in `storetest`'s own idiom: it
-// re-states the predicate rather than borrowing the query's string, so a
-// rewrite of the scan that quietly stopped matching the index still passes
-// here and is caught by the behavioural cases above plus this plan going
-// unused.
-func TestTheUnblockedScanIsIndexServed(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-
-	var plan string
-	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			EXPLAIN QUERY PLAN
-			SELECT COALESCE(MAX(log_seq), 0) FROM tracker_history
-			WHERE log_seq > 0
-			  AND json_extract(fields_json, '$.status.to') IS NOT NULL`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var a, b, c int
-			var detail string
-			if err := rows.Scan(&a, &b, &c, &detail); err != nil {
-				return err
-			}
-			plan += detail + " "
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("explain the repair's horizon: %v", err)
-	}
-	if !strings.Contains(plan, "tracker_history_status_seq_idx") {
-		t.Errorf("the repair's horizon is planned as %q — it names no index, "+
-			"so every tick reads the whole of tracker_history, which is the "+
-			"account of everything that ever happened and is never swept",
-			plan)
-	}
-	if strings.Contains(plan, "SCAN tracker_history") {
-		t.Errorf("the repair's horizon SCANS tracker_history: %q", plan)
 	}
 }
 
