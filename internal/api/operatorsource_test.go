@@ -17,8 +17,7 @@ import (
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
-// THE OPERATOR SURFACE READS ITS HALVES ON EVERY REQUEST, AND SAYS WHICH OF
-// ITS TWO ABSENCES IT IS.
+// THE OPERATOR SURFACE READS ITS HALVES ON EVERY REQUEST.
 //
 // The catalogue is the native halves', which a node meets at its first company
 // — by an apply, long after its API started serving. It was a server taken
@@ -26,40 +25,46 @@ import (
 // no /operator/mcp for the life of the process. Now the route is mounted once
 // and each request reads the halves: before the company it is `503
 // no_active_revision` with the reconcile poll as its wait and the halves'
-// words, and once the company has come up keeping nothing this surface could
-// manage it is the route's absence, in the mux's own `404 no_route` — one
-// App, the same route, told apart only by what the halves say NOW.
+// words, and once the company has come up — even one keeping neither native
+// half here, which is still served the seat controls every node can serve —
+// it is the MCP transport's own answer — one App, the same route, told apart
+// only by what the halves say NOW.
 //
 // Mutation: read the halves once, when the server is built, and the second
 // request is the first one's 503 again.
 func TestTheOperatorSurfaceReadsItsSourcePerRequest(t *testing.T) {
 	t.Parallel()
 	var started atomic.Bool
-	operators, err := operator.New(operator.Options{
+	operators, err := operator.New(withSeatControls(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			return operator.Halves{}, started.Load()
 		},
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     queuememory.New(),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}
 	a := newApp(t, api.Options{Operator: operators})
-	post := func() (*httptest.ResponseRecorder, map[string]any) {
+	post := func() *httptest.ResponseRecorder {
 		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, operator.MCPPath,
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize",`+
+				`"params":{"protocolVersion":"2025-06-18","capabilities":{},`+
+				`"clientInfo":{"name":"a case","version":"1"}}}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json, text/event-stream")
 		rec := httptest.NewRecorder()
-		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, operator.MCPPath,
-			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))))
-		var body map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("the answer is not the engine's envelope: %v (%s)", err,
-				rec.Body.String())
-		}
-		return rec, body
+		a.ServeHTTP(rec, authed(r))
+		return rec
 	}
 
-	rec, body := post()
+	rec := post()
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the answer is not the engine's envelope: %v (%s)", err,
+			rec.Body.String())
+	}
 	if rec.Code != http.StatusServiceUnavailable ||
 		body["error"] != string(httpjson.CodeNoActiveRevision) ||
 		body["detail"] != httpjson.Sentence(httpjson.NativeHalvesNotUp) {
@@ -73,10 +78,9 @@ func TestTheOperatorSurfaceReadsItsSourcePerRequest(t *testing.T) {
 	}
 
 	started.Store(true)
-	rec, body = post()
-	if rec.Code != http.StatusNotFound || body["error"] != string(httpjson.CodeNoRoute) {
-		t.Errorf("once the company keeps nothing this surface manages, %s "+
-			"answered %d %v, want the route's absence, 404 %s", operator.MCPPath,
-			rec.Code, body, httpjson.CodeNoRoute)
+	if rec = post(); rec.Code != http.StatusOK {
+		t.Errorf("once the company is up, %s answered %d %s, want the MCP "+
+			"transport's own answer to an initialize", operator.MCPPath, rec.Code,
+			rec.Body.String())
 	}
 }

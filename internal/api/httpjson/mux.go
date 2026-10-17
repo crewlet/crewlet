@@ -94,15 +94,14 @@ func (m *muxRefusal) WriteHeader(status int) {
 //
 // THE MUX'S OWN ANSWER, and exported for the two other answers that must be
 // INDISTINGUISHABLE from it. A route that IS registered but has nothing to
-// serve here — the work surface on a company whose tracker is a vendor's, the
-// operator's MCP surface over an empty catalogue — answers in exactly the
-// bytes the route's absence would have: a handler that wrote its own "not
-// served here" would be the one refusal a client told apart from a missing
-// route, and a route that is absent by configuration and one that is absent by
-// build must read the same. And the public listener's refusal of a route that
-// exists on api.port is this answer byte for byte, because a different wording
-// there would tell anybody on the internet that a private admin port exists and
-// which paths it serves.
+// serve here — the work surface on a company whose tracker is a vendor's —
+// answers in exactly the bytes the route's absence would have: a handler that
+// wrote its own "not served here" would be the one refusal a client told apart
+// from a missing route, and a route that is absent by configuration and one
+// that is absent by build must read the same. And the public listener's
+// refusal of a route that exists on api.port is this answer byte for byte,
+// because a different wording there would tell anybody on the internet that a
+// private admin port exists and which paths it serves.
 func NoRoute(w http.ResponseWriter, r *http.Request) {
 	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
 		"detail": fmt.Sprintf("this node serves nothing at %s %s",
