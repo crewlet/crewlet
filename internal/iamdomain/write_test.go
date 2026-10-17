@@ -23,7 +23,6 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -651,17 +650,10 @@ func (r *writeRig) during(gesture func() error) error {
 // silently would not have.
 func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 	t.Helper()
-	// THROUGH THE FRAMEWORK'S OWN TEST CONSTRUCTOR, over a waiter whose
-	// position MOVES as the rig drains — which is what makes a read that
-	// has to wait actually wait, rather than being served the rows from
-	// before the position it was handed.
-	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, r.db, r.waiter)
-	if err != nil {
-		t.Fatalf("build the read authority: %v", err)
-	}
+	// OVER A WAITER WHOSE POSITION MOVES as the rig drains, so the position
+	// a read reports is the one the rows it served were derived through.
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: r.db.Reader(), Log: log, Committed: r.waiter.Committed,
+		DB: r.db.Reader(), Committed: r.waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
