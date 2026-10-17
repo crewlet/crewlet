@@ -450,13 +450,16 @@ func metadata(body, event map[string]any, seat Seat, msg notify.ChatMessage,
 	// Where a reply GOES, which is a different question — [notify.Anchor]
 	// is the one derivation, and it reads the two keys above.
 	m[notify.ThreadAnchorField] = notify.Anchor(m)
-	if thread != "" && reach.Deliver && reach.Reason != "" {
+	if thread != "" && reach.Deliver && reach.Following != "" {
 		// WHY THE SEAT IS IN THIS THREAD, which is the only answer a
 		// later reply has once the message that named it has scrolled
 		// away. The REASON, never a bare "true": a follow is not an
 		// ask, and which follow decides whether this reply obliges an
-		// answer — see [notify.FollowReason.Addresses].
-		m[notify.FollowingField] = string(reach.Reason)
+		// answer — see [notify.FollowReason.Addresses]. The follow's
+		// own, not this message's: an @here in a thread the seat was
+		// named in reached it as a broadcast, and it is still there
+		// because it was named.
+		m[notify.FollowingField] = string(reach.Following)
 	}
 	return m
 }

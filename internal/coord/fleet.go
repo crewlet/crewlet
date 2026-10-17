@@ -1648,7 +1648,9 @@ type TrashReaps interface {
 //
 // Every method's seat is the seat's handle, which is immutable (ADR-0013) —
 // what internal/notify's FollowStore hands in. This store resolves nothing; it
-// keys on the name it is given.
+// keys on the name it is given — and it RANKS nothing either: which of two
+// reasons is the stronger is internal/notify's vocabulary, so the caller
+// chooses and this store makes the choice safe against a concurrent one.
 //
 // # Three methods, and no purge
 //
@@ -1656,15 +1658,25 @@ type TrashReaps interface {
 // re-assert rewrites the record, so the age is a true last-activity stamp and
 // the broker expires what has gone quiet. A sweep would have nothing to delete.
 type Follows interface {
-	// Follow records that a seat follows a thread, or refreshes an
-	// existing follow's reason.
+	// Follow records that a seat follows a thread, or refreshes the follow
+	// it has, and answers the reason the record holds afterwards.
 	//
-	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
-	// a thread by a collective shout and later named personally is now
-	// following for the stronger reason, and an operator asking why it
-	// answered should see the mention rather than the shout that happened
-	// to come first.
-	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
+	// THE REASON IS CHOSEN AGAINST THE RECORD IT REPLACES: choose is handed
+	// the reason held, and whether a follow is held at all, and answers the
+	// reason to write — and the write lands only on the record choose was
+	// shown. One that loses to another writer reads again and asks again.
+	// A choice made from an earlier read is a decision about a record
+	// somebody may since have rewritten, and the reason decides whether a
+	// reply obliges an answer: a seat named in a thread a moment before a
+	// broadcast is written there must not be left following it for the
+	// broadcast. choose may run more than once, so it must be a pure
+	// function of what it is handed.
+	//
+	// EVERY CALL WRITES, an unchanged reason included, because the write is
+	// what moves the bucket's age: a follow refreshed only when its reason
+	// changed would expire in a thread the seat is still active in.
+	Follow(ctx context.Context, backend, seat, channel, thread string, at time.Time,
+		choose func(held string, following bool) string) (string, error)
 
 	// Following reports why a seat follows a thread, and whether it does.
 	//

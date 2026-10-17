@@ -999,15 +999,25 @@ func followKey(backend, handle, channel, thread string) string {
 	return coord.DocumentKey("follow", backend, handle, channel, thread)
 }
 
-// Follow records or refreshes a seat's follow on a thread.
-func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) error {
+// Follow records or refreshes a seat's follow on a thread, writing the reason
+// choose answers for the record it replaces.
+//
+// ONE MUTEX ACROSS THE READ, THE CHOICE AND THE WRITE, which is the property
+// the KV backend reaches by binding its write to the revision it read: no
+// other follow can land between what choose was shown and what is written.
+func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread string, at time.Time,
+	choose func(held string, following bool) string) (string, error) {
+
 	if backend == "" || handle == "" || thread == "" {
-		return errors.New("coord/memory: a follow needs a backend, a handle and a thread")
+		return "", errors.New("coord/memory: a follow needs a backend, a handle and a thread")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.follows[followKey(backend, handle, channel, thread)] = followEntry{reason: reason, at: at.UTC()}
-	return nil
+	key := followKey(backend, handle, channel, thread)
+	held, following := f.follows[key]
+	reason := choose(held.reason, following)
+	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
+	return reason, nil
 }
 
 // Following reports why a seat follows a thread, and whether it does.
