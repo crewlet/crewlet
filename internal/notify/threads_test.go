@@ -181,16 +181,70 @@ func TestParticipationFollowsTheThread(t *testing.T) {
 	}
 }
 
-func TestExplicitSubscriptionAndItsUndo(t *testing.T) {
+// A TOP-LEVEL MESSAGE THAT TRIGGERS FOLLOWS THE THREAD IT STARTS, for the
+// reason it triggered. Its own id is the thread every reply will carry, so a
+// seat named in a channel hears the answers without being named again — and
+// the reason is what decides whether those answers oblige it: a seat in the
+// room for a broadcast owes nothing to every reply under it.
+func TestATopLevelTriggerFollowsItsOwnThreadForItsReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		text   string
+		reason notify.FollowReason
+	}{
+		{"named", "@agent-swe can you take this", notify.FollowMention},
+		{"a broadcast", "@here standup in five", notify.FollowCollective},
+	}
+	for _, c := range cases {
+		store := newFollows()
+		tr := threads(t, store)
+		top := msg("C1", "", c.text)
+		top.ID = "P1"
+
+		got, err := tr.Reaches(t.Context(), "swe", "agent-swe", top, t0)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !got.Deliver || got.Reason != c.reason || !got.Followed {
+			t.Fatalf("%s: a top-level trigger produced %+v", c.name, got)
+		}
+		if held := store.rows[key("mattermost", "swe", "C1", "P1")]; held != string(c.reason) {
+			t.Fatalf("%s: the thread it starts is followed as %q, want %q", c.name, held, c.reason)
+		}
+		reply, _ := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "P1", "here you go"), t0)
+		if !reply.Deliver || reply.Reason != c.reason {
+			t.Fatalf("%s: a reply under it produced %+v", c.name, reply)
+		}
+		if reply.Reason.Addresses() != (c.reason == notify.FollowMention) {
+			t.Errorf("%s: a reply under it addresses the seat: %v", c.name, reply.Reason.Addresses())
+		}
+	}
+
+	// A top-level message that triggers nothing follows nothing, and one
+	// whose backend gave no id has no thread to follow.
+	store := newFollows()
+	tr := threads(t, store)
+	plain := msg("C1", "", "morning all")
+	plain.ID = "P2"
+	if got, _ := tr.Reaches(t.Context(), "swe", "agent-swe", plain, t0); !got.Deliver || got.Followed {
+		t.Fatalf("a passive top-level message produced %+v", got)
+	}
+	if got, _ := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "", "@agent-swe look"), t0); got.Followed {
+		t.Fatalf("a top-level message with no id reported a follow: %+v", got)
+	}
+	if store.writes != 0 {
+		t.Fatalf("%d follows were written for messages that start no followed thread", store.writes)
+	}
+}
+
+func TestAnUnfollowedThreadStopsDelivering(t *testing.T) {
 	store := newFollows()
 	tr := threads(t, store)
 
-	if err := tr.Follow(t.Context(), "swe", "C1", "T1", t0); err != nil {
-		t.Fatalf("Follow: %v", err)
-	}
+	tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "@agent-swe look"), t0)
 	got, _ := tr.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "plain"), t0)
-	if !got.Deliver || got.Reason != notify.FollowExplicit {
-		t.Fatalf("an explicit follow produced %+v", got)
+	if !got.Deliver {
+		t.Fatalf("a followed thread's reply produced %+v", got)
 	}
 
 	// A seat told to stop watching must actually stop — waiting out the
@@ -277,8 +331,8 @@ func TestBackendsDoNotShareThreads(t *testing.T) {
 		t.Fatalf("NewThreadTracker: %v", err)
 	}
 
-	if err := mm.Follow(t.Context(), "swe", "C1", "T1", t0); err != nil {
-		t.Fatalf("Follow: %v", err)
+	if _, err := mm.Reaches(t.Context(), "swe", "agent-swe", msg("C1", "T1", "@agent-swe look"), t0); err != nil {
+		t.Fatalf("Reaches: %v", err)
 	}
 	got, _ := sl.Reaches(t.Context(), "swe", "U1", msg("C1", "T1", "plain"), t0)
 	if got.Deliver {
