@@ -17,6 +17,16 @@
  * view is somebody using the dashboard, and the session's absolute deadline
  * still bounds how long that can last. A 401 is read where every other is
  * (`rest.ts`): a session that ended needs a sign-in.
+ *
+ * THE READ IS MADE FOR THE TAB'S READER (`auth.keepAlive`), unlike the frame's
+ * read of who the session is, so it is also how a tab that only listens learns
+ * the browser changed hands under it: somebody signed in as somebody else in
+ * another tab and the close of this tab's session never reached its socket.
+ * The engine refuses the read `reader_changed`, and the tab is handed over
+ * within TWO intervals — under ten minutes of the sign-in — rather than
+ * drawing the last person's company for as long as it stays open. Two, not
+ * one: a tick passes over a tab the engine answered less than an interval
+ * ago, and that answer may have come just before the sign-in.
  */
 
 import { auth } from "./auth.ts";
@@ -54,8 +64,9 @@ export class SessionKeepAlive {
   tick(now: number = Date.now()): void {
     if (!this.socket.connected) return;
     if (now - lastAnsweredAt() < SESSION_KEEPALIVE_MS) return;
-    // A refusal is noted by `rest.ts` (a 401 needs a sign-in); a failure that
-    // never reached the engine changes nothing, and the next tick asks again.
-    auth.session().catch(() => undefined);
+    // A refusal is noted by `rest.ts` (a 401 needs a sign-in, a
+    // `reader_changed` hands the tab over); a failure that never reached the
+    // engine changes nothing, and the next tick asks again.
+    auth.keepAlive().catch(() => undefined);
   }
 }
