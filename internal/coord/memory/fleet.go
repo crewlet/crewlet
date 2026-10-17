@@ -76,11 +76,13 @@ type Fleet struct {
 	maintAcks   map[string]coord.MaintenanceAck
 	maintRev    uint64
 
-	// pauseWatchers are the open seat-pause watches, and runWatchers the
-	// open watches of each sandbox run by its turn id, each told of every
-	// change under the lock that made it.
-	pauseWatchers map[*watcher[coord.SeatPauseUpdate]]struct{}
-	runWatchers   map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
+	// pauseWatchers are the open seat-pause watches, runWatchers the open
+	// watches of each sandbox run by its turn id, and chatReadWatchers the
+	// open watches of the chat read state, each told of every change under
+	// the lock that made it.
+	pauseWatchers    map[*watcher[coord.SeatPauseUpdate]]struct{}
+	runWatchers      map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
+	chatReadWatchers map[*watcher[coord.ChatReadUpdate]]struct{}
 
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
@@ -1002,6 +1004,7 @@ func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
 	f.version++
 	merged.Revision = f.version
 	f.chatReads[handle] = merged
+	f.notifyChatReadLocked(handle, &merged)
 	return cloneChatRead(merged), nil
 }
 
@@ -1023,6 +1026,7 @@ func (f *Fleet) SetChatReadAbsence(_ context.Context, handle string, since time.
 		f.version++
 		next.Revision = f.version
 		f.chatReads[handle] = next
+		f.notifyChatReadLocked(handle, &next)
 	}
 	return true, nil
 }
@@ -1040,6 +1044,7 @@ func (f *Fleet) ForgetChatRead(_ context.Context, handle string, absentBy time.T
 		return false, nil
 	}
 	delete(f.chatReads, handle)
+	f.notifyChatReadLocked(handle, nil)
 	return true, nil
 }
 
@@ -1054,6 +1059,44 @@ func (f *Fleet) ChatReaders(_ context.Context) ([]coord.ChatReader, error) {
 	}
 	slices.SortFunc(readers, func(a, b coord.ChatReader) int { return cmp.Compare(a.Handle, b.Handle) })
 	return readers, nil
+}
+
+// WatchChatReads streams every seat's read state, the marker, then every
+// change, under the twin's one-lock ordering (watch.go). The KV backend's
+// WatchChatReads certifies its first answer instead.
+func (f *Fleet) WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	answer := make([]coord.ChatReadUpdate, 0, len(f.chatReads)+1)
+	for _, handle := range slices.Sorted(maps.Keys(f.chatReads)) {
+		state := cloneChatRead(f.chatReads[handle])
+		answer = append(answer, coord.ChatReadUpdate{Handle: handle, State: &state})
+	}
+	w := newWatcher(append(answer, coord.ChatReadUpdate{Current: true})...)
+	if f.chatReadWatchers == nil {
+		f.chatReadWatchers = map[*watcher[coord.ChatReadUpdate]]struct{}{}
+	}
+	f.chatReadWatchers[w] = struct{}{}
+	return w.serve(ctx, func() {
+		f.mu.Lock()
+		delete(f.chatReadWatchers, w)
+		f.mu.Unlock()
+	}), nil
+}
+
+// notifyChatReadLocked tells every watcher that a seat's record now holds
+// state, or nil when it was forgotten. Each watcher gets its own copy, maps
+// and slices included, so one consumer that keeps the state cannot see
+// another's edits — or the twin's next write.
+func (f *Fleet) notifyChatReadLocked(handle string, state *coord.ChatReadState) {
+	for w := range f.chatReadWatchers {
+		u := coord.ChatReadUpdate{Handle: handle}
+		if state != nil {
+			copied := cloneChatRead(*state)
+			u.State = &copied
+		}
+		w.push(u)
+	}
 }
 
 // cloneChatRead copies the maps and slices a caller could otherwise mutate

@@ -403,6 +403,45 @@ type ChatReads interface {
 	// cannot decode: a reader left out of the list is one the reconcile
 	// never judges, and so never forgets.
 	ChatReaders(ctx context.Context) ([]ChatReader, error)
+
+	// WatchChatReads streams every record that exists, then the
+	// [ChatReadUpdate.Current] marker, then every change after it: a
+	// flush, an absence stamp, a forget.
+	//
+	// WHAT THE LIVE CHANNEL IS DERIVED FROM. A person's tabs are attached
+	// to whichever nodes their sockets reached, and a flush is taken by
+	// whichever node served it — so every node serving sockets watches,
+	// and each pushes a changed record to that seat's own sockets on that
+	// node. The push comes from the durable record rather than from the
+	// node that took the write telling its peers, so there is no message
+	// a node carries out on another's word, a flush through any surface
+	// reaches every tab, and a node that was not listening loses nothing
+	// the record does not still hold.
+	//
+	// The channel is closed when ctx ends or the watch fails. A CLOSED
+	// CHANNEL IS NOT A FORGET: the watcher has stopped hearing, and a
+	// consumer watches again — the records that exist then are delivered
+	// again before the next marker, so a change it missed while it was
+	// not listening is in that answer, at its revision, and one it already
+	// pushed is recognised as no newer than what it holds.
+	WatchChatReads(ctx context.Context) (<-chan ChatReadUpdate, error)
+}
+
+// ChatReadUpdate is one change a read-state watch delivers.
+type ChatReadUpdate struct {
+	// Handle names the seat whose record it is. Empty on the marker.
+	Handle string
+
+	// State is the record as it now stands, stamped with its
+	// [ChatReadState.Revision], and nil when the record was forgotten.
+	State *ChatReadState
+
+	// Current marks the end of the records that existed when the watch
+	// started: every update before it is one of those, and every update
+	// after it is a change. A consumer that re-syncs after watching again
+	// does it from what precedes the marker, the only point at which the
+	// watch can say a record it has not delivered does not exist.
+	Current bool
 }
 
 // MergeChatRead applies a flush to a stored state and reports the result.
