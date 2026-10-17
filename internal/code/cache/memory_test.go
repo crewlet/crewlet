@@ -702,6 +702,173 @@ func TestTheMemoryShapeGivesTheMaintainerItsShare(t *testing.T) {
 	}
 }
 
+// A BUDGET OF NOTHING IS STATED AS THE CACHE COMPUTES IT, AND SO IS WHAT
+// CLEARS IT. The background work's budget is the node's memory less what Open
+// keeps of it — gitproc.TransferMemory for every transfer the pool admits and
+// ServingMemoryPerCore for every core the memory backs at gitproc.CoreMemory a
+// core — never below zero (maintenanceBudget); every pass reads the memory
+// again, and the reserve stays what Open fixed. A transfer lane the pool sized
+// itself — git.max_transfers unset — leaves MaintenanceMemoryPerCore a backed
+// core. An explicit git.max_transfers is kept as written, and it zeroes the
+// budget long before its transfers take the whole memory: 42 of them on
+// 16 GiB and eight cores, where 16 GiB holds 73 at 224 MiB each. The remedy
+// called a budget of zero a memory lowered after the node booted, which a
+// restart re-sizes the lanes to — so the operator who set that figure was
+// sent to restart a node no restart changes, and a budget of zero was said to
+// clear at a restart where memory given in place past what the node keeps
+// clears it too.
+//
+// Here the smallest explicit lane that zeroes a 16 GiB, eight-core node's
+// budget is found through the cache's own reserve: below what the memory holds
+// at TransferMemory each, at the fraction of the memory the prose states, and
+// one transfer fewer leaves a budget. Real caches then show what clears it: at
+// that lane the budget is nothing; memory given in place past what Open kept
+// gives it back at the next pass; a restart over the same memory leaves it
+// nothing; and with the lane unset, a memory lowered in place to nothing is
+// given back by a restart over the lowered memory. The remedy, the
+// configuration page's entry for the setting and the concept page state those
+// figures and those clears.
+//
+// Mutation: state another fraction, drop the serving reserve or the in-place
+// clear from the remedy or a page, or name another lane there, and this fails;
+// read the memory only at Open, and the in-place clear does.
+func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
+	t.Parallel()
+	const memory, cores = int64(16 << 30), 8
+	// THE BOUNDARY, from the cache's own reserve.
+	holds := int(memory / gitproc.TransferMemory)
+	zeroing := 1
+	for cache.MemoryReserve(zeroing, cores, memory) < memory {
+		zeroing++
+	}
+	if zeroing >= holds {
+		t.Fatalf("%d transfers zero a %d-byte, %d-core node's budget, no fewer than the %d its memory holds "+
+			"at TransferMemory each", zeroing, memory, cores, holds)
+	}
+	if left := memory - cache.MemoryReserve(zeroing-1, cores, memory); left <= 0 {
+		t.Fatalf("%d transfers already leave a %d-byte node nothing", zeroing-1, memory)
+	}
+	// THE FRACTION the prose states: where the memory backs no more than one
+	// core for every CoreMemory of it, serving keeps ServingMemoryPerCore of
+	// every CoreMemory, and the transfers zero the budget at the rest: the
+	// lane found keeps at least that share of the memory, and one transfer
+	// fewer less than a point more — the figure is the boundary, rounded down.
+	percent := 100 * (gitproc.CoreMemory - cache.ServingMemoryPerCore) / gitproc.CoreMemory
+	kept := int64(zeroing) * gitproc.TransferMemory
+	if kept*100 < percent*memory || (kept-gitproc.TransferMemory)*100 >= (percent+1)*memory {
+		t.Fatalf("%d transfers keep %d bytes of %d, which is not the %d%% the prose states", zeroing, kept,
+			memory, percent)
+	}
+
+	// WHAT CLEARS IT, on real caches.
+	w := newWorld(t)
+	w.processes, w.transfers, w.memory = cores, zeroing, memory
+	c := w.open(t)
+	if got := cache.MaintenanceBudget(c); got != 0 {
+		t.Fatalf("%d transfers on %d bytes and %d cores leave a budget of %d, want nothing", zeroing, memory,
+			cores, got)
+	}
+	resized := memory + 8<<30
+	cache.SetNodeMemory(c, resized)
+	cache.MaintainerPass(c)
+	if got, want := cache.MaintenanceBudget(c), resized-cache.MemoryReserved(c); want <= 0 || got != want {
+		t.Errorf("the node given %d bytes in place has a budget of %d, want the %d past what Open kept",
+			resized, got, want)
+	}
+	c.Stop(context.Background())
+	c = w.open(t)
+	if got := cache.MaintenanceBudget(c); got != 0 {
+		t.Errorf("a restart over the same memory and lane gave the background work %d, want nothing", got)
+	}
+	c.Stop(context.Background())
+
+	w.transfers = 0
+	c = w.open(t)
+	if got, want := cache.MaintenanceBudget(c), int64(cores)*cache.MaintenanceMemoryPerCore; got != want {
+		t.Fatalf("an unset lane on %d bytes and %d cores leaves %d, want MaintenanceMemoryPerCore a core, %d",
+			memory, cores, got, want)
+	}
+	lowered := memory / 2
+	cache.SetNodeMemory(c, lowered)
+	cache.MaintainerPass(c)
+	if got := cache.MaintenanceBudget(c); got != 0 {
+		t.Fatalf("an unset lane sized for %d bytes, lowered in place to %d, leaves %d, want nothing", memory,
+			lowered, got)
+	}
+	c.Stop(context.Background())
+	w.memory = lowered
+	if got := cache.MaintenanceBudget(w.open(t)); got <= 0 {
+		t.Errorf("a restart over the lowered memory with the lane unset gave the background work %d, want "+
+			"the lanes re-sized to leave a budget", got)
+	}
+
+	// THE PROSE, in the same figures.
+	var remedy string
+	for _, a := range statelog.Evaluate(statelog.Reading{CodeMaintenanceRefused: 1, CodeMaintenanceLargest: 1}) {
+		if a.Kind == statelog.KindCodeMaintenanceRefused {
+			remedy = a.Remedy
+		}
+	}
+	if remedy == "" {
+		t.Fatalf("%s did not fire over a bitmap charged past a budget of nothing", statelog.KindCodeMaintenanceRefused)
+	}
+	transfer, serving, core := amount(t, gitproc.TransferMemory), amount(t, cache.ServingMemoryPerCore),
+		amount(t, gitproc.CoreMemory)
+	for _, want := range []string{
+		fmt.Sprintf("%s for every transfer its git lane admits", transfer),
+		fmt.Sprintf("%s for each core its memory backs at %s a core", serving, core),
+		fmt.Sprintf("no more than one for every %s, and leaves the background work %s for each backed core",
+			amount(t, gitproc.TransferShare), amount(t, cache.MaintenanceMemoryPerCore)),
+		fmt.Sprintf("once its transfers' %s each reach the memory less the cores' %s each — at as little as "+
+			"%d%% of the transfers the memory holds at %s each, where the node has a core for every %s of it "+
+			"or more", transfer, serving, percent, transfer, core),
+		"clears when git.max_transfers is lowered or unset, or when the node is given memory past what it " +
+			"keeps, in place or at a boot",
+		"A restart alone keeps the same lanes over the same memory, and clears it only where " +
+			"git.max_transfers is unset and the memory was lowered after the node booted",
+	} {
+		if !strings.Contains(remedy, want) {
+			t.Errorf("the %s remedy does not say %q: %s", statelog.KindCodeMaintenanceRefused, want, remedy)
+		}
+	}
+	for _, page := range []struct {
+		path  string
+		wants []string
+	}{
+		{filepath.Join("docs", "concepts", "configuration.md"), []string{
+			fmt.Sprintf("keeps %s of its memory for every transfer it names whatever they serve, beside %s for "+
+				"each core its memory backs at %s a core", transfer, serving, core),
+			fmt.Sprintf("as little as %d%% of that, where the node has a core for every %s of memory or more: "+
+				"on %s and %s cores, %d transfers, of the %d that %s holds", percent, core, amount(t, memory),
+				word(t, cores), zeroing, holds, amount(t, memory)),
+			"[`code_maintenance_refused`](../reference/alarms.md) says so until the figure is lowered or " +
+				"unset, or the node is given memory past what it keeps, in place or at a boot. A restart alone " +
+				"changes nothing.",
+		}},
+		{filepath.Join("docs", "concepts", "code-host.md"), []string{
+			fmt.Sprintf("once its transfers' %s each reach the memory less the %s of each core it backs — as "+
+				"little as %d%% of the transfers the memory holds at %s each, where the node has a core for "+
+				"every %s or more", transfer, serving, percent, transfer, core),
+			"Lowering or unsetting it, or memory past what the node keeps, gives the budget back; a restart " +
+				"alone does not.",
+			fmt.Sprintf("Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, "+
+				"each of which keeps %s of it.", transfer),
+		}},
+	} {
+		path := filepath.Join(sourcetree.Root(t), page.path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		for _, want := range page.wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not say %q", path, want)
+			}
+		}
+	}
+}
+
 // THE PROSE NAMES THE CACHE'S OWN FIGURES: the alarm table and the metrics
 // catalogue cannot import the cache (the cache imports them), so their prose
 // states the bytes an object in words — every step's it names, and the

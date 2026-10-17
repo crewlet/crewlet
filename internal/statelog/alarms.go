@@ -849,10 +849,23 @@ var table = []rule{
 			"every ten seconds — less what it keeps for its git lanes, the " +
 			"store, the broker and the engine, on the `code_cache_opened` line. " +
 			"Give the node more memory; a container resized in place is held to " +
-			"its new limit within ten seconds, without a restart. A budget of " +
-			"zero is a node whose git lanes now take all its memory: its memory " +
-			"was lowered after it booted, and a restart sizes the lanes to what " +
-			"it has. See docs/concepts/code-host.md.",
+			"its new limit within ten seconds, without a restart. Or, where " +
+			"git.max_transfers is set, give it fewer transfers. What the node " +
+			"keeps is fixed when it boots: 224 MiB for every transfer its git " +
+			"lane admits, whatever it serves, and 896 MiB for each core its " +
+			"memory backs at 2 GiB a core. An unset git.max_transfers is sized " +
+			"to the memory, no more than one for every 512 MiB, and leaves the " +
+			"background work 256 MiB for each backed core; a figure set by hand " +
+			"is kept as written, and leaves it nothing once its transfers' " +
+			"224 MiB each reach the memory less the cores' 896 MiB each — at as " +
+			"little as 56% of the transfers the memory holds at 224 MiB each, " +
+			"where the node has a core for every 2 GiB of it or more. A budget " +
+			"of zero clears when git.max_transfers is lowered or unset, or when " +
+			"the node is given memory past what it keeps, in place or at a " +
+			"boot. A restart alone keeps the same lanes over the same memory, " +
+			"and clears it only where git.max_transfers is unset and the memory " +
+			"was lowered after the node booted, since the lanes are then sized " +
+			"to what it has. See docs/concepts/code-host.md.",
 	},
 }
 

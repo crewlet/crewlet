@@ -103,8 +103,10 @@ func memoryReserve(transfers, cores int, memory int64) int64 {
 
 // maintenanceBudget is what a node of mem keeps for its background work once
 // it has kept reserve for the rest: never below zero. Zero is a node whose
-// lanes are sized past its memory — an operator's git.max_transfers past what
-// its memory backs, or a memory lowered in place below what its lanes were
+// lanes keep all its memory — an operator's git.max_transfers whose
+// transfers' TransferMemory each reach the memory less what its backed cores
+// keep (memoryReserve), which is well short of what the memory holds at
+// TransferMemory each, or a memory lowered in place below what its lanes were
 // sized by — every step refused, and the alarm saying so, rather than a
 // refusal to boot: what it serves it still serves.
 func maintenanceBudget(mem, reserve int64) int64 {

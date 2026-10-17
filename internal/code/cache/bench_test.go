@@ -594,7 +594,7 @@ func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ..
 		b.Fatalf("Prepare: %v", err)
 	}
 	o := cache.Options{
-		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU(), 1<<40), Objects: w.store,
+		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU(), 0, 1<<40), Objects: w.store,
 		Fetch: silent{w.log}, Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"},
 		Metrics: w.rec, Now: time.Now,
 	}

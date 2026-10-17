@@ -218,7 +218,17 @@ git:
 - **`max_transfers`** — the clones, fetches and pushes the node serves at
   once. 0 is four for each process slot, and no more than one for every
   512 MiB of the node's memory: a transfer holds memory for its whole life and
-  a core only now and then, so size it to memory rather than cores.
+  a core only now and then, so size it to memory rather than cores. A figure
+  set by hand is taken as written, and the node keeps 224 MiB of its memory
+  for every transfer it names whatever they serve, beside 896 MiB for each
+  core its memory backs at 2 GiB a core; the caches' background indexing has
+  what is left. So a figure well short of what the memory holds at 224 MiB
+  each already leaves it nothing — as little as 56% of that, where the node
+  has a core for every 2 GiB of memory or more: on 16 GiB and eight cores,
+  42 transfers, of the 73 that 16 GiB holds — every repository's bitmap is
+  refused, and [`code_maintenance_refused`](../reference/alarms.md) says so
+  until the figure is lowered or unset, or the node is given memory past what
+  it keeps, in place or at a boot. A restart alone changes nothing.
 
 A `git` block on a node whose roles name no `git` is read by nothing, and
 `crewlet validate` warns about it.
