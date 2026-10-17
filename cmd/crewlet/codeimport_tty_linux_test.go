@@ -125,14 +125,17 @@ func TestImportAsksForTheSourcesCredentialOnTheTerminal(t *testing.T) {
 	}
 }
 
-// promptingEnv is this process's environment less what would answer git's
-// prompt in the person's place or forbid it: the case's subject is the prompt.
+// promptingEnv is this process's environment less the node's token, which the
+// case names with -token, and the probe's switch, which it sets. What would
+// answer git's prompt in the person's place or forbid it — GIT_ASKPASS,
+// SSH_ASKPASS, GIT_TERMINAL_PROMPT — is not in it: TestMain removed every git
+// variable before any case ran ([scrubGitEnv]).
 func promptingEnv() []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		switch name {
-		case "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", apiTokenEnv, mainProbeEnv:
+		case apiTokenEnv, mainProbeEnv:
 			continue
 		}
 		env = append(env, kv)
