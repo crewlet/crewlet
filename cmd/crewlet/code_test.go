@@ -195,11 +195,12 @@ func mapKeys(m map[string]string) func(func(string) bool) {
 }
 
 // hermeticGit is the real git behind a stand-in that strips the developer's
-// own configuration — a HOME of its own, no system or global file, no system
-// attributes — and hands the helper it runs the race options, for the case
-// whose subject is the CLI running the operator's git: what that git does
-// must not depend on the machine the suite runs on. Everything else of the
-// environment is the CLI's to pass on, and is.
+// own configuration — a HOME and a configuration home of its own, no system or
+// global file, no system attributes, the C locale and no proxy
+// ([hermeticGitIn]) — and hands the helper it runs the race options, for the
+// case whose subject is the CLI running the operator's git: what that git
+// does must not depend on the machine the suite runs on. Everything else of
+// the environment is the CLI's to pass on, and is.
 func hermeticGit(t *testing.T) string {
 	t.Helper()
 	return hermeticGitWith(t, "")
@@ -210,10 +211,146 @@ func hermeticGit(t *testing.T) string {
 // have set, or a step of git's work a case holds.
 func hermeticGitWith(t *testing.T, more string) string {
 	t.Helper()
-	home := t.TempDir()
+	git, _ := hermeticGitIn(t, "/dev/null", more)
+	return git
+}
+
+// hermeticGitIn is [hermeticGitWith] reading global as its global
+// configuration file, for the case that hands the operator's git a setting of
+// their own, and the HOME it gives git.
+//
+// What it replaces is every input of git's the suite's scrub cannot remove
+// ([scrubGitEnv] takes git's own variables out of the whole process): the
+// FILES git reads beside them — no system configuration or attributes, the
+// global configuration named, and a HOME and a configuration home of its own,
+// since git takes its global attributes and ignore files from
+// $XDG_CONFIG_HOME/git before HOME, whatever GIT_CONFIG_GLOBAL says — the
+// LOCALE, which translates the sentences of git's a case reads; and curl's
+// PROXY variables, the scheme's own and ALL_PROXY with NO_PROXY, under which
+// even a request to the node on this machine goes to the person's proxy.
+// Pinned on git alone rather than taken from the suite: the process keeps its
+// HOME and XDG_CACHE_HOME for the store's per-user cache, and its locale and
+// proxies are the person's to keep for everything that is not git
+// ([TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine]).
+func hermeticGitIn(t *testing.T, global, more string) (git, home string) {
+	t.Helper()
+	home = t.TempDir()
 	return gittest.Wrap(t, "export HOME="+shellQuote(home)+
-		" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 "+
-		procgrouptest.GORACE+"="+shellQuote(procgrouptest.StandInRaceOptions())+"\n"+more)
+		" XDG_CONFIG_HOME="+shellQuote(filepath.Join(home, ".config"))+" LC_ALL=C"+
+		" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="+shellQuote(global)+" GIT_ATTR_NOSYSTEM=1 "+
+		procgrouptest.GORACE+"="+shellQuote(procgrouptest.StandInRaceOptions())+"\n"+
+		"unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY\n"+
+		more), home
+}
+
+// THE OPERATOR'S GIT A CASE STARTS READS NOTHING OF THE MACHINE THROUGH WHAT
+// THE SCRUB CANNOT REACH ([hermeticGit], [scrubGitEnv]). The CLI hands its git
+// the whole environment, as it must an operator's, and three of git's inputs
+// there are no GIT_ variable: the configuration home, where git finds its
+// global attributes and ignore files whatever GIT_CONFIG_GLOBAL says (a
+// developer's `* -delta` there turned deltas off and moved the
+// repository-limit case's refusal a step later); the locale, which translates
+// every sentence of git's a case reads; and curl's proxy variables, through
+// which even a request to this machine's own node goes to the person's proxy.
+// Planted here as a developer's shell holds them, and read back through git
+// itself, run the way the CLI runs it, over this process's environment.
+//
+// Mutation: drop hermeticGitIn's XDG_CONFIG_HOME → the planted attributes and
+// ignore files answer (red). Drop its LC_ALL → the locale row (red). Drop its
+// unset of the proxies → the node hears nothing (red).
+func TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine(t *testing.T) {
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"attributes": "* -delta\n", "ignore": "*\n"} {
+		if err := os.WriteFile(filepath.Join(xdg, "git", name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var heard atomic.Int32
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		heard.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(node.Close)
+	unreachable := "http://127.0.0.1:1"
+	for name, value := range map[string]string{
+		"XDG_CONFIG_HOME": xdg,
+		"LC_ALL":          "de_DE.UTF-8", "LANG": "de_DE.UTF-8", "LANGUAGE": "de",
+		"http_proxy": unreachable, "https_proxy": unreachable, "HTTPS_PROXY": unreachable,
+		"all_proxy": unreachable, "ALL_PROXY": unreachable, "no_proxy": "", "NO_PROXY": "",
+	} {
+		t.Setenv(name, value)
+	}
+
+	// What git is started under, as the stand-in leaves it.
+	dump := filepath.Join(t.TempDir(), "env")
+	probe, home := hermeticGitIn(t, "/dev/null", "env > "+shellQuote(dump)+"\nexit 0\n")
+	if out, err := exec.CommandContext(t.Context(), probe, "status").CombinedOutput(); err != nil {
+		t.Fatalf("the probe: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for line := range strings.Lines(string(raw)) {
+		if name, value, ok := strings.Cut(strings.TrimSuffix(line, "\n"), "="); ok {
+			env[name] = value
+		}
+	}
+	for name, want := range map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		"LC_ALL":          "C",
+	} {
+		if env[name] != want {
+			t.Errorf("the operator's git is started with %s=%q, want %q", name, env[name], want)
+		}
+	}
+	for _, name := range []string{"http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy",
+		"ALL_PROXY", "no_proxy", "NO_PROXY"} {
+		if value, ok := env[name]; ok {
+			t.Errorf("the operator's git is started with %s=%q, want none", name, value)
+		}
+	}
+
+	// And git agrees, read through the CLI's own git.
+	git, home := hermeticGitIn(t, "/dev/null", "")
+	g, err := newOperatorGit(git, &nodeClient{base: node.URL, token: "a-token"}, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	in := func(env []string, args ...string) (string, error) {
+		cmd := exec.CommandContext(t.Context(), g.path, args...)
+		cmd.Env, cmd.Dir = env, repo
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := in(g.environ, "init", "-q"); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	// `git var GIT_ATTR_GLOBAL` names the global attributes file git reads
+	// (2.42 and newer; an older git knows no such variable, and check-attr
+	// below holds the line there).
+	if out, err := in(g.environ, "var", "GIT_ATTR_GLOBAL"); err == nil {
+		if own := filepath.Join(home, ".config", "git", "attributes"); strings.TrimSpace(out) != own {
+			t.Errorf("the operator's git reads the global attributes file %s, want its own HOME's %s",
+				strings.TrimSpace(out), own)
+		}
+	}
+	if out, err := in(g.environ, "check-attr", "delta", "--", "f.bin"); err != nil ||
+		strings.TrimSpace(out) != "f.bin: delta: unspecified" {
+		t.Errorf("git check-attr delta = %q (%v), want it unspecified: the planted `* -delta` was read",
+			strings.TrimSpace(out), err)
+	}
+	if out, err := in(g.environ, "check-ignore", "-v", "f.bin"); err == nil {
+		t.Errorf("git check-ignore ignores f.bin (%s): the planted ignore file was read", strings.TrimSpace(out))
+	}
+	if out, err := in(g.targetEnv(), "ls-remote", g.repoURL("web")); heard.Load() == 0 {
+		t.Errorf("the node heard nothing of the operator's git (%v): it went to the planted proxy\n%s", err, out)
+	}
 }
 
 // ---- dispatch ---------------------------------------------------------------
@@ -1208,9 +1345,7 @@ func TestAnExportRunsUnderTheOperatorsHardening(t *testing.T) {
 	if err := os.WriteFile(global, []byte("[safe]\n\tbareRepository = explicit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hardened := gittest.Wrap(t, "export HOME="+shellQuote(t.TempDir())+" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="+
-		shellQuote(global)+" GIT_ATTR_NOSYSTEM=1 "+procgrouptest.GORACE+"="+
-		shellQuote(procgrouptest.StandInRaceOptions()))
+	hardened, _ := hermeticGitIn(t, global, "")
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -1243,10 +1378,7 @@ func TestAnExportOfADamagedBundleLeavesNothing(t *testing.T) {
 		"HEAD:refs/heads/main")
 	// A git that damages every bundle it writes, eight bytes into its pack's
 	// last object, as a disk could.
-	damaging := gittest.Wrap(t, "export HOME="+shellQuote(t.TempDir())+
-		" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 "+procgrouptest.GORACE+"="+
-		shellQuote(procgrouptest.StandInRaceOptions())+`
-case " $* " in
+	damaging := hermeticGitWith(t, `case " $* " in
 *" bundle create "*)
 	"$real_git" "$@" || exit $?
 	prev=
