@@ -443,3 +443,85 @@ func TestTheMetadataCarriesWhatTheSpineNeeds(t *testing.T) {
 		}
 	}
 }
+
+// EVERY KEY THE SPINE REQUIRES IS STAMPED, on every delivery this backend
+// produces. The set is [notify.RequiredChatKeys] rather than a list copied
+// into this file, so a key a reader starts depending on is missing here
+// LOUDLY rather than reading back as "" — which every consumer would take as
+// a message with nothing to say.
+func TestTheParserStampsTheRequiredVocabulary(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	deliveries := map[string]types.RawWebhook{
+		"a top-level channel message": event("message", nil),
+		"a direct message": event("message", map[string]any{
+			"channel": "D0ANA", "channel_type": "im",
+		}),
+		"an app_mention": event("app_mention", map[string]any{
+			"text": "<@" + botUser + "> can you look",
+		}),
+	}
+	for name, w := range deliveries {
+		got := route(t, p, w)
+		if len(got) != 1 {
+			t.Fatalf("%s produced %d notifications", name, len(got))
+		}
+		for _, key := range notify.RequiredChatKeys() {
+			if _, ok := got[0].Metadata[key]; !ok {
+				t.Errorf("%s: %q was not stamped", name, key)
+			}
+		}
+	}
+}
+
+// A FOLLOW KEY CARRIES THE REASON, never "true". Which follow is the whole
+// question: read as a bare marker, every later reply in every thread the
+// seat had ever posted in became a turn that may not end in silence.
+func TestTheFollowKeysCarryAReasonTheRuleCanRead(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	named := event("message", map[string]any{
+		"thread_ts": "1700000000.000000",
+		"text":      "<@" + botUser + "> can you look",
+	})
+	got := route(t, p, named)
+	if len(got) != 1 {
+		t.Fatalf("a mention in a thread produced %d notifications", len(got))
+	}
+	for _, key := range []string{notify.FollowReasonField, notify.FollowingField} {
+		reason := notify.FollowReason(got[0].Metadata[key])
+		if !reason.Valid() {
+			t.Fatalf("%s = %q, which is not a reason the engine knows", key, reason)
+		}
+		if reason != notify.FollowMention {
+			t.Errorf("%s = %q, want the mention that established the follow", key, reason)
+		}
+	}
+	// And the rule the prompt and the indicator share agrees, which is the
+	// property the metadata exists to carry: a named seat owes an answer.
+	if !slack.Prompt().Address.Addressed(got[0].Metadata) {
+		t.Error("a message naming the seat does not oblige an answer")
+	}
+
+	// A reply the seat merely PARTICIPATED in is the counterfactual: it
+	// reaches the seat and obliges nothing.
+	quiet := newFollows()
+	if err := quiet.Follow(t.Context(), slack.Backend, "swe", "C0ENG",
+		"1700000000.000000", string(notify.FollowParticipated), pinned); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := route(t, parser(t, quiet), event("message", map[string]any{
+		"thread_ts": "1700000000.000000", "text": "thanks all",
+	}))
+	if len(ordinary) != 1 {
+		t.Fatalf("a followed thread's reply produced %d notifications", len(ordinary))
+	}
+	if got := ordinary[0].Metadata[notify.FollowingField]; got != string(notify.FollowParticipated) {
+		t.Fatalf("the reply rides the follow as %q", got)
+	}
+	if slack.Prompt().Address.Addressed(ordinary[0].Metadata) {
+		t.Error("a reply in a thread the seat merely spoke in obliges an answer")
+	}
+}
