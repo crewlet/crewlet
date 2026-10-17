@@ -237,7 +237,8 @@ func (e *Engine) releaseDuty(ctx context.Context, name string) (bool, error) {
 
 // workerGiveBack is the give-back of the fleet duty [Engine.workerDuty] claims
 // under name, for a holder that stops running it while it is still up — a
-// duty DECLINED because a copy it decides from is out of service
+// duty DECLINED because a copy it decides from is out of service, or because
+// this node does not serve the revision the fleet's activation pointer names
 // ([dutyDecline]). It reports whether this node held the duty and gave it
 // back.
 //
@@ -245,8 +246,8 @@ func (e *Engine) releaseDuty(ctx context.Context, name string) (bool, error) {
 // outlive several of its ticks: a holder that merely stopped claiming kept the
 // trim from every node for its 45-minute lease plus a 15-minute tick — the
 // duty that bounds every log's disk — and the collector and the embedding duty
-// for their own TTLs. Given back, the next node whose copies serve takes it at
-// its next tick.
+// for their own TTLs. Given back, the next node that does not decline it
+// takes it at its next tick.
 //
 // Nil wherever workerDuty claims no lease — a node that runs no workers, or
 // one with no coordination store — since there is nothing to give back.

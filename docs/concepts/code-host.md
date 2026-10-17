@@ -384,7 +384,27 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
 - once the purge has applied on the duty holder's own rows, the name is free,
   and a name the current configuration still declares — re-added while it
   purged, which the reconcile logs as `code_repo_awaits_purge` — is created
-  again at once.
+  again at once;
+- a purge **begins only on a node that serves the fleet's current
+  configuration** — the revision the [activation pointer](control-plane.md)
+  names, applied on that node. The duty purges by the retention its own node
+  serves, and a purge has no undo, so a revision that lengthens
+  `code.deleted_retention_days` to save a deleted repository is never defeated
+  by a holder that failed to apply it: a node behind the fleet's revision, or
+  one whose fleet has activated nothing yet, declines the duty and gives it
+  back, logging `code_retention_duty_declined` with the reason and both
+  epochs, and a node that has applied the revision takes it at its next tick.
+  A pass that outlasts a renewal of the duty's lease is asked the same before
+  the renewal, and stops there if its node has fallen behind. Being behind is
+  a fault only once the lag is
+  [confirmed](control-plane.md#where-the-gate-sits) — an apply of the
+  revision failed on the node, or it has been behind longer than propagation
+  explains: a node merely applying an activation, or starting up before its
+  reconciler has ticked, declines quietly and asks again a reconcile interval
+  (15 seconds) later, so a restart or a configuration write costs a purge
+  seconds. Declining costs a purge at most one tick (15 minutes) on a fleet
+  with a current node; on a fleet whose only worker data node is stuck, every
+  purge waits for its apply to succeed.
 
 A push to a repository that is not there to take it is refused
 `repo_deleted`, and what follows the code says which of four states the
@@ -1077,7 +1097,7 @@ reference](../reference/metrics.md)).
 | `code_repos_retrying` | `INFO` | The reconcile of `activation` left something undone — said in the lines before — and runs again in `retry_in`: five seconds after the first such run, doubling with each run in a row (`attempt`) to five minutes, until one applies or a newer activation replaces it. |
 | `code_retention_pass` | `INFO` | A pass that purged, failed a repository, held a purged name or stopped at its budget (`purged`, `steps`, `remain`, `failed`, `unhanded`); `DEBUG` when nothing was due. |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
-| `code_retention_duty_declined` | `WARN` | This node's copy of the code log is out of service, so it does not take the duty. |
+| `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the token and the person it is bound to, the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
 | `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request — a fetch's in an advertisement, in the node's check of which of the fetch's wants the copy lacks, or, for a pack it was building, in the answer before the pack began, but never in the messages the fetch's own git process prints, which repeat the request's words (`error` quotes git's words) — or the node would not run git in it for its shape (`reason`: `corrupt`, `midx`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape or a damaged multi-pack-index (`midx`) in place, damage to its packs or objects by a rebuild — and git run again over the same request. |

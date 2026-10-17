@@ -1579,7 +1579,9 @@ configuration rather than by a command, and its three stages are timed:
   node's write lane, and the last leaves only its deletion marker, which drops
   every later record about the repository on every node, for ever. A purge
   once begun is finished whatever the retention says, since it has no undo,
-  and the name is free again once it is.
+  and the name is free again once it is. One begins only on a node serving
+  the revision the fleet is on, so a node that failed to apply a longer
+  retention never purges by the shorter one it replaced.
 - **The bytes** go a day after that: once no row names a pack, the
   [object collector](../concepts/object-store.md#collection-and-audit)
   deletes it like any other object nothing names.

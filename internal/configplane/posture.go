@@ -177,8 +177,7 @@ func DecidePosture(v FleetView) Posture {
 		return PostureServe
 	}
 
-	triedAndFailed := v.SelfStatus == StatusError || v.SelfStatus == StatusDegraded
-	if !triedAndFailed && v.BehindFor < LagGrace {
+	if !v.LagConfirmed() {
 		// Ordinary propagation. Never shed here.
 		return PostureWait
 	}
@@ -194,7 +193,7 @@ func DecidePosture(v FleetView) Posture {
 		return PostureShed
 	}
 
-	if v.PeersReported > 0 || triedAndFailed {
+	if v.PeersReported > 0 || v.triedAndFailed() {
 		// Everyone who tried failed — and on a single-node deployment
 		// "everyone" is this node.
 		//
@@ -218,6 +217,29 @@ func DecidePosture(v FleetView) Posture {
 	// attempted the epoch and no peer has reported either way. That is
 	// silence, not evidence — keep polling.
 	return PostureWait
+}
+
+// LagConfirmed reports whether this node's lag on the target epoch is
+// CONFIRMED rather than ordinary propagation: an attempt of its own at the
+// epoch concluded in failure, or it has been behind on it for [LagGrace] or
+// longer. An attempt still running is neither, and a node that is not behind
+// has no lag to confirm.
+//
+// THE RULE [DecidePosture] JUDGES BY, stated once, because a second reader
+// needs the same line drawn: the engine's irreversible judgements against the
+// active revision decline on a node that has not applied the pointer's epoch,
+// and say so at WARN only where that is a fault rather than the seconds every
+// activation and every boot spends applying it. A copy of the rule there is
+// the one that would drift — and a node the posture reads as waiting while its
+// purge duty reports it behind is two answers to one question.
+func (v FleetView) LagConfirmed() bool {
+	return v.AppliedEpoch < v.TargetEpoch && (v.triedAndFailed() || v.BehindFor >= LagGrace)
+}
+
+// triedAndFailed is whether this node's own attempt at the target concluded in
+// failure — see [FleetView.SelfStatus].
+func (v FleetView) triedAndFailed() bool {
+	return v.SelfStatus == StatusError || v.SelfStatus == StatusDegraded
 }
 
 // ServesTraffic reports whether a posture should keep answering inbound

@@ -703,9 +703,14 @@ type codeRetentionDuty struct {
 	// declines it ([Engine.workerGiveBack]); nil holds no lease to give.
 	giveBack func(context.Context) (bool, error)
 	// copies names the first of the domains given whose copy on this node is
-	// out of service ([Engine.copyOutOfService]); declines remembers whether
-	// the duty is declining. Nil judges no copy.
-	copies   func(ctx context.Context, domains ...string) (string, bool)
+	// out of service ([Engine.copyOutOfService]). Nil judges no copy.
+	copies func(ctx context.Context, domains ...string) (string, bool)
+	// served answers whether this node serves the revision the fleet's
+	// activation pointer names ([Engine.servedFleetRevision]): a purge is
+	// judged by that revision's code.deleted_retention_days and has no undo.
+	// Nil judges no revision.
+	served func(ctx context.Context) (*Company, error)
+	// declines remembers why the duty is declining, if it is.
 	declines dutyDecline
 	// renewal keeps the duty while a pass runs, and ends the pass when it
 	// cannot.
@@ -730,8 +735,9 @@ func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader) *c
 		claim:    e.workerDuty(codeRetentionDutyName, codeRetentionDutyTTL),
 		giveBack: e.workerGiveBack(codeRetentionDutyName),
 		copies:   e.copyOutOfService,
+		served:   e.servedFleetRevision,
 	}
-	d.renewal = newDutyRenewal(codeRetentionDutyName, codeRetentionDutyTTL).declining(d.declinedMidPass)
+	d.renewal = newDutyRenewal(codeRetentionDutyName, codeRetentionDutyTTL).declining(d.declined)
 	return d
 }
 
@@ -744,10 +750,7 @@ func (e *Engine) startCodeRetention(ctx context.Context, n *native) {
 		return
 	}
 	d := e.newCodeRetentionDuty(store, n.codeReader)
-	d.loop = startLoop(ctx, sleep, func(ctx context.Context) time.Duration {
-		d.turn(ctx)
-		return code.RetentionInterval
-	})
+	d.loop = startLoop(ctx, sleep, d.tick)
 	e.codeRetention = d
 }
 
@@ -774,23 +777,49 @@ func (e *Engine) stopCodeRetention() {
 // whose deleted repositories it purges.
 func (d *codeRetentionDuty) decidesFrom() []string { return []string{code.Domain{}.Name()} }
 
-// declinedMidPass is whether this node now declines the duty, asked before
-// every renewal of a pass in flight ([dutyRenewal.declining]): a purge decided
-// from a copy that went out of service after the pass began is a purge the
-// node's peers may not agree was due.
-func (d *codeRetentionDuty) declinedMidPass(ctx context.Context) bool {
-	_, out := d.declines.check(ctx, codeRetentionDecline, d.copies, d.decidesFrom())
-	return out
+// declined is whether this node declines the duty now, said on a change
+// ([dutyDecline.record]) — asked before every turn's claim, and before every
+// renewal of a pass in flight ([dutyRenewal.declining]). A purge removes rows
+// on every node and the bytes of every pack the repository named, and has no
+// undo, so this node declines while either of two things is true:
+//
+//   - its copy of the code log is out of service ([Engine.copyOutOfService]):
+//     a purge decided from it is one the node's peers may not agree was due;
+//   - it does not serve the revision the fleet's activation pointer names
+//     ([Engine.servedFleetRevision]), nothing activated included: the pass
+//     purges by this node's code.deleted_retention_days, and a holder that
+//     failed to apply a revision lengthening it — to save a deleted
+//     repository — would purge that repository by the retention the company
+//     replaced. Stronger than the posture on purpose, and cheap: a node
+//     merely applying the revision, or starting, asks again a reconcile
+//     interval later ([dutyDecline.next]), a node that failed it a
+//     [code.RetentionInterval] later, and a purge is days late by design.
+func (d *codeRetentionDuty) declined(ctx context.Context) bool {
+	reason, _ := copyDeclineReason(ctx, codeRetentionDecline, d.copies, d.decidesFrom())
+	if reason.key == "" {
+		reason = revisionDeclineReason(ctx, codeRetentionDecline, d.served)
+	}
+	return d.declines.record(ctx, codeRetentionDecline, reason)
+}
+
+// tick is one turn of the duty's loop, and how long the loop waits before the
+// next: [code.RetentionInterval], or sooner where the turn declined for a
+// reason that clears by itself ([dutyDecline.next]) — the boot's first turn,
+// which runs before `crewlet run` has built the reconciler, and a turn that
+// meets an activation this node is still applying.
+func (d *codeRetentionDuty) tick(ctx context.Context) time.Duration {
+	d.turn(ctx)
+	return d.declines.next(code.RetentionInterval)
 }
 
 // turn is one turn of the duty: claimed, kept while its pass runs, and the
 // pass's report logged. It reports the pass's report and whether a pass ran.
 //
-// DECLINED FIRST, before the claim, while this node's copy of the code log is
-// out of service ([dutyDecline]): a purge removes rows on every node and the
-// bytes of every pack the repository named, and has no undo.
+// DECLINED FIRST, before the claim ([codeRetentionDuty.declined]), and the
+// duty given back if this node holds it, so a node that may purge takes it at
+// its own next tick rather than once the lease lapses.
 func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, bool) {
-	if _, out := d.declines.check(ctx, codeRetentionDecline, d.copies, d.decidesFrom()); out {
+	if d.declined(ctx) {
 		d.declines.giveBack(ctx, codeRetentionDecline, d.giveBack)
 		return code.RetentionReport{}, false
 	}
@@ -807,10 +836,11 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 		}
 	}
 	// FROM HERE THE PASS KEEPS THE DUTY AS IT RUNS, and is ended the moment
-	// it cannot say it still holds it or a copy it decides from goes out of
-	// service ([dutyRenewal.keep]) — so no pass purges beside another
-	// holder's. A pass stops between steps when its context ends, and the
-	// next resumes from the rows.
+	// it cannot say it still holds it or this node comes to decline it
+	// ([dutyRenewal.keep]) — so no pass purges beside another holder's, nor
+	// on past a copy gone wrong or a revision this node has not applied. A
+	// pass stops between steps when its context ends, and the next resumes
+	// from the rows.
 	work, kept := d.renewal.keep(ctx, d.claim, asked)
 	report, err := d.pass.Pass(work)
 	ended := work.Err() != nil

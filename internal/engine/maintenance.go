@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -351,33 +352,21 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // applied the pointer's epoch (propagation, a refused apply, a node stuck on an
 // older revision) answers unknown, and the tick stamps and retires nothing. The
 // next holder of the duty, or this node once it catches up, judges instead.
-//
-// The three reads are ordered so the roster can only be NEWER than the epoch it
-// is checked against, never older. The pointer is read first; the applied epoch
-// next; the company last. An apply installs its company before the reconciler
-// records its epoch, so a company read after a matching epoch is that
-// revision's or a later one, and a later revision is only ever a truer roster.
+// That is the rule every irreversible judgement against the active revision
+// follows, read through its one helper ([Engine.servedFleetRevision]), whose
+// three answers the roster keeps: the seats, nothing activated, or unknown —
+// and an unknown that is only this node still applying the revision, or still
+// starting, is [maintenance.ErrRevisionPropagating], which the sweep judges
+// nothing on without a warning, since every activation and every boot puts
+// every node there for the seconds its apply takes.
 func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
-	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
-	}
-	target, found, err := e.backends.Fleet.Target(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the activation pointer: %w", err)
-	}
-	if !found {
-		return nil, maintenance.ErrNoActiveRevision
-	}
-	r := e.reconciler.Load()
-	if r == nil {
-		return nil, fmt.Errorf("engine: this node runs no reconciler, so it cannot tell whether it "+
-			"serves activation epoch %d", target.Epoch)
-	}
-	applied := r.Applied()
-	company := e.Company()
-	if applied != target.Epoch || company == nil {
-		return nil, fmt.Errorf("engine: this node serves activation epoch %d and the fleet is on %d; "+
-			"seats are judged once this node has applied it", applied, target.Epoch)
+	company, err := e.servedFleetRevision(ctx)
+	var behind *errBehindFleet
+	switch {
+	case errors.As(err, &behind) && behind.reconciled():
+		return nil, fmt.Errorf("%w; seats are judged once this node has applied it", err)
+	case err != nil:
+		return nil, err
 	}
 	seats := company.Seats()
 	handles := make([]string, 0, len(seats))

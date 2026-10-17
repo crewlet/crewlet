@@ -81,9 +81,13 @@ roles:
 		t.Fatalf("Activate: %v", err)
 	}
 
-	// A node with no reconciler cannot say which activation it serves.
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
-		t.Fatalf("a node with no reconciler produced a roster %v", handles)
+	// A node with no reconciler cannot say which activation it serves: it
+	// has not reconciled yet, which is where every node starts — unknown,
+	// and the quiet kind, as a reconciler that has not ticked is.
+	if handles, err := e.activeSeatHandles(t.Context()); err == nil ||
+		!errors.Is(err, maintenance.ErrRevisionPropagating) {
+		t.Fatalf("a node with no reconciler produced (%v, %v), want ErrRevisionPropagating",
+			handles, err)
 	}
 
 	// THE RECONCILER THE ENGINE BUILDS is the one the roster reads, or the
@@ -94,9 +98,21 @@ roles:
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
-	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch})
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
-		t.Fatalf("a node behind the fleet's epoch produced a roster %v; its seats may be stale", handles)
+	// BEHIND, and still applying it: unknown, and the quiet kind — every
+	// node is here for the seconds of every activation.
+	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch,
+		behindSince: time.Now()})
+	if handles, err := e.activeSeatHandles(t.Context()); err == nil ||
+		!errors.Is(err, maintenance.ErrRevisionPropagating) {
+		t.Fatalf("a node still applying the fleet's epoch produced (%v, %v), want "+
+			"ErrRevisionPropagating; its seats may be stale", handles, err)
+	}
+	// BEHIND, and its apply failed: unknown, and a fault the sweep reports.
+	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch, attempts: 1})
+	if handles, err := e.activeSeatHandles(t.Context()); err == nil ||
+		errors.Is(err, maintenance.ErrRevisionPropagating) {
+		t.Fatalf("a node that failed the fleet's epoch produced (%v, %v), want an unknown "+
+			"roster the sweep reports", handles, err)
 	}
 
 	r.publish(applyProgress{applied: activation.Epoch, target: activation.Epoch})
@@ -107,6 +123,13 @@ roles:
 	// Agent seats only: a human seat has no mailbox to retire or keep.
 	if !slices.Equal(handles, []string{"ceo", "swe"}) {
 		t.Fatalf("roster = %v, want the agent seats", handles)
+	}
+	// AHEAD of the pointer it read — the pointer moved after the read, and
+	// this node had already applied what it moved to — it serves a truer
+	// revision than the one read, as the posture reads the same race.
+	r.publish(applyProgress{applied: activation.Epoch + 1, target: activation.Epoch + 1})
+	if handles, err := e.activeSeatHandles(t.Context()); err != nil || len(handles) != 2 {
+		t.Fatalf("a node ahead of the pointer it read produced (%v, %v), want the roster", handles, err)
 	}
 
 	// An unreadable pointer is unknown, never the last roster it produced.
