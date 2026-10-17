@@ -55,7 +55,7 @@ import (
 // re-derives the same identities is refused rather than duplicated.
 
 const (
-	// MaxBulkTasks is how many other tasks one call may name: a
+	// MaxTasksNamed is how many other tasks one call may name: a
 	// dependency change's counterparties ([Writer.Depend]) and a rank
 	// order's own moves, beside the neighbours a re-spread adds to them
 	// ([Writer.MoveTasks]).
@@ -64,7 +64,7 @@ const (
 	// ([WalkBatch]), the scope term cap ([MaxScopeTerms]) — because they
 	// are one quantity: how many objects one step may name before the work
 	// is a batch rather than a gesture.
-	MaxBulkTasks = 64
+	MaxTasksNamed = 64
 
 	// WalkBatch is one batch of a paced walk — a merge's children, a
 	// re-spread's placements — and of every duty selection that finishes
