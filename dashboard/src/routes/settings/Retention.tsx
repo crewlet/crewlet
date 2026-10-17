@@ -196,10 +196,12 @@ export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: numb
  *
  * THE NAME IS THE KIND IN WORDS (`lib/alarms.ts`) and the measurement is the
  * engine's own sentence, so this reads the same as the log line and
- * `crewlet retention status`. A single log whose measurement IS the alarm's is
- * folded into it, as the CLI folds it: drawn as both a headline and a line,
- * the one sentence read as two facts. Every other log the alarm stands on says
- * its own measurement under it, as the CLI prints one, so a log a backup holds
+ * `crewlet retention status`. A single measurement that IS the alarm's is
+ * folded into it with the logs it was taken on beside it, as the CLI folds it:
+ * drawn as both a headline and a line, the one sentence read as two facts — a
+ * young fleet's missing backup, measured alike on every log, is one such
+ * sentence naming them all. Every other measurement the alarm stands on is
+ * said under it with its logs, as the CLI prints one, so a log a backup holds
  * says how many records it keeps past its window and the second log of a
  * blocked trim is not read as the first one's.
  */
@@ -221,7 +223,7 @@ export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }
         <p>
           {folded && (
             <>
-              <LogLink domain={folded.domains[0] ?? ""} />:{" "}
+              <LogNames domains={folded.domains} />:{" "}
             </>
           )}
           {marked(asSentence(alarm.detail), "inherit")}
@@ -258,7 +260,7 @@ function AlarmLogText({
   if (!line.term) {
     return (
       <>
-        <LogLink domain={line.domains[0] ?? ""} />: {marked(line.detail ?? "", "inherit")}
+        <LogNames domains={line.domains} />: {marked(line.detail ?? "", "inherit")}
       </>
     );
   }

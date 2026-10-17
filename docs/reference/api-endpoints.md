@@ -3815,7 +3815,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: when its last beat is older than the beat interval it keeps (a second at the shipped lease TTL, which is how often a turning duty beats), and then how long since that beat, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. Absent on a node whose duty is on its beat, so its presence is what to alert on. |
 | `identity` | Whether this company has its **first person**: `ready` once a person is enrolled, `unclaimed` while nobody is — a service account alone signs nobody in with a password, so it does not count — a fresh install waiting for [its first person](../concepts/identity-and-access.md#how-the-first-person-exists) to be invited into, or created on, a human seat its company declares, under a Tier A token. A person an administrator creates makes it `ready` the moment the create lands, before they have spent the first password link it handed back: it says somebody exists, not that they have chosen a password yet. It is `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to put a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
-| `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each with its own measurement, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
+| `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each entry a measurement with the logs it was taken on, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes) — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those surfaces a node short, and this is where that stays visible after the log line has scrolled away. |
 | `objects` | `{direct_upload}`: whether an upload may go straight to the object store's S3 bucket on a presigned put. `available`, or `unavailable (<reason>)`: always so on the default `nats` backend, whose bucket only the fleet reaches, and on an `s3` bucket whose provider the boot probe could not prove refuses a body that does not match its `x-amz-checksum-sha256` and a second put under `If-None-Match: *` (see [The boot probe](../concepts/object-store.md#the-boot-probe-and-direct-uploads)). Unavailable is no fault: every upload then streams through the engine. Absent on a node running no object store. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
@@ -6418,7 +6418,7 @@ is three per-node facts attributed to a fleet.
   "replica": {"store_bytes": 10415140864, "projected_join_seconds": 308,
               "rejoin_window_seconds": 1800},
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "...",
-              "domains": [{"domain": "tracker",
+              "domains": [{"domains": ["tracker"],
                            "detail": "the newest verified backup of this log is 97h 14m old, and the policy asks for 24h; the trim has not advanced for 73h 14m, and the log is keeping up to 1840 record(s) older than its 24h replay window",
                            "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
 }
@@ -6426,22 +6426,25 @@ is three per-node facts attributed to a fleet.
 
 **`alarms`** holds each standing [alarm](alarms.md) once: `kind`, `detail` (the
 measurement, in the units of the thing measured) and `remedy`. A condition that
-is a property of a log names every log it stands on in **`domains`**, each with
-its own `detail`, and for a held trim the `term` holding it and `since`, when it
-stopped advancing; `detail` is then the most pressing log's. A log that would
-raise `trim_blocked` (held longer than its replay window plus a trim tick, while
-keeping records older than the window) is listed under `backup_age` instead
-while the backup term holds it and that log's own `backup_age` fires, because
-the backup is its remedy: its entry there carries the `term` and `since`, and
-its `detail` is its backup's measurement followed by what the hold is keeping.
-A younger backup hold raises no `trim_blocked` to fold, and a backup hold on a
-log whose own backup is inside the policy stays under `trim_blocked`. So
-`alarms` has one entry per kind, and its length is the health envelope's
-`alarms.count`. The `alarm_raised` and `alarm_cleared` log lines are the one
-place a log stands alone: a condition that is a property of a log writes a pair
-per log it stands on, carrying it as `domain`, so a log joining an alarm that is
-already up, and a log leaving one that stays up, are each said with their own
-start.
+is a property of a log names every log it stands on in **`domains`**: each entry
+is one measurement, its `detail`, and the logs it was taken on, its own
+**`domains`** list — one log for a held trim, with the `term` holding it and
+`since`, when it stopped advancing, and every log measured in the same words
+otherwise, so a fleet with no backup yet is one entry naming every log rather
+than the same sentence once per log; the alarm's own `detail` is then the most
+pressing log's. A log that would raise `trim_blocked` (held longer than its
+replay window plus a trim tick, while keeping records older than the window) is
+listed under `backup_age` instead while the backup term holds it and that log's
+own `backup_age` fires, because the backup is its remedy: its entry there
+carries the `term` and `since`, and its `detail` is its backup's measurement
+followed by what the hold is keeping. A younger backup hold raises no
+`trim_blocked` to fold, and a backup hold on a log whose own backup is inside
+the policy stays under `trim_blocked`. So `alarms` has one entry per kind, and
+its length is the health envelope's `alarms.count`. The `alarm_raised` and
+`alarm_cleared` log lines are the one place a log stands alone: a condition that
+is a property of a log writes a pair per log it stands on, carrying it as
+`domain`, so a log joining an alarm that is already up, and a log leaving one
+that stays up, are each said with their own start.
 
 `trim_floor` and `trim_to` are two different numbers, and a blocked domain is
 where they part. `trim_floor` is the floor the fleet has published: everything
@@ -6519,7 +6522,8 @@ this log under `operator`. It is **absent** where no counted backup covers the
 log, which is the state the `backup_floor` term blocks on. The `backup_age`
 alarm is evaluated per log from it and lists each log in its `domains` with its
 own age, because the logs' backups have one age each: under `operator` every
-log is acknowledged on its own.
+log is acknowledged on its own. Logs whose measurement reads the same — none
+of them backed up yet — share one entry naming them.
 
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what

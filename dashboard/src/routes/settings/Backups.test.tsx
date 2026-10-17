@@ -576,12 +576,15 @@ describe("arriving for the alarms", () => {
     snapshots: [],
     replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
     // THE ENGINE'S OWN RENDERING of a fleet with no backup yet: one alarm,
-    // every log named under it with its own sentence.
+    // every log named beside its one sentence.
     alarms: engineAlarms("young"),
   } as RetentionReport;
-  /** The alarm's headline: the leading log's measurement, as a sentence. */
+  /**
+   * The alarm's headline: the measurement every log was taken alike on, as a
+   * sentence, after the logs it names.
+   */
   const headline =
-    /^No verified backup of this log has been recorded, and the policy asks for one every 24h\.$/;
+    /: No verified backup of this log has been recorded, and the policy asks for one every 24h\.$/;
 
   test("the alarm list is brought into view", async () => {
     location.hash = "#/settings/backups?at=alarms";
@@ -594,7 +597,7 @@ describe("arriving for the alarms", () => {
     expect(screen.getByText(headline).textContent).not.toMatch(/\u2014/);
     // EVERY LOG IS NAMED, each a way to its own page.
     const alarms = document.getElementById("retention-alarms") as HTMLElement;
-    for (const { domain } of report.alarms[0]?.domains ?? []) {
+    for (const domain of (report.alarms[0]?.domains ?? []).flatMap((d) => d.domains)) {
       expect(within(alarms).getByRole("link", { name: domain })).toBeTruthy();
     }
   });

@@ -8585,8 +8585,12 @@ once, named in words, with the engine's measurement as a sentence, the logs it
 stands on (logs one term holds are one line, "Trim held by the backup on
 tracker, vectors, pages and usage, for 46h", with each log's own measurement
 under it, since what a log keeps past its replay window is why it is listed and
-no shared date says it; each log a link to its page; a single log whose
-measurement is the alarm's is said once), and the engine's remedy, each a row
+no shared date says it; each log a link to its page; a single measurement that
+is the alarm's is said once with the logs it was taken on beside it, so a fleet
+with no backup yet reads "tracker, vectors, pages, iam and usage: No verified
+backup of this log has been recorded…" once — the engine carries a sentence
+measured alike on several logs once, naming them, and the page draws what it
+is given), and the engine's remedy, each a row
 of the one Alarms card with its warning glyph rather than a callout framed
 inside it. The backup they ask for is the page bar's **Take a backup**, the
 only one on the screen. Then the record of

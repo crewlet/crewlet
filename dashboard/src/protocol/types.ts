@@ -2270,19 +2270,26 @@ export interface RetentionAlarm {
   detail: string;
   remedy: string;
   /**
-   * Every log the alarm stands on, each with its own measurement. Under
-   * `backup_age` these are the logs whose own counted backup is missing or
-   * older than the policy — each log is acknowledged and aged on its own — and
-   * one of them the backup term has held past its replay window carries the
-   * term there, raising no `trim_blocked` of its own. Absent for a node-wide
-   * condition.
+   * Every measurement the alarm stands on, each naming the logs it was taken
+   * on. Under `backup_age` these are the logs whose own counted backup is
+   * missing or older than the policy — each log is acknowledged and aged on
+   * its own — and one of them the backup term has held past its replay window
+   * carries the term there, raising no `trim_blocked` of its own. Absent for a
+   * node-wide condition.
    */
   domains?: RetentionAlarmDomain[];
 }
 
-/** One log an alarm stands on: `statelog.AlarmDomain`. */
+/**
+ * One measurement an alarm stands on, and the logs it was taken on:
+ * `statelog.AlarmDomain`. ONE LOG where a term is set, since a held trim's
+ * instant and count are its own; EVERY LOG MEASURED IN THE SAME WORDS
+ * otherwise, so a young fleet's missing backup arrives once, naming every log,
+ * and is drawn once.
+ */
 export interface RetentionAlarmDomain {
-  domain: string;
+  /** The logs, in the report's own order: never empty. */
+  domains: string[];
   detail: string;
   /** The trim term holding this log, where the alarm is about its trim: under
    *  `trim_blocked`, and under `backup_age` for a hold folded there. */

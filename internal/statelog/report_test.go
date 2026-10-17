@@ -6,6 +6,7 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -195,7 +196,7 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	if len(fired) != 1 {
 		t.Fatalf("one domain is at 3%% headroom and %d headroom alarm(s) fired", len(fired))
 	}
-	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "vectors" {
+	if d := fired[0].Domains; len(d) != 1 || !slices.Equal(d[0].Domains, []string{"vectors"}) {
 		t.Errorf("the headroom alarm names %+v, not the log that is filling", d)
 	}
 	if !strings.Contains(fired[0].Detail, "3%") {
@@ -232,7 +233,7 @@ func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
 		t.Fatalf("one log is short of its window and %d alarm(s) fired: %v",
 			len(fired), rep.Alarms)
 	}
-	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "iam" {
+	if d := fired[0].Domains; len(d) != 1 || !slices.Equal(d[0].Domains, []string{"iam"}) {
 		t.Fatalf("the alarm stands on %+v, not the log that is short", d)
 	}
 	if fired[0].Detail != fired[0].Domains[0].Detail ||
@@ -319,7 +320,9 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 			t.Fatalf("the backup alarm reads %q and names no log", a.Detail)
 		}
 		for _, d := range a.Domains {
-			fired[d.Domain] = d.Detail
+			for _, domain := range d.Domains {
+				fired[domain] = d.Detail
+			}
 		}
 		// THE LOG NOTHING COVERS LEADS, ahead of one whose copy is merely
 		// old: it is the one whose trim cannot advance at all.
@@ -432,7 +435,7 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	for _, a := range rep.Alarms {
 		if a.Kind == statelog.KindLogHeadroom {
 			for _, d := range a.Domains {
-				fired = append(fired, d.Domain)
+				fired = append(fired, d.Domains...)
 			}
 		}
 	}
@@ -710,7 +713,7 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 		t.Errorf("the alarm reads %q; it says what the log is keeping", fired.Detail)
 	}
 	// THE LOG AND THE TERM HOLDING IT ride on the log the alarm stands on.
-	if d := fired.Domains; len(d) != 1 || d[0].Domain != "tracker" ||
+	if d := fired.Domains; len(d) != 1 || !slices.Equal(d[0].Domains, []string{"tracker"}) ||
 		d[0].Term != statelog.TermBackupFloor || !d[0].Since.Equal(old) {
 		t.Errorf("the alarm stands on %+v; want the tracker's log, held by the "+
 			"backup term since %v", d, old)
@@ -788,7 +791,9 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 			}
 			alarm = a
 			for _, d := range a.Domains {
-				out[d.Domain] = d.Detail
+				for _, domain := range d.Domains {
+					out[domain] = d.Detail
+				}
 			}
 		}
 		return alarm, out
@@ -883,7 +888,7 @@ func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 				"the reference says nothing of it", a.Kind, a.Domains)
 		case len(a.Domains) == 0:
 			// A node-wide alarm, unflagged and listing no log.
-		case len(a.Domains) == 1 && a.Domains[0].Domain == "tracker":
+		case len(a.Domains) == 1 && slices.Equal(a.Domains[0].Domains, []string{"tracker"}):
 			stamped[a.Kind] = true
 		default:
 			t.Errorf("%s lists %+v; want the one log this case put at its firing value",

@@ -577,6 +577,49 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 	}
 }
 
+// AN ENTRY NAMING SEVERAL LOGS IS A LINE PAIR PER LOG.
+//
+// The report carries a measurement taken alike on several logs once, naming
+// them ([statelog.AlarmDomain.Domains]) — a young fleet's missing backup, on
+// every log. That is how it is carried, and nothing about which log lines are
+// written: each log it names raises its own `alarm_raised`, and one leaving it
+// while the rest stand writes its own `alarm_cleared`.
+//
+// Mutation: read only an entry's first log as its instance and this fails.
+func TestAnEntryNamingSeveralLogsIsALinePairPerLog(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	var logs bytes.Buffer
+	statelog.LogTrackerTo(tracker, slog.New(slog.NewJSONHandler(&logs, nil)))
+	domainsOf := func(event string) []string {
+		var out []string
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == event {
+				domain, _ := line["domain"].(string)
+				out = append(out, domain)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	const missing = "no verified backup of this log has been recorded"
+	uncovered := func(domains ...string) statelog.Alarm {
+		return statelog.Alarm{Kind: statelog.KindBackupAge, Detail: missing,
+			Domains: []statelog.AlarmDomain{{Domains: domains, Detail: missing}}}
+	}
+	tracker.Observe(t.Context(), []statelog.Alarm{uncovered("tracker", "pages", "usage")})
+	if got := domainsOf("alarm_raised"); !slices.Equal(got, []string{"pages", "tracker", "usage"}) {
+		t.Fatalf("one entry naming three logs raised lines for %v, want one per log", got)
+	}
+	clock = clock.Add(time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{uncovered("tracker", "usage")})
+	if got := domainsOf("alarm_cleared"); !slices.Equal(got, []string{"pages"}) {
+		t.Errorf("the pages log leaving the entry cleared %v, want the pages log alone", got)
+	}
+}
+
 // ONE KIND ON TWO LOGS IS ONE ALARM AND TWO PAIRS OF LOG LINES: each log is
 // logged when it comes to stand under the kind and when it leaves it.
 //
@@ -614,7 +657,7 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 		return out
 	}
 	held := func(domain string) statelog.AlarmDomain {
-		return statelog.AlarmDomain{Domain: domain,
+		return statelog.AlarmDomain{Domains: []string{domain},
 			Detail: "the " + domain + " log's trim has not advanced"}
 	}
 	blocked := func(logs ...string) statelog.Alarm {
@@ -627,7 +670,7 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	}
 	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind"}
 	uncovered := statelog.Alarm{Kind: statelog.KindBackupAge,
-		Domains: []statelog.AlarmDomain{{Domain: "usage",
+		Domains: []statelog.AlarmDomain{{Domains: []string{"usage"},
 			Detail: "no verified backup of this log has been recorded"}}}
 	uncovered.Detail = uncovered.Domains[0].Detail
 
@@ -752,7 +795,7 @@ func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 	blocked := func(logs ...string) statelog.Alarm {
 		a := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced"}
 		for _, domain := range logs {
-			a.Domains = append(a.Domains, statelog.AlarmDomain{Domain: domain,
+			a.Domains = append(a.Domains, statelog.AlarmDomain{Domains: []string{domain},
 				Detail: "the trim has not advanced"})
 		}
 		return a

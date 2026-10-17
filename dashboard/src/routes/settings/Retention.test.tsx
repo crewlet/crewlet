@@ -370,14 +370,14 @@ test("an alarm is drawn once, with the logs it holds as one line and each log's 
       "the trim has not advanced for 46h",
   );
   expect(text.match(/Trim held by/g)).toHaveLength(1);
-  const names = domains.map((d) => d.domain);
+  const names = domains.flatMap((d) => d.domains);
   expect(text).toContain(
     `Trim held by the backup on ${names.slice(0, -1).join(", ")} and ${names.at(-1)}, for 46h.`,
   );
   // EACH LOG SAYS ITS OWN COUNT, and no two say the same one.
   expect(new Set(domains.map((d) => d.detail)).size).toBe(domains.length);
   for (const d of domains) {
-    expect(text).toContain(`${d.domain}: ${d.detail}`);
+    expect(text).toContain(`${d.domains.join(", ")}: ${d.detail}`);
   }
   // EACH LOG IS A WAY TO ITS OWN PAGE, wherever it is named.
   const links = screen.getAllByRole("link", { name: "pages" });
@@ -399,8 +399,8 @@ test("a trim blocked on two logs says each log's count, not only the lead's", ()
         kind: "trim_blocked",
         detail: keeping(1200),
         domains: [
-          { domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE },
-          { domain: "pages", detail: keeping(7), term: "applied", since: HELD_SINCE },
+          { domains: ["tracker"], detail: keeping(1200), term: "applied", since: HELD_SINCE },
+          { domains: ["pages"], detail: keeping(7), term: "applied", since: HELD_SINCE },
         ],
       })}
       now={NOW}
@@ -420,7 +420,9 @@ test("a trim blocked on one log says its count once", () => {
       alarm={alarm({
         kind: "trim_blocked",
         detail: keeping(1200),
-        domains: [{ domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE }],
+        domains: [
+          { domains: ["tracker"], detail: keeping(1200), term: "applied", since: HELD_SINCE },
+        ],
       })}
       now={NOW}
     />,
@@ -443,13 +445,32 @@ test("a backup alarm on one log says that log's measurement once, beside it", ()
   expect(text).not.toContain("Trim held by");
 });
 
+// A YOUNG FLEET'S MISSING BACKUP IS SAID ONCE, NAMING EVERY LOG. The engine
+// measures it in the same words on each log and carries it once, naming them,
+// so the panel draws one sentence with the logs beside it — it drew the
+// headline and then that sentence once per log, one fact said six times.
+test("a measurement taken alike on every log is said once, naming them all", () => {
+  const backup = engineAlarm("young");
+  const names = (backup.domains ?? []).flatMap((d) => d.domains);
+  expect(names.length).toBeGreaterThan(1);
+  const { container } = render(<AlarmItem alarm={backup} now={NOW} />);
+  const text = container.textContent ?? "";
+  expect(text.match(/o verified backup of this log has been recorded/g)).toHaveLength(1);
+  expect(text).toContain(
+    `${names.slice(0, -1).join(", ")} and ${names.at(-1)}: No verified backup of this log`,
+  );
+  for (const name of names) {
+    expect(screen.getByRole("link", { name })).toBeTruthy();
+  }
+});
+
 // A SINGLE LOG WHOSE MEASUREMENT IS THE ALARM'S IS FOLDED INTO IT, as the CLI
 // folds it: drawn as both the headline and a line, one sentence read twice.
 test("a single log's measurement is said once, with the log beside it", () => {
   const detail = "3% of the log's byte ceiling for ordinary writes is left";
   const { container } = render(
     <AlarmItem
-      alarm={alarm({ kind: "log_headroom", detail, domains: [{ domain: "vectors", detail }] })}
+      alarm={alarm({ kind: "log_headroom", detail, domains: [{ domains: ["vectors"], detail }] })}
       now={NOW}
     />,
   );

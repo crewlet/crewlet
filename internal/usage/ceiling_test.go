@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -92,7 +93,7 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 			continue
 		}
 		for _, d := range a.Domains {
-			if d.Domain == domain && strings.Contains(d.Detail, "ceiling") {
+			if slices.Contains(d.Domains, domain) && strings.Contains(d.Detail, "ceiling") {
 				named = true
 			}
 		}

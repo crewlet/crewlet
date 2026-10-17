@@ -297,11 +297,12 @@ type retentionAlarm struct {
 	Domains []retentionAlarmDomain `json:"domains"`
 }
 
-// retentionAlarmDomain is one log an alarm stands on ([statelog.AlarmDomain]).
+// retentionAlarmDomain is one measurement an alarm stands on and the logs it
+// was taken on ([statelog.AlarmDomain]).
 type retentionAlarmDomain struct {
-	Domain string `json:"domain"`
-	Detail string `json:"detail"`
-	Term   string `json:"term"`
+	Domains []string `json:"domains"`
+	Detail  string   `json:"detail"`
+	Term    string   `json:"term"`
 }
 
 // retentionStatus prints what the log is holding and what is stopping it from
@@ -590,11 +591,13 @@ func retentionAlarms(stderr io.Writer, report retentionReport) error {
 // printRetentionAlarm prints one alarm: its kind and measurement, the logs it
 // stands on, and its remedy.
 //
-// ONE LOG IS FOLDED INTO THE HEADLINE. An alarm standing on a single log whose
+// ONE MEASUREMENT IS FOLDED INTO THE HEADLINE. An alarm whose only entry's
 // measurement is the headline's printed that sentence twice, once as the
-// alarm and once as its only log; it reads `kind on log (term): detail`
-// instead. Several logs are one line each under it, each with its own
-// measurement and the term holding it.
+// alarm and once as its entry; it reads `kind on logs (term): detail`
+// instead. Several entries are one line each under it, each with its own
+// measurement, the logs it was taken on and the term holding them. The report
+// already carries a measurement taken alike on several logs once, naming
+// them, so nothing here folds repeats of its own.
 func printRetentionAlarm(w io.Writer, alarm retentionAlarm) {
 	if len(alarm.Domains) == 1 && alarm.Domains[0].Detail == alarm.Detail {
 		fmt.Fprintf(w, "%s on %s: %s\n  %s\n",
@@ -608,12 +611,14 @@ func printRetentionAlarm(w io.Writer, alarm retentionAlarm) {
 	fmt.Fprintf(w, "  %s\n", alarm.Remedy)
 }
 
-// alarmLog names a log an alarm stands on, with the trim term holding it.
+// alarmLog names the logs one of an alarm's measurements was taken on, with
+// the trim term holding them.
 func alarmLog(d retentionAlarmDomain) string {
+	logs := strings.Join(d.Domains, ", ")
 	if d.Term == "" {
-		return d.Domain
+		return logs
 	}
-	return d.Domain + " (" + d.Term + ")"
+	return logs + " (" + d.Term + ")"
 }
 
 // retentionSnapshots prints the per-node snapshot inventory.
