@@ -67,11 +67,14 @@ func (r *retention) capacity(ctx context.Context) {
 //
 // # Why the age is read off the disk and not off the register
 //
-// The register says a backup was TAKEN. The directory says one EXISTS, and the
-// two differ in exactly the cases the alarm is for — a copy that was taken and
-// then deleted, a volume that was never mounted, a schedule pointing at a path
-// nobody ships from. In every one of those the register reports a protected
-// fleet and the disk reports an unprotected one.
+// The register says a backup was ANNOUNCED. The directory says one still
+// EXISTS. The trim's backup term and the `backup_age` alarm read the register —
+// they have to, since the node holding the duty can never see a directory on
+// another host — so this gauge is the one reading that notices the cases where
+// the two differ: a copy announced and then deleted, a volume that was never
+// mounted, a schedule pointing at a path nobody ships from. In every one of
+// those the register, and so the trim and the alarm, still count the copy, and
+// the disk says it is gone.
 //
 // So this walks the register for the points THIS NODE announced — the only
 // artefacts whose directory is reachable from this process — and reads their

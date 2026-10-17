@@ -459,19 +459,25 @@ func Catalogue() []Instrument {
 		{
 			Name: BackupAge, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: nil,
-			Shows: "How long ago the newest COMPLETE backup finished, read " +
-				"from the manifests on disk rather than from a counter this " +
-				"process keeps. A counter records that a process believed it " +
-				"took a backup; the disk records that one exists, and they " +
-				"differ in exactly the cases the alarm is for — a copy " +
-				"deleted, a volume never mounted, a schedule pointing at a " +
-				"path nobody ships from. A node holding no manifest reports " +
-				"NO SERIES rather than a value: zero is the freshest backup " +
-				"imaginable and every other number is an age nobody " +
-				"measured, so neither can stand for an absence. The absence " +
-				"is what the `backup_age` alarm says in words, and an " +
-				"`absent()` rule over this gauge is what a collector alerts " +
-				"on.",
+			Shows: "How long ago the newest COMPLETE backup THIS NODE took " +
+				"finished, read from the manifests in the directories it " +
+				"announced rather than from the fleet's register. The " +
+				"register records that a copy was announced; the disk " +
+				"records that it still exists, and they differ in exactly " +
+				"the cases worth catching — a copy deleted, a volume never " +
+				"mounted, a schedule pointing at a path nobody ships from. A " +
+				"node holding no manifest of its own reports NO SERIES " +
+				"rather than a value: zero is the freshest backup imaginable " +
+				"and every other number is an age nobody measured, so " +
+				"neither can stand for an absence, and an `absent()` rule " +
+				"over this gauge is what a collector alerts on. It is NOT " +
+				"what the `backup_age` alarm reads: the alarm ages, per log " +
+				"and fleet-wide, the newest verified point the trim counts " +
+				"in the register (under `backup_floor: operator`, the " +
+				"operator's acknowledgement of that log), so the two answer " +
+				"different questions and can disagree — a copy deleted " +
+				"after it was announced still counts for the alarm and the " +
+				"trim, and leaves this gauge.",
 		},
 		{
 			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
