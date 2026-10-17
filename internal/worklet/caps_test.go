@@ -342,3 +342,65 @@ func TestACreatePastACapNamesNoTask(t *testing.T) {
 		t.Errorf("the refusal names the id of a task that was never created: %v", err)
 	}
 }
+
+// ONE CALL NAMES AT MOST [worklet.MaxTasksNamed] OTHER TASKS: a dependency
+// change's counterparties, and a rank order's own moves beside a re-spread's
+// neighbours.
+//
+// Each counterparty is a commit of its own and each move a placement on one
+// record, so a call past the cap is a batch rather than a gesture, and both
+// writers refuse it before anything is read or published — naming the count,
+// so the caller knows how far to split it. AT the cap neither refusal is the
+// cap's: the call goes on to whatever it would have met next.
+//
+// Mutation: drop either check and its over-the-cap row is accepted.
+func TestOneCallNamesAtMostMaxTasksNamedTasks(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ids := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("t-%04d", i)
+		}
+		return out
+	}
+	depend := func(n int) error {
+		_, err := r.writer.Depend(t.Context(), fmt.Sprintf("op-depend-%d", n),
+			worklet.DependencyChange{Task: "dep", Project: "ENG", WaitingOnAdd: ids(n)},
+			fixedLeads{})
+		return err
+	}
+	move := func(n int) error {
+		placements := make([]worklet.Placement, n)
+		for i, id := range ids(n) {
+			rank, err := worklet.IntegerAt(uint64(i + 1))
+			if err != nil {
+				t.Fatalf("a rank key for placement %d: %v", i, err)
+			}
+			placements[i] = worklet.Placement{Task: id, Rank: rank}
+		}
+		_, err := r.writer.MoveTasks(t.Context(), fmt.Sprintf("op-move-%d", n), "ENG", placements)
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		call   func(int) error
+		max    int
+		refuse string
+	}{
+		{"a dependency change's counterparties", depend, worklet.MaxTasksNamed,
+			"one call may name"},
+		{"a rank order's placements", move, worklet.MaxTasksNamed + worklet.RankRespreadInline,
+			"one record carries at most"},
+	} {
+		over := tc.call(tc.max + 1)
+		if !errors.Is(over, worklet.ErrInvalid) || !strings.Contains(over.Error(), tc.refuse) ||
+			!strings.Contains(over.Error(), fmt.Sprint(tc.max+1)) {
+			t.Errorf("%s: %d were answered %v, want the cap's refusal naming the count",
+				tc.name, tc.max+1, over)
+		}
+		if at := tc.call(tc.max); at != nil && strings.Contains(at.Error(), tc.refuse) {
+			t.Errorf("%s: exactly %d were refused by the cap: %v", tc.name, tc.max, at)
+		}
+	}
+}
