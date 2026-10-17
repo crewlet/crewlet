@@ -54,6 +54,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// EACH HUMAN SEAT'S CHAT READ STATE, a coordination record with
+		// no age: without this entry the cursors, mutes and
+		// do-not-disturb of every seat anybody ever read a room as were
+		// kept for the life of the deployment, long after the company
+		// stopped having the seat.
+		"chat_read_state",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and
@@ -332,6 +338,7 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
+		"chat_read_state":       maintenance.ChatReadForgetGrace,
 		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the
 		// absence is the point rather than an omission. Both are
 		// state-log domains: their records are a log the retention gate
