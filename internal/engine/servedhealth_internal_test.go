@@ -258,12 +258,23 @@ func TestAFloorNobodyCouldRefreshIsRefusedAsUnknownNamingItsAge(t *testing.T) {
 	}
 }
 
-// refusedOverAFailedRefresh holds m's value older than stale — by moving the
-// memo's own clock rather than the held instant, so a fresh read the node's
-// heartbeat stores meanwhile is exactly as old — with one refresh in flight,
-// starts a read of running's read authority, checks it waits for that refresh
-// rather than answering from the old value, and then fails the refresh with
-// why. It returns the read's refusal.
+// refusedOverAFailedRefresh holds m's value older than stale with one refresh
+// in flight, starts a read of running's read authority, checks it waits for
+// that refresh rather than answering from the old value, and then fails the
+// refresh with why. It returns the read's refusal.
+//
+// THE MEMO IS FROZEN FOR THE CASE, because the node goes on reading it: every
+// read of its health may start a refresh, and every fresh read made elsewhere
+// (the heartbeat's, the copy's verdict) stores what it read. So the held
+// instant and the memo's clock both move an hour AHEAD of the wall, the value
+// exactly as old as the case says by the memo's own clock, and a store stamped
+// with the wall clock landed before it and replaces nothing ([memo.store]);
+// and the refresh's slot stays the case's, failed, until the case ends, so no
+// other refresh starts in its place. The slot used to be given back with the
+// failure: a real refresh the node's next read started then landed at the
+// moved clock before the case's read looked again, and that read was answered
+// from it, or refused naming an age of nothing — four runs in sixty of the
+// two cases on one CPU.
 func refusedOverAFailedRefresh[T any](t *testing.T, running *runningLog, m *memo[T],
 	stale time.Duration, q statelog.Query, why string) *statelog.Refused {
 
@@ -275,20 +286,26 @@ func refusedOverAFailedRefresh[T any](t *testing.T, running *runningLog, m *memo
 	// Only once no real refresh is in flight, whose landing would otherwise
 	// end the one this case holds open.
 	landed := make(chan struct{})
+	var heldAt time.Time
 	waitUntil(t, 5*time.Second, "no refresh in flight", func() bool {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if m.reading != nil {
 			return false
 		}
-		m.now = func() time.Time { return time.Now().Add(stale + time.Second) }
+		ahead := time.Now().Add(time.Hour)
+		heldAt, m.at = m.at, ahead
+		m.now = func() time.Time { return ahead.Add(stale + time.Second) }
 		m.reading = landed
 		return true
 	})
 	t.Cleanup(func() {
 		m.mu.Lock()
-		m.now = nil
-		m.mu.Unlock()
+		defer m.mu.Unlock()
+		m.now, m.at = nil, heldAt
+		if m.reading == landed {
+			m.reading = nil
+		}
 	})
 	refused := make(chan error, 1)
 	go func() {
@@ -302,9 +319,9 @@ func refusedOverAFailedRefresh[T any](t *testing.T, running *runningLog, m *memo
 	case <-time.After(50 * time.Millisecond):
 	}
 	// AND THE REFRESH FAILS, recorded as [memo.refresh] records a read that
-	// did not answer.
+	// did not answer — its slot kept (above).
 	m.mu.Lock()
-	m.reading, m.failed = nil, errors.New(why)
+	m.failed = errors.New(why)
 	m.mu.Unlock()
 	close(landed)
 
