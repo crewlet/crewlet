@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sync"
 
 	"github.com/google/uuid"
 
@@ -78,83 +77,29 @@ func (f *Fleet) DeleteSeatPause(_ context.Context, seat uuid.UUID, version uint6
 // WatchSeatPauses streams every pause, the marker, then every change.
 //
 // The snapshot and the registration happen under ONE lock, which is the whole
-// ordering guarantee: a write lands either before the snapshot (and is in it)
-// or after the registration (and is delivered as a change). The KV backend
-// gives the same guarantee by starting its change hint before it lists, and
-// confirming every hint on the leader — see its WatchSeatPauses. This twin has
-// one copy, so every update it delivers is already the current state.
+// ordering guarantee (watch.go). The KV backend gives the same guarantee by
+// certifying its first answer against the bucket's key index and reading every
+// change after it off the same consumer — see its WatchSeatPauses. This twin
+// has one copy, so every update it delivers is already the current state.
 func (f *Fleet) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
-	w := &pauseWatcher{wake: make(chan struct{}, 1)}
 	f.mu.Lock()
+	var answer []coord.SeatPauseUpdate
 	for _, p := range f.sortedPausesLocked() {
-		w.pending = append(w.pending, coord.SeatPauseUpdate{Seat: p.Seat, Pause: &p})
+		answer = append(answer, coord.SeatPauseUpdate{Seat: p.Seat, Pause: &p})
 	}
-	w.pending = append(w.pending, coord.SeatPauseUpdate{Current: true})
+	answer = append(answer, coord.SeatPauseUpdate{Current: true})
+	w := newWatcher(answer)
 	if f.pauseWatchers == nil {
-		f.pauseWatchers = map[*pauseWatcher]struct{}{}
+		f.pauseWatchers = map[*watcher[coord.SeatPauseUpdate]]struct{}{}
 	}
 	f.pauseWatchers[w] = struct{}{}
 	f.mu.Unlock()
-	w.signal()
 
-	out := make(chan coord.SeatPauseUpdate)
-	go func() {
-		defer close(out)
-		defer func() {
-			f.mu.Lock()
-			delete(f.pauseWatchers, w)
-			f.mu.Unlock()
-		}()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-w.wake:
-			}
-			for _, u := range w.drain() {
-				select {
-				case out <- u:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
-}
-
-// pauseWatcher is one open watch: an unbounded queue a writer appends to under
-// the fleet's lock and never waits on, and a goroutine that hands it on.
-//
-// UNBOUNDED, because the alternative is a writer that blocks on a slow reader
-// while holding the lock every other call in the twin takes. The set is the
-// changes to a handful of seat pauses, which a reader consumes promptly.
-type pauseWatcher struct {
-	mu      sync.Mutex
-	pending []coord.SeatPauseUpdate
-	wake    chan struct{}
-}
-
-func (w *pauseWatcher) push(u coord.SeatPauseUpdate) {
-	w.mu.Lock()
-	w.pending = append(w.pending, u)
-	w.mu.Unlock()
-	w.signal()
-}
-
-func (w *pauseWatcher) signal() {
-	select {
-	case w.wake <- struct{}{}:
-	default:
-	}
-}
-
-func (w *pauseWatcher) drain() []coord.SeatPauseUpdate {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := w.pending
-	w.pending = nil
-	return out
+	return w.serve(ctx, func() {
+		f.mu.Lock()
+		delete(f.pauseWatchers, w)
+		f.mu.Unlock()
+	}), nil
 }
 
 // storePauseLocked writes a pause with the next store-wide version and tells
