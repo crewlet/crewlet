@@ -174,6 +174,14 @@ export interface EventRecord {
    * sub-agent).
    */
   work_key?: string;
+  /**
+   * The node that PUBLISHED this event — where the work it describes ran —
+   * read off the row server-side (store.EventRecord.Node). Not the node that
+   * answered with it: a data node keeps the events of a node without `data`
+   * in custody and holds rows it never published. Absent only on a row no node
+   * published.
+   */
+  node?: string;
 }
 
 export interface EventsPage {
@@ -3780,12 +3788,14 @@ export interface TurnAnswer {
    * answer", never "this turn touched no trace".
    */
   trace_ids?: string[];
-  /** Which nodes the turn was assembled from — a turn resumed on another node
-   *  has rows on both, and a node that did not answer may hold the missing
-   *  part. */
+  /** Which data nodes the turn was assembled from — a turn resumed on another
+   *  node can have rows on two of them, and one that did not answer may hold
+   *  the missing part. */
   coverage?: Coverage;
-  /** Which of them RAN it: the nodes whose own store held any of its events,
-   *  sorted — empty when no answering node held them yet. */
+  /** Where it RAN: the nodes that PUBLISHED its events, read off the rows,
+   *  sorted. Not the nodes in `coverage`: a turn run on a node without `data`
+   *  is held by the data node keeping its events in custody, which never ran
+   *  it. Empty when no answering node held any of its events yet. */
   nodes: string[];
 }
 
