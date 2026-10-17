@@ -63,9 +63,10 @@ const (
 	// on purpose: both blocks are frozen into the same system prompt and
 	// re-sent on every round of every phase, and this one must not
 	// dominate the one carrying the seat's own cross-turn history. A third
-	// is roughly 2k tokens — thirty chat messages, which is the item cap
-	// above, and the ceiling bites only on a thread whose messages are
-	// documents rather than replies.
+	// is roughly 2k tokens — about thirty ordinary chat messages, the count
+	// the bound above replaced — so the ceiling bites on a thread longer
+	// than that or one whose messages are documents rather than replies,
+	// and what it bites is condensed rather than dropped.
 	//
 	// NOT A CONFIG FIELD. config.ConversationSession's doc records what
 	// happened the last time a render bound here was exposed: two knobs
