@@ -352,6 +352,19 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	return int(inserted + moved), nil
 }
 
+// effectiveAtStatement is [effectiveAt]'s one statement, named for the plan
+// test.
+const effectiveAtStatement = `
+		SELECT MAX(broker_at) FROM (
+			SELECT broker_at FROM tracker_history
+			WHERE subject_id = ? AND log_seq <= ?
+			UNION ALL
+			SELECT broker_at FROM tracker_turns
+			WHERE task_id = ? AND log_seq <= ?
+			UNION ALL
+			SELECT ?
+		)`
+
 // effectiveAt is D141's closed form: the fleet-agreed instant for a subject at
 // a position.
 //
@@ -365,16 +378,8 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 // chain because a turn is something that happened to the task.
 func effectiveAt(ctx context.Context, tx *sql.Tx, subjectID string, c applyContext) (time.Time, error) {
 	var highest sql.NullInt64
-	err := tx.QueryRowContext(ctx, `
-		SELECT MAX(broker_at) FROM (
-			SELECT broker_at FROM tracker_history
-			WHERE subject_id = ? AND log_seq <= ?
-			UNION ALL
-			SELECT broker_at FROM tracker_turns
-			WHERE task_id = ? AND log_seq <= ?
-			UNION ALL
-			SELECT ?
-		)`, subjectID, c.packed, subjectID, c.packed, store.EncodeTime(c.brokerAt)).
+	err := tx.QueryRowContext(ctx, effectiveAtStatement,
+		subjectID, c.packed, subjectID, c.packed, store.EncodeTime(c.brokerAt)).
 		Scan(&highest)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("worklet: compute the effective instant "+

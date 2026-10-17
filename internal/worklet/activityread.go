@@ -480,26 +480,7 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	if err != nil {
 		return nil, "", err
 	}
-	clause := ""
-	if len(where) > 0 {
-		clause = " WHERE " + joinAnd(where)
-	}
-	// NEWEST FIRST. A feed is read from the top, and the cursor pages
-	// backwards through the log — which is why the keyset is `<` rather
-	// than `>` and why it needs no tie-break: a composed position is
-	// unique per record by construction.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT h.id, h.log_seq, h.log_stream, h.log_generation,
-		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
-		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
-		       h.excerpt, h.fields_json, h.comment_id, h.turn_id,
-		       h.notified, h.late,
-		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
-		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
-		                 WHERE k.id = h.subject_id), 0)
-		FROM tracker_history h`+clause+`
-		ORDER BY h.log_seq DESC
-		LIMIT ?`, append(args, limit+1)...)
+	rows, err := tx.QueryContext(ctx, activityStatement(where), append(args, limit+1)...)
 	if err != nil {
 		return nil, "", fmt.Errorf("worklet: read the activity feed: %w", err)
 	}
@@ -575,6 +556,33 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		}.String()
 	}
 	return out, next, nil
+}
+
+// activityStatement is the feed's one statement over [compileActivity]'s
+// predicate, its last placeholder the page's limit — named so the plan test
+// explains exactly what the reader issues.
+//
+// NEWEST FIRST. A feed is read from the top, and the cursor pages backwards
+// through the log — which is why the keyset is `<` rather than `>` and why it
+// needs no tie-break: a composed position is unique per record by
+// construction.
+func activityStatement(where []string) string {
+	clause := ""
+	if len(where) > 0 {
+		clause = " WHERE " + joinAnd(where)
+	}
+	return `
+		SELECT h.id, h.log_seq, h.log_stream, h.log_generation,
+		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
+		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
+		       h.excerpt, h.fields_json, h.comment_id, h.turn_id,
+		       h.notified, h.late,
+		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
+		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
+		                 WHERE k.id = h.subject_id), 0)
+		FROM tracker_history h` + clause + `
+		ORDER BY h.log_seq DESC
+		LIMIT ?`
 }
 
 // counterpartyKeys resolves the task ids a page of deltas points at.

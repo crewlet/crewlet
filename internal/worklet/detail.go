@@ -997,16 +997,20 @@ func cursorID(cursor string) string {
 	return id
 }
 
-// readHistory is the activity feed, NEWEST FIRST and capped.
-func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
-	rows, err := tx.QueryContext(ctx, `
+// taskHistoryStatement is [readHistory]'s one statement, named so the plan
+// test explains exactly what the reader issues.
+const taskHistoryStatement = `
 		SELECT id, kind, actor, actor_kind, operator_id, comment_id,
 		       excerpt, fields_json, turn_id, notified, effective_at,
 		       log_seq, reassignments
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
-		LIMIT ?`, taskID, limit)
+		LIMIT ?`
+
+// readHistory is the activity feed, NEWEST FIRST and capped.
+func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
+	rows, err := tx.QueryContext(ctx, taskHistoryStatement, taskID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the history of %s: %w", taskID, err)
 	}

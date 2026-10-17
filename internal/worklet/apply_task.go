@@ -1394,6 +1394,44 @@ func purgeDeletes(id string) []purgeStatement {
 	}
 }
 
+// The statements a purge runs over the task's history, named for the plan
+// test: the notices its rows routed, which [forgottenNotices] reads first by
+// the same predicate, both finding the rows by the subject; and the skeleton
+// each row the census walks keeps, written to that row by its own id.
+const (
+	forgottenNoticesStatement = `
+		SELECT record_id, recipient, reason FROM tracker_notifications
+		WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)
+		ORDER BY record_id, recipient`
+	forgetNoticesStatement = `
+		DELETE FROM tracker_notifications WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`
+	forgetSkeletonStatement = `
+		UPDATE tracker_history
+		SET excerpt = '', comment_id = '', document = ?, fields_json = ?
+		WHERE id = ?`
+)
+
+// The purge's two statements over the census's own rows, found by the subject:
+// the rows it does not walk, which go, and the walk's own read
+// ([censusRows]). Variables rather than constants because both are spelled
+// with [historyMoves], the predicate the flow walk reads, so a purge keeps
+// exactly the rows the census counts.
+var (
+	forgetHistoryStatement = `
+		DELETE FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+		  AND NOT (` + historyMoves("") + `)`
+	censusRowsStatement = `
+		SELECT id, fields_json FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+		  AND ` + historyMoves("") + `
+		ORDER BY id`
+)
+
 // forgetRecords destroys what a purged task's own records wrote beside its
 // rows: the inbox notices its rows routed and its turn records go, and of its
 // history only a SKELETON stays — every row but the purge's own (keep) that
@@ -1473,24 +1511,18 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 			reason: notice.reason, position: c.packed, removed: true,
 		})
 	}
-	if err = exec(`DELETE FROM tracker_notifications WHERE record_id IN (
-		SELECT id FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`, id, kind, keep); err != nil {
+	if err = exec(forgetNoticesStatement, id, kind, keep); err != nil {
 		return 0, err
 	}
 	skeleton, err := censusRows(ctx, tx, id, keep)
 	if err != nil {
 		return 0, err
 	}
-	if err := exec(`DELETE FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
-		  AND NOT (`+historyMoves("")+`)`, id, kind, keep); err != nil {
+	if err := exec(forgetHistoryStatement, id, kind, keep); err != nil {
 		return 0, err
 	}
 	for _, row := range skeleton {
-		if err := exec(`UPDATE tracker_history
-			SET excerpt = '', comment_id = '', document = ?, fields_json = ?
-			WHERE id = ?`, []byte("{}"), row.fields, row.id); err != nil {
+		if err := exec(forgetSkeletonStatement, []byte("{}"), row.fields, row.id); err != nil {
 			return 0, err
 		}
 	}
@@ -1510,12 +1542,7 @@ type forgottenNotice struct {
 // forgottenNotices reads the notices [Applier.forgetRecords] deletes, by the
 // same predicate it deletes them with, ordered so every node notes them alike.
 func forgottenNotices(ctx context.Context, tx *sql.Tx, id, keep string) ([]forgottenNotice, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT record_id, recipient, reason FROM tracker_notifications
-		WHERE record_id IN (
-			SELECT id FROM tracker_history
-			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)
-		ORDER BY record_id, recipient`, id, string(KindTask), keep)
+	rows, err := tx.QueryContext(ctx, forgottenNoticesStatement, id, string(KindTask), keep)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read whose inbox a purge of %s empties: %w", id, err)
 	}
@@ -1547,11 +1574,7 @@ type skeletonRow struct {
 // its `fields_json` cut to [censusFields]. Ordered by id, so every node issues
 // the same updates in the same order.
 func censusRows(ctx context.Context, tx *sql.Tx, id, keep string) ([]skeletonRow, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, fields_json FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
-		  AND `+historyMoves("")+`
-		ORDER BY id`, id, string(KindTask), keep)
+	rows, err := tx.QueryContext(ctx, censusRowsStatement, id, string(KindTask), keep)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read what the census keeps of a purged task: %w", err)
 	}

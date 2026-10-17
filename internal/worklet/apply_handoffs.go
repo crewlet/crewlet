@@ -77,6 +77,20 @@ func handOffsCarried(carried int, rows []handOffRow) map[string]int {
 	return moved
 }
 
+// handOffsBeforeStatement is the count the row before a task's commit left,
+// and handOffsFromStatement every row of that task from it on — the two reads
+// of [deriveHandOffs], named for the plan test.
+const (
+	handOffsBeforeStatement = `
+		SELECT reassignments FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND log_seq < ?
+		ORDER BY log_seq DESC LIMIT 1`
+	handOffsFromStatement = `
+		SELECT id, document, reassignments FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND log_seq >= ?
+		ORDER BY log_seq`
+)
+
 // deriveHandOffs brings the rows of one task at and after `from` to the rule.
 //
 // FROM THE WRITTEN ROW FORWARD rather than for that row alone, because an
@@ -86,19 +100,14 @@ func handOffsCarried(carried int, rows []handOffRow) map[string]int {
 func deriveHandOffs(ctx context.Context, tx *sql.Tx, taskID string, from int64) (int, error) {
 	carried := 0
 	var before sql.NullInt64
-	switch err := tx.QueryRowContext(ctx, `
-		SELECT reassignments FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND log_seq < ?
-		ORDER BY log_seq DESC LIMIT 1`, taskID, string(KindTask), from).Scan(&before); {
+	switch err := tx.QueryRowContext(ctx, handOffsBeforeStatement,
+		taskID, string(KindTask), from).Scan(&before); {
 	case err == nil:
 		carried = int(before.Int64)
 	case !errors.Is(err, sql.ErrNoRows):
 		return 0, fmt.Errorf("worklet: read the hand-off count before %s's commit: %w", taskID, err)
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, document, reassignments FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND log_seq >= ?
-		ORDER BY log_seq`, taskID, string(KindTask), from)
+	rows, err := tx.QueryContext(ctx, handOffsFromStatement, taskID, string(KindTask), from)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: read %s's history to count its hand-offs: %w", taskID, err)
 	}
@@ -109,6 +118,13 @@ func deriveHandOffs(ctx context.Context, tx *sql.Tx, taskID string, from int64) 
 	return writeHandOffs(ctx, tx, handOffsCarried(carried, walked))
 }
 
+// rederiveHandOffsStatement is [rederiveHandOffs]' walk of the whole task
+// history, named for the plan test.
+const rederiveHandOffsStatement = `
+		SELECT subject_id, id, document, reassignments FROM tracker_history
+		WHERE subject_kind = ?
+		ORDER BY subject_id, log_seq`
+
 // rederiveHandOffs is every task history row's hand-off count recomputed from
 // the whole history, for [Applier.Rederive].
 //
@@ -116,10 +132,7 @@ func deriveHandOffs(ctx context.Context, tx *sql.Tx, taskID string, from int64) 
 // its create, which states the whole task. The reads finish before any write,
 // for the reason [rederiveReopens] gives.
 func rederiveHandOffs(ctx context.Context, tx *sql.Tx) (int, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT subject_id, id, document, reassignments FROM tracker_history
-		WHERE subject_kind = ?
-		ORDER BY subject_id, log_seq`, string(KindTask))
+	rows, err := tx.QueryContext(ctx, rederiveHandOffsStatement, string(KindTask))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: read the task history to re-derive hand-off counts: %w", err)
 	}
@@ -175,13 +188,16 @@ func scanHandOffRows(rows *sql.Rows) ([]handOffRow, error) {
 	return out, rows.Err()
 }
 
+// writeHandOffStatement is one row's hand-off count written, by
+// [writeHandOffs] and named for the plan test.
+const writeHandOffStatement = `UPDATE tracker_history SET reassignments = ? WHERE id = ?`
+
 // writeHandOffs writes the counts that moved, in id order so a re-derivation
 // issues the same statements on every node.
 func writeHandOffs(ctx context.Context, tx *sql.Tx, moved map[string]int) (int, error) {
 	written := 0
 	for _, id := range slices.Sorted(maps.Keys(moved)) {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE tracker_history SET reassignments = ? WHERE id = ?`, moved[id], id)
+		res, err := tx.ExecContext(ctx, writeHandOffStatement, moved[id], id)
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the hand-off count of history row %s: %w", id, err)
 		}

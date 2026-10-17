@@ -89,6 +89,36 @@ type UnblockScan struct {
 	Through uint64
 }
 
+// unblockHorizonStatement is the repair's own horizon: the newest status row
+// past the last one it read. Named, like [unblockedDependentsStatement], so the
+// plan test explains exactly what [ScanUnblocked] issues.
+const unblockHorizonStatement = `
+		SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
+		WHERE log_seq > ?
+		  AND json_extract(fields_json, '$.status.to') IS NOT NULL`
+
+// unblockedDependentsStatement is every ready dependent of a blocker whose
+// status moved between two positions, read by [ScanUnblocked].
+const unblockedDependentsStatement = `
+		SELECT DISTINCT t.id, t.key, t.project_key, t.assignee,
+		       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
+		        WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
+		FROM tracker_history h
+		JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
+		JOIN tracker_tasks t ON t.id = d.task_id
+		WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		  AND h.log_seq > ? AND h.log_seq <= ?
+		  AND t.removed_at IS NULL
+		  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
+		  -- comment on ScanUnblocked.
+		  AND t.assignee <> ''
+		  AND NOT EXISTS (SELECT 1 FROM tracker_task_deps o
+		                  WHERE o.task_id = t.id AND o.blocker_open = 1)
+		  AND (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
+		       WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
+		      > COALESCE(t.unblocked_told_at, 0)
+		ORDER BY t.id LIMIT ?`
+
 // ScanUnblocked finds every dependent that became workable since a position.
 //
 // # The query, and why each clause is there
@@ -133,10 +163,7 @@ func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 		// THE HORIZON IS OVER THE SAME PREDICATE AS THE ROWS, which is
 		// what makes advancing it safe: a horizon computed over a WIDER
 		// set steps past records the scan below never looked at.
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
-			WHERE log_seq > ?
-			  AND json_extract(fields_json, '$.status.to') IS NOT NULL`,
+		if err := tx.QueryRowContext(ctx, unblockHorizonStatement,
 			since, since).Scan(&scan.Through); err != nil {
 			return fmt.Errorf("worklet: read the repair's own horizon: %w", err)
 		}
@@ -150,25 +177,7 @@ func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 		// start. The same is true of the clearing instant: the newest
 		// clearing among the blockers that moved is not the newest among
 		// the blockers.
-		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT t.id, t.key, t.project_key, t.assignee,
-			       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
-			        WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
-			FROM tracker_history h
-			JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
-			JOIN tracker_tasks t ON t.id = d.task_id
-			WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
-			  AND h.log_seq > ? AND h.log_seq <= ?
-			  AND t.removed_at IS NULL
-			  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
-			  -- comment on ScanUnblocked.
-			  AND t.assignee <> ''
-			  AND NOT EXISTS (SELECT 1 FROM tracker_task_deps o
-			                  WHERE o.task_id = t.id AND o.blocker_open = 1)
-			  AND (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
-			       WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
-			      > COALESCE(t.unblocked_told_at, 0)
-			ORDER BY t.id LIMIT ?`,
+		rows, err := tx.QueryContext(ctx, unblockedDependentsStatement,
 			since, scan.Through, limit)
 		if err != nil {
 			return fmt.Errorf("worklet: read the unblocked dependents since "+
