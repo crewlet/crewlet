@@ -8439,7 +8439,14 @@ most, named again by the Broker members panel), **Up since**, **Roles**, then
 Lease and Broker give way; beside a peek at 1440, Node, Seats, In flight,
 Posture and Config stay. The **Broker** column is the kind the node's presence
 advertises — `member`, `leaf` or `client` as a neutral tag, `unknown` as a
-warning since it is the one reading that is a guess. Then
+warning since it is the one reading that is a guess. The **Posture** column,
+like the Posture fact on a node's page and in its peek, is the node's own word,
+`serve` as a success tag and any other as a warning. Its dash says which of two
+absences it is, in its title and to a screen reader alike: a node that could
+not read the control plane on its last heartbeat publishes the rest of its
+status without a posture, rather than the `serve` its readiness probe falls
+back to, and one whose last heartbeat carried no status has no in-flight count
+either. Then
 **Seat placement** — each seat, the node holding it, its lease and **Since**:
 the tenure's start (`acquired_at`), stamped when the epoch is minted and
 carried through every renewal, so "since 2h ago" means the seat has not moved

@@ -1875,9 +1875,27 @@ export interface FleetNode {
    */
   appliers_ready?: number;
   appliers_total?: number;
+  /**
+   * How many turns are running on this node, off its presence heartbeat.
+   * ABSENT, never 0, when its last heartbeat carried no status, and present on
+   * every heartbeat that carried one: a published status always states it,
+   * beside `draining`. So it also says whether a status was published at all,
+   * which is how an absent `posture` is read.
+   */
   in_flight?: number;
   draining?: boolean;
   started_at?: string;
+  /**
+   * The node's config posture, its control plane's own word: `serve`, `wait`,
+   * `shed`, `isolated` or `stuck`.
+   *
+   * ABSENT FOR ONE OF TWO REASONS, which `in_flight` tells apart. With it
+   * present, the node could not read its control plane on its last heartbeat
+   * and published the rest of its status without a posture, rather than
+   * broadcast the `serve` its readiness probe falls back to
+   * (`coord.NodeStatus.Posture`). With it absent too, that heartbeat carried
+   * no status at all.
+   */
   posture?: string;
 }
 

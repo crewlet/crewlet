@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -230,27 +231,54 @@ func statusOf(ctx context.Context, t *testing.T, e *Engine) coord.NodeStatus {
 	return status
 }
 
-// A POSTURE READ THAT RAN OUT OF THE BEAT'S BUDGET DID NOT ANSWER.
+// A POSTURE READ THAT DID NOT ANSWER PUBLISHES NO POSTURE.
 //
 // [Reconciler.Posture] fails OPEN — a control plane it cannot read reports
 // as "serve", deliberately, so a database blip does not take every node out
 // of rotation. That is the right answer for the readiness probe and the
 // wrong one to broadcast: it would put a confident healthy posture on the
-// one node an operator is looking for.
-func TestATimedOutPostureReadPublishesNoPosture(t *testing.T) {
+// one node an operator is looking for. Both ways a read fails are covered,
+// because the guard used to catch only the first: the read the beat's budget
+// ran out on, and the plane that refused at once and came back well inside
+// the budget.
+func TestAPostureReadThatDidNotAnswerPublishesNoPosture(t *testing.T) {
+	t.Parallel()
+	t.Run("the beat's budget ran out", func(t *testing.T) {
+		t.Parallel()
+		e := &Engine{}
+		e.SetPosture(func(ctx context.Context) (string, error) {
+			<-ctx.Done()
+			return "serve", ctx.Err() // what a fail-open reporter hands back
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+		defer cancel()
+		// Either outcome is honest — no answer at all, or an answer
+		// without a posture — and the one thing it may not do is carry
+		// the fail-open one.
+		if status, err := e.nodeStatus(ctx); err == nil && status.Posture != "" {
+			t.Errorf("posture = %q, want none published", status.Posture)
+		}
+	})
+	t.Run("the control plane refused at once", func(t *testing.T) {
+		t.Parallel()
+		e := &Engine{}
+		e.SetPosture(func(context.Context) (string, error) {
+			return "serve", errors.New("the control plane is unreachable")
+		})
+		status := statusOf(t.Context(), t, e)
+		if status.Posture != "" {
+			t.Errorf("posture = %q, want none published", status.Posture)
+		}
+	})
+}
+
+// AN ANSWERED READ IS PUBLISHED, which is the whole point of carrying it.
+func TestAnAnsweredPostureReachesTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	e.SetPosture(func(ctx context.Context) string {
-		<-ctx.Done()
-		return "serve" // what a fail-open reporter hands back
-	})
-
-	ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
-	defer cancel()
-	// Either outcome is honest — no answer at all, or an answer without a
-	// posture — and the one thing it may not do is carry the fail-open one.
-	if status, err := e.nodeStatus(ctx); err == nil && status.Posture != "" {
-		t.Errorf("posture = %q, want none published", status.Posture)
+	e.SetPosture(func(context.Context) (string, error) { return "shed", nil })
+	if got := statusOf(t.Context(), t, e).Posture; got != "shed" {
+		t.Errorf("posture = %q, want shed", got)
 	}
 }
 
@@ -264,16 +292,6 @@ func TestAStatusReadOnASpentBudgetDoesNotAnswer(t *testing.T) {
 	cancel()
 	if status, err := e.nodeStatus(ctx); err == nil {
 		t.Errorf("a status read on a dead context answered %+v", status)
-	}
-}
-
-// AN ANSWERED READ IS PUBLISHED, which is the whole point of carrying it.
-func TestAnAnsweredPostureReachesTheHeartbeat(t *testing.T) {
-	t.Parallel()
-	e := &Engine{}
-	e.SetPosture(func(context.Context) string { return "shed" })
-	if got := statusOf(t.Context(), t, e).Posture; got != "shed" {
-		t.Errorf("posture = %q, want shed", got)
 	}
 }
 

@@ -464,7 +464,7 @@ A token budget is a set of ceilings per **calendar window** — the day, the ISO
 
 ## What a node says about itself
 
-Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up, whether it serves admin — and how its MCP servers started:
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture (absent for a beat on which it could not read the control plane, rather than the `serve` its own readiness probe assumes then), when it started, how far its replicated state has come up, whether it serves admin — and how its MCP servers started:
 
 - **`admin`** — the node's own [`api.auth.admin`](identity-and-access.md#access-admin-and-one-permission-per-app): `serve` or `refuse`. The posture is applied at decision time, per node and per request, and nothing is written when it changes, so a fleet mid-rollout legally disagrees about it — and without a row saying so, whether somebody can administer the company would depend on which node a load balancer sent them to, with nothing anywhere saying why. `GET /query/fleet` shows it per node. Absent on a node that serves no API, which is a node not saying rather than one that refuses.
 

@@ -7736,6 +7736,11 @@ fields entirely, and the dashboard draws an em dash. A confident `0` would
 render an idle row for a process that is simply not saying. Whether the read
 answered is decided by the read itself, not by the clock after it returned, so
 a complete answer is never dropped because the process was briefly descheduled.
+`posture` alone can be absent beside the rest: a node that could not read the
+control plane — the read refused at once, or ran out of its budget — still
+publishes the rest of its status, its in-flight count, drain state, start time
+and `admin` among them, and no posture, never the `serve` its readiness probe
+falls back to in that case.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
