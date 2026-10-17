@@ -914,7 +914,7 @@ Mattermost's default of five seconds until the next start
 | Mode | Shows the status when… |
 |---|---|
 | `always` *(default)* | every Mattermost-triggered turn |
-| `addressed` | a DM, a direct mention, or a thread the agent already follows |
+| `addressed` | a DM, a direct mention, or a thread the agent is in because it was named there — a thread it merely spoke in does not count |
 
 The lifecycle is the turn's, and it is the same on both chat backends: every
 point the indicator is raised, held, released and cleared at is the table in

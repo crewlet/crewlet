@@ -14,13 +14,11 @@ import "github.com/crewlet/crewlet/internal/notify"
 // Prompt builds the chat prompt for this backend.
 func Prompt() notify.ChatPrompt {
 	return notify.ChatPrompt{
-		Backend:     Backend,
-		Label:       "Slack",
-		DirectKinds: DirectKinds,
-		// Slack ids carry their kind in the first letter, so the prefix
-		// test is exact rather than a guess — and it is the only answer
-		// for an app_mention, whose payload omits the channel type.
-		DMPrefix:      DMPrefix,
+		Backend: Backend,
+		Label:   "Slack",
+		// The backend's own rule, and the same value its transport
+		// hands the working indicator — see [AddressRule].
+		Address:       AddressRule(),
 		Collectives:   "`<!channel>` / `<!here>` / `<!everyone>`",
 		SelfReference: selfReference,
 		MentionHint:   mentionHint,
