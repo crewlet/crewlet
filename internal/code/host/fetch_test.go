@@ -279,7 +279,7 @@ func TestAFetchAbandonedDuringItsSyncAtTheHeadEndsQuietly(t *testing.T) {
 		}
 		answered <- err
 	}()
-	<-reached
+	reachedFirst(t, reached, answered)
 	cancel()
 	if err := <-answered; !errors.Is(err, context.Canceled) {
 		t.Fatalf("the abandoned fetch's client got %v, want its own cancellation", err)
@@ -341,7 +341,7 @@ func TestBusySlotsAre503WithTheirRetryAfter(t *testing.T) {
 	c.Fleet.Faults().Arm(codefault.HostHookAdmitted, codefault.Action{Once: true, Block: held, Reached: reached})
 	pushed := make(chan codetest.Pushed, 1)
 	go func() { pushed <- p.Push(c.Ctx, work, c.URL(0), "main") }()
-	<-reached
+	reachedFirst(t, reached, pushed)
 	var (
 		wg              sync.WaitGroup
 		getResp, rpc    *http.Response

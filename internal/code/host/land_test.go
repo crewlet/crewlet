@@ -365,7 +365,7 @@ func TestALandingItsClientAbandonedIsNoWarning(t *testing.T) {
 	ctx, cancel := context.WithCancel(c.Ctx)
 	pushed := make(chan codetest.Pushed, 1)
 	go func() { pushed <- p.Push(ctx, work, c.URL(0), "main") }()
-	<-reached
+	reachedFirst(t, reached, pushed)
 	cancel()
 	<-pushed
 	eventually(t, "the abandoned landing's line", func() bool {

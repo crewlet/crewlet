@@ -322,7 +322,7 @@ func TestARefusedPushLeavesNoObjectARowNames(t *testing.T) {
 	c.Fleet.Faults().Arm(codefault.HostAfterSync, codefault.Action{Once: true, Block: held, Reached: reached})
 	stale := make(chan codetest.Pushed, 1)
 	go func() { stale <- a.Push(c.Ctx, workA, c.URL(0), "main") }()
-	<-reached
+	reachedFirst(t, reached, stale)
 	c.MustPush(b, workB, "main")
 	close(held)
 	if reason, _ := (<-stale).Rejected("refs/heads/main"); !strings.Contains(reason, "(stale: ") {
@@ -995,7 +995,7 @@ func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 	c.Fleet.Faults().Arm(codefault.HostUpload, codefault.Action{Once: true, Block: held, Reached: reached})
 	done := make(chan codetest.Pushed, 1)
 	go func() { done <- p.Push(c.Ctx, work, c.URL(0), "main") }()
-	<-reached
+	reachedFirst(t, reached, done)
 	slots := node.Pool().Slots(gitproc.ClassRead)
 	free := node.Pool().Free(gitproc.ClassRead)
 	for deadline := time.Now().Add(5 * time.Second); free != slots && time.Now().Before(deadline); {
@@ -1050,7 +1050,7 @@ func TestAPushAbandonedAfterItsProposalIsRecordedAsItsSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(c.Ctx)
 	pushed := make(chan codetest.Pushed, 1)
 	go func() { pushed <- p.Push(ctx, work, c.URL(0), "main") }()
-	<-reached
+	reachedFirst(t, reached, pushed)
 	cancel()
 	<-pushed
 	eventually(t, "the push's record", func() bool { return len(c.Fleet.Audited()) == 1 })

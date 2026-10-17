@@ -32,6 +32,21 @@ func newCase(t *testing.T, o codetest.SoloOptions, settings code.RepoSettings) *
 	return &codetest.Case{T: t, Fleet: f, Ctx: t.Context()}
 }
 
+// reachedFirst waits for reached — a fault point's hit — and fails the case
+// if ended, the result of the step that was to reach it, comes back first:
+// that step never reached the point (its client failed, a precondition
+// broke), and a wait on reached alone held the whole package until its
+// timeout with nothing to say why. Once the point is reached the step is
+// held there, so ended cannot race it.
+func reachedFirst[T any](t *testing.T, reached <-chan struct{}, ended <-chan T) {
+	t.Helper()
+	select {
+	case <-reached:
+	case v := <-ended:
+		t.Fatalf("the step ended before it reached its fault point: %v", v)
+	}
+}
+
 // fast is a Timing a case can wait out: the production's shape, at a scale of
 // tens of milliseconds — but for the stall, which ends a real git process
 // that is merely busy (its keepalives are five seconds apart), so a case that

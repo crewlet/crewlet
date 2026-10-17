@@ -139,7 +139,7 @@ func TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest(t *testing.T) {
 					Reached: reached})
 				pushed := make(chan codetest.Pushed, 1)
 				go func() { pushed <- p.Push(c.Ctx, work, c.URL(0), "main") }()
-				<-reached
+				reachedFirst(t, reached, pushed)
 				dir := incarnationDir(t, c)
 				damage(t, dir)
 				close(held)
