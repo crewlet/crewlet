@@ -48,6 +48,9 @@ func TestADecisionIsValidatedField(t *testing.T) {
 		{"an inform", func(d *tracker.Decision) {
 			d.Inform = &tracker.Inform{Surface: tracker.InformSlack, Channel: "eng"}
 		}, ""},
+		{"an inform on the engine's own chat", func(d *tracker.Decision) {
+			d.Inform = &tracker.Inform{Surface: tracker.InformChat, Channel: "eng"}
+		}, ""},
 
 		{"no question", func(d *tracker.Decision) { d.Question = "  " }, "decision.question"},
 		{"a long question", func(d *tracker.Decision) {

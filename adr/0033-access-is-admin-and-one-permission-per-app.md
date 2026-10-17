@@ -8,12 +8,15 @@
 
 ## The decision
 
-There are three permissions. **`admin`** runs the company and the engine: its
+There are four permissions. **`admin`** runs the company and the engine: its
 configuration, its credentials, its people, its deployment and its
-company-wide trail. **`tracker`** and **`knowledge`** each use one APP — the
-native work tracker and the native knowledge base, reading and writing.
-`iam.Apps` is the one place an app is declared, and admin includes every app
-through `iam.Expand`, which every comparison of permissions goes through.
+company-wide trail. **`tracker`**, **`knowledge`** and **`chat`** each use one
+APP — the native work tracker, the native knowledge base and the company's own
+chat, reading and writing. `iam.Apps` is the one place an app is declared, and
+admin includes every app through `iam.Expand`, which every comparison of
+permissions goes through. `chat` is the third app and was appended LAST, so
+every list drawn in the vocabulary's order kept its first members where they
+were.
 
 **Everything else is everybody's.** Every principal the request guard resolves
 sees the read-only overview — the org chart, the agents' status, spend,
@@ -22,10 +25,13 @@ all. What a lead may do to their own team, an author to their own work and a
 person to their own record are RELATIONS, not permissions, and on an app's
 verb each is asked beside the app.
 
-Two facts about a verb are fields on its row rather than permissions anybody
-holds: `humanOnly` keeps an agent off a person's gesture, and `seatOnly` keeps
-a person off an agent's — asking a colleague and starting a coding run, which
-the seat's role offers or does not. An agent seat holds every app and never
+Three facts about a verb are fields on its row rather than permissions anybody
+holds: `humanOnly` keeps an agent off a person's gesture, `seatOnly` keeps a
+person off an agent's — asking a colleague and starting a coding run, which
+the seat's role offers or does not — and `seated` keeps a credential acting as
+itself off a verb made as a seat: a question answered on the asker's seat's
+model, and every chat verb, because a room renders a speaker by seat and its
+membership is seats. An agent seat holds every app and never
 admin. A node either serves admin or clamps it away (`api.auth.admin`), and a
 node that clamps it keeps every app.
 
@@ -45,7 +51,8 @@ everybody involved intended, or granting nothing while looking like it did.
 
 A finer vocabulary also cannot say what a company actually decides about a
 colleague. "Uses the tracker", "uses the knowledge base" and "runs the place"
-are the three questions a founder answers when somebody joins; a reader of the
+— and, where the company runs its own chat, "talks in it" — are the
+questions a founder answers when somebody joins; a reader of the
 trail, a manager of people and an operator of the deployment were three grants
 nobody could tell apart, and they are one.
 
@@ -70,6 +77,6 @@ unchanged, and a purge asks for a recent proof. It does not decide **who may wri
 ([ADR-0030](0030-a-managed-company-document-names-its-writers.md)) or **that a
 person holds a human seat**
 ([ADR-0032](0032-every-person-holds-a-human-seat.md)); both compose with it.
-And it does not decide **which apps exist**: a third app is a new member of
+And it does not decide **which apps exist**: a new app is a new member of
 `iam.Apps` and a new set of rows, and the walks named above fail until both
-are there.
+are there — which is how `chat` arrived.

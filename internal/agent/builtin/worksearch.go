@@ -111,7 +111,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"about, in plain words."), nil
 	}
 	if knowledge.CheckQuery(text) != nil {
-		// REFUSED, NOT CUT, at the bound both ranked searches share
+		// REFUSED, NOT CUT, at the bound every ranked search shares
 		// ([knowledge.MaxQueryBytes]). The search behind this refuses it
 		// too, but as an error the model would read as the tracker
 		// failing; this says what to send instead.

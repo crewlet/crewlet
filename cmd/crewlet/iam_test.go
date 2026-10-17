@@ -333,7 +333,13 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 // Mutation: send admin alone and every row below fails.
 func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	t.Parallel()
-	every := []string{"admin", "tracker", "knowledge"}
+	// EVERY PERMISSION, read off the vocabulary rather than written down: a
+	// literal here went stale the day an app was added, and the expansion
+	// it pins is "every app", whatever the apps are.
+	every := make([]string, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		every = append(every, string(g))
+	}
 	for _, flagged := range []string{"admin", "knowledge,admin", " admin , tracker "} {
 		granted, err := iamGrants(flagged)
 		if err != nil {
@@ -375,7 +381,7 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 		t.Fatalf("the node was asked %d times, want 5", len(bodies))
 	}
 	for i, body := range bodies {
-		got := make([]string, 0, 3)
+		got := make([]string, 0, len(every))
 		raw, _ := body["grants"].([]any)
 		for _, g := range raw {
 			s, _ := g.(string)
@@ -480,10 +486,10 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 			[]string{"-grants", "or none"}},
 		{[]string{"create", "-kind", "machine", "-login", "ci:release",
 			"-grants", "trackr"},
-			[]string{`"trackr"`, "admin, tracker, knowledge", "none"}},
+			[]string{`"trackr"`, "admin, tracker, knowledge, chat", "none"}},
 		{[]string{"invite", "lead@example.com", "-seat", "lead",
 			"-grants", "billing"},
-			[]string{`"billing"`, "admin, tracker, knowledge"}},
+			[]string{`"billing"`, "admin, tracker, knowledge, chat"}},
 		{[]string{"grant", "p-1", "-grants", "none,admin"},
 			[]string{"none", "on its own"}},
 		{[]string{"suspend", "p-1", "-grants", "admin"},

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -71,6 +72,30 @@ func PageActorOf(p iam.Principal) (pages.Actor, error) {
 	return pages.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
 }
 
+// ChatActorOf is [ActorOf] for chat, which records the SAME author under the
+// SAME name, for [PageActorOf]'s reason: one person under two names across
+// the histories an audit reads side by side is two people.
+//
+// AN ERROR FOR THE ENGINE'S OWN PRINCIPAL, although chat HAS a word for it
+// ([chat.AuthorSystem]): that kind is the engine NARRATING a room — somebody
+// joined, the room was archived — which the store writes from its own
+// records, never a tool call. A tool call made as the engine would put a
+// narration where a speaker belongs, a line nobody said and nobody can answer.
+//
+// A CREDENTIAL ACTING AS ITSELF CONVERTS, to [chat.AuthorOperator]: it is a
+// real author of what is not said in a room's voice, and the store refuses it
+// every gesture that is ([chat.Actor] says which), naming the remedy.
+func ChatActorOf(p iam.Principal) (chat.Actor, error) {
+	a := iam.ActorFor(p)
+	kind := chat.AuthorKind(a.Kind)
+	if !kind.Valid() || kind == chat.AuthorSystem {
+		return chat.Actor{}, fmt.Errorf("builtin: a %s cannot author a chat "+
+			"write — the engine narrates a room from its own records, and chat "+
+			"records agents, people and operators", a.Kind)
+	}
+	return chat.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
+}
+
 // PrincipalActor is [WorkDeps.Actor] for a surface whose caller is on the
 // request's context.
 //
@@ -93,6 +118,15 @@ func PrincipalPageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, erro
 		return pages.Actor{}, err
 	}
 	return PageActorOf(p)
+}
+
+// PrincipalChatActor is [PrincipalActor] for [ChatDeps.Actor].
+func PrincipalChatActor(ctx context.Context, _ *turnctx.Turn) (chat.Actor, error) {
+	p, err := resolvedPrincipal(ctx)
+	if err != nil {
+		return chat.Actor{}, err
+	}
+	return ChatActorOf(p)
 }
 
 // resolvedPrincipal is the request's principal, or why there is none to write

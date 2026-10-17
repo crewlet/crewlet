@@ -41,6 +41,7 @@ vi.mock("~/lib/viewer.ts", async () => {
       admin: true,
       tracker: true,
       knowledge: true,
+      chat: true,
       handle: "",
       owner: "ops",
       name: "",

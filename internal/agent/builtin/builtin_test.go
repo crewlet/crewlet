@@ -290,6 +290,19 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		tracker.ReadProjectFileTool:   false,
 		tracker.WriteProjectFileTool:  true,
 		tracker.RemoveProjectFileTool: true,
+
+		// THE NATIVE CHAT. Its reads are reads; saying something and
+		// reacting are words on somebody else's screen; joining and
+		// leaving move only where this seat listens, which is its own.
+		builtin.ReadChannelTool:    false,
+		builtin.ListChannelsTool:   false,
+		builtin.SearchMessagesTool: false,
+		builtin.PostMessageTool:    true,
+		builtin.ReplyInThreadTool:  true,
+		builtin.SendDMTool:         true,
+		builtin.ReactToMessageTool: true,
+		builtin.JoinChannelTool:    false,
+		builtin.LeaveChannelTool:   false,
 	}
 
 	reg := tools.NewRegistry()
@@ -1000,6 +1013,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 			Objects:    newFakeObjects(),
 		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
+		// AND THE NATIVE CHAT, all three halves: left out, its nine tools
+		// were classified by nothing in the table below.
+		Chat: chatDeps(newFakeChat()),
 	}
 }
 

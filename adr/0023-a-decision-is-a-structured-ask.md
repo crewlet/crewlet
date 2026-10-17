@@ -33,10 +33,11 @@ The engine enforces **exactly three things**, and forbids itself a fourth:
    against that ask's own row inside the writer's decide, and an ask is
    answered once.
 3. **The promise** — an `inform` is accepted only from an agent seat, only for
-   a chat surface the company runs and the seat holds a bot on, and only for a
-   channel a unit declares; the asker's `answered` wake then **owes** that
-   surface, and the turn it wakes is not finished until a tool there has
-   posted.
+   a chat surface the company runs and the seat can post on — a bot it holds on
+   Slack or Mattermost, or the engine's own chat, where every agent seat posts
+   as itself — and only for a channel a unit declares; the asker's `answered`
+   wake then **owes** that surface, and the turn it wakes is not finished until
+   a tool there has posted.
 4. **Nothing else.** No approval chain, no quorum, no state machine, no
    escalation timer and no routing of a decision to an approver the asker did
    not name. The DACI roles stay behavioural guidance; `role` is a label that

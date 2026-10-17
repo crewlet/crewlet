@@ -43,7 +43,7 @@
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
-import { ADMIN, KNOWLEDGE, TRACKER, holds } from "./access.ts";
+import { ADMIN, CHAT, KNOWLEDGE, TRACKER, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 
 export interface ViewerState {
@@ -72,6 +72,8 @@ export interface ViewerState {
   tracker: boolean;
   /** Whether this caller holds the KNOWLEDGE base — every page question. */
   knowledge: boolean;
+  /** Whether this caller holds the company's own CHAT — every room question. */
+  chat: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -157,6 +159,7 @@ function useViewerRead(): ViewerState {
     admin: holds(grants, ADMIN),
     tracker: holds(grants, TRACKER),
     knowledge: holds(grants, KNOWLEDGE),
+    chat: holds(grants, CHAT),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",

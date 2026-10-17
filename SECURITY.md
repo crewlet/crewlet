@@ -186,8 +186,8 @@ A few things worth knowing when deploying Crewlet:
   (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
   route and every socket question declares who may ask it — everybody, one of
-  the [three permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-  (`admin`, `tracker`, `knowledge`), or a verb the answer decides record by
+  the [four permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+  (`admin`, `tracker`, `knowledge`, `chat`), or a verb the answer decides record by
   record — and both transports are decided by the same registry, so a question
   cannot be reached by choosing a channel. A route registered without saying
   so is a build failure rather than a route that answers to anyone.
@@ -281,7 +281,7 @@ A few things worth knowing when deploying Crewlet:
   than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
   states its own `grants` — required and non-empty, naming only `admin`,
-  `tracker` and `knowledge`, and refused for `admin` on a node that refuses it
+  `tracker`, `knowledge` and `chat`, and refused for `admin` on a node that refuses it
   — and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node

@@ -29,6 +29,7 @@ const BOUND: ViewerState = {
   admin: false,
   tracker: true,
   knowledge: false,
+  chat: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

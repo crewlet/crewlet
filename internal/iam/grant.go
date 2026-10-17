@@ -4,7 +4,7 @@ import "slices"
 
 // Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
-// A CLOSED SET OF THREE (ADR-0033), and the set is the whole point. Eleven
+// A CLOSED SET OF FOUR (ADR-0033), and the set is the whole point. Eleven
 // grants carved the engine by surface — a read of the board, a read of the
 // trail, a read of the document, a write of work, a write of pages, the
 // credential store twice, the deployment, the directory, a coding run — and a
@@ -17,7 +17,8 @@ import "slices"
 //
 //   - [GrantAdmin] runs the company and the engine, and includes every app;
 //   - [GrantTracker] uses the native work tracker, read and write;
-//   - [GrantKnowledge] uses the native knowledge base, read and write.
+//   - [GrantKnowledge] uses the native knowledge base, read and write;
+//   - [GrantChat] uses the native chat, read and write.
 //
 // Everything else a person sees — the org chart, the agents' status, spend,
 // schedules — is EVERYBODY's, and asks no permission at all; what a team lead
@@ -79,6 +80,22 @@ const (
 	// what every seat reads next turn — which is why the tool-skill pages,
 	// injected into every seat's prompt, are [GrantAdmin]'s and not this.
 	GrantKnowledge Grant = "knowledge"
+
+	// GrantChat uses the native chat: reading and searching the rooms its
+	// holder may see, posting, replying, reacting, opening a conversation,
+	// making a room, moving their own membership and keeping their read
+	// state.
+	//
+	// WHICH ROOM IS NEVER THIS PERMISSION'S. A public room and a unit's room
+	// are every holder's, and a private room, a group and a direct
+	// conversation are their MEMBERSHIP (internal/chat's Visible) — an
+	// administrator's included, who reads no conversation they are not in.
+	// And it is spoken in as a SEAT: a credential acting as itself holds it
+	// and still says nothing, because a room renders a speaker by seat
+	// (internal/authz's seated rows). A company whose chat is a vendor's
+	// (`chat.backend: vendor`) is given nothing by it, as the tracker app
+	// gives a company on Jira nothing.
+	GrantChat Grant = "chat"
 )
 
 // AllGrants are every permission this build knows, in declaration order.
@@ -86,7 +103,7 @@ const (
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
 // one principal's slice of it is a sentence that reads wrong either way.
-var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge}
+var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge, GrantChat}
 
 // Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
 // DECLARED.
@@ -96,9 +113,13 @@ var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge}
 // the company), [Expand] adds them to an administrator, the dashboard's access
 // picker ticks and locks them under Admin, and internal/authz's walks hold
 // every one of them to a verb a person can take. The dashboard's own copy is
-// held to this one by a gate, so a third app added here and nowhere else fails
-// the build rather than shipping a permission no screen offers.
-var Apps = []Grant{GrantTracker, GrantKnowledge}
+// held to this one by a gate, so an app added here and nowhere else fails the
+// build rather than shipping a permission no screen offers.
+//
+// APPENDED, NEVER INSERTED: the order is what [Expand] stores in a row and
+// what every list of an administrator's permissions reads in, so a new app
+// goes last and no stored row moves.
+var Apps = []Grant{GrantTracker, GrantKnowledge, GrantChat}
 
 // Valid reports whether a permission off the wire is one this build knows.
 //

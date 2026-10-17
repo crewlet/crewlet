@@ -79,6 +79,7 @@ const nobody: ViewerState = {
   admin: false,
   tracker: false,
   knowledge: false,
+  chat: false,
   handle: "",
   owner: "",
   name: "",

@@ -701,7 +701,7 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 		grants       []iam.Grant
 		pages, items bool
 	}{
-		{"both apps", slices.Clone(iam.Apps), true, true},
+		{"both apps", []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}, true, true},
 		{"admin, which includes both", []iam.Grant{iam.GrantAdmin}, true, true},
 		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, true},
 		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, true, false},
@@ -734,8 +734,9 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 	rig.grants = nil
 	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
 	var refused *builtin.DecisionRefused
+	both, _ := authz.AnyOf(authz.ActionKnowledgeAnswer)
 	if !res.Failed || !errors.As(res.Cause, &refused) ||
-		!slices.Equal(refused.Decision.Grants, iam.Apps) {
+		!slices.Equal(refused.Decision.Grants, both) {
 		t.Fatalf("an asker holding neither app = %+v, want the table's refusal naming "+
 			"both apps", res)
 	}

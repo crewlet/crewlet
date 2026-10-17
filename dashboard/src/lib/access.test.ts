@@ -25,8 +25,8 @@ import {
 
 describe("expand", () => {
   // ADMIN INCLUDES EVERY APP, as the engine's `iam.Expand` reads it, so a
-  // stored row of `[admin]` is read as holding the tracker and the knowledge
-  // base without listing them.
+  // stored row of `[admin]` is read as holding the tracker, the knowledge
+  // base and the chat without listing them.
   test("adds every app to a set holding admin, and nothing to one without", () => {
     expect(expand(["admin"])).toEqual(["admin", ...APPS]);
     expect(expand(["tracker"])).toEqual(["tracker"]);
@@ -39,6 +39,7 @@ describe("expand", () => {
       "admin",
       "knowledge",
       "tracker",
+      "chat",
     ]);
   });
 
@@ -55,7 +56,9 @@ describe("holds", () => {
   test("counts every app an admin carries", () => {
     expect(holds(["admin"], "tracker")).toBe(true);
     expect(holds(["admin"], "knowledge")).toBe(true);
+    expect(holds(["admin"], "chat")).toBe(true);
     expect(holds(["tracker"], "knowledge")).toBe(false);
+    expect(holds(["tracker"], "chat")).toBe(false);
     expect(holds(["tracker"], "admin")).toBe(false);
   });
 
@@ -83,6 +86,7 @@ describe("the words", () => {
   test("a set is said as Admin, its apps, or the overview", () => {
     expect(accessLine(["admin", "tracker", "knowledge"])).toBe("Admin");
     expect(accessLine(["knowledge", "tracker"])).toBe("Tracker · Knowledge");
+    expect(accessLine(["chat", "tracker", "knowledge"])).toBe("Tracker · Knowledge · Chat");
     expect(accessLine(["tracker"])).toBe("Tracker");
     expect(accessLine([])).toBe("Overview only");
   });

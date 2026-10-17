@@ -76,15 +76,23 @@ func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 		t.Errorf("removed %v", removed)
 	}
 	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}); a != nil ||
+		append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)); a != nil ||
 		r != nil {
 		t.Errorf("spelling out the apps admin includes is %v / %v, want nothing", a, r)
 	}
+	// Every app admin carried that the new row does not list goes with it —
+	// derived from iam.Apps, so a new app is counted without editing this case.
+	wantRemoved := []string{string(iam.GrantAdmin)}
+	for _, app := range iam.Apps {
+		if app != iam.GrantKnowledge {
+			wantRemoved = append(wantRemoved, string(app))
+		}
+	}
+	slices.Sort(wantRemoved)
 	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantKnowledge}); a != nil ||
-		!slices.Equal(r, []string{"admin", "tracker"}) {
-		t.Errorf("taking admin away is %v / %v, want admin and the app not kept "+
-			"removed", a, r)
+		[]iam.Grant{iam.GrantKnowledge}); a != nil || !slices.Equal(r, wantRemoved) {
+		t.Errorf("taking admin away is %v / %v, want %v removed: admin and every "+
+			"app it carried that the new row does not keep", a, r, wantRemoved)
 	}
 	if a, r := grantDelta(nil, nil); a != nil || r != nil {
 		t.Errorf("an empty change is %v / %v, want nothing", a, r)
