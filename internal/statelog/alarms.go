@@ -608,8 +608,8 @@ type Alarm struct {
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
 	// and "this node is 4m12s behind" is a fact. For a per-log condition
-	// it is the most pressing log's measurement; each log in [Alarm.Domains]
-	// carries its own.
+	// it is the most pressing log's measurement; each entry in
+	// [Alarm.Domains] carries its own logs'.
 	Detail string `json:"detail"`
 
 	// Remedy is what to do about it. Carried on the alarm rather than
@@ -632,7 +632,13 @@ type Alarm struct {
 	// raised `trim_blocked` once per log told the health count four while
 	// the gauge said one, and drew one cause as four problems on the
 	// operator's screen. Detail is the most pressing log's measurement;
-	// each entry here carries its own.
+	// each entry here carries its own logs'.
+	//
+	// ONE ENTRY PER MEASUREMENT, naming every log it was taken on, where no
+	// trim term holds them ([AlarmDomain.Domains]). A deployment minutes old
+	// with no backup measures the same sentence on every log, and an entry
+	// per log made every surface print it once per log under a headline
+	// that was already that sentence.
 	//
 	// THE LOG LINES ARE STILL PER LOG. The [Tracker] forms one instance per
 	// (kind, log) from this list, so a second log joining a kind that is
@@ -643,14 +649,23 @@ type Alarm struct {
 	Domains []AlarmDomain `json:"domains,omitempty"`
 }
 
-// AlarmDomain is one log an alarm stands on, and what was measured there.
+// AlarmDomain is one measurement an alarm stands on, and the logs it was
+// taken on.
 type AlarmDomain struct {
-	// Domain is the log's registered name.
-	Domain string `json:"domain"`
+	// Domains is the logs' registered names, in the report's own order —
+	// never empty. ONE LOG WHEREVER Term IS SET: a held trim's entry carries
+	// that log's own instant and its own count of what it keeps, which no
+	// other log shares. EVERY LOG MEASURED IDENTICALLY otherwise, so a
+	// measurement the report took on five logs in the same words is carried
+	// once, naming the five, and each surface renders what it is given
+	// rather than folding repeats of its own: a young fleet's missing backup
+	// was printed once per log under a headline that already said it, on
+	// the dashboard and in `crewlet retention status` alike.
+	Domains []string `json:"domains"`
 
-	// Detail is this log's own measurement, in the operator's units —
-	// under [KindBackupAge], followed by its held trim's where Term is set,
-	// since that log raises no [KindTrimBlocked] to say it.
+	// Detail is these logs' measurement, in the operator's units — under
+	// [KindBackupAge], followed by the held trim's where Term is set, since
+	// that log raises no [KindTrimBlocked] to say it.
 	Detail string `json:"detail"`
 
 	// Term is the trim term holding this log, where the alarm is about its

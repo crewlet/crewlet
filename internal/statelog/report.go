@@ -1202,7 +1202,9 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 // operator has to look at. So a kind raised on several logs is one alarm
 // listing them ([Alarm.Domains]), each with its own measurement and the most
 // pressing log's as its detail, rather than one alarm per log that the health
-// count would add up and the gauge would not. The log lines are the one
+// count would add up and the gauge would not. A measurement taken in the same
+// words on several logs no term holds is ONE entry naming them ([withEntry]),
+// so no surface draws one sentence once per log. The log lines are the one
 // surface that stays per log, and the [Tracker] forms them from this list.
 //
 // # A trim the backup policy holds is the backup alarm's
@@ -1268,7 +1270,7 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 		heldByBackup := d.BlockedBy == TermBackupFloor && trimAt >= 0 &&
 			slices.ContainsFunc(fired, func(a Alarm) bool { return a.Kind == KindBackupAge })
 		for _, a := range fired {
-			entry := AlarmDomain{Domain: d.Domain, Detail: a.Detail}
+			entry := AlarmDomain{Domains: []string{d.Domain}, Detail: a.Detail}
 			switch a.Kind {
 			case KindTrimBlocked:
 				if heldByBackup {
@@ -1291,7 +1293,7 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 				at[a.Kind] = slot
 				out = append(out, Alarm{Kind: a.Kind, Remedy: a.Remedy})
 			}
-			out[slot].Domains = append(out[slot].Domains, entry)
+			out[slot].Domains = withEntry(out[slot].Domains, entry)
 			if current, has := lead[a.Kind]; !has || morePressing(a.Kind, perDomain, current) {
 				lead[a.Kind] = perDomain
 				out[slot].Detail = entry.Detail
@@ -1304,6 +1306,21 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 		return tableIndex(a.Kind) - tableIndex(b.Kind)
 	})
 	return out
+}
+
+// withEntry is an alarm's entries with one more log's: carried on the entry
+// already naming the same measurement where no trim term holds either, and as
+// an entry of its own otherwise ([AlarmDomain.Domains]).
+func withEntry(entries []AlarmDomain, entry AlarmDomain) []AlarmDomain {
+	if entry.Term == "" {
+		if i := slices.IndexFunc(entries, func(e AlarmDomain) bool {
+			return e.Term == "" && e.Detail == entry.Detail
+		}); i >= 0 {
+			entries[i].Domains = append(entries[i].Domains, entry.Domains...)
+			return entries
+		}
+	}
+	return append(entries, entry)
 }
 
 // pastWindow is how many records a domain's log holds that are older than the
