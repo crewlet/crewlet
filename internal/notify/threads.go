@@ -152,7 +152,6 @@ type FollowStore interface {
 	Follow(ctx context.Context, backend, seat, channel, thread string, at time.Time,
 		choose func(held string, following bool) string) (string, error)
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
-	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }
 
 // ChatMessage is one inbound chat message, in backend-neutral terms.
@@ -391,9 +390,4 @@ func (t *ThreadTracker) Participated(ctx context.Context, seat, channel, thread 
 	}
 	_, err := t.assert(ctx, seat, channel, thread, FollowParticipated, at)
 	return err
-}
-
-// Unfollow drops a follow, reporting whether one was there.
-func (t *ThreadTracker) Unfollow(ctx context.Context, seat, channel, thread string) (bool, error) {
-	return t.store.Unfollow(ctx, t.Backend(), seat, channel, thread)
 }

@@ -59,15 +59,6 @@ func (f *follows) Following(_ context.Context, backend, handle, channel, thread 
 	return reason, ok, nil
 }
 
-func (f *follows) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := f.key(backend, handle, channel, thread)
-	_, ok := f.held[key]
-	delete(f.held, key)
-	return ok, nil
-}
-
 func (f *follows) reason(handle, channel, thread string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
