@@ -24,6 +24,7 @@ import type { BackupPointRow, BackupsAnswer } from "~/contract/backups.ts";
 import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { engineAlarms } from "~/test/retentionAlarms.ts";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -521,13 +522,7 @@ test("the alarms lead the page, and the backup they ask for is the page bar's on
     snapshots: [],
     replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
     backup_owner: "platform-oncall",
-    alarms: [
-      {
-        kind: "backup_age",
-        detail: "no verified backup of this log has been recorded",
-        remedy: "Run `crewlet backup` against any node.",
-      },
-    ],
+    alarms: engineAlarms("young"),
   } as RetentionReport;
   mount({}, { retention: report });
   await settle();
@@ -580,14 +575,13 @@ describe("arriving for the alarms", () => {
     register_readable: true,
     snapshots: [],
     replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
-    alarms: [
-      {
-        kind: "backup_age",
-        detail: "no verified backup has been recorded",
-        remedy: "Run `crewlet backup` against any node.",
-      },
-    ],
+    // THE ENGINE'S OWN RENDERING of a fleet with no backup yet: one alarm,
+    // every log named under it with its own sentence.
+    alarms: engineAlarms("young"),
   } as RetentionReport;
+  /** The alarm's headline: the leading log's measurement, as a sentence. */
+  const headline =
+    /^No verified backup of this log has been recorded, and the policy asks for one every 24h\.$/;
 
   test("the alarm list is brought into view", async () => {
     location.hash = "#/settings/backups?at=alarms";
@@ -597,16 +591,19 @@ describe("arriving for the alarms", () => {
     // Its rows say the kind in words and what was measured as a sentence,
     // with no dash between them.
     expect(screen.getByText("Backup age")).toBeTruthy();
-    expect(screen.getByText(/No verified backup has been recorded\./).textContent).not.toMatch(
-      /\u2014/,
-    );
+    expect(screen.getByText(headline).textContent).not.toMatch(/\u2014/);
+    // EVERY LOG IS NAMED, each a way to its own page.
+    const alarms = document.getElementById("retention-alarms") as HTMLElement;
+    for (const { domain } of report.alarms[0]?.domains ?? []) {
+      expect(within(alarms).getByRole("link", { name: domain })).toBeTruthy();
+    }
   });
 
   test("a reader who came for the page is left at its top", async () => {
     location.hash = "#/settings/backups";
     mount({}, { retention: report });
     await settle();
-    expect(screen.getByText(/No verified backup has been recorded\./)).toBeTruthy();
+    expect(screen.getByText(headline)).toBeTruthy();
     expect(scrolled).toEqual([]);
   });
 });
