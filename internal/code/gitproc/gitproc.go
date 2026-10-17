@@ -183,11 +183,15 @@
 //
 // Every stderr line is read as it arrives and classified by a table built
 // from real damaged repositories (classify_test.go): a pack, index or
-// multi-pack-index git could not read ([ErrCorrupt]), an object git could
-// not find ([ErrMissingObject]), a want upload-pack does not serve
-// ([ErrNotOurRef]) — never a rebuild trigger, since an absent want and a
-// cache that lost a pack print the same line — or none of those
-// ([ErrFailed]). LC_ALL=C, because the table matches git's English.
+// multi-pack-index git could not read — git 2.47's "invalid MIDX object
+// position, MIDX is likely corrupt" for a bitmap read through a damaged
+// reverse index among them ([ErrCorrupt]), an object git could not find
+// ([ErrMissingObject]), a want upload-pack does not serve ([ErrNotOurRef]) —
+// never a rebuild trigger, since an absent want and a cache that lost a pack
+// print the same line — or none of those ([ErrFailed]). LC_ALL=C, because the
+// table matches git's English. Git's words met anywhere else — the side band
+// of upload-pack's answer, where its pack-objects names a fetch's damage — are
+// read by the same table ([Words]).
 //
 // # Measured
 //

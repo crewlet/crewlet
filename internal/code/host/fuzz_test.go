@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitref"
 )
@@ -180,6 +182,46 @@ func FuzzPktLines(f *testing.F) {
 		}
 		if !bytes.Equal(data, raw) {
 			t.Fatalf("side band %d carried %d bytes back of %d", ch, len(data), len(raw))
+		}
+	})
+}
+
+// FuzzAnswerScan: an upload-pack answer is read alike however its writes cut
+// it — the pool hands a fetch's sink whatever pieces git's pipe gave it — and
+// the reading never panics nor holds more than gitproc.MaxLine of a side
+// band's line. Seeded with git's own answers and a damaged clone's.
+func FuzzAnswerScan(f *testing.F) {
+	for _, seed := range gitTranscripts(f) {
+		f.Add(seed, []byte{3, 7, 250})
+	}
+	damaged := string(pktString("packfile\n")) +
+		string(pktLine(append([]byte{bandProgress}, "fatal: invalid MIDX object position, MIDX is likely corrupt\n"...))) +
+		string(pktLine(append([]byte{bandError}, "aborting due to possible repository corruption\n"...))) + flushPkt
+	f.Add([]byte(damaged), []byte{1, 2, 3, 4, 5})
+	f.Add([]byte(damaged), []byte{20, 9})
+	f.Add([]byte(string(pktString("NAK\n"))+"PACK\x00\x00\x00\x02"), []byte{2})
+	f.Fuzz(func(t *testing.T, answer, cuts []byte) {
+		var whole, pieces answerScan
+		whole.scan(answer)
+		whole.finish()
+		rest := answer
+		for _, c := range cuts {
+			n := int(c) % (len(rest) + 1)
+			pieces.scan(rest[:n])
+			rest = rest[n:]
+		}
+		pieces.scan(rest)
+		pieces.finish()
+		if whole.begun != pieces.begun || whole.raw != pieces.raw ||
+			!errors.Is(whole.words.Kind(), pieces.words.Kind()) || whole.words.Named() != pieces.words.Named() {
+			t.Fatalf("read whole: begun %v raw %v %v %q; in pieces: begun %v raw %v %v %q", whole.begun,
+				whole.raw, whole.words.Kind(), whole.words.Named(), pieces.begun, pieces.raw,
+				pieces.words.Kind(), pieces.words.Named())
+		}
+		for i, text := range pieces.text {
+			if len(text) > gitproc.MaxLine {
+				t.Fatalf("band %d holds a line of %d bytes", i+2, len(text))
+			}
 		}
 	})
 }

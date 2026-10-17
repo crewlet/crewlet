@@ -80,9 +80,24 @@ type RebuildReason string
 
 const (
 	// RebuildCorrupt is a git process in the cache classified
-	// gitproc.ErrCorrupt: a pack, an index or a multi-pack-index git could
-	// not read.
+	// gitproc.ErrCorrupt whose damage is NOT confined to the
+	// multi-pack-index (RebuildMidx is that): a pack or an index git could
+	// not read, which only a whole re-read from the object store repairs.
 	RebuildCorrupt RebuildReason = "corrupt"
+	// RebuildMidx is damage confined to the multi-pack-index — its reverse
+	// index, its bitmap, or the index itself (gitproc.ErrCorrupt whose line
+	// names the multi-pack-index: "invalid MIDX object position", "MIDX is
+	// likely corrupt", or "...multi-pack-index..."). It is a DERIVED file git
+	// only mmaps, written by the maintainer from the packs the incarnation
+	// already holds, so it is repaired IN PLACE like a shape: a whole read
+	// that DROPS the damaged multi-pack-index (and its bitmap and .rev; the
+	// commit-graph, which names no position in it, is kept) so
+	// the round or the maintainer writes a sound one over the same packs —
+	// no download, no new incarnation, where a whole-repository rebuild
+	// would GET every pack again (thousands, for a large repository). Only
+	// damage that SURVIVES this in-place repair — a pack the dropped index
+	// named is itself damaged — escalates to RebuildCorrupt (repair.go).
+	RebuildMidx RebuildReason = "midx"
 	// RebuildMissing is a git process in the cache classified
 	// gitproc.ErrMissingObject: an object a row names that no installed
 	// pack holds.
@@ -117,12 +132,29 @@ const (
 )
 
 // RebuildReasons is every [RebuildReason].
-var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildShape, RebuildStream, RebuildRewound,
-	RebuildVerify}
+var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMidx, RebuildMissing, RebuildShape, RebuildStream,
+	RebuildRewound, RebuildVerify}
 
-// gitReasons are the reasons a git process's failure gives (DamageReason):
-// the ones Rebuild takes.
+// gitReasons are the reasons a git process's failure gives through
+// [DamageReason] and [ShapeReason] and that reach [askRebuild] — so the ones
+// crewlet.code.cache.rebuild.refusals can carry. RebuildMidx is NOT one: it is
+// supplied by the host (a fetch whose side band names the multi-pack-index),
+// is always repaired in place, and so is never refused.
 var gitReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildShape}
+
+// rebuildReasons are every reason [Cache.Rebuild] takes: the git reasons plus
+// the host's RebuildMidx.
+var rebuildReasons = append(append([]RebuildReason{}, gitReasons...), RebuildMidx)
+
+// inPlaceReasons are the damage a WHOLE READ IN PLACE repairs — no new
+// incarnation, no download: a shape its sweep puts right (RebuildShape), and a
+// multi-pack-index its round drops and rewrites over the same packs
+// (RebuildMidx). The others replace the incarnation.
+var inPlaceReasons = []RebuildReason{RebuildShape, RebuildMidx}
+
+// inPlace reports whether r is repaired by a whole read in place rather than a
+// new incarnation.
+func inPlace(r RebuildReason) bool { return slices.Contains(inPlaceReasons, r) }
 
 // Valid reports whether r is one of [RebuildReasons].
 func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) }
@@ -180,6 +212,15 @@ func ShapeReason(err error) (RebuildReason, bool) {
 //     incarnation holds — no new incarnation, no download, and none of a
 //     rebuild's refusals, since it costs a read of the rows. A shape that
 //     sweep did not end is rebuilt by the round itself (Cache.run).
+//   - [RebuildMidx] reads the incarnation whole IN PLACE the same way, and
+//     its round DROPS the damaged multi-pack-index (apply) so it or the
+//     maintainer writes a sound one over the same packs — no download —
+//     whatever else the incarnation is already marked to be read whole for
+//     (a shape, a log recreated or gone back), which the read is then
+//     counted under instead (dropMidx). The
+//     host asks it only when a fetch's side band names the multi-pack-index;
+//     damage it does not end (a pack the index named is itself damaged)
+//     escalates to [RebuildCorrupt] on the retry (repair.go).
 //   - [RebuildCorrupt] and [RebuildMissing] replace it with the NEXT
 //     incarnation, read whole at the log's head: one whose rebuild is queued
 //     or running joins it, and one a rebuild could not end the failure of is
@@ -191,9 +232,9 @@ func ShapeReason(err error) (RebuildReason, bool) {
 // caller's wait and nothing else: the repair runs on for anybody else
 // waiting on it.
 func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason) (Synced, error) {
-	if !slices.Contains(gitReasons, reason) {
+	if !slices.Contains(rebuildReasons, reason) {
 		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process over the cache "+
-			"failed with, one of %v, and %q is not", ErrInvalid, gitReasons, reason)
+			"failed with, one of %v, and %q is not", ErrInvalid, rebuildReasons, reason)
 	}
 	if err := c.handedOut(failed, "a rebuild"); err != nil {
 		return Synced{}, err
@@ -225,11 +266,13 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason
 		e.mu.Unlock()
 		return c.Sync(ctx, e.id, linearizable)
 	}
-	if reason == RebuildShape {
-		// IN PLACE: a linearizable caller joins only the round queued
-		// behind the one running, which starts after the mark and so reads
-		// the incarnation whole.
-		markWhole(failed.inc, RebuildShape)
+	if inPlace(reason) {
+		// IN PLACE (a shape, or a damaged multi-pack-index): a linearizable
+		// caller joins only the round queued behind the one running, which
+		// starts after the mark and so reads the incarnation whole — the
+		// midx case dropping the damaged index so the round rewrites it, with
+		// no download and no new incarnation (apply).
+		markWhole(failed.inc, reason)
 		w := newWaiter(linearizable)
 		c.join(e, w)
 		e.mu.Unlock()

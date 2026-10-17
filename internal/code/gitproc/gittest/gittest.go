@@ -105,6 +105,46 @@ func Require(t testing.TB) string {
 	return git
 }
 
+// NamesMidxPosition is the first git that checks every object position it
+// reads through a multi-pack-index and dies naming one past its objects
+// ("invalid MIDX object position, MIDX is likely corrupt"). Before it, a
+// bitmapped walk over a damaged reverse index dies of a segmentation fault and
+// says nothing — so a case whose SUBJECT is that message has nothing to
+// provoke on an older git, and skips there, declared (internal/skipgate's
+// allowed.go) rather than read as a pass: the engine image's git (2.47) and
+// CI's say it.
+var NamesMidxPosition = gitproc.Version{Major: 2, Minor: 47}
+
+// MidxChunk is where chunk id lies in the multi-pack-index at path — its first
+// byte and the byte past its last — read from the file's own chunk table, for
+// a case that damages one chunk: a twelve-byte header whose seventh byte
+// counts the chunks, then a row for each chunk and one ending the table, each
+// a four-byte id and an eight-byte offset, every chunk ending where the next
+// row's begins. It fails t on a file shorter than its table, or with no such
+// chunk.
+func MidxChunk(t testing.TB, path, id string) (start, end int64) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) < 12 {
+		t.Fatalf("%s is %d bytes, shorter than a multi-pack-index's header", path, len(body))
+	}
+	chunks := int(body[6])
+	if len(body) < 12+12*(chunks+1) {
+		t.Fatalf("%s is %d bytes, shorter than its table of %d chunks", path, len(body), chunks)
+	}
+	for i := range chunks {
+		row := body[12+12*i:]
+		if string(row[:4]) == id {
+			return int64(binary.BigEndian.Uint64(row[4:12])), int64(binary.BigEndian.Uint64(row[16:24]))
+		}
+	}
+	t.Fatalf("%s has no %s chunk", path, id)
+	return 0, 0
+}
+
 // Client is a person's or a fixture's git.
 type Client struct {
 	git  string

@@ -612,6 +612,33 @@ failing on one damaged copy cost one repair. How depends on the damage:
   from the rows and the object store into a new directory beside the damaged
   one, which replaces it once it is complete. Requests already reading the old
   copy finish on it.
+- **Its multi-pack-index.** The index git builds over the packs (its reverse
+  index and its bitmap) is a DERIVED file, written on the node from the packs
+  it already holds. A clone over one whose positions are damaged makes git die
+  `invalid MIDX object position, MIDX is likely corrupt` (git 2.47 and later;
+  an older git crashes there without a word) as it starts building the pack,
+  after the answer's first line — so a fetch's answer starts only once its pack
+  does, and the damage, which git names in the answer's side band, is read
+  there. Because the index is derived, it is put right **in place**: the copy
+  is read whole again in the same directory with its multi-pack-index dropped,
+  so the node rewrites a sound one over the same packs — no download, no new
+  directory. Only damage that survives that — a pack the index named is itself
+  damaged — falls through to a pack rebuild above. Before, such a clone failed
+  with `aborting due to possible repository corruption on the remote side` on
+  every clone of the copy until an operator repaired it.
+
+Damage is read only from what a request cannot write. Git repeats the words of
+a request line it refuses in its own error message, so a fetch is judged by
+what git says in its answer's side band — the words of the process that builds
+the pack — and by the node's own refusal of a copy's shape, made before git
+starts, never by the messages the fetch's own git process prints: read there, a
+request quoting `is corrupt` would have the node read the repository whole
+again from the object store. So damage a fetch's negotiation meets before its
+answer begins — an object the fetch names that git cannot read — fails that
+fetch in git's own words, and is repaired by the next request that meets the
+same object where no request writes (the node looks up every object a fetch
+wants before serving it, and a clone packs every object), or by a check asked
+to repair it (below).
 
 A rebuild that does not end the failure is not repeated at once: the damage is
 then in the object store or in the rows rather than in the node's copy, and
@@ -908,11 +935,13 @@ connection, at its turn: the engine's listener speaks HTTP/1.1, where a client
 that hung up is heard only by reading from it.
 `crewlet.code.host.spool.waits` counts every wait by how it ended.
 
-A spooled request holds its room until git has read it and started its
-answer — through its sync — so what a request behind it waits for is that
-sync: a moment on a node that holds the repository, and on a node that does
-not, a **cold** sync of about 70 to 130 s at 10 000 pushes, longer than the
-wait. Behind one token, as many checkouts large enough to spool run at once
+A spooled request holds its room until the answer's first byte — through its
+sync, git's read of it, and, for a fetch, its `pack-objects` before the pack
+begins (at most a progress line or one keepalive, 5 s, for a client using
+side-band) — so what a request behind it waits for is that sync: a moment on a
+node that holds the repository, and on a node that does not, a **cold** sync of
+about 70 to 130 s at 10 000 pushes, longer than the wait, plus each fetch's
+pack-objects. Behind one token, as many checkouts large enough to spool run at once
 as their requests fit in the token's quarter of the room, and the rest wait
 for them; on a cold node the ones past the quarter fail. N runners asking for
 B bytes each fail their checkouts there once N × B passes the quarter:
@@ -926,8 +955,10 @@ the syncs warm. A request past what the node spools for one request —
 at most 64 MiB, about 1.3 million objects, a quarter of the allowance on a
 node of fewer than four transfer slots — is answered 413 at once, since this
 node will never take it: fetch fewer objects at once, as a sparse checkout
-does. A request's memory and its spool are given back as soon as git has read
-it and started its answer, not when a slow client finishes downloading. A
+does. A request's memory and its spool are given back at the answer's first byte —
+for a fetch, its pack's, after `pack-objects` has run (at most a progress line
+or one keepalive for a side-band client) — not when a slow client finishes
+downloading. A
 blobless clone needs protocol v2, git's default since 2.28 — under v0 a fetch
 of a blob the client never saw advertised is refused.
 
@@ -1049,7 +1080,7 @@ reference](../reference/metrics.md)).
 | `code_retention_duty_declined` | `WARN` | This node's copy of the code log is out of service, so it does not take the duty. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the token and the person it is bound to, the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
-| `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request, or the node would not run git in it for its shape (`reason`: `corrupt`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape in place, damage to its packs by a rebuild — and git run again over the same request. |
+| `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request — a fetch's in an advertisement, in the node's check of which of the fetch's wants the copy lacks, or, for a pack it was building, in the answer before the pack began, but never in the messages the fetch's own git process prints, which repeat the request's words (`error` quotes git's words) — or the node would not run git in it for its shape (`reason`: `corrupt`, `midx`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape or a damaged multi-pack-index (`midx`) in place, damage to its packs or objects by a rebuild — and git run again over the same request. |
 | `code_git_refused` | `ERROR` | The node refused its own call serving a request because the call is wrong — a git configuration key or variable outside what the node allows, a call without a deadline, a malformed command, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or because its git should never have started; answered 500 with no `Retry-After`. A bug in the build the node runs: report the line. |
 | `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut); or the request failed on the node itself before git answered (`reason`: `node` — its disk refusing a write into the repository's copy, or anything else the engine did not name; the `error` says what), answered 503. |
 | `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a copy out of service, no data node answering), answered 503. Only the code log's own failure is logged so. |
@@ -1094,6 +1125,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_sync_restarted` | `INFO` | A repository's rows moved under a read that spans pages — the log under it re-anchored — and the read began again from its first page (`restart`); it begins again at most three times, and a sync whose history moves a fourth time fails. |
 | `code_sync_damaged` | `INFO` | The node's own sync of a repository — peeling the tags it sets, in the repository's copy — found the copy damaged, or the node would not run git in it for its shape, or still would not once the sync had read it whole (`reason`: `corrupt`, `missing`, `shape`, with git's `error`; `swept` true when the sync had read the copy whole); the copy is repaired as a request's would be — a shape the sync did not read whole in place, anything else by a rebuild — and the sync answered by the repair. A check's own sync repairs nothing: what it met is the check's first finding. |
 | `code_cache_reshaped` | `WARN` | A repository's copy the node would not run git in because it was not the shape the engine writes was read whole again in place, every pack it holds reused; `moved` is how many files the engine never writes there went to the trash. One is a disk's bad moment or a person's edit; a run of them is something outside the engine writing into the cache's directory. Counted as `crewlet.code.cache.rebuilds{reason=shape}`. |
+| `code_cache_midx_repaired` | `WARN` | A repository's copy whose multi-pack-index git could not read (`MIDX is likely corrupt`, named in a fetch's answer) had that index dropped in place, its packs and its commit-graph kept, none downloaded; the node writes a sound one over the same packs, and the fetch is served meanwhile from the packs themselves. Counted as `crewlet.code.cache.rebuilds{reason=midx}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, and the copy is rebuilt (`code_cache_rebuilt`, `corrupt`). |
 | `code_cache_rebuilt` | `WARN` | git found a repository's copy damaged, or the node still would not run git in it for its shape after reading it whole in place, and the node rebuilt it beside the damaged one from the rows and the object store; `reason` is what git found (`corrupt`, `missing`, `shape`), or `verify` for a repair asked for. One is a disk's bad moment; a run of them is a disk to replace — and a `shape` here, something that keeps writing into the cache's directory. |
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
 | `code_cache_rebuild_seeded` | `INFO` | A repair (`crewlet code verify` asked to repair) linked the `packs` it had found whole into the new copy, of the `whole` it checked, so it downloads only the rest. |

@@ -142,9 +142,12 @@
 // its quarter fails the rest on a cold node. The wants are read back from
 // wherever the request is, as a stream, by the negotiation's parse and by the
 // cache's check of what it lacks, and never held whole; and the request is
-// GIVEN BACK the moment upload-pack has read it and started its answer, since
-// a retry over it happens only before that byte — never held through a
-// transfer its client paces.
+// GIVEN BACK when the answer's FIRST BYTE is written, since a retry over it
+// happens only before that byte. For a fetch that first byte is its PACK's
+// (body.go): upload-pack writes its opening line, then runs pack-objects, so
+// the request and its spool are held through pack-objects' enumeration — at
+// most a progress line or one keepalive (5 s) for a side-band client, and
+// until the raw pack otherwise — never through the transfer its client paces.
 //
 // # A refusal is decided before the bytes, and said in git's own words
 //
@@ -167,9 +170,26 @@
 // cache REPAIRED — a shape in place, with no download, a pack or an object
 // into the next incarnation — and runs once more over the repaired one
 // (repair.go): the cache is disposable, so damage it can name is its own to
-// repair, never the client's to retry. And every failure before the first
-// byte is answered as what it is (refuse.go), identified by what failed and
-// never by elimination: the code log failing (marked where it is met, so its
+// repair, never the client's to retry. DAMAGE IS READ ONLY WHERE NO REQUEST
+// WRITES: upload-pack echoes its request on its own stderr when it refuses a
+// line, so for its run the host reads git's words from the answer's side
+// band alone and, beside them, the pool's refusal of the incarnation's shape,
+// made before git starts (fetchDamage) — a request quoting a damage phrase
+// forces no rebuild, and damage upload-pack meets itself before its first
+// byte (an object its negotiation cannot parse) is answered in git's words
+// and repaired by the next request that meets it where no request writes, or
+// by an operator's check. A FETCH'S FIRST BYTE IS ITS PACK'S:
+// upload-pack writes its answer's first line before its pack-objects runs, and
+// pack-objects names the damage it meets — "invalid MIDX object position,
+// MIDX is likely corrupt", over a multi-pack-index bitmap whose reverse index
+// is damaged — only in the side band of that answer, upload-pack's stderr
+// saying just that pack-objects died. So a fetch's answer is held until the
+// pack begins and its side band read by gitproc's own table (band.go,
+// gitproc.Words): a fetch whose pack-objects names damage before its pack is
+// repaired and run again like any other, where it was answered in git's words
+// on every clone of the copy, never repaired. And every failure before the
+// first byte is answered as what it is (refuse.go), identified by what failed
+// and never by elimination: the code log failing (marked where it is met, so its
 // sentence is never another failure's), the object store (the store's own
 // side of a download, never the node's files beside it), the node ending
 // git, git itself or an answer of git's the engine cannot read, a copy whose
