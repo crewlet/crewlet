@@ -387,7 +387,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 			"stream failed to come up")
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: sl.estate().Reader(), Log: running.reader,
+		DB:        sl.estate().Reader(),
 		Committed: running.runner.Committed,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace

@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -476,12 +475,7 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 	t.Cleanup(func() { _ = db.Close() })
 
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
-	log, err := statelogtest.LocalReader(iamdomain.Domain{}, db.Replicated(),
-		statelog.Position{})
-	if err != nil {
-		t.Fatalf("build the read authority: %v", err)
-	}
-	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: db.Replicated().Reader(), Log: log})
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: db.Replicated().Reader()})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
