@@ -431,6 +431,20 @@ func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
 	return out, nil
 }
 
+// removedWithStatement is [Writer.removedWith]'s one statement, named so the
+// plan test explains exactly what the restore issues.
+//
+// THE PARTIAL PREDICATE IS SPELLED OUT. `tracker_tasks_removed_with_idx` holds
+// only the rows `removed_with IS NOT NULL`, and this engine's planner does not
+// infer that from `removed_with = ?`, so without the term the index is not one
+// it may use: the restore reads every task in the company from the heap and
+// sorts the few it keeps.
+const removedWithStatement = `
+		SELECT id, project_key FROM tracker_tasks
+		WHERE removed_with IS NOT NULL AND removed_with = ?
+		  AND removed_at IS NOT NULL
+		ORDER BY depth, id`
+
 // removedWith is every task whose tombstone names this one as the gesture that
 // removed it.
 //
@@ -443,10 +457,7 @@ func (w *Writer) removedWith(ctx context.Context, id string) ([]Task, error) {
 	}
 	var out []Task
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id, project_key FROM tracker_tasks
-			 WHERE removed_with = ? AND removed_at IS NOT NULL
-			 ORDER BY depth, id`, id)
+		rows, err := tx.QueryContext(ctx, removedWithStatement, id)
 		if err != nil {
 			return err
 		}
