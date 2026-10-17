@@ -18,6 +18,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { engineAlarms } from "~/test/retentionAlarms.ts";
 
 afterEach(cleanup);
 
@@ -234,35 +235,13 @@ const twoAlarms = {
   alarms: { count: 2, worst: "backup_age" },
 };
 
-// ONE ALARM PER KIND, with the logs it stands on: three logs the missing
-// backup holds are the backup alarm's, and a log a slow node holds is the
-// trim alarm's.
-const held = (domain: string, term: string) => ({
-  domain,
-  detail: "the trim has not advanced for 3h",
-  term,
-  since: "2031-04-02T00:00:00Z",
-});
+// ONE ALARM PER KIND, with the logs it stands on, as the engine renders them:
+// every log the missing backup holds is the backup alarm's, and the one log
+// another term holds is the trim alarm's.
+const alarms = engineAlarms("held_beside_a_blocked_trim");
 const report = {
-  domains: ["tracker", "pages", "vectors", "usage"].map((domain) => ({ domain })),
-  alarms: [
-    {
-      kind: "backup_age",
-      detail: "no verified backup has been recorded",
-      remedy: "",
-      domains: [
-        held("tracker", "backup_floor"),
-        held("vectors", "backup_floor"),
-        held("usage", "backup_floor"),
-      ],
-    },
-    {
-      kind: "trim_blocked",
-      detail: "the trim has not advanced for 3h",
-      remedy: "",
-      domains: [held("pages", "applied")],
-    },
-  ],
+  domains: alarms.flatMap((a) => a.domains ?? []).map(({ domain }) => ({ domain })),
+  alarms,
 } as unknown as RetentionReport;
 
 describe("the row", () => {

@@ -30,6 +30,7 @@ import {
   Tombstone,
 } from "./Retention.tsx";
 import { Router } from "~/app/router.tsx";
+import { engineAlarm, ENGINE_ALARMS_NOW } from "~/test/retentionAlarms.ts";
 import type {
   RetentionAlarm,
   RetentionDomain,
@@ -333,14 +334,18 @@ test("an answer served at stale renders no banner at all", () => {
   expect(missing.container.textContent).toBe("");
 });
 
-const alarm = (over: Partial<RetentionAlarm>): RetentionAlarm => ({
-  kind: "backup_age",
-  detail: "no verified backup has been recorded, and the policy asks for one every 24h",
-  remedy: "Run `crewlet backup` against any node.",
+/**
+ * A `trim_blocked` or `log_headroom` alarm a case shapes for itself. The backup
+ * alarm is never typed here: every case drawing one reads the engine's own
+ * rendering (`~/test/retentionAlarms.ts`).
+ */
+const alarm = (over: Partial<RetentionAlarm> & Pick<RetentionAlarm, "kind">): RetentionAlarm => ({
+  detail: "",
+  remedy: "The term holding each log names what to fix.",
   ...over,
 });
 
-const NOW = Date.parse("2031-04-02T03:14:00Z");
+const NOW = ENGINE_ALARMS_NOW;
 const HELD_SINCE = "2031-03-31T05:14:00Z"; // 46h before NOW
 
 /** The engine's `trim_blocked` sentence for a log keeping `kept` records past its window. */
@@ -350,32 +355,29 @@ const keeping = (kept: number) =>
 // ONE CAUSE IS ONE ALARM. A company with no backup was drawn as a banner per
 // log, a `trim_blocked` per log and a backup alarm: five problems for one.
 // The logs one term holds are one line under the alarm whose remedy covers
-// them, dated by the one held longest — and each still says what it keeps
-// past its window, which is why it is listed at all and which no date says.
+// them, dated by the one held longest — and each still says its own backup's
+// measurement and what it keeps past its window, which is why it is listed at
+// all and which no date says.
 test("an alarm is drawn once, with the logs it holds as one line and each log's own count", () => {
-  const kept: Record<string, number> = { tracker: 1200, vectors: 40, pages: 7, usage: 310 };
-  const { container } = render(
-    <AlarmItem
-      alarm={alarm({
-        domains: Object.entries(kept).map(([domain, n]) => ({
-          domain,
-          detail: keeping(n),
-          term: "backup_floor" as const,
-          since: HELD_SINCE,
-        })),
-      })}
-      now={NOW}
-    />,
-  );
+  const backup = engineAlarm("held");
+  const domains = backup.domains ?? [];
+  const { container } = render(<AlarmItem alarm={backup} now={NOW} />);
   const text = container.textContent ?? "";
   expect(screen.getByText("Backup age")).toBeTruthy();
+  // THE HEADLINE IS THE MOST PRESSING LOG'S OWN MEASUREMENT, as a sentence.
   expect(text).toContain(
-    "No verified backup has been recorded, and the policy asks for one every 24h.",
+    "No verified backup of this log has been recorded, and the policy asks for one every 24h; " +
+      "the trim has not advanced for 46h",
   );
   expect(text.match(/Trim held by/g)).toHaveLength(1);
-  expect(text).toContain("Trim held by the backup on tracker, vectors, pages and usage, for 46h.");
-  for (const [domain, n] of Object.entries(kept)) {
-    expect(text).toContain(`${domain}: ${keeping(n)}`);
+  const names = domains.map((d) => d.domain);
+  expect(text).toContain(
+    `Trim held by the backup on ${names.slice(0, -1).join(", ")} and ${names.at(-1)}, for 46h.`,
+  );
+  // EACH LOG SAYS ITS OWN COUNT, and no two say the same one.
+  expect(new Set(domains.map((d) => d.detail)).size).toBe(domains.length);
+  for (const d of domains) {
+    expect(text).toContain(`${d.domain}: ${d.detail}`);
   }
   // EACH LOG IS A WAY TO ITS OWN PAGE, wherever it is named.
   const links = screen.getAllByRole("link", { name: "pages" });
@@ -429,6 +431,18 @@ test("a trim blocked on one log says its count once", () => {
   expect(text).toContain("for 46h.");
 });
 
+// ONE LOG'S STALE COPY IS THE BACKUP ALARM'S WHOLE MEASUREMENT, folded into
+// the headline as any single log's is: the log is named beside it, and no
+// held trim is drawn for a hold that has not yet lasted past the window.
+test("a backup alarm on one log says that log's measurement once, beside it", () => {
+  const { container } = render(<AlarmItem alarm={engineAlarm("stale")} now={NOW} />);
+  const text = container.textContent ?? "";
+  expect(text.match(/30h old/g)).toHaveLength(1);
+  expect(text).toContain("tracker: The newest verified backup of this log is 30h old");
+  expect(screen.getByRole("link", { name: "tracker" })).toBeTruthy();
+  expect(text).not.toContain("Trim held by");
+});
+
 // A SINGLE LOG WHOSE MEASUREMENT IS THE ALARM'S IS FOLDED INTO IT, as the CLI
 // folds it: drawn as both the headline and a line, one sentence read twice.
 test("a single log's measurement is said once, with the log beside it", () => {
@@ -449,7 +463,10 @@ test("a single log's measurement is said once, with the log beside it", () => {
 // screen. Mutation: draw an alarm as a Callout and the first query finds one.
 test("an alarm is a row of the alarms card, with no button the page bar already offers", () => {
   const { container } = render(
-    <AlarmList alarms={[alarm({}), alarm({ kind: "trim_blocked" })]} now={NOW} />,
+    <AlarmList
+      alarms={[engineAlarm("held"), engineAlarm("held_beside_a_blocked_trim", "trim_blocked")]}
+      now={NOW}
+    />,
   );
   expect(container.querySelector(".crewlet-callout")).toBeNull();
   const rows = container.querySelectorAll(".alarm-rows > .alarm-row");
