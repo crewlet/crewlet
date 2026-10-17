@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -879,6 +880,71 @@ func TestASlowTurnStartAndASlowSearchAreTwoAlarms(t *testing.T) {
 				t.Fatalf("the alarms are %v, want %s and not %s", fired, tc.fires, tc.silent)
 			}
 		})
+	}
+}
+
+// A PERCENTILE INSIDE ITS BUDGET FIRES NOTHING, AND ONE PAST IT FIRES. Every
+// percentile the reading holds is read off a histogram, and a histogram's
+// quantile is the upper boundary of the bucket it falls in — so an alarm whose
+// budget is not a boundary is decided at the boundary above it. Under
+// twenty-one powers of two that was 512 ms for the 500 ms budgets of
+// `prefetch_slow` and `barrier_slow`, 1 024 ms for `search_slow`'s second and
+// 128 ms for `pool_starved`'s 100 ms: each fired at a p95 just past the
+// boundary below — 256, 256, 512 and 64 ms — and said the p95 was the boundary
+// above. Here each instrument is recorded at four fifths of its budget, which
+// is past that boundary below, and then just past its budget, and the reading
+// assembled from the recorder is evaluated.
+//
+// Mutation: put back a boundary set without the budgets in it, and the four
+// fifths fire.
+func TestAPercentileInsideItsBudgetFiresNothing(t *testing.T) {
+	t.Parallel()
+	answer := search.Answer{BucketsAnswered: 64, Served: knowledge.ModeHybrid}
+	for _, tc := range []struct {
+		kind   statelog.Kind
+		budget time.Duration
+		record func(*Engine, *metrics.Recorder, time.Duration)
+	}{
+		{statelog.KindBarrierSlow, statelog.ReadBudget / 4, func(_ *Engine, r *metrics.Recorder, d time.Duration) {
+			r.Observe(metrics.StatelogBarrierDuration, d, metrics.Attrs{"domain": "tracker"})
+		}},
+		{statelog.KindPrefetchSlow, statelog.PrefetchScanBudget, func(e *Engine, _ *metrics.Recorder, d time.Duration) {
+			e.reportSearch(search.FanQuery{Prefetch: true}, answer, d)
+		}},
+		{statelog.KindSearchSlow, statelog.InteractiveSearchTarget, func(e *Engine, _ *metrics.Recorder, d time.Duration) {
+			e.reportSearch(search.FanQuery{}, answer, d)
+		}},
+		{statelog.KindPoolStarved, statelog.PoolWaitAlarm, func(_ *Engine, r *metrics.Recorder, d time.Duration) {
+			r.Observe(metrics.StorePoolWait, d, metrics.Attrs{"file": "node"})
+		}},
+	} {
+		for _, arm := range []struct {
+			took  time.Duration
+			fires bool
+		}{
+			{tc.budget * 4 / 5, false},
+			{tc.budget + time.Millisecond, true},
+		} {
+			t.Run(fmt.Sprintf("%s at %v", tc.kind, arm.took), func(t *testing.T) {
+				t.Parallel()
+				recorder, err := metrics.New()
+				if err != nil {
+					t.Fatalf("recorder: %v", err)
+				}
+				e := &Engine{metrics: recorder}
+				for range 20 {
+					tc.record(e, recorder, arm.took)
+				}
+				var reading statelog.Reading
+				(&retention{metrics: recorder}).observed(&reading, nil)
+				if fired := firedKind(statelog.Evaluate(reading), tc.kind); fired != arm.fires {
+					t.Errorf("every observation at %v against a %v budget: %s fired = %v, want %v — the "+
+						"percentiles read as barrier %v, prefetch %v, search %v, pool wait %v", arm.took,
+						tc.budget, tc.kind, fired, arm.fires, reading.BarrierP95, reading.PrefetchP95,
+						reading.SearchP95, reading.PoolWaitP95)
+				}
+			})
+		}
 	}
 }
 

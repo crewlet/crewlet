@@ -121,17 +121,7 @@ func configureMeter(
 				sdkmetric.WithInterval(metricInterval(opts)))))
 	}
 
-	// THE HISTOGRAM BOUNDARIES ARE THE RECORDER'S, so a bucket on a
-	// collector's panel is the bucket the recorder counted into. The SDK's
-	// own default boundaries stop at 10 s, which is inside the range this
-	// engine measures — a 16-second apply would land in an overflow bucket
-	// and read as "at least 10 s" for ever.
-	providerOpts = append(providerOpts, sdkmetric.WithView(sdkmetric.NewView(
-		sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram},
-		sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
-			Boundaries: metrics.Bins(),
-		}},
-	)))
+	providerOpts = append(providerOpts, sdkmetric.WithView(histogramViews()...))
 
 	mp := sdkmetric.NewMeterProvider(providerOpts...)
 
@@ -248,6 +238,35 @@ func registerInstruments(mp otelmetric.MeterProvider, rec *metrics.Recorder) err
 		return fmt.Errorf("tracing: register the metrics callback: %w", err)
 	}
 	return nil
+}
+
+// histogramViews give every histogram in the catalogue the recorder's own
+// boundaries — its unit's ([metrics.Bounds]) — one view an instrument, by name.
+//
+// THE RECORDER'S, so a bucket on a collector's panel is the bucket the
+// recorder counted into and an alarm read. The SDK's own default boundaries
+// stop at 10 s, which is inside the range this engine measures — a
+// 16-second apply would land in an overflow bucket and read as "at least
+// 10 s" for ever. ONE VIEW AN INSTRUMENT rather than one for every
+// histogram, because the boundaries are the unit's and the catalogue records
+// in three: one view can hand every histogram only one set, and the one set
+// they had ended at 65 536, so every push's bundle past 64 KiB was exported
+// in the overflow.
+func histogramViews() []sdkmetric.View {
+	var views []sdkmetric.View
+	for _, inst := range metrics.Catalogue() {
+		if inst.Kind != metrics.KindHistogram {
+			continue
+		}
+		// metrics.Validate refuses a histogram whose unit has none, and
+		// the recorder this provider binds to was built through it.
+		bounds, _ := metrics.Bounds(inst.Unit)
+		views = append(views, sdkmetric.NewView(
+			sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram, Name: inst.Name},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: bounds}},
+		))
+	}
+	return views
 }
 
 // histogramFor builds the synchronous instrument a histogram records through.

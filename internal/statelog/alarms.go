@@ -282,6 +282,13 @@ type Reading struct {
 	RefusalsSince time.Duration
 
 	// BarrierP95 is the read barrier's 95th percentile.
+	//
+	// EVERY …P95 HERE IS A HISTOGRAM'S QUANTILE, the upper boundary of the
+	// bucket the percentile falls in ([metrics.Snapshot.Quantile]): "up to"
+	// this, and past the boundary below it. An alarm holds one to a budget
+	// that is itself a boundary, so it fires exactly when the percentile is
+	// past the budget (TestEveryPercentileAlarmIsDecidedAtABoundary), and its
+	// detail says "up to" rather than naming the boundary as the percentile.
 	BarrierP95 time.Duration
 
 	// HeadroomFraction is how much of the byte ceiling the log's ordinary
@@ -505,8 +512,8 @@ var table = []rule{
 	{
 		kind: KindBarrierSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the read barrier's p95 is %s, a quarter of the "+
-					"read budget", spoken(r.BarrierP95)),
+			return fmt.Sprintf("the read barrier's p95 is past %s, a quarter of the "+
+					"read budget: up to %s", spoken(ReadBudget/4), spoken(r.BarrierP95)),
 				r.BarrierP95 > ReadBudget/4
 		},
 		remedy: "The barrier is an append and a wait: check the broker's own " +
@@ -599,8 +606,8 @@ var table = []rule{
 		kind: KindPrefetchSlow,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the knowledge scans this node ran for turns' prefetches "+
-					"are %s at p95, against a %s budget", spoken(r.PrefetchP95),
-					spoken(PrefetchScanBudget)),
+					"are past their %s budget at p95: up to %s", spoken(PrefetchScanBudget),
+					spoken(r.PrefetchP95)),
 				r.PrefetchP95 > PrefetchScanBudget
 		},
 		remedy: "Every turn whose knowledge prefetch this node scans waits for the " +
@@ -613,8 +620,8 @@ var table = []rule{
 	{
 		kind: KindSearchSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("interactive search is %s at p95, against a %s target",
-					spoken(r.SearchP95), spoken(InteractiveSearchTarget)),
+			return fmt.Sprintf("interactive search is past its %s target at p95: up to %s",
+					spoken(InteractiveSearchTarget), spoken(r.SearchP95)),
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
@@ -794,8 +801,8 @@ var table = []rule{
 	{
 		kind: KindPoolStarved,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("a database connection takes %s at p95 to acquire",
-				spoken(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
+			return fmt.Sprintf("a database connection takes past %s at p95 to acquire: up to %s",
+				spoken(PoolWaitAlarm), spoken(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
 		},
 		remedy: "Raise `store.max_open_conns`, or find the caller holding one. " +
 			"Every read on this node is queuing before it starts.",

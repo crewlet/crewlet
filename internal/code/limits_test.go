@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE BOUNDS FIT THE BUDGETS THEY ARE SIZED FROM — each inequality a constant's
@@ -198,6 +199,45 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 		RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
 	}) {
 		t.Errorf("DefaultLimits is %+v, and config's defaults differ", got)
+	}
+}
+
+// EVERY PUSH IS COUNTED BELOW THE TOP BOUNDARY of the histograms that measure
+// it: its bundle in crewlet.code.push.bytes, whose byte boundaries must reach
+// the largest bundle one push may store (MaxPackBytes), and its duration in
+// the millisecond histograms, whose boundaries must reach the bound on the
+// longest transfer the engine paces (objstore.RecordWithin, which
+// TestTheBoundsFitTheReadAndPurgeBudgets holds the largest bundle at the
+// pacing floor under). Past its top boundary a
+// value lands in the overflow, where every push past 64 KiB was counted while
+// one set of boundaries ending at 65 536 served every unit.
+//
+// Mutation: end the byte boundaries below MaxPackBytes, or the millisecond
+// boundaries below twelve hours, and this fails.
+func TestEveryPushIsCountedBelowTheTopBoundary(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		unit, what string
+		largest    float64
+	}{
+		{metrics.UnitBytes, "the largest bundle one push may store (MaxPackBytes)", float64(code.MaxPackBytes)},
+		{metrics.UnitMilliseconds, "the longest transfer the engine paces (objstore.RecordWithin)",
+			float64(objstore.RecordWithin) / float64(time.Millisecond)},
+	} {
+		bounds, ok := metrics.Bounds(tc.unit)
+		if !ok {
+			t.Errorf("%q has no histogram boundaries", tc.unit)
+			continue
+		}
+		if top := bounds[len(bounds)-1]; top < tc.largest {
+			t.Errorf("the %s histograms end at %v, below %s, %v: it is counted in the overflow", tc.unit,
+				top, tc.what, tc.largest)
+		}
+	}
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.CodePushBytes && in.Unit != metrics.UnitBytes {
+			t.Errorf("%s is recorded in %q, not in the bytes the bound above is stated in", in.Name, in.Unit)
+		}
 	}
 }
 

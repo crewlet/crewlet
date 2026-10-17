@@ -918,6 +918,12 @@ func Validate(entries []Instrument) error {
 			return fmt.Errorf("metrics: %q has no unit: a number with no unit "+
 				"is one a collector cannot convert and a reader cannot check",
 				e.Name)
+		case e.Kind == KindHistogram && boundsOf(e.Unit) == nil:
+			return fmt.Errorf("metrics: %q is a histogram in %q, which has no "+
+				"boundaries: a histogram counts into its unit's (Bounds), and a "+
+				"unit with none would count every value into one bucket — "+
+				"record it in a unit that has them, or give that unit a set",
+				e.Name, e.Unit)
 		case e.Shows == "":
 			return fmt.Errorf("metrics: %q does not say which failure it makes "+
 				"visible: an instrument nobody will alarm on is a number on a "+

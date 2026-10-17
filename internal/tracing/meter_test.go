@@ -1,10 +1,14 @@
 package tracing
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -84,6 +88,61 @@ func TestEveryInstrumentRegistersAgainstTheProvider(t *testing.T) {
 	if got, want := len(rec.Read()), len(metrics.Catalogue()); got != want {
 		t.Errorf("%d series after recording into every instrument, want %d: an "+
 			"instrument that did not register drops silently", got, want)
+	}
+}
+
+// A HISTOGRAM IS EXPORTED IN ITS UNIT'S BUCKETS — the boundaries the recorder
+// counted it into and an alarm read it against, so a collector's panel and the
+// operator record bucket one observation alike. Every histogram in the
+// catalogue is recorded once through a provider built with the engine's views,
+// collected, and its exported boundaries compared with metrics.Bounds.
+//
+// Mutation: one view handing every histogram one set, and the byte and count
+// histograms export in the millisecond set; no views, and the SDK's defaults.
+func TestAHistogramIsExportedInItsUnitsBuckets(t *testing.T) {
+	t.Parallel()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithView(histogramViews()...))
+	defer func() { _ = mp.Shutdown(t.Context()) }()
+	meter := mp.Meter("crewlet")
+	units := map[string]string{}
+	for _, inst := range metrics.Catalogue() {
+		if inst.Kind != metrics.KindHistogram {
+			continue
+		}
+		h, err := meter.Float64Histogram(inst.Name, otelmetric.WithUnit(inst.Unit))
+		if err != nil {
+			t.Fatalf("histogram %s: %v", inst.Name, err)
+		}
+		h.Record(t.Context(), 1)
+		units[inst.Name] = inst.Unit
+	}
+	var got metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &got); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, scope := range got.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			unit, ok := units[m.Name]
+			if !ok {
+				continue
+			}
+			data, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok || len(data.DataPoints) != 1 {
+				t.Errorf("%s exported %T, want one float histogram point", m.Name, m.Data)
+				continue
+			}
+			want, _ := metrics.Bounds(unit)
+			if !slices.Equal(data.DataPoints[0].Bounds, want) {
+				t.Errorf("%s (%s) exported buckets %v, want its unit's boundaries %v", m.Name, unit,
+					data.DataPoints[0].Bounds, want)
+			}
+			seen[m.Name] = true
+		}
+	}
+	if len(seen) != len(units) || len(units) == 0 {
+		t.Errorf("collected %d of the catalogue's %d histograms", len(seen), len(units))
 	}
 }
 
