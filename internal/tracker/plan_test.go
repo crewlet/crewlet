@@ -341,10 +341,8 @@ func dutyReads() map[string]plannedRead {
 		"the embed duty's opening read": read(search.TaskOpeningRead("t-00001")),
 		"the embed duty's withdrawals":  read(search.TaskWithdrawals(1024)),
 		"the embed duty's coverage":     read(search.TaskCoverageCount("m", 8)),
-		"the re-spread walk": {
-			`SELECT id, rank FROM tracker_tasks
-			 WHERE project_key = ? AND length(rank) > 64
-			 ORDER BY rank, id LIMIT 64`, []any{"P01"}},
+		"the re-spread walk":            {respreadRowsStatement, []any{"P01"}},
+		"the re-spread hand-off":        {respreadPendingStatement, []any{"P01", "P01"}},
 		"the abandoned merge walk": {
 			`SELECT id FROM tracker_tasks
 			 WHERE merging = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
