@@ -13,10 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// ABSENT IS NOT ZERO. A node that publishes no status (its status hook overran
-// its budget on that beat, so its heartbeat carried the placement half alone)
-// is not a node with no work in flight, and a confident 0 would draw an idle
-// row for a process that is simply not saying.
+// ABSENT IS NOT ZERO. A node that publishes no status (its status hook did not
+// answer within its share of that beat, so its heartbeat carried the placement
+// half alone) is not a node with no work in flight, and a confident 0 would
+// draw an idle row for a process that is simply not saying.
 func TestANodeThatPublishesNoStatusIsNotReadAsIdle(t *testing.T) {
 	t.Parallel()
 	for name, meta := range map[string]map[string]any{

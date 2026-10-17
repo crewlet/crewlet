@@ -924,8 +924,9 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 			InFlight: 4, Posture: "shed",
 		}.Meta(),
 	})
-	// A peer whose beat carried no status: its status hook overran its
-	// budget, so the heartbeat published the placement half alone.
+	// A peer whose beat carried no status: its status hook did not answer
+	// within its share of the beat, so the heartbeat published the
+	// placement half alone.
 	claim(coord.NodeResource("node-b"), "node-b:1", map[string]any{
 		"roles": []any{"ingress"},
 	})

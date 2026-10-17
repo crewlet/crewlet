@@ -998,8 +998,9 @@ func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 // The hook is BOUNDED. Answering may mean reading the control plane, and
 // this is the path that renews presence: an unbounded read on a wedged store
 // would hold the beat until the watchdog shot the process, to publish a
-// display column. Overrunning it publishes the placement half alone, which
-// the reading side already renders as "did not say".
+// display column. A hook that does not answer — it says so with its error,
+// see [Config].Status — publishes the placement half alone, which the
+// reading side already renders as "did not say".
 func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	meta := h.profile.Meta()
 	// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
@@ -1020,8 +1021,12 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	}
 	ctx, cancel := context.WithTimeout(ctx, h.statusBudget())
 	defer cancel()
-	status := h.status(ctx)
-	if ctx.Err() != nil {
+	// NOT ctx.Err() after the call. Whether the hook answered is the
+	// hook's fact: the clock read here cannot tell a hook the deadline
+	// cut short from one that had already returned its whole answer when
+	// the goroutine was descheduled past the deadline.
+	status, err := h.status(ctx)
+	if err != nil {
 		return meta
 	}
 	meta[coord.StatusKey] = status.Meta()
