@@ -1,15 +1,16 @@
 /**
  * How a screen asks the shell to stop scrolling and hand it the height.
  *
- * THREE SCREENS NEED THIS, each for part of its life. Edit org's
- * visualization is a canvas, and a canvas fills the box its screen gives it
- * rather than growing the page — a wheel turned over a page that scrolls
- * lands in a canvas half off screen. The Inbox and a task's page are two
- * columns that each scroll on their own (a list and its pane; a task and its
- * rail), which they can only do inside a box of the window's height. Each
- * withdraws the request where it stops being true: the builder off its chart,
- * the other two below a phone's width, where they are one column and the page
- * scrolls as any other.
+ * FOUR SCREENS NEED THIS, each for part of its life. Two are
+ * canvases — Edit org's visualization and the org chart — and a canvas fills
+ * the box its screen gives it rather than growing the page: a wheel turned
+ * over a page that scrolls lands in a canvas half off screen. Two are two
+ * columns that each scroll on their own — the Inbox (a list and its pane) and
+ * a task's page (a task and its rail) — which they can only do inside a box
+ * of the window's height. Each withdraws the request where it stops being
+ * true: the builder off its chart, and the other three below a phone's width,
+ * where the chart is rows and the columns are one, and the page scrolls as any
+ * other.
  *
  * WHY A REQUEST RATHER THAN A STYLESHEET. This used to be a rule the shell's
  * own sheet carried, matching a class deep inside the screen
