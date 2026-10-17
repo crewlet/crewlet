@@ -1221,7 +1221,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		return WriteResult{}, invalid("a move names no project")
 	case len(placements) == 0:
 		return WriteResult{}, invalid("a move places no task")
-	case len(placements) > MaxBulkTasks+RankRespreadInline:
+	case len(placements) > MaxTasksNamed+RankRespreadInline:
 		// THE CALLER'S OWN MOVES PLUS A RE-SPREAD'S WORTH OF
 		// NEIGHBOURS. The scope is the project CONTAINER rather than an
 		// enumeration precisely so the placement list is not bounded by
@@ -1230,7 +1230,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		return WriteResult{}, invalid("a move carries %d "+
 			"placements and one record carries at most %d — %d moves plus "+
 			"a re-spread's %d neighbours", len(placements),
-			MaxBulkTasks+RankRespreadInline, MaxBulkTasks, RankRespreadInline)
+			MaxTasksNamed+RankRespreadInline, MaxTasksNamed, RankRespreadInline)
 	}
 	for _, placement := range placements {
 		if !placement.Rank.Valid() {
